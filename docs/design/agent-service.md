@@ -552,48 +552,46 @@ repeat the types. Where the two differ, the SPEC wins.
 | Concept | Is | A user uses it to | Exposed as |
 |---|---|---|---|
 | **Session** | A conversation: the messages of one session share its history | Continue a conversation; list, read, follow, fork, compact or abort it. An operator also names it and sets its model | Named by the caller, or created by the service (§7.4) |
-| **Message** | One message a caller sends, from its acceptance to its outcome | Send one (`invoke`); learn whether it was answered, with what, and what it cost; stop the work on it | The unit a caller holds (`messageId`), with a status, events and a cancel (§7.3) |
+| **Message** | One message a caller sends, from its acceptance to its outcome | Send one (`invoke`); learn whether it was answered, and with what; stop the agent answering it | The unit a caller holds (`messageId`), with a status, events and a cancel (§7.3) |
 | **Entry** | One record in a session's history: a user's message once taken, the agent's messages, a tool result, a settings change, a compaction | Read the history; reconnect from a point; fork from a point | Ids that are the cursor for `follow` and the point for `fork` (§7.5) |
 
-How the agent works, in steps, turns or runs, belongs to the harness and is not exposed. A session works on one thing
-at a time: it takes a message and works, across model calls and tool calls, until it answers. *Turn* and *run* are
-not protocol words: the ecosystem uses *turn* for both a step (pi) and a whole answer (dsh, ACP), and a run is how a
-harness groups its work, which differs between harnesses.
+How the agent answers, in steps, turns or runs, and which messages it handles together, belongs to the harness and is
+not exposed. *Turn*, *run* and *work* are not protocol words: the ecosystem uses *turn* for both a step (pi) and a
+whole answer (dsh, ACP), and a run is how a harness groups what it does, which differs between harnesses.
 
 | This protocol | pi | pi-durable | DeepSeek Harness | ACP |
 |---|---|---|---|---|
 | Session | session | conversation | session | session |
 | Message | a prompt, steer or follow-up input | Submission (input) | message (`MessageId`) | a `session/prompt` request |
-| Its outcome | the run's end that took it | `done` with its answer, or `unanswered` with a reason | the turn's end | the prompt's `stopReason` |
-| The work (not exposed) | an agent run, until `agent_settled` | run | turn | prompt turn |
+| Its outcome | what the run that took it says of it | `done` with its answer, or `unanswered` with a reason | the turn's end | the prompt's `stopReason` |
+| Not exposed | an agent run, until `agent_settled` | run | turn | prompt turn |
 | Entry | session entry | entry | session event | session update |
 
 Names follow one rule: fields are camelCase; enum values and discriminators are snake_case. A field that refers to
 another object names its kind: `sessionId`, `messageId`, `entryId`, `parentEntryId`.
 
-**Why the caller holds its message, not a run.** The first version of this design gave the caller a run, a stretch of
-the agent's work that took one message or more, with `run_started` and `run_ended` entries in the log. It held a
-message to be no unit of its own, since steered messages share the work. Measuring pi-durable 1.3.0 (§9.1) showed
-what that costs and what it buys:
+**Why the caller holds its message, and nothing groups messages.** The first version of this design gave the caller a
+run, a stretch of the agent's work that took one message or more, with `run_started` and `run_ended` entries in the
+log. The second removed the run from the surface but kept it as an unnamed rule: messages "taken by the same work"
+shared one answer and outcome, usage was reported once per piece of work, a message's history ended where its work
+ended (`lastEntryId`), and cancelling a message stopped every message its work took. Building pi-durable's port on
+that rule showed what it costs:
 
-- **What must be durable is per message.** A channel owes each user an answer; a retry needs the key it sent; a
-  restart must say which messages were cut off. pi-durable keeps exactly that: each submission is admitted durably and
-  settles once, `done` with the entry that answered it or `unanswered` with a reason, in the same atomic commit as the
-  entries. Its runs are scheduling state that it does not keep after they end.
-- **Run boundaries in the log were the costly part.** They had to come before every entry of the run and after its
-  last one, in a log the harness also writes. pi-durable places the next queued input in the same commit that ends a
-  run, and ends a run whose last answer came before a steer instead of keeping it open, so its boundaries cannot be
-  written into its log in order, only guessed from commit order. For pi they took the run markers, a steering report
-  by message id and the rule that a run does not end while it holds a steer (§9.3).
-- **A message's outcome is real.** The objection was that steered messages share the work. They do, and they share
-  its answer and outcome: a message taken by work is answered by that work's answer. pi-durable settles a steered
-  input with the same answer as the input that started the run. A steer that arrives after the answer was written was
-  not seen by it, so it is answered on its own, by the next work.
-- **What a caller reconnecting needs** is the entries after its cursor and the end of its message. Entries carry the
-  first; the second comes from the message's durable record, as a `done` event, so it needs no entry in the log.
+- **What must be durable is per message, and harnesses keep exactly that.** A channel owes each user an answer; a
+  retry needs the key it sent; a restart must say which messages were cut off. pi-durable keeps each submission's
+  admission and settlement, `done` with the entry that answered it or `unanswered` with a reason, atomically with
+  the entries. Which inputs a run took, and where a run that did not answer ended, it keeps only while the run is
+  live (`pi.live.run`, gone when it ends; a generation task's input is empty).
+- **Every per-work fact had to be reconstructed after the fact.** The port derived them from an event stream
+  asynchronous to the commits that decide them, or from the shape of the log. Five review rounds found a new window
+  each time (no one listening, a backed-up stream, a write queued behind the next message, a recovery reading the
+  tail, a cancel mid-tool), and about two thirds of their findings were in that reconstruction, a third of the port.
+- **Nothing a caller does needs the grouping.** A caller wants its message's outcome and answer, the entries, and
+  what things cost. The answer is per message; cost belongs to each model response, so it rides on the
+  `assistant_message` entries and adds up without a rule; the whole of what happened is the session's `follow`.
 
-So the caller holds its message. The log holds the conversation and nothing else, and every harness keeps the
-message records it already keeps (pi-durable's submissions) or that the port keeps for it (§9.3).
+So the caller holds its message, its facts are its own as the harness reports them, and nothing in the protocol groups
+messages. Two messages the agent answered together may share an answer; that is an observation, not a promise.
 
 ### 7.2 Invoke
 
@@ -601,24 +599,24 @@ message records it already keeps (pi-durable's submissions) or that the port kee
 with its `done` event; or a single `rejected` (SPEC §3).
 
 - **Accepted.** `duplicate` says the key had been seen, and `message` is that message as it is now. The stream is the
-  message's follow, from its `user_message` entry, so a duplicate sees what the first saw and `collect` over it gets
-  the same answer. A caller that stops reading detaches: the work goes on, and the caller can come back to the message
-  (§7.3).
+  message's follow, from its `user_message` entry, so a duplicate ends with the same `done` and `collect` over it gets
+  the same answer. A caller that stops reading detaches: the agent goes on, and the caller can come back to the
+  message (§7.3).
 - **Rejected.** The only event of an invoke that was not accepted: nothing ran and nothing was recorded, so it is safe
   to send again. Over HTTP it is an error status instead of a stream.
-- **A busy session.** The caller says what a message that arrives while the session works is, and the service applies
-  it, because only the service can do so without a race:
+- **A busy session.** The caller says what a message that arrives while the session is busy is, and the service
+  applies it, because only the service can do so without a race:
 
-  | `whenBusy` | When the session is working on another message |
+  | `whenBusy` | When the session is busy with another message |
   |---|---|
-  | `queue` (the default) | Queued. Taken once the work before it ends, in arrival order |
-  | `steer` | Queued ahead of the queue, and taken by the work in progress after its current tool round, answered by that work's answer. One the work has not taken when it ends, answered, failed or canceled, is taken by the next work, before the queue |
+  | `queue` (the default) | Queued. Taken in arrival order, each once the agent is done with the one before |
+  | `steer` | Handed to the agent while it is still busy, to take at its next step rather than after it stops; queued ahead of the queue until taken |
   | `reject` | Rejected with `busy` |
 
   An idle session takes a message whatever `whenBusy` says. pi-durable offers the same three choices with the same
-  default and the same steering rule; dsh and ACP's inject draft offer `queue` and `steer`. The receipt does not say
-  whether a steer will be taken by the work in progress: no harness can know until the work reaches its next step,
-  and the rule above makes the answer the same either way, one answer per message.
+  default; dsh and ACP's inject draft offer `queue` and `steer`. What answers a steered message, and with what outcome,
+  is the harness's to report for that message: pi-durable answers one that arrives after its answer with an answer of
+  its own, pi's loop may take it in the same run.
 - **Sessions.** A caller that names the session gets that session, created empty by its first invoke: a channel names
   a chat place, a schedule names `schedule:<name>`. A caller that names none gets a new session per invoke, named in
   the receipt. Forking happens only through `sessions.create` (§7.4). The harness's own ids are mapped by the serving
@@ -640,37 +638,35 @@ with its `done` event; or a single `rejected` (SPEC §3).
 ### 7.3 Messages
 
 A message is `queued`, `taken` (its `user_message` entry written) or `done` with one outcome: `completed`,
-`max_tokens`, `intercepted`, `interrupted`, `canceled` by `cancel`, `abort` or `delete`, or `failed` with an error
-(SPEC §4).
+`max_tokens`, `intercepted`, `interrupted`, `canceled`, or `failed` with an error (SPEC §4).
 
-- `answer` is the final agent message of the work that took it; messages taken together report the same answer.
-  `usage` is that work's cost, reported once, on the first message the work took: with no work id on a message, that
-  is what lets a caller add usage up without counting shared work twice.
-- `lastEntryId` is the last entry of the history when the work ended. Without run boundaries in the log, it is what
-  says where a message's part of the history ends when it has no answer: a duplicate or a reattaching
-  `messages.follow` of a message that failed after a tool call replays its `user_message` and its tool results, not
-  only its `done`. It is the tail when the work ended, not the work's own last entry, so every harness can record it
-  exactly: nothing has to tell the work's entries from others.
+- `answer` is the `assistant_message` that answered it, when the agent did. What anything cost is on the
+  `assistant_message` entries, one model response each: a caller adds those up, and nothing is counted twice.
+- `canceled` does not say who stopped it (a cancel, an abort or a delete): nobody needed the distinction, and
+  pi-durable records only that it was aborted.
+- A done message's follow replays its own entry through its answer, or its own entry alone when it has none: what a
+  failed message's agent did on the way is in the session's `follow`, not in the message's.
 - A steered message is `queued` until it is taken, at the front of the queue; it counts toward the 20 and `abort`
   withdraws it.
 - `messages.follow` is the session's events for that message, from a cursor or from its `user_message` entry: a
   caller that lost its invoke stream reattaches without following the whole session.
-- `messages.cancel` withdraws a queued message, which ends `canceled` without an entry, or stops the work a taken one
-  is part of, which ends every message that work took. Messages queued after it are taken as usual.
+- `messages.cancel` withdraws a queued message, which ends `canceled` without an entry, or stops the agent answering a
+  taken one, which ends `canceled`; other messages the agent was answering with it report their own outcome. Messages
+  queued after it are taken as usual.
 - A session holds at most 20 queued messages, the cap a conversation's wake-ups already have, and a process caps its
   messages in flight, queued and taken together (100 in the reference implementation: queued messages cost almost
-  nothing, and work in progress bounds the memory of a small host such as an AgentCore microVM). Past either, and for
+  nothing, and the ones being answered bound the memory of a small host such as an AgentCore microVM). Past either, and for
   `whenBusy: "reject"`, an invoke is rejected with `busy`, whose `details.reason` says which: `running`,
   `queue_full` or `capacity`.
 - Acceptance is durable: before the receipt is sent, the message is recorded with its id, key and source, and its end
   is recorded before it is reported (§9.3). So `messages.get` answers `undefined` only for a message that was never
-  accepted, or whose session was deleted. A message that was accepted and never ended, and is neither taken by work
-  in progress nor queued, is reported `interrupted`: one whose work the process stopped, and one lost from a queue
-  that did not survive a restart. Whether queued messages survive a restart, and whether work in progress continues
-  after it, depend on the harness (`durableQueue`, `durableWork`, §9.3). The service never redoes work on its own:
-  its tools may already have had effects (§3.1, invariant 3). A caller that owes an answer may decide to: an invoke
-  with the key of an `interrupted` message accepts it again (§7.2), and the new work's tools may repeat effects the
-  interrupted one had. `messages.get({ idempotencyKey })` returns the key's newest message. This keeps a channel
+  accepted, or whose session was deleted. A message that was accepted and never ended, and is neither being answered
+  nor queued, is reported `interrupted`: one the process stopped answering, and one lost from a queue that did not
+  survive a restart. Whether queued messages survive a restart, and whether a taken one is still answered after it,
+  depend on the harness (`durableQueue`, `durableTaken`, §9.3). The service never redoes a message on its own: its
+  tools may already have had effects (§3.1, invariant 3). A caller that owes an answer may decide to: an invoke with
+  the key of an `interrupted` message accepts it again (§7.2), and its tools may repeat effects the interrupted
+  answer had. `messages.get({ idempotencyKey })` returns the key's newest message. This keeps a channel
   at-least-once, as today: its turn store invokes again with the message's key, at most three times per message.
 
 ### 7.4 Sessions
@@ -687,10 +683,10 @@ The session operations are SPEC §5.
   from the beginning. A client that opens a session reads its latest page, then follows from its last entry. Every
   harness keeps an ordered log, so the port only reads it after a cursor and the serving layer builds `follow` once
   for all of them (§9.1).
-- **`abort`** stops everything the session is doing: the work in progress, every queued message and a manual
+- **`abort`** stops everything the session is doing: the agent answering its taken messages, every queued message and a manual
   compaction. It reports the messages it ended, so a stop command can say when nothing was running. A chat's stop
   command calls it.
-- **`rewind`** moves the session's active branch to an entry, and the next work continues from there. Nothing is
+- **`rewind`** moves the session's active branch to an entry, and the next message continues from there. Nothing is
   deleted: the earlier branch stays in the history.
 - **`compact`** belongs to the user plane. `update` (a session's name, model and thinking level) and `delete` belong
   to the control plane, because the operator decides what a team's agent runs on and how its conversations are named
@@ -718,14 +714,13 @@ The session operations are SPEC §5.
 
 Only `entry` events are durable, and an entry's id is the cursor. `done` is built from a message's durable record, so
 any follow of a message that has ended reaches it. The others are live: a client that reconnects sees the settled
-records, not the deltas it missed. A session works on one thing at a time, so live events carry no message id: they
-belong to the work in progress, or to a compaction while the session is `compacting` (whose model retries also send
-`retry_scheduled`), and deltas add up to its current agent message until its `assistant_message` entry
-arrives. Entries are ordered as appended, and each names its parent, so forks and branches share what they inherited.
+records, not the deltas it missed. Live events carry no message id: they are the session's, what the agent is doing
+while it answers its taken messages, or a compaction while the session is `compacting` (whose model retries also send
+`retry_scheduled`), and deltas add up to the agent's current message until its `assistant_message` entry arrives. Entries are ordered as appended, and each names its parent, so forks and branches share what they inherited.
 
 The log holds the conversation only: user messages as they were taken, each naming its message, the agent's
-messages, tool results, settings changes and compactions. Which entries a piece of work wrote is not recorded; a
-caller that wants a message's result reads its `answer`, and one that wants the whole exchange reads the entries
+messages (each with the `usage` of its model response), tool results, settings changes and compactions. Which entries
+answered which message is not recorded beyond the `answer`; a caller that wants the whole exchange reads the entries
 from its `user_message` on.
 
 ### 7.6 Results, errors and capabilities
@@ -776,19 +771,20 @@ process. What this obliges, and the browser-facing rules that follow, are in
 
 `docs/SPEC.md` is this protocol, [SPEC v1](../SPEC.md); it replaced v0.1 in step 4. The harness port stays out of
 the SPEC: it is the implementation's contract, and a harness conforms by passing the SPEC's suite through it. v1 was
-first written around runs and changed to messages before it was released (§7.1), so it stays v1. Against v0.1:
+first written around runs, changed to messages, and then lost the unnamed grouping of messages ("work") the change had
+kept, all before it was released (§7.1), so it stays v1. Against v0.1:
 
 | Section | Change |
 |---|---|
 | §2 | `invoke(request)` returns the receipt and then the message's events, or a single `rejected` |
 | §3 | `Scope` goes. The request carries an optional `sessionId`, `whenBusy`, `idempotencyKey` and, in process, `source`; forking is `sessions.create` |
 | §5 | Events are durable entries and live events (§7.5). `completed.data` goes: no harness produces it, and a structured result waits for a design |
-| §6, the three endings | (a) the message's `done` event; (b) `rejected`; (c) the caller stops reading and detaches, while the work goes on |
+| §6, the three endings | (a) the message's `done` event; (b) `rejected`; (c) the caller stops reading and detaches, while the agent goes on |
 | §6, MUST 1 | An invoke stream holds exactly one `rejected`, or ends with its message's `done`, unless the process stops |
-| §6, MUST 2 | Every failure is an event: a message whose work failed ends with a `failed` outcome, and a refusal is `rejected` |
-| §6, MUST 3 | Reversed: a caller that stops reading detaches; `messages.cancel`, `abort` and `delete` stop work |
+| §6, MUST 2 | Every failure is an event: a message the agent failed to answer ends with a `failed` outcome, and a refusal is `rejected` |
+| §6, MUST 3 | Reversed: a caller that stops reading detaches; `messages.cancel`, `abort` and `delete` stop the agent |
 | §6, MUST 4 | The terminal set changes once, from `{ completed, failed }` to `{ done, rejected }`, and is frozen again |
-| §6, MUST 6 | Weaker: while a session works, its calls must reach the process working on it; portable conformance needs a session router in front (§9.3). `conformance-levels.md` says so with v1 |
+| §6, MUST 6 | Weaker: while a session is busy, its calls must reach the process answering it; portable conformance needs a session router in front (§9.3). `conformance-levels.md` says so with v1 |
 | §7 | `collect` returns the message's answer when it ends `completed`, and throws on any other outcome or on `rejected` |
 | §8 | The lineage, identity and source rows are replaced by §7.2 and §7.4; the mid-turn steering row by `whenBusy`, `messages.cancel` and `abort` |
 | New | The message operations (§7.3), the session operations (§7.4) and the planes (§7.7). The harness port (§9.1) stays out, as above |
@@ -928,7 +924,7 @@ The entry points inside FastAgent call the protocol in process, like any other c
 |---|---|
 | A channel | `invoke({ sessionId: the chat place, whenBusy: "queue", idempotencyKey: the platform's message id })`. A thread's first message creates its session with `sessions.create({ sessionId, fork })` from the chat's session, `context: "recent"`, and treats `conflict` as already done. Its stop command calls `abort` |
 | A schedule | `invoke({ sessionId: "schedule:<name>", whenBusy: "reject", idempotencyKey: the occurrence })`: an occurrence on a busy session is skipped |
-| A wake-up | `invoke({ sessionId, whenBusy: "queue", idempotencyKey: the wake-up and its instant })`: one that fires into a busy session is taken after the work in progress |
+| A wake-up | `invoke({ sessionId, whenBusy: "queue", idempotencyKey: the wake-up and its instant })`: one that fires into a busy session is taken after the messages before it |
 
 Where a thread forks is found through the platform's reply chain: the message the thread starts from, then each
 message it replies to, nearest first. The first message in the chain that names a protocol message decides, and the
@@ -979,7 +975,7 @@ Two ways to place the queue of a busy session:
 
 | | A: in the serving layer | B: behind the port |
 |---|---|---|
-| The port offers | Run one piece of work, steer it, stop it, read the log | Submit with a mode, cancel a message, abort a session, read the log and the messages, settings, fork |
+| The port offers | Run one message, steer it, stop it, read the log | Submit with a mode, cancel a message, abort a session, read the log and the messages, settings, fork |
 | A harness with a durable queue (pi-durable, dsh) | Its queue goes unused, and queued messages are lost on a restart | Its queue is used, and queued messages survive a restart |
 | A harness that is only a loop (pi, an ACP agent) | Works as it is | A shared `LoopPort` adds the queue, message ids and message records |
 | The semantics | Written once | Defined once by the protocol, and held by one conformance suite every port implementation runs |
@@ -988,30 +984,30 @@ B wins: durable harnesses are the reason to plug in pi-durable and dsh at all, a
 unused.
 
 So the port has two layers. `HarnessPort` is the one the serving layer calls, and a durable harness implements it
-directly: pi-durable does. `LoopHarness` is what a harness that is only a loop implements: start work on a message,
+directly: pi-durable does. `LoopHarness` is what a harness that is only a loop implements: start a run on a message,
 steer it and stop it, and, if it keeps a log that can take records of its own, read and append that log. `LoopPort`
 turns a `LoopHarness` into a `HarnessPort`, owning what such a harness lacks: admission, the queue, idempotency,
 message records and closing interrupted messages. Its records go into the one log it writes: the harness's own when
-it has one that takes them (pi's), otherwise a log `LoopPort` keeps itself, recording every event of the work, as for
+it has one that takes them (pi's), otherwise a log `LoopPort` keeps itself, recording every event of the run, as for
 every ACP agent (§7.9). Either way the records and the conversation share one log with one writer (§9.3). It is
 written once, so the semantics of a busy session are the same for pi-coding-agent and for an ACP agent later.
 
 | Port operation | Means |
 |---|---|
 | `submit(session, message, { whenBusy, idempotencyKey, source })` | Returns the message. Looking up the key, recording the accepted message and queueing it are one step, serialized per session, so two deliveries of one message cannot both be accepted: a durable harness does it natively (pi-durable keys submissions by request id), and `LoopPort` under its per-session lock, with each accepted message recorded in the session's log (§9.3). A durable harness queues natively; `LoopPort` queues for one that is only a loop |
-| `cancelMessage(session, messageId)`, `abort(session)` | Withdraw a queued message or stop the work a taken one is part of; stop everything the session is doing |
+| `cancelMessage(session, messageId)`, `abort(session)` | Withdraw a queued message or stop the agent answering a taken one; stop everything the session is doing |
 | `message(session, id or key)`, `read(session, { after })`, live events | The serving layer builds `messages.get`, `read`, `follow` and `messages.follow` on them; a message's `done` comes from its record |
 | `create`, `open`, `fork`, `delete`, settings | Session lifecycle; the serving layer maps caller-named ids to the harness's own |
-| Capabilities | `steer`, `fork`, `rewind`, `delete`, `durableQueue`, `durableWork`. A port that offers `steer` lets the work in progress take a steer at its next step, and has the next work take one it did not, ahead of the queue (§7.2) |
+| Capabilities | `steer`, `fork`, `rewind`, `delete`, `durableQueue`, `durableTaken`. A port that offers `steer` hands a steered message to the agent while it is busy, and reports what became of it like any message (§7.2) |
 
-|  | Withdraw a queued message | Stop the work in progress, keep the queue | Abort the session |
+|  | Withdraw a queued message | Stop the agent, keep the queue | Abort the session |
 |---|---|---|---|
 | DeepSeek Harness | `inbox.remove(id)` | `cancel(user, { keepInbox: true })` | `cancel()` |
 | pi-durable | `submission.abort()` | `harness.abortTask()` on `pi.live.run.taskId`; the queue then waits, so the port places it (below) | `conversation.abort()` |
-| pi, an ACP agent (`LoopPort`) | Remove it from `LoopPort`'s queue | The `AbortSignal` given to the work | Both |
+| pi, an ACP agent (`LoopPort`) | Remove it from `LoopPort`'s queue | The `AbortSignal` given to the run | Both |
 
 Steering stays a harness capability, because only the loop knows where its steps end: from outside, the serving
-layer could only stop a step, killing a tool mid-call, or wait for the work to end, which is a queued message.
+layer could only stop a step, killing a tool mid-call, or wait for the agent to stop, which is a queued message.
 
 **pi-durable, measured.** Spikes with faux models checked these port operations against it. On 1.1.0: steer, reject,
 withdrawal, cursor reads and live events. On 1.3.0: a run with a tool, follow-ups and steers mid-tool, a steer that
@@ -1022,15 +1018,16 @@ input entries of the host's own kind, and a `kill -9` mid-tool on SQLite storage
 | The port needs | pi-durable 1.3.0 |
 |---|---|
 | Admission with a mode and a key | `submit({ whenBusy, requestId })`, admitted durably: `followUp` (this protocol's `queue`), `steer`, or `reject`, which throws `ConversationBusy`. The same `requestId` returns the same submission |
-| A message's outcome | Each submission settles once, in the commit that writes the entries it settles with: `done` with its `entry` and its `answer`, or `unanswered` with a `reason` (`aborted`, `model_error`, `no_model`, `reset`, …). Its runs are scheduling state (`pi.live.run`), not kept after they end |
-| Steering | A steer queued during a tool round is placed after it and settles with the run's answer. One still queued when the run writes its answer starts the next run, with the first queued follow-up if there is one (its specification, §6), and gets an answer of its own (measured). That is this protocol's rule (§7.2), so `steer` maps without adaptation |
+| A message's outcome | Each submission settles once, in the commit that writes the entries it settles with: `done` with its `entry` and its `answer`, or `unanswered` with a `reason` (`aborted`, `model_error`, `no_model`, `reset`, …). That is the message's status as it stands: the port maps it, and keeps nothing of its own about it. Its runs are scheduling state (`pi.live.run`), not kept after they end, and nothing in the protocol needs them |
+| Steering | A steer queued during a tool round is placed after it and settles with the run's answer. One still queued when the run writes its answer starts the next run, with the first queued follow-up if there is one (its specification, §6), and gets an answer of its own (measured). Each settles as itself, which is all the protocol asks |
+| What anything cost | Each assistant message carries pi-ai's `usage`, as every pi-ai message does: the `assistant_message` entry publishes it |
 | Which entry a message became | The submission's `entry`. An input may carry `entry: { kind, data }` (1.2.0), placed as an entry of that kind, so the port's `user_message` carries its message id, key and source without a lookup, written in the same commit that places it |
 | Message ids | The message id is the Agent's, not the caller's key: the key is optional and the caller's, the message id always present and never reused. The port submits with request id `k:<key>` when the caller sent a key, otherwise `m:<minted>`, and the message id is that request id. pi-durable's own atomic dedup by request id is then the protocol's, a minted id and a key can never share a request id, and every message id is addressable in a URL (a key of `.` is not). A key names one message only: pi-durable never ends a message `interrupted` (below), so this harness never accepts a key's text a second time |
-| Surviving a restart | Measured on SQLite: after a `kill -9` mid-tool and a reopen, the run continues (`resume()`), the tool is not rerun, and the queued input survives and is answered. A tool cut off mid-call is rerun only if it declares `replay: "safe"`; otherwise the model gets an "interrupted" error result and carries on. `durableWork` and `durableQueue` both hold |
+| Surviving a restart | Measured on SQLite: after a `kill -9` mid-tool and a reopen, the run continues (`resume()`), the tool is not rerun, and the queued input survives and is answered. A tool cut off mid-call is rerun only if it declares `replay: "safe"`; otherwise the model gets an "interrupted" error result and carries on. `durableTaken` and `durableQueue` both hold |
 | Reading after a cursor | `entries({ minEntryId, order: "ascending" }, limit, cursor)`; entry ids ascend |
 | Live events | `watchEvents()`: a snapshot, then events derived from each commit (`run_start`, `message_*`, `tool_execution_*`, `submission`, …). Nothing is replayed, so `follow` reads entries first, as for every harness |
 | Withdrawing a queued message | `submission.abort()`; one already placed answers `already_placed` |
-| Work that did not answer, and the queue behind it | After a run that fails (`model_error`, `no_model`) or whose task is aborted, the queued inputs stay in `pi.inbox` until the next input or queued write runs a boundary (measured for both), and nothing else appends to the conversation until then. So after such a run the port submits one write of its own kind with `edits: []`: its data is the run's `lastEntryId`, the conversation's tail at that moment, which is exact because nothing was appended since the run ended; and since it is not display-only, it runs the boundary that places the waiting inputs. It is the message records' end in pi-durable's own store, one commit, never published. A process that stopped between the run's end and that write finds the run settled without it on reopen, and writes it then, before answering anything on the session: the tail is still the run's. For an answered run `lastEntryId` is its `answer`, and the next run starts in the same commit, so no write is needed. pi-durable's unreleased `afterFailedRun: "continue"` covers failures but not aborts, so the write stays |
+| The queue after a run that did not answer | After a run that fails (`model_error`, `no_model`) or whose task is aborted, the queued inputs stay in `pi.inbox` until the next input or queued write runs a boundary (measured for both). The SPEC takes queued messages after one that failed or was canceled, so something must run that boundary: a write of the port's own kind with `edits: []`, never published, which carries nothing (losing one only delays the queue, and any next message places it too). An abort is always the port's (cancel, abort, delete), so it submits that write after one. A model failure needs a follower while messages are queued, until pi-durable's unreleased `afterFailedRun: "continue"`, which covers failures but not aborts, is released |
 | `fork`, settings | `conversation.fork(entryId)` creates a new conversation with the history up to that entry; `configure()` sets the model and thinking level |
 | `rewind`, `delete` | Neither exists: no call moves a conversation's active branch, and none deletes a conversation. Both are `false` in its capabilities; emulating them (a fork the session id is remapped to, a deleted mapping that leaves the data) would be the silent downgrade SPEC MUST 5 forbids |
 | Aborting the session | `conversation.abort()`: the running run and every queued input end `unanswered` with `aborted` (measured) |
@@ -1089,27 +1086,25 @@ Works with      Content (content/<name>/) · Connectors (tools, MCP) · Environm
 ### 9.3 Messages and durability
 
 What a caller reads after the fact comes from one durable record per message: written when it is accepted, with its
-id, key and source, before the receipt is sent, and ended once, with its outcome, the entry it became, the history's
-tail when its work ended (`lastEntryId`), its answer and, once per piece of work, its usage, before that end is
-reported. A harness keeps it natively (pi-durable's submissions) or `LoopPort`
-keeps it for one that is only a loop. A message's status is derived from that record and the queue. A message that
-was accepted, never ended and is neither taken by work in progress nor queued is `interrupted`; its end is recorded
-when the session is first opened after the work stopped, before anything on it is answered, so a caller reattaching
-with `messages.follow` after a restart reaches its `done` without the session working again. Only live events and,
-for a harness that is only a loop, what `LoopPort` holds while a session is busy are in memory: the order of its
-queue, its work in progress, the session's one log writer (pi's `SessionManager`, which caches the whole log) and the
+id, key and source, before the receipt is sent, and ended once, with its outcome, the entry it became and its answer,
+before that end is reported. Nothing in it relates a message to another: what the agent answered together is the
+harness's. A harness keeps it natively (pi-durable's submissions) or `LoopPort` keeps it for one that is only a loop.
+A message's status is derived from that record and the queue. A message that was accepted, never ended and is
+neither being answered nor queued is `interrupted`; its end is recorded when the session is first opened after the
+process stopped, before anything on it is answered, so a caller reattaching with `messages.follow` after a restart
+reaches its `done` without the agent running again. Only live events and, for a harness that is only a loop, what
+`LoopPort` holds while a session is busy are in memory: the order of its queue, the run in progress, the session's one
+log writer (pi's `SessionManager`, which caches the whole log) and the
 index of its keys and messages. The last two are caches of the durable log, and a queued message lost with the first
 two is still known, as `interrupted`.
 
 The records live in the same store as the conversation, written together. pi-durable commits a submission's
 settlement atomically with the entries it settles with. `LoopPort` gets the same property from a harness log that has
 one writer, into which it writes three records, each naming its message: `message_accepted` when it is accepted,
-`message_taken` with its entry when the loop reports writing it, and `message_ended` with its outcome, its entry
-again (so an end is whole when the `message_taken` was refused), its `lastEntryId` (the log's tail as it is written)
-and, on the first message the work took, its usage. All three
-are plane markers (`isPlaneMarker`): never published, never navigable, never seen by the model, never copied by a
-fork. Nothing else marks the log: which entries a piece of work wrote is not recorded (§7.5), so the published log is
-the conversation alone. A record of accepted messages in a file of its own was considered and not chosen: two files
+`message_taken` with its entry when the loop reports writing it, and `message_ended` with its outcome, its entry again
+(so an end is whole when the `message_taken` was refused) and its answer. All three are plane markers
+(`isPlaneMarker`): never published, never navigable, never seen by the model, never copied by a fork. Nothing else
+marks the log, so the published log is the conversation alone. A record of accepted messages in a file of its own was considered and not chosen: two files
 cannot be written atomically, so every crash between them would need its own recovery rule, for a gain that arrives
 only with scaling out, whose storage is redesigned anyway (§10.2, §13).
 
@@ -1120,44 +1115,45 @@ The rules this gives `LoopPort` over pi-coding-agent, each checked against pi wi
   reaches. So every operation on a session, a read included, acquires it through `LoopPort`'s per-session lock, which
   holds the session's one `SessionManager` from the first acquisition until the session is idle, its queue empty and
   no operation holds it. Every write to the log goes through that manager: the message records, a withdrawn message's
-  end, `update`, `rewind` (pi's `branch` and its leaf anchor), `compact`, and each piece of work's fresh
-  `AgentSession`, which is bound to it. The first acquisition in a process ends the session's interrupted messages
+  end, `update`, `rewind` (pi's `branch` and its leaf anchor), `compact`, and each run's fresh `AgentSession`, which
+  is bound to it. The first acquisition in a process ends the session's interrupted messages
   before anything else, so two operations arriving together after a restart cannot both end one. An idle session
   holds nothing in process.
-- **Writes during work.** Appended through the work's own manager, a record or a settings change keeps the log one
-  chain, never reaches the model's context, and survives a reopen unchanged. Work in progress takes its model from its
-  agent's state, so `update` during it applies from the next work, as the SPEC says, instead of answering `busy`. One
+- **Writes during a run.** Appended through the run's own manager, a record or a settings change keeps the log one
+  chain, never reaches the model's context, and survives a reopen unchanged. A running run takes its model from its
+  agent's state, so `update` during it applies from the next message the agent takes, as the SPEC says, instead of
+  answering `busy`. One
   window is not covered: a message accepted but not yet bound to pi (its extensions still loading) binds on the new
   settings. Binding it on the settings it was accepted with would not help, since pi records the model it binds, which
   would then override the update for every later message too.
 - **Which entry a message became.** pi's entries carry no message id. The loop reports, for each message, the entry
   it wrote for it as it writes it, and `LoopPort` records that at once as `message_taken`, through the same manager;
-  a published `user_message` names its message through the index built from those records. So work the process loses
-  still leaves its messages' entries named, and an `interrupted` message replays what it wrote. The one gap is a stop
+  a published `user_message` names its message through the index built from those records. So a run the process loses
+  still leaves its messages' entries named. The one gap is a stop
   between pi appending the entry and `LoopPort` appending its `message_taken`, two writes in a row on one manager:
   that entry stays unnamed and its message ends `interrupted` without an `entryId`, as SPEC §6 allows.
-- **Where a message's history ends.** `message_ended` is written through the same manager right after the work
-  settles, and for an `interrupted` message at the first acquisition after a restart, before anything else writes. In
-  both cases nothing has been appended since the work stopped, so the log's tail is its `lastEntryId`.
+- **What a message ended as.** When pi's run settles, each message it took ends with what that run came to: its
+  answer and outcome, which pi reports for the run and `LoopPort` records for each message. That is the pi harness
+  reporting its own facts, not a protocol rule: the protocol asks only that each message have one.
 - **Idempotency.** Opening a session scans its whole log, not only the active path (a rewind leaves earlier messages'
   keys on an abandoned branch), into an index of keys to messages held while the session is busy.
 - **Steering.** Only the loop can say what became of a message it was handed, so a loop reports it for each message,
   by the id `LoopPort` handed it under and as it happens: written as an entry, or consumed without one. By id, because
   a report by position shifts every later message when one steer fails; as it happens, because a taken message's
-  `messages.get` should name its entry while the work goes on. pi keeps a run going for a message steered before
+  `messages.get` should name its entry while it is being answered. pi keeps a run going for a message steered before
   `agent_settled`, even after a failed model request; an extension's `input` handler can consume one (`steer()`
   answers `handled`, and no entry is written), which ends it `intercepted`; and since `steer()` awaits those handlers
   before it queues, a message can reach pi's queue after its run settled, where nothing runs it. The pi harness
-  reports those three from what pi tells it. A message the loop said nothing for when the work ends was not taken, and
-  `LoopPort` has the next work take it, ahead of the queue, as the SPEC's steering rule says (§7.2), whether the work
-  answered, failed or was canceled. Work the process lost ends its messages `interrupted`, naming the entries their
-  `message_taken` recorded: which entry was whose is the loop's to say, so it is recorded as the loop says it. Counting the work's user entries cannot tell these apart, checked against pi: a consumed
-  message has no entry and would be taken twice.
+  reports those three from what pi tells it. A message the loop said nothing for when its run ends was not taken, and
+  `LoopPort` starts the next run with it, ahead of the queue, however that run ended: a steer is still a message to
+  answer. A run the process lost ends its messages `interrupted`, naming the entries their `message_taken` recorded:
+  which entry was whose is the loop's to say, so it is recorded as the loop says it. Counting the run's user entries
+  cannot tell these apart, checked against pi: a consumed message has no entry and would be taken twice.
 - **Withdrawing a steer.** `messages.cancel` of a steer the loop holds and has not taken asks the loop to take it
   back, and it is `canceled` without an entry only when the loop can promise it never will: pi's harness drops one
   still in its `input` handlers, and takes one out of pi's steering queue by queueing the others again without it,
-  synchronously, so pi cannot select it in between. One pi has already selected for its next step is the work's: the
-  cancel stops that work, and the steer ends `canceled` with it, never carried to the next work.
+  synchronously, so pi cannot select it in between. One pi has already selected for its next step is the run's: the
+  cancel stops that run, and the steer ends `canceled` with it, never carried to the next run.
 - **Where a live event sits.** Every live event the port reports carries the newest entry published before it. A
   subscriber reads the log after it subscribes, so its live queue overlaps that read; only an event that follows the
   newest entry it was given is new. That keeps a message's stream from replaying another message's answer, or its own
@@ -1168,13 +1164,11 @@ write on power loss; pi drops a torn last line when it loads a log.
 
 | What happens | A taken message | A queued message |
 |---|---|---|
-| The caller stops reading | The work continues | Stays queued, and is taken in its turn |
-| `messages.cancel` | The work stops: `canceled` by `cancel` | Withdrawn: `canceled` by `cancel` |
-| `abort` | The work stops: `canceled` by `abort` | Withdrawn: `canceled` by `abort` |
-| `delete` | The work stops: `canceled` by `delete` | Withdrawn: `canceled` by `delete` |
-| The process stops: a restart or a deploy | The work continues with `durableWork`; otherwise `interrupted`, and what it recorded stays | Stays queued with `durableQueue`; otherwise `interrupted` without being taken |
+| The caller stops reading | The agent goes on | Stays queued, and is taken in its turn |
+| `messages.cancel`, `abort` or `delete` | The agent stops: `canceled` | Withdrawn: `canceled` |
+| The process stops: a restart or a deploy | Still answered with `durableTaken`; otherwise `interrupted`, and what it recorded stays | Stays queued with `durableQueue`; otherwise `interrupted` without being taken |
 
-The service never redoes work on its own: its tools may already have had effects (§3.1, invariant 3). A caller that
+The service never redoes a message on its own: its tools may already have had effects (§3.1, invariant 3). A caller that
 owes an answer invokes again with the message's key, which is accepted again only when the key's message was
 `interrupted` (§7.3); the channels do, from their turn stores, so they stay at-least-once.
 
@@ -1183,7 +1177,7 @@ a session router above FastAgent. FastAgent's deployments meet it by topology: o
 host, and on AgentCore the microVM of the runtime session the call names. Scaling out keeps it by giving each
 conversation its own runtime session, which a router finds from the path or the invoke's body (§7.7). It is weaker
 than v0.1's rule, which forbade requiring a session's invocations to land in one process: a queued message in
-`LoopPort`'s memory, or a steer, is state only the process working on the session holds. Portable conformance needs
+`LoopPort`'s memory, or a steer, is state only the process answering the session holds. Portable conformance needs
 that router in front (§7.8).
 
 ### 9.4 Where state lives
@@ -1253,8 +1247,8 @@ and what spans conversations (redelivery dedup, the session list, schedules) to 
 ### 10.3 Operations
 
 `logs` shows what the service printed. What an agent is doing is each session's state and messages (`read`,
-`messages.get`), and what it cost is the sum of the messages' `usage`, which each piece of work reports once, on the
-first message it took.
+`messages.get`), and what it cost is the sum of the `usage` its `assistant_message` entries carry, one model response
+each.
 
 ## 11. What changes in FastAgent
 
@@ -1272,7 +1266,7 @@ first message it took.
 | A busy session | `whenBusy`: `queue` (the default), `steer`, `reject` (§7.2, step 4) | Unchanged |
 | Stopping and steering | `messages.cancel` and the session's `abort`; steering through `invoke` (§7.3, §7.4, step 4) | Unchanged |
 | HTTP | The user plane (`http.api`), on by default: invoking, listing, reading, following, aborting and rewinding sessions; the control plane (`/control`, `http.control`) off by default (§7.7, step 4) | Unchanged |
-| A channel's turn after a restart | Its turn store replays it, at most three times | The same in effect: the service never redoes work, and the turn store invokes again with the message's key, which is accepted again only when the key's message was `interrupted` (§7.3) |
+| A channel's turn after a restart | Its turn store replays it, at most three times | The same in effect: the service never redoes a message, and the turn store invokes again with the message's key, which is accepted again only when the key's message was `interrupted` (§7.3) |
 | The harness boundary | Two contracts: the protocol above, the harness port below, with `LoopPort` holding the queue for pi (§9.1, step 4) | A durable harness behind the same port (pi-durable, step 4) |
 | AgentCore | One fixed runtime session for every entry point | A runtime session per conversation (§10.2) |
 | The agent's own changes on a host | Lost at the next deploy | Designed later (#605) |
@@ -1316,11 +1310,11 @@ Each is settled when the step that needs it is built (§12).
    which API storage holds each part. Pending wake-ups are part of it: a deploy must
    not wipe them.
 4. Settled in §9.1: pi-durable is chosen with `harness: "pi-durable"`, implements `HarnessPort` directly over SQLite
-   under `.state/`, places its waiting queue with a write of its own after work that did not answer, and offers no
+   under `.state/`, places its waiting queue with a write of its own after a run that did not answer, and offers no
    `rewind` or `delete`. Which of skills and prompt templates it gains through FastAgent is settled when it is built;
    extensions, MCP and `chat` stay pi-coding-agent's.
-5. Settled with pi-durable: a harness whose work continues after a restart (`durableWork`) keeps its own message
-   records, so the port adds nothing; a harness that is only a loop does not continue its work (§9.3).
+5. Settled with pi-durable: a harness that still answers a taken message after a restart (`durableTaken`) keeps its own
+   message records, so the port adds nothing; a harness that is only a loop does not (§9.3).
 6. Content kinds, and context sources, beyond GitHub repositories and this machine's directories: another git host,
    npm for a context, an S3 bucket synced to files.
 7. Acting as the member who asked (§6.3), with permissions.
@@ -1398,15 +1392,16 @@ The serving protocol:
   holds at most 20 queued messages, and a process caps its messages in flight at 100 (§7.2, §7.3).
 - An idempotency key is unique within its session and requires `sessionId`; the same key returns the same message,
   without comparing its text, except a message that ended `interrupted`, whose key accepts it again. The service never
-  redoes work on its own; a caller that owes
+  redoes a message on its own; a caller that owes
   an answer decides to, so channels stay at-least-once (§7.2, §7.3).
-- A steered message is taken by the work in progress at its next step and answered by that work's answer; one that
-  arrives after the work has answered is taken next, ahead of the queue, and answered on its own. That is pi-durable's
-  rule, and it gives every message one answer without the receipt waiting for the harness (§7.2).
+- A steered message is handed to the agent while it is busy, and is a message like any other: its answer and outcome
+  are its own, as the harness reports them. Nothing groups messages: no shared outcome, no usage per group, no end of
+  a group in the log. Cost rides on each `assistant_message`; `canceled` does not say who stopped it; a done message's
+  follow replays its own entry through its answer (§7.1, §7.2, §7.3).
 - A message's `source` is set in process by channels, schedules and wake-ups; a remote caller cannot set it and is
   recorded as `api` (§7.2).
-- A message's work outlives its caller: a caller that stops reading detaches. Messages are read, followed and
-  canceled by id; the session's `abort` stops the work in progress, every queued message and a manual compaction
+- A message outlives its caller: a caller that stops reading detaches. Messages are read, followed and canceled by
+  id; the session's `abort` stops the agent, every queued message and a manual compaction
   (§7.3, §7.4).
 - A session's history is read with `read` (state and a page, after or before a cursor) and followed with `follow`
   from a cursor; the serving layer builds both on the harness's ordered log, the same way for every harness (§7.4).
@@ -1414,7 +1409,7 @@ The serving protocol:
   active branch is `rewind` (§7.4).
 - Each message has one durable record, accepted and ended once, kept beside the conversation and committed with it;
   the log holds the conversation alone. An `interrupted` message's end is recorded once, when the session is first
-  opened after its work stopped (§7.3, §9.3).
+  opened after its process stopped (§7.3, §9.3).
 - A thread forks at the answer of the protocol message named by the nearest chat message of its reply chain: a
   message the channel posted for it, which it records, or a user's message, by its idempotency key. When nothing names
   one,
@@ -1437,17 +1432,17 @@ The architecture and deployment:
   lives behind the port, so a durable harness's queue is used, and a shared `LoopPort` serves harnesses that are only
   a loop, writing its message records into the one log it writes (the harness's own, pi's, or one it keeps for an ACP
   agent) through that log's one writer, which every operation on a session acquires (§9.1, §9.3).
-- Steering is a harness capability; stopping work is a signal the port receives (§9.1).
+- Steering is a harness capability; stopping the agent is a signal the port receives (§9.1).
 - pi-durable is a second harness in step 4, behind the same port, which an agent opts into; pi-coding-agent stays the
   default, so `extensions/`, MCP and `chat` keep working. An agent that chooses pi-durable and declares `extensions/`
-  or `mcp.json`, or runs on Bun, is refused at start. It implements `HarnessPort` directly, with `durableWork` and
+  or `mcp.json`, or runs on Bun, is refused at start. It implements `HarnessPort` directly, with `durableTaken` and
   `durableQueue`, and no `rewind` or `delete`, which it lacks: emulating them would be a silent downgrade. Spikes on
   1.1.0 and 1.3.0 measured it against the port's admission, queue, steering, stop, read and restart operations
   (§9.1).
 - DeepSeek Harness is reached through its ACP server first (step 5), with `LoopPort` recording its whole log; a
   native harness for it waits until a run against its npm `alpha` release shows that composing its plugin runtime is
   worth what ACP leaves out (§9.1).
-- After work that failed or was canceled, queued messages are taken as usual. pi-durable leaves its queue waiting after
+- After a message that failed or was canceled, queued messages are taken as usual. pi-durable leaves its queue waiting after
   a run that fails or is aborted, so its port places the queue with a write of its own to keep this rule (§9.1).
 - `principal` is deferred until permissions are designed; a message records its `source` (§9.5).
 - AgentCore is the main host, because an idle agent costs nothing there. A box is disposable by design: the program

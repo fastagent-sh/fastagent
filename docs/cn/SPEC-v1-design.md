@@ -45,15 +45,15 @@ v1 的设计来源是两个本身就为长时间、多入口运行设计的 harn
 | **Message（消息）** | 调用方发进会话的一条消息，从被接受到有结局 | "我这条消息排着队 / 正在处理 / 已回答"；"回答是什么、花了多少 token、成功还是失败" |
 | **Entry（记录）** | 会话历史里的一条记录：被处理的用户消息、agent 的回复、工具结果、设置变更、压缩 | 聊天记录本身；断线后从哪里接着看；从哪里分叉 |
 
-agent 怎么干活（step、turn、run）属于 harness 内部，不进协议。会话同一时间只做一件事：接下一条消息，调用模型和工具，直到给出回答。
+agent 怎么回答（step、turn、run），以及哪些消息被一起处理，都属于 harness 内部，不进协议。每条消息的事实只属于它自己。
 
 **为什么调用方拿到的是消息，而不是 run。** v1 最初的草稿让调用方拿 run（一段工作，可能包含多条 steer 进来的消息），并把 run 的开始和结束作为 entry 写进日志。实测 pi-durable 1.3.0 后改成了消息，原因是：
 
 - 真正必须持久化的东西是按消息的：channel 欠每个用户一个回答；重试要靠 key；重启后要知道哪些消息被打断。pi-durable 正是这样：每条输入（submission）持久地结束一次，要么 `done` 并指向回答它的 entry，要么 `unanswered` 并给出原因，并且和 entry 在同一次提交里原子写入。它的 run 只是调度状态，结束后不保留。
 - 把 run 边界写进日志代价最大：边界要在 run 的所有 entry 之前和之后，而日志 harness 也在写。pi-durable 会在结束一个 run 的同一次提交里放入下一条排队消息，所以它的边界没法按顺序写进日志，只能从提交顺序去猜。
-- steer 进来的消息并不是没有自己的结局：它被哪段工作接走，就由那段工作的回答来回答，结局也和那段工作相同。
+- 之后又删掉了一个隐藏的分组概念"一段工作"（work）。它其实是改了名的 run：同一段工作接走的消息结局相同、用量每段工作只算一次、消息的历史在工作结束处截止（`lastEntryId`）、取消一条消息会停掉整段工作。pi-durable 不持久保存这种分组（一个 run 取走了哪些输入，只在 run 进行中存在），port 只能事后重建；五轮 review 每轮都在重建里找到新的漏洞，约占全部问题的三分之二。而调用方真正要的东西都不需要分组：回答是按消息的；用量属于每一次模型回答，记在 `assistant_message` 上，直接相加；完整过程看会话的 `follow`。
 
-由于 SPEC v1 还没有对外发布过，这次改动仍然叫 v1。
+所以协议里不再有任何把消息归成一组的规则。两条消息被一起回答、共用一个回答，只是 harness 的行为，不是承诺。由于 SPEC v1 还没有对外发布过，这些改动仍然叫 v1。
 
 ### 2. 会话忙时怎么办：`whenBusy`
 
@@ -61,17 +61,17 @@ agent 怎么干活（step、turn、run）属于 harness 内部，不进协议。
 
 | `whenBusy` | 会话正在处理别的消息时 | 典型场景 |
 |---|---|---|
-| `queue`（默认） | 排队，按到达顺序，前一段工作结束后再处理 | 群聊里连续来了几条消息 |
-| `steer` | 排在队首等待，当前工作在这轮工具调用结束后接走它，由当前工作的回答来回答；如果当前工作结束时（不管是回答了、失败了还是被取消）还没接走它，就由下一段工作接走并回答（下一段工作可能同时接走第一条排队消息，两者共用一个回答） | 用户补充一句"对了，用英文回答" |
+| `queue`（默认） | 排队，按到达顺序，agent 处理完前一条后再处理，不管前一条结局如何 | 群聊里连续来了几条消息 |
+| `steer` | agent 还在忙时就交给它，让它在下一步（这轮工具调用之后）接走，而不是等它停下；被接走前排在队首。它的回答和结局由 harness 如实报告 | 用户补充一句"对了，用英文回答" |
 | `reject` | 直接拒绝，返回 `busy` | 定时任务不想堆积 |
 
-会话空闲时，三种方式都会立刻处理这条消息。被同一段工作接走的消息，回答和结局都相同。steer 消息在被接走之前和其他排队消息一样是 `queued`：有 `position`（排在最前），出现在会话的 `queued` 列表里，占用 20 条的排队上限，`abort` 会把它撤回。
+会话空闲时，三种方式都会立刻处理这条消息。steer 消息在被接走之前和其他排队消息一样是 `queued`：有 `position`（排在最前），出现在会话的 `queued` 列表里，占用 20 条的排队上限，`abort` 会把它撤回。
 
-### 3. 工作不依赖调用方存活
+### 3. 消息不依赖调用方存活
 
-- 调用方停止读取只是**离开**（detach），工作继续进行。
-- 叫停工作只能显式调用：
-  - `messages.cancel`：撤回一条排队的消息，或停掉正在处理它的那段工作；
+- 调用方停止读取只是**离开**（detach），agent 继续处理。
+- 叫停只能显式调用，被停下的消息结局都是 `canceled`（不再区分是谁停的）：
+  - `messages.cancel`：撤回一条排队的消息，或让 agent 停止回答一条已取走的消息；同时被处理的其他消息怎么结束，由它们各自报告；
   - `abort`：停掉整个会话正在做的一切；
   - `delete`：删除会话。
 
@@ -112,7 +112,7 @@ const { text } = await collect(agent.invoke({ prompt: { text: "总结这个 issu
    - `done`：某条消息有了结局。
 5. 往上翻历史时，用 `prev` 游标继续 `read`。
 
-只有 entry 是持久的；`done` 由消息的持久记录生成，任何时候来跟随一条已结束的消息都能收到；其余都是实时事件，属于会话正在做的事：当前工作，或者 `compacting` 状态下的压缩（压缩的模型重试也会发 `retry_scheduled`）。断线重连后能看到所有漏掉的 entry，但看不到中间的逐字输出，这是有意的设计。
+只有 entry 是持久的；`done` 由消息的持久记录生成，任何时候来跟随一条已结束的消息都能收到；其余都是实时事件，属于会话正在做的事：agent 回答已取走的消息，或者 `compacting` 状态下的压缩（压缩的模型重试也会发 `retry_scheduled`）。断线重连后能看到所有漏掉的 entry，但看不到中间的逐字输出，这是有意的设计。
 
 ### 3. 可靠的 channel：飞书、Slack、Telegram
 
@@ -125,7 +125,7 @@ agent.invoke({
 ```
 
 - 平台重投、或者 FastAgent 崩溃后重发同一个 key，返回同一条消息，标记 `duplicate: true`，不会重复处理。
-- 重复的那个流从这条消息的 `user_message` entry 开始，重放这段工作写下的记录（到消息记录里的 `lastEntryId` 为止），以同一个 `done` 结束，所以 `collect` 拿到的答案和第一次完全一样；没有回答的消息（例如调用工具后失败）也能看到它的工具结果。
+- 重复的那个流从这条消息的 `user_message` entry 开始，有回答时重放到回答为止，没有回答时只给它自己那条 entry，以同一个 `done` 结束，所以 `collect` 拿到的答案和第一次完全一样。失败消息中途做了什么，看会话的 `follow`。
 - 只有一个例外：上次那条消息是 `interrupted`（进程挂了），同一个 key 会作为一条新消息重新接受。这样 channel 仍然是"至少一次"：
   - 要么已经有一个结果；
   - 要么由调用方明确决定重做。
@@ -170,7 +170,7 @@ for await (const e of session.messages.follow(messageId, { after: lastEntryId })
 |---|---|
 | 1. 一种结尾 | 读到底的流，要么只有一个 `rejected`，要么以自己那条消息的 `done` 结束；进程停止是唯一例外 |
 | 2. 失败是事件 | 迭代 `invoke`、`follow`、`messages.follow` 永远不抛异常；处理失败的消息以 `failed` 结局结束 |
-| 3. 离开不等于停止 | 调用方断开时只释放这个流占用的资源，工作继续 |
+| 3. 离开不等于停止 | 调用方断开时只释放这个流占用的资源，agent 继续 |
 | 4. 先持久化再回执 | 发出 `accepted` 之前，消息的 id、key 和来源必须已经落盘；每条消息恰好结束一次，先落盘再报告；永不自动重做 |
 | 5. 能力如实声明 | 做不到的操作返回 `unsupported`，不能悄悄忽略、模拟或降级 |
 
@@ -182,7 +182,8 @@ for await (const e of session.messages.follow(messageId, { after: lastEntryId })
 ### 2. 几条容易做错的语义
 
 - **幂等的原子性**：查 key、登记消息、入队必须在同一个会话内串行完成。同一个 key 并发进来，只能产生一条消息。
-- **steer 的去向**：回执不承诺 steer 一定被当前工作接走，因为 harness 只有到下一步才知道。规则保证无论哪种情况，每条消息都有且只有一个回答。
+- **steer 的去向**：回执不承诺 steer 被哪次回答处理，harness 只有到下一步才知道。每条消息的回答和结局都由 harness 按这条消息如实报告。
+- **用量**：记在每条 `assistant_message` 上，一次模型回答一份，相加即可，不存在重复计算。
 - **`interrupted` 的收尾**：重启后第一次打开这个会话时，先把被打断的消息记为结束，再回应任何操作。这样重连的 `messages.follow` 不会永远等下去。
 - **会话的生命周期**：
   - invoke 一个不存在的会话会自动创建它；
@@ -200,7 +201,7 @@ for await (const e of session.messages.follow(messageId, { after: lastEntryId })
 | `rewind` | 支持 | 不支持，没有对应调用 |
 | `delete` | 支持 | 不支持，没有对应调用 |
 | `durableQueue`：重启后排队的消息还在 | 否 | 是 |
-| `durableWork`：重启后正在进行的工作继续 | 否 | 是 |
+| `durableTaken`：重启后已取走的消息继续被回答 | 否 | 是 |
 
 ### 4. 上限
 
@@ -218,7 +219,7 @@ for await (const e of session.messages.follow(messageId, { after: lastEntryId })
 所有 harness 都跑同一套测试，分别在进程内和通过 HTTP 各跑一遍。覆盖的范围：
 
 - 回执和结尾；
-- 三种 `whenBusy`，包括 steer 在回答之后才到的情况；
+- 三种 `whenBusy`；
 - 幂等，包括并发和 `interrupted` 的例外；
 - 断开、取消、中止，以及失败或取消之后队列照常继续；
 - 重启后的行为，包括"工具副作用次数不增加"；
@@ -260,23 +261,23 @@ channel、定时任务和 wake 不再走特殊通道，它们和外部应用一�
 
 选 B，因为接入 pi-durable 的意义就在于它的持久性。pi-durable 直接实现 `HarnessPort`。
 
-steer 必须交给 harness 实现：只有它的循环知道一个 step 在哪里结束。从外面只能杀掉正在执行的工具，或者等工作结束。
+steer 必须交给 harness 实现：只有它的循环知道一个 step 在哪里结束。从外面只能杀掉正在执行的工具，或者等 agent 停下。
 
 ### 3. 状态放在哪里
 
-每条消息有一份持久记录：被接受时写入 id、key 和来源（在回执之前），结束时写一次结局、它变成的 entry、工作结束时历史的最后一条 entry（`lastEntryId`）、回答和用量（在报告之前）。用量每段工作只报告一次，记在这段工作接走的第一条消息上，所以把各条消息的用量加起来不会重复计算。消息 id 归 Agent 所有，和调用方的 idempotency key 是两回事：pi-durable 上，提交时的 request id 就带来源前缀（`k:<key>` 或 `m:<生成的 id>`），消息 id 就是它，所以调用方的 key 和生成的 id 在去重层也不会撞号。消息的状态由这份记录和队列推导出来。日志里只放对话本身，不再有 run 的开始和结束标记。
+每条消息有一份持久记录：被接受时写入 id、key 和来源（在回执之前），结束时写一次结局、它变成的 entry 和回答（在报告之前）。记录里没有任何把消息归成一组的信息。消息 id 归 Agent 所有，和调用方的 idempotency key 是两回事：pi-durable 上，提交时的 request id 就带来源前缀（`k:<key>` 或 `m:<生成的 id>`），消息 id 就是它，所以调用方的 key 和生成的 id 在去重层也不会撞号。消息的状态由这份记录和队列推导出来。日志里只放对话本身，不再有 run 的开始和结束标记。
 
-- **pi-durable**：它自己的 submission 就是这份记录，和 entry 在同一次提交里原子写入。工作没有回答就结束时，pi-durable 不记 `lastEntryId`，端口会提交一条自己类型的写入（`edits: []`）补上它，存在 pi-durable 自己的 store 里；这条写入同时会放出排在后面的消息。因为工作没回答时，在这条写入之前不会有别的东西追加到对话里，所以写入时的末尾就是准确的 `lastEntryId`；进程如果恰好在中间停了，重新打开会话时先补写，结果也一样。
-- **pi-coding-agent**：`LoopPort` 把三种记录写进 pi 的会话日志：`message_accepted`（被接受时）、`message_taken`（loop 报告写下这条消息的 entry 时，立刻写）和 `message_ended`（结局、`lastEntryId`、用量）。三者都是 plane marker：不对外发布、不能作为 rewind 目标、模型看不到、fork 不复制。
+- **pi-durable**：它自己的 submission 就是这份记录，和 entry 在同一次提交里原子写入，port 直接映射，不另存。run 失败或被中止后 pi-durable 会让排队消息停住，port 补一条不发布的写入（`edits: []`）把它们放出来：中止都由 port 自己发起，发起后补写即可；模型失败要等 pi-durable 发布 `afterFailedRun: "continue"`，在那之前需要一个只在有排队时才挂的观察者。这条写入不携带任何数据，丢了只会延迟。
+- **pi-coding-agent**：`LoopPort` 把三种记录写进 pi 的会话日志：`message_accepted`（被接受时）、`message_taken`（loop 报告写下这条消息的 entry 时，立刻写）和 `message_ended`（结局、entry、回答）。三者都是 plane marker：不对外发布、不能作为 rewind 目标、模型看不到、fork 不复制。
 - **ACP agent**：ACP 没法往 agent 的历史里追加自己的记录，所以 `LoopPort` 自己保存整份日志，消息记录也写在里面。
 
 不单独存一个文件，因为两个文件没法原子写入。
 
-只有实时事件放在内存里。对只有循环的 harness，排队顺序和当前工作也在内存里。内存丢了不会让消息凭空消失，它会被认定为 `interrupted`。
+只有实时事件放在内存里。对只有循环的 harness，排队顺序和正在跑的 run 也在内存里。内存丢了不会让消息凭空消失，它会被认定为 `interrupted`。
 
-这要求每个会话的日志只有一个写者。从第一次有操作拿到会话，到会话空闲、队列为空且没有操作持有它，`LoopPort` 一直持有这个会话唯一的 `SessionManager`，每段工作新绑定的 `AgentSession` 都用它，所有写入（消息记录、被撤回消息的结束、`update`、`rewind`、`compact`）也都经过它。对会话的任何操作，包括只读的 `read`，都要先经过 `LoopPort` 的会话锁拿到这个 `SessionManager`；本进程第一次拿到时先结束被打断的消息，所以重启后同时到达的两个请求不会各结束一次。如果另开一个 `SessionManager` 写同一个文件，写入的 entry 会变成活动分支之外的旁支，等于丢失。细节见 [agent-service.md](../design/agent-service.md) §9.3。
+这要求每个会话的日志只有一个写者。从第一次有操作拿到会话，到会话空闲、队列为空且没有操作持有它，`LoopPort` 一直持有这个会话唯一的 `SessionManager`，每个 run 新绑定的 `AgentSession` 都用它，所有写入（消息记录、被撤回消息的结束、`update`、`rewind`、`compact`）也都经过它。对会话的任何操作，包括只读的 `read`，都要先经过 `LoopPort` 的会话锁拿到这个 `SessionManager`；本进程第一次拿到时先结束被打断的消息，所以重启后同时到达的两个请求不会各结束一次。如果另开一个 `SessionManager` 写同一个文件，写入的 entry 会变成活动分支之外的旁支，等于丢失。细节见 [agent-service.md](../design/agent-service.md) §9.3。
 
-steer 进来的消息最后怎么样了，只有 harness 知道：写成了 entry、被扩展消费（不写 entry，结局是 `intercepted`），或者没被处理（pi 的 `steer()` 可能在 run 结束后才进队列）。所以 loop 按 `LoopPort` 给每条消息的 id、在发生的那一刻报告它的去向；工作结束时还没被报告的，就是没被处理，`LoopPort` 让下一段工作在队首接走它。按 id 而不按位置，是因为某条 steer 出错时，按位置会让后面的消息全部错位；当场报告，是为了让正在处理的消息也能查到已写入的 entry。进程中断的工作，它的消息结局是 `interrupted`，但已经写下的 `message_taken` 仍然标明了每条消息对应的 entry，所以重连后能重放它写下的内容；只有在 pi 写入 entry 和 `LoopPort` 写入 `message_taken` 之间恰好停掉时，那条消息才没有 entryId。按 user entry 的条数推断是不行的：被扩展消费的消息没有 entry，会被处理两遍。
+steer 进来的消息最后怎么样了，只有 harness 知道：写成了 entry、被扩展消费（不写 entry，结局是 `intercepted`），或者没被处理（pi 的 `steer()` 可能在 run 结束后才进队列）。所以 loop 按 `LoopPort` 给每条消息的 id、在发生的那一刻报告它的去向；run 结束时还没被报告的，就是没被处理，`LoopPort` 用它开始下一个 run，排在队首（这是 pi 这个 harness 的实现选择，不是协议规则）。按 id 而不按位置，是因为某条 steer 出错时，按位置会让后面的消息全部错位；当场报告，是为了让正在处理的消息也能查到已写入的 entry。进程中断的 run，它的消息结局是 `interrupted`，但已经写下的 `message_taken` 仍然标明了每条消息对应的 entry；只有在 pi 写入 entry 和 `LoopPort` 写入 `message_taken` 之间恰好停掉时，那条消息才没有 entryId。按 user entry 的条数推断是不行的：被扩展消费的消息没有 entry，会被处理两遍。
 
 ### 4. 位置依赖（MUST 8，比 v0.1 弱）
 
