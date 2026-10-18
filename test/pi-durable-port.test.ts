@@ -384,7 +384,7 @@ describe("pi-durable port", () => {
       const page = await session.read();
       const entries = page.ok ? page.entries : [];
       const ownAnswer = entries.find((e) => e.kind === "assistant_message");
-      const failedId = (entries[0]?.data as { messageId: string }).messageId;
+      const failedId = (entries[0]?.data as { messageId: string } | undefined)?.messageId ?? "";
       expect(await session.messages.get({ messageId: failedId })).toMatchObject({ lastEntryId: ownAnswer?.id });
       held.open();
     } finally {
