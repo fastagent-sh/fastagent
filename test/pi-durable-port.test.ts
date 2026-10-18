@@ -345,6 +345,66 @@ describe("pi-durable port", () => {
     const read = await agent.sessions.get("s").read({ limit: 0 });
     expect(read.ok && read.state.name).toBeUndefined();
   });
+
+  it("an end recovered after other work started is where its own work ended", { timeout: 30_000 }, async () => {
+    file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
+    held = gate();
+    let release!: () => void;
+    const reading = new Promise<void>((resolve) => (release = resolve));
+    let gated = false;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The read before the end is recorded waits, then fails: the end is recovered from the log, after `hold` began.
+    const agent = await start(undefined, {
+      storage: (storage) =>
+        new Proxy(storage, {
+          get: (target, key) =>
+            key === "submission"
+              ? async (...args: Parameters<Storage["submission"]>) => {
+                  const record = await target.submission(...args);
+                  if (record?.status === "unanswered" && !gated) {
+                    gated = true;
+                    await reading;
+                    throw new Error("disk unavailable");
+                  }
+                  return record;
+                }
+              : bound(target, key),
+        }),
+    });
+    try {
+      const session = agent.sessions.get("s");
+      const failed = collect(agent.invoke({ sessionId: "s", prompt: { text: "fail" } }));
+      void failed.catch(() => {});
+      await vi.waitFor(() => expect(gated).toBe(true), { timeout: 20_000 });
+      const before = holds;
+      await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+      await vi.waitFor(() => expect(holds).toBe(before + 1), { timeout: 5000 });
+      release();
+      await expect(failed).rejects.toThrow("boom");
+      const page = await session.read();
+      const entries = page.ok ? page.entries : [];
+      const ownAnswer = entries.find((e) => e.kind === "assistant_message");
+      const failedId = (entries[0]?.data as { messageId: string }).messageId;
+      expect(await session.messages.get({ messageId: failedId })).toMatchObject({ lastEntryId: ownAnswer?.id });
+      held.open();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("a message after one canceled mid-tool is work of its own, and reports its usage", async () => {
+    file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
+    held = gate();
+    const agent = await start();
+    const session = agent.sessions.get("s");
+    const before = holds;
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await vi.waitFor(() => expect(holds).toBe(before + 1), { timeout: 5000 });
+    expect(await session.messages.cancel(first)).toEqual({ ok: true });
+    await vi.waitFor(async () => expect((await session.messages.get({ messageId: first }))?.status).toBe("done"));
+    const next = await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
+    expect(await session.messages.get({ messageId: next.messageId })).toMatchObject({ usage: expect.any(Object) });
+  });
 });
 
 async function receiptOf(events: AsyncIterable<InvokeEvent>) {

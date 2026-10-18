@@ -1064,8 +1064,11 @@ As built (`harnesses/pi-durable/port.ts`, passing the SPEC's suite on SQLite sto
   run. Until the end is recorded the message reads `taken`, and one function says which messages are taken for a
   message's status and the session's state alike. The stream's listener only queues each batch; the work runs on the
   conversation's own queue, and a job that fails is logged and made good by a resync from the log (a
-  `serving_error` only when that fails too). When the port opens, it follows the conversations with work in flight or
-  an end a previous process did not record, and records those from the conversation's tail.
+  `serving_error` only when that fails too). An end recovered that way, or by a port opening after a previous process
+  stopped before recording it, is the message's last published entry before a user entry of another message: the
+  exact moment is gone, and work started since is not its.
+- **Reads are ranges of the log.** A page, a message's part, and a message's usage read entry ranges by id; nothing
+  reads a conversation's whole history.
 - **Kept beside pi-durable's records, in its own store:** which conversation a session id names, its name and times
   (`fastagent.sessions`), why a message was canceled (`fastagent.stops`), which pi-durable records only as
   `aborted`, and where unanswered work ended (`fastagent.ends`).
