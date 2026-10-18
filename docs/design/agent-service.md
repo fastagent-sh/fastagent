@@ -1057,7 +1057,10 @@ and the error names the cause; nothing it declares is dropped silently.
 
 As built (`harnesses/pi-durable/port.ts`, passing the SPEC's suite on SQLite storage):
 
-- **A conversation is followed from its first use, listened to or not.** The port records a run's end the moment it
+- **A conversation is followed while it owes a message an outcome, or someone listens.** Each message is marked owed
+  (`fastagent.pending`) before it is submitted and cleared once its `done` is reported, so what is in flight is a small
+  set nothing has to scan history to find; an idle conversation nobody listens to is let go, and holds nothing in the
+  process. The port records a run's end the moment it
   observes it (`watchEvents`), from the newest entry of that same commit, so `lastEntryId` is exact. The record is a
   document (`fastagent.ends`) in a commit of its own, which waits for nothing: a write would queue behind work a new
   message starts first. A separate write then places the inputs pi-durable leaves waiting after a failed or aborted

@@ -142,38 +142,39 @@ describeProtocolConformance("pi-durable", {
 });
 
 describe("pi-durable port", () => {
-  it("a message whose work failed before its end was written gets it when the port opens", async () => {
+  it("a message whose work failed before its end was written gets it when the port opens", {
+    timeout: 30_000,
+  }, async () => {
     file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
-    // A first process: one message taken and failed, and nothing else, as if it stopped right after.
-    const first = await start();
-    const events = [];
-    for await (const event of first.invoke({ sessionId: "s", prompt: { text: "first" } })) events.push(event);
-    await open?.harness.close(context);
-    const storage = await openNodeSqliteStorage(file);
-    const faux = fauxProvider();
-    faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom" })]);
-    const models = createModels();
-    models.setProvider(faux.provider);
-    const bare = await Harness.open(storage, { models, registry: createRegistry() }, context);
-    const [only] = (await storage.scanConversations({ order: "descending" }, 1, undefined, context)).items;
-    const target = only && (await bare.conversation(only.id, context));
-    if (!target) throw new Error("the first process left no conversation");
-    await target.configure({ model: { provider: faux.getModel().provider, modelId: faux.getModel().id } }, context);
-    const submission = await target.submit(
-      {
-        type: "input",
-        content: "fail",
-        requestId: "m:failed",
-        entry: { kind: "fastagent.user", data: { messageId: "m:failed", source: { kind: "api" } } },
+    // A first process whose read before recording the end never returns: it stops with the end unrecorded.
+    const first = await start(undefined, {
+      storage: (storage) =>
+        new Proxy(storage, {
+          get: (target, key) =>
+            key === "submission"
+              ? async (...args: Parameters<Storage["submission"]>) => {
+                  const record = await target.submission(...args);
+                  if (record?.status === "unanswered") await new Promise(() => {});
+                  return record;
+                }
+              : bound(target, key),
+        }),
+    });
+    const accepted = await receiptOf(first.invoke({ sessionId: "s", prompt: { text: "fail" } }));
+    const messageId = accepted.message.messageId;
+    await vi.waitFor(
+      async () => {
+        const page = await first.sessions.get("s").read();
+        expect(page.ok && page.entries.some((e) => e.kind === "assistant_message")).toBe(true);
       },
-      context,
+      { timeout: 20_000 },
     );
-    expect(await submission.wait(context)).toMatchObject({ status: "unanswered", reason: "model_error" });
-    await bare.close(context);
+    expect(await first.sessions.get("s").messages.get({ messageId })).toMatchObject({ status: "taken" });
+    await open?.harness.close(context);
 
     const agent = await start();
     const followed = [];
-    for await (const event of agent.sessions.get("s").messages.follow("m:failed")) followed.push(event);
+    for await (const event of agent.sessions.get("s").messages.follow(messageId)) followed.push(event);
     const done = followed.at(-1);
     expect(done).toMatchObject({ type: "done", message: { outcome: { status: "failed" } } });
     const lastEntryId = done?.type === "done" ? done.message.lastEntryId : undefined;
@@ -392,7 +393,7 @@ describe("pi-durable port", () => {
     }
   });
 
-  it("a message after one canceled mid-tool is work of its own, and reports its usage", async () => {
+  it("work canceled mid-tool reports its usage, and the message after it is work of its own", async () => {
     file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
     held = gate();
     const agent = await start();
@@ -402,6 +403,11 @@ describe("pi-durable port", () => {
     await vi.waitFor(() => expect(holds).toBe(before + 1), { timeout: 5000 });
     expect(await session.messages.cancel(first)).toEqual({ ok: true });
     await vi.waitFor(async () => expect((await session.messages.get({ messageId: first }))?.status).toBe("done"));
+    // The canceled work had already asked the model for its tool call: that cost is reported too.
+    expect(await session.messages.get({ messageId: first })).toMatchObject({
+      outcome: { status: "canceled", by: "cancel" },
+      usage: expect.any(Object),
+    });
     const next = await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
     expect(await session.messages.get({ messageId: next.messageId })).toMatchObject({ usage: expect.any(Object) });
   });
