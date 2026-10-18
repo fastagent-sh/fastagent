@@ -11,8 +11,8 @@ updated: 2026-10-17
 
 > **Status: locked.** This is the protocol the package implements. Changing its semantics needs an explicit decision.
 > Until step 4's next change lands ([#788](https://github.com/fastagent-sh/fastagent/issues/788)), the reference
-> implementation still groups messages as this text no longer does: `lastEntryId`, `usage` on a message,
-> `canceled.by` and `durableWork`.
+> implementation still groups messages as this text no longer does: `lastEntryId`, `usage` on a message rather than
+> on `assistant_message` and `compaction` entries, `canceled.by`, `durableWork`, and an `answer` on any outcome.
 > The design, with its rationale, is [agent-service.md](design/agent-service.md) §7 and §9.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119. This specification is
@@ -199,9 +199,10 @@ type Outcome =
 interface Usage { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; cost?: number }
 ```
 
-`entryId` is the message's `user_message` entry, written when it is taken. `answer` is the `assistant_message` that
-answered it, when the agent did. What anything cost is on the `assistant_message` entries (§6), one model response
-each. `position` counts from 0 in the order the queued messages will be taken, steered ones first. Times are
+`entryId` is the message's `user_message` entry, written when it is taken. `answer` is the `assistant_message` the agent
+stopped on for it: present when the outcome is `completed`, or `max_tokens`, where it is the cut-off reply, and
+absent on every other outcome. A reply whose tool calls ran is never an answer. What the agent's model calls cost is
+on the entries they wrote (§6). `position` counts from 0 in the order the queued messages will be taken, steered ones first. Times are
 milliseconds since the epoch.
 
 ### 4.1 How a message ends
@@ -305,7 +306,7 @@ interface Entry {
 // assistant_message  { text, thinking?, toolCalls?, outcome?, usage?: Usage }
 // tool_result        { toolCallId, toolName, isError, text, images? }
 // settings_changed   { name?, model?, thinkingLevel? }
-// compaction         { summary, firstKeptEntryId }
+// compaction         { summary, firstKeptEntryId, usage?: Usage }
 
 type SessionEvent =
   | { type: "entry"; entry: Entry }
@@ -325,8 +326,10 @@ type SessionEvent =
   message then ends `interrupted` without an `entryId`.
 - `done` reports a message that has ended, built from its durable record. It ends a `messages.follow` and an invoke
   stream; a session `follow` delivers it as a live event for each message that ends while it follows.
-- An `assistant_message` carries the `usage` of the model response it is, when the Agent reports usage: what anything
-  cost is the sum over these entries, each response counted once.
+- When the Agent reports usage, an `assistant_message` carries the `usage` of the model response it is, and a
+  `compaction` the `usage` of the model calls that wrote its summary. An entry a fork copied carries none: its cost was
+  the source session's. So the sum over a session's entries is what its answers and compactions cost, and the sum over
+  sessions counts each call once.
 - Every other event is live: a Caller that reconnects sees the entries it missed, not the deltas. They are the
   session's: what the agent is doing while it answers its taken messages, or a compaction while its status is
   `compacting`, which can also send `retry_scheduled`. A `messages.follow` delivers them while its message is taken.
@@ -398,7 +401,7 @@ A Caller MUST NOT infer the end of the history from a short page: only an absent
 answer `unsupported`: `steer` (`whenBusy: "steer"`), `fork` (`sessions.create` with `fork`), `rewind`, `compaction`
 (`compact`), `delete`, and every field outside `updatable`. `durableQueue` and `durableTaken` change no operation;
 they say what a restart preserves (§4.1). Without `toolProgress` no `tool_progress` event is sent; without `usage`,
-no `assistant_message` carries `usage`.
+no entry carries `usage`.
 
 ## 8. Conformance
 
@@ -450,11 +453,11 @@ One executable suite, run against every harness in process and through the HTTP 
 | Area | Checks |
 |---|---|
 | Invoke | `accepted` first; the stream ends with the message's `done` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session; iteration never throws; every event is JSON |
-| Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is `queued` at position 0 until taken, then taken while the session is still busy, and ends with an answer of its own record (or `unsupported`); an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
+| Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is `queued` at position 0 until taken, then taken while the session is still busy; a steer the agent did not take before it stopped is taken no later than the messages queued with `queue`; a steered message ends `done` (or the mode is `unsupported`); an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
 | Idempotency | A key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`; a duplicate's stream ends with the same `done`, so `collect` over it returns the same answer as over the first; concurrent invokes with one key make one message; an `interrupted` message's key accepts a new message, and `messages.get` by key returns it |
-| Messages | A detached message is done; `messages.follow` resumes from a cursor; `messages.cancel` stops a taken message and withdraws a queued one while the rest are taken, both ending `canceled`; `abort` stops all and reports it, and reports nothing on an idle session; queued messages are taken after one that failed or was canceled; a done message's follow replays its own entry through its answer, or its own entry alone |
+| Messages | A detached message is done; `messages.follow` resumes from a cursor; `messages.cancel` stops a taken message and withdraws a queued one while the rest are taken, both ending `canceled`; `abort` stops all and reports it, and reports nothing on an idle session; queued messages are taken after one that failed or was canceled; a done message's follow replays its own entry through its answer, or its own entry alone; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
 | Restart | A message accepted just before a restart is found by `messages.get`; a taken message is still answered or is `interrupted` per `durableTaken`; queued messages survive or are `interrupted` per `durableQueue`; after a restart, `messages.follow` of an `interrupted` message ends with its `done` without another invoke; no message is redone (a tool's effect count does not grow) |
-| Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; with `usage`, every `assistant_message` carries one; `follow` and a reconnect from the last entry deliver each entry exactly once; an unknown session or cursor is `not_found`, a single `rejected` for a follow; state moves idle → running → idle |
+| Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; with `usage`, every `assistant_message` and every `compaction` the session wrote carries one, and no entry a fork copied does; `follow` and a reconnect from the last entry deliver each entry exactly once; an unknown session or cursor is `not_found`, a single `rejected` for a follow; state moves idle → running → idle |
 | Sessions | `create` of an existing id is `conflict`; a fork holds the history up to its entry and none of the messages, and leaves the source unchanged; `rewind` keeps the earlier branch and answers `busy` on a busy session; `compact` on an empty history is `nothing_to_compact`; `update`, `delete` and `list` |
 | Portable | Two instances over one storage: the second sees the first's history of an idle session |
 

@@ -640,8 +640,12 @@ with its `done` event; or a single `rejected` (SPEC §3).
 A message is `queued`, `taken` (its `user_message` entry written) or `done` with one outcome: `completed`,
 `max_tokens`, `intercepted`, `interrupted`, `canceled`, or `failed` with an error (SPEC §4).
 
-- `answer` is the `assistant_message` that answered it, when the agent did. What anything cost is on the
-  `assistant_message` entries, one model response each: a caller adds those up, and nothing is counted twice.
+- `answer` is the `assistant_message` the agent stopped on for it, present only when it ended `completed` or
+  `max_tokens` (the cut-off reply): a reply whose tool calls ran is a step, not an answer, so a failed message has
+  none and its follow is its own entry alone.
+- What the model calls cost is on the entries they wrote: each `assistant_message`, and each `compaction` for the
+  calls that summarized. A fork's copies carry no `usage`, since the source already paid for them; with that, a caller
+  adds entries up within a session or across sessions and counts each call once.
 - `canceled` does not say who stopped it (a cancel, an abort or a delete): nobody needed the distinction, and
   pi-durable records only that it was aborted.
 - A done message's follow replays its own entry through its answer, or its own entry alone when it has none: what a
@@ -1027,7 +1031,7 @@ input entries of the host's own kind, and a `kill -9` mid-tool on SQLite storage
 | Reading after a cursor | `entries({ minEntryId, order: "ascending" }, limit, cursor)`; entry ids ascend |
 | Live events | `watchEvents()`: a snapshot, then events derived from each commit (`run_start`, `message_*`, `tool_execution_*`, `submission`, …). Nothing is replayed, so `follow` reads entries first, as for every harness |
 | Withdrawing a queued message | `submission.abort()`; one already placed answers `already_placed` |
-| The queue after a run that did not answer | After a run that fails (`model_error`, `no_model`) or whose task is aborted, the queued inputs stay in `pi.inbox` until the next input or queued write runs a boundary (measured for both). The SPEC takes queued messages after one that failed or was canceled, so something must run that boundary: a write of the port's own kind with `edits: []`, never published, which carries nothing (losing one only delays the queue, and any next message places it too). An abort is always the port's (cancel, abort, delete), so it submits that write after one. A model failure needs a follower while messages are queued, until pi-durable's unreleased `afterFailedRun: "continue"`, which covers failures but not aborts, is released |
+| The queue after a run that did not answer | After a run that fails (`model_error`, `no_model`) or whose task is aborted, the queued inputs stay in `pi.inbox` until the next input or queued write runs a boundary (measured for both). The SPEC takes queued messages after one that failed or was canceled, so something must run that boundary: a write of the port's own kind with `edits: []`, never published, which carries nothing. An abort is always the port's (cancel, abort, delete), so it submits that write after one. A model failure needs a follower while messages are queued, until pi-durable's unreleased `afterFailedRun: "continue"`, which covers failures but not aborts, is released. A process that stops before the write leaves the queue stalled across the restart, which `durableQueue` forbids, and no follower is attached in the new process; so the first time the port opens a conversation in a process, it submits the same write when the inbox holds inputs and no run is live. That reads state pi-durable keeps, not anything the stopped process knew |
 | `fork`, settings | `conversation.fork(entryId)` creates a new conversation with the history up to that entry; `configure()` sets the model and thinking level |
 | `rewind`, `delete` | Neither exists: no call moves a conversation's active branch, and none deletes a conversation. Both are `false` in its capabilities; emulating them (a fork the session id is remapped to, a deleted mapping that leaves the data) would be the silent downgrade SPEC MUST 5 forbids |
 | Aborting the session | `conversation.abort()`: the running run and every queued input end `unanswered` with `aborted` (measured) |
@@ -1247,8 +1251,9 @@ and what spans conversations (redelivery dedup, the session list, schedules) to 
 ### 10.3 Operations
 
 `logs` shows what the service printed. What an agent is doing is each session's state and messages (`read`,
-`messages.get`), and what it cost is the sum of the `usage` its `assistant_message` entries carry, one model response
-each.
+`messages.get`), and what it cost is the sum of the `usage` its `assistant_message` and `compaction` entries carry. A fork's copies
+carry none, so summing across sessions counts each model call once. A model call the harness makes outside the log,
+such as pi's cache warming, is not in that sum.
 
 ## 11. What changes in FastAgent
 

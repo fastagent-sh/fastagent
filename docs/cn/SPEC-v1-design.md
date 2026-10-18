@@ -183,7 +183,8 @@ for await (const e of session.messages.follow(messageId, { after: lastEntryId })
 
 - **幂等的原子性**：查 key、登记消息、入队必须在同一个会话内串行完成。同一个 key 并发进来，只能产生一条消息。
 - **steer 的去向**：回执不承诺 steer 被哪次回答处理，harness 只有到下一步才知道。每条消息的回答和结局都由 harness 按这条消息如实报告。
-- **用量**：记在每条 `assistant_message` 上，一次模型回答一份，相加即可，不存在重复计算。
+- **用量**：记在写下它的 entry 上：每条 `assistant_message` 一份，`compaction` 记生成摘要的那几次模型调用。fork 复制过来的 entry 不带 `usage`（钱已经记在源会话上），所以不管是单个会话内相加，还是跨会话相加，每次模型调用都只算一次。
+- **回答（`answer`）**：只有结局是 `completed` 或 `max_tokens`（被截断的回复）的消息才有，是 agent 为它停下时的那条 `assistant_message`。执行过工具调用的中间回复永远不是回答，所以失败的消息没有回答，回放时只给它自己那条 entry。
 - **`interrupted` 的收尾**：重启后第一次打开这个会话时，先把被打断的消息记为结束，再回应任何操作。这样重连的 `messages.follow` 不会永远等下去。
 - **会话的生命周期**：
   - invoke 一个不存在的会话会自动创建它；
@@ -219,7 +220,7 @@ for await (const e of session.messages.follow(messageId, { after: lastEntryId })
 所有 harness 都跑同一套测试，分别在进程内和通过 HTTP 各跑一遍。覆盖的范围：
 
 - 回执和结尾；
-- 三种 `whenBusy`；
+- 三种 `whenBusy`，包括 agent 停下前没接走的 steer 不晚于普通排队消息被处理；
 - 幂等，包括并发和 `interrupted` 的例外；
 - 断开、取消、中止，以及失败或取消之后队列照常继续；
 - 重启后的行为，包括"工具副作用次数不增加"；
@@ -267,7 +268,7 @@ steer 必须交给 harness 实现：只有它的循环知道一个 step 在哪�
 
 每条消息有一份持久记录：被接受时写入 id、key 和来源（在回执之前），结束时写一次结局、它变成的 entry 和回答（在报告之前）。记录里没有任何把消息归成一组的信息。消息 id 归 Agent 所有，和调用方的 idempotency key 是两回事：pi-durable 上，提交时的 request id 就带来源前缀（`k:<key>` 或 `m:<生成的 id>`），消息 id 就是它，所以调用方的 key 和生成的 id 在去重层也不会撞号。消息的状态由这份记录和队列推导出来。日志里只放对话本身，不再有 run 的开始和结束标记。
 
-- **pi-durable**：它自己的 submission 就是这份记录，和 entry 在同一次提交里原子写入，port 直接映射，不另存。run 失败或被中止后 pi-durable 会让排队消息停住，port 补一条不发布的写入（`edits: []`）把它们放出来：中止都由 port 自己发起，发起后补写即可；模型失败要等 pi-durable 发布 `afterFailedRun: "continue"`，在那之前需要一个只在有排队时才挂的观察者。这条写入不携带任何数据，丢了只会延迟。
+- **pi-durable**：它自己的 submission 就是这份记录，和 entry 在同一次提交里原子写入，port 直接映射，不另存。run 失败或被中止后 pi-durable 会让排队消息停住，port 补一条不发布的写入（`edits: []`）把它们放出来：中止都由 port 自己发起，发起后补写即可；模型失败要等 pi-durable 发布 `afterFailedRun: "continue"`，在那之前需要一个只在有排队时才挂的观察者。这条写入不携带任何数据。进程如果在补写之前停掉，队列会在重启后一直卡住（违反 `durableQueue`），新进程里也没有观察者；所以 port 在一个进程里第一次打开会话时，如果 inbox 里有输入且没有正在跑的 run，就先补写一次。判断用的是 pi-durable 自己保存的状态，不依赖停掉的进程知道什么。
 - **pi-coding-agent**：`LoopPort` 把三种记录写进 pi 的会话日志：`message_accepted`（被接受时）、`message_taken`（loop 报告写下这条消息的 entry 时，立刻写）和 `message_ended`（结局、entry、回答）。三者都是 plane marker：不对外发布、不能作为 rewind 目标、模型看不到、fork 不复制。
 - **ACP agent**：ACP 没法往 agent 的历史里追加自己的记录，所以 `LoopPort` 自己保存整份日志，消息记录也写在里面。
 
