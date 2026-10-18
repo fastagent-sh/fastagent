@@ -29,7 +29,7 @@ import { type PortFailure, portJoin } from "../../effect-port.ts";
  *
  * The invoke queues behind whatever runs in the session (a wake-up, an API caller): the channel's own turns never
  * collide, its queue serializes them per session. Its key is the turn's, so a turn run again after a restart is the
- * run it already started: an ended run is replayed, answer included, and only an `interrupted` one runs again.
+ * message it already sent: one that ended is replayed, answer included, and only an `interrupted` one is taken again.
  *
  * A preparation failure is the invoke's `rejected` event: nothing ran. It must never throw out of the stream, since
  * the turn's own settlement path is what tells the user — an exception here would take the reply with it.

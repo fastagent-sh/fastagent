@@ -276,7 +276,7 @@ wake-ups (id, next fire, one-shot or cron, session, prompt). `--json` adds each 
 | `interrupted` | The process stopped mid-turn. The instant is not replayed; the next resident start records it. |
 | `unreported` | Still running, or never settled (AgentCore has no resident start to record it). |
 
-What a run said is in its session under `<state root>/sessions/`. A failure before the model was reached
+What the agent said is in its session under `<state root>/sessions/`. A failure before the model was reached
 (credentials, model) is only in the logs, under the host's retention. The agent cancels its own wake-ups with
 `unwake({ id })`; as a last resort, edit `<state root>/schedule/wakeups.json`.
 

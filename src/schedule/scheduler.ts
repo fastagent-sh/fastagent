@@ -5,7 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Result from "effect/Result";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
-import type { Agent, InvokeEvent, InvokeRequest, RunOutcome } from "../protocol.ts";
+import type { Agent, InvokeEvent, InvokeRequest, Outcome } from "../protocol.ts";
 import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
@@ -132,14 +132,14 @@ function oneLine(text: string): string {
 }
 
 /**
- * How one invoke went: refused before it ran, the run's outcome, or a stream that stopped before its run ended, with
- * the serving error that said why when there was one.
+ * How one invoke went: refused before it ran, the message's outcome, or a stream that stopped before its message ended,
+ * with the serving error that said why when there was one.
  */
-type InvokeEnd = { refused: string; busy: boolean } | { outcome: RunOutcome } | { unfinished: string };
+type InvokeEnd = { refused: string; busy: boolean } | { outcome: Outcome } | { unfinished: string };
 
 /**
- * Read an invoke's stream to its run's end, and close it; `onAccepted` hears the receipt. Interrupted, it closes the
- * stream, and the run goes on: a caller that stops reading only detaches (SPEC v1 §3.1).
+ * Read an invoke's stream to its message's end, and close it; `onAccepted` hears the receipt. Interrupted, it closes
+ * the stream, and the work goes on: a caller that stops reading only detaches (SPEC v1 §3.1).
  */
 async function readInvoke(
   agent: ScheduledAgent,
@@ -151,36 +151,34 @@ async function readInvoke(
   const close = () => void iterator.return?.();
   signal.addEventListener("abort", close, { once: true });
   try {
-    let runId: string | undefined;
+    let messageId: string | undefined;
     let servingError: string | undefined;
     for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
       const event: InvokeEvent = next.value;
       if (event.type === "rejected") return { refused: event.error.message, busy: event.error.code === "busy" };
       if (event.type === "serving_error") servingError = event.message;
       if (event.type === "accepted") {
-        runId = event.run.runId;
+        messageId = event.message.messageId;
         onAccepted();
       }
-      if (event.type === "entry" && event.entry.kind === "run_ended" && event.entry.runId === runId) {
-        return { outcome: (event.entry.data as { outcome: RunOutcome }).outcome };
-      }
+      if (event.type === "done" && event.message.messageId === messageId) return { outcome: event.message.outcome };
     }
-    return { unfinished: servingError ?? "the stream ended before the run did" };
+    return { unfinished: servingError ?? "the stream ended before the message did" };
   } finally {
     signal.removeEventListener("abort", close);
     await iterator.return?.();
   }
 }
 
-/** A run's outcome as the one word a claim keeps, and the detail worth a log line. */
-function settled(outcome: RunOutcome): { fire: "completed" | "failed" | "interrupted"; detail?: string } {
+/** A message's outcome as the one word a claim keeps, and the detail worth a log line. */
+function settled(outcome: Outcome): { fire: "completed" | "failed" | "interrupted"; detail?: string } {
   switch (outcome.status) {
     case "completed":
     case "max_tokens":
     case "intercepted":
       return { fire: "completed" };
     case "interrupted":
-      return { fire: "interrupted", detail: "the process stopped before the run ended" };
+      return { fire: "interrupted", detail: "the process stopped before the work ended" };
     case "canceled":
       return { fire: "failed", detail: `canceled by ${outcome.by}` };
     case "failed":
@@ -189,9 +187,9 @@ function settled(outcome: RunOutcome): { fire: "completed" | "failed" | "interru
 }
 
 /**
- * One invoke, read to its run's end, with what became of it said in the log.
+ * One invoke, read to its message's end, with what became of it said in the log.
  *
- * WHAT THE RUN SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
+ * WHAT THE AGENT SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
  * (`schedule:<name>` for a schedule, the asking conversation for a wake-up), and a session is persisted under
  * `<stateRoot>/sessions/` like any other. Copying the reply into the log would be a second store of the same text,
  * unstructured, in a stream with a wider audience and a bound that differs per host.
@@ -385,7 +383,8 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
 
     /**
      * Fire the first due wake-up into its session, queued behind whatever runs there. The wake-up is taken out of the
-     * store first, so accepted is delivered: the pump goes on to the next one, and how the run ends is followed apart.
+     * store first, so accepted is delivered: the pump goes on to the next one, and how the message ends is followed
+     * apart.
      */
     const wakeOnce = Effect.gen(function* () {
       const w = yield* Effect.try({
@@ -401,7 +400,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         idempotencyKey: `wake:${w.id}@${w.fireAt}`,
         source: { kind: "wake" },
       };
-      // Counted until the run is accepted: from then on the run itself is the work in flight.
+      // Counted until the message is accepted: from then on the message itself is the work in flight.
       yield* Effect.acquireUseRelease(
         Effect.sync(beginWork),
         () =>

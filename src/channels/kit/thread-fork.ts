@@ -1,33 +1,33 @@
 /**
  * Where a NEW thread starts from (participant-model.md §5, agent-service.md §8.3): a fork of the room's session at
- * the run the thread's reply chain names, or at the room's present when nothing in it names one. A thread that already
- * exists is left alone.
+ * the message the thread's reply chain names, or at the room's present when nothing in it names one. A thread that
+ * already exists is left alone.
  *
- * A user's message names the run that took it by its key: a channel invokes with the platform's message id as the
- * `idempotencyKey`, so `runs.get({ idempotencyKey })` finds it. The thread forks at that run's answer; at the message
- * that started it when it has none (still running, or ended without one); at the room's present when it is still
- * queued, since its message is not in the history yet.
+ * A user's chat message names the protocol message it became by its key: a channel invokes with the platform's message
+ * id as the `idempotencyKey`, so `messages.get({ idempotencyKey })` finds it. The thread forks at that message's
+ * answer; at its own entry when it has none (still taken, or done without one); at the room's present when it is still
+ * queued, or was never taken, since it is not in the history.
  */
 import { log } from "../../log.ts";
-import type { Agent, RunStatus } from "../../protocol.ts";
+import type { Agent, MessageStatus } from "../../protocol.ts";
 
-/** A reply chain is ids walked from the platform, each one a `runs.get`: bounded like ids, not payloads. */
+/** A reply chain is ids walked from the platform, each one a `messages.get`: bounded like ids, not payloads. */
 const MAX_CHAIN = 16;
 const MAX_ID_CHARS = 128;
 
-/** The entry a thread forks at for the run a chain message names; undefined forks at the room's present. */
-function forkPoint(run: RunStatus): string | undefined {
-  if (run.status === "queued") return undefined;
-  if (run.status === "done" && run.answer) return run.answer.entryId;
-  return run.messages[0]?.entryId;
+/** The entry a thread forks at for the message a chain names; undefined forks at the room's present. */
+function forkPoint(message: MessageStatus): string | undefined {
+  if (message.status === "queued") return undefined;
+  if (message.status === "done" && message.answer) return message.answer.entryId;
+  return message.entryId;
 }
 
-/** Where the first run the chain names (nearest first) puts the fork; undefined, the room's present. */
+/** Where the first message the chain names (nearest first) puts the fork; undefined, the room's present. */
 async function branchPoint(agent: Agent, room: string, chain: readonly string[]): Promise<string | undefined> {
   const usable = chain.filter((id) => id.length > 0 && id.length <= MAX_ID_CHARS).slice(0, MAX_CHAIN);
   for (const idempotencyKey of usable) {
-    const run = await agent.sessions.get(room).runs.get({ idempotencyKey });
-    if (run) return forkPoint(run);
+    const message = await agent.sessions.get(room).messages.get({ idempotencyKey });
+    if (message) return forkPoint(message);
   }
   return undefined;
 }

@@ -5,7 +5,7 @@
  */
 import { type CompactionEntry, type SessionManager, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
-import { isPlaneMarker, isRunMarker } from "./session-markers.ts";
+import { isMessageMarker, isPlaneMarker } from "./session-markers.ts";
 
 /** The recent window: at most this many exchanges of the source reach the copy's model context. */
 const RECENT_MAX_EXCHANGES = 50;
@@ -128,8 +128,8 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         childId = child.appendThinkingLevelChange(entry.thinkingLevel);
         break;
       case "custom":
-        // The plane's markers describe the parent's RECORD, and its run markers its runs: neither is history.
-        if (!isPlaneMarker(entry) && !isRunMarker(entry))
+        // The plane's markers describe the parent's RECORD, and its message records its messages: neither is history.
+        if (!isPlaneMarker(entry) && !isMessageMarker(entry))
           childId = child.appendCustomEntry(entry.customType, entry.data);
         break;
       case "label":

@@ -8,7 +8,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   collect,
-  RunNotCompleted,
+  MessageNotCompleted,
   createPiAgent,
   createPiAgentFromDefinition,
   defineTool,
@@ -637,8 +637,8 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
       await chmod(system, 0o000); // the live re-read now throws (unreadable SYSTEM.md)
       // A failed run, never a thrown iteration error: the read failure is the run's outcome.
       const failed = await collect(agent.invoke({ sessionId: "s", prompt: { text: "again" } })).catch((e) => e);
-      expect(failed).toBeInstanceOf(RunNotCompleted);
-      expect((failed as RunNotCompleted).message).toMatch(/SYSTEM\.md/);
+      expect(failed).toBeInstanceOf(MessageNotCompleted);
+      expect((failed as MessageNotCompleted).message).toMatch(/SYSTEM\.md/);
 
       await chmod(system, 0o644); // the next good edit heals it — same agent, no restart
       const { text } = await collect(agent.invoke({ sessionId: "s", prompt: { text: "back" } }));

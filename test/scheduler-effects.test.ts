@@ -72,8 +72,8 @@ it("two SCHEDULERS over one state root fire a cron slot exactly once", async () 
           const { fireScheduleOnce } = await import(${JSON.stringify(source)});
           const agent = { async *invoke() {
             await new Promise((r) => setTimeout(r, 150));
-            yield { type: "accepted", sessionId: "s", run: { runId: "r", messages: [], status: "running", startedAt: 0 }, joined: false, duplicate: false };
-            yield { type: "entry", entry: { id: "e", timestamp: 0, runId: "r", kind: "run_ended", data: { runId: "r", outcome: { status: "completed" } } } };
+            yield { type: "accepted", sessionId: "s", message: { messageId: "m", status: "queued", position: 0 }, duplicate: false };
+            yield { type: "done", message: { messageId: "m", status: "done", endedAt: 0, outcome: { status: "completed" } } };
           } };
           const outcome = await Effect.runPromise(fireScheduleOnce({
             agent,
@@ -481,8 +481,11 @@ it("stopping the scheduler detaches from a running fire, and the run goes on to 
   store.release();
   await vi.waitFor(async () => expect(await running()).toBe("idle"));
   const page = await agent.sessions.get("schedule:job").read();
-  const ended = page.ok ? page.entries.find((e) => e.kind === "run_ended") : undefined;
-  expect(ended?.data).toMatchObject({ outcome: { status: "completed" } });
+  const taken = page.ok ? page.entries.find((e) => e.kind === "user_message") : undefined;
+  const messageId = (taken?.data as { messageId?: string } | undefined)?.messageId as string;
+  expect(await agent.sessions.get("schedule:job").messages.get({ messageId })).toMatchObject({
+    outcome: { status: "completed" },
+  });
 });
 
 it("a schedule's occurrence on a busy session is skipped, not queued behind the running run", async () => {
@@ -512,13 +515,14 @@ it("startSchedules records a schedule's run as a schedule and a wake-up's as a w
   expect(added.ok).toBe(true);
   const scheduler = startSchedules(agent, stateRoot, agentDir, { schedules: [], failures: [] });
   try {
-    const runId = await vi.waitFor(async () => {
+    const messageId = await vi.waitFor(async () => {
       const page = await agent.sessions.get("chat").read();
-      const started = page.ok ? page.entries.find((e) => e.kind === "run_started") : undefined;
-      if (!started?.runId) throw new Error("the wake-up has not run yet");
-      return started.runId;
+      const taken = page.ok ? page.entries.find((e) => e.kind === "user_message") : undefined;
+      const id = (taken?.data as { messageId?: string } | undefined)?.messageId;
+      if (!id) throw new Error("the wake-up has not been taken yet");
+      return id;
     });
-    expect(await agent.sessions.get("chat").runs.get({ runId })).toMatchObject({ source: { kind: "wake" } });
+    expect(await agent.sessions.get("chat").messages.get({ messageId })).toMatchObject({ source: { kind: "wake" } });
   } finally {
     scheduler.stop();
   }
@@ -527,8 +531,9 @@ it("startSchedules records a schedule's run as a schedule and a wake-up's as a w
   );
   expect(fired).toMatchObject({ fired: true });
   const page = await agent.sessions.get("schedule:job").read();
-  const started = page.ok ? page.entries.find((e) => e.kind === "run_started") : undefined;
-  expect(await agent.sessions.get("schedule:job").runs.get({ runId: started?.runId as string })).toMatchObject({
+  const taken = page.ok ? page.entries.find((e) => e.kind === "user_message") : undefined;
+  const messageId = (taken?.data as { messageId?: string } | undefined)?.messageId as string;
+  expect(await agent.sessions.get("schedule:job").messages.get({ messageId })).toMatchObject({
     source: { kind: "schedule", name: "job" },
   });
 });

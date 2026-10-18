@@ -26,7 +26,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { collect, RunNotCompleted } from "../../src/protocol-collect.ts";
+import { collect, MessageNotCompleted } from "../../src/protocol-collect.ts";
 import type { InvokeEvent, Entry } from "../../src/protocol.ts";
 import { createPiAgentFromDir } from "../../src/harnesses/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
@@ -256,15 +256,18 @@ export default defineTool({
 
   it("a real HTTP error becomes a failed terminal, classified non-retryable", async () => {
     const { agent } = await createPiAgentFromDir(await refusingDefinition());
-    // A failed run is an outcome, never a thrown iteration error: `collect` turns it into RunNotCompleted.
+    // A failed run is an outcome, never a thrown iteration error: `collect` turns it into MessageNotCompleted.
     const failure = await collect(agent.invoke({ sessionId: "live-refused", prompt: { text: "go" } })).catch((e) => e);
     // 400 is decisive: re-sending it would fail identically, and `retryable` is what a caller branches on. This is the
     // half a faux provider cannot settle: the shape of a real provider error as it travels through pi's stack into
     // our classifier. The outcome travels IN the message, because a matcher's diff prints only the keys it named.
     expect(failure, `the refused run did not fail non-retryably: ${JSON.stringify(failure)}`).toBeInstanceOf(
-      RunNotCompleted,
+      MessageNotCompleted,
     );
-    expect((failure as RunNotCompleted).outcome, JSON.stringify((failure as RunNotCompleted).outcome)).toMatchObject({
+    expect(
+      (failure as MessageNotCompleted).outcome,
+      JSON.stringify((failure as MessageNotCompleted).outcome),
+    ).toMatchObject({
       status: "failed",
       error: { retryable: false },
     });

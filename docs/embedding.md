@@ -27,17 +27,19 @@ interface Agent {
   info(); models(); commands();
 }
 type InvokeEvent =
-  | { type: "accepted"; sessionId: string; run: RunStatus }           // first: the run is recorded
+  | { type: "accepted"; sessionId: string; message: MessageStatus }   // first: the message is recorded
   | { type: "rejected"; error: AgentError }                            // or first and only: nothing ran
-  | { type: "message_delta"; runId: string; channel: "text" | "thinking"; delta: string } // live text
-  | { type: "tool_started"; runId: string; toolCallId: string; name: string; args: Json }
-  | { type: "entry"; entry: Entry }                                    // durable: messages, tool results, run_ended
+  | { type: "message_delta"; channel: "text" | "thinking"; delta: string } // live text
+  | { type: "tool_started"; toolCallId: string; name: string; args: Json }
+  | { type: "entry"; entry: Entry }                                    // durable: messages, tool results
+  | { type: "done"; message: DoneMessage }                             // last: its outcome and answer
   | /* tool_progress, retry_scheduled, state, serving_error */ …;
 ```
 
-The stream ends after the run's `run_ended` entry, whose `outcome` says how it ended. `sessionId` is an opaque string
-you choose; reuse it to continue a conversation. A message for a session that is running queues behind the run.
-Stopping reading detaches; the run goes on, and `agent.sessions.get(id).abort()` stops it.
+The stream ends with the message's `done`, whose `outcome` says how it ended and whose `answer` is the reply.
+`sessionId` is an opaque string you choose; reuse it to continue a conversation. A message for a session that is
+working queues behind the work in progress. Stopping reading detaches; the work goes on, and
+`agent.sessions.get(id).abort()` stops it.
 
 ## 1. Get the agent (pick by what you have)
 
@@ -80,14 +82,14 @@ Use the `z` re-exported from `@fastagent-sh/fastagent`, not a separately install
 // (1) raw stream — render tokens as they arrive
 for await (const e of agent.invoke({ sessionId: "u1", prompt: { text: "hi" } })) {
   if (e.type === "message_delta" && e.channel === "text") render(e.delta);
-  if (e.type === "entry" && e.entry.kind === "run_ended") done(e.entry.data);
+  if (e.type === "done") done(e.message);
 }
 
 // (2) buffered JSON — one question, one answer
-import { collect, RunNotCompleted } from "@fastagent-sh/fastagent";
+import { collect, MessageNotCompleted } from "@fastagent-sh/fastagent";
 const { text } = await collect(agent.invoke({ sessionId: "u1", prompt: { text: "hi" } }));
-// `collect` throws AgentRejection (nothing ran), RunNotCompleted (the run ended otherwise; `.outcome` says how) or
-// RunUnfinished (the stream stopped first).
+// `collect` throws AgentRejection (nothing ran), MessageNotCompleted (the message ended otherwise; `.outcome` says
+// how) or MessageUnfinished (the stream stopped first).
 
 // (3) HTTP/SSE — the agent's API as one Fetch handler: POST /invoke, /sessions/*, /agent/*
 import { createAgentHandler } from "@fastagent-sh/fastagent";
@@ -179,9 +181,9 @@ serveNode(handler, { port: 8787 });                    // just the agent's API
 serveNode((await createAgentService("./my-agent")).handler, { port: 8787 });
 ```
 
-Backpressure and a body cap are native to the web-stream primitives. A client disconnect detaches from the run, which
-goes on; `POST /sessions/{s}/abort` or `/runs/{r}/cancel` stops it. A second message for a running session queues
-behind the run, as `whenBusy` says.
+Backpressure and a body cap are native to the web-stream primitives. A client disconnect detaches from the message,
+whose work goes on; `POST /sessions/{s}/abort` or `/messages/{m}/cancel` stops it. A second message for a working
+session queues behind the work in progress, as `whenBusy` says.
 
 ## 3. Tier 1 vs Tier 2
 

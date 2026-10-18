@@ -1,52 +1,48 @@
 /**
- * The buffered consumer of an invoke stream (SPEC v1 §10): the run's answer, or a throw that says why there is none.
+ * The buffered consumer of an invoke stream (SPEC v1 §10): the message's answer, or a throw that says why there is none.
  */
-import { AgentRejection, type InvokeEvent, type RunOutcome } from "./protocol.ts";
+import { AgentRejection, type InvokeEvent, type Outcome } from "./protocol.ts";
 
-export interface CollectedRun {
+export interface CollectedMessage {
   sessionId: string;
-  runId: string;
-  /** The run's last `assistant_message`; empty when it wrote none. */
+  messageId: string;
+  /** The message's answer; empty when its work wrote none. */
   text: string;
 }
 
-/** A run that ended, but not `completed`: its outcome says how. */
-export class RunNotCompleted extends Error {
-  readonly outcome: Exclude<RunOutcome, { status: "completed" }>;
+/** A message that ended, but not `completed`: its outcome says how. */
+export class MessageNotCompleted extends Error {
+  readonly outcome: Exclude<Outcome, { status: "completed" }>;
   readonly sessionId: string;
-  readonly runId: string;
-  constructor(outcome: Exclude<RunOutcome, { status: "completed" }>, at: { sessionId: string; runId: string }) {
-    super(outcome.status === "failed" ? outcome.error.message : `the run ended ${outcome.status}`);
-    this.name = "RunNotCompleted";
+  readonly messageId: string;
+  constructor(outcome: Exclude<Outcome, { status: "completed" }>, at: { sessionId: string; messageId: string }) {
+    super(outcome.status === "failed" ? outcome.error.message : `the message ended ${outcome.status}`);
+    this.name = "MessageNotCompleted";
     this.outcome = outcome;
     this.sessionId = at.sessionId;
-    this.runId = at.runId;
+    this.messageId = at.messageId;
   }
 }
 
-/** A stream that stopped before its run ended: the process went away, or the connection to it did. */
-export class RunUnfinished extends Error {
+/** A stream that stopped before its message ended: the process went away, or the connection to it did. */
+export class MessageUnfinished extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "RunUnfinished";
+    this.name = "MessageUnfinished";
   }
 }
 
-export async function collect(events: AsyncIterable<InvokeEvent>): Promise<CollectedRun> {
-  let receipt: { sessionId: string; runId: string } | undefined;
-  let text = "";
+export async function collect(events: AsyncIterable<InvokeEvent>): Promise<CollectedMessage> {
+  let receipt: { sessionId: string; messageId: string } | undefined;
   let lastError: string | undefined;
   for await (const event of events) {
     if (event.type === "rejected") throw new AgentRejection(event.error);
-    if (event.type === "accepted") receipt = { sessionId: event.sessionId, runId: event.run.runId };
+    if (event.type === "accepted") receipt = { sessionId: event.sessionId, messageId: event.message.messageId };
     if (event.type === "serving_error") lastError = event.message;
-    if (event.type !== "entry" || receipt === undefined || event.entry.runId !== receipt.runId) continue;
-    if (event.entry.kind === "assistant_message") text = String((event.entry.data as { text?: unknown }).text ?? "");
-    if (event.entry.kind === "run_ended") {
-      const { outcome } = event.entry.data as { outcome: RunOutcome };
-      if (outcome.status !== "completed") throw new RunNotCompleted(outcome, receipt);
-      return { ...receipt, text };
-    }
+    if (event.type !== "done" || receipt === undefined || event.message.messageId !== receipt.messageId) continue;
+    const { outcome, answer } = event.message;
+    if (outcome.status !== "completed") throw new MessageNotCompleted(outcome, receipt);
+    return { ...receipt, text: answer?.text ?? "" };
   }
-  throw new RunUnfinished(lastError ?? "the stream ended before its run did");
+  throw new MessageUnfinished(lastError ?? "the stream ended before its message did");
 }

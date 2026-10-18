@@ -1,9 +1,9 @@
 /**
- * The run trace: wrap an Agent to tee each invoke — prompt, reasoning, tool calls (name + args) with results, reply,
+ * The message trace: wrap an Agent to tee each invoke — prompt, reasoning, tool calls (name + args) with results, reply,
  * outcome — to the log at DEBUG level. Everything but `invoke` passes through.
  */
 import { log } from "./log.ts";
-import type { Agent, InvokeEvent, InvokeRequest, Json, RunOutcome } from "./protocol.ts";
+import type { Agent, InvokeEvent, InvokeRequest, Json, Outcome } from "./protocol.ts";
 
 const PREVIEW = 200;
 
@@ -15,7 +15,7 @@ function oneLine(s: string): string {
 
 const preview = (v: Json): string => oneLine(typeof v === "string" ? v : JSON.stringify(v));
 
-function describe(outcome: RunOutcome): string {
+function describe(outcome: Outcome): string {
   if (outcome.status === "failed") return `failed: ${outcome.error.code}: ${outcome.error.message}`;
   if (outcome.status === "canceled") return `canceled (${outcome.by})`;
   return outcome.status;
@@ -24,16 +24,16 @@ function describe(outcome: RunOutcome): string {
 export function logAgentLoop(agent: Agent, sink: (line: string) => void = (line) => log.debug(line)): Agent {
   const traced = (request: InvokeRequest): AsyncIterable<InvokeEvent> => {
     const at = request.sessionId ?? "(new)";
-    let runId: string | undefined;
+    let messageId: string | undefined;
     let thinking = "";
     let reply = "";
     const toolName = new Map<string, string>();
     const observe = (e: InvokeEvent): void => {
       switch (e.type) {
         case "accepted":
-          runId = e.run.runId;
+          messageId = e.message.messageId;
           sink(
-            `[agent] ▶ run session=${e.sessionId} run=${runId}${e.duplicate ? " (duplicate)" : ""} ← ${oneLine(request.prompt.text)}`,
+            `[agent] ▶ message session=${e.sessionId} message=${messageId}${e.duplicate ? " (duplicate)" : ""} ← ${oneLine(request.prompt.text)}`,
           );
           break;
         case "rejected":
@@ -50,19 +50,19 @@ export function logAgentLoop(agent: Agent, sink: (line: string) => void = (line)
         case "retry_scheduled":
           sink(`[agent]   retrying (${e.attempt}/${e.maxAttempts} in ${e.delayMs}ms): ${oneLine(e.reason)}`);
           break;
+        case "done":
+          if (e.message.messageId !== messageId) break;
+          if (thinking.trim() !== "") sink(`[agent]   thinking: ${oneLine(thinking)}`);
+          sink(`[agent]   reply: ${oneLine(reply || (e.message.answer?.text ?? "")) || "(empty)"}`);
+          sink(`[agent] ■ ${describe(e.message.outcome)} message=${messageId}`);
+          break;
         case "entry": {
-          if (e.entry.runId !== runId) break;
           const data = e.entry.data as { toolCallId?: string; toolName?: string; isError?: boolean; text?: string };
           if (e.entry.kind === "tool_result") {
             const name = toolName.get(data.toolCallId ?? "") ?? data.toolName ?? data.toolCallId;
             sink(`[agent]   tool ${data.isError ? "✗" : "✓"} ${name} → ${preview(data.text ?? "")}`);
           }
           if (e.entry.kind === "assistant_message" && reply === "") reply = data.text ?? "";
-          if (e.entry.kind === "run_ended") {
-            if (thinking.trim() !== "") sink(`[agent]   thinking: ${oneLine(thinking)}`);
-            sink(`[agent]   reply: ${oneLine(reply) || "(empty)"}`);
-            sink(`[agent] ■ ${describe((e.entry.data as { outcome: RunOutcome }).outcome)} run=${runId}`);
-          }
           break;
         }
       }

@@ -1,7 +1,7 @@
 /**
  * pi's session entries as the records of a session's log (SPEC v1 §6): which entries are records at all, and each one
  * in the v1 vocabulary. Message entries become `user_message`, `assistant_message` and `tool_result` with the payload
- * a client renders; the plane's run markers become their own kinds; settings changes become `settings_changed`; any
+ * a client renders; `LoopPort`'s message records become their own kinds; settings changes become `settings_changed`; any
  * other harness record keeps its pi type with an empty payload, present so parent chains and cursors stay intact.
  */
 import { contentText } from "@earendil-works/pi-ai";
@@ -12,20 +12,20 @@ import {
   estimateTokens,
   getLastAssistantUsage,
 } from "@earendil-works/pi-coding-agent";
-import type { LogRecord, RunMarker } from "../../loop-port.ts";
+import type { LogRecord, MessageMarker } from "../../loop-port.ts";
 import type { Json, SessionState } from "../../protocol.ts";
 import { entryImages } from "./entry-images.ts";
 import { answerOutcome, answerThinking, endsRun } from "./messages.ts";
-import { RUN_MARKERS, isConversationMessage, isPlaneMarker, isRunMarker } from "./session-markers.ts";
+import { MESSAGE_MARKERS, isConversationMessage, isMessageMarker, isPlaneMarker } from "./session-markers.ts";
 
-const MARKER_KINDS = new Map<string, RunMarker>(
-  Object.entries(RUN_MARKERS).map(([kind, customType]) => [customType, kind as RunMarker]),
+const MARKER_KINDS = new Map<string, MessageMarker>(
+  Object.entries(MESSAGE_MARKERS).map(([kind, customType]) => [customType, kind as MessageMarker]),
 );
 
 /** Whether an entry is a record of the log at all: pi's prompt bookkeeping, labels and extension state are not. */
 export function isRecord(entry: PiSessionEntry): boolean {
   if (entry.type === "message") return isConversationMessage(entry);
-  if (entry.type === "custom") return isRunMarker(entry);
+  if (entry.type === "custom") return isMessageMarker(entry);
   return entry.type !== "label" && entry.type !== "usage" && !isPlaneMarker(entry);
 }
 

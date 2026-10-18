@@ -1,6 +1,6 @@
 /** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
 import type { InvokeEvent, Json } from "../../protocol.ts";
-import { runText } from "../../run-text.ts";
+import { answerText } from "../../answer-text.ts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import type * as Fiber from "effect/Fiber";
@@ -455,9 +455,9 @@ function streamNativeSlackReply(
       }
     });
 
-    let runId: string | undefined;
+    let messageId: string | undefined;
     let servingError: string | undefined;
-    const textOf = runText(() => runId);
+    const textOf = answerText();
     /** An ending that is a failure: its notice woven into the stream, then the turn fails with it. */
     const failWith = (failure: SlackFailure) =>
       Effect.gen(function* () {
@@ -495,24 +495,24 @@ function streamNativeSlackReply(
           retryStatusShown = false;
           setStatus(WORKING_STATUS);
         }
-        if (event.type === "accepted") runId = event.run.runId;
+        if (event.type === "accepted") messageId = event.message.messageId;
         if (event.type === "serving_error") servingError = event.message;
-        const end = turnEnd(event, runId);
+        const end = turnEnd(event, messageId);
         if (end === undefined) {
           // Slack's native loading status represents private reasoning (`thinking` deltas) without exposing it.
           if (event.type === "message_delta" && event.channel === "text") appendAnswer(textOf(event));
           else if (event.type === "retry_scheduled") {
-            // A summarization retry backoff pauses the stream (~14s worst case). Channels have no per-run
+            // A summarization retry backoff pauses the stream (~14s worst case). Channels have no per-message
             // status surface in native mode; DMs get the explicit Agent status line, restored on progress.
             if (target.channelId.startsWith("D")) {
               retryStatusShown = true;
               setStatus("hit a temporary problem — retrying…");
             }
-          } else if (event.type === "tool_started" && event.runId === runId) {
+          } else if (event.type === "tool_started") {
             const trace = nativeToolTrace(event.name, event.args);
             toolTraces.set(event.toolCallId, trace);
             sendToolTrace(nativeToolLine(trace));
-          } else if (event.type === "entry" && event.entry.runId === runId) {
+          } else if (event.type === "entry") {
             if (event.entry.kind === "assistant_message") appendAnswer(textOf(event));
             if (event.entry.kind === "tool_result") {
               const data = event.entry.data as { toolCallId?: string; isError?: boolean };

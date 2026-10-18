@@ -18,8 +18,8 @@ export async function dispatchStop(agent: Agent, session: string, label: string)
   try {
     const result = await agent.sessions.get(session).abort();
     if (result.ok) {
-      const { runId, queued, compaction } = result.stopped;
-      return runId !== undefined || queued.length > 0 || compaction ? STOPPED_NOTICE : NOTHING_RUNNING_NOTICE;
+      const { taken, queued, compaction } = result.stopped;
+      return taken.length > 0 || queued.length > 0 || compaction ? STOPPED_NOTICE : NOTHING_RUNNING_NOTICE;
     }
     // A session nothing has run in yet has nothing to stop.
     if (result.error.code === "not_found") return NOTHING_RUNNING_NOTICE;

@@ -19,7 +19,7 @@ import { destroyAgentcoreDeployment as destroyDeployment } from "../../src/deplo
 import { ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
 import type { CliRunner } from "../../src/deploy/runner.ts";
 import { environmentAuthSource } from "../../src/harnesses/pi/models.ts";
-import type { InvokeEvent, RunOutcome } from "../../src/protocol.ts";
+import type { InvokeEvent, Outcome } from "../../src/protocol.ts";
 import { fastagentVersion } from "../../src/version.ts";
 import { TARBALL_ENV } from "./pack.ts";
 export function requireEnv(name: string, hint: string): string {
@@ -227,15 +227,9 @@ export function sseEvents(body: string): InvokeEvent[] {
     .map((line) => JSON.parse(line.slice("data: ".length)) as InvokeEvent);
 }
 
-/** How the stream's run ended, as its `run_ended` entry says. */
-const outcomeOf = (events: InvokeEvent[]): RunOutcome | undefined => {
-  for (const event of events) {
-    if (event.type === "entry" && event.entry.kind === "run_ended") {
-      return (event.entry.data as { outcome: RunOutcome }).outcome;
-    }
-  }
-  return undefined;
-};
+/** How the stream's message ended, as its `done` says. */
+const outcomeOf = (events: InvokeEvent[]): Outcome | undefined =>
+  events.flatMap((event) => (event.type === "done" ? [event.message.outcome] : []))[0];
 
 /**
  * One invoke's outcome, asserted with the outcome itself (or the stream's last event) in the message.

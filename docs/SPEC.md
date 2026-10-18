@@ -9,10 +9,8 @@ updated: 2026-10-17
 
 # Agent Handler — Protocol Specification v1
 
-> **Status: locked.** This is the protocol the package implements once step 4's change from runs to messages lands
-> ([#788](https://github.com/fastagent-sh/fastagent/issues/788)); until then the reference implementation serves the
-> run model this text replaced (`runs.*`, `run_started` and `run_ended` entries). Changing its semantics needs an
-> explicit decision. The design, with its rationale, is [agent-service.md](design/agent-service.md) §7 and §9.
+> **Status: locked.** This is the protocol the package implements. Changing its semantics needs an explicit decision.
+> The design, with its rationale, is [agent-service.md](design/agent-service.md) §7 and §9.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119. This specification is
 > harness-neutral and does not depend on any implementation.

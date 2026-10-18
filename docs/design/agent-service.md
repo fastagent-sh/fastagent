@@ -1104,8 +1104,9 @@ two is still known, as `interrupted`.
 The records live in the same store as the conversation, written together. pi-durable commits a submission's
 settlement atomically with the entries it settles with. `LoopPort` gets the same property from a harness log that has
 one writer, into which it writes three records, each naming its message: `message_accepted` when it is accepted,
-`message_taken` with its entry when the loop reports writing it, and `message_ended` with its outcome, its
-`lastEntryId` (the log's tail as it is written) and, on the first message the work took, its usage. All three
+`message_taken` with its entry when the loop reports writing it, and `message_ended` with its outcome, its entry
+again (so an end is whole when the `message_taken` was refused), its `lastEntryId` (the log's tail as it is written)
+and, on the first message the work took, its usage. All three
 are plane markers (`isPlaneMarker`): never published, never navigable, never seen by the model, never copied by a
 fork. Nothing else marks the log: which entries a piece of work wrote is not recorded (§7.5), so the published log is
 the conversation alone. A record of accepted messages in a file of its own was considered and not chosen: two files
@@ -1152,6 +1153,15 @@ The rules this gives `LoopPort` over pi-coding-agent, each checked against pi wi
   answered, failed or was canceled. Work the process lost ends its messages `interrupted`, naming the entries their
   `message_taken` recorded: which entry was whose is the loop's to say, so it is recorded as the loop says it. Counting the work's user entries cannot tell these apart, checked against pi: a consumed
   message has no entry and would be taken twice.
+- **Withdrawing a steer.** `messages.cancel` of a steer the loop holds and has not taken asks the loop to take it
+  back, and it is `canceled` without an entry only when the loop can promise it never will: pi's harness drops one
+  still in its `input` handlers, and takes one out of pi's steering queue by queueing the others again without it,
+  synchronously, so pi cannot select it in between. One pi has already selected for its next step is the work's: the
+  cancel stops that work, and the steer ends `canceled` with it, never carried to the next work.
+- **Where a live event sits.** Every live event the port reports carries the newest entry published before it. A
+  subscriber reads the log after it subscribes, so its live queue overlaps that read; only an event that follows the
+  newest entry it was given is new. That keeps a message's stream from replaying another message's answer, or its own
+  entry twice, when the message is taken between its admission and the read.
 
 pi and `writeFileAtomic` both write without `fsync`, so either choice survives a process crash and may lose its newest
 write on power loss; pi drops a torn last line when it loads a log.
@@ -1285,7 +1295,7 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior. Done |
 | 2 | Upgrade to pi 1.1.0. Done |
 | 3 | Declarations as files: `context.json`, with content at `content/<name>/`; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise. Done |
-| 4 | The serving protocol (§7) on the harness port (§9.1), with `LoopPort` for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678). Done: the protocol and `LoopPort` for pi-coding-agent with its conformance suite, the SPEC, and channels, schedules and wake-ups on it. Not yet: the protocol's change from runs to messages (§7.1), pi-durable, duang, MCP |
+| 4 | The serving protocol (§7) on the harness port (§9.1), with `LoopPort` for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678). Done: the protocol and `LoopPort` for pi-coding-agent with its conformance suite, the SPEC and its change from runs to messages (§7.1), and channels, schedules and wake-ups on it. Not yet: pi-durable, duang, MCP |
 | 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first ACP agent used as a harness |
 | 6 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a native harness, if a run against its npm `alpha` release shows ACP leaves out too much; more content kinds |

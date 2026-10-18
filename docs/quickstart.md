@@ -98,20 +98,22 @@ curl -N -X POST localhost:8787/invoke \
 ```
 
 The response is Server-Sent Events ([SPEC v1](SPEC.md)). It starts with `accepted` (or `rejected`, with the reason),
-streams `message_delta` text and `tool_started` while the run works, records each settled message, tool result and
-the ending as an `entry`, and ends with the `run_ended` entry, whose `outcome` says `completed`, `failed` or
-`canceled`.
+streams `message_delta` text and `tool_started` while the agent works, records your message, each tool result and
+the agent's settled message as an `entry`, and ends with `done`, whose `outcome` says `completed`, `failed` or
+`canceled` and whose `answer` is the reply.
 
 ```txt
-data: {"type":"accepted","sessionId":"s1","run":{"runId":"9f…","messages":[{"entryId":"a1…"}],"status":"running","startedAt":1767225600000},"joined":false,"duplicate":false}
+data: {"type":"accepted","sessionId":"s1","message":{"messageId":"9f…","source":{"kind":"api"},"status":"taken","entryId":"a1…","takenAt":1767225600000},"duplicate":false}
 
-data: {"type":"tool_started","runId":"9f…","toolCallId":"tool-1","name":"fetch_content","args":{"url":"https://example.com"}}
+data: {"type":"entry","entry":{"id":"a1…","kind":"user_message","data":{"text":"Summarize https://example.com in two bullets","messageId":"9f…"},…}}
 
-data: {"type":"entry","entry":{"id":"c3…","runId":"9f…","kind":"tool_result","data":{"toolCallId":"tool-1","toolName":"fetch_content","isError":false,"text":"# Example Domain …"},…}}
+data: {"type":"tool_started","toolCallId":"tool-1","name":"fetch_content","args":{"url":"https://example.com"}}
 
-data: {"type":"message_delta","runId":"9f…","channel":"text","delta":"- Example Domain is …"}
+data: {"type":"entry","entry":{"id":"c3…","kind":"tool_result","data":{"toolCallId":"tool-1","toolName":"fetch_content","isError":false,"text":"# Example Domain …"},…}}
 
-data: {"type":"entry","entry":{"id":"e5…","runId":"9f…","kind":"run_ended","data":{"runId":"9f…","outcome":{"status":"completed"}},…}}
+data: {"type":"message_delta","channel":"text","delta":"- Example Domain is …"}
+
+data: {"type":"done","message":{"messageId":"9f…","status":"done","outcome":{"status":"completed"},"answer":{"entryId":"e5…","text":"- Example Domain is …"},…}}
 ```
 
 Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `.state/sessions` in the agent directory), so a dev restart keeps conversation history.

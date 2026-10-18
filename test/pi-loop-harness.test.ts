@@ -1,6 +1,6 @@
 /**
- * The SPEC v1 suite against pi-coding-agent through `LoopPort`, on real pi sessions over a record store on disk. What a
- * run does is chosen by its message, as the suite asks: the faux model answers the newest user message, `hold` and
+ * The SPEC v1 suite against pi-coding-agent through `LoopPort`, on real pi sessions over a record store on disk. What
+ * its work does is chosen by its message, as the suite asks: the faux model answers the newest user message, `hold` and
  * `effect` call tools of those names first, and `fail` is an error the model returns.
  */
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
@@ -16,7 +16,7 @@ import {
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { piLoopHarness } from "../src/harnesses/pi/loop-harness.ts";
-import { isRunMarker } from "../src/harnesses/pi/session-markers.ts";
+import { isMessageMarker } from "../src/harnesses/pi/session-markers.ts";
 import {
   type PiSessionRecordStore,
   piInMemorySessionRecordStore,
@@ -29,7 +29,7 @@ import { type Agent, type InvokeEvent, LIMITS } from "../src/protocol.ts";
 import { servingAgent } from "../src/serving-layer.ts";
 import { fauxAgent } from "./agent.ts";
 import { makeFaux } from "./faux.ts";
-import { collect, RunNotCompleted } from "../src/protocol-collect.ts";
+import { collect, MessageNotCompleted } from "../src/protocol-collect.ts";
 import { defineTool, z } from "../src/pi.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
 
@@ -161,6 +161,24 @@ async function receiptOf(events: AsyncIterable<InvokeEvent>) {
   throw new Error("not accepted");
 }
 
+async function doneOf(agent: Agent, messageId: string) {
+  return vi.waitFor(
+    async () => {
+      const status = await agent.sessions.get("s").messages.get({ messageId });
+      if (status?.status !== "done") throw new Error("not done");
+      return status;
+    },
+    { timeout: 5000 },
+  );
+}
+
+async function takenNow(agent: Agent, messageId: string) {
+  await vi.waitFor(
+    async () => expect((await agent.sessions.get("s").messages.get({ messageId }))?.status).toBe("taken"),
+    { timeout: 5000 },
+  );
+}
+
 /**
  * An extension whose `input` handler consumes `handle` (and counts it), and holds `slow` until `release-slow` is
  * written to a file the test controls, so that message reaches pi's queue only after the run it joined settled.
@@ -218,7 +236,7 @@ describe("pi-coding-agent through LoopPort", () => {
       const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
       const run = await vi.waitFor(
         async () => {
-          const status = await agent.sessions.get("s").runs.get({ runId: first.run.runId });
+          const status = await agent.sessions.get("s").messages.get({ messageId: first.message.messageId });
           if (status?.status !== "done") throw new Error("not done");
           return status;
         },
@@ -230,42 +248,34 @@ describe("pi-coding-agent through LoopPort", () => {
     }
   });
 
-  it("a steer an extension consumed is not run again", async () => {
+  it("a steer an extension consumed ends intercepted and is not taken again", async () => {
     const ext = await extensionDir();
     const local = new World();
     const store = piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "pi-loop-")), cwd: process.cwd() });
     const agent = await piAgent(store, local, LIMITS.inFlightPerProcess, ext.paths);
-    const session = agent.sessions.get("s");
-    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"), {
-      timeout: 5000,
-    });
-    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "handle" }, whenBusy: "steer" }));
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, first);
+    const handled = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "handle" }, whenBusy: "steer" }));
     local.held.open();
-    const run = await vi.waitFor(
-      async () => {
-        const status = await session.runs.get({ runId: first.run.runId });
-        if (status?.status !== "done") throw new Error("not done");
-        return status;
-      },
-      { timeout: 5000 },
-    );
+    expect(await doneOf(agent, first)).toMatchObject({
+      outcome: { status: "completed" },
+      answer: { text: "answer: hold" },
+    });
+    const consumed = await doneOf(agent, handled.message.messageId);
+    expect(consumed).toMatchObject({ outcome: { status: "intercepted" } });
+    expect(consumed.entryId).toBeUndefined();
     expect(await ext.counted()).toBe(1);
-    expect(run).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: hold" } });
-    expect(run.messages.map((m) => m.entryId !== undefined)).toEqual([true, false]);
   });
 
-  it("a steer consumed only after its run settled is still not run again", async () => {
+  it("a steer consumed only after pi's run settled is still not taken again", async () => {
     const ext = await extensionDir();
     const local = new World();
     const store = piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "pi-loop-")), cwd: process.cwd() });
     const agent = await piAgent(store, local, LIMITS.inFlightPerProcess, ext.paths);
     const session = agent.sessions.get("s");
-    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"), {
-      timeout: 5000,
-    });
-    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "slow-handle" }, whenBusy: "steer" }));
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, first);
+    const steer = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "slow-handle" }, whenBusy: "steer" }));
     local.held.open();
     await vi.waitFor(
       async () => {
@@ -276,31 +286,24 @@ describe("pi-coding-agent through LoopPort", () => {
       { timeout: 5000 },
     );
     await writeFile(join(ext.dir, "release-slow"), "");
-    const run = await vi.waitFor(
-      async () => {
-        const status = await session.runs.get({ runId: first.run.runId });
-        if (status?.status !== "done") throw new Error("not done");
-        return status;
-      },
-      { timeout: 5000 },
-    );
+    expect(await doneOf(agent, first)).toMatchObject({ answer: { text: "answer: hold" } });
+    const consumed = await doneOf(agent, steer.message.messageId);
+    expect(consumed).toMatchObject({ outcome: { status: "intercepted" } });
+    expect(consumed.entryId).toBeUndefined();
     expect(await ext.counted()).toBe(1);
-    expect(run.messages.map((m) => m.entryId !== undefined)).toEqual([true, false]);
   });
 
-  it("a steer that reaches pi after its run settled is run in the same run", async () => {
+  it("a steer that reaches pi after its run settled is taken by the next work and answered on its own", async () => {
     const ext = await extensionDir();
     const local = new World();
     const store = piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "pi-loop-")), cwd: process.cwd() });
     const agent = await piAgent(store, local, LIMITS.inFlightPerProcess, ext.paths);
     const session = agent.sessions.get("s");
-    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"), {
-      timeout: 5000,
-    });
-    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "slow" }, whenBusy: "steer" }));
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, first);
+    const steer = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "slow" }, whenBusy: "steer" }));
     local.held.open();
-    // The run answers `hold` and settles while `slow` is still in its input handler.
+    // pi answers `hold` and settles while `slow` is still in its input handler.
     await vi.waitFor(
       async () => {
         const page = await session.read();
@@ -310,21 +313,42 @@ describe("pi-coding-agent through LoopPort", () => {
       { timeout: 5000 },
     );
     await writeFile(join(ext.dir, "release-slow"), "");
-    const run = await vi.waitFor(
-      async () => {
-        const status = await session.runs.get({ runId: first.run.runId });
-        if (status?.status !== "done") throw new Error("not done");
-        return status;
-      },
-      { timeout: 5000 },
-    );
-    expect(run).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: slow" } });
-    expect(run.messages.map((m) => m.entryId !== undefined)).toEqual([true, true]);
+    expect(await doneOf(agent, first)).toMatchObject({
+      outcome: { status: "completed" },
+      answer: { text: "answer: hold" },
+    });
+    const answered = await doneOf(agent, steer.message.messageId);
+    expect(answered).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: slow" } });
+    expect(answered.entryId).toBeDefined();
     const page = await session.read();
-    expect(page.ok ? page.entries.filter((e) => e.kind === "run_ended") : []).toHaveLength(1);
+    const users = page.ok ? page.entries.filter((e) => e.kind === "user_message") : [];
+    expect(users.map((e) => (e.data as { messageId?: string }).messageId)).toEqual([first, steer.message.messageId]);
   });
 
-  it("keeps run markers out of the model's context and out of a fork's history", async () => {
+  it("canceling a steer pi holds takes it out of pi's queue: canceled, never run", async () => {
+    const local = new World();
+    const store = piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "pi-loop-")), cwd: process.cwd() });
+    const agent = await piAgent(store, local);
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await local.holding.opened;
+    const steer = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "two" }, whenBusy: "steer" }));
+    // Delivered: pi runs its input handlers, then queues the message for its next step.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await agent.sessions.get("s").messages.cancel(steer.message.messageId)).toEqual({ ok: true });
+    local.held.open();
+    expect(await doneOf(agent, first)).toMatchObject({
+      outcome: { status: "completed" },
+      answer: { text: "answer: hold" },
+    });
+    const withdrawn = await doneOf(agent, steer.message.messageId);
+    expect(withdrawn).toMatchObject({ outcome: { status: "canceled", by: "cancel" } });
+    expect(withdrawn.entryId).toBeUndefined();
+    const page = await agent.sessions.get("s").read();
+    const users = page.ok ? page.entries.filter((e) => e.kind === "user_message") : [];
+    expect(users.map((e) => (e.data as { text: string }).text)).toEqual(["hold"]);
+  });
+
+  it("keeps message records out of the model's context and out of a fork's history", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-loop-"));
     const store = piSessionRecordStore({ dir, cwd: process.cwd() });
     const agent = await piAgent(store, new World());
@@ -335,10 +359,11 @@ describe("pi-coding-agent through LoopPort", () => {
     expect(context).toEqual(["system", "user", "assistant", "user", "assistant"]);
     expect(await agent.sessions.create({ sessionId: "f", fork: { sessionId: "s" } })).toMatchObject({ ok: true });
     const forked = await store.openIfExists("f");
-    expect(forked?.getEntries().filter(isRunMarker)).toEqual([]);
+    expect(record?.getEntries().filter(isMessageMarker).length).toBeGreaterThan(0);
+    expect(forked?.getEntries().filter(isMessageMarker)).toEqual([]);
   });
 
-  it("a model set during a run is written at once, and the next run runs on it", async () => {
+  it("a model set during work is written at once, and the next work runs on it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-loop-"));
     const store = piSessionRecordStore({ dir, cwd: process.cwd() });
     const local = new World();
@@ -354,7 +379,9 @@ describe("pi-coding-agent through LoopPort", () => {
     local.held.open();
     await vi.waitFor(
       async () =>
-        expect(await session.runs.get({ runId: first.run.runId })).toMatchObject({ outcome: { status: "completed" } }),
+        expect(await session.messages.get({ messageId: first.message.messageId })).toMatchObject({
+          outcome: { status: "completed" },
+        }),
       { timeout: 5000 },
     );
     for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "next" } })) void _;
@@ -362,7 +389,7 @@ describe("pi-coding-agent through LoopPort", () => {
     const answeredBy = (record?.getEntries() ?? []).flatMap((e) =>
       e.type === "message" && e.message.role === "assistant" ? [e.message.model] : [],
     );
-    // The running run keeps the model it started on, through its tool call and its answer.
+    // The work in progress keeps the model it started on, through its tool call and its answer.
     expect(answeredBy).toEqual(["first", "first", "second"]);
   });
 
@@ -435,7 +462,7 @@ describe("pi's auto-retry vs. append-only deltas", () => {
     const started = Date.now();
     await expect(
       collect(agent.invoke({ sessionId: "streamed-then-failed", prompt: { text: "go" } })),
-    ).rejects.toBeInstanceOf(RunNotCompleted);
+    ).rejects.toBeInstanceOf(MessageNotCompleted);
     // Refusing the retry must also CANCEL it: pi's first backoff is 2s, and letting it run would both delay the
     // failure and spend a provider call on an answer this run can never use.
     expect(Date.now() - started).toBeLessThan(1000);
@@ -487,7 +514,7 @@ describe("an abort right after acceptance", () => {
       options?.signal?.addEventListener("abort", aborted, { once: true });
     });
 
-  /** Start a run, abort its session once it is accepted (after `wait`), and answer how the run ended. */
+  /** Send a message, abort its session once it is accepted (after `wait`), and answer how the message ended. */
   async function abortedAfter(agent: Agent, sessionId: string, wait: () => Promise<void>) {
     const iterator = agent.invoke({ sessionId, prompt: { text: "go" } })[Symbol.asyncIterator]();
     expect((await iterator.next()).value).toMatchObject({ type: "accepted" });
@@ -495,10 +522,9 @@ describe("an abort right after acceptance", () => {
     expect(await agent.sessions.get(sessionId).abort()).toMatchObject({ ok: true });
     for (;;) {
       const next = await iterator.next();
-      if (next.done) throw new Error("the stream ended without its run_ended");
+      if (next.done) throw new Error("the stream ended without its done");
       const event = next.value;
-      if (event.type === "entry" && event.entry.kind === "run_ended")
-        return (event.entry.data as { outcome: unknown }).outcome;
+      if (event.type === "done") return event.message.outcome;
     }
   }
 

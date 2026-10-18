@@ -1,20 +1,25 @@
 /**
  * SPEC v1 conformance (docs/SPEC.md §8), runnable against any `Agent`. Everything harness-specific comes from the
- * subject; what a run does is chosen by its message (`hold`, `fail`, `effect`, or any other text, answered
- * `answer: <text>`), which a subject maps onto its harness.
+ * subject; what a piece of work does is chosen by its message (`hold`, `fail`, `effect`, `late`, or any other text,
+ * answered `answer: <text>`), which a subject maps onto its harness.
  */
 import { describe, expect, it, vi } from "vitest";
-import type { Agent, Entry, FollowEvent, InvokeEvent, RunStatus, Session } from "../src/protocol.ts";
+import type { Agent, DoneMessage, Entry, FollowEvent, InvokeEvent, MessageStatus, Session } from "../src/protocol.ts";
 
 export interface ProtocolSubject {
-  /** A fresh agent over fresh storage. `capacity` lowers the runs a process holds in flight. */
+  /** A fresh agent over fresh storage. `capacity` lowers the messages a process holds in flight. */
   start(options?: { capacity?: number }): Agent | Promise<Agent>;
   /** The same storage, opened by a new process; the previous agent is abandoned mid-work. */
   restart(): Agent | Promise<Agent>;
-  /** Lets every `hold` run of the current process go on. */
+  /** Lets every `hold` and `late` work of the current process go on. */
   release(): void;
-  /** How many times an `effect` run's tool has run. */
+  /** How many times an `effect` work's tool has run. */
   effects(): number;
+  /**
+   * Whether the subject maps `late`: answered at once, its work settling only on `release()`, so a steer sent in
+   * between arrives after the answer. A subject without it proves that rule in a test of its own.
+   */
+  late?: true;
 }
 
 async function drain<T>(events: AsyncIterable<T>): Promise<T[]> {
@@ -59,24 +64,28 @@ function rejected(event: InvokeEvent | FollowEvent): Extract<InvokeEvent, { type
 const entriesOf = (events: (InvokeEvent | FollowEvent)[]): Entry[] =>
   events.flatMap((event) => (event.type === "entry" ? [event.entry] : []));
 
-const answerOf = (events: InvokeEvent[]): string | undefined =>
-  entriesOf(events)
-    .filter((entry) => entry.kind === "assistant_message")
-    .map((entry) => (entry.data as { text: string }).text)
-    .at(-1);
+const doneOf = (events: (InvokeEvent | FollowEvent)[]): DoneMessage[] =>
+  events.flatMap((event) => (event.type === "done" ? [event.message] : []));
 
-async function runOf(session: Session, runId: string): Promise<RunStatus> {
-  const run = await session.runs.get({ runId });
-  if (!run) throw new Error(`no run ${runId}`);
-  return run;
+const answerOf = (events: InvokeEvent[]): string | undefined => doneOf(events).at(-1)?.answer?.text;
+
+const idOf = (event: InvokeEvent): string => accepted(event).message.messageId;
+
+async function messageOf(session: Session, messageId: string): Promise<MessageStatus> {
+  const message = await session.messages.get({ messageId });
+  if (!message) throw new Error(`no message ${messageId}`);
+  return message;
 }
 
-async function until(session: Session, runId: string, status: RunStatus["status"]): Promise<RunStatus> {
-  return vi.waitFor(async () => {
-    const run = await runOf(session, runId);
-    if (run.status !== status) throw new Error(`run ${runId} is ${run.status}, not ${status}`);
-    return run;
-  });
+async function until(session: Session, messageId: string, status: MessageStatus["status"]): Promise<MessageStatus> {
+  return vi.waitFor(
+    async () => {
+      const message = await messageOf(session, messageId);
+      if (message.status !== status) throw new Error(`message ${messageId} is ${message.status}, not ${status}`);
+      return message;
+    },
+    { timeout: 5000 },
+  );
 }
 
 async function all(session: Session): Promise<Entry[]> {
@@ -84,6 +93,10 @@ async function all(session: Session): Promise<Entry[]> {
   if (!page.ok) throw new Error(page.error.message);
   return page.entries;
 }
+
+/** The message each `user_message` entry names, in history order. */
+const takenOrder = (entries: Entry[]): unknown[] =>
+  entries.filter((e) => e.kind === "user_message").map((e) => (e.data as { messageId?: unknown }).messageId);
 
 /** What was said, without the settings a harness records along the way. */
 const conversation = (entries: Entry[]) =>
@@ -96,20 +109,21 @@ function expectParentsPublished(entries: Entry[]): void {
   expect(dangling).toEqual([]);
 }
 
-const outcomeOf = (run: RunStatus) => (run.status === "done" ? run.outcome : undefined);
+const outcomeOf = (message: MessageStatus) => (message.status === "done" ? message.outcome : undefined);
 
 export function describeProtocolConformance(name: string, subject: ProtocolSubject): void {
   describe(`SPEC v1 conformance: ${name}`, () => {
     describe("invoke", () => {
-      it("answers with a receipt first and ends after its run's run_ended, every event JSON", async () => {
+      it("answers with a receipt first and ends with its message's done, every event JSON", async () => {
         const agent = await subject.start();
         const events = await drain(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
         expect(events[0]?.type).toBe("accepted");
-        const runId = accepted(events[0] as InvokeEvent).run.runId;
+        const messageId = idOf(events[0] as InvokeEvent);
         const last = events.at(-1);
-        expect(last?.type === "entry" && last.entry.kind === "run_ended" && last.entry.runId === runId).toBe(true);
-        expect(entriesOf(events).filter((e) => e.kind === "run_ended")).toHaveLength(1);
+        expect(last?.type === "done" && last.message.messageId === messageId).toBe(true);
+        expect(doneOf(events)).toHaveLength(1);
         expect(answerOf(events)).toBe("answer: hi");
+        expect(entriesOf(events)[0]).toMatchObject({ kind: "user_message", data: { messageId } });
         for (const event of events) expect(JSON.parse(JSON.stringify(event))).toEqual(event);
       });
 
@@ -134,48 +148,40 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
     });
 
     describe("a busy session", () => {
-      it("queues runs in arrival order, with their positions", async () => {
+      it("queues messages in arrival order, with their positions", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
-        const first = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, first.run.runId, "running");
+        const first = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(session, first, "taken");
         const second = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "two" } })));
         const third = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "three" } })));
-        expect(second.run).toMatchObject({ status: "queued", position: 1 });
-        expect(third.run).toMatchObject({ status: "queued", position: 2 });
+        expect(second.message).toMatchObject({ status: "queued", position: 0 });
+        expect(third.message).toMatchObject({ status: "queued", position: 1 });
         subject.release();
-        await until(session, third.run.runId, "done");
-        const started = (await all(session)).filter((e) => e.kind === "run_started").map((e) => e.runId);
-        expect(started).toEqual([first.run.runId, second.run.runId, third.run.runId]);
+        await until(session, third.message.messageId, "done");
+        expect(takenOrder(await all(session))).toEqual([first, second.message.messageId, third.message.messageId]);
       });
 
-      it("reject answers busy, naming the running run", async () => {
+      it("reject answers busy", async () => {
         const agent = await subject.start();
-        const first = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(agent.sessions.get("s"), first.run.runId, "running");
+        const first = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(agent.sessions.get("s"), first, "taken");
         const events = await drain(agent.invoke({ sessionId: "s", prompt: { text: "x" }, whenBusy: "reject" }));
         expect(rejected(events[0] as InvokeEvent).error).toMatchObject({
           code: "busy",
           retryable: true,
-          details: { reason: "running", runId: first.run.runId },
+          details: { reason: "running" },
         });
         subject.release();
       });
 
-      it("steer joins the running run, which takes the message", async () => {
+      it("a steer waits at the front of the queue, is taken by the work in progress, and shares its answer", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
-        const first = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, first.run.runId, "running");
-        // A running run reports the entry each message became as soon as it is written.
-        const written = await vi.waitFor(
-          async () => {
-            const entry = (await all(session)).find((e) => e.kind === "user_message" && e.runId === first.run.runId);
-            if (!entry) throw new Error("the run's message is not written yet");
-            return entry;
-          },
-          { timeout: 5000 },
-        );
+        const first = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        // A taken message reports its entry as soon as it is written.
+        const taken = await until(session, first, "taken");
+        const queued = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "queued" } })));
         const steered = agent.invoke({ sessionId: "s", prompt: { text: "also" }, whenBusy: "steer" });
         if (!agent.info().capabilities.steer) {
           expect(rejected((await drain(steered))[0] as InvokeEvent).error.code).toBe("unsupported");
@@ -183,35 +189,65 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
           return;
         }
         const { first: head, rest } = await opened(steered);
-        const joined = accepted(head);
-        expect(joined).toMatchObject({ joined: true, duplicate: false });
-        expect(joined.run.runId).toBe(first.run.runId);
-        expect(joined.run.messages).toHaveLength(2);
-        expect(joined.run.messages[0]?.entryId).toBe(written.id);
+        const steer = accepted(head);
+        expect(steer).toMatchObject({ duplicate: false, message: { status: "queued", position: 0 } });
+        expect(await messageOf(session, queued)).toMatchObject({ status: "queued", position: 1 });
         subject.release();
         const events = await rest;
-        const run = await until(session, first.run.runId, "done");
-        expect(run.messages).toHaveLength(2);
-        expect(run.messages.every((m) => m.entryId !== undefined)).toBe(true);
+        const done = await until(session, first, "done");
+        const shared = await until(session, steer.message.messageId, "done");
         expect(answerOf(events)).toBe("answer: also");
-        const users = (await all(session)).filter((e) => e.kind === "user_message" && e.runId === first.run.runId);
-        expect(users.map((e) => (e.data as { text: string }).text)).toEqual(["hold", "also"]);
+        expect(shared.status === "done" && shared.answer).toEqual(done.status === "done" && done.answer);
+        expect(shared.status === "done" && shared.entryId).toBeTruthy();
+        expect(done.status === "done" && done.entryId).toBe(taken.status === "taken" && taken.entryId);
+        if (agent.info().capabilities.usage) {
+          expect(done.status === "done" && done.usage).toBeTruthy();
+          expect(shared.status === "done" && shared.usage).toBeUndefined();
+        }
+        const users = (await all(session)).filter((e) => e.kind === "user_message");
+        expect(users.map((e) => (e.data as { text: string }).text).slice(0, 2)).toEqual(["hold", "also"]);
+        await until(session, queued, "done");
       });
 
-      it("an idle session starts a run whatever whenBusy says", async () => {
+      it("a steer the work has not taken when it ends is taken by the next work, before the queue", async () => {
+        const agent = await subject.start();
+        if (!subject.late || !agent.info().capabilities.steer) return;
+        const session = agent.sessions.get("s");
+        const first = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "late" } })));
+        await vi.waitFor(async () => expect((await messageOf(session, first)).status).toBe("taken"));
+        await vi.waitFor(async () =>
+          expect(conversation(await all(session)).map((e) => e.kind)).toContain("assistant_message"),
+        );
+        const queued = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "queued" } })));
+        const steer = idOf(
+          await receipt(agent.invoke({ sessionId: "s", prompt: { text: "also" }, whenBusy: "steer" })),
+        );
+        subject.release();
+        const answered = await until(session, steer, "done");
+        expect(answered).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: also" } });
+        expect(await until(session, first, "done")).toMatchObject({ answer: { text: "answer: late" } });
+        await until(session, queued, "done");
+        expect(takenOrder(await all(session))).toEqual([first, steer, queued]);
+      });
+
+      it("an idle session takes a message whatever whenBusy says", async () => {
         const agent = await subject.start();
         for (const whenBusy of ["queue", "steer", "reject"] as const) {
           const events = await drain(agent.invoke({ sessionId: "s", prompt: { text: whenBusy }, whenBusy }));
-          expect(accepted(events[0] as InvokeEvent)).toMatchObject({ joined: false, duplicate: false });
+          expect(accepted(events[0] as InvokeEvent)).toMatchObject({ duplicate: false });
+          expect(answerOf(events)).toBe(`answer: ${whenBusy}`);
         }
       });
 
-      it("holds 20 queued runs and refuses the 21st with queue_full", async () => {
+      it("holds 20 queued messages, steered ones included, and refuses the 21st with queue_full", async () => {
         const agent = await subject.start();
-        const first = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(agent.sessions.get("s"), first.run.runId, "running");
-        for (let i = 0; i < 20; i++)
-          accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: `q${i}` } })));
+        const first = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(agent.sessions.get("s"), first, "taken");
+        const steer = agent.info().capabilities.steer;
+        for (let i = 0; i < 20; i++) {
+          const whenBusy = steer && i === 0 ? "steer" : "queue";
+          accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: `q${i}` }, whenBusy })));
+        }
         const events = await drain(agent.invoke({ sessionId: "s", prompt: { text: "one too many" } }));
         expect(rejected(events[0] as InvokeEvent).error).toMatchObject({
           code: "busy",
@@ -221,7 +257,7 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         subject.release();
       });
 
-      it("refuses past the process's runs in flight with capacity", async () => {
+      it("refuses past the process's messages in flight with capacity", async () => {
         const agent = await subject.start({ capacity: 2 });
         accepted(await receipt(agent.invoke({ sessionId: "a", prompt: { text: "hold" } })));
         accepted(await receipt(agent.invoke({ sessionId: "b", prompt: { text: "hold" } })));
@@ -236,161 +272,191 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
     });
 
     describe("idempotency", () => {
-      it("a key seen while queued, running and done returns the same run and records one message", async () => {
+      it("a key seen while queued, taken and done returns the same message and records one entry", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
-        const holder = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, holder.run.runId, "running");
+        const holder = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(session, holder, "taken");
         const keyed = { sessionId: "s", prompt: { text: "keyed" }, idempotencyKey: "m1" };
-        const first = accepted(await receipt(agent.invoke(keyed)));
+        const first = idOf(await receipt(agent.invoke(keyed)));
         const whileQueued = accepted(await receipt(agent.invoke(keyed)));
-        expect(whileQueued).toMatchObject({ duplicate: true, run: { runId: first.run.runId, status: "queued" } });
+        expect(whileQueued).toMatchObject({ duplicate: true, message: { messageId: first, status: "queued" } });
         subject.release();
-        await until(session, first.run.runId, "done");
+        await until(session, first, "done");
         const whenDone = await drain(agent.invoke(keyed));
-        expect(accepted(whenDone[0] as InvokeEvent)).toMatchObject({
-          duplicate: true,
-          run: { runId: first.run.runId },
-        });
+        expect(accepted(whenDone[0] as InvokeEvent)).toMatchObject({ duplicate: true, message: { messageId: first } });
         expect(answerOf(whenDone)).toBe("answer: keyed");
-        const messages = (await all(session)).filter((e) => e.kind === "user_message" && e.runId === first.run.runId);
-        expect(messages).toHaveLength(1);
+        expect(takenOrder(await all(session)).filter((id) => id === first)).toHaveLength(1);
       });
 
-      it("a duplicate of a running run replays it from its start, so it collects the same answer", async () => {
+      it("a duplicate of a taken message replays it from its own entry, so it collects the same answer", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
         const keyed = { sessionId: "s", prompt: { text: "hold" }, idempotencyKey: "m1" };
-        const first = accepted(await receipt(agent.invoke(keyed)));
-        await until(session, first.run.runId, "running");
+        const first = idOf(await receipt(agent.invoke(keyed)));
+        await until(session, first, "taken");
         const { first: head, rest } = await opened(agent.invoke(keyed));
-        expect(accepted(head)).toMatchObject({ duplicate: true, run: { status: "running" } });
+        expect(accepted(head)).toMatchObject({ duplicate: true, message: { status: "taken" } });
         subject.release();
         const events = [head, ...(await rest)];
-        const kinds = entriesOf(events).map((e) => e.kind);
-        expect(kinds[0]).toBe("run_started");
-        expect(kinds.at(-1)).toBe("run_ended");
+        expect(entriesOf(events)[0]).toMatchObject({ kind: "user_message", data: { messageId: first } });
+        expect(events.at(-1)?.type).toBe("done");
         expect(answerOf(events)).toBe("answer: hold");
       });
 
-      it("concurrent invokes with one key make one run", async () => {
+      it("a duplicate of a done message replays what its work wrote, and nothing after it", async () => {
+        const agent = await subject.start();
+        const keyed = { sessionId: "s", prompt: { text: "effect" }, idempotencyKey: "m1" };
+        const live = entriesOf(await drain(agent.invoke(keyed)));
+        await drain(agent.invoke({ sessionId: "s", prompt: { text: "after" } }));
+        const replayed = entriesOf(await drain(agent.invoke(keyed)));
+        expect(replayed.map((e) => e.id)).toEqual(live.map((e) => e.id));
+        expect(replayed.map((e) => e.kind)).toContain("tool_result");
+      });
+
+      it("concurrent invokes with one key make one message", async () => {
         const agent = await subject.start();
         const keyed = { sessionId: "s", prompt: { text: "once" }, idempotencyKey: "m1" };
         const receipts = await Promise.all([1, 2, 3].map(() => receipt(agent.invoke(keyed))));
-        const runIds = new Set(receipts.map((r) => accepted(r).run.runId));
-        expect(runIds.size).toBe(1);
+        const ids = new Set(receipts.map((r) => idOf(r)));
+        expect(ids.size).toBe(1);
         expect(receipts.filter((r) => accepted(r).duplicate)).toHaveLength(2);
       });
 
-      it("an interrupted run's key starts a new run, which the key then names", async () => {
+      it("an interrupted message's key accepts it again, and the key then names the new one", async () => {
         const agent = await subject.start();
         const keyed = { sessionId: "s", prompt: { text: "hold" }, idempotencyKey: "m1" };
-        const first = accepted(await receipt(agent.invoke(keyed)));
-        await until(agent.sessions.get("s"), first.run.runId, "running");
+        const first = idOf(await receipt(agent.invoke(keyed)));
+        await until(agent.sessions.get("s"), first, "taken");
         const restarted = await subject.restart();
         const session = restarted.sessions.get("s");
-        if (restarted.info().capabilities.durableRuns) return;
-        expect(outcomeOf(await runOf(session, first.run.runId))).toEqual({ status: "interrupted" });
+        if (restarted.info().capabilities.durableWork) return;
+        expect(outcomeOf(await messageOf(session, first))).toEqual({ status: "interrupted" });
         const again = await opened(restarted.invoke(keyed));
         subject.release();
         await again.rest;
         const second = accepted(again.first);
         expect(second.duplicate).toBe(false);
-        expect(second.run.runId).not.toBe(first.run.runId);
-        expect((await session.runs.get({ idempotencyKey: "m1" }))?.runId).toBe(second.run.runId);
+        expect(second.message.messageId).not.toBe(first);
+        expect((await session.messages.get({ idempotencyKey: "m1" }))?.messageId).toBe(second.message.messageId);
       });
     });
 
-    describe("runs", () => {
-      it("a caller that stops reading detaches; the run goes on", async () => {
+    describe("messages", () => {
+      it("a caller that stops reading detaches; the work goes on", async () => {
         const agent = await subject.start();
-        const first = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        const first = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
         subject.release();
-        const run = await until(agent.sessions.get("s"), first.run.runId, "done");
-        expect(run).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: hold" } });
+        const message = await until(agent.sessions.get("s"), first, "done");
+        expect(message).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: hold" } });
       });
 
-      it("runs.follow reattaches after a cursor and ends with the run", async () => {
+      it("messages.follow reattaches after a cursor and ends with the message's done", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
-        const first = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, first.run.runId, "running");
-        const started = (await all(session)).find((e) => e.kind === "run_started" && e.runId === first.run.runId);
-        const followed = drain(session.runs.follow(first.run.runId, { after: started?.id as string }));
+        const first = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        const taken = await until(session, first, "taken");
+        const own = taken.status === "taken" ? taken.entryId : "";
+        const followed = drain(session.messages.follow(first, { after: own }));
         subject.release();
-        const kinds = entriesOf(await followed).map((e) => e.kind);
-        expect(kinds).not.toContain("run_started");
+        const events = await followed;
+        const kinds = entriesOf(events).map((e) => e.kind);
+        expect(kinds).not.toContain("user_message");
         expect(kinds).toContain("assistant_message");
-        expect(kinds.at(-1)).toBe("run_ended");
-        expect(rejected((await drain(session.runs.follow("no-such-run")))[0] as FollowEvent).error.code).toBe(
+        expect(events.at(-1)).toMatchObject({ type: "done", message: { messageId: first } });
+        expect(rejected((await drain(session.messages.follow("no-such-message")))[0] as FollowEvent).error.code).toBe(
           "not_found",
         );
       });
 
-      it("runs.cancel stops a running run and withdraws a queued one; the rest run", async () => {
+      it("messages.cancel stops work in progress and withdraws a queued message; the rest are taken", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
-        const running = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, running.run.runId, "running");
-        const queued = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "queued" } })));
-        const last = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "last" } })));
-        expect(await session.runs.cancel(queued.run.runId)).toEqual({ ok: true });
-        expect(await session.runs.cancel(running.run.runId)).toEqual({ ok: true });
+        const taken = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(session, taken, "taken");
+        const queued = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "queued" } })));
+        const last = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "last" } })));
+        expect(await session.messages.cancel(queued)).toEqual({ ok: true });
+        expect(await session.messages.cancel(taken)).toEqual({ ok: true });
         const canceled = { status: "canceled", by: "cancel" };
-        expect(outcomeOf(await until(session, running.run.runId, "done"))).toEqual(canceled);
-        expect(outcomeOf(await runOf(session, queued.run.runId))).toEqual(canceled);
-        expect(outcomeOf(await until(session, last.run.runId, "done"))).toEqual({ status: "completed" });
-        expect((await session.runs.cancel(last.run.runId)).ok).toBe(false);
+        expect(outcomeOf(await until(session, taken, "done"))).toEqual(canceled);
+        const withdrawn = await messageOf(session, queued);
+        expect(outcomeOf(withdrawn)).toEqual(canceled);
+        expect(withdrawn.status === "done" && withdrawn.entryId).toBeUndefined();
+        expect(outcomeOf(await until(session, last, "done"))).toEqual({ status: "completed" });
+        expect((await session.messages.cancel(last)).ok).toBe(false);
+      });
+
+      it("a steer still waiting when the work is canceled is taken by the next work", async () => {
+        const agent = await subject.start();
+        if (!subject.late || !agent.info().capabilities.steer) return;
+        const session = agent.sessions.get("s");
+        const first = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "late" } })));
+        await vi.waitFor(async () =>
+          expect(conversation(await all(session)).map((e) => e.kind)).toContain("assistant_message"),
+        );
+        const steer = idOf(
+          await receipt(agent.invoke({ sessionId: "s", prompt: { text: "also" }, whenBusy: "steer" })),
+        );
+        expect(await session.messages.cancel(first)).toEqual({ ok: true });
+        expect(outcomeOf(await until(session, first, "done"))).toEqual({ status: "canceled", by: "cancel" });
+        expect(await until(session, steer, "done")).toMatchObject({ answer: { text: "answer: also" } });
       });
 
       it("abort stops everything and says what; on an idle session it stops nothing", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
-        const running = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, running.run.runId, "running");
-        const queued = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "queued" } })));
+        const taken = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(session, taken, "taken");
+        const queued = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "queued" } })));
         expect(await session.abort()).toEqual({
           ok: true,
-          stopped: { runId: running.run.runId, queued: [queued.run.runId], compaction: false },
+          stopped: { taken: [taken], queued: [queued], compaction: false },
         });
         const aborted = { status: "canceled", by: "abort" };
-        expect(outcomeOf(await until(session, running.run.runId, "done"))).toEqual(aborted);
-        expect(outcomeOf(await runOf(session, queued.run.runId))).toEqual(aborted);
-        expect(await session.abort()).toEqual({ ok: true, stopped: { queued: [], compaction: false } });
+        expect(outcomeOf(await until(session, taken, "done"))).toEqual(aborted);
+        expect(outcomeOf(await messageOf(session, queued))).toEqual(aborted);
+        expect(await session.abort()).toEqual({ ok: true, stopped: { taken: [], queued: [], compaction: false } });
       });
 
-      it("the queue goes on after a failed run", async () => {
+      it("the queue goes on after work that failed", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
-        const holder = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, holder.run.runId, "running");
-        const failing = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "fail" } })));
-        const after = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "after" } })));
+        const holder = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(session, holder, "taken");
+        const failing = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "fail" } })));
+        const after = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "after" } })));
         subject.release();
-        expect(outcomeOf(await until(session, failing.run.runId, "done"))?.status).toBe("failed");
-        expect(outcomeOf(await until(session, after.run.runId, "done"))).toEqual({ status: "completed" });
+        expect(outcomeOf(await until(session, failing, "done"))?.status).toBe("failed");
+        expect(outcomeOf(await until(session, after, "done"))).toEqual({ status: "completed" });
       });
     });
 
     describe("restart", () => {
-      it("a run accepted before a restart is found after it; one interrupted is closed without an invoke", async () => {
+      it("a message accepted before a restart is found after it; one interrupted ends without an invoke", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
-        const running = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, running.run.runId, "running");
-        const queued = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "effect" } })));
+        const taken = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(session, taken, "taken");
+        const queued = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "effect" } })));
+        const before = await all(session);
         const restarted = await subject.restart();
         const after = restarted.sessions.get("s");
-        const { durableRuns, durableQueue } = restarted.info().capabilities;
-        const runningAfter = await runOf(after, running.run.runId);
-        const queuedAfter = await runOf(after, queued.run.runId);
-        if (!durableRuns) expect(outcomeOf(runningAfter)).toEqual({ status: "interrupted" });
-        if (!durableQueue) expect(outcomeOf(queuedAfter)).toEqual({ status: "interrupted" });
-        if (!durableRuns) {
-          const followed = entriesOf(await drain(after.runs.follow(running.run.runId)));
-          expect(followed.at(-1)).toMatchObject({ kind: "run_ended", data: { outcome: { status: "interrupted" } } });
-          expect(followed.filter((e) => e.kind === "run_ended")).toHaveLength(1);
+        const { durableWork, durableQueue } = restarted.info().capabilities;
+        const takenAfter = await messageOf(after, taken);
+        const queuedAfter = await messageOf(after, queued);
+        if (!durableWork) {
+          expect(outcomeOf(takenAfter)).toEqual({ status: "interrupted" });
+          // What its work wrote stays named, and a reattaching follow replays it before its end.
+          const followed = await drain(after.messages.follow(taken));
+          expect(entriesOf(followed).map((e) => e.id)).toEqual(
+            before
+              .slice(before.findIndex((e) => (e.data as { messageId?: unknown }).messageId === taken))
+              .map((e) => e.id),
+          );
+          expect(doneOf(followed)).toEqual([expect.objectContaining({ outcome: { status: "interrupted" } })]);
         }
+        if (!durableQueue) expect(outcomeOf(queuedAfter)).toEqual({ status: "interrupted" });
         if (!durableQueue) expect(subject.effects()).toBe(0);
       });
     });
@@ -412,23 +478,24 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         if (!forward.ok) throw new Error(forward.error.message);
         expect(forward.entries).toEqual(everything.slice(-3, -1));
         const state = await session.read({ limit: 0 });
-        expect(state).toMatchObject({ ok: true, entries: [], state: { status: "idle", queued: [] } });
+        expect(state).toMatchObject({ ok: true, entries: [], state: { status: "idle", taken: [], queued: [] } });
         expect((await session.read({ after: "no-such-entry" })).ok).toBe(false);
         expect((await session.read({ limit: 501 })).ok).toBe(false);
       });
 
-      it("a run's entries carry its id, between its run_started and run_ended", async () => {
+      it("the history is the conversation; each user_message names its message", async () => {
         const agent = await subject.start();
-        const events = await drain(agent.invoke({ sessionId: "s", prompt: { text: "effect" } }));
-        const runId = accepted(events[0] as InvokeEvent).run.runId;
-        await drain(agent.invoke({ sessionId: "s", prompt: { text: "again" } }));
-        expectParentsPublished(await all(agent.sessions.get("s")));
-        const entries = (await all(agent.sessions.get("s"))).filter((e) => e.runId === runId);
-        expect(entries[0]?.kind).toBe("run_started");
-        expect(entries.at(-1)?.kind).toBe("run_ended");
+        const first = await drain(agent.invoke({ sessionId: "s", prompt: { text: "effect" } }));
+        const second = await drain(agent.invoke({ sessionId: "s", prompt: { text: "again" } }));
+        const entries = await all(agent.sessions.get("s"));
+        expectParentsPublished(entries);
+        expect(takenOrder(entries)).toEqual([idOf(first[0] as InvokeEvent), idOf(second[0] as InvokeEvent)]);
         expect(entries.map((e) => e.kind)).toEqual(
           expect.arrayContaining(["user_message", "tool_result", "assistant_message"]),
         );
+        expect(entries.map((e) => e.kind).filter((kind) => kind.startsWith("message_"))).toEqual([]);
+        const done = doneOf(first)[0];
+        expect(done?.lastEntryId).toBe(done?.answer?.entryId);
       });
 
       it("follow catches up, goes live, and a reconnect from the last entry repeats nothing", async () => {
@@ -465,7 +532,7 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         const followed = await drain(missing.follow());
         expect(followed).toHaveLength(1);
         expect(rejected(followed[0] as FollowEvent).error.code).toBe("not_found");
-        expect(await missing.runs.get({ runId: "r" })).toBeUndefined();
+        expect(await missing.messages.get({ messageId: "m" })).toBeUndefined();
         await drain(agent.invoke({ sessionId: "s", prompt: { text: "x" } }));
         const badCursor = await drain(agent.sessions.get("s").follow({ after: "no-such-entry" }));
         expect(rejected(badCursor[0] as FollowEvent).error.code).toBe("not_found");
@@ -474,12 +541,12 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
       it("state moves from idle to running and back", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
-        const first = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, first.run.runId, "running");
+        const first = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(session, first, "taken");
         const busy = await session.read({ limit: 0 });
-        expect(busy).toMatchObject({ ok: true, state: { status: "running", run: { runId: first.run.runId } } });
+        expect(busy).toMatchObject({ ok: true, state: { status: "running", taken: [{ messageId: first }] } });
         subject.release();
-        await until(session, first.run.runId, "done");
+        await until(session, first, "done");
         expect(await session.read({ limit: 0 })).toMatchObject({ ok: true, state: { status: "idle" } });
       });
     });
@@ -496,10 +563,10 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         expect(listed).toEqual(expect.arrayContaining(["s", minted.ok ? minted.sessionId : ""]));
       });
 
-      it("a fork holds the history up to its entry and none of the runs, and leaves the source alone", async () => {
+      it("a fork holds the history up to its entry and none of the messages, and leaves the source alone", async () => {
         const agent = await subject.start();
         if (!agent.info().capabilities.fork) return;
-        await drain(agent.invoke({ sessionId: "s", prompt: { text: "one" } }));
+        const one = await drain(agent.invoke({ sessionId: "s", prompt: { text: "one" } }));
         await drain(agent.invoke({ sessionId: "s", prompt: { text: "two" } }));
         const source = await all(agent.sessions.get("s"));
         const firstAnswer = source.find((e) => e.kind === "assistant_message") as Entry;
@@ -510,7 +577,7 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         expect(forked.ok).toBe(true);
         const copied = await all(agent.sessions.get("f"));
         expect(conversation(copied).map((e) => e.kind)).toEqual(["user_message", "assistant_message"]);
-        expect(copied.every((e) => e.runId === undefined)).toBe(true);
+        expect(takenOrder(copied)).toEqual([undefined]);
         expectParentsPublished(copied);
         expect(await agent.sessions.create({ sessionId: "g", fork: { sessionId: "s" } })).toMatchObject({ ok: true });
         const whole = await all(agent.sessions.get("g"));
@@ -522,10 +589,11 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         ]);
         expect(whole.slice(1).map((e) => e.parentEntryId)).toEqual(whole.slice(0, -1).map((e) => e.id));
         expect(await all(agent.sessions.get("s"))).toEqual(source);
-        expect((await agent.sessions.get("f").runs.get({ runId: source[0]?.runId as string })) ?? null).toBeNull();
+        const copiedMessage = await agent.sessions.get("f").messages.get({ messageId: idOf(one[0] as InvokeEvent) });
+        expect(copiedMessage ?? null).toBeNull();
       });
 
-      it("rewind moves the active branch and keeps the earlier one; a running session is busy", async () => {
+      it("rewind moves the active branch and keeps the earlier one; a working session is busy", async () => {
         const agent = await subject.start();
         if (!agent.info().capabilities.rewind) return;
         const session = agent.sessions.get("s");
@@ -536,8 +604,8 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         expect(await session.rewind(point.id)).toEqual({ ok: true });
         expect(await session.read({ limit: 0 })).toMatchObject({ state: { leafEntryId: point.id } });
         expect((await all(session)).slice(0, before.length)).toEqual(before);
-        const holder = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, holder.run.runId, "running");
+        const holder = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(session, holder, "taken");
         const busy = await session.rewind(point.id);
         expect(busy.ok ? undefined : busy.error.code).toBe("busy");
         subject.release();
@@ -551,7 +619,7 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         expect(result.ok ? undefined : result.error.code).toBe("nothing_to_compact");
       });
 
-      it("update sets what is updatable; delete cancels the runs and removes the session", async () => {
+      it("update sets what is updatable; delete ends the messages and removes the session", async () => {
         const agent = await subject.start();
         const session = agent.sessions.get("s");
         await drain(agent.invoke({ sessionId: "s", prompt: { text: "x" } }));
@@ -560,13 +628,15 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
           expect(await session.read({ limit: 0 })).toMatchObject({ state: { name: "named" } });
         }
         if (!agent.info().capabilities.delete) return;
-        const holder = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
-        await until(session, holder.run.runId, "running");
-        const followed = await opened(session.runs.follow(holder.run.runId));
-        expect(followed.first).toMatchObject({ type: "entry", entry: { kind: "run_started" } });
+        const holder = idOf(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
+        await until(session, holder, "taken");
+        const followed = await opened(session.messages.follow(holder));
+        expect(followed.first).toMatchObject({ type: "entry", entry: { kind: "user_message" } });
         expect(await session.delete()).toEqual({ ok: true });
-        const ended = entriesOf(await followed.rest).at(-1);
-        expect(ended).toMatchObject({ kind: "run_ended", data: { outcome: { status: "canceled", by: "delete" } } });
+        expect((await followed.rest).at(-1)).toMatchObject({
+          type: "done",
+          message: { outcome: { status: "canceled", by: "delete" } },
+        });
         const read = await session.read();
         expect(read.ok ? undefined : read.error.code).toBe("not_found");
         expect((await agent.sessions.list()).map((s) => s.sessionId)).not.toContain("s");

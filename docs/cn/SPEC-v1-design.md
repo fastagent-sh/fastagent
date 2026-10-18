@@ -304,7 +304,7 @@ ACP v1 表达不了三样东西：调用方自己命名的会话、幂等 key、
 
 ## 六、现状和未决问题
 
-- **现状**：v1 在 step 4 替换了 v0.1，成为锁定的 [SPEC.md](../SPEC.md)。从 run 改为消息的这一版尚未实现，代码（`src/protocol.ts`）目前仍按 run 模型服务，step 4 内完成切换（#788）。
+- **现状**：v1 在 step 4 替换了 v0.1，成为锁定的 [SPEC.md](../SPEC.md)，代码实现的就是它（包括从 run 改为消息的这一版）。
 - **待实现**：pi-durable 作为第二个 harness（`harness: "pi-durable"`），直接实现 `HarnessPort`。
 - **待设计**：
   - 跨进程租约和 AgentCore 横向扩展（step 6）；

@@ -1,9 +1,10 @@
 /**
- * A `LoopHarness` over an in-memory store, for the protocol suite. What a run does is read from its message:
+ * A `LoopHarness` over an in-memory store, for the protocol suite. What a piece of work does is read from its message:
  * `hold` waits for `release()` (or a stop), `fail` ends with a model error, `effect` runs a side-effecting tool once,
+ * `late` is answered at once but its work settles only on `release()`, so a steer sent meanwhile is never taken, and
  * anything else is answered `answer: <text>`. A steered message is taken after the current one, as pi does.
  *
- * `restart()` is a process restart: the store (the disk) stays, a new harness opens it, and the old one's runs never
+ * `restart()` is a process restart: the store (the disk) stays, a new harness opens it, and the old one's work never
  * move again, the way a killed process's do not.
  */
 import type {
@@ -13,7 +14,7 @@ import type {
   LoopHooks,
   LoopLog,
   LoopRun,
-  RunMarker,
+  MessageMarker,
 } from "../src/loop-port.ts";
 import { type Json, type Result, agentError, failure } from "../src/protocol.ts";
 
@@ -49,7 +50,7 @@ export class FakeStore {
     return `e${++this.ids}`;
   }
 
-  /** Lets every run of the current process that is holding go on. */
+  /** Lets every piece of work of the current process that is holding go on. */
   release(): void {
     this.held.open();
     this.held = gate();
@@ -66,7 +67,11 @@ export class FakeStore {
   }
 }
 
-const RUN_MARKERS: ReadonlySet<string> = new Set<RunMarker>(["run_accepted", "run_started", "run_ended"]);
+const MESSAGE_MARKERS: ReadonlySet<string> = new Set<MessageMarker>([
+  "message_accepted",
+  "message_taken",
+  "message_ended",
+]);
 
 export function fakeLoopHarness(store: FakeStore): LoopHarness {
   const generation = store.generation;
@@ -77,7 +82,8 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
   const logOf = (sessionId: string, stored: StoredSession, onRecord: (record: LogRecord) => void): LoopLog => {
     let closed = false;
     store.openLogs++;
-    const write = (kind: string, data: Json): LogRecord => {
+    /** `before` hears the record durable and not yet reported, as a loop says a message's fate (LoopHooks.fate). */
+    const write = (kind: string, data: Json, before?: (record: LogRecord) => void): LogRecord => {
       alive();
       if (closed) throw new Error(`the log of ${sessionId} is closed`);
       if (store.refuseNext === kind) {
@@ -93,6 +99,7 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
       };
       stored.records.push(record);
       stored.leaf = record.id;
+      before?.(record);
       onRecord(record);
       return record;
     };
@@ -113,7 +120,7 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
             fate(id, { handled: true });
             continue;
           }
-          fate(id, { taken: write("user_message", { text: taken.text }).id });
+          write("user_message", { text: taken.text }, (record) => fate(id, { taken: record.id }));
           if (taken.text === "hold") await Promise.race([store.holding(), stop.opened]);
           if (stopped) {
             outcome = { status: "failed", error: agentError("internal", "stopped") };
@@ -132,6 +139,10 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
           emit({ type: "message_delta", channel: "text", delta: text });
           write("assistant_message", { text });
           outcome = { status: "completed" };
+          if (taken.text === "late") {
+            finished = true;
+            await Promise.race([store.holding(), stop.opened]);
+          }
         }
         finished = true;
         return { outcome, usage: { inputTokens: 1, outputTokens: 1 } };
@@ -140,6 +151,12 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
         // A message handed after the loop finished is one it never takes, as pi's late `steer()`.
         steer: (steered) => {
           if (!finished) handed.push(steered);
+        },
+        withdraw: (id) => {
+          const index = handed.findIndex((h) => h.id === id);
+          if (index < next) return false;
+          handed.splice(index, 1);
+          return true;
         },
         stop: () => {
           stopped = true;
@@ -206,11 +223,11 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
       if (fork) {
         const source = fork.from.records();
         const end = fork.entryId === undefined ? source.length : source.findIndex((r) => r.id === fork.entryId) + 1;
-        // Runs are not copied, so a kept record's parent is its nearest kept ancestor.
+        // Message records are not copied, so a kept record's parent is its nearest kept ancestor.
         const kept = new Map<string, string | undefined>();
         for (const record of source.slice(0, end)) {
           const parent = record.parentEntryId === undefined ? undefined : kept.get(record.parentEntryId);
-          if (RUN_MARKERS.has(record.kind)) {
+          if (MESSAGE_MARKERS.has(record.kind)) {
             kept.set(record.id, parent);
             continue;
           }

@@ -10,7 +10,7 @@ The stable design center is the harness-neutral Agent Handler contract (`docs/SP
 
 | Document | Purpose |
 |---|---|
-| `docs/SPEC.md` | The locked Agent Handler contract, v1. The code implements it once step 4's change from runs to messages lands (#788); until then `src/protocol.ts` is the run model it replaced. Do not change its semantics without an explicit decision. |
+| `docs/SPEC.md` | The locked Agent Handler contract, v1, which the code implements. Do not change its semantics without an explicit decision. |
 | `docs/design/core.md` | The pi reference implementation and current architecture. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
@@ -27,11 +27,11 @@ one place that cannot drift away from the code it explains. Directories that hav
 ```
 src/
 ├── channel.ts              # the Channel contract: ChannelModule / Routes / ChannelHandler / LongConnection*
-├── protocol.ts             # the Agent contract as types, plus its limits and error values: SPEC v1's run model until
-│                           # #788 moves it to messages (docs/SPEC.md)
+├── protocol.ts             # the Agent contract, SPEC v1 (docs/SPEC.md), as types, plus its limits and error values
 ├── harness-port.ts         # what the serving layer calls to run a session's work; a durable harness implements it
-├── loop-port.ts            # LoopPort: the harness port for a harness that is only a loop: queue, idempotency, run
-│                           # markers in the session's own log through its one writer, closing interrupted runs
+├── loop-port.ts            # LoopPort: the harness port for a harness that is only a loop: queue, idempotency,
+│                           # message records in the session's own log through its one writer, ending interrupted
+│                           # messages
 ├── serving-layer.ts        # servingAgent: the SPEC v1 Agent over any harness port: session ids, request rules, the
 │                           # invoke and follow streams, read pages
 ├── service.ts              # THE PRODUCT AS ONE CALL — a directory becomes a live service (mountAgentService),
@@ -39,8 +39,9 @@ src/
 ├── effect-port.ts          # the ONE crossing from a Promise-shaped port into Effect: port / portJoin / portAbort /
 │                           # portRequest / portCleanup / PortFailure
 ├── once.ts                 # work that runs once per process, its outcome shared (shutdown, AgentCore activation)
-├── protocol-collect.ts     # the v1 buffered consumer: a run's answer, or RunNotCompleted / RunUnfinished saying why not
-├── run-text.ts             # a run's answer text as it streams: its deltas, plus entry text no delta carried
+├── protocol-collect.ts     # the v1 buffered consumer: a message's answer, or MessageNotCompleted / MessageUnfinished
+│                           # saying why not
+├── answer-text.ts          # a message's answer text as it streams: its deltas, plus entry text no delta carried
 ├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + Effect only, no Node /
 │                           # harness-neutral but needs Node / names the harness. Asserted in package-boundary.test.ts
 ├── index.ts                # supported all-in-one entry (re-exports core + node + pi)

@@ -17,12 +17,13 @@ export type {
   LiveEvent,
   ModelDescriptor,
   Prompt,
+  DoneMessage,
+  MessageKey,
+  MessageSource,
+  MessageStatus,
+  Outcome,
   ReadResult,
   Result,
-  RunKey,
-  RunOutcome,
-  RunSource,
-  RunStatus,
   Session,
   SessionEvent,
   SessionSettings,
@@ -32,7 +33,7 @@ export type {
   WhenBusy,
 } from "./protocol.ts";
 export { AgentRejection, LIMITS } from "./protocol.ts";
-export { collect, type CollectedRun, RunNotCompleted, RunUnfinished } from "./protocol-collect.ts";
+export { collect, type CollectedMessage, MessageNotCompleted, MessageUnfinished } from "./protocol-collect.ts";
 export type { ModuleLoadFailure } from "./loader.ts";
 
 // The agent's API over HTTP: serve it inside an app, and call one that is served.

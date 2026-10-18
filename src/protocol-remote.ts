@@ -15,7 +15,7 @@ import {
   type InvokeRequest,
   type ReadResult,
   type Result,
-  type RunStatus,
+  type MessageStatus,
   type Session,
   type SessionSummary,
   type ModelDescriptor,
@@ -71,18 +71,18 @@ async function bodyOf<T>(res: Response): Promise<{ value: T } | { error: AgentEr
   }
 }
 
-/** Whether an event is `runId`'s `run_ended`. */
-const endsRunOf =
-  (runId: string) =>
+/** Whether an event is `messageId`'s `done`. */
+const endsMessage =
+  (messageId: string) =>
   (event: FollowEvent | InvokeEvent): boolean =>
-    event.type === "entry" && event.entry.kind === "run_ended" && event.entry.runId === runId;
+    event.type === "done" && event.message.messageId === messageId;
 
-/** An invoke ends on the `run_ended` of the run its receipt named. */
+/** An invoke ends on the `done` of the message its receipt named. */
 function receiptThenEnd(): (event: InvokeEvent) => boolean {
-  let runId: string | undefined;
+  let messageId: string | undefined;
   return (event) => {
-    if (event.type === "accepted") runId = event.run.runId;
-    return runId !== undefined && endsRunOf(runId)(event);
+    if (event.type === "accepted") messageId = event.message.messageId;
+    return messageId !== undefined && endsMessage(messageId)(event);
   };
 }
 
@@ -173,7 +173,7 @@ export async function connectAgent(options: RemoteAgentOptions): Promise<Agent> 
     connectMs: number,
     /**
      * Whether an event is the one the stream ends on. A stream that ends before it is cut off, by a proxy or a server
-     * going down, and says so with a `serving_error`: a caller must not read a run that did not end as one that did.
+     * going down, and says so with a `serving_error`: a caller must not read a message that did not end as one that did.
      */
     ends: (event: T) => boolean,
     /** Said instead of `rejected` when the request may have reached the server before the connection failed. */
@@ -289,42 +289,42 @@ export async function connectAgent(options: RemoteAgentOptions): Promise<Agent> 
           : unaddressable,
       delete: async (): Promise<Result> =>
         addressable ? result<{ ok: true }>(`/control${path}`, { method: "DELETE" }) : unaddressable,
-      runs: {
+      messages: {
         get: async (key) => {
           if (!addressable) return undefined;
           const at =
-            "runId" in key
-              ? `${path}/runs/${encodeURIComponent(key.runId)}`
-              : `${path}/runs${query({ idempotencyKey: key.idempotencyKey })}`;
-          return reading(at, async (res) => (await jsonOf<RunStatus | null>(res)) ?? undefined);
+            "messageId" in key
+              ? `${path}/messages/${encodeURIComponent(key.messageId)}`
+              : `${path}/messages${query({ idempotencyKey: key.idempotencyKey })}`;
+          return reading(at, async (res) => (await jsonOf<MessageStatus | null>(res)) ?? undefined);
         },
-        follow: (runId, options = {}) =>
+        follow: (messageId, options = {}) =>
           addressable
             ? events<FollowEvent>(
-                `${path}/runs/${encodeURIComponent(runId)}/events${query(options)}`,
+                `${path}/messages/${encodeURIComponent(messageId)}/events${query(options)}`,
                 {},
                 REQUEST_TIMEOUT_MS,
-                (event) => endsRunOf(runId)(event),
+                (event) => endsMessage(messageId)(event),
               )
             : rejectedStream(),
-        cancel: async (runId) =>
+        cancel: async (messageId) =>
           addressable
-            ? result<{ ok: true }>(`${path}/runs/${encodeURIComponent(runId)}/cancel`, post())
+            ? result<{ ok: true }>(`${path}/messages/${encodeURIComponent(messageId)}/cancel`, post())
             : unaddressable,
       },
     };
   };
 
   /**
-   * The connection failed before the receipt, so the run may have been accepted, or may yet be: the server can still be
-   * reading the request. Sending it again with its key settles it, since the server answers a key it has seen with that
-   * run and starts one for a key it has not. Without a key nothing can tell, and saying `rejected` would invite a
-   * second run.
+   * The connection failed before the receipt, so the message may have been accepted, or may yet be: the server can still
+   * be reading the request. Sending it again with its key settles it, since the server answers a key it has seen with
+   * that message and accepts one for a key it has not. Without a key nothing can tell, and saying `rejected` would invite
+   * a second message.
    */
   function settleUnsure(invokeRequest: InvokeRequest, reason: string): AsyncIterable<InvokeEvent> {
     const unknown = (why: string): AsyncIterable<InvokeEvent> => ({
       async *[Symbol.asyncIterator]() {
-        yield { type: "serving_error", message: `whether the run was accepted is unknown: ${why}` };
+        yield { type: "serving_error", message: `whether the message was accepted is unknown: ${why}` };
       },
     });
     if (invokeRequest.sessionId === undefined || invokeRequest.idempotencyKey === undefined) {

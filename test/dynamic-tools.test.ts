@@ -25,15 +25,14 @@ async function workspace(defaultTools?: string[]) {
   }
   return cwd;
 }
-/** One run's invoke stream, and the entries it wrote. */
+/** One message's invoke stream, and the entries its work wrote. */
 async function invoked(events: AsyncIterable<InvokeEvent>): Promise<{ events: InvokeEvent[]; entries: Entry[] }> {
   const all: InvokeEvent[] = [];
   for await (const event of events) all.push(event);
   const entries = all.flatMap((event) => (event.type === "entry" ? [event.entry] : []));
   return { events: all, entries };
 }
-const outcomeOf = (entries: Entry[]) =>
-  (entries.find((e) => e.kind === "run_ended")?.data as { outcome?: unknown } | undefined)?.outcome;
+const outcomeOf = (events: InvokeEvent[]) => events.flatMap((e) => (e.type === "done" ? [e.message.outcome] : []))[0];
 const toolResults = (entries: Entry[]) =>
   entries.flatMap((e) =>
     e.kind === "tool_result" ? [e.data as { toolCallId: string; isError: boolean; text: string }] : [],
@@ -163,7 +162,7 @@ describe("Pi-native tool loadouts", () => {
       { cwd: await workspace(["+codemode"]), tools: [weather()] },
     );
     const { events, entries } = await invoked(agent.invoke({ sessionId: "room:/native", prompt: { text: "go" } }));
-    expect(outcomeOf(entries)).toEqual({ status: "completed" });
+    expect(outcomeOf(events)).toEqual({ status: "completed" });
     expect(events.filter((event) => event.type === "tool_started")).toEqual([
       expect.objectContaining({ toolCallId: "outer", name: "codemode" }),
     ]);
@@ -257,7 +256,7 @@ describe("Pi-native tool loadouts", () => {
       },
     );
     const { events, entries } = await invoked(agent.invoke({ sessionId: "desk", prompt: { text: "go" } }));
-    expect(outcomeOf(entries)).toEqual({ status: "completed" });
+    expect(outcomeOf(events)).toEqual({ status: "completed" });
     // The invoke stream carries the call's status line: its own report, and each call it makes. pi delivers an update
     // and a nested call made in the same tick out of order (the update takes the longer listener path), so only the
     // last is certain: `archive` starts after `lookup` returned.
@@ -307,10 +306,10 @@ describe("Pi-native tool loadouts", () => {
     const run = invoked(agent.invoke({ sessionId: "cancelled", prompt: { text: "go" } }));
     await started;
     const read = await agent.sessions.get("cancelled").read({ limit: 0 });
-    const runId = read.ok ? read.state.run?.runId : undefined;
-    if (!runId) throw new Error("no running run");
-    expect(await agent.sessions.get("cancelled").runs.cancel(runId)).toEqual({ ok: true });
-    expect(outcomeOf((await run).entries)).toEqual({ status: "canceled", by: "cancel" });
+    const messageId = read.ok ? read.state.taken[0]?.messageId : undefined;
+    if (!messageId) throw new Error("no message taken");
+    expect(await agent.sessions.get("cancelled").messages.cancel(messageId)).toEqual({ ok: true });
+    expect(outcomeOf((await run).events)).toEqual({ status: "canceled", by: "cancel" });
     expect(cancelled).toBe(true);
   });
 

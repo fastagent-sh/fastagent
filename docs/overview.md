@@ -39,7 +39,7 @@ machine has is bound in `context.local.json` alone: it stays here, and a deploym
 ## What FastAgent provides
 
 1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`, `AGENTS.md`), `skills/`, `tools/`, `channels/`, `schedules/` and reference material as files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as its [content](configuration.md#content): files the agent reads and changes there, none of which becomes part of its prompt.
-2. **A contract** — [Agent Handler SPEC v1](SPEC.md): `invoke(request) => AsyncIterable<InvokeEvent>`, and sessions whose runs outlive their callers.
+2. **A contract** — [Agent Handler SPEC v1](SPEC.md): `invoke(request) => AsyncIterable<InvokeEvent>`, and sessions whose messages outlive their callers.
 3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md` / `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `content`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.

@@ -1,12 +1,12 @@
 /**
  * `LoopPort`: the harness port for a harness that is only a loop (docs/design/agent-service.md §9.1, §9.3). It owns
- * what such a harness lacks: admission, the queue, idempotency, run records, the steering promise and closing
- * interrupted runs.
+ * what such a harness lacks: admission, the queue, idempotency, message records and closing interrupted messages.
  *
- * Run records are entries in the session's own log, written through its one writer: `run_accepted` (a plane marker,
- * never published), `run_started` and `run_ended` (published). A session's log is held from the first operation that
- * acquires it until the session is idle and nothing holds it; every operation acquires it, so a session has one
- * writer, and the first acquisition in a process closes the runs a previous process left open.
+ * Message records are plane markers in the session's own log, written through its one writer and never published:
+ * `message_accepted`, `message_taken` (the entry a message became, as soon as the loop says) and `message_ended`. A
+ * session's log is held from the first operation that acquires it until the session is idle and nothing holds it;
+ * every operation acquires it, so a session has one writer, and the first acquisition in a process ends the messages a
+ * previous process left open.
  */
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -22,18 +22,18 @@ import {
   type AgentCommand,
   type Attachment,
   type Capabilities,
+  type DoneMessage,
   type Entry,
   type Json,
   LIMITS,
   type LiveEvent,
+  type MessageKey,
+  type MessageSource,
+  type MessageStatus,
   type ModelDescriptor,
+  type Outcome,
   type Prompt,
   type Result,
-  type RunKey,
-  type RunMessage,
-  type RunOutcome,
-  type RunSource,
-  type RunStatus,
   type SessionEvent,
   type SessionSettings,
   type SessionState,
@@ -44,7 +44,7 @@ import {
   failure,
 } from "./protocol.ts";
 
-/** One record of a session's log: the harness's entries and `LoopPort`'s run markers alike. */
+/** One record of a session's log: the harness's entries and `LoopPort`'s message records alike. */
 export interface LogRecord {
   id: string;
   parentEntryId?: string;
@@ -53,18 +53,16 @@ export interface LogRecord {
   data: Json;
 }
 
-export type RunMarker = "run_accepted" | "run_started" | "run_ended";
+export type MessageMarker = "message_accepted" | "message_taken" | "message_ended";
 
-/** How a loop's run ended: `canceled` and `interrupted` are the port's to say. */
-export type LoopOutcome = Extract<RunOutcome, { status: "completed" | "max_tokens" | "intercepted" | "failed" }>;
+const MARKERS: ReadonlySet<string> = new Set<MessageMarker>(["message_accepted", "message_taken", "message_ended"]);
 
-type Distribute<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-/** A live event as a loop emits it: the port adds the run it belongs to. */
-export type LoopLiveEvent = Distribute<LiveEvent, "runId">;
+/** How a loop's work ended: `canceled` and `interrupted` are the port's to say. */
+export type LoopOutcome = Extract<Outcome, { status: "completed" | "max_tokens" | "intercepted" | "failed" }>;
 
 /** A message handed to a loop, under the id its fate is reported by. */
 export interface HandedMessage {
-  readonly id: number;
+  readonly id: string;
   readonly prompt: Prompt;
 }
 
@@ -75,18 +73,24 @@ export interface HandedMessage {
 export type MessageFate = { taken: string } | { handled: true };
 
 export interface LoopHooks {
-  emit(event: LoopLiveEvent): void;
+  emit(event: LiveEvent): void;
   /**
    * Said once per message, as it happens. Only the loop can tell (an extension may consume a message; pi's `steer()`
-   * can queue after its run settled), so a message it has said nothing for when its run ends counts as not taken, and
-   * `LoopPort` runs it itself.
+   * can queue after its work settled), so a message it has said nothing for when its work ends counts as not taken, and
+   * the next work takes it. `taken` is said before the entry it names reaches `onRecord`, so that entry is published
+   * naming its message; it must not write the log itself.
    */
-  fate(messageId: number, fate: MessageFate): void;
+  fate(messageId: string, fate: MessageFate): void;
 }
 
 export interface LoopRun {
-  /** Hand a message to the run, which takes it after its current tool round. */
+  /** Hand a message to the work, which takes it after its current tool round. */
   steer(message: HandedMessage): void;
+  /**
+   * Take back a steered message the work has not taken, so it never will. False when that can no longer be promised
+   * (the loop has already selected it for its next step): the message is then the work's like any it took.
+   */
+  withdraw(messageId: string): boolean;
   stop(): void;
   readonly done: Promise<{ outcome: LoopOutcome; usage?: Usage }>;
 }
@@ -96,9 +100,9 @@ export interface LoopLog {
   /** Every record, in append order. */
   records(): readonly LogRecord[];
   /** Durable when it returns; reported to `onRecord` like every other append. */
-  append(kind: RunMarker, data: Json): LogRecord;
-  state(): Omit<SessionState, "status" | "run" | "queued">;
-  /** Start a run on this log. The harness writes the message as a `user_message` entry when it takes it. */
+  append(kind: MessageMarker, data: Json): LogRecord;
+  state(): Omit<SessionState, "status" | "taken" | "queued">;
+  /** Start work on this log. The harness writes the message as a `user_message` entry when it takes it. */
   run(message: HandedMessage, hooks: LoopHooks): LoopRun;
   rewind(entryId: string): Promise<Result>;
   compact(options: { instructions?: string }, signal: AbortSignal): Promise<Result>;
@@ -112,12 +116,13 @@ export interface LoopLog {
  * cannot answer now, and reaches the caller as that. Any other rejection is a harness failure, reported `internal`.
  */
 export interface LoopHarness {
-  readonly capabilities: Omit<Capabilities, "durableQueue" | "durableRuns">;
+  readonly capabilities: Omit<Capabilities, "durableQueue" | "durableWork">;
   /** `onRecord` sees every record appended from now on, by the harness or by `LoopPort`, once it is durable. */
   open(sessionId: string, onRecord: (record: LogRecord) => void): Promise<LoopLog | undefined>;
   /**
-   * A fork copies the source's conversation up to `entryId`, never its run markers: runs are not copied. `recent` bounds
-   * what the model is given of that copy, for a harness that manages context; one that does not copies it whole.
+   * A fork copies the source's conversation up to `entryId`, never its message records: messages are not copied.
+   * `recent` bounds what the model is given of that copy, for a harness that manages context; one that does not copies
+   * it whole.
    */
   create(
     sessionId: string,
@@ -136,32 +141,48 @@ export interface LoopPortLimits {
   inFlightPerProcess: number;
 }
 
-type AcceptedData = { runId: string; idempotencyKey?: string; source: RunSource; joined?: true };
-/** `messages` gives each accepted message's entry, in acceptance order: the only record of which entry is whose. */
-type EndedData = { runId: string; outcome: RunOutcome; usage?: Usage; messages?: { entryId?: string }[] };
+type AcceptedData = { messageId: string; idempotencyKey?: string; source: MessageSource };
+type TakenData = { messageId: string; entryId: string };
+/**
+ * `entryId` repeats `message_taken`'s, so an end is whole even when that record was refused; `answer` is the entry id
+ * of the work's final `assistant_message`.
+ */
+type EndedData = {
+  messageId: string;
+  outcome: Outcome;
+  entryId?: string;
+  lastEntryId?: string;
+  usage?: Usage;
+  answer?: string;
+};
 
-interface Queued {
-  readonly runId: string;
-  readonly message: Prompt;
+type StopReason = "cancel" | "abort" | "delete";
+
+/** An accepted message that has not ended. */
+interface Pending {
+  readonly messageId: string;
+  readonly prompt: Prompt;
   readonly idempotencyKey?: string;
-  readonly source: RunSource;
-  /** Holds the session while the run is queued or running. */
+  readonly source: MessageSource;
+  /** Holds the session until the message ends. */
   readonly hold: Scope.Closeable;
 }
 
-interface Running extends Queued {
-  readonly startedAt: number;
+/** One piece of work: what the loop does from taking its first message to settling. */
+interface Work {
   readonly ended: Deferred.Deferred<void>;
   loop: LoopRun;
-  stoppedBy?: "cancel" | "abort" | "delete";
-  /** Set once the run has decided to end: a message arriving after it starts a run of its own. */
+  stoppedBy?: StopReason;
+  /** Set once the loop settled: a steer arriving after it waits for the next work. */
   closing: boolean;
-  /** The message that started the run, then each one joined, in the order they were accepted. */
-  readonly messages: Prompt[];
-  /** What each message became, by the same position: its entry, `null` when consumed, absent until a loop says. */
-  readonly fates: (string | null | undefined)[];
-  /** The positions in `messages` the current loop was handed: its own first, then its steers. */
-  handed: number[];
+  /** Its first message, then each one steered in, in the order they were accepted. */
+  readonly messages: Pending[];
+  /** What each message became: its entry, or `null` when consumed without one. */
+  readonly fates: Map<string, string | null>;
+  /** Steers canceled that the loop could not give back: they end with the work, never carried to the next one. */
+  readonly canceled: Set<string>;
+  /** The newest `assistant_message` it wrote: its answer when it ends. */
+  answer?: string;
 }
 
 interface Held {
@@ -170,109 +191,89 @@ interface Held {
   log: LoopLog | undefined;
   /** The log read so far, for the live path; reads project the whole log again. */
   projection: Projection;
+  /** Which message each `user_message` entry is. */
+  readonly named: Map<string, string>;
+  /** `message_taken` records owed: written right after the entry each names is reported. */
+  readonly owed: TakenData[];
   readonly keys: Map<string, string>;
-  readonly queue: Queued[];
-  running: Running | undefined;
+  /** Steered messages the last work did not take: the next work takes them, before the queue. */
+  readonly carried: Pending[];
+  readonly queue: Pending[];
+  work: Work | undefined;
   compaction: { readonly controller: AbortController; readonly done: Deferred.Deferred<void> } | undefined;
 }
 
-const markerRunId = (record: LogRecord): string => (record.data as { runId: string }).runId;
+const markerOf = (record: LogRecord): string | undefined =>
+  MARKERS.has(record.kind) ? (record.data as { messageId: string }).messageId : undefined;
 
-/**
- * Where a record sits among runs, and whether it is published: one rule for the live path and for every read. A
- * marker names its run; `settings_changed` belongs to none; anything else belongs to the run whose span encloses it.
- */
-function place(
-  span: string | undefined,
-  record: LogRecord,
-): { published: boolean; runId?: string; span: string | undefined } {
-  switch (record.kind) {
-    case "run_accepted":
-      return { published: false, span };
-    case "run_started": {
-      const runId = markerRunId(record);
-      return { published: true, runId, span: runId };
-    }
-    case "run_ended": {
-      const runId = markerRunId(record);
-      return { published: true, runId, span: span === runId ? undefined : span };
-    }
-    case "settings_changed":
-      return { published: true, span };
-    default:
-      return span === undefined ? { published: true, span } : { published: true, runId: span, span };
-  }
-}
-
-/** What reading the log so far has established: the open run span, and each record's nearest published ancestor. */
+/** What reading the log so far has established: each record's nearest published ancestor, and the newest entry. */
 interface Projection {
-  span: string | undefined;
   readonly visible: Map<string, string | undefined>;
+  last: string | undefined;
 }
 
-const emptyProjection = (): Projection => ({ span: undefined, visible: new Map() });
+const emptyProjection = (): Projection => ({ visible: new Map(), last: undefined });
 
 /**
- * A record as published, or `undefined` for a plane marker. A published entry's parent is its nearest published
- * ancestor, so an entry never names one a caller cannot read.
+ * A record as published, or `undefined` for a message record. A published entry's parent is its nearest published
+ * ancestor, so an entry never names one a caller cannot read; a `user_message` names the message it is.
  */
-function project(projection: Projection, record: LogRecord): Entry | undefined {
+function project(projection: Projection, named: ReadonlyMap<string, string>, record: LogRecord): Entry | undefined {
   const parent = record.parentEntryId === undefined ? undefined : projection.visible.get(record.parentEntryId);
-  const placed = place(projection.span, record);
-  projection.span = placed.span;
-  projection.visible.set(record.id, placed.published ? record.id : parent);
-  if (!placed.published) return undefined;
+  if (MARKERS.has(record.kind)) {
+    projection.visible.set(record.id, parent);
+    return undefined;
+  }
+  projection.visible.set(record.id, record.id);
+  projection.last = record.id;
   const { parentEntryId: _stored, ...rest } = record;
+  const messageId = record.kind === "user_message" ? named.get(record.id) : undefined;
   return {
     ...rest,
     ...(parent === undefined ? {} : { parentEntryId: parent }),
-    ...(placed.runId === undefined ? {} : { runId: placed.runId }),
+    ...(messageId === undefined ? {} : { data: { ...(record.data as Record<string, Json>), messageId } }),
   };
 }
 
+/** Which message each `user_message` entry is: `message_taken` says so, and `message_ended` again for a refused one. */
+function namedIn(records: readonly LogRecord[]): Map<string, string> {
+  const named = new Map<string, string>();
+  for (const record of records) {
+    if (record.kind !== "message_taken" && record.kind !== "message_ended") continue;
+    const { messageId, entryId } = record.data as TakenData | EndedData;
+    if (entryId !== undefined) named.set(entryId, messageId);
+  }
+  return named;
+}
+
 function published(records: readonly LogRecord[]): { entries: Entry[]; projection: Projection } {
+  const named = namedIn(records);
   const projection = emptyProjection();
   const entries: Entry[] = [];
   for (const record of records) {
-    const entry = project(projection, record);
+    const entry = project(projection, named, record);
     if (entry) entries.push(entry);
   }
   return { entries, projection };
 }
 
-function addUsage(total: Usage | undefined, more: Usage | undefined): Usage | undefined {
-  if (!more) return total;
-  if (!total) return more;
-  const sum = (a?: number, b?: number) => (a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0));
-  const optional = (key: "cacheReadTokens" | "cacheWriteTokens" | "cost") => {
-    const value = sum(total[key], more[key]);
-    return value === undefined ? {} : { [key]: value };
-  };
-  return {
-    inputTokens: total.inputTokens + more.inputTokens,
-    outputTokens: total.outputTokens + more.outputTokens,
-    ...optional("cacheReadTokens"),
-    ...optional("cacheWriteTokens"),
-    ...optional("cost"),
-  };
-}
-
-/** A harness that throws instead of starting a run gets a run that failed, so the run still ends once. */
+/** A harness that throws instead of starting work gets work that failed, so its messages still end once. */
 function failedRun(error: unknown): LoopRun {
   const message = error instanceof Error ? error.message : String(error);
   return {
     steer: () => {},
+    withdraw: () => false,
     stop: () => {},
     done: Promise.resolve({ outcome: { status: "failed", error: agentError("internal", message) } }),
   };
 }
 
-const NOT_STARTED = failedRun("the run has not started");
+const NOT_STARTED = failedRun("the work has not started");
 
 const PREVIEW_CHARS = 80;
 
 export interface LoopPortHooks {
-  /** Marks work in flight (a queued or running run, a compaction) for whoever asks if the process is idle. */
+  /** Marks work in flight (a message not yet done, a compaction) for whoever asks if the process is idle. */
   beginWork?: () => () => void;
 }
 
@@ -284,59 +285,149 @@ export function loopPort(
   },
   hooks: LoopPortHooks = {},
 ): HarnessPort {
-  const capabilities: Capabilities = { ...harness.capabilities, durableQueue: false, durableRuns: false };
-  const listeners = new Map<string, Set<(event: SessionEvent) => void>>();
+  const capabilities: Capabilities = { ...harness.capabilities, durableQueue: false, durableWork: false };
+  const listeners = new Map<string, Set<(event: SessionEvent, after: string | undefined) => void>>();
   const active = new Map<string, Held>();
   let inFlight = 0;
 
-  const emit = (sessionId: string, event: SessionEvent): void => {
+  /** `after` defaults to the newest entry published so far: a live event follows it. */
+  const emit = (held: Held, event: SessionEvent, after: string | undefined = held.projection.last): void => {
+    const { sessionId } = held;
     for (const listener of listeners.get(sessionId) ?? []) {
       try {
-        listener(event);
+        listener(event, after);
       } catch (error) {
         logger.warn(`[fastagent] session listener threw (session ${sessionId}, event ${event.type}): ${String(error)}`);
       }
     }
   };
 
-  const stateOf = (held: Held, log: LoopLog): SessionState => ({
-    ...log.state(),
-    status: held.running ? "running" : held.compaction ? "compacting" : "idle",
-    ...(held.running ? { run: { runId: held.running.runId, startedAt: held.running.startedAt } } : {}),
-    queued: held.queue.map((queued) => ({
-      runId: queued.runId,
-      ...(queued.idempotencyKey === undefined ? {} : { idempotencyKey: queued.idempotencyKey }),
-      preview: queued.message.text.slice(0, PREVIEW_CHARS),
-    })),
-  });
+  /** The messages not taken yet, in the order they will be taken: the work's own untaken ones, then the queue. */
+  const waiting = (held: Held): Pending[] => [
+    ...(held.work ? held.work.messages.filter((m) => !held.work?.fates.has(m.messageId)) : []),
+    ...held.carried,
+    ...held.queue,
+  ];
+
+  const takenIn = (held: Held): { pending: Pending; entryId: string }[] => {
+    const work = held.work;
+    if (!work) return [];
+    return work.messages.flatMap((pending) => {
+      const entryId = work.fates.get(pending.messageId);
+      return typeof entryId === "string" ? [{ pending, entryId }] : [];
+    });
+  };
+
+  const stateOf = (held: Held, log: LoopLog): SessionState => {
+    const records = log.records();
+    // A taken message's entry is near the end of the log: search from there.
+    const timestampOf = (id: string): number => {
+      for (let i = records.length - 1; i >= 0; i--)
+        if (records[i]?.id === id) return (records[i] as LogRecord).timestamp;
+      return Date.now();
+    };
+    const { leafEntryId: leaf, ...state } = log.state();
+    // The harness's leaf can be a message record, which is never published: the head a caller sees is the entry
+    // nearest above it.
+    const leafEntryId = leaf === undefined ? undefined : held.projection.visible.get(leaf);
+    return {
+      ...state,
+      ...(leafEntryId === undefined ? {} : { leafEntryId }),
+      status: held.work ? "running" : held.compaction ? "compacting" : "idle",
+      taken: takenIn(held).map(({ pending, entryId }) => ({
+        messageId: pending.messageId,
+        takenAt: timestampOf(entryId),
+      })),
+      queued: waiting(held).map((pending) => ({
+        messageId: pending.messageId,
+        ...(pending.idempotencyKey === undefined ? {} : { idempotencyKey: pending.idempotencyKey }),
+        preview: pending.prompt.text.slice(0, PREVIEW_CHARS),
+      })),
+    };
+  };
 
   const emitState = (held: Held): void => {
     if (held.log && listeners.has(held.sessionId)) {
-      emit(held.sessionId, { type: "state", state: stateOf(held, held.log) });
+      emit(held, { type: "state", state: stateOf(held, held.log) });
     }
+  };
+
+  /**
+   * A record the storage refused, said with what it costs. A refused end: callers take the message out of memory
+   * first, so it reads as `interrupted` (accepted, not ended, neither taken nor queued), and the session goes on with the
+   * rest of its work; the `serving_error` is what ends a stream waiting for this message's `done`. A refused
+   * `message_taken`: the message goes on, and its `message_ended` names the entry instead.
+   */
+  const recorded = (
+    held: Held,
+    log: LoopLog,
+    kind: MessageMarker,
+    data: Json,
+    messageId: string,
+    consequence = "it reads as interrupted",
+  ): boolean => {
+    try {
+      log.append(kind, data);
+      return true;
+    } catch (error) {
+      const message = `could not record ${kind} of message ${messageId}; ${consequence}: ${String(error)}`;
+      logger.error(`[fastagent] ${message}`);
+      emit(held, { type: "serving_error", message });
+      return false;
+    }
+  };
+
+  /** Write the `message_taken` records owed, then tell followers: a message taken moves from `queued` to `taken`. */
+  const payOwed = (held: Held, log: LoopLog): void => {
+    if (held.owed.length === 0) return;
+    for (let taken = held.owed.shift(); taken; taken = held.owed.shift()) {
+      recorded(held, log, "message_taken", taken, taken.messageId, "its entry names it only once it ends");
+    }
+    emitState(held);
   };
 
   const onRecord =
     (held: Held) =>
     (record: LogRecord): void => {
-      const entry = project(held.projection, record);
-      if (entry) emit(held.sessionId, { type: "entry", entry });
+      const before = held.projection.last;
+      const entry = project(held.projection, held.named, record);
+      if (record.kind === "assistant_message" && held.work) held.work.answer = record.id;
+      if (entry) emit(held, { type: "entry", entry }, before);
+      if (held.log && held.owed.length > 0) payOwed(held, held.log);
     };
 
-  /** Close the runs a previous process left open, and index the keys. Runs before anything else on the session. */
+  /** End the messages a previous process left open, and index the keys. Runs before anything else on the session. */
   const reconcile = (held: Held, log: LoopLog): void => {
     const records = log.records();
-    held.projection = published(records).projection;
-    const ended = new Set(records.filter((r) => r.kind === "run_ended").map(markerRunId));
+    const { projection } = published(records);
+    held.projection = projection;
+    for (const [entryId, messageId] of namedIn(records)) held.named.set(entryId, messageId);
+    const taken = new Map<string, string>();
+    const ended = new Set<string>();
     const open: string[] = [];
     for (const record of records) {
-      if (record.kind !== "run_accepted") continue;
+      if (record.kind === "message_taken") {
+        const data = record.data as TakenData;
+        taken.set(data.messageId, data.entryId);
+      }
+      if (record.kind === "message_ended") ended.add((record.data as EndedData).messageId);
+      if (record.kind !== "message_accepted") continue;
       const data = record.data as AcceptedData;
-      if (data.idempotencyKey !== undefined) held.keys.set(data.idempotencyKey, data.runId);
-      if (!data.joined && !ended.has(data.runId)) open.push(data.runId);
+      if (data.idempotencyKey !== undefined) held.keys.set(data.idempotencyKey, data.messageId);
+      open.push(data.messageId);
     }
-    for (const runId of open)
-      log.append("run_ended", { runId, outcome: { status: "interrupted" } } satisfies EndedData);
+    // Nothing has been appended since the work stopped, so the newest entry is where it ended.
+    const tail = projection.last;
+    for (const messageId of open) {
+      if (ended.has(messageId)) continue;
+      const entryId = taken.get(messageId);
+      const data: EndedData = {
+        messageId,
+        outcome: { status: "interrupted" },
+        ...(entryId === undefined ? {} : { entryId, ...(tail === undefined ? {} : { lastEntryId: tail }) }),
+      };
+      log.append("message_ended", data);
+    }
   };
 
   const sessions = Effect.runSync(
@@ -350,9 +441,12 @@ export function loopPort(
                 lock: Semaphore.makeUnsafe(1),
                 log: undefined,
                 projection: emptyProjection(),
+                named: new Map(),
+                owed: [],
                 keys: new Map(),
+                carried: [],
                 queue: [],
-                running: undefined,
+                work: undefined,
                 compaction: undefined,
               };
               const log = yield* port(() => harness.open(sessionId, onRecord(held)));
@@ -388,45 +482,52 @@ export function loopPort(
   const locked = <A, E, R>(held: Held, work: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
     Semaphore.withPermits(held.lock, 1)(work);
 
-  /** A run's status, for the run plane and every read alike: memory says queued or running, the log says the rest. */
-  const statusOf = (held: Held, log: LoopLog, runId: string): RunStatus | undefined => {
+  /** A message's status, for every read alike: the log says accepted, taken and done; memory says queued or taken. */
+  const statusOf = (held: Held, log: LoopLog, messageId: string): MessageStatus | undefined => {
     const records = log.records();
-    const accepted = records
-      .filter((r) => r.kind === "run_accepted" && markerRunId(r) === runId)
-      .map((r) => r.data as AcceptedData);
-    const first = accepted[0];
-    if (!first) return undefined;
-    const entries = published(records).entries.filter((entry) => entry.runId === runId);
-    const ended = entries.find((entry) => entry.kind === "run_ended");
-    const endedData = ended?.data as EndedData | undefined;
-    const running = held.running?.runId === runId ? held.running : undefined;
-    // An interrupted run has none: which entry was whose is said by its loop, and recorded with its end.
-    const entryOf = (i: number) => (running ? (running.fates[i] ?? undefined) : endedData?.messages?.[i]?.entryId);
-    const messages: RunMessage[] = accepted.map((data, i) => {
-      const entryId = entryOf(i);
-      return {
-        ...(entryId === undefined ? {} : { entryId }),
-        ...(data.idempotencyKey === undefined ? {} : { idempotencyKey: data.idempotencyKey }),
-      };
-    });
-    const base = { runId, source: first.source, messages };
-    const position = held.queue.findIndex((queued) => queued.runId === runId);
-    if (position >= 0) return { ...base, status: "queued", position: position + 1 };
-    if (running) return { ...base, status: "running", startedAt: running.startedAt };
-    const started = entries.find((entry) => entry.kind === "run_started");
-    const answer = entries.filter((entry) => entry.kind === "assistant_message").at(-1);
-    return {
-      ...base,
-      status: "done",
-      ...(started ? { startedAt: started.timestamp } : {}),
-      endedAt: ended?.timestamp ?? Date.now(),
-      // A run neither in memory nor ended is one this process never closed: reconcile closes them on acquisition.
-      outcome: endedData?.outcome ?? { status: "interrupted" },
-      ...(endedData?.usage ? { usage: endedData.usage } : {}),
-      ...(answer
-        ? { answer: { entryId: answer.id, text: String((answer.data as { text?: unknown }).text ?? "") } }
-        : {}),
+    let accepted: AcceptedData | undefined;
+    let takenAt: number | undefined;
+    let entryId: string | undefined;
+    let ended: { data: EndedData; at: number } | undefined;
+    for (const record of records) {
+      if (markerOf(record) !== messageId) continue;
+      if (record.kind === "message_accepted") accepted = record.data as AcceptedData;
+      if (record.kind === "message_taken") entryId = (record.data as TakenData).entryId;
+      if (record.kind === "message_ended") ended = { data: record.data as EndedData, at: record.timestamp };
+    }
+    if (!accepted) return undefined;
+    const fate = held.work?.fates.get(messageId);
+    entryId ??= ended?.data.entryId ?? (typeof fate === "string" ? fate : undefined);
+    if (entryId !== undefined) takenAt = records.find((r) => r.id === entryId)?.timestamp;
+    const base = {
+      messageId,
+      ...(accepted.idempotencyKey === undefined ? {} : { idempotencyKey: accepted.idempotencyKey }),
+      source: accepted.source,
     };
+    const taken = entryId === undefined ? {} : { entryId, ...(takenAt === undefined ? {} : { takenAt }) };
+    if (ended) {
+      const { outcome, lastEntryId, usage, answer } = ended.data;
+      const answerRecord = answer === undefined ? undefined : records.find((r) => r.id === answer);
+      return {
+        ...base,
+        status: "done",
+        ...taken,
+        ...(lastEntryId === undefined ? {} : { lastEntryId }),
+        endedAt: ended.at,
+        outcome,
+        ...(usage ? { usage } : {}),
+        ...(answerRecord
+          ? { answer: { entryId: answerRecord.id, text: String((answerRecord.data as { text?: unknown }).text ?? "") } }
+          : {}),
+      };
+    }
+    if (entryId !== undefined && held.work?.messages.some((m) => m.messageId === messageId)) {
+      return { ...base, status: "taken", entryId, takenAt: takenAt ?? Date.now() };
+    }
+    const position = waiting(held).findIndex((pending) => pending.messageId === messageId);
+    if (position >= 0) return { ...base, status: "queued", position };
+    // Accepted, not ended, and not in memory: one this process never ended. `reconcile` ends them on acquisition.
+    return { ...base, status: "done", ...taken, endedAt: Date.now(), outcome: { status: "interrupted" } };
   };
 
   const release = (hold: Scope.Closeable): void => {
@@ -434,177 +535,175 @@ export function loopPort(
   };
 
   /**
-   * A marker the storage refused. Callers take the run out of memory first, so it reads as `interrupted` (an accepted
-   * run with no `run_ended`, neither queued nor running), and the session goes on with the rest of its work. The
-   * `serving_error` is what ends a stream waiting for this run's `run_ended`.
+   * Record a message's end, report it, and only then let go of what held it: the last hold on a session closes its log.
+   * The caller has taken it out of memory.
    */
-  const recorded = (held: Held, log: LoopLog, kind: RunMarker, data: Json, runId: string): boolean => {
-    try {
-      log.append(kind, data);
-      return true;
-    } catch (error) {
-      const message = `could not record ${kind} of run ${runId}; it reads as interrupted: ${String(error)}`;
-      logger.error(`[fastagent] ${message}`);
-      emit(held.sessionId, { type: "serving_error", message });
-      return false;
+  const end = (held: Held, log: LoopLog, pending: Pending, ending: Omit<EndedData, "messageId">): void => {
+    if (recorded(held, log, "message_ended", { messageId: pending.messageId, ...ending }, pending.messageId)) {
+      const status = statusOf(held, log, pending.messageId);
+      if (status?.status === "done") emit(held, { type: "done", message: status as DoneMessage });
     }
-  };
-
-  const withdraw = (held: Held, log: LoopLog, queued: Queued, by: "cancel" | "abort" | "delete"): void => {
-    held.queue.splice(held.queue.indexOf(queued), 1);
     inFlight--;
-    release(queued.hold);
-    recorded(
-      held,
-      log,
-      "run_ended",
-      { runId: queued.runId, outcome: { status: "canceled", by } } satisfies EndedData,
-      queued.runId,
-    );
+    release(pending.hold);
   };
 
-  const stop = (running: Running, by: "cancel" | "abort" | "delete"): void => {
-    if (running.stoppedBy) return;
-    running.stoppedBy = by;
-    running.loop.stop();
+  const withdraw = (held: Held, log: LoopLog, pending: Pending, by: StopReason): void => {
+    for (const list of [held.queue, held.carried]) {
+      const index = list.indexOf(pending);
+      if (index >= 0) list.splice(index, 1);
+    }
+    end(held, log, pending, { outcome: { status: "canceled", by } });
+  };
+
+  /** `abort` and `delete` override an earlier `cancel`: they also withdraw the steers the work has not taken. */
+  const stop = (work: Work, by: StopReason): void => {
+    const first = work.stoppedBy === undefined;
+    if (first || by !== "cancel") work.stoppedBy = by;
+    if (first) work.loop.stop();
   };
 
   /** A loop that throws instead of taking the message says nothing for it, so it counts as untaken. */
-  const steerInto = (running: Running, position: number): void => {
-    running.handed.push(position);
+  const steerInto = (work: Work, pending: Pending): void => {
     try {
-      running.loop.steer({ id: position, prompt: running.messages[position] as Prompt });
+      work.loop.steer({ id: pending.messageId, prompt: pending.prompt });
     } catch (error) {
-      logger.error(
-        `[fastagent] steering run ${running.runId} threw; the run takes the message itself: ${String(error)}`,
-      );
+      logger.error(`[fastagent] steering threw; the next work takes message ${pending.messageId}: ${String(error)}`);
     }
   };
 
-  const startLoop = (held: Held, log: LoopLog, running: Running, position: number): LoopRun => {
-    const { runId } = running;
+  const startLoop = (held: Held, log: LoopLog, work: Work, first: Pending): LoopRun => {
     try {
       return log.run(
-        { id: position, prompt: running.messages[position] as Prompt },
+        { id: first.messageId, prompt: first.prompt },
         {
-          emit: (event) => emit(held.sessionId, { ...event, runId }),
+          emit: (event) => emit(held, event),
           fate: (messageId, fate) => {
-            if (running.fates[messageId] !== undefined) return;
-            running.fates[messageId] = "taken" in fate ? fate.taken : null;
+            if (work.fates.has(messageId)) return;
+            const pending = work.messages.find((m) => m.messageId === messageId);
+            if (!pending) return;
+            if ("taken" in fate) {
+              work.fates.set(messageId, fate.taken);
+              held.named.set(fate.taken, messageId);
+              held.owed.push({ messageId, entryId: fate.taken });
+              return;
+            }
+            // Consumed by a command or an input handler: no model will be called for it.
+            work.fates.set(messageId, null);
+            end(held, log, pending, { outcome: { status: "intercepted" } });
+            emitState(held);
           },
         },
       );
     } catch (error) {
-      logger.error(`[fastagent] the harness could not start run ${runId}: ${String(error)}`);
+      logger.error(`[fastagent] the harness could not start work on message ${first.messageId}: ${String(error)}`);
       return failedRun(error);
     }
   };
 
-  const drive = (held: Held, log: LoopLog, running: Running): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      let outcome: RunOutcome = { status: "completed" };
-      let usage: Usage | undefined;
-      for (;;) {
-        const result = yield* Effect.exit(port(() => running.loop.done));
-        if (Exit.isFailure(result)) {
-          logger.error(`[fastagent] run ${running.runId} rejected instead of ending: ${String(result.cause)}`);
-          outcome = { status: "failed", error: agentError("internal", "the harness failed the run") };
-          break;
-        }
-        outcome = result.value.outcome;
-        usage = addUsage(usage, result.value.usage);
-        const untaken = running.handed.filter((position) => running.fates[position] === undefined);
-        // A loop that did not take its own first message refused it (a failure before the model): the run ends with
-        // that outcome, and the messages it never took end with it.
-        const [next, ...rest] = untaken;
-        if (running.stoppedBy || next === undefined || next === running.handed[0]) {
-          running.closing = true;
-          break;
-        }
-        running.handed = [next];
-        running.loop = startLoop(held, log, running, next);
-        for (const position of rest) steerInto(running, position);
+  /** How each of a work's messages ends, and which steered ones the next work takes. */
+  const settle = (held: Held, log: LoopLog, work: Work, outcome: Outcome, usage: Usage | undefined): void => {
+    payOwed(held, log);
+    const stoppedBy = work.stoppedBy;
+    const final: Outcome = stoppedBy ? { status: "canceled", by: stoppedBy } : outcome;
+    const lastEntryId = held.projection.last;
+    const [first] = work.messages;
+    // Usage is reported once, on the first message the work took (SPEC v1 §4).
+    const usageOwner = work.messages.find((m) => typeof work.fates.get(m.messageId) === "string") ?? (first as Pending);
+    const carried: Pending[] = [];
+    for (const pending of work.messages) {
+      const fate = work.fates.get(pending.messageId);
+      if (fate === null) continue;
+      const untakenSteer = fate === undefined && pending !== first;
+      const withdrawnBy: StopReason | undefined =
+        stoppedBy === "abort" || stoppedBy === "delete"
+          ? stoppedBy
+          : work.canceled.has(pending.messageId)
+            ? "cancel"
+            : undefined;
+      if (untakenSteer && withdrawnBy === undefined) {
+        carried.push(pending);
+        continue;
       }
-      if (running.stoppedBy) outcome = { status: "canceled", by: running.stoppedBy };
-      return { outcome, usage };
+      end(held, log, pending, {
+        outcome: untakenSteer ? { status: "canceled", by: withdrawnBy as StopReason } : final,
+        ...(fate === undefined ? {} : { entryId: fate }),
+        ...(fate === undefined || lastEntryId === undefined ? {} : { lastEntryId }),
+        ...(pending === usageOwner && usage ? { usage } : {}),
+        ...(fate === undefined || work.answer === undefined ? {} : { answer: work.answer }),
+      });
+    }
+    held.carried.unshift(...carried);
+  };
+
+  const drive = (held: Held, log: LoopLog, work: Work): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const result = yield* Effect.exit(port(() => work.loop.done));
+      work.closing = true;
+      if (Exit.isSuccess(result)) return result.value;
+      logger.error(`[fastagent] work rejected instead of ending: ${String(result.cause)}`);
+      return { outcome: { status: "failed", error: agentError("internal", "the harness failed the work") } } as {
+        outcome: Outcome;
+        usage?: Usage;
+      };
     }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.sync(() => {
-          logger.error(`[fastagent] run ${running.runId} failed in LoopPort: ${String(cause)}`);
-          return {
-            outcome: { status: "failed", error: agentError("internal", "the run failed") } as RunOutcome,
-            usage: undefined,
-          };
-        }),
-      ),
       Effect.flatMap(({ outcome, usage }) =>
         Effect.sync(() => {
-          held.running = undefined;
-          recorded(
-            held,
-            log,
-            "run_ended",
-            {
-              runId: running.runId,
-              outcome,
-              ...(usage ? { usage } : {}),
-              messages: running.messages.map((_, i): { entryId?: string } => {
-                const entryId = running.fates[i] ?? undefined;
-                return entryId === undefined ? {} : { entryId };
-              }),
-            } satisfies EndedData,
-            running.runId,
-          );
+          held.work = undefined;
+          settle(held, log, work, outcome, usage);
         }),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.sync(() => logger.error(`[fastagent] ending work failed in LoopPort: ${String(cause)}`)),
       ),
       Effect.ensuring(
         Effect.gen(function* () {
-          held.running = undefined;
-          inFlight--;
-          yield* Deferred.succeed(running.ended, undefined);
+          held.work = undefined;
+          yield* Deferred.succeed(work.ended, undefined);
           pump(held);
           emitState(held);
-          yield* Scope.close(running.hold, Exit.void);
         }),
       ),
     );
 
   const pump = (held: Held): void => {
     const log = held.log;
-    if (!log || held.running || held.compaction) return;
-    const next = held.queue.shift();
-    if (!next) return;
-    const running: Running = {
-      ...next,
-      startedAt: Date.now(),
+    if (!log || held.work || held.compaction) return;
+    const steered = held.carried.length > 0;
+    const first = steered ? held.carried.shift() : held.queue.shift();
+    if (!first) return;
+    const work: Work = {
       ended: Deferred.makeUnsafe<void>(),
       loop: NOT_STARTED,
       closing: false,
-      messages: [next.message],
-      fates: [],
-      handed: [0],
+      messages: [first],
+      fates: new Map(),
+      canceled: new Set(),
     };
-    if (!recorded(held, log, "run_started", { runId: running.runId }, running.runId)) {
-      inFlight--;
-      release(next.hold);
-      pump(held);
-      return;
+    held.work = work;
+    work.loop = startLoop(held, log, work, first);
+    // The next work takes every steered message the last one left, not only the first.
+    if (steered) {
+      for (const pending of held.carried.splice(0)) {
+        work.messages.push(pending);
+        steerInto(work, pending);
+      }
     }
-    held.running = running;
-    running.loop = startLoop(held, log, running, 0);
-    Effect.runFork(drive(held, log, running));
+    Effect.runFork(drive(held, log, work));
   };
 
   /**
-   * A session that does not exist yet is created only once nothing can refuse the run, and removed again if its first
-   * record is refused: a rejected invoke records nothing (SPEC v1 §3.1).
+   * A session that does not exist yet is created only once nothing can refuse the message, and removed again if its
+   * first record is refused: a rejected invoke records nothing (SPEC v1 §3.1).
    */
   const recordAccepted = (held: Held, data: AcceptedData): Effect.Effect<LoopLog, PortFailure> =>
     Effect.gen(function* () {
       const existing = held.log;
       const log = existing ?? (yield* port(() => harness.create(held.sessionId, onRecord(held))));
       held.log = log;
-      yield* Effect.try({ try: () => log.append("run_accepted", data), catch: (cause) => new PortFailure(cause) }).pipe(
+      yield* Effect.try({
+        try: () => log.append("message_accepted", data),
+        catch: (cause) => new PortFailure(cause),
+      }).pipe(
         Effect.onError(() =>
           existing
             ? Effect.void
@@ -620,74 +719,64 @@ export function loopPort(
 
   const accept = (
     held: Held,
-    message: Prompt,
-    options: { whenBusy: WhenBusy; idempotencyKey?: string; source: RunSource },
+    prompt: Prompt,
+    options: { whenBusy: WhenBusy; idempotencyKey?: string; source: MessageSource },
   ): Effect.Effect<Admission, PortFailure, Scope.Scope> =>
     Effect.gen(function* () {
       const { whenBusy, idempotencyKey, source } = options;
       const existing = held.log;
       if (existing && idempotencyKey !== undefined) {
-        const log = existing;
         const known = held.keys.get(idempotencyKey);
-        const run = known === undefined ? undefined : statusOf(held, log, known);
-        if (run && !(run.status === "done" && run.outcome.status === "interrupted")) {
-          const record = log
-            .records()
-            .filter((r) => r.kind === "run_accepted" && (r.data as AcceptedData).idempotencyKey === idempotencyKey)
-            .at(-1);
-          return {
-            ok: true,
-            run,
-            joined: (record?.data as AcceptedData | undefined)?.joined === true,
-            duplicate: true,
-          };
+        const message = known === undefined ? undefined : statusOf(held, existing, known);
+        if (message && !(message.status === "done" && message.outcome.status === "interrupted")) {
+          return { ok: true, message, duplicate: true };
         }
       }
-      const running = held.running;
-      if (running || held.compaction || held.queue.length > 0) {
-        if (whenBusy === "reject") {
-          return failure("busy", "the session is running another run", {
-            reason: "running",
-            ...(running ? { runId: running.runId } : {}),
-          });
-        }
-        if (whenBusy === "steer" && running && !running.stoppedBy && !running.closing) {
-          if (!capabilities.steer) return failure("unsupported", "this agent cannot steer a running run");
-          const log = yield* recordAccepted(held, {
-            runId: running.runId,
-            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
-            source,
-            joined: true,
-          });
-          if (idempotencyKey !== undefined) held.keys.set(idempotencyKey, running.runId);
-          running.messages.push(message);
-          steerInto(running, running.messages.length - 1);
-          return { ok: true, run: statusOf(held, log, running.runId) as RunStatus, joined: true, duplicate: false };
-        }
-        if (held.queue.length >= limits.queuedPerSession) {
-          return failure("busy", `the session already has ${held.queue.length} queued runs`, { reason: "queue_full" });
+      const work = held.work;
+      const busy = work !== undefined || held.compaction !== undefined || waiting(held).length > 0;
+      const steer = busy && whenBusy === "steer";
+      if (busy) {
+        if (whenBusy === "reject") return failure("busy", "the session is working", { reason: "running" });
+        if (steer && !capabilities.steer) return failure("unsupported", "this agent cannot steer");
+        const queued = waiting(held).length;
+        if (queued >= limits.queuedPerSession) {
+          return failure("busy", `the session already has ${queued} queued messages`, { reason: "queue_full" });
         }
       }
       if (inFlight >= limits.inFlightPerProcess) {
-        return failure("busy", `this process already has ${inFlight} runs in flight`, { reason: "capacity" });
+        return failure("busy", `this process already has ${inFlight} messages in flight`, { reason: "capacity" });
       }
-      const runId = crypto.randomUUID();
+      const messageId = crypto.randomUUID();
       const log = yield* recordAccepted(held, {
-        runId,
+        messageId,
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         source,
       });
-      if (idempotencyKey !== undefined) held.keys.set(idempotencyKey, runId);
+      if (idempotencyKey !== undefined) held.keys.set(idempotencyKey, messageId);
       const hold = Scope.makeUnsafe();
       yield* Scope.provide(RcMap.get(sessions, held.sessionId), hold);
-      // The run's hold is closed once, however the run ends, so its work ends with it.
+      // The hold is closed once, however the message ends, so its work-in-flight mark ends with it.
       const workDone = hooks.beginWork?.();
       if (workDone) yield* Scope.addFinalizer(hold, Effect.sync(workDone));
       inFlight++;
-      held.queue.push({ runId, message, ...(idempotencyKey === undefined ? {} : { idempotencyKey }), source, hold });
+      const pending: Pending = {
+        messageId,
+        prompt,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+        source,
+        hold,
+      };
+      if (steer && work && !work.stoppedBy && !work.closing) {
+        work.messages.push(pending);
+        steerInto(work, pending);
+      } else if (steer) {
+        held.carried.push(pending);
+      } else {
+        held.queue.push(pending);
+      }
       pump(held);
       emitState(held);
-      return { ok: true, run: statusOf(held, log, runId) as RunStatus, joined: false, duplicate: false };
+      return { ok: true, message: statusOf(held, log, messageId) as MessageStatus, duplicate: false };
     });
 
   const notFound = (sessionId: string) => failure("not_found", `no session ${sessionId}`);
@@ -721,47 +810,77 @@ export function loopPort(
 
     submit: (sessionId, message, options) => use(sessionId, (held) => locked(held, accept(held, message, options))),
 
-    getRun: (sessionId, key: RunKey) =>
+    getMessage: (sessionId, key: MessageKey) =>
       use(sessionId, (held) =>
         Effect.sync(() => {
           const log = held.log;
           if (!log) return undefined;
-          const runId = "runId" in key ? key.runId : held.keys.get(key.idempotencyKey);
-          return runId === undefined ? undefined : statusOf(held, log, runId);
+          const messageId = "messageId" in key ? key.messageId : held.keys.get(key.idempotencyKey);
+          return messageId === undefined ? undefined : statusOf(held, log, messageId);
         }),
       ),
 
-    runEntries: (sessionId, runId, after) =>
+    messageEntries: (sessionId, messageId, after) =>
       use(sessionId, (held) =>
         Effect.sync(() => {
           const log = held.log;
           if (!log) return notFound(sessionId);
+          const status = statusOf(held, log, messageId);
+          if (!status) return failure("not_found", `no message ${messageId}`);
           const { entries } = published(log.records());
-          const index = after === undefined ? -1 : entries.findIndex((entry) => entry.id === after);
-          if (after !== undefined && index < 0) return failure("not_found", `no entry ${after}`);
-          return { ok: true as const, entries: entries.filter((entry, i) => i > index && entry.runId === runId) };
+          const cursor = after === undefined ? -1 : entries.findIndex((entry) => entry.id === after);
+          if (after !== undefined && cursor < 0) return failure("not_found", `no entry ${after}`);
+          const ended = log.records().some((r) => r.kind === "message_ended" && markerOf(r) === messageId);
+          if (status.status === "queued" || status.entryId === undefined) {
+            return { ok: true as const, message: status, entries: [], ended };
+          }
+          const { entryId } = status;
+          const first = Math.max(
+            entries.findIndex((entry) => entry.id === entryId),
+            cursor + 1,
+          );
+          const last =
+            status.status === "done" && status.lastEntryId !== undefined
+              ? entries.findIndex((entry) => entry.id === status.lastEntryId)
+              : entries.length - 1;
+          return { ok: true as const, message: status, entries: entries.slice(first, last + 1), ended };
         }),
       ),
 
-    cancelRun: (sessionId, runId) =>
+    cancelMessage: (sessionId, messageId) =>
       use(sessionId, (held) =>
         locked(
           held,
           Effect.sync((): Result => {
             const log = held.log;
             if (!log) return notFound(sessionId);
-            const queued = held.queue.find((q) => q.runId === runId);
+            const queued = [...held.carried, ...held.queue].find((p) => p.messageId === messageId);
             if (queued) {
               withdraw(held, log, queued, "cancel");
               emitState(held);
               return { ok: true };
             }
-            if (held.running?.runId === runId) {
-              stop(held.running, "cancel");
+            const work = held.work;
+            const inWork = work?.messages.find((m) => m.messageId === messageId);
+            if (work && inWork) {
+              // A steer the loop holds and has not taken is withdrawn only if the loop can promise it never will;
+              // otherwise it is the work's, and stopping the work is what cancels it.
+              const withdrawn =
+                inWork !== work.messages[0] && !work.fates.has(messageId) && work.loop.withdraw(messageId);
+              if (!withdrawn) {
+                work.canceled.add(messageId);
+                stop(work, "cancel");
+                return { ok: true };
+              }
+              work.fates.set(messageId, null);
+              end(held, log, inWork, { outcome: { status: "canceled", by: "cancel" } });
+              emitState(held);
               return { ok: true };
             }
-            const run = statusOf(held, log, runId);
-            return run ? failure("conflict", `run ${runId} has ended`) : failure("not_found", `no run ${runId}`);
+            const message = statusOf(held, log, messageId);
+            return message
+              ? failure("conflict", `message ${messageId} is done`)
+              : failure("not_found", `no message ${messageId}`);
           }),
         ),
       ),
@@ -773,14 +892,14 @@ export function loopPort(
           Effect.sync((): AbortResult => {
             const log = held.log;
             if (!log) return notFound(sessionId);
-            const queued = held.queue.map((q) => q.runId);
-            for (const q of [...held.queue]) withdraw(held, log, q, "abort");
-            const running = held.running;
-            if (running) stop(running, "abort");
+            const taken = takenIn(held).map(({ pending }) => pending.messageId);
+            const queued = waiting(held).map((pending) => pending.messageId);
+            for (const pending of [...held.carried, ...held.queue]) withdraw(held, log, pending, "abort");
+            if (held.work) stop(held.work, "abort");
             const compaction = held.compaction !== undefined;
             held.compaction?.controller.abort();
             emitState(held);
-            return { ok: true, stopped: { ...(running ? { runId: running.runId } : {}), queued, compaction } };
+            return { ok: true, stopped: { taken, queued, compaction } };
           }),
         ),
       ),
@@ -822,13 +941,17 @@ export function loopPort(
             if (entryId !== undefined && !published(from.records()).entries.some((entry) => entry.id === entryId)) {
               return failure("not_found", `no entry ${entryId} in session ${fork.sessionId}`);
             }
-            held.log = yield* port(() =>
+            const log = yield* port(() =>
               harness.create(sessionId, onRecord(held), {
                 from,
                 ...(entryId === undefined ? {} : { entryId }),
                 ...(context === undefined ? {} : { context }),
               }),
             );
+            // The copy is written without reaching `onRecord`, so the live projection starts from it here. Not observable
+            // today (a fork holds nothing, and the next operation acquires it afresh), but `stateOf` reads it.
+            held.projection = published(log.records()).projection;
+            held.log = log;
             return { ok: true } as Result;
           }),
         ),
@@ -842,11 +965,13 @@ export function loopPort(
             if (!capabilities.rewind) return failure("unsupported", "this agent cannot rewind a session");
             const log = held.log;
             if (!log) return notFound(sessionId);
-            if (held.running || held.compaction)
-              return failure("busy", "the session is running", { reason: "running" });
+            if (held.work || held.compaction) return failure("busy", "the session is working", { reason: "running" });
             if (!published(log.records()).entries.some((entry) => entry.id === entryId)) {
               return failure("not_found", `no entry ${entryId}`);
             }
+            // The head a caller sees already: the harness's own leaf may be a message record below it, which changes
+            // nothing the next work continues from.
+            if (stateOf(held, log).leafEntryId === entryId) return { ok: true } as Result;
             const result = yield* port(() => log.rewind(entryId));
             emitState(held);
             return result;
@@ -863,8 +988,8 @@ export function loopPort(
             Effect.sync(() => {
               const log = held.log;
               if (!log) return notFound(sessionId);
-              if (held.running || held.compaction) {
-                return failure("busy", "the session is running", { reason: "running" });
+              if (held.work || held.compaction) {
+                return failure("busy", "the session is working", { reason: "running" });
               }
               const compaction = { controller: new AbortController(), done: Deferred.makeUnsafe<void>() };
               held.compaction = compaction;
@@ -918,11 +1043,11 @@ export function loopPort(
             if (!capabilities.delete) return failure("unsupported", "this agent cannot delete a session");
             const log = held.log;
             if (!log) return notFound(sessionId);
-            for (const queued of [...held.queue]) withdraw(held, log, queued, "delete");
-            const running = held.running;
-            if (running) {
-              stop(running, "delete");
-              yield* Deferred.await(running.ended);
+            for (const pending of [...held.carried, ...held.queue]) withdraw(held, log, pending, "delete");
+            const work = held.work;
+            if (work) {
+              stop(work, "delete");
+              yield* Deferred.await(work.ended);
             }
             const compaction = held.compaction;
             if (compaction) {
@@ -932,6 +1057,7 @@ export function loopPort(
             log.close();
             held.log = undefined;
             held.projection = emptyProjection();
+            held.named.clear();
             held.keys.clear();
             yield* port(() => harness.delete(sessionId));
             return { ok: true } as Result;
@@ -942,7 +1068,7 @@ export function loopPort(
     list: async () => {
       const summaries = await harness.list();
       return summaries.map((summary) =>
-        active.get(summary.sessionId)?.running ? { ...summary, status: "running" as const } : summary,
+        active.get(summary.sessionId)?.work ? { ...summary, status: "running" as const } : summary,
       );
     },
     models: () => harness.models(),

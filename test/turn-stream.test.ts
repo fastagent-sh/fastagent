@@ -31,7 +31,7 @@ const failOnEnd = (events: Stream.Stream<InvokeEvent, PortFailure>, error: Error
     Stream.tap((event) =>
       Effect.try({
         try: () => {
-          if (event.type === "entry" && event.entry.kind === "run_ended") throw error;
+          if (event.type === "done") throw error;
         },
         catch: (cause) => new PortFailure(cause),
       }),

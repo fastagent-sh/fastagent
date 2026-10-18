@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { type LoopHarness, type LoopLog, type LoopRun, loopPort } from "../src/loop-port.ts";
 import type { HarnessPort } from "../src/harness-port.ts";
-import { AgentRejection, type FollowEvent, type InvokeEvent, LIMITS, agentError, failure } from "../src/protocol.ts";
+import {
+  AgentRejection,
+  type FollowEvent,
+  type InvokeEvent,
+  LIMITS,
+  type SessionState,
+  agentError,
+  failure,
+} from "../src/protocol.ts";
 import { LIVE_BACKLOG, servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
@@ -24,6 +32,7 @@ describeProtocolConformance("LoopPort over a fake loop harness", {
   },
   release: () => store.release(),
   effects: () => store.effects,
+  late: true,
 });
 
 /** A harness that loses a steer and says nothing about it. */
@@ -49,7 +58,7 @@ function refusingEveryMessage(
 ): { harness: LoopHarness; loops: () => number } {
   let loops = 0;
   // Past a handful, a regression would restart forever; a run that never ends stops it so the count can fail.
-  const never: LoopRun = { steer: async () => {}, stop: () => {}, done: new Promise(() => {}) };
+  const never: LoopRun = { steer: async () => {}, withdraw: () => false, stop: () => {}, done: new Promise(() => {}) };
   const refusing = (log: LoopLog): LoopLog => ({
     ...log,
     run: () => (++loops > 5 ? never : refuse()),
@@ -72,46 +81,59 @@ async function receiptOf(events: AsyncIterable<InvokeEvent>) {
   throw new Error("not accepted");
 }
 
+/** A message's status once it is done. */
+async function doneOf(agent: ReturnType<typeof servingAgent>, sessionId: string, messageId: string) {
+  return vi.waitFor(async () => {
+    const status = await agent.sessions.get(sessionId).messages.get({ messageId });
+    if (status?.status !== "done") throw new Error(`message ${messageId} is ${status?.status}`);
+    return status;
+  });
+}
+
+async function takenNow(agent: ReturnType<typeof servingAgent>, sessionId: string, messageId: string) {
+  await vi.waitFor(async () =>
+    expect((await agent.sessions.get(sessionId).messages.get({ messageId }))?.status).toBe("taken"),
+  );
+}
+
+const usersOf = async (agent: ReturnType<typeof servingAgent>, sessionId: string) => {
+  const page = await agent.sessions.get(sessionId).read({ limit: 500 });
+  return page.ok ? page.entries.filter((e) => e.kind === "user_message") : [];
+};
+
 describe("LoopPort", () => {
-  it("runs a joined message the harness reports nothing for in the same run, before it ends", async () => {
+  it("a steer the harness reports nothing for is taken by the next work, and answered on its own", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(steeringDropped(fakeLoopHarness(store))));
-    const session = agent.sessions.get("s");
-    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"));
-    const steered = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "late" }, whenBusy: "steer" }));
-    expect(steered).toMatchObject({ joined: true, run: { runId: first.run.runId } });
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
+    const steered = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "also" }, whenBusy: "steer" }));
+    expect(steered.message).toMatchObject({ status: "queued", position: 0 });
     store.release();
-    const run = await vi.waitFor(async () => {
-      const status = await session.runs.get({ runId: first.run.runId });
-      if (status?.status !== "done") throw new Error("not done");
-      return status;
-    });
-    expect(run).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: late" } });
-    expect(run.messages.map((m) => m.entryId !== undefined)).toEqual([true, true]);
-    const page = await session.read();
-    const ends = page.ok ? page.entries.filter((e) => e.kind === "run_ended") : [];
-    expect(ends).toHaveLength(1);
-  });
-  it("a message an extension consumed is not run again, and has no entry", async () => {
-    const store = new FakeStore();
-    const agent = servingAgent(loopPort(fakeLoopHarness(store)));
-    const session = agent.sessions.get("s");
-    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"));
-    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "handle" }, whenBusy: "steer" }));
-    store.release();
-    const run = await vi.waitFor(async () => {
-      const status = await session.runs.get({ runId: first.run.runId });
-      if (status?.status !== "done") throw new Error("not done");
-      return status;
-    });
-    expect(store.handled).toBe(1);
-    expect(run.messages.map((m) => m.entryId !== undefined)).toEqual([true, false]);
-    expect(run).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: hold" } });
+    expect(await doneOf(agent, "s", first)).toMatchObject({ answer: { text: "answer: hold" } });
+    const answered = await doneOf(agent, "s", steered.message.messageId);
+    expect(answered).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: also" } });
+    expect((await usersOf(agent, "s")).map((e) => (e.data as { text: string }).text)).toEqual(["hold", "also"]);
   });
 
-  it("a steer the harness throws on is still accepted, and the run takes the message itself", async () => {
+  it("a message an extension consumed ends intercepted, with no entry, and is not taken again", async () => {
+    const store = new FakeStore();
+    const agent = servingAgent(loopPort(fakeLoopHarness(store)));
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
+    const handled = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "handle" }, whenBusy: "steer" }));
+    store.release();
+    expect(await doneOf(agent, "s", first)).toMatchObject({
+      outcome: { status: "completed" },
+      answer: { text: "answer: hold" },
+    });
+    const consumed = await doneOf(agent, "s", handled.message.messageId);
+    expect(consumed).toMatchObject({ outcome: { status: "intercepted" } });
+    expect(consumed.entryId).toBeUndefined();
+    expect(store.handled).toBe(1);
+  });
+
+  it("a steer the harness throws on is still accepted, and the next work takes the message", async () => {
     const store = new FakeStore();
     const harness = fakeLoopHarness(store);
     const throwing = (log: LoopLog): LoopLog => ({
@@ -133,21 +155,16 @@ describe("LoopPort", () => {
         create: async (sessionId, onRecord, fork) => throwing(await harness.create(sessionId, onRecord, fork)),
       }),
     );
-    const session = agent.sessions.get("s");
-    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"));
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
     const steered = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "steered" }, whenBusy: "steer" }));
-    expect(steered).toMatchObject({ joined: true, run: { runId: first.run.runId } });
     store.release();
-    await vi.waitFor(async () =>
-      expect(await session.runs.get({ runId: first.run.runId })).toMatchObject({
-        status: "done",
-        answer: { text: "answer: steered" },
-      }),
-    );
+    expect(await doneOf(agent, "s", steered.message.messageId)).toMatchObject({
+      answer: { text: "answer: steered" },
+    });
   });
 
-  it("a steer the harness throws on shifts nothing: each message is run once", async () => {
+  it("a steer the harness throws on shifts nothing: each message names its own entry", async () => {
     const store = new FakeStore();
     const harness = fakeLoopHarness(store);
     const throwingOnBad = (log: LoopLog): LoopLog => ({
@@ -173,25 +190,26 @@ describe("LoopPort", () => {
         create: async (sessionId, onRecord, fork) => throwingOnBad(await harness.create(sessionId, onRecord, fork)),
       }),
     );
-    const session = agent.sessions.get("s");
-    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"));
-    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "bad" }, whenBusy: "steer" }));
-    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "good" }, whenBusy: "steer" }));
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
+    const bad = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "bad" }, whenBusy: "steer" }))).message
+      .messageId;
+    const good = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "good" }, whenBusy: "steer" })))
+      .message.messageId;
     store.release();
-    const run = await vi.waitFor(async () => {
-      const status = await session.runs.get({ runId: first.run.runId });
-      if (status?.status !== "done") throw new Error("not done");
-      return status;
-    });
-    const page = await session.read();
-    const written = page.ok ? page.entries.filter((e) => e.kind === "user_message") : [];
+    const ids = [first, bad, good];
+    const done = await Promise.all(ids.map((id) => doneOf(agent, "s", id)));
+    const written = await usersOf(agent, "s");
     expect(written.map((e) => (e.data as { text: string }).text)).toEqual(["hold", "good", "bad"]);
-    const byText = new Map(written.map((e) => [(e.data as { text: string }).text, e.id]));
-    expect(run.messages.map((m) => m.entryId)).toEqual([byText.get("hold"), byText.get("bad"), byText.get("good")]);
+    const byText = new Map(written.map((e) => [(e.data as { text: string }).text, e]));
+    expect(done.map((m) => m.entryId)).toEqual(["hold", "bad", "good"].map((t) => byText.get(t)?.id));
+    const named = ["hold", "bad", "good"].map(
+      (t) => (byText.get(t)?.data as { messageId?: string } | undefined)?.messageId,
+    );
+    expect(named).toEqual(ids);
   });
 
-  it("counts each queued and running run as work in flight, until it ends", async () => {
+  it("counts each message as work in flight until it ends", async () => {
     const store = new FakeStore();
     let working = 0;
     const agent = servingAgent(
@@ -206,21 +224,19 @@ describe("LoopPort", () => {
         },
       }),
     );
-    const session = agent.sessions.get("s");
-    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    const queued = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "next" } }));
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    const queued = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "next" } }))).message.messageId;
     expect(working).toBe(2);
     store.release();
-    await vi.waitFor(async () =>
-      expect(await session.runs.get({ runId: queued.run.runId })).toMatchObject({ status: "done" }),
-    );
+    await doneOf(agent, "s", queued);
     await vi.waitFor(() => expect(working).toBe(0));
-    expect(await session.runs.get({ runId: first.run.runId })).toMatchObject({ status: "done" });
+    expect((await doneOf(agent, "s", first)).status).toBe("done");
   });
 
-  it("a loop that ends without writing its message ends the run once, with its outcome", async () => {
+  it("a loop that ends without writing its message ends it once, with its outcome", async () => {
     const missingModel = refusingEveryMessage(fakeLoopHarness(new FakeStore()), () => ({
       steer: async () => {},
+      withdraw: () => false,
       stop: () => {},
       done: new Promise((resolve) =>
         setTimeout(
@@ -234,11 +250,9 @@ describe("LoopPort", () => {
     }));
     const first = servingAgent(loopPort(missingModel.harness));
     const failed = await receiptOf(first.invoke({ sessionId: "s", prompt: { text: "x" } }));
-    await vi.waitFor(async () =>
-      expect(await first.sessions.get("s").runs.get({ runId: failed.run.runId })).toMatchObject({
-        outcome: { status: "failed", error: { code: "missing_model" } },
-      }),
-    );
+    expect(await doneOf(first, "s", failed.message.messageId)).toMatchObject({
+      outcome: { status: "failed", error: { code: "missing_model" } },
+    });
     expect(missingModel.loops()).toBe(1);
 
     const throwing = refusingEveryMessage(fakeLoopHarness(new FakeStore()), () => {
@@ -246,67 +260,65 @@ describe("LoopPort", () => {
     });
     const second = servingAgent(loopPort(throwing.harness));
     const thrown = await receiptOf(second.invoke({ sessionId: "s", prompt: { text: "x" } }));
-    await vi.waitFor(async () =>
-      expect(await second.sessions.get("s").runs.get({ runId: thrown.run.runId })).toMatchObject({
-        outcome: { status: "failed", error: { code: "internal" } },
-      }),
-    );
+    expect(await doneOf(second, "s", thrown.message.messageId)).toMatchObject({
+      outcome: { status: "failed", error: { code: "internal" } },
+    });
     expect(throwing.loops()).toBe(1);
   });
 
-  it("a run whose start the storage refused reads as interrupted, and the session goes on", async () => {
+  it("a taken record the storage refused: the message ends whole, and its end names its entry", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(fakeLoopHarness(store)));
-    const session = agent.sessions.get("s");
-    store.refuseNext = "run_started";
-    const events: InvokeEvent[] = [];
-    for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
-      events.push(event);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      store.refuseNext = "message_taken";
+      const events: InvokeEvent[] = [];
+      for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
+      const done = events.at(-1);
+      expect(done).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
+      const [user] = await usersOf(agent, "s");
+      expect(done?.type === "done" && done.message.entryId).toBe(user?.id);
+      expect((user?.data as { messageId?: string } | undefined)?.messageId).toBe(
+        done?.type === "done" ? done.message.messageId : "",
+      );
+      const said = error.mock.calls.flat().join(" ");
+      expect(said).toContain("could not record message_taken");
+      expect(said).not.toContain("interrupted");
+    } finally {
+      error.mockRestore();
     }
-    // Released once its run failed to start, the session is acquired again by the stream itself, which closes the run.
-    expect(events[0]).toMatchObject({ type: "accepted", run: { status: "done", outcome: { status: "interrupted" } } });
-    expect(events.slice(1)).toMatchObject([
-      { type: "entry", entry: { kind: "run_ended", data: { outcome: { status: "interrupted" } } } },
-    ]);
-    const next = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "y" } }));
-    await vi.waitFor(async () =>
-      expect(await session.runs.get({ runId: next.run.runId })).toMatchObject({ outcome: { status: "completed" } }),
-    );
-    const retried = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" }));
-    expect(retried.duplicate).toBe(false);
   });
 
-  it("a run whose end the storage refused ends the streams waiting for it", async () => {
+  it("a message whose end the storage refused ends the streams waiting for it", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(fakeLoopHarness(store)));
-    const session = agent.sessions.get("s");
     const iterator = agent.invoke({ sessionId: "s", prompt: { text: "hold" } })[Symbol.asyncIterator]();
     const head = await iterator.next();
-    const runId = head.done || head.value.type !== "accepted" ? "" : head.value.run.runId;
-    await vi.waitFor(async () => expect((await session.runs.get({ runId }))?.status).toBe("running"));
-    store.refuseNext = "run_ended";
+    const messageId = head.done || head.value.type !== "accepted" ? "" : head.value.message.messageId;
+    await takenNow(agent, "s", messageId);
+    store.refuseNext = "message_ended";
     store.release();
     const rest: InvokeEvent[] = [];
     for (let next = await iterator.next(); !next.done; next = await iterator.next()) rest.push(next.value);
     expect(rest.at(-1)?.type).toBe("serving_error");
-    expect(rest.some((e) => e.type === "entry" && e.entry.kind === "run_ended")).toBe(false);
-    expect(await session.runs.get({ runId })).toMatchObject({ outcome: { status: "interrupted" } });
+    expect(rest.some((e) => e.type === "done")).toBe(false);
+    expect(await agent.sessions.get("s").messages.get({ messageId })).toMatchObject({
+      outcome: { status: "interrupted" },
+    });
   });
 
-  it("closes the log when closing a previous process's runs fails", async () => {
+  it("closes the log when ending a previous process's messages fails", async () => {
     const store = new FakeStore();
     const before = servingAgent(loopPort(fakeLoopHarness(store)));
-    const held = await receiptOf(before.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () =>
-      expect((await before.sessions.get("s").runs.get({ runId: held.run.runId }))?.status).toBe("running"),
-    );
+    const held = (await receiptOf(before.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(before, "s", held);
     store.restart();
     const after = servingAgent(loopPort(fakeLoopHarness(store)));
-    store.refuseNext = "run_ended";
+    store.refuseNext = "message_ended";
     const refused = await after.sessions.get("s").read();
     expect(refused.ok).toBe(false);
     expect(store.openLogs).toBe(0);
-    expect(await after.sessions.get("s").runs.get({ runId: held.run.runId })).toMatchObject({
+    expect(await after.sessions.get("s").messages.get({ messageId: held })).toMatchObject({
       outcome: { status: "interrupted" },
     });
   });
@@ -314,7 +326,7 @@ describe("LoopPort", () => {
   it("an invoke whose first record the storage refused leaves no session behind", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(fakeLoopHarness(store)));
-    store.refuseNext = "run_accepted";
+    store.refuseNext = "message_accepted";
     const events: InvokeEvent[] = [];
     for await (const event of agent.invoke({ sessionId: "new", prompt: { text: "x" } })) events.push(event);
     expect(events).toMatchObject([{ type: "rejected", error: { code: "internal" } }]);
@@ -328,36 +340,116 @@ describe("LoopPort", () => {
     const agent = servingAgent(loopPort({ ...harness, open: () => Promise.reject(down) }));
     const session = agent.sessions.get("s");
     const unavailable = { code: "unavailable", retryable: true, message: "disk busy" };
-    await expect(session.runs.get({ runId: "r" })).rejects.toMatchObject(unavailable);
+    await expect(session.messages.get({ messageId: "m" })).rejects.toMatchObject(unavailable);
     expect(await session.read()).toEqual({ ok: false, error: unavailable });
     const events: InvokeEvent[] = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
     expect(events).toEqual([{ type: "rejected", error: unavailable }]);
   });
 
+  it("canceling a steer the loop has not taken withdraws it: canceled, no entry, never taken", async () => {
+    const store = new FakeStore();
+    const agent = servingAgent(loopPort(fakeLoopHarness(store)));
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
+    const steer = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "two" }, whenBusy: "steer" })))
+      .message.messageId;
+    expect(await agent.sessions.get("s").messages.cancel(steer)).toEqual({ ok: true });
+    store.release();
+    expect(await doneOf(agent, "s", first)).toMatchObject({
+      outcome: { status: "completed" },
+      answer: { text: "answer: hold" },
+    });
+    const withdrawn = await doneOf(agent, "s", steer);
+    expect(withdrawn).toMatchObject({ outcome: { status: "canceled", by: "cancel" } });
+    expect(withdrawn.entryId).toBeUndefined();
+    expect((await usersOf(agent, "s")).map((e) => (e.data as { text: string }).text)).toEqual(["hold"]);
+  });
+
+  it("a steer the loop can no longer take back is canceled by stopping the work it is part of", async () => {
+    const store = new FakeStore();
+    const harness = fakeLoopHarness(store);
+    const keeping = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, hooks) => ({ ...log.run(message, hooks), withdraw: () => false }),
+    });
+    const agent = servingAgent(
+      loopPort({
+        ...harness,
+        open: async (sessionId, onRecord) => {
+          const log = await harness.open(sessionId, onRecord);
+          return log && keeping(log);
+        },
+        create: async (sessionId, onRecord, fork) => keeping(await harness.create(sessionId, onRecord, fork)),
+      }),
+    );
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
+    const steer = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "two" }, whenBusy: "steer" })))
+      .message.messageId;
+    expect(await agent.sessions.get("s").messages.cancel(steer)).toEqual({ ok: true });
+    const canceled = { outcome: { status: "canceled", by: "cancel" } };
+    expect(await doneOf(agent, "s", first)).toMatchObject(canceled);
+    expect(await doneOf(agent, "s", steer)).toMatchObject(canceled);
+  });
+
+  it("an abort after a cancel withdraws the steers the canceled work had not taken", async () => {
+    const store = new FakeStore();
+    const harness = fakeLoopHarness(store);
+    // A stop that lands only on release, so the abort arrives while the canceled work is still settling.
+    const slowStop = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, hooks) => {
+        const run = log.run(message, hooks);
+        return { ...run, stop: () => void store.holding().then(() => run.stop()) };
+      },
+    });
+    const agent = servingAgent(
+      loopPort({
+        ...harness,
+        open: async (sessionId, onRecord) => {
+          const log = await harness.open(sessionId, onRecord);
+          return log && slowStop(log);
+        },
+        create: async (sessionId, onRecord, fork) => slowStop(await harness.create(sessionId, onRecord, fork)),
+      }),
+    );
+    const session = agent.sessions.get("s");
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "late" } }))).message.messageId;
+    await vi.waitFor(async () => {
+      const page = await session.read();
+      expect(page.ok && page.entries.some((e) => e.kind === "assistant_message")).toBe(true);
+    });
+    const steer = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "also" }, whenBusy: "steer" })))
+      .message.messageId;
+    expect(await session.messages.cancel(first)).toEqual({ ok: true });
+    expect(await session.abort()).toMatchObject({ ok: true, stopped: { queued: [steer] } });
+    store.release();
+    expect(await doneOf(agent, "s", steer)).toMatchObject({ outcome: { status: "canceled", by: "abort" } });
+    expect(await doneOf(agent, "s", first)).toMatchObject({ outcome: { status: "canceled", by: "abort" } });
+  });
+
   it("a withdrawal the storage refused still frees the session", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(fakeLoopHarness(store)));
     const session = agent.sessions.get("s");
-    const holder = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () => expect((await session.runs.get({ runId: holder.run.runId }))?.status).toBe("running"));
-    const queued = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "queued" } }));
-    store.refuseNext = "run_ended";
-    expect(await session.runs.cancel(queued.run.runId)).toEqual({ ok: true });
-    expect(await session.runs.get({ runId: queued.run.runId })).toMatchObject({ outcome: { status: "interrupted" } });
+    const holder = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", holder);
+    const queued = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "queued" } }))).message.messageId;
+    store.refuseNext = "message_ended";
+    expect(await session.messages.cancel(queued)).toEqual({ ok: true });
+    expect(await session.messages.get({ messageId: queued })).toMatchObject({ outcome: { status: "interrupted" } });
     const followed: FollowEvent[] = [];
-    for await (const event of session.runs.follow(queued.run.runId)) followed.push(event);
+    for await (const event of session.messages.follow(queued)) followed.push(event);
     expect(followed).toMatchObject([{ type: "serving_error", message: expect.stringMatching(/no recorded end/) }]);
     store.release();
-    const after = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "after" } }));
-    await vi.waitFor(async () =>
-      expect(await session.runs.get({ runId: after.run.runId })).toMatchObject({ outcome: { status: "completed" } }),
-    );
+    const after = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "after" } }))).message.messageId;
+    expect(await doneOf(agent, "s", after)).toMatchObject({ outcome: { status: "completed" } });
   });
 });
 
 describe("serving layer", () => {
-  it("a caller that detaches releases its subscription; the run goes on", async () => {
+  it("a caller that detaches releases its subscription; the work goes on", async () => {
     const store = new FakeStore();
     const port = loopPort(fakeLoopHarness(store));
     let watching = 0;
@@ -376,9 +468,136 @@ describe("serving layer", () => {
     const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
     await vi.waitFor(() => expect(watching).toBe(0));
     store.release();
-    await vi.waitFor(async () =>
-      expect(await agent.sessions.get("s").runs.get({ runId: first.run.runId })).toMatchObject({ status: "done" }),
+    await doneOf(agent, "s", first.message.messageId);
+  });
+
+  it("a message taken between its status read and its backfill still streams its whole work", async () => {
+    const store = new FakeStore();
+    const harness = fakeLoopHarness(store);
+    // pi binds before it writes the first message: the message is taken a moment after it is accepted.
+    const lateTake = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, hooks) => {
+        const started = new Promise<LoopRun>((resolve) => setTimeout(() => resolve(log.run(message, hooks)), 10));
+        return {
+          steer: (steered) => void started.then((run) => run.steer(steered)),
+          withdraw: () => false,
+          stop: () => void started.then((run) => run.stop()),
+          done: started.then((run) => run.done),
+        };
+      },
+    });
+    const port = loopPort({
+      ...harness,
+      open: async (sessionId, onRecord) => {
+        const log = await harness.open(sessionId, onRecord);
+        return log && lateTake(log);
+      },
+      create: async (sessionId, onRecord, fork) => lateTake(await harness.create(sessionId, onRecord, fork)),
+    });
+    // The status is read at once and answered late, after the message was taken.
+    const agent = servingAgent({
+      ...port,
+      getMessage: async (sessionId, key) => {
+        const status = await port.getMessage(sessionId, key);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return status;
+      },
+    });
+    const kinds: string[] = [];
+    const read = (async () => {
+      for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "hold" } })) {
+        kinds.push(event.type === "entry" ? `entry:${event.entry.kind}` : event.type);
+      }
+    })();
+    await vi.waitFor(() => expect(kinds).toContain("entry:user_message"));
+    store.release();
+    await read;
+    expect(kinds).toEqual(["accepted", "entry:user_message", "message_delta", "entry:assistant_message", "done"]);
+  });
+
+  it("a message taken just before its backfill streams its own work only, each entry once", async () => {
+    const store = new FakeStore();
+    const port = loopPort(fakeLoopHarness(store));
+    let releaseBeforeRead = false;
+    // The loop moves on between the steer's admission and its backfill: the first message's answer is written, then the
+    // steer is taken. That answer, and its delta, come before the steer's own entry and are not the steer's.
+    const agent = servingAgent({
+      ...port,
+      messageEntries: async (sessionId, messageId, after) => {
+        if (releaseBeforeRead) {
+          releaseBeforeRead = false;
+          store.release();
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return port.messageEntries(sessionId, messageId, after);
+      },
+    });
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
+    releaseBeforeRead = true;
+    const events: InvokeEvent[] = [];
+    const read = (async () => {
+      for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "hold" }, whenBusy: "steer" })) {
+        events.push(event);
+      }
+    })();
+    await vi.waitFor(() => expect(events.some((e) => e.type === "entry")).toBe(true));
+    store.release();
+    await read;
+    const steer = events[0]?.type === "accepted" ? events[0].message.messageId : "";
+    const entries = events.flatMap((e) => (e.type === "entry" ? [e.entry] : []));
+    expect(entries.map((e) => e.kind)).toEqual(["user_message", "assistant_message"]);
+    expect((entries[0]?.data as { messageId?: string } | undefined)?.messageId).toBe(steer);
+    expect(events.filter((e) => e.type === "message_delta")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "done", message: { messageId: steer } });
+  });
+
+  it("a follower is told when a message is taken, not only when work starts and ends", async () => {
+    const store = new FakeStore();
+    // Taken a moment after it is accepted, as pi takes a message once its session is bound.
+    const harness = fakeLoopHarness(store);
+    const lateTake = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, hooks) => {
+        const started = new Promise<LoopRun>((resolve) => setTimeout(() => resolve(log.run(message, hooks)), 10));
+        return {
+          steer: (steered) => void started.then((run) => run.steer(steered)),
+          withdraw: () => false,
+          stop: () => void started.then((run) => run.stop()),
+          done: started.then((run) => run.done),
+        };
+      },
+    });
+    const late = servingAgent(
+      loopPort({
+        ...harness,
+        open: async (sessionId, onRecord) => {
+          const log = await harness.open(sessionId, onRecord);
+          return log && lateTake(log);
+        },
+        create: async (sessionId, onRecord, fork) => lateTake(await harness.create(sessionId, onRecord, fork)),
+      }),
     );
+    await late.sessions.create({ sessionId: "s" });
+    const states: SessionState[] = [];
+    const follow = late.sessions.get("s").follow()[Symbol.asyncIterator]();
+    void (async () => {
+      for (let next = await follow.next(); !next.done; next = await follow.next()) {
+        if (next.value.type === "state") states.push(next.value.state);
+      }
+    })();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const first = await receiptOf(late.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+    await vi.waitFor(() =>
+      expect(states.at(-1)).toMatchObject({
+        status: "running",
+        taken: [{ messageId: first.message.messageId }],
+        queued: [],
+      }),
+    );
+    store.release();
+    await follow.return?.();
   });
 
   it("a follow whose next page the port refuses reports the port's answer, not a harness failure", async () => {
@@ -414,12 +633,12 @@ describe("serving layer", () => {
   it("never hands the harness a session id no URL can address", async () => {
     const port = loopPort(fakeLoopHarness(new FakeStore()));
     const untouchable = () => Promise.reject(new Error("the port was reached"));
-    const agent = servingAgent({ ...port, getRun: untouchable, attachment: untouchable });
-    expect(await agent.sessions.get("..").runs.get({ runId: "r" })).toBeUndefined();
+    const agent = servingAgent({ ...port, getMessage: untouchable, attachment: untouchable });
+    expect(await agent.sessions.get("..").messages.get({ messageId: "m" })).toBeUndefined();
     expect(await agent.sessions.get(".").attachment("ref")).toBeUndefined();
   });
 
-  it("a subscriber that falls behind reads what it missed from the log: every entry once, and the run's end", async () => {
+  it("a subscriber that falls behind reads what it missed from the log: every entry once, and the message's end", async () => {
     const saved = { ...LIVE_BACKLOG };
     LIVE_BACKLOG.events = 3;
     try {
@@ -428,7 +647,7 @@ describe("serving layer", () => {
       const session = agent.sessions.get("s");
       const follow = session.follow()[Symbol.asyncIterator]();
       const followed: FollowEvent[] = [(await follow.next()).value as FollowEvent];
-      // Not read while the next runs write: this subscriber and the invoke's own both fall behind.
+      // Not read while the next messages write: this subscriber and the invoke's own both fall behind.
       const invoked = agent.invoke({ sessionId: "s", prompt: { text: "second" } })[Symbol.asyncIterator]();
       const receipt = await invoked.next();
       for (const text of ["third", "fourth"]) {
@@ -437,7 +656,7 @@ describe("serving layer", () => {
       const rest = [];
       for (let next = await invoked.next(); !next.done; next = await invoked.next()) rest.push(next.value);
       expect(receipt.value).toMatchObject({ type: "accepted" });
-      expect(rest.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
+      expect(rest.at(-1)).toMatchObject({ type: "done" });
       const page = await session.read({ limit: 500 });
       const all = page.ok ? page.entries.map((e) => e.id) : [];
       while (followed.filter((e) => e.type === "entry").length < all.length) {
@@ -459,7 +678,7 @@ describe("serving layer", () => {
     }
   });
 
-  it("what a lagging subscriber cannot read back is kept: the error that ends a run, and the latest state", async () => {
+  it("what a lagging subscriber cannot read back is kept: the error that ends a message, and the latest state", async () => {
     const saved = { ...LIVE_BACKLOG };
     LIVE_BACKLOG.events = 2;
     try {
@@ -469,23 +688,23 @@ describe("serving layer", () => {
       for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "first" } })) void _;
       const follow = session.follow()[Symbol.asyncIterator]();
       await follow.next();
-      // Not read while this run writes, so both the invoke's stream and the follow fall behind before its end.
+      // Not read while this work writes, so both the invoke's stream and the follow fall behind before its end.
       const invoked = agent.invoke({ sessionId: "s", prompt: { text: "hold" } })[Symbol.asyncIterator]();
       const receipt = await invoked.next();
-      const runId = receipt.done || receipt.value.type !== "accepted" ? "" : receipt.value.run.runId;
-      await vi.waitFor(async () => expect((await session.runs.get({ runId }))?.status).toBe("running"));
-      // A run queued behind holds the session, so nothing closes the refused run's end for it in the log.
-      const next = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-      store.refuseNext = "run_ended";
+      const messageId = receipt.done || receipt.value.type !== "accepted" ? "" : receipt.value.message.messageId;
+      await takenNow(agent, "s", messageId);
+      // A message queued behind holds the session, so nothing ends the refused one for it in the log.
+      const next = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+      store.refuseNext = "message_ended";
       store.release();
-      await vi.waitFor(async () => expect((await session.runs.get({ runId }))?.status).toBe("done"));
+      await doneOf(agent, "s", messageId);
       const rest = [];
       for (let next = await invoked.next(); !next.done; next = await invoked.next()) rest.push(next.value);
       expect(rest.at(-1)).toMatchObject({ type: "serving_error" });
-      expect(rest.some((e) => e.type === "entry" && e.entry.kind === "run_ended")).toBe(false);
-      await vi.waitFor(async () => expect((await session.runs.get({ runId: next.run.runId }))?.status).toBe("running"));
+      expect(rest.some((e) => e.type === "done")).toBe(false);
+      await takenNow(agent, "s", next);
       store.release();
-      await vi.waitFor(async () => expect((await session.runs.get({ runId: next.run.runId }))?.status).toBe("done"));
+      await doneOf(agent, "s", next);
       const followed: FollowEvent[] = [];
       for (;;) {
         const next = await Promise.race([
@@ -543,11 +762,11 @@ describe("serving layer", () => {
     const session = agent.sessions.get("s");
     const newest = await session.read();
     if (!newest.ok) throw new Error(newest.error.message);
-    expect(newest.entries.map((e) => e.kind)).toEqual(["assistant_message", "run_ended"]);
+    expect(newest.entries.map((e) => e.kind)).toEqual(["assistant_message"]);
     expect(newest.prev).toBe(newest.entries[0]?.id);
     const older = await session.read({ before: newest.prev as string });
     if (!older.ok) throw new Error(older.error.message);
-    expect(older.entries.map((e) => e.kind)).toEqual(["run_started", "user_message"]);
+    expect(older.entries.map((e) => e.kind)).toEqual(["user_message"]);
     expect(older.prev).toBeUndefined();
     expect(older.next).toBe(older.entries.at(-1)?.id);
   });

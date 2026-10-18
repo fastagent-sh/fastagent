@@ -297,8 +297,8 @@ it("source failure remains primary when writer cleanup also fails", async () => 
   expect(Exit.isFailure(exit) && portError(exit.cause)).toBe(primary);
 });
 
-it("turnEnd: a refusal or the turn's own run_ended ends the turn, and says how", () => {
-  const run = "run";
+it("turnEnd: a refusal or the turn's own done ends the turn, and says how", () => {
+  const run = "message";
   expect(turnEnd(ev.rejected("busy"), undefined)).toMatchObject({ failure: { code: "busy" } });
   expect(turnEnd(ev.ended(), run)).toEqual({ answered: true });
   // Stopped at its output limit, or taken by a command: still an answer, with whatever it wrote.
@@ -313,7 +313,7 @@ it("turnEnd: a refusal or the turn's own run_ended ends the turn, and says how",
   expect(turnEnd(ev.ended({ status: "interrupted" }), run)).toMatchObject({
     failure: { retryable: true, code: "interrupted" },
   });
-  // Another run's ending, or anything else, is not this turn's.
+  // Another message's ending, or anything else, is not this turn's.
   expect(turnEnd(ev.ended({ status: "completed" }, "other"), run)).toBeUndefined();
   expect(turnEnd(ev.text("x"), run)).toBeUndefined();
 });

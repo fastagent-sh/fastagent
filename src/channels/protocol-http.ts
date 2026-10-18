@@ -15,7 +15,7 @@ import {
   AgentRejection,
   type FollowEvent,
   type InvokeEvent,
-  type RunStatus,
+  type MessageStatus,
   type Session,
   agentError,
 } from "../protocol.ts";
@@ -148,7 +148,7 @@ const entryId = (event: FollowEvent | InvokeEvent): string | undefined =>
 
 /**
  * A follow: refused, an error status; otherwise an event stream at once. Whether it is refused is asked of `refusal`
- * first, never of the stream's first event, which on a session with nothing new may be the next run's. A refusal that
+ * first, never of the stream's first event, which on a session with nothing new may be the next message's. A refusal that
  * arrives later (the session deleted in between) is that stream's one `rejected` event.
  */
 async function stream(
@@ -257,7 +257,7 @@ export function createAgentHandler(
 
 /** The two planes, as what a host router mounts: the user plane's routes and prefixes, and the control prefix. */
 export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: PrefixMount[] }; control: PrefixMount } {
-  const runOf = (run: RunStatus | undefined): Response => json(run ?? null);
+  const messageOf = (message: MessageStatus | undefined): Response => json(message ?? null);
 
   const invoke = async (req: Request): Promise<Response> => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -283,7 +283,7 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
     if (first?.type === "rejected") return refused(first.error);
     const accept = req.headers.get("accept") ?? "";
     if (accept.includes("application/json") && !accept.includes("text/event-stream")) {
-      // The receipt alone: the run goes on, and the caller follows or polls it.
+      // The receipt alone: the work goes on, and the caller follows or polls the message.
       detach();
       return json(first, 202);
     }
@@ -354,29 +354,31 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
       if ("error" in body) return body.error;
       return answer(await sessions(url, params).compact(body.value));
     },
-    "GET /sessions/{s}/runs": (_req, url, params) => {
+    "GET /sessions/{s}/messages": (_req, url, params) => {
       const idempotencyKey = url.searchParams.get("idempotencyKey");
       if (idempotencyKey === null) return invalid("expected ?idempotencyKey=");
-      return read(() => sessions(url, params).runs.get({ idempotencyKey }), runOf);
+      return read(() => sessions(url, params).messages.get({ idempotencyKey }), messageOf);
     },
-    "GET /sessions/{s}/runs/{r}": (_req, url, params) =>
-      read(() => sessions(url, params).runs.get({ runId: params.r as string }), runOf),
-    "GET /sessions/{s}/runs/{r}/events": (req, url, params) => {
+    "GET /sessions/{s}/messages/{m}": (_req, url, params) =>
+      read(() => sessions(url, params).messages.get({ messageId: params.m as string }), messageOf),
+    "GET /sessions/{s}/messages/{m}/events": (req, url, params) => {
       const after = resumeFrom(req, url);
       const session = sessions(url, params);
-      const runId = params.r as string;
+      const messageId = params.m as string;
       const refusal = (async () => {
-        const run = await session.runs.get({ runId }).catch((error: unknown) => {
+        const message = await session.messages.get({ messageId }).catch((error: unknown) => {
           if (error instanceof AgentRejection) return error;
           throw error;
         });
-        if (run instanceof AgentRejection) return { code: run.code, message: run.message, retryable: run.retryable };
-        return run ? refusalOf(session, after) : agentError("not_found", `no run ${runId}`);
+        if (message instanceof AgentRejection) {
+          return { code: message.code, message: message.message, retryable: message.retryable };
+        }
+        return message ? refusalOf(session, after) : agentError("not_found", `no message ${messageId}`);
       })();
-      return stream(refusal, () => session.runs.follow(runId, after));
+      return stream(refusal, () => session.messages.follow(messageId, after));
     },
-    "POST /sessions/{s}/runs/{r}/cancel": async (_req, url, params) =>
-      answer(await sessions(url, params).runs.cancel(params.r as string)),
+    "POST /sessions/{s}/messages/{m}/cancel": async (_req, url, params) =>
+      answer(await sessions(url, params).messages.cancel(params.m as string)),
   };
 
   const about: Record<string, Handler> = {
