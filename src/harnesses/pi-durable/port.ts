@@ -23,8 +23,10 @@ import {
   InboxDoc,
   LiveDoc,
   type Storage,
+  type AgentEvent,
   type SubmissionId,
   type SubmissionRecord,
+  type Tx,
   defineDoc,
   watchEvents,
 } from "@earendil-works/pi-durable";
@@ -42,6 +44,7 @@ import {
   type ModelDescriptor,
   type Outcome,
   type Prompt,
+  type ForkSource,
   type Result,
   type SessionEvent,
   type SessionState,
@@ -62,6 +65,16 @@ const Sessions = defineDoc<SessionIndex>({
   scope: "session",
   initial: () => ({ byId: {} }),
 });
+
+/** A session id another conversation already holds: the creating commit is rolled back. */
+class SessionExists extends Error {}
+
+/** Name `conversationId` `sessionId`, in the commit that creates it, unless another conversation holds that id. */
+async function claimSession(tx: Tx, sessionId: string, conversationId: ConversationId): Promise<void> {
+  const index = await tx.doc(Sessions);
+  if (index.byId[sessionId]) throw new SessionExists(`session ${sessionId} exists`);
+  index.byId[sessionId] = { conversationId, createdAt: Date.now(), updatedAt: Date.now() };
+}
 
 type StopReason = "cancel" | "abort" | "delete";
 
@@ -179,9 +192,15 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
 
   const sessionOf = async (sessionId: string) => (await harness.snapshot(Sessions, context))?.byId[sessionId];
 
+  /** A session's conversation, followed from its first use in this process (`attach`). */
   const conversationOf = async (sessionId: string): Promise<Conversation | undefined> => {
     const known = await sessionOf(sessionId);
-    return known === undefined ? undefined : harness.conversation(known.conversationId as ConversationId, context);
+    if (known === undefined) return undefined;
+    const conversation = await harness.conversation(known.conversationId as ConversationId, context);
+    if (!conversation)
+      throw new Error(`session ${sessionId} names conversation ${known.conversationId}, which is gone`);
+    await attach(sessionId, conversation);
+    return conversation;
   };
 
   /** Every entry of a conversation, oldest first, its forked-from history included. */
@@ -268,6 +287,10 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
     }
     const stop = stops?.byMessage[messageId];
     const ended = endedRecords(records).get(messageId);
+    // Taken, and its work stopped, but where that work ended is not written yet: it is done once it is.
+    if (entryId !== undefined && ended === undefined) {
+      return { ...base, status: "taken", entryId, takenAt: takenAt ?? Date.now() };
+    }
     return {
       ...base,
       status: "done",
@@ -287,13 +310,7 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
     record: Extract<SubmissionRecord, { status: "done"; type: "input" }>,
     records: EntryRecord[],
   ): Promise<{ usage?: Usage }> => {
-    const page = await storage.scanSubmissions(
-      { conversationId: conversation.id, status: "done" },
-      1000,
-      undefined,
-      context,
-    );
-    const sharing = page.items.filter(
+    const sharing = (await scanAll({ conversationId: conversation.id, status: "done" })).filter(
       (s): s is typeof record => s.type === "input" && s.status === "done" && s.answer === record.answer,
     );
     const first = sharing.reduce((a, b) => (a.entry <= b.entry ? a : b), record);
@@ -366,16 +383,90 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
     await conversation.submit({ type: "write", entry: { kind: ENDED, data, edits: [] } }, context);
   };
 
-  /** Follow one conversation's commits: entries and live events, each placed after the newest entry before it. */
+  /**
+   * The messages this process has accepted and not yet reported done, per conversation: what a resync after a gap in
+   * the event stream owes a `done` to.
+   */
+  const awaiting = new Map<number, Set<string>>();
+  const await_ = (conversationId: number, messageId: string) => {
+    const set = awaiting.get(conversationId) ?? new Set();
+    awaiting.set(conversationId, set);
+    set.add(messageId);
+  };
+  const emitDone = (sessionId: string, conversationId: number, status: MessageStatus, after: string | undefined) => {
+    if (status.status !== "done") return;
+    awaiting.get(conversationId)?.delete(status.messageId);
+    emitTo(sessionId, { type: "done", message: status }, after);
+  };
+
+  /** Every submission matching `query`, every page of it. */
+  const scanAll = async (query: Parameters<Storage["scanSubmissions"]>[0]): Promise<SubmissionRecord[]> => {
+    const all: SubmissionRecord[] = [];
+    let cursor: Parameters<Storage["scanSubmissions"]>[2];
+    do {
+      const page = await storage.scanSubmissions(query, 500, cursor, context);
+      all.push(...page.items);
+      cursor = page.next;
+    } while (cursor !== undefined);
+    return all;
+  };
+
+  /**
+   * Follow one conversation's commits. The stream's callback only queues each batch: the work a batch needs (reads,
+   * the end write) runs on the conversation's own queue, in order, so a slow read never backs pi-durable's stream up into
+   * the snapshot it sends instead of what it dropped, and a failed job is said and the next batch still runs.
+   */
   const attach = async (sessionId: string, conversation: Conversation): Promise<void> => {
     if (followed.has(conversation.id)) return;
     followed.add(conversation.id);
     const stream = await watchEvents(harness, conversation.id, context);
     let last = publish(stream.snapshot.entries, conversation.id).at(-1)?.id;
-    stream.start(async (events) => {
+    let queue = Promise.resolve();
+    /**
+     * A failed job is logged and made good once by a resync, which writes and reports what it would have, from the log.
+     * Only a resync that fails too reaches the followers, as a `serving_error`: they cannot be made whole.
+     */
+    const later = (job: () => Promise<void>, recover = true) => {
+      queue = queue.then(job).catch((error: unknown) => {
+        const message = `session ${sessionId}: following its work failed: ${String(error)}`;
+        log.error(`[fastagent] ${message}`);
+        if (recover) later(resync, false);
+        else emitTo(sessionId, { type: "serving_error", message }, last);
+      });
+    };
+    const statusById = async (id: SubmissionId) => {
+      const record = await storage.submission(id, context);
+      return record && statusOf(conversation, record, await entriesOf(conversation));
+    };
+
+    /** A gap: what the stream dropped is read back from the log, then every end owed is written and reported. */
+    const resync = async () => {
+      const records = await entriesOf(conversation);
+      const entries = publish(records, conversation.id);
+      const from = last === undefined ? 0 : entries.findIndex((entry) => entry.id === last) + 1;
+      for (const entry of entries.slice(from)) {
+        emitTo(sessionId, { type: "entry", entry }, last);
+        last = entry.id;
+      }
+      await reconcile(conversation);
+      for (const messageId of [...(awaiting.get(conversation.id) ?? [])]) {
+        const record = await findSubmission(conversation, messageId);
+        if (record) emitDone(sessionId, conversation.id, await statusOf(conversation, record, records), last);
+      }
+      if (listeners.has(sessionId)) {
+        emitTo(sessionId, { type: "state", state: await stateOf(sessionId, conversation, records) }, last);
+      }
+    };
+
+    const handle = async (events: readonly AgentEvent[]) => {
       const ended: SubmissionId[][] = [];
       for (const event of events) {
         switch (event.type) {
+          // pi-durable sends one after dropping frames a slow listener did not take (more than 100 behind). This
+          // listener only queues, so that is not reproduced in tests; a failed job takes the same resync, and that is.
+          case "snapshot":
+            await resync();
+            break;
           case "message_end":
           case "entry_appended": {
             const record = event.entry;
@@ -384,8 +475,7 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
               for (const messageId of (record.data as EndedData).messages) {
                 const submission = await findSubmission(conversation, messageId);
                 if (submission) {
-                  const status = await statusOf(conversation, submission, records);
-                  if (status.status === "done") emitTo(sessionId, { type: "done", message: status }, last);
+                  emitDone(sessionId, conversation.id, await statusOf(conversation, submission, records), last);
                 }
               }
               break;
@@ -431,10 +521,11 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
           case "submission": {
             const record = event.record;
             if (record.type !== "input" || record.requestId === undefined) break;
+            // One that ended without an answer after it was taken is done once its end is written (ENDED, above).
             const needsEnd = record.status === "unanswered" && record.entry !== undefined;
             if (record.status === "done" || (record.status === "unanswered" && !needsEnd)) {
-              const status = await statusOf(conversation, record, await entriesOf(conversation));
-              if (status.status === "done") emitTo(sessionId, { type: "done", message: status }, last);
+              const status = await statusById(record.id);
+              if (status) emitDone(sessionId, conversation.id, status, last);
             }
             break;
           }
@@ -442,6 +533,7 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
             break;
         }
       }
+      // `last` is the newest entry of the commit the run ended in: where its work ended, exactly.
       for (const inputs of ended) {
         const records = await Promise.all(inputs.map((id) => storage.submission(id, context)));
         const unanswered = records.filter(
@@ -461,22 +553,37 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
         const records = await entriesOf(conversation);
         emitTo(sessionId, { type: "state", state: await stateOf(sessionId, conversation, records) }, last);
       }
+    };
+
+    stream.start(async (events) => {
+      later(() => handle(events));
+    });
+    // A stream that ended for any reason but the harness closing is followed again, and what it missed made good. Not
+    // reproduced in tests: this listener never throws, the end pi-durable reports as `listener_error`.
+    void stream.closed.then((end) => {
+      followed.delete(conversation.id);
+      if (end.reason === "stopped" || end.reason === "session_closed" || end.reason === "cancelled") return;
+      const why = "error" in end ? String(end.error) : end.reason;
+      log.error(`[fastagent] session ${sessionId}: its event stream ended (${why}); following it again`);
+      later(async () => {
+        await attach(sessionId, conversation);
+        await resync();
+      }, false);
     });
   };
 
-  /** Messages whose work ended without an answer before their end was written: written before anything else. */
+  /**
+   * Messages whose work ended without an answer before their end was written: written before anything else. Only a
+   * conversation with such a message reads its history.
+   */
   const reconcile = async (conversation: Conversation): Promise<void> => {
+    const candidates = (await scanAll({ conversationId: conversation.id, status: "unanswered" })).filter(
+      (r) => r.type === "input" && r.entry !== undefined && r.requestId !== undefined,
+    );
+    if (candidates.length === 0) return;
     const records = await entriesOf(conversation);
     const ended = endedRecords(records);
-    const page = await storage.scanSubmissions(
-      { conversationId: conversation.id, status: "unanswered" },
-      1000,
-      undefined,
-      context,
-    );
-    const missing = page.items.filter(
-      (r) => r.type === "input" && r.entry !== undefined && r.requestId !== undefined && !ended.has(r.requestId),
-    );
+    const missing = candidates.filter((r) => !ended.has(r.requestId as string));
     if (missing.length === 0) return;
     await recordEnded(conversation, {
       messages: missing.map((r) => r.requestId as string),
@@ -493,13 +600,7 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
           ...(options.model ? { model: options.model } : {}),
           ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel as never } : {}),
         },
-        init: async (tx, id) => {
-          (await tx.doc(Sessions)).byId[sessionId] = {
-            conversationId: id,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          };
-        },
+        init: (tx, id) => claimSession(tx, sessionId, id),
       },
       context,
     );
@@ -510,10 +611,14 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
   const serially = <A>(sessionId: string, work: () => Promise<A>): Promise<A> => {
     const previous = admissions.get(sessionId) ?? Promise.resolve();
     const next = previous.then(work, work);
-    admissions.set(
-      sessionId,
-      next.catch(() => {}),
+    const settled = next.then(
+      () => {},
+      () => {},
     );
+    admissions.set(sessionId, settled);
+    void settled.then(() => {
+      if (admissions.get(sessionId) === settled) admissions.delete(sessionId);
+    });
     return next;
   };
 
@@ -521,6 +626,52 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
 
   const inFlight = async (): Promise<number> =>
     (await harness.inspect(context)).submissions.filter((s) => s.type === "input").length;
+
+  /** The session's conversation, created now, or the one a concurrent create named it after while this one checked. */
+  const claimOrFind = async (sessionId: string): Promise<Conversation> => {
+    try {
+      return await createConversation(sessionId);
+    } catch (error) {
+      // The one failure expected here: the creating commit found the id taken, and wrote nothing.
+      if (!(error instanceof SessionExists)) throw error;
+      const found = await conversationOf(sessionId);
+      if (!found) throw new Error(`session ${sessionId} was taken, and is not found`);
+      return found;
+    }
+  };
+
+  /** A new session, empty or a fork; `conflict` when the id is taken, checked again by the commit that creates it. */
+  const created = async (sessionId: string, fork: ForkSource | undefined): Promise<Result> => {
+    if (await sessionOf(sessionId)) return failure("conflict", `session ${sessionId} exists`);
+    try {
+      if (!fork) {
+        await createConversation(sessionId);
+        return { ok: true };
+      }
+      const source = await conversationOf(fork.sessionId);
+      if (!source) return notFound(fork.sessionId);
+      const entries = publish(await entriesOf(source), source.id);
+      const at = fork.entryId ?? entries.at(-1)?.id;
+      if (at === undefined) {
+        await createConversation(sessionId);
+        return { ok: true };
+      }
+      if (!entries.some((entry) => entry.id === at)) {
+        return failure("not_found", `no entry ${at} in session ${fork.sessionId}`);
+      }
+      const forked = await source.fork(
+        Number(at) as EntryId,
+        { ownership: { kind: "ownerless" }, init: (tx, id) => claimSession(tx, sessionId, id) },
+        context,
+      );
+      await attach(sessionId, forked);
+      return { ok: true };
+    } catch (error) {
+      // The one failure expected here: the creating commit found the id taken, and wrote nothing.
+      if (error instanceof SessionExists) return failure("conflict", error.message);
+      throw error;
+    }
+  };
 
   const port: HarnessPort = {
     capabilities,
@@ -532,11 +683,9 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
         if (existing && idempotencyKey !== undefined) {
           const known = await findSubmission(existing, requestId);
           if (known) {
-            return {
-              ok: true as const,
-              message: await statusOf(existing, known, await entriesOf(existing)),
-              duplicate: true,
-            };
+            const message = await statusOf(existing, known, await entriesOf(existing));
+            if (message.status !== "done") await_(existing.id, requestId);
+            return { ok: true as const, message, duplicate: true };
           }
         }
         if (existing) {
@@ -551,7 +700,7 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
         if (flying >= limit) {
           return failure("busy", `this process already has ${flying} messages in flight`, { reason: "capacity" });
         }
-        const conversation = existing ?? (await createConversation(sessionId));
+        const conversation = existing ?? (await claimOrFind(sessionId));
         const content = [
           { type: "text" as const, text: prompt.text },
           ...(prompt.images ?? []).map((image) => ({
@@ -576,6 +725,7 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
             },
             context,
           );
+          await_(conversation.id, requestId);
           const record = await submission.status(context);
           await conversation.commit(async (tx) => {
             const own = (await tx.doc(Sessions)).byId[sessionId];
@@ -624,7 +774,7 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
         message.status === "done" && message.lastEntryId !== undefined
           ? entries.findIndex((entry) => entry.id === message.lastEntryId)
           : entries.length - 1;
-      return { ok: true as const, message, entries: entries.slice(first, last + 1), ended: true };
+      return { ok: true as const, message, entries: entries.slice(first, last + 1), ended: message.status === "done" };
     },
 
     cancelMessage: async (sessionId, messageId) => {
@@ -635,13 +785,20 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
       if (record.status === "done" || record.status === "unanswered") {
         return failure("conflict", `message ${messageId} is done`);
       }
+      // Written first, so the settlement it causes reads as a cancel; never over an earlier stop's reason.
       await conversation.commit(async (tx) => {
-        (await tx.doc(Stops, conversation.id)).byMessage[messageId] = { by: "cancel", at: Date.now() };
+        const stops = (await tx.doc(Stops, conversation.id)).byMessage;
+        stops[messageId] ??= { by: "cancel", at: Date.now() };
       }, context);
-      const submission = await harness.submission(record.id, context);
-      if (record.status === "queued" && (await submission?.abort(context)) === "aborted") return { ok: true };
+      if (record.status === "queued") {
+        const withdrawn = await (await harness.submission(record.id, context))?.abort(context);
+        if (withdrawn === "aborted") return { ok: true };
+        if (withdrawn !== "already_placed") return failure("conflict", `message ${messageId} is done`);
+      }
+      // Placed: it belongs to the conversation's run, which stopping is what cancels it.
       const live = await harness.snapshot(LiveDoc, conversation.id, context);
-      if (live?.run) await harness.abortTask(live.run.taskId, context);
+      if (!live?.run?.inputs.includes(record.id)) return failure("conflict", `message ${messageId} is done`);
+      await harness.abortTask(live.run.taskId, context);
       return { ok: true };
     },
 
@@ -710,40 +867,9 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
       return message ? imageIn(message, at.index) : undefined;
     },
 
-    create: async (sessionId, fork): Promise<Result> => {
-      if (await sessionOf(sessionId)) return failure("conflict", `session ${sessionId} exists`);
-      if (!fork) {
-        await createConversation(sessionId);
-        return { ok: true };
-      }
-      const source = await conversationOf(fork.sessionId);
-      if (!source) return notFound(fork.sessionId);
-      const entries = publish(await entriesOf(source), source.id);
-      const at = fork.entryId ?? entries.at(-1)?.id;
-      if (at === undefined) {
-        await createConversation(sessionId);
-        return { ok: true };
-      }
-      if (!entries.some((entry) => entry.id === at)) {
-        return failure("not_found", `no entry ${at} in session ${fork.sessionId}`);
-      }
-      const forked = await source.fork(
-        Number(at) as EntryId,
-        {
-          ownership: { kind: "ownerless" },
-          init: async (tx, id) => {
-            (await tx.doc(Sessions)).byId[sessionId] = {
-              conversationId: id,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            };
-          },
-        },
-        context,
-      );
-      await attach(sessionId, forked);
-      return { ok: true };
-    },
+    // Serialized with the session's admissions, and the commit that creates the conversation refuses a session id
+    // another one holds: two creates, or a create and a first invoke, cannot both name a conversation after it.
+    create: (sessionId, fork) => serially(sessionId, () => created(sessionId, fork)),
 
     rewind: async () => failure("unsupported", "this agent cannot rewind a session"),
 
@@ -823,13 +949,21 @@ export async function piDurablePort(options: PiDurablePortOptions): Promise<Harn
     commands: async () => (await options.commands?.()) ?? [],
   };
 
-  // A previous process may have stopped between a run that did not answer and the write that records its end.
+  // What needs following from the start: a conversation with work in flight, which ends without anyone asking, and one
+  // a previous process left with a message whose end it did not write. The rest are followed from their first use.
   const index = (await harness.snapshot(Sessions, context))?.byId ?? {};
-  for (const [sessionId, own] of Object.entries(index)) {
-    const conversation = await harness.conversation(own.conversationId as ConversationId, context);
-    if (!conversation) throw new Error(`session ${sessionId} names conversation ${own.conversationId}, which is gone`);
-    await attach(sessionId, conversation);
-    await reconcile(conversation);
+  const sessionOfConversation = new Map(
+    Object.entries(index).map(([sessionId, own]) => [own.conversationId, sessionId]),
+  );
+  const inFlightNow = (await harness.inspect(context)).submissions.filter((r) => r.type === "input");
+  for (const record of inFlightNow) if (record.requestId) await_(record.conversationId, record.requestId);
+  const unended = (await scanAll({ status: "unanswered" })).filter((r) => r.type === "input" && r.entry !== undefined);
+  const owed = new Set([...inFlightNow, ...unended].map((r) => r.conversationId as number));
+  for (const conversationId of owed) {
+    const sessionId = sessionOfConversation.get(conversationId);
+    if (sessionId === undefined) continue;
+    const conversation = await conversationOf(sessionId);
+    if (conversation) await reconcile(conversation);
   }
   return port;
 }

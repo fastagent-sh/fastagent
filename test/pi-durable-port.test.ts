@@ -17,11 +17,12 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
-import { Harness, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { Harness, type Storage, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { piDurablePort } from "../src/harnesses/pi-durable/port.ts";
 import { LIMITS } from "../src/protocol.ts";
+import { collect } from "../src/protocol-collect.ts";
 import { servingAgent } from "../src/serving-layer.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
 
@@ -63,7 +64,16 @@ let held = gate();
 let effects = 0;
 let open: { harness: Harness } | undefined;
 
-async function start(capacity?: number) {
+/** A property of `target` read through a proxy: its methods keep `target` as `this` (private fields need it). */
+const bound = (target: object, key: string | symbol): unknown => {
+  const value = Reflect.get(target, key);
+  return typeof value === "function" ? value.bind(target) : value;
+};
+
+/** What a test changes in the port's surroundings: the storage the port reads, the harness it drives. */
+type Wrap = { storage?: (storage: Storage) => Storage; harness?: (harness: Harness) => Harness };
+
+async function start(capacity?: number, wrap: Wrap = {}) {
   const faux = fauxProvider();
   faux.setResponses(Array.from({ length: 2000 }, () => answer));
   const models = createModels();
@@ -101,8 +111,8 @@ async function start(capacity?: number) {
   open = { harness };
   return servingAgent(
     await piDurablePort({
-      harness,
-      storage,
+      harness: wrap.harness?.(harness) ?? harness,
+      storage: wrap.storage?.(storage) ?? storage,
       context,
       model: { provider: model.provider, modelId: model.id },
       models: async () => [{ spec: `${model.provider}/${model.id}`, thinkingLevels: [] }],
@@ -167,5 +177,96 @@ describe("pi-durable port", () => {
     const entries = followed.flatMap((e) => (e.type === "entry" ? [e.entry] : []));
     expect(entries.map((e) => e.kind)).toEqual(["user_message", "assistant_message"]);
     expect(lastEntryId).toBe(entries.at(-1)?.id);
+  });
+
+  it("a failure following a message's work is logged and made good from the log", { timeout: 30_000 }, async () => {
+    file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
+    let failing = true;
+    const agent = await start(undefined, {
+      storage: (storage) =>
+        new Proxy(storage, {
+          get: (target, key) =>
+            key === "submission"
+              ? async (...args: Parameters<Storage["submission"]>) => {
+                  const record = await target.submission(...args);
+                  if (record?.status === "unanswered" && failing) {
+                    failing = false;
+                    throw new Error("disk unavailable");
+                  }
+                  return record;
+                }
+              : bound(target, key),
+        }),
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // `fail` ends unanswered: the read that would write where its work ended fails, and the port makes it good.
+      const events = [];
+      for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "fail" } })) events.push(event);
+      expect(events.at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "failed" } } });
+      expect(events.some((e) => e.type === "serving_error")).toBe(false);
+      expect(failing).toBe(false);
+      expect(error.mock.calls.flat().join(" ")).toContain("disk unavailable");
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("a message whose work stopped is taken until where that work ended is written, then done", {
+    timeout: 30_000,
+  }, async () => {
+    file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
+    let release!: () => void;
+    const written = new Promise<void>((resolve) => (release = resolve));
+    let held = false;
+    // The port's read of a run's unanswered inputs, the one before it writes where their work ended, waits.
+    const agent = await start(undefined, {
+      storage: (storage) =>
+        new Proxy(storage, {
+          get: (target, key) =>
+            key === "submission"
+              ? async (...args: Parameters<Storage["submission"]>) => {
+                  const record = await target.submission(...args);
+                  if (record?.status === "unanswered" && !held) {
+                    held = true;
+                    await written;
+                  }
+                  return record;
+                }
+              : bound(target, key),
+        }),
+    });
+    const session = agent.sessions.get("s");
+    const stream = collect(agent.invoke({ sessionId: "s", prompt: { text: "fail" } }));
+    const messageId = await vi.waitFor(async () => {
+      const page = await session.read();
+      const failed = page.ok ? page.entries.find((e) => e.kind === "assistant_message") : undefined;
+      if (!failed) throw new Error("not failed yet");
+      return (page.ok ? page.entries[0]?.data : {}) as { messageId: string };
+      // pi-durable retries a model error with backoff before it gives up.
+    }, 20_000);
+    expect(await session.messages.get({ messageId: messageId.messageId })).toMatchObject({ status: "taken" });
+    release();
+    await expect(stream).rejects.toThrow("boom");
+    const done = await session.messages.get({ messageId: messageId.messageId });
+    const page = await session.read();
+    expect(done).toMatchObject({ status: "done", lastEntryId: page.ok ? page.entries.at(-1)?.id : "" });
+  });
+
+  it("concurrent creates of one session id make one session; the rest are conflicts", async () => {
+    file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
+    const agent = await start();
+    const results = await Promise.all([1, 2, 3].map(() => agent.sessions.create({ sessionId: "s" })));
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok).map((r) => (r.ok ? "" : r.error.code))).toEqual(["conflict", "conflict"]);
+    const [created, invoked] = await Promise.all([
+      agent.sessions.create({ sessionId: "t" }),
+      collect(agent.invoke({ sessionId: "t", prompt: { text: "hi" } })),
+    ]);
+    expect(created.ok || created.error.code === "conflict").toBe(true);
+    expect(invoked.text).toBe("answer: hi");
+    expect(await agent.sessions.get("t").messages.get({ messageId: invoked.messageId })).toMatchObject({
+      status: "done",
+    });
   });
 });

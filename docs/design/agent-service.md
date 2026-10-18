@@ -1057,11 +1057,13 @@ and the error names the cause; nothing it declares is dropped silently.
 
 As built (`harnesses/pi-durable/port.ts`, passing the SPEC's suite on SQLite storage):
 
-- **Every served conversation is followed, listened to or not.** The port writes a run's end the moment it observes it
-  (`watchEvents`), from the newest entry of that same commit, so `lastEntryId` is exact; that write is also what
-  places the inputs pi-durable leaves waiting. It cannot wait for a caller, since none may be reading. So a process
-  holds one event stream per conversation it serves, for its life; a process that stopped between the run's end and
-  that write has it written when the port opens, from the conversation's tail.
+- **A conversation is followed from its first use, listened to or not.** The port writes a run's end the moment it
+  observes it (`watchEvents`), from the newest entry of that same commit, so `lastEntryId` is exact; that write is also
+  what places the inputs pi-durable leaves waiting. It cannot wait for a caller, since none may be reading. Until it is
+  written, the message reads `taken`, on every plane. The stream's listener only queues each batch; the work runs on
+  the conversation's own queue, and a job that fails is logged and made good by a resync from the log (a
+  `serving_error` only when that fails too). When the port opens, it follows the conversations with work in flight or
+  an end a previous process did not write, and writes those from the conversation's tail.
 - **Kept beside pi-durable's records, in its own store:** which conversation a session id names, its name and times
   (`fastagent.sessions`), and why a message was canceled (`fastagent.stops`), which pi-durable records only as
   `aborted`.
