@@ -13,10 +13,10 @@ of "fastagent". Which pi class serves it is a separate question, and it is settl
 
 The protocol says so already. [SPEC](../SPEC.md) §8, under *Portable conformance (optional)*:
 
-> **Process affinity only while a run is active.** A session's calls MUST NOT need to reach one process while the
-> session is idle: its state is reconstructible from external storage. While a run is active or queued, they MAY need
-> to reach the process running it; portable deployment therefore needs a session router in front that sends a
-> session's calls to that process.
+> **Process affinity only while a session works.** A session's calls MUST NOT need to reach one process while the
+> session is idle: its state is reconstructible from external storage. While a message is taken or queued, they MAY
+> need to reach the process working on it; portable deployment therefore needs a session router in front that sends
+> a session's calls to that process.
 
 A resident Agent is permitted, the cost is named, and the level is optional. FastAgent's own agent meets it:
 `test/protocol-conformance.ts` asks every subject to `restart`, a second process over the same storage, and reads
@@ -74,8 +74,8 @@ keeps.
 
 ## 5. What each level owes
 
-**`per-run` owes MUST 8**: an idle session's state reconstructible from the store, process affinity only while a run
-is active or queued. Nothing more — in particular, "the directory is the agent, LIVE" is a fastagent product property,
+**`per-run` owes MUST 8**: an idle session's state reconstructible from the store, process affinity only while a
+message is taken or queued. Nothing more — in particular, "the directory is the agent, LIVE" is a fastagent product property,
 not part of this level. Sharing a `ResourceLoader` across runs is what makes the per-run cost ~0.6 ms, and it caches
 the definition; the binding pays a reload (~5.5 ms) on the run after an edit and nothing on the rest,
 by asking the loader what it is serving rather than trusting a copy of what it last wrote.
