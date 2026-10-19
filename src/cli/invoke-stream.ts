@@ -8,8 +8,6 @@ function failure(outcome: Outcome): string | undefined {
       return undefined;
     case "failed":
       return `${outcome.error.code}: ${outcome.error.message}${outcome.error.retryable ? " (retryable)" : ""}`;
-    case "canceled":
-      return `canceled (${outcome.by})`;
     default:
       return outcome.status;
   }

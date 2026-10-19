@@ -17,7 +17,6 @@ const preview = (v: Json): string => oneLine(typeof v === "string" ? v : JSON.st
 
 function describe(outcome: Outcome): string {
   if (outcome.status === "failed") return `failed: ${outcome.error.code}: ${outcome.error.message}`;
-  if (outcome.status === "canceled") return `canceled (${outcome.by})`;
   return outcome.status;
 }
 

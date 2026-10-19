@@ -37,9 +37,9 @@ type InvokeEvent =
 ```
 
 The stream ends with the message's `done`, whose `outcome` says how it ended and whose `answer` is the reply.
-`sessionId` is an opaque string you choose; reuse it to continue a conversation. A message for a session that is
-working queues behind the work in progress. Stopping reading detaches; the work goes on, and
-`agent.sessions.get(id).abort()` stops it.
+`sessionId` is an opaque string you choose; reuse it to continue a conversation. A message for a busy session queues
+behind the ones before it. Stopping reading detaches; the agent goes on, and `agent.sessions.get(id).abort()` stops
+it.
 
 ## 1. Get the agent (pick by what you have)
 
@@ -182,8 +182,8 @@ serveNode((await createAgentService("./my-agent")).handler, { port: 8787 });
 ```
 
 Backpressure and a body cap are native to the web-stream primitives. A client disconnect detaches from the message,
-whose work goes on; `POST /sessions/{s}/abort` or `/messages/{m}/cancel` stops it. A second message for a working
-session queues behind the work in progress, as `whenBusy` says.
+which the agent goes on answering; `POST /sessions/{s}/abort` or `/messages/{m}/cancel` stops it. A second message
+for a busy session queues behind it, as `whenBusy` says.
 
 ## 3. Tier 1 vs Tier 2
 

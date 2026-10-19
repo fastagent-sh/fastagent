@@ -307,7 +307,7 @@ it("turnEnd: a refusal or the turn's own done ends the turn, and says how", () =
   expect(turnEnd(ev.failed("boom", { retryable: true }), run)).toEqual({
     failure: { details: "boom", retryable: true, code: "model_error" },
   });
-  expect(turnEnd(ev.ended({ status: "canceled", by: "abort" }), run)).toMatchObject({
+  expect(turnEnd(ev.ended({ status: "canceled" }), run)).toMatchObject({
     failure: { retryable: false, code: "canceled" },
   });
   expect(turnEnd(ev.ended({ status: "interrupted" }), run)).toMatchObject({

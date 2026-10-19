@@ -793,7 +793,7 @@ const page = await s1.read({ limit: 50 });
 if (page.ok) console.log(page.state.status, page.entries.length, page.prev);
 
 // Follow: the entries after a cursor, then live events. A reconnect passes the last entry id it saw.
-for await (const event of s1.follow({ after: lastEntryId })) {
+for await (const event of s1.follow({ after: lastSeenEntryId })) {
   if (event.type === "rejected") break; // an unknown session or cursor
   console.log(event.type);
 }

@@ -1,6 +1,6 @@
 /**
- * The harness port: what the serving layer calls to run a session's work (docs/design/agent-service.md §9.1). It is
- * the protocol's semantics without the protocol's surface: no id minting, no request validation, no streams. A
+ * The harness port: what the serving layer calls to answer a session's messages (docs/design/agent-service.md §9.1).
+ * It is the protocol's semantics without the protocol's surface: no id minting, no request validation, no streams. A
  * durable harness implements it directly; a harness that is only a loop gets it from `loopPort`.
  */
 import type {
@@ -52,7 +52,8 @@ export interface HarnessPort {
   getMessage(sessionId: string, key: MessageKey): Promise<MessageStatus | undefined>;
   /**
    * A message's part of the history after `after` (any entry of the session), or from its own entry: through its
-   * `lastEntryId` once it is done, through the newest entry while it is taken, nothing while it is queued. `message`
+   * answer once it is done, or its own entry alone when it has none; through the newest entry while it is taken;
+   * nothing while it is queued. `message`
    * is its status as of the same read, so the two agree; `ended` says its end is recorded: a message the storage
    * refused to end reads as done without being so. An unknown message is `not_found`.
    */

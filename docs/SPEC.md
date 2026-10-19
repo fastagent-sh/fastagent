@@ -10,9 +10,6 @@ updated: 2026-10-17
 # Agent Handler — Protocol Specification v1
 
 > **Status: locked.** This is the protocol the package implements. Changing its semantics needs an explicit decision.
-> Until step 4's next change lands ([#788](https://github.com/fastagent-sh/fastagent/issues/788)), the reference
-> implementation still groups messages as this text no longer does: `lastEntryId`, `usage` on a message rather than
-> on `assistant_message` and `compaction` entries, `canceled.by`, `durableWork`, and an `answer` on any outcome.
 > The design, with its rationale, is [agent-service.md](design/agent-service.md) §7 and §9.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119. This specification is

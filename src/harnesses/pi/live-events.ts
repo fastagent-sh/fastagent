@@ -1,5 +1,5 @@
 /**
- * pi's session events as a piece of work's live events (SPEC v1 §6): its text and thinking as they are written, the tool calls
+ * pi's session events as a run's live events (SPEC v1 §6): its text and thinking as they are written, the tool calls
  * it starts, a running call's status line, and retries.
  *
  * Stateful only for `tool_progress`, the one event that is a status rather than a fact: an outer call's status line is
@@ -12,9 +12,9 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Json, LiveEvent } from "../../protocol.ts";
 import { streamsThinkingDelta } from "./messages.ts";
 
-/** One piece of work's projection: feed it every event pi emits, in order. */
+/** One run's projection: feed it every event pi emits, in order. */
 export function liveEvents(): (event: AgentSessionEvent) => LiveEvent | undefined {
-  /** Each nested call's outer call: the one the work announced with `tool_started`. */
+  /** Each nested call's outer call: the one the run announced with `tool_started`. */
   const outerOf = new Map<string, string>();
   /** The status line each outer call last reported. */
   const shown = new Map<string, string>();

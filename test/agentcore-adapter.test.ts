@@ -390,7 +390,7 @@ describe("agentcore adapter: api envelope", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
     const body = await res.text();
-    expect(body).toContain('"kind":"assistant_message","data":{"text":"answer: hello"}');
+    expect(body).toContain('"kind":"assistant_message","data":{"text":"answer: hello"');
     expect(body).toContain('"status":"completed"');
   });
 

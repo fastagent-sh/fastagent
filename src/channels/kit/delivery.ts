@@ -16,7 +16,7 @@ export type TurnEnd = { answered: true } | { failure: ChannelFailure };
 
 /**
  * Whether this event ends the turn, and how: the invoke refused (nothing ran), or the turn's message ended. A message
- * whose work stopped at its output limit, or that a command took, still answers with what was written.
+ * the agent stopped answering at its output limit, or that a command took, still answers with what was written.
  */
 export function turnEnd(event: InvokeEvent, messageId: string | undefined): TurnEnd | undefined {
   if (event.type === "rejected") {
@@ -35,9 +35,9 @@ export function turnEnd(event: InvokeEvent, messageId: string | undefined): Turn
         failure: { details: outcome.error.message, retryable: outcome.error.retryable, code: outcome.error.code },
       };
     case "canceled":
-      return { failure: { details: `the work was canceled (${outcome.by})`, retryable: false, code: "canceled" } };
+      return { failure: { details: "the message was canceled", retryable: false, code: "canceled" } };
     case "interrupted":
-      return { failure: { details: "the work was interrupted", retryable: true, code: "interrupted" } };
+      return { failure: { details: "the message was interrupted", retryable: true, code: "interrupted" } };
   }
 }
 

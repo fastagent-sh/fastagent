@@ -502,6 +502,7 @@ describe("compaction", () => {
     expect(await agent.sessions.get("sCompact").compact()).toEqual({ ok: true });
     expect((await entries(agent, "sCompact")).find((e) => e.kind === "compaction")?.data).toMatchObject({
       summary: expect.any(String),
+      usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number) }, // the summarizing calls' cost
     });
     expect(await stateOf(agent, "sCompact")).toMatchObject({ status: "idle", thinkingLevel: "high" });
   });

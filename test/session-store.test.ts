@@ -19,7 +19,7 @@ import {
   piSessionRecordStore,
 } from "../src/harnesses/pi/session-store.ts";
 import { log } from "../src/log.ts";
-import { publishedLeaf } from "../src/harnesses/pi/session-markers.ts";
+import { inheritedEntries, publishedLeaf } from "../src/harnesses/pi/session-markers.ts";
 
 /** Write properties on a fresh handle of `sessionId`'s record, as each served write opens one. */
 async function apply(store: PiSessionRecordStore, sessionId: string, writes: PropertyWrites) {
@@ -250,11 +250,10 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     }
   });
 
-  it("a fork's leaf is the exchange it was taken at, not a metadata record", async () => {
-    // pi has ONE leaf pointer and every append advances it, so whatever a fork writes LAST is what a
-    // client opening it finds its head on. Written after the history, the provenance stamp made that
-    // an empty `custom` entry — published by entries() like any position, and the next turn would
-    // hang off it.
+  it("a fork's head is the exchange it was taken at; the stamp after it marks the copy and is never the head", async () => {
+    // pi has ONE leaf pointer and every append advances it, so a published entry written last would be
+    // the head a client finds. The stamp is written last on purpose (it says where the copy ends), and
+    // it is a plane marker, so the head a client sees is the copied exchange.
     const dir = await mkdtemp(join(tmpdir(), "fa-store-forkleaf-"));
     for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {
       const parent = await store.openOrCreate("src");
@@ -264,8 +263,16 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
 
       await store.fork("src", at, "branch", `src@${at}`);
       const branch = await store.openIfExists("branch");
-      const leaf = branch?.getEntries().find((e) => e.id === branch.getLeafId()) as { type?: string } | undefined;
-      expect(leaf?.type).toBe("message"); // the forked exchange, not session_info or the stamp
+      if (!branch) throw new Error("no fork");
+      const head = branch.getEntries().find((e) => e.id === publishedLeaf(branch)) as { type?: string } | undefined;
+      expect(head?.type).toBe("message"); // the forked exchange, not session_info or the stamp
+      const inherited = inheritedEntries(branch.getEntries());
+      expect(
+        branch
+          .getEntries()
+          .filter((e) => !inherited.has(e.id))
+          .map((e) => e.type),
+      ).toEqual(["custom"]);
     }
   });
 
