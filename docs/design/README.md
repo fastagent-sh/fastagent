@@ -1,6 +1,6 @@
 ---
 title: Design notes
-description: "What belongs in FastAgent's public design notes, and what is normative: the Agent Handler SPEC, the code, and the user docs."
+description: "What belongs in FastAgent's public design notes, and what is normative: the Agent API SPEC, the code, and the user docs."
 status: current
 ---
 
@@ -12,7 +12,7 @@ This directory contains maintainer-facing design material. It is intentionally k
 
 | Source | Status |
 |---|---|
-| [Agent Handler SPEC](../SPEC.md) | Normative protocol contract, v1. Changes require explicit review. |
+| [Agent API SPEC](../SPEC.md) | The consumer API, v1: normative. Changes require explicit review. |
 | Code in `src/` | Implementation source of truth. |
 | User docs in `docs/` | Product behavior and supported usage. |
 | Documents in `docs/design/` | Explanatory architecture notes. They clarify why the code is shaped the way it is, but they are not a public compatibility promise. |
@@ -31,13 +31,14 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 
 | Document | Purpose |
 |---|---|
+| [architecture.md](architecture.md) | **Decided, not implemented.** What FastAgent is for, and the shape that follows: pi-durable as the only harness, the consumer API of SPEC v1 as the one API of our own, the definition and its assembly, an npm package as the artifact, context packages, and hosts that keep state off the box. Replaces agent-service.md §7 to §9 and conformance-levels.md. |
 | [agent-model.md](agent-model.md) | **Implemented.** What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, the content it works on and knows, its types, and the vocabulary later designs build on. |
-| [agent-service.md](agent-service.md) | **Proposed, partly implemented.** Agents a team builds, runs and uses together as cloud services: the product loop, what an agent works with (content, connectors and environment, with sharing them as contexts deferred; the environment under `environment` in `context.json`, installed by mise), state, credentials, the serving protocol that is now the Agent Handler SPEC v1 (sessions, messages, entries; a user plane and a control plane) and its harness port, disposable boxes, the interfaces, the architecture and deployment. Answers #688. |
+| [agent-service.md](agent-service.md) | **Proposed, partly implemented; §7 to §9 superseded by architecture.md.** Agents a team builds, runs and uses together as cloud services: the product loop, what an agent works with (content, connectors and environment, with sharing them as contexts deferred; the environment under `environment` in `context.json`, installed by mise), state, credentials, the serving protocol that is now the Agent Handler SPEC v1 (sessions, messages, entries; a user plane and a control plane) and its harness port, disposable boxes, the interfaces, the architecture and deployment. Answers #688. |
 | [agent-cli.md](agent-cli.md) | **Implemented.** The command-line side of the agent model: addressing an Agent, the local instance, what `init` declares, editing content, and what each command shows. |
 | [core.md](core.md) | Current architecture of the pi reference implementation. |
 | [configuration.md](configuration.md) | **Partially implemented** (day one landed; the env dimension is not scheduled). Where each configuration fact lives: the convention boundary, deployment environments, and credential ownership. |
 | [distribution.md](distribution.md) | Why an agent directory has no manifest: what is derivable from the filesystem, what must be recorded, and where that record lives. |
-| [conformance-levels.md](conformance-levels.md) | Where a session's state lives: the deployment axis, the postures that pin it, and what each owes. |
+| [conformance-levels.md](conformance-levels.md) | **Superseded by architecture.md.** Where a session's state lives: the deployment axis, the postures that pin it, and what each owes. |
 | [participant-model.md](participant-model.md) | How a chat bot behaves in a collaboration tool: the participant axiom and the summon/placement/memory rules derived from it. |
 | [place-history.md](place-history.md) | Proposed: a chat place's history read from the platform when a turn needs it, replacing the context buffer (#633, #374). |
 | [security-boundary.md](security-boundary.md) | Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, the JSON body gate and CORS, and a multi-tenant facade in front of one deployment. |

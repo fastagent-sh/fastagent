@@ -99,6 +99,10 @@ something that authenticates.
 
 ## 4. A multi-tenant facade
 
+> **Superseded** by [SPEC v1](../SPEC.md) §8: the agent is a public bot, a session id is the session's unguessable key,
+> and no route lists sessions, so a facade needs no per-user mapping to keep users apart. This section describes the
+> previous API, which the code serves until the move lands.
+
 N users behind one deployment, each reaching only their own sessions: the facade authenticates its user, reads the
 session id from the request, checks it against its own user-to-session mapping, and forwards. It never parses an
 operation's meaning, and gains no new capability when the protocol does. What makes the pass-through safe:

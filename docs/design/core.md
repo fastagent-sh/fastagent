@@ -8,8 +8,9 @@ updated: 2026-07-19
 
 # Core design
 
-Architecture of FastAgent's pi reference implementation. The normative protocol is
-[Agent Handler SPEC v1](../SPEC.md); code in `src/` is the implementation source of truth. User
+Architecture of FastAgent's pi reference implementation, as the code is now. [architecture.md](architecture.md)
+decides what replaces it (pi-durable as the only harness, behind the consumer API of [SPEC v1](../SPEC.md)); until
+that lands, the code serves the previous SPEC v1 draft. Code in `src/` is the implementation source of truth. User
 behavior belongs in the other `docs/` guides.
 
 ## 1. Product boundary
