@@ -205,13 +205,18 @@ without locks only in exclusive locking mode, which pi-durable's opener gives no
 then an upstream option or an adapter of our own over its `SqliteStorage`. This is a choice of storage, not a fix of
 pi-durable's, and its alternatives are a mounted EFS (POSIX locks, survives deploys, shared across sessions; needs a
 VPC and so a standing NAT for the model's traffic) or a pi-durable storage backend of our own on a database service.
-Session storage is kept for now because a deploy already resets an AgentCore agent's state today.
+Both exist to keep conversations across deploys, which an AgentCore agent does not: a deploy resets its state, as it
+does today, and that is decided, so session storage stays.
 
 Nothing continues a run cut off on AgentCore by itself: a stopped session stays stopped until it is invoked again,
-and the next invocation's process opens the storage and pi-durable carries on (§6.1). So a run cut off with no message
-following it waits for an external trigger; the one-shot wake alarm the wake-ups already use is the candidate, and
-which runs need it is settled when it is implemented. A session whose `/ping` answers `HealthyBusy` is not reclaimed
-for being idle.
+and the next invocation's process opens the storage and pi-durable carries on (§6.1). A run is cut off when the
+microVM reaches its maximum lifetime (eight hours as deployed), when its host fails, or when FastAgent stops the
+session; a deploy is not one, since it resets the storage. **No alarm is set to continue it.** Every conversation of an
+agent shares one runtime session and one storage, so any invocation wakes them all: a message in any chat, a
+platform's webhook, a schedule's own trigger. Only an agent that receives nothing after the cut leaves its cut-off
+message unanswered until something arrives; a one-shot wake alarm per run (the wake-ups' own mechanism) would close
+that, at a few scheduler calls per run, and is added if that case is seen. A session whose `/ping` answers
+`HealthyBusy` is not reclaimed for being idle.
 
 ### 4.4 Later: shared contexts and agents working together
 
@@ -309,6 +314,5 @@ those protocols are outside the product's goals.
 Settled when they are implemented:
 
 - Hot reload in `dev`: the definition is read on every invoke today; pi-durable installs extensions in a registry.
-- Which runs cut off on AgentCore get a wake alarm to continue them (§4.3).
 - Whether pi-ai's `models.json` stays a file or joins `defineAgent`.
 - Bun: pi-durable's portable SQLite core runs there given an adapter over `bun:sqlite`, which does not exist yet.
