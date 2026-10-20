@@ -86,6 +86,7 @@ SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照�
 **回答中途接上也能看到已经写出的部分。** `assistant_message` 写完才有 id。写的过程中，快照里的 `state.reply` 是目前已写出的文字，
 `message_delta` 在它后面追加。一个会话同一时间只写一条 agent 消息，所以 delta 不需要带 id：客户端先显示 `reply`，再接上后面的
 delta；收到 `retry_scheduled` 就丢掉已显示的部分（下一次尝试从头写）；`assistant_message` entry 到达后用它替换。
+delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
 
 典型用法：客户端回到一个之前显示过的会话，就从它手里最后一条 entry 之后 `resume`；打开一个很长、从没显示过的会话，就先 `read`
 最新一页，再从这页最后一条之后 `resume`。
@@ -116,7 +117,9 @@ delta；收到 `retry_scheduled` 就丢掉已显示的部分（下一次尝试�
   维护映射。
 - **消息状态只保留消费者需要的字段：** 没有 `takenAt`、`endedAt`，时间只在 entry 的 `timestamp` 上。
 - **`abort` 不等工具退出。** 停止一被记录就返回，并报告停下了哪些消息；不理会停止信号的工具不会让它挂住。被停下的消息在 agent
-  放手之后以 `canceled` 结束，并发出 `done`。之后发来的消息，等被停下的消息都结束后照常处理。
+  放手之后以 `canceled` 结束，并发出 `done`，在那之前仍是 `taken`。之后发来的消息，等被停下的消息都结束后照常处理。`abort` 是幂等的：
+  它报告所有还没结束的消息，包括之前一次 `abort` 已经停下的，所以工具不理会停止信号时连发两次 `/stop`，第二次仍会说明正在停止哪些
+  消息。如果 `abort` 已经返回、被停的消息还没结束时进程重启，这条消息在重启后以 `canceled` 结束，不会被接着回答。
 - **消息的结局只有四种：** `completed`、`max_tokens`、`canceled`、`failed`。没有 `interrupted`：进程重启后 pi-durable 会接着
   回答已取走的消息，排队的消息也还在。`answer` 只在 `completed` 和 `max_tokens` 时出现，执行过工具调用的中间回复不算回答。
 - **fork 共享源会话的 entry：** fork 的历史开头就是源会话的那些 entry 本身，id 和内容都相同，之后写的才是 fork 自己的。每条 entry

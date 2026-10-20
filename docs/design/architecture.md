@@ -214,7 +214,8 @@ for the steps above.
 ## 6. Order
 
 1. **A spike on pi-durable**, run locally on 1.3.0 (§6.1). Still open: SQLite on AgentCore's session storage, and what
-   restarts a run cut off there (§4.3), which needs a deployment.
+   restarts a run cut off there (§4.3), which need a deployment; and the coding tools' `read` reading a skill's
+   `SKILL.md` through an execution environment, which §3's skills depend on.
 2. The Agent on pi-durable, with the conformance suite in process and over HTTP; channels, schedules, wake-ups, the CLI
    and AgentCore moved onto it; the previous protocol, `LoopPort` and the pi-coding-agent harness deleted.
 3. The artifact: `fastagent build`, and `deploy` from it.
@@ -232,8 +233,8 @@ On pi-durable 1.3.0 with pi-ai's faux model, in process, against memory and SQLi
 | Images | Stored inline, as base64, in the entry's model message; there is no separate blob store | `attachment(ref)` reads from the entry: a ref names the entry and the part. Images grow the storage |
 | An answer being written | Its text so far is in `pi.live.generation.message`, and in a new `watchEvents` stream's snapshot, with its attempt number; its entry gets an id only when the answer is complete | `state.reply` is that text and `message_delta` carries no entry id ([Agent API](agent-api.md) §6) |
 | A fork's history | Shares the source's entries: the same ids, with the source's `conversationId` | Publishes `Entry.sessionId` from it |
-| The queue after a run that did not answer | Waits, after a model failure and across a restart (the inbox persists with no run live); a write of the port's own kind with `edits: []` places it, and lands as an entry | Submits that write after each run that did not answer and at the first open of a conversation whose inbox waits with no run live, and never publishes the entry |
-| Abort | `conversation.abort()` ends the running message and withdraws the queued ones, and a message sent after it settles is taken; but one sent while the aborted run is still settling waits in the inbox, and `abort()` itself waits for a running tool that ignores its signal | Answers `abort` once the stop is recorded (Agent API §5), and submits the placing write once the stopped messages have ended |
+| The queue after a run that did not answer | Waits, after a model failure and across a restart (the inbox persists with no run live); a write submission of FastAgent's kind `fastagent.release` with `edits: []` places it (the conversation takes the inputs waiting in its inbox), and lands as an entry | Submits that write after each run that did not answer and at the first open of a conversation whose inbox waits with no run live, and never publishes the entry |
+| Abort | `conversation.abort()` ends the running message and withdraws the queued ones, and a message sent after it settles is taken; but one sent while the aborted run is still settling waits in the inbox, and `abort()` itself waits for a running tool that ignores its signal | Answers `abort` once the stop is recorded (Agent API §5), and submits the `fastagent.release` write once the stopped messages have ended |
 | Ids | Entries, submissions and conversations share one counter per storage, which a new storage starts again (conversation 8 in both); a session-scoped document keeps a random incarnation across reopens and gets a new one in a new storage | Encodes every id as incarnation plus pi-durable's id (§2) |
 
 Not run: the coding tools' `read` reading a skill's `SKILL.md` through an execution environment.
