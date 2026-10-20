@@ -35,7 +35,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 |---|---|---|
 | `info` | `GET /agent` | bot 的名字、简介，以及消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`） |
 | `invoke` | `POST /invoke` | 发一条消息：不带 `sessionId` 就新建会话。默认返回 SSE 流；`Accept: application/json` 时一接受就返回 `202` 和回执，之后用 `getMessage` 查或 `resume` 接上 |
-| `getMessage` | `GET /sessions/{s}/messages/{m}` | 按 id 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
+| `getMessage` | `GET /sessions/{s}/messages/{m}`，或 `?idempotencyKey=` 按 key 查 | 按 id 或发送时的 key 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
 | `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”） |
 | `read` | `GET /sessions/{s}` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
 | `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
@@ -55,13 +55,20 @@ entry 也是同样的结构。内容类型是开放的取值（§6.1），以后
 
 ## 3. 接上一个会话：重放、快照、实时
 
-这部分参照了 ACP v2 的 `session/resume`。`resume` 和 invoke 的流用同一套三段式：
+这部分参照了 ACP v2 的 `session/resume`。`resume` 接上的是整个会话，invoke 的流接上的是它自己那条消息，两者都分三步：
 
 1. **重放**：`resume` 按 `replayFrom` 决定：不带就不重放；`{ type: "start" }` 重放全部 entry；`{ type: "after", entryId }`
-   重放这条之后的。invoke 的流重放这条消息自己从 `user_message` 开始的 entry。重放里只有 entry，没有过去的实时事件和状态。
+   重放这条之后的。invoke 的流在消息被取走后，重放这条消息自己从 `user_message` 开始的 entry。重放里只有 entry，没有过去的
+   实时事件和状态。
 2. **快照**：然后**必须**发一个 `state`，即使什么都没重放。它是“过去”和“现在”的分界线：客户端以它为准判断 bot 是不是还在回答，
    不要从重放内容去推断。
-3. **实时**：之后是实时事件和新的 entry，和快照之间不漏不重；每条消息结束时发它的 `done`。
+3. **实时**：之后是实时事件和新的 entry，和快照之间不漏不重。`resume` 收到整个会话的，每条消息结束时发它的 `done`；invoke 的流
+   只在它的消息被处理期间收到，以它自己的 `done` 结束。
+
+invoke 的流在消息排队期间只收到 `state`，不带 `reply`：排在别的消息后面时，收不到那条消息的 entry、实时事件和 `done`。
+
+SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照时最新的 entry id（会话还没有 entry 时是 `start`）。所以不带游标打开的
+流，即使在第一条 entry 到达之前断线，重连时浏览器带上的 `Last-Event-ID` 也能从快照处接上，不会漏掉断线期间写下的 entry。
 
 **回答中途接上也能看到已经写出的部分。** 正在写的 `assistant_message` 在写完前就有 id：`message_delta` 带上这个 `entryId`，
 快照里的 `state.reply` 是目前已写出的文字。客户端先显示 `reply`，再把后续的 delta 接在后面。pi-durable 每 100 毫秒就把部分回答
@@ -72,8 +79,14 @@ entry 也是同样的结构。内容类型是开放的取值（§6.1），以后
 
 ## 4. 几个关键决定
 
-- **会话 id 由服务端生成，调用方自己记住。** 会话 id 就是 pi-durable 的 conversation id，它由 pi-durable 生成、不接受调用方
-  指定，所以不需要任何映射。channel 和定时任务在自己的状态里记“哪个聊天对应哪个会话”。服务端不提供会话列表，也不提供删除。
+- **会话 id 由服务端生成，调用方自己记住。** pi-durable 生成 conversation id，不接受调用方指定。channel 和定时任务在自己的
+  状态里记“哪个聊天对应哪个会话”。服务端不提供会话列表，也不提供删除。
+- **id 是不透明的，永不复用。** pi-durable 的 id 在每个存储里是一个从 2 开始的计数器，而部署可能换掉存储（AgentCore 每次 deploy
+  会清空 session storage，卷也可能重建）。所以对外的 id 是“存储的 incarnation（创建存储时生成的随机 id）+ pi-durable 的 id”，
+  会话、消息、entry 都这样。存储换掉后，旧 id 得到 `not_found`，而不是别人的新会话；id 本身也说明了它属于哪个存储，多个存储时
+  可以据此路由。这是编码，不是查表，不需要存任何映射。
+- **开 thread**：分叉点仍然按 key 找（`getMessage` 带平台消息 id）；thread 对应的会话 id 在 `createSession` 分叉之后记进 channel
+  的状态。如果分叉之后、记录之前进程崩溃，会留下一个没人引用的 fork，重试不会复用它，也没有东西删除它。
 - **会话 id 只是名字，不是凭证。** 它可能是顺序编号。能访问到 agent 的人就能访问它的每个会话：读、接上、发消息、停止、从它分叉。
   多个用户共用一个部署时，用户之间的隔离由前面的一层负责：一个记录“用户 → 会话”映射、只放行自己会话的 facade，包括 fork 的
   源会话和不带 `sessionId` 的 invoke 新建的会话（见 [security-boundary.md](../design/security-boundary.md) §4）。认证、限流也由
@@ -81,7 +94,8 @@ entry 也是同样的结构。内容类型是开放的取值（§6.1），以后
 - **幂等 key 必须和 `sessionId` 一起用。** pi-durable 的 key 只在单个会话内有效；不带会话的 invoke 如果重试，会建出两个会话。
   想安全重试第一条消息，就先 `createSession` 拿到 id，再带 key 发。
 - **查一条消息：`getMessage`。** 参照 A2A 的 `GetTask` 和 OpenAI 的 `GET /responses/{id}`。调用方丢了流之后，用它查消息状态，
-  再用 `resume` 接上会话看 agent 写了什么。
+  再用 `resume` 接上会话看 agent 写了什么。用自己的东西（比如聊天平台的消息 id）作 key 的调用方，可以直接按 key 查，不用自己
+  维护映射。
 - **消息状态只保留消费者需要的字段：** 没有 `takenAt`、`endedAt`，时间只在 entry 的 `timestamp` 上。
 - **消息的结局只有四种：** `completed`、`max_tokens`、`canceled`、`failed`。没有 `interrupted`：进程重启后 pi-durable 会接着
   回答已取走的消息，排队的消息也还在。`answer` 只在 `completed` 和 `max_tokens` 时出现，执行过工具调用的中间回复不算回答。
@@ -90,8 +104,9 @@ entry 也是同样的结构。内容类型是开放的取值（§6.1），以后
 - **会扩展的取值都是开放的**（§6.1）：事件类型、entry 种类、内容类型、`inputs`、结局、会话状态、错误码。规范定义的名字不含
   `.`；实现方自己加的必须带自己的前缀（例如 `fastagent.plan`）。客户端遇到不认识的事件就忽略，不认识的会话状态当作“忙”，
   不认识的结局当作“结束但没有完成”。
-- **浏览器也只是一个调用方。** HTTP 上带 body 的请求必须是 `content-type: application/json`，否则在读取之前就拒绝：表单或
-  `text/plain` 的跨域 POST 不经过预检，拒绝返回结果也挡不住已经开始的运行。
+- **浏览器也只是一个调用方。** HTTP 上每个 `POST`，不管有没有 body，都必须是 `content-type: application/json`，否则在读取之前
+  就拒绝：表单、`text/plain` 或没有 body 的跨域 POST 不经过预检，拒绝返回结果也挡不住已经做了的事（开始一次运行、中止一个会话、
+  建一个会话）。
 
 ## 5. 和其他接口规范的对照
 
@@ -134,9 +149,9 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | 现在的 SPEC v1（代码实现的） | Agent API |
 |---|---|
 | harness 无关的协议，加 harness 端口和 `LoopPort` | 只有 pi-durable，Agent API 只管消费者接口 |
-| 调用方可以给会话命名 | 服务端生成 id（就是 pi-durable 的 conversation id） |
+| 调用方可以给会话命名 | 服务端生成不透明、永不复用的 id |
 | `sessions.list`、`rewind`、`compact`、`update`、`delete`、`/control` 平面 | 去掉；需要的用 pi-durable 原生 API |
-| `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`；接上会话用 `resume`；停止用 `abort` |
+| `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`（按 id 或 key）；接上会话用 `resume`；停止用 `abort` |
 | `follow` | `resume`：按 `replayFrom` 重放，必发状态快照，回答中途也能接上 |
 | `prompt: { text, images }` | `content` 内容数组 |
 | `sessions.create({ fork })` | `createSession({ from })` |
