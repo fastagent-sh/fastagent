@@ -50,12 +50,12 @@ the same semantics: TypeScript, in process (§2), and HTTP (§10).
 ```ts
 interface Agent {
   info(): AgentInfo;
-  invoke(request: InvokeRequest): Invocation;
+  invoke(request: InvokeRequest): Promise<InvokeResult>;
   getMessage(sessionId: string, key: { messageId: string } | { idempotencyKey: string }): Promise<MessageStatus | undefined>;
   createSession(options?: { from?: ForkSource }): Promise<{ ok: true; sessionId: string } | { ok: false; error: AgentError }>;
   read(sessionId: string, options?: { after?: string; before?: string; limit?: number }): Promise<ReadResult>;
   resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
-  abort(sessionId: string): Promise<AbortResult>;
+  abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
   attachment(sessionId: string, ref: string): Promise<Attachment | undefined>;
 }
 
@@ -69,12 +69,19 @@ interface AgentInfo {
   commands: { name: string; description?: string }[];
 }
 
-/** The events of one message, and the message's end as a value. */
-type Invocation = AsyncIterable<InvokeEvent> & { result: Promise<InvokeResult> };
+/** The receipt of an accepted message, the refusal of one that was not, or neither known (§10). */
 type InvokeResult =
-  | { ok: true; sessionId: string; message: DoneMessage }
+  | ({ ok: true } & Receipt & { wait(options?: { signal?: AbortSignal }): Promise<WaitResult> })
   | { ok: false; error: AgentError }                     // rejected: nothing was recorded
-  | { ok: false; unfinished: { sessionId?: string; messageId?: string; reason: string } };
+  | { ok: false; unknown: { reason: string } };          // whether it was accepted is not known
+
+/** The receipt's data: what `POST /invoke` answers with. */
+interface Receipt { sessionId: string; message: MessageStatus; duplicate: boolean }
+
+/** A message's end, or why it is not known here. */
+type WaitResult =
+  | { ok: true; message: DoneMessage }
+  | { ok: false; unfinished: { reason: string } };
 
 interface ForkSource { sessionId: string; entryId?: string; context?: "full" | "recent" }
 
@@ -86,7 +93,8 @@ type ReadResult =
 
 type AbortResult =
   | { ok: true; stopped: { taken: string[]; queued: string[] } }
-  | { ok: false; error: AgentError };
+  | { ok: false; error: AgentError }
+  | { ok: false; unknown: { reason: string } };           // whether the stop was recorded is not known (§5)
 
 /** A resume that cannot start (an unknown session or cursor) is a single `rejected`. */
 type ResumeEvent = SessionEvent | { type: "rejected"; error: AgentError };
@@ -104,16 +112,20 @@ interface Attachment { mimeType: string; data: string }    // base64
 Every operation that returns a `Promise` resolves, and failures are values, not rejections. The exception is
 `getMessage` and `attachment`, whose answers have no failure branch: they MAY reject with an `AgentError` of code
 `unavailable` when the Agent's storage cannot answer, because `undefined` would be a false answer. Every event, entry
-and result MUST be JSON-serializable.
+and result's data MUST be JSON-serializable: an invoke's is its `Receipt`, the body of `POST /invoke`, and `wait()` is
+a method each binding provides, in process over pi-durable's `Submission.wait()`, and in the HTTP client as §10 says.
 
-`result` resolves with the message's end whether or not the Caller iterates the events, so a Caller that wants only
-the answer awaits it and reads nothing else. The events are produced as they are read: an `Invocation` that is never
-iterated holds nothing but its `result`, and one first iterated later attaches to its message as it is then (§5.1),
-from its receipt, with its entries replayed and the snapshot standing for what was missed live. It resolves `unfinished` when the stream stops before the message's end
-is known, which a `serving_error` event says (§6): the Agent cannot go on with it (its storage failed), or a client of a
-remote Agent lost its connection (§10). `unfinished` names what the receipt said, when
-it arrived; it never says the message was refused, so a Caller asks `getMessage`, or sends again with the same key,
-and does not send again without one.
+`invoke` answers once the message is recorded, with its receipt, and does not wait for it to be answered. It answers
+`unknown` only from a client of a remote Agent whose connection failed before the receipt arrived: the message may or
+may not have been accepted, so the Caller sends it again with its key, which settles it, and without a key does not
+report it refused (§10).
+
+`wait()` resolves once the message has ended, with its `done` (§4), as pi-durable's `Submission.wait()` does, also
+when the message had ended before `wait()` was called. It resolves `unfinished` when the end is not known from where
+it waits: the Agent's storage failed, a client of a remote Agent lost its connection (§10), or its `signal` was
+aborted. Aborting the signal ends that wait and releases what it held, never the message, as cancelling pi-durable's
+wait context does. `unfinished` never says the message was refused: a Caller asks `getMessage` later, and does not
+send again without a key. A receipt whose `wait()` is never called holds nothing.
 
 ## 3. Invoke
 
@@ -127,11 +139,6 @@ interface InvokeRequest {
   /** What the message is when the session is busy with another. Default: "queue". */
   whenBusy?: "queue" | "steer" | "reject";
 }
-
-type InvokeEvent =
-  | { type: "accepted"; sessionId: string; message: MessageStatus; duplicate: boolean }
-  | { type: "rejected"; error: AgentError }
-  | SessionEvent;
 ```
 
 `content` holds at least one part. A part whose `type` is not among `info().inputs` is refused with
@@ -143,17 +150,20 @@ an instruction to use it. The `user_message` entry holds what the Caller sent, s
 the expansion. A `/` followed by a name the Agent does not know is sent to the model as written. A chat client shows
 `commands` as a menu, and a channel can register them as its platform's commands.
 
-### 3.1 The stream
+### 3.1 The receipt, and watching a message
 
-The first event is `accepted` or `rejected`.
-
-- **`rejected`** is the only event of an invoke that was not accepted. Nothing was taken and nothing was recorded, so
-  the same request MAY be sent again.
-- **`accepted`** names the session and the message. What follows is the message's own (§5.1): `state` events while
-  it is queued; once it is taken, its entries from its `user_message`, a `state` snapshot, and live events while it is
-  taken. The stream ends with the message's `done` event. Nothing of another message reaches it: a message queued
-  behind another gets none of that one's entries, live events or `done`.
-- A Caller that stops reading **detaches**: the agent goes on. `abort` stops it (§5).
+- **A rejection** records nothing, so the same request MAY be sent again.
+- **A receipt** names the session and the message, with the message's status as it is now. Sending a message and
+  watching a session are separate: the Caller watches what the agent does by resuming the session (§5.1), and awaits
+  the message's end with `wait()`.
+- **One message's answer** is what follows its `user_message` entry, which names it, in the session's events, up to
+  its `done`; until then the events are another message's. A Caller that wants it as it is written resumes the session
+  before it invokes, which needs the session to exist: a new conversation is created first (`createSession`), and its
+  id kept, before anything is sent into it. A `done`
+  is never replayed (§5.1), so a Caller that resumes only after it invoked reads an end that came before it attached
+  with `getMessage` once the snapshot arrives. The TypeScript client offers this as `stream(agent, request)`, over any
+  `Agent`, in process or remote; it is a Caller of this API and adds nothing to it (§10).
+- A Caller that stops waiting or watching **detaches**: the agent goes on. `abort` stops it (§5).
 
 ### 3.2 A busy session
 
@@ -178,15 +188,14 @@ share an answer, and nothing more is promised about it.
   sent while the session is still unnamed could not find its first message again. A Caller that wants a safe retry of
   its first message creates the session first (`createSession`).
 - An invoke with a key the session has seen returns that key's message, `duplicate: true`, `message` as it is now,
-  and records nothing new. The content is not compared with the first one: the key alone identifies the message. Its
-  stream is the same message's stream (§3.1); a duplicate of a done message replays it and ends with its `done`
-  (§5.1).
+  and records nothing new; its `wait()` resolves with the same end. The content is not compared with the first one:
+  the key alone identifies the message.
 - Looking up the key, recording the message and queueing it are one step per session: concurrent invokes with one key
   produce one message.
 
 ### 3.4 Acceptance is durable
 
-Before `accepted` is sent, the message MUST be recorded durably with its id and key, so that `getMessage` and a
+Before the receipt is answered, the message MUST be recorded durably with its id and key, so that `getMessage` and a
 duplicate find it after any later restart.
 
 ## 4. Messages
@@ -221,8 +230,8 @@ absent on every other outcome. A reply whose tool calls ran is never an answer. 
 the queued messages will be taken, steered ones first.
 
 **`getMessage`** returns a message's status as it is now, by its id or by the key it was sent with, or `undefined`
-for a message the session never accepted or a session the Agent does not hold. A Caller that sent a message and lost
-its stream asks it, and resumes the session (§5.1) for what the agent writes. A Caller that keys its messages by
+for a message the session never accepted or a session the Agent does not hold. A Caller that lost track of a message
+asks it, and resumes the session (§5.1) for what the agent writes. A Caller that keys its messages by
 something of its own, such as a chat platform's message id, finds a message by that key without keeping a map of its
 own.
 
@@ -232,10 +241,9 @@ A message ends exactly once, with one outcome, recorded durably before it is rep
 
 | What happens | A taken message | A queued message |
 |---|---|---|
-| The Caller stops reading | The agent goes on | Stays queued, and is taken in its turn |
+| The Caller stops waiting or watching | The agent goes on | Stays queued, and is taken in its turn |
 | `abort` | The agent stops: `canceled` | Withdrawn: `canceled`, without an entry |
-| The process stops | Answered after the restart | Stays queued, and is taken in its turn |
-| The process stops after `abort` answered and before the message ended | `canceled` after the restart, never answered | (`abort` withdrew it) |
+| The process stops | Answered after the restart; `canceled` if an `abort` was stopping it | Stays queued, and is taken in its turn |
 
 A process that stops does not lose what was accepted: the Agent continues it when it starts again. A tool cut off
 mid-call is not run again unless it declares that a second run is safe; the agent is told it was interrupted and
@@ -258,8 +266,8 @@ interface SessionState {
 }
 ```
 
-The Agent names every session. A Caller gets an id from `createSession` or from an invoke without `sessionId`, and
-keeps it. An id is a name, not a credential (§8).
+The Agent names every session. A Caller gets an id from `createSession` or from the receipt of an invoke without
+`sessionId`, and keeps it. An id is a name, not a credential (§8).
 
 Session, message and entry ids are opaque strings, and the Agent MUST NOT reuse one: within a deployment, an id names
 one thing for as long as the deployment exists, even when its storage is rebuilt from empty. An id a Caller kept from
@@ -278,36 +286,37 @@ a storage that is gone answers `not_found` (or `undefined`), never another sessi
   the state alone.
 - **`resume`** attaches to the session (§5.1).
 - **`abort`** stops everything the session does: the agent answering its taken messages, and every queued message,
-  steered ones included. It answers once the stop is recorded, without waiting for a running tool to exit, and
-  reports the messages it stopped; on an idle session it answers `ok` with nothing stopped. Each stopped message ends
-  `canceled`, with its `done`, once the agent has let go of it, and is `taken` until then. `abort` is idempotent: it
-  reports every message that has not ended, including one an earlier `abort` already stopped, so a second `abort` while
-  a tool ignores its stop still says what is being stopped. Messages invoked after it are taken as usual, once the
-  stopped ones have ended.
+  steered ones included, as pi-durable's `conversation.abort()` does. It answers once the messages it stopped have
+  ended, each `canceled` with its `done`, and reports them; on an idle session it answers `ok` with nothing stopped.
+  The stop is recorded before it waits, so a Caller that stops waiting loses nothing: the messages still end
+  `canceled`, after a restart too. A running tool ends when it honors its abort signal, which a tool must; until it
+  does, `abort` waits. It reports every message that has not ended and that it stops, one an earlier `abort` is still
+  stopping included. Messages invoked after it are taken as usual.
+- **An `abort` whose answer did not arrive** answers `unknown`: its `signal` was aborted, or a client of a remote
+  Agent lost its connection while it waited (a proxy's idle timeout). Whether the stop was recorded is not known, and
+  sending `abort` again is not the way to find out: it would also stop what was sent since, which the first one would
+  have let be. The Caller reads the session's state (`read` with `limit: 0`) and the messages it meant to stop
+  (`getMessage`), and aborts again only if it still wants everything stopped.
 - **`attachment`** returns the bytes behind a ref an entry of this session published, or `undefined`.
 
 An unknown session answers `not_found` on every operation, and so does an unknown entry cursor, except `getMessage`
 and `attachment`, which answer `undefined`.
 
-### 5.1 Attaching: replay, snapshot, live
+### 5.1 Resuming: replay, snapshot, live
 
-`resume` attaches to the session; an invoke stream attaches to its message. Both do it in three parts:
+`resume` attaches to the session in three parts:
 
-1. **Replay.** `resume` replays what `replayFrom` asks for: nothing without it, every entry with `{ type: "start" }`,
-   and the entries after `entryId` with `{ type: "after", entryId }`. An invoke stream, once its message is taken,
-   replays the message's entries from its `user_message` (§3.1). Replay holds entries only: no live event, and no
-   `state` from the past.
+1. **Replay.** What `replayFrom` asks for: nothing without it, every entry with `{ type: "start" }`, and the entries
+   after `entryId` with `{ type: "after", entryId }`. Replay holds entries only: no live event, and no `state` from
+   the past.
 2. **Snapshot.** Then a `state` event with the session as it is now MUST be sent, even when nothing was replayed. It
    is the line between the past and the present: a Caller takes the session's status from it, not from the replay,
    and with `reply` it shows an answer that is being written from where it is.
-3. **Live.** Then live events and new entries, without a gap or a duplicate after the snapshot. `resume` delivers the
-   session's, with a `done` event for each message that ends, and ends only when the Caller stops reading or with a
-   `serving_error` (§6). An invoke stream delivers them while its message is taken, and ends with its message's `done`.
-
-Until its message is taken, an invoke stream delivers only `state` events, without `reply`. A duplicate of a message
-that is already done attaches to nothing live, so it sends no snapshot: its entries from its `user_message` through
-its answer, or its `user_message` alone when it has no answer, or nothing when it was withdrawn before it was taken,
-and then its `done`.
+3. **Live.** Then live events and new entries, without a gap or a duplicate after the snapshot, and a `done` event for
+   each message that ends. A message's `done` comes before the entries of any message taken after it, also when one
+   commit records both (pi-durable places the next queued message in the commit that ends a run), so a Caller can
+   take a message's events as running from its `user_message` to its `done`. It ends only when the Caller stops
+   reading, or with a `serving_error` (§6).
 
 The TypeScript client of the HTTP binding does not reconnect on its own: when its connection is lost, it ends the
 stream with a `serving_error`, and the Caller resumes after the last entry it had.
@@ -362,7 +371,7 @@ type SessionEvent =
 - `thinking` is the model's reasoning: a Caller MUST NOT fold it into the answer.
 - `tool_progress` is the current status line of a running tool, each replacing the last; an Agent MAY drop one its
   Caller has not read. It carries the same trust as the tool's output.
-- `serving_error` is the last event of a stream that stops before its ending, and says why: the Agent cannot go on
+- `serving_error` is the last event of a `resume` that stops before the Caller does, and says why: the Agent cannot go on
   serving it (its storage failed: `unavailable`), or, sent by the client of a remote Agent, the connection was lost
   (`unavailable`). It ends the stream, not the message, which may still end and be read with `getMessage`; a Caller
   resumes the session, or asks again, once the Agent is back. No stream stops silently.
@@ -434,33 +443,25 @@ often, is decided in front of it (a gateway, a private network, a cloud's IAM, a
 
 ## 9. Conformance
 
-An invoke stream ends in exactly one of four ways:
-
-- **(a)** the message's `done` event;
-- **(b)** a single `rejected`;
-- **(c)** the Caller detaches; the agent goes on;
-- **(d)** a `serving_error`: the Agent cannot go on serving the stream, or a client of a remote Agent lost its
-  connection. The message is not ended by it, and `result` is `unfinished`.
-
 ### Agent MUST
 
-1. **One ending.** A stream the Caller reads to its end holds exactly one `rejected`, or one `accepted` and ends with
-   its message's `done` event, unless it stops with a `serving_error` or the process stops. Nothing follows any of
-   them.
-2. **Failures are events.** Iterating `invoke` or `resume` MUST NOT throw, and a stream MUST NOT stop without saying
-   why: a message the agent failed to answer ends with a `failed` outcome, a refusal is `rejected`, and a stream the
-   Agent cannot go on serving ends with `serving_error`.
-3. **Detaching is not stopping.** When the Caller stops reading, the Agent MUST release what it held for that stream
-   and MUST NOT stop the agent. Only `abort` stops it.
+1. **One answer, one end.** An invoke answers once: a receipt, a rejection that recorded nothing, or, from a remote
+   client whose connection failed before the receipt, `unknown`. A message ends once, and its `wait()` resolves once,
+   with that end or `unfinished`, never as a refusal.
+2. **Failures are values and events.** `invoke`, `wait()` and the other operations resolve rather than reject (§2),
+   and iterating `resume` MUST NOT throw or stop without saying why: a message the agent failed to answer ends with a
+   `failed` outcome, a refusal is a rejection, and a `resume` the Agent cannot go on serving ends with
+   `serving_error`.
+3. **Detaching is not stopping.** When the Caller stops reading a `resume`, or aborts the `signal` of a `wait()` or an
+   `abort`, the Agent MUST release what it held for that call and MUST NOT stop the agent for it. Only `abort` stops
+   it: a recorded stop goes on when its Caller stops waiting.
 4. **Durable messages.** An accepted message is recorded before its receipt (§3.4), ends exactly once, recorded
    before it is reported, and survives a restart of the process (§4.1). The Agent never redoes a message on its own.
-5. **One present.** A `resume`, and an invoke stream while its message is taken, sends its `state` snapshot after
-   what it replays and before anything live (§5.1).
+5. **One present.** A `resume` sends its `state` snapshot after what it replays and before anything live (§5.1).
 
 ### Caller MUST
 
-6. **Forward compatibility.** The stream endings `{ done, rejected }` are frozen. A Caller MUST handle values it does
-   not know as §6.1 says.
+6. **Forward compatibility.** A Caller MUST handle values it does not know as §6.1 says.
 7. **Relay passthrough.** Middleware that relays a stream MUST pass unknown events through unchanged.
 
 ### Not guaranteed
@@ -476,27 +477,27 @@ One executable suite, run against the Agent in process and through the HTTP bind
 
 | Area | Checks |
 |---|---|
-| Invoke | `accepted` first; a `/<name>` among `info().commands` is expanded for the model while its `user_message` holds the text as sent, and an unknown `/<name>` is sent as written; the stream ends with the message's `done` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; `result` resolves with the same `done` whether or not the events are read, and an invocation first iterated after its message is taken begins with its receipt and replays its entries; a remote invoke whose connection is lost ends with `serving_error` and resolves `result` as `unfinished`, with the receipt's ids once it arrived, never as a rejection; when the storage fails, an in-process invoke and a `resume` end with `serving_error` instead of hanging, and `result` is `unfinished`; iteration never throws; every event is JSON |
+| Invoke | An invoke answers with a receipt once the message is recorded, without waiting for it to be answered; a rejection records nothing; a remote invoke whose connection fails before the receipt answers `unknown`, never a rejection; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; a `/<name>` among `info().commands` is expanded for the model while its `user_message` holds the text as sent, and an unknown `/<name>` is sent as written; `wait()` resolves with the message's `done`, also when it is called after the message ended, and with `unfinished`, never a rejection, when the storage fails, a remote client's connection is lost or its `signal` is aborted, which leaves the message going on; a receipt whose `wait()` is never called holds nothing; every result's data and every event is JSON |
 | Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is `queued` at position 0 until taken, then taken while the session is still busy; a steer the agent did not take before it stopped is taken no later than the messages queued with `queue`; an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
-| Idempotency | A key without `sessionId` is `invalid_request`; a key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`; a duplicate's stream ends with the same `done`; concurrent invokes with one key make one message |
-| Messages | `getMessage` by id and by key follows a message through queued, taken and done, and answers `undefined` for an unknown one; a detached message is done; `abort` stops the taken message and withdraws the queued ones, all ending `canceled`, reports them, and reports nothing on an idle session; `abort` answers while a tool that ignores its stop still runs, a second `abort` meanwhile reports the same messages, and a message invoked meanwhile is taken once the stopped ones have ended; messages invoked after a failed or aborted one are taken; a done message's duplicate replays its own entry through its answer, or its own entry alone, with no snapshot, and one withdrawn before it was taken delivers only `accepted` and `done`; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
-| Restart | A message accepted just before a restart is answered after it, and `getMessage` finds it; queued messages survive and are taken; a message `abort` stopped that had not ended when the process stopped ends `canceled` after the restart, unanswered; no message is redone (a tool's effect count does not grow) |
-| Attaching | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; a `resume`, and an invoke stream once its message is taken, sends one `state` snapshot after the replay and before anything live; an invoke stream queued behind another message gets none of that message's entries, live events or `done`, and no `reply` before its own message is taken; one attached mid-answer gets `state.reply`, and it with the deltas that follow is a prefix of the `assistant_message` entry that ends that answer; a reconnect after the last entry it had delivers each entry exactly once; an unknown session or cursor is a single `rejected` |
+| Idempotency | A key without `sessionId` is `invalid_request`; a key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`, and its `wait()` resolves with the same end; concurrent invokes with one key make one message |
+| Messages | `getMessage` by id and by key follows a message through queued, taken and done, and answers `undefined` for an unknown one; a message whose Caller never waits or watches is done; `abort` stops the taken message and withdraws the queued ones, answers once they have ended `canceled`, and reports them, and reports nothing on an idle session; a second `abort` while a tool that ignores its signal keeps the first one waiting reports the same messages; an `abort` whose `signal` is aborted answers `unknown` and its stop, once recorded, still ends the messages `canceled`; messages invoked after a failed or aborted one are taken, one invoked while an abort is still ending its messages included, also when that `abort`'s `signal` was aborted; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
+| Restart | A message accepted just before a restart is answered after it, and `getMessage` finds it; queued messages survive and are taken; a message an `abort` was stopping when the process stopped ends `canceled` after the restart, unanswered; no message is redone (a tool's effect count does not grow) |
+| Resuming | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; it sends one `state` snapshot after the replay and before anything live, and a `done` for each message that ends, before the `user_message` of the message taken after it, also when one commit ends one and places the other; a `resume` opened before an invoke delivers that message's `user_message` and then its answer, and the events before its `user_message` are another message's; one attached mid-answer gets `state.reply`, and it with the deltas that follow is a prefix of the `assistant_message` entry that ends that answer; a reconnect after the last entry it had delivers each entry exactly once; when the storage fails it ends with `serving_error` instead of hanging; an unknown session or cursor is a single `rejected` |
 | Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` and every `compaction` carries `usage`; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source, and summing each session's own entries counts each model call once; the state moves idle → running → idle |
 | Sessions | A fork shares the history up to its entry and none of the messages, and leaves the source unchanged; an unknown fork source is `not_found` |
-| HTTP | A `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `Accept: application/json` on an invoke answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between |
+| HTTP | A `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `POST /invoke` answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between; the HTTP client's `wait()` gives what the in-process one does, also for a message that ended before it was called; `stream()` over the in-process Agent and over the HTTP client gives the same receipt, refusals and events for a new message, a queued, taken or done duplicate (a taken one whose message ends meanwhile included), and an `abort` |
 
 ## 10. HTTP binding
 
 | Operation | HTTP |
 |---|---|
 | `info` | `GET /agent` |
-| `invoke` | `POST /invoke` with the `InvokeRequest`: a `text/event-stream` of `InvokeEvent`s. With `Accept: application/json` the server answers as soon as the message is accepted, with `202` and the `accepted` event's `{ sessionId, message, duplicate }`; the Caller then asks `getMessage`, or resumes the session. A rejection is the error's status with `{ "error": AgentError }` |
+| `invoke` | `POST /invoke` with the `InvokeRequest`: `202` and the `Receipt`, once the message is recorded. A rejection is the error's status with `{ "error": AgentError }` |
 | `getMessage` | `GET /sessions/{s}/messages/{m}`, or `GET /sessions/{s}/messages?idempotencyKey=` by key: `200` and the `MessageStatus`, or `200` and `null` for `undefined` |
 | `createSession` | `POST /sessions` with `{ from? }`: `201` and `{ sessionId }` |
 | `read` | `GET /sessions/{s}?after=&before=&limit=` |
 | `resume` | `GET /sessions/{s}/events`, with `?replay=start` or `?after=<entryId>` for `replayFrom`: a `text/event-stream`. Each `entry` event's SSE `id` is the entry id, and the snapshot's is the newest entry id when it was taken, or `start` when the session has none, so a reconnect's `Last-Event-ID` resumes after where the stream had got to even before any entry arrived (`start`: from the first entry). A `Last-Event-ID` header takes precedence over `replay` and `after`: a browser reconnects with the URL it opened and the header, and the header is where it got to. A resume that cannot start is the error's status instead |
-| `abort` | `POST /sessions/{s}/abort` |
+| `abort` | `POST /sessions/{s}/abort`: `200` and `{ stopped }` once the stopped messages have ended |
 | `attachment` | `GET /sessions/{s}/attachments/{ref}`: the bytes with their content type, or `404` with no body |
 
 A failed result is answered with its code's status (§7.1) and `{ "error": AgentError }`; a successful one with `200`
@@ -504,14 +505,48 @@ and the value without its `ok`. `getMessage` answers an unknown message with `nu
 router answers `404` for a path it does not know, and this answer decides whether a Caller sends again.
 
 A connection that fails before the receipt arrives leaves it unknown whether the message was accepted, since the
-server answers only once the message is recorded and may still be reading the request. With an `idempotencyKey`,
-sending it again settles it: the server answers with the message the key names, or accepts it. Without a key, a
-client MUST NOT report the invoke `rejected`: that says nothing was recorded, and a Caller would send it again.
+server answers only once the message is recorded and may still be reading the request. The client answers `unknown`
+then, and MUST NOT answer a rejection: that says nothing was recorded, and a Caller would send it again. With an
+`idempotencyKey`, sending it again settles it: the server answers with the message the key names, or accepts it.
 
-A JSON invoke does not wait for the message to end: an answer can take minutes, longer than the idle timeout of the
-proxies in front of most deployments, and a connection cut while waiting would leave a Caller that sent no key without
-even the ids to ask about. A Caller that wants to wait reads the event stream, which the TypeScript client of this
-binding does to resolve `result`.
+`POST /invoke` does not wait for the message to be answered: an answer can take minutes, longer than the idle timeout
+of the proxies in front of most deployments. A Caller that wants the answer as it is written opens
+`GET /sessions/{s}/events` first; one that wants only the end asks `getMessage` until it is `done`. An `abort` does
+wait, as pi-durable's does, so one cut by such a timeout answers `unknown` in the client, and its Caller reads the
+state before it decides anything (§5).
+
+**The TypeScript client.** Its `wait()` and the `stream()` helper are Callers of the operations above, and §9 checks
+that they give what the in-process ones do. A `done` is a live event, never replayed, so both read an end that came
+before they attached with `getMessage`:
+
+- **`wait()`** answers at once when the receipt's message is already `done`. Otherwise it resumes the session without
+  replay and, once the snapshot arrives, asks `getMessage`: a message that ended before the snapshot is `done` there,
+  and one that ends after it arrives as a live `done`. A lost connection, or an aborted `signal`, ends it
+  `unfinished`.
+- **`stream(agent, request)`** sends a message and delivers its answer as it is written:
+
+  ```ts
+  function stream(agent: Agent, request: InvokeRequest & { sessionId: string }): Promise<StreamResult>;
+  type StreamResult =
+    | ({ ok: true } & Receipt & { events: AsyncIterable<SessionEvent> })  // after its user_message, through its done
+    | { ok: false; error: AgentError }                                   // rejected: nothing was recorded
+    | { ok: false; unknown: { reason: string } };                        // as InvokeResult's
+  ```
+
+  The receipt, a rejection and `unknown` are the invoke's own (a channel keys its turn by the receipt's `messageId`
+  and tells its user why a message was refused); `events` ends with the message's `done`, or with a `serving_error`
+  when the session cannot be followed. It takes a session that exists, since only one can be resumed before the
+  message is sent: a Caller with a new conversation creates the session and keeps its id first, which is also what
+  keeps a key's retry in one session (§3.3). It resumes the session without replay, invokes once the snapshot arrives,
+  and then, by the receipt:
+  - a new or `queued` message: the events after its `user_message`, which arrives live;
+  - a `taken` duplicate, whose `user_message` was written before: it resumes again after that entry
+    (`{ type: "after", entryId: message.entryId }`), holds what that replays, and asks `getMessage` once its snapshot
+    arrives. Still taken, it delivers the held entries and goes on live; done meanwhile, it delivers the held entries
+    through its answer only (none when it has none), since the replay can run on into a message taken after it, and
+    then its `done`;
+  - a `done` duplicate: it reads the entries after its `user_message` through its answer (`read`, after
+    `message.entryId`), or none when it has no answer, then delivers its `done`.
 
 ## 11. Out of scope
 
@@ -537,14 +572,15 @@ From [SPEC v1](../SPEC.md), which the code implements until this API replaces it
 | `commands()` | `info().commands`, which a Caller reads once |
 | `messages.get`, `messages.follow`, `messages.cancel` | `getMessage` by id or key; `resume`; `abort` |
 | `follow` | `resume`: replay by `replayFrom`, a snapshot that MUST be sent, live; an answer can be joined mid-way |
-| An invoke stream that is `messages.follow` of its message | The same, attached to its message, with a snapshot once it is taken |
+| `invoke` streaming its message's events until its `done` | `invoke` answers with the receipt; the session is watched with `resume`, the end awaited with `wait()`, as pi-durable separates `submit` from `watchEvents` and `Submission.wait()` |
 | `prompt: { text, images }` | `content` parts, checked against `info().inputs` |
 | A fork's entries copied, with ids of their own and no `usage` | A fork shares its source's entries; every entry names the `sessionId` that wrote it, and a session's cost is its own entries' |
 | `sessions.create({ sessionId, fork })` | `createSession({ from })` |
 | `capabilities`, `durableQueue`, `durableTaken` | Gone: durability is a MUST |
 | The `intercepted` and `interrupted` outcomes; `source`; `takenAt`, `endedAt` | Gone |
-| `collect`; `Accept: application/json` answering `202` | `invocation.result`, which can be `unfinished`; the same `202` |
-| `serving_error { message }` | `serving_error { error }`, the stop of a stream that cannot go on |
+| `collect`; `Accept: application/json` answering `202` | `wait()`, which can be `unfinished` and takes a `signal`; `POST /invoke` always answers `202` and the receipt, and a remote invoke cut before it answers `unknown` |
+| `abort` that answers once the stop is signalled: queued messages withdrawn and the run told to stop, without waiting for them to end | `abort` that waits until the messages it stopped have ended, as pi-durable's `conversation.abort()`, and takes a `signal`; one whose answer did not arrive is `unknown`. A channel's `/stop` must therefore not await it on the path that acknowledges its platform's webhook |
+| `serving_error { message }` | `serving_error { error }`, the end of a `resume` that cannot go on |
 | A body-only JSON gate | Every `POST` requires `content-type: application/json` |
 
 From v0.1, the last released protocol:
@@ -556,11 +592,11 @@ From v0.1, the last released protocol:
 | `text`, `thinking` events | `message_delta`, adding to `state.reply` until the `assistant_message` entry |
 | `tool_ended` | The `tool_result` entry |
 | `retrying` | `retry_scheduled` |
-| A turn, with no id | A message, with an id, a status (`getMessage`) and an outcome that outlive the stream |
-| `completed`, `failed` endings | The message's `done` event, with its outcome; `rejected` for a refusal |
+| A turn, with no id | A message, with an id, a status (`getMessage`) and an outcome that outlive its Caller |
+| `completed`, `failed` endings | The message's `done`, with its outcome; a refusal is `{ ok: false, error }` |
 | `completed.data` | Gone: a structured result waits for a design |
 | MUST 3: the Agent stops when the Caller stops reading | The Caller detaches; `abort` stops the agent |
 | A busy session rejected with `session_busy` | `whenBusy`; `busy` with a reason |
 | The session control extension (`steer`, `followUp`, `abort`, …) | `whenBusy` and `abort` |
-| `collect(events)` | `invocation.result` |
+| `collect(events)` | `wait()` |
 | Nothing about history | `read`, `resume` (replay, snapshot, live), `attachment`, and a durable history of entries |
