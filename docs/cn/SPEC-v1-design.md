@@ -54,12 +54,16 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
   key 时不能当作被拒绝。
 - 只有回执的数据部分（`POST /invoke` 返回的 body）要求能 JSON 序列化；`wait()` 是各个绑定提供的方法。
 - 想看回答怎么写出来，就用 `resume` 订阅会话。**一条消息的回答，是会话事件里它自己那条 `user_message`（会注明是哪条消息）之后、
-  到它的 `done` 为止的内容**；在那之前的事件属于别的消息。为了不漏，调用方在 `invoke` 之前先 `resume`，或者从手里最后一条 entry
-  之后 `resume`。TypeScript 客户端把这件事包成了 `stream(request)`：发消息，并给出从这条消息的 `user_message` 到它的 `done` 的
-  事件。它适用于任何 `Agent`（进程内或远程），只是 API 的一个调用方，不增加任何语义。`done` 是实时事件、不会被重放，所以
-  `wait()` 和 `stream()` 都在订阅拿到快照之后再用 `getMessage` 查一次，覆盖“订阅之前消息就已结束”的情况；对重复发送的消息，
-  `stream()` 按回执里的状态处理：正在处理的，从它的 `user_message` 之后重新接上；已经结束的，用 `read` 读出它之后到回答为止的
-  entry，再给出 `done`（见 agent-api.md §10）。
+  到它的 `done` 为止的内容**；在那之前的事件属于别的消息。为了不漏，调用方在 `invoke` 之前先 `resume`，这要求会话已经存在：新对话
+  先用 `createSession` 建出来。`done` 不会被重放，所以在 `invoke` 之后才 `resume` 的调用方，要在拿到快照后用 `getMessage` 查一次，
+  补上订阅之前就已结束的情况。
+- TypeScript 客户端把这件事包成了 `stream(agent, request)`，适用于任何 `Agent`（进程内或远程），只是 API 的一个调用方，不增加
+  任何语义。它返回 `StreamResult`：成功时是回执加 `events`（这条消息 `user_message` 之后、到它的 `done` 为止的事件，会话无法继续
+  跟随时以 `serving_error` 结束）；也可能是拒绝（包括新会话没建成）或 `unknown`，和 invoke 的一样。channel 用回执里的 `messageId`
+  记录这一轮，并把拒绝的原因告诉用户。没有 `sessionId` 时它先建会话。它先不带重放地 `resume`，拿到快照后再 `invoke`，然后按回执
+  里的状态处理：新消息或还在排队的，它的 `user_message` 会以实时事件到来；正在处理的重复消息，从它的 `user_message` 之后重新接上，
+  并在快照后用 `getMessage` 补查一次；已经结束的重复消息，用 `read` 读出它之后到回答为止的 entry，再给出 `done`（见 agent-api.md
+  §10）。`wait()` 则在回执已是 `done` 时直接返回，否则在快照后用 `getMessage` 查一次，再等实时的 `done`。
 - HTTP 上 `POST /invoke` 不等消息被回答：一次回答可能要几分钟，比大多数部署前面代理的空闲超时（例如 60 秒）还长。想看过程就先开
   `GET /sessions/{s}/events`；只要结果就用 `getMessage` 轮询到 `done`。
 
@@ -125,8 +129,11 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
 - **消息状态只保留消费者需要的字段：** 没有 `takenAt`、`endedAt`，时间只在 entry 的 `timestamp` 上。
 - **`abort` 和 pi-durable 一致。** 它停下正在回答的消息、撤回排队的消息，等这些消息都以 `canceled` 结束后才返回，并报告停下了
   哪些。停止会先被持久记录再等待，所以调用方不再等待也不会丢掉这次中止，进程重启后这些消息照样以 `canceled` 结束。正在执行的工具
-  要响应中止信号才会结束，这是对工具的要求；在那之前 `abort` 一直等。再调一次 `abort` 是安全的：它报告所有还没结束、被它停下的
-  消息，包括上一次 `abort` 还在停的。远程客户端在等待中被切断（比如代理的空闲超时）时返回 `unfinished`，调用方再调一次即可。
+  要响应中止信号才会结束，这是对工具的要求；在那之前 `abort` 一直等，也可以用 `signal` 放弃等待。它报告所有还没结束、被它停下的
+  消息，包括上一次 `abort` 还在停的。
+- **`abort` 没拿到答复时返回 `unknown`**：`signal` 被触发，或者远程客户端在等待中被切断（比如代理的空闲超时）。这时不知道停止有没有
+  被记录，而且**不能靠再调一次 `abort` 来弄清楚**：那会把这期间新发来的消息也一起停掉，而第一次 `abort` 本来不会停它们。调用方应该先用
+  `read`（`limit: 0`）看会话状态、用 `getMessage` 看要停的那些消息，确实还想全部停下时再调一次。
 - **消息的结局只有四种：** `completed`、`max_tokens`、`canceled`、`failed`。没有 `interrupted`：进程重启后 pi-durable 会接着
   回答已取走的消息，排队的消息也还在。`answer` 只在 `completed` 和 `max_tokens` 时出现，执行过工具调用的中间回复不算回答。
 - **fork 共享源会话的 entry：** fork 的历史开头就是源会话的那些 entry 本身，id 和内容都相同，之后写的才是 fork 自己的。每条 entry
@@ -195,6 +202,6 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
 | `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |
 | `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`，可以用 `signal` 放弃等待；`POST /invoke` 总是返回 `202` 和回执，远程 invoke 在回执前断线返回 `unknown` |
-| `abort` 等被停下的消息结束后返回 | 不变，和 pi-durable 的 `conversation.abort()` 一样；再调一次报告还在停的消息，远程调用在等待中被切断返回 `unfinished` |
+| `abort` 发出停止就返回：撤回排队的消息、通知 run 停止，不等消息结束 | `abort` 等被停下的消息都结束后才返回，和 pi-durable 的 `conversation.abort()` 一样，可以带 `signal`；没拿到答复时返回 `unknown`。所以迁移时，channel 的 `/stop` 不能在确认平台 webhook 的路径上等 `abort` |
 | `serving_error { message }` | `serving_error { error }`：无法继续的 `resume` 以它结束 |
 | 只检查带 body 的请求 | 每个 `POST` 都要求 `content-type: application/json` |
