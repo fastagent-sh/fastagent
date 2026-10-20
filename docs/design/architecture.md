@@ -213,16 +213,30 @@ for the steps above.
 
 ## 6. Order
 
-1. **A spike on pi-durable** that answers what the Agent API promises: SQLite on AgentCore's session storage and what
-   restarts a run cut off there; the definition rendered and run (`SYSTEM.md`, `AGENTS.md`, skills, tools); how
-   images are stored, behind `attachment`; whether an answer being written already has its entry id and its text so
-   far, which `message_delta` and `state.reply` need (pi-durable commits a partial answer at most every 100 ms); and the
-   queue left waiting after a failed or aborted run.
+1. **A spike on pi-durable**, run locally on 1.3.0 (§6.1). Still open: SQLite on AgentCore's session storage, and what
+   restarts a run cut off there (§4.3), which needs a deployment.
 2. The Agent on pi-durable, with the conformance suite in process and over HTTP; channels, schedules, wake-ups, the CLI
    and AgentCore moved onto it; the previous protocol, `LoopPort` and the pi-coding-agent harness deleted.
 3. The artifact: `fastagent build`, and `deploy` from it.
 4. Context packages.
 5. Shared contexts and agents working together.
+
+### 6.1 What the spike measured
+
+On pi-durable 1.3.0 with pi-ai's faux model, in process, against memory and SQLite storage:
+
+| Question | Measured | So the implementation |
+|---|---|---|
+| The definition rendered | `SYSTEM.md`, `AGENTS.md` and the skill list render as an extension's prompt sections, and pi-durable adds no prompt of its own; a tool made by `needs([...])` around pi-durable's `defineTool` receives its secret | Installs one extension of FastAgent's own with those sections, beside the agent's tools and extensions |
+| A command kept as sent | An input submitted with the expanded text as `content` and `entry: { kind: "fastagent.user", data: { content: <as sent> } }` is recorded with that kind and data, while the model sees `content` | Submits every message that way, and publishes `fastagent.user` as `user_message` |
+| Images | Stored inline, as base64, in the entry's model message; there is no separate blob store | `attachment(ref)` reads from the entry: a ref names the entry and the part. Images grow the storage |
+| An answer being written | Its text so far is in `pi.live.generation.message`, and in a new `watchEvents` stream's snapshot, with its attempt number; its entry gets an id only when the answer is complete | `state.reply` is that text and `message_delta` carries no entry id ([Agent API](agent-api.md) §6) |
+| A fork's history | Shares the source's entries: the same ids, with the source's `conversationId` | Publishes `Entry.sessionId` from it |
+| The queue after a run that did not answer | Waits, after a model failure and across a restart (the inbox persists with no run live); a write of the port's own kind with `edits: []` places it, and lands as an entry | Submits that write after each run that did not answer and at the first open of a conversation whose inbox waits with no run live, and never publishes the entry |
+| Abort | `conversation.abort()` ends the running message and withdraws the queued ones, and a message sent after it settles is taken; but one sent while the aborted run is still settling waits in the inbox, and `abort()` itself waits for a running tool that ignores its signal | Answers `abort` once the stop is recorded (Agent API §5), and submits the placing write once the stopped messages have ended |
+| Ids | Entries, submissions and conversations share one counter per storage, which a new storage starts again (conversation 8 in both); a session-scoped document keeps a random incarnation across reopens and gets a new one in a new storage | Encodes every id as incarnation plus pi-durable's id (§2) |
+
+Not run: the coding tools' `read` reading a skill's `SKILL.md` through an execution environment.
 
 ## 7. Compared with other agent APIs
 
@@ -246,7 +260,7 @@ the conversation, no turn id is exposed, stopping is per session, the state is `
 resumes from a cursor and is then told the current state. From the comparison the Agent API took `getMessage` (A2A,
 OpenAI), the snapshot after a replay (ACP), content parts (ACP, A2A, OpenAI), the accepted inputs in `info` (ACP's
 negotiated prompt capabilities), open value sets with prefixed extensions (ACP's `_` names), and an answer that can be
-resumed mid-way (ACP's message ids on chunks, OpenAI's sequence numbers).
+joined mid-way (as ACP's resume and OpenAI's sequence numbers allow).
 
 It did not take: a run, turn or task as a first-class id (messages are the unit); history owned by the client and sent
 with each run (AG-UI; here the Agent owns it); shared-state JSON patches, plans and modes (agent-specific, so prefixed

@@ -248,7 +248,7 @@ interface SessionState {
   taken: string[];      // the messages the agent is answering
   queued: string[];     // in the order they will be taken
   /** The agent's message being written, as written so far: present only while one is. */
-  reply?: { entryId: string; text: string; thinking?: string };
+  reply?: { text: string; thinking?: string };
 }
 ```
 
@@ -272,8 +272,10 @@ a storage that is gone answers `not_found` (or `undefined`), never another sessi
   the state alone.
 - **`resume`** attaches to the session (§5.1).
 - **`abort`** stops everything the session does: the agent answering its taken messages, and every queued message,
-  steered ones included. It reports the messages it ended; on an idle session it answers `ok` with nothing stopped.
-  Messages invoked after it are taken as usual.
+  steered ones included. It answers once the stop is recorded, without waiting for a running tool to exit, and
+  reports the messages it stopped; on an idle session it answers `ok` with nothing stopped. Each stopped message ends
+  `canceled`, with its `done`, once the agent has let go of it. Messages invoked after it are taken as usual, once the
+  stopped ones have ended.
 - **`attachment`** returns the bytes behind a ref an entry of this session published, or `undefined`.
 
 An unknown session answers `not_found` on every operation, and so does an unknown entry cursor, except `getMessage`
@@ -326,7 +328,7 @@ type SessionEvent =
   | { type: "entry"; entry: Entry }
   | { type: "done"; message: DoneMessage }
   | { type: "state"; state: SessionState }
-  | { type: "message_delta"; entryId: string; channel: "text" | "thinking"; delta: string }
+  | { type: "message_delta"; channel: "text" | "thinking"; delta: string }
   | { type: "tool_started"; toolCallId: string; name: string; args: Json }
   | { type: "tool_progress"; toolCallId: string; text: string }
   | { type: "retry_scheduled"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
@@ -337,9 +339,11 @@ type SessionEvent =
   what it inherited. An entry is the same wherever it is read: the same id and the same data in its session and in
   every fork that shares it. Its id is the cursor; `timestamp` is milliseconds since the epoch. Images in an entry are refs, read with `attachment`.
 - A `user_message` entry is a message taken, and names it.
-- An `assistant_message` entry is published once it is complete. While it is being written, its id is already known:
-  `message_delta` events name it and add up to it, and `state.reply` holds what they added up to so far, so a Caller
-  that attaches mid-answer shows it from there and appends the deltas that follow.
+- An `assistant_message` entry is published once it is complete, and gets its id then. While it is being written,
+  `state.reply` holds it as written so far and `message_delta` events add to it. A session writes one agent message at
+  a time, so the deltas need no id: a Caller that attaches mid-answer shows `reply`, appends the deltas that follow,
+  drops what it shows on a `retry_scheduled` (the next attempt starts over), and replaces it with the
+  `assistant_message` entry when that arrives.
 - An `assistant_message` carries the `usage` of the model response it is, and a `compaction` the `usage` of the model
   calls that wrote its summary. A session's cost is the sum over the entries it wrote, those whose `sessionId` is its
   own; an entry a fork shares is its source's cost. Summed that way, each model call counts once, within a session or
@@ -467,9 +471,9 @@ One executable suite, run against the Agent in process and through the HTTP bind
 | Invoke | `accepted` first; a `/<name>` among `info().commands` is expanded for the model while its `user_message` holds the text as sent, and an unknown `/<name>` is sent as written; the stream ends with the message's `done` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; `result` resolves with the same `done` whether or not the events are read, and an invocation first iterated after its message is taken begins with its receipt and replays its entries; a remote invoke whose connection is lost ends with `serving_error` and resolves `result` as `unfinished`, with the receipt's ids once it arrived, never as a rejection; when the storage fails, an in-process invoke and a `resume` end with `serving_error` instead of hanging, and `result` is `unfinished`; iteration never throws; every event is JSON |
 | Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is `queued` at position 0 until taken, then taken while the session is still busy; a steer the agent did not take before it stopped is taken no later than the messages queued with `queue`; an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
 | Idempotency | A key without `sessionId` is `invalid_request`; a key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`; a duplicate's stream ends with the same `done`; concurrent invokes with one key make one message |
-| Messages | `getMessage` by id and by key follows a message through queued, taken and done, and answers `undefined` for an unknown one; a detached message is done; `abort` stops the taken message and withdraws the queued ones, all ending `canceled`, reports them, and reports nothing on an idle session; messages invoked after a failed or aborted one are taken; a done message's duplicate replays its own entry through its answer, or its own entry alone, with no snapshot, and one withdrawn before it was taken delivers only `accepted` and `done`; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
+| Messages | `getMessage` by id and by key follows a message through queued, taken and done, and answers `undefined` for an unknown one; a detached message is done; `abort` stops the taken message and withdraws the queued ones, all ending `canceled`, reports them, and reports nothing on an idle session; `abort` answers while a tool that ignores its stop still runs, and a message invoked meanwhile is taken once the stopped ones have ended; messages invoked after a failed or aborted one are taken; a done message's duplicate replays its own entry through its answer, or its own entry alone, with no snapshot, and one withdrawn before it was taken delivers only `accepted` and `done`; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
 | Restart | A message accepted just before a restart is answered after it, and `getMessage` finds it; queued messages survive and are taken; no message is redone (a tool's effect count does not grow) |
-| Attaching | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; a `resume`, and an invoke stream once its message is taken, sends one `state` snapshot after the replay and before anything live; an invoke stream queued behind another message gets none of that message's entries, live events or `done`, and no `reply` before its own message is taken; one attached mid-answer gets `state.reply`, and the deltas that follow add up to the `assistant_message` entry they name; a reconnect after the last entry it had delivers each entry exactly once; an unknown session or cursor is a single `rejected` |
+| Attaching | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; a `resume`, and an invoke stream once its message is taken, sends one `state` snapshot after the replay and before anything live; an invoke stream queued behind another message gets none of that message's entries, live events or `done`, and no `reply` before its own message is taken; one attached mid-answer gets `state.reply`, and it with the deltas that follow adds up to the `assistant_message` entry that ends that answer; a reconnect after the last entry it had delivers each entry exactly once; an unknown session or cursor is a single `rejected` |
 | Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` and every `compaction` carries `usage`; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source, and summing each session's own entries counts each model call once; the state moves idle → running → idle |
 | Sessions | A fork shares the history up to its entry and none of the messages, and leaves the source unchanged; an unknown fork source is `not_found` |
 | HTTP | A `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `Accept: application/json` on an invoke answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between |
@@ -541,7 +545,7 @@ From v0.1, the last released protocol:
 |---|---|
 | `invoke(scope, prompt)` | `invoke(request)`: an optional `sessionId`, `content` parts, `idempotencyKey`, `whenBusy` |
 | `Scope`, Caller-named sessions, `scope.parentSession` | The Agent names sessions; forking is `createSession` with `from` |
-| `text`, `thinking` events | `message_delta`, naming the `assistant_message` entry it builds |
+| `text`, `thinking` events | `message_delta`, adding to `state.reply` until the `assistant_message` entry |
 | `tool_ended` | The `tool_result` entry |
 | `retrying` | `retry_scheduled` |
 | A turn, with no id | A message, with an id, a status (`getMessage`) and an outcome that outlive the stream |
