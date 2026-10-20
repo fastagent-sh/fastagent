@@ -7,6 +7,13 @@ status: proposed
 
 # Agent service
 
+> **Superseded in part.** [architecture.md](architecture.md) replaces §3.6 and §7 to §14: one harness (pi-durable)
+> instead of a harness port and `LoopPort`, the consumer [Agent API](agent-api.md) instead of the serving protocol,
+> context packages instead of deferred contexts, an npm package as what a deploy builds, and its own order of work and
+> open questions. §7 to §9 describe the code until the move lands. §1 to §6, except §3.6, stand: who it is for, the
+> loop, the model, the declared environment, connectors and credentials (where declarations live is architecture.md
+> §2's).
+
 **Status: proposed, partly implemented** (§12 says which steps are done). It extends the
 [agent model](agent-model.md), replaced the v0.1 Agent Handler SPEC with the serving protocol, now
 [SPEC v1](../SPEC.md) (§7; §7.8 lists what changed), and answers

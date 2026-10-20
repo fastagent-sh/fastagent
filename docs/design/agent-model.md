@@ -74,6 +74,10 @@ collaboration and synchronization (§8): git for a repository, a content service
 
 ## 2. Definition and content: program and data
 
+> **Partly superseded** by [architecture.md](architecture.md) §3: the definition becomes a TypeScript package
+> (`defineAgent`, code under `src/`), `APPEND_SYSTEM.md`, `.pi/` and the machine's skills and prompt templates go, and schedules
+> are code. This section describes the code until the move lands; the line between definition and content stands.
+
 The line between definition and content is the line between a program and the data it works on, not who may write
 them (§6) and not how widely a change is seen.
 
@@ -378,6 +382,11 @@ agent knows or why. Sharing conversations as content is deferred until FastAgent
 merging (§8).
 
 ## 6. An agent changes itself
+
+> **Partly superseded** by [architecture.md](architecture.md) §3: an agent still changes its text (`SYSTEM.md`,
+> `AGENTS.md`, skills, prompt templates) for its next answer, but code it writes (extensions, schedules) takes effect only through a
+> build and a deployment, and its own recurring work moves to `wake`'s recurring form. This section describes the code
+> until the move lands.
 
 An agent may change its definition and the content it works on while it runs: write a skill, edit its prompt, add
 a tool, update `AGENTS.md`, change the project. Agent harnesses are built for this: pi's own README opens with

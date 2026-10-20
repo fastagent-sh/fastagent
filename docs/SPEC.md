@@ -11,6 +11,10 @@ updated: 2026-10-17
 
 > **Status: locked.** This is the protocol the package implements. Changing its semantics needs an explicit decision.
 > The design, with its rationale, is [agent-service.md](design/agent-service.md) §7 and §9.
+>
+> **Being replaced.** The decided replacement is the consumer [Agent API](design/agent-api.md), with pi-durable as the
+> only harness ([architecture.md](design/architecture.md)). It takes this file's place when the move lands
+> ([#788](https://github.com/fastagent-sh/fastagent/issues/788)); until then, this is what the code implements.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119. This specification is
 > harness-neutral and does not depend on any implementation.

@@ -6,6 +6,9 @@ status: current
 
 # Conformance levels
 
+> **Superseded** by [architecture.md](architecture.md): with pi-durable as the only harness, a session's state is its
+> storage, which one process owns at a time (§4.3). This note describes the code until the move lands.
+
 ## 1. Decision
 
 **Where a session's state lives is an explicit deployment choice** — a property of a deployment, not
