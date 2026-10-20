@@ -47,7 +47,7 @@ goal needs.
 | **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (settings, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A developer who needs one of those over HTTP adds a route that calls it |
 | **The agent is a public bot.** No identity or session ownership in FastAgent | Who may reach it is decided in front of it. A session id is a name, not a credential: whoever reaches the agent reaches every session. When several users share one deployment, a facade in front keeps each to their own sessions ([security-boundary.md](security-boundary.md) §4) |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
-| **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another |
+| **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
 | **No session listing and no deletion** | No consumer needs them; pi-durable has no deletion |
 | **An agent is a standard npm and TypeScript package** (§3) | The artifact is an npm package (§4.1), and an agent must be a value other code can import: an app that embeds it, a deploy by package name and version, another agent that depends on it |
 | **One configuration file, `fastagent.config.ts`, with `defineAgent()`; every field optional** | It is the `defineConfig` pattern of Vite and its peers: typed, and read by the build. The model, thinking level and tools it names are defaults: a deployment overrides them with a flag or an environment variable, and a session with pi-durable's own API |
@@ -202,7 +202,8 @@ So on AgentCore FastAgent opens the SQLite database itself and hands it to pi-du
 `new DatabaseSync("file:<path>?vfs=unix-dotfile")`, then `locking_mode = EXCLUSIVE` and `journal_mode = WAL` in that
 order, then pi-durable's `NodeSqliteDatabase` and `SqliteStorage.open`. FastAgent creates the directory, since it
 opens the file itself (pi-durable's own opener would create a directory named after the URI's `file:` prefix instead).
-With `unix-dotfile`, SQLite locks by creating `<path>.lock`, which works on this mount, and the exclusive mode keeps
+With `unix-dotfile`, SQLite locks by creating the directory `<path>.lock` (and unlocks with `rmdir`), which works on
+this mount, and the exclusive mode keeps
 WAL's index in the process's memory, so no shared memory is needed; a second opener fails with `database is locked`.
 That is the safety the storage needs, and it is two rules:
 
@@ -211,7 +212,7 @@ That is the safety the storage needs, and it is two rules:
    the deployment lease, so it is the one that opens the database; anything else that tries is refused.
 2. **The lease holder breaks a stale lock, and says so.** A dotfile lock outlives a stopped microVM (measured), where
    `flock` does not, so a process that holds the lease knows a `<path>.lock` it finds is a dead process's: it removes
-   it before opening, and logs that it did.
+   that directory (`rmdir`; an unlink fails on it) before opening, and logs that it did.
 
 Without locking at all (`vfs=unix-none`), a second opener's writes were accepted and then silently lost (measured),
 which is why the storage keeps a lock.
@@ -220,7 +221,7 @@ This is a choice of storage, not a fix of pi-durable's, and nothing upstream is 
 EFS (POSIX locks, survives deploys, shared across sessions; needs a VPC and so a standing NAT for the model's traffic)
 or a pi-durable storage backend of our own on a database service. Both exist to keep conversations across deploys,
 which an AgentCore agent does not: a deploy resets its state, as it does today, and that is decided, so session
-storage stays.
+storage stays. They would also survive a host failure, which session storage may not (below).
 
 Nothing continues a run cut off on AgentCore by itself: a stopped session stays stopped until it is invoked again.
 Every process opens the storage and calls pi-durable's `harness.resume()` when it starts, before it handles the
@@ -230,14 +231,28 @@ its maximum lifetime (eight hours as deployed) or when its host fails. **No alar
 conversation of an agent shares one runtime session and one storage, so any invocation wakes them all: a message in
 any chat, a platform's webhook, a schedule's own trigger. Only an agent that receives nothing after the cut leaves its
 cut-off message unanswered until something arrives; a one-shot wake alarm per run (the wake-ups' own mechanism) would
-close that, at a few scheduler calls per run, and is added if that case is seen. A session whose `/ping` answers
+close that, at a few scheduler calls per run, and is added if that case is seen. To be seen at all, it is logged when
+it ends: a process whose `resume()` finds a run left by the last one logs it, with the time of the run's newest entry
+and how long it waited since. A session whose `/ping` answers
 `HealthyBusy` is not reclaimed for being idle.
 
 **A host failure is not measured**, and is not a graceful stop: what was not yet replicated is lost, and how much of
-the database and its WAL survive is unknown. A process may then find its newest commits missing, against the Agent
-API's promise that nothing accepted is lost, or the database corrupt. It fails visibly then: an open that reports
-`SQLITE_CORRUPT` is an error of the start that says so, never a silent fresh storage, and the next deploy is what
-resets it. This is a limit of session storage while it is a preview, accepted with it.
+the database and its WAL survive is unknown. A process may then find the database corrupt, or its newest commits
+missing:
+
+- **Corrupt:** an open that reports `SQLITE_CORRUPT` is an error of the start that says so, never a silent fresh
+  storage, and the next deploy resets it.
+- **Rolled back:** the storage opens, with its incarnation, and its counter where it was before the lost commits. The
+  messages accepted in them are lost, against the Agent API's promise (§4.1 there says so), and their ids are handed
+  out again, against §2's: a session id a Caller kept can name another conversation. A channel's mapping lives in
+  `.state/`, replicated apart from the database, so it can survive the rollback and send a chat into a session that
+  is now another chat's. Nothing here detects it: the storage that would record what was handed out is the one that
+  rolled back.
+
+Both are accepted as limits of session storage while it is a preview, and both are rare: a host failure, not a stop,
+an eight-hour lifetime or a deploy. A mounted EFS or a storage backend on a database service would remove both, which
+is the other reason to choose one of them, besides keeping conversations across deploys; neither is worth a VPC and a
+standing NAT, or a backend of our own, for a failure not yet seen.
 
 ### 4.4 Later: shared contexts and agents working together
 
