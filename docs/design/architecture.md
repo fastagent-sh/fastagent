@@ -49,35 +49,72 @@ goal needs.
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat to its session, a schedule to its session) in its own state, as it already keeps other state |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another |
 | **No session listing and no deletion** | No consumer needs them; pi-durable has no deletion |
-| **The definition's harness-specific parts are pi-durable's**: `extensions/` holds pi-durable extensions (`defineExtension`), `tools/` holds pi-durable tools (`defineTool`, TypeBox) | With one harness, a portable layer over its extension and tool APIs would be a second API to learn for nothing |
-| **Secrets are declared in `context.json`, and only there** | They were declared beside each tool and each channel (`defineTool`'s and `defineChannel`'s `secrets`). With pi-durable's `defineTool` the tools' move to the one file that already declares what an agent needs from its environment, and the channels' move with them, so `deploy` checks one list before it ships. `add <channel>` writes its channel's names there |
+| **An agent is a standard npm and TypeScript package** (§3) | The artifact is an npm package (§4.1), and an agent must be a value other code can import: an app that embeds it, a deploy by package name and version, another agent that depends on it |
+| **One configuration file, `fastagent.config.ts`, with `defineAgent()`; every field optional** | It is the `defineConfig` pattern of Vite and its peers: typed, and read by the build. The model, thinking level and tools it names are defaults: a deployment overrides them with a flag or an environment variable, and a session with pi-durable's own API |
+| **Code is registered by where it is, at build time**: `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/` | `fastagent dev` and `build` generate a registry of plain imports, as TanStack Router's route tree and Next.js's route manifest are generated: nothing to import by hand, full types, and a bundler can follow it. Not a scan at run time (no types, no bundling, a loader to keep), and not `import.meta.glob`, which only Vite understands while `dev` runs on Node |
+| **The code is pi-durable's**: tools are its `defineTool` (TypeBox), extensions its `defineExtension` | With one harness, a portable layer over its tool and extension APIs would be a second API to learn for nothing |
+| **Third-party capabilities are pi-durable extensions**, listed in `defineAgent({ extensions })` | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. Contexts, skills, MCP and environments travel as context packages (§4.2) |
+| **Schedules are TypeScript**: `defineSchedule({ cron, tz, prompt })`, the prompt a text or a function | A schedule is behaviour, like a tool: a prompt that depends on the time it fires, secrets it may need, and a cron the build checks, including the dialect an external clock accepts |
+| **`SYSTEM.md` is the whole prompt the author writes; `APPEND_SYSTEM.md` goes** | It added to pi-coding-agent's default prompt, which pi-durable does not have |
+| **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; a context package's connectors declare theirs beside each connector. A missing one fails the start, naming where it was declared |
 
-The previous design's pi-coding-agent harness goes with it: pi's `extensions/` and `.pi/`, the `chat` TUI (replaced by
-a REPL over the consumer API), and the skills and prompt templates a machine lends from `~/.pi/agent`.
+The previous design's pi-coding-agent harness goes with it: pi's `extensions/` and `.pi/`, `APPEND_SYSTEM.md`, the
+`chat` TUI (replaced by a REPL over the consumer API), and the skills and prompt templates a machine lends from
+`~/.pi/agent`.
 
 ## 3. The definition and its assembly
 
 ```
 my-agent/
-  SYSTEM.md  AGENTS.md          who the agent is; how to work on it
-  skills/                        Agent Skills
-  tools/  extensions/            pi-durable tools and extensions
-  channels/  schedules/          how it is reached, and what it does on a clock
-  context.json                   its context: content, connectors, environment, secrets, and the context packages it uses
-  fastagent.config.ts            its model and settings
-  models.json  package.json
+  package.json
+  fastagent.config.ts             defineAgent({...}): every field optional
+  SYSTEM.md  AGENTS.md            the agent's prompt; how to work on the agent
+  skills/<name>/SKILL.md          Agent Skills
+  src/
+    tools/*.ts                    pi-durable defineTool, with needs([...]) for secrets
+    extensions/*.ts               pi-durable defineExtension
+    channels/*.ts
+    schedules/*.ts                defineSchedule
+  context.json  context.lock.json
+  .fastagent/                     the generated registry and entry, not committed
+  dist/                           the build output
 ```
 
-`openAgent(dir)` assembles it: pi-ai's model registry and credentials, a pi-durable `Harness` over the instance's
-storage, the definition rendered into pi-durable's prompt sections, its tools and extensions installed, and the
-execution environment its context declares. The result is the Agent API's `Agent`, plus `harness`. `dev`, `start` and an
-embedder's process call the same function, so an agent behaves the same wherever it runs.
+Code is under `src/`, because it is what the build compiles. Text is at the root, because it is data the agent reads
+at run time by its path: a skill's `SKILL.md` names the files and scripts beside it, which must ship as they are, and
+`tsc` emits only JavaScript. `AGENTS.md` is where every coding agent looks for how to work on the project.
+
+```ts
+// fastagent.config.ts
+import { defineAgent } from "@fastagent-sh/fastagent";
+
+export default defineAgent({
+  name: "support",                       // default: package.json's name
+  model: "anthropic/claude-sonnet-4-5",  // a default; a deployment or a session may change it
+  thinkingLevel: "medium",
+  extensions: [stripe()],                // third-party capabilities
+  http: { cors: ["https://app.example.com"] },
+  deploy: { agentcore: { idleTimeoutSeconds: 900 } },
+});
+```
+
+`fastagent build` generates the registry of `src/`'s four directories and an entry that exports the agent (the
+configuration and the registry), compiles them, and locks the context; `package.json`'s `exports` names that entry.
+`fastagent dev` generates the same and regenerates it as files change. Every tool found is offered unless the
+configuration leaves it out; a deployment cannot add one, since code ships in the artifact.
+
+`openAgent(agent)` assembles it: pi-ai's model registry and credentials, a pi-durable `Harness` over the instance's
+storage, `SYSTEM.md`, `AGENTS.md` and the skills rendered into pi-durable's prompt sections, the tools and extensions
+installed with the secrets they declared, and the execution environment its context declares. The result is the Agent
+API's `Agent`, plus `harness`. `dev`, `start` and an embedder's process call the same function, so an agent behaves the
+same wherever it runs.
 
 ## 4. Around the agent
 
 ### 4.1 The artifact
 
-The artifact is an **npm package**: the agent directory, its lockfile, an exact pi-durable version and a `start` entry.
+The artifact is an **npm package**: the built entry, the text and skills, `context.json` and its lock, the lockfile and
+an exact pi-durable version.
 It never holds secret values, runtime state or cloned content. A registry versions and distributes it; it can be a
 dependency of an app that embeds it, or of another agent. What a host runs is derived from it by `deploy`: an OCI
 image for AgentCore, Fly, Railway and Docker, a bundle where a host needs one.
@@ -96,15 +133,25 @@ directory with a `context.json` of the same format an agent's own uses:
 | `content` | Repositories and directories the agent works on or knows: references (a GitHub repository at a ref), never the data |
 | `connectors` | MCP servers, and the names of the secrets they need |
 | `environment` | The commands and runtimes it needs |
-| `uses` | The context packages it builds on |
+| `uses` | The context packages it builds on, by an alias of its own: `{ "billing": "@acme/ctx-billing@^1" }` |
 
 plus `skills/` for working with that context. It is distributed as an npm package or a git repository, and the agent's
 `context.json` lists it under `uses`. Building resolves `uses` into `context.lock.json` and puts the manifests and
 skills in the artifact; starting an instance clones or binds the content, installs the environment and starts the
-connectors. A package's parts are mounted under its alias (`content/<alias>/<name>`). Two packages that declare the
-same skill or connector, or environment constraints that cannot both hold, are refused at build; the agent's own
-declaration wins only where it is written explicitly. An instance can bind an entry to another repository or directory
-without a rebuild, as `context.local.json` does today.
+connectors. An instance can bind an entry to another repository or directory without a rebuild, as
+`context.local.json` does today.
+
+**Each package is a namespace, named by the alias its user gives it**, so two packages never collide on a name:
+
+| Part | Under the alias `billing` | Conflicts |
+|---|---|---|
+| Content | `content/billing/<name>` | None |
+| Skills | Offered to the model as `billing/<name>`; the `SKILL.md` on disk keeps the standard's name | None |
+| Connectors | `billing/<name>`, their tools prefixed with the alias | None |
+| Secrets | Not namespaced: an environment variable's name is global | One name is one value: two packages that need `GITHUB_TOKEN` need the same token |
+| Environment | Not namespaced: a process has one `PATH` | Constraints that cannot both hold are refused at build |
+
+The agent's own parts carry no prefix. Since the agent chooses the aliases, two aliases cannot collide either.
 
 ### 4.3 Hosts and storage
 
@@ -127,8 +174,9 @@ for the steps above.
 | [SPEC v1](../SPEC.md)'s surface: Caller-named sessions, `sessions.list`, `sessions.get(...).rewind/compact/update/delete`, `messages.*`, capabilities, `source`, the control plane | The [Agent API](agent-api.md), which then becomes `docs/SPEC.md`, and `agent.harness` |
 | `harness-port.ts`, `serving-layer.ts`, `loop-port.ts`, the conformance suite over a harness port | The Agent implemented on pi-durable, and the suite over that Agent |
 | `harnesses/pi/` serving and session code, the `chat` TUI | The pi-durable assembly, and a REPL |
-| `defineTool` with Zod, and its `secrets` | pi-durable's `defineTool`; `secrets` in `context.json` |
-| `defineChannel`'s `secrets` | `secrets` in `context.json` |
+| `defineTool` with Zod, and its `secrets`; `defineChannel`'s `secrets` | pi-durable's `defineTool`; `needs([...])` in the module that reads them |
+| `tools/`, `channels/` and `schedules/` read by a scan at run time (`loader.ts`); schedules in markdown | `src/` registered by a generated registry; `defineSchedule` |
+| `fastagent.config.ts`'s `FastagentConfig`, and `APPEND_SYSTEM.md` | `defineAgent()`, every field optional; `SYSTEM.md` alone |
 | A thread's Caller-named session, whose existence records that the room was forked ([participant-model.md](participant-model.md) rungs 3 and 4) | The thread's session id, recorded in the channel's state after `createSession` forks the room. The branch point is still found by key (`getMessage` with the platform's message id). A crash between the fork and the record leaves a fork nothing refers to, which the retry does not reuse; nothing deletes it |
 | [agent-service.md](agent-service.md) §7 to §9, [conformance-levels.md](conformance-levels.md) | This note and the Agent API |
 
@@ -179,7 +227,9 @@ those protocols are outside the product's goals.
 
 ## 8. Open
 
-- `APPEND_SYSTEM.md` adds to pi-coding-agent's default prompt, which pi-durable does not have: whether it stays, as the
-  part of `SYSTEM.md` an author keeps apart, or goes.
+Settled when they are implemented:
+
 - Hot reload in `dev`: the definition is read on every invoke today; pi-durable installs extensions in a registry.
+- What starts a process on AgentCore to continue a run cut off there (§4.3).
+- Whether pi-ai's `models.json` stays a file or joins `defineAgent`.
 - Bun: pi-durable's portable SQLite core runs there given an adapter over `bun:sqlite`, which does not exist yet.
