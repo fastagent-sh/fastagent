@@ -195,28 +195,49 @@ Measured (§6.1) and documented, it is:
   asynchronously and flushed when the session stops gracefully;
 - isolated per runtime session, with one compute per session at a time, at most 1 GB, and reset by every runtime
   version update (every deploy) and after 14 idle days;
-- without byte-range locks: AWS documents that advisory locks work within a running session, but SQLite's locks fail
-  there in every journal mode (`database is locked`).
+- a place where SQLite's own locks fail, in every journal mode (`database is locked`), while `flock` works: the
+  deployment lease takes one there today, and a second taker is refused.
 
-So on AgentCore the storage is SQLite opened without locking, `file:<path>?vfs=unix-none`, which works there. That is
-safe because nothing else opens it: one compute per session, one process per compute. pi-durable's opener passes the
-URI through unchanged, so nothing upstream is needed. The cost is the rollback journal instead of WAL: SQLite takes WAL
-without locks only in exclusive locking mode, which pi-durable's opener gives no way to ask for; a WAL that matters is
-then an upstream option or an adapter of our own over its `SqliteStorage`. This is a choice of storage, not a fix of
-pi-durable's, and its alternatives are a mounted EFS (POSIX locks, survives deploys, shared across sessions; needs a
-VPC and so a standing NAT for the model's traffic) or a pi-durable storage backend of our own on a database service.
-Both exist to keep conversations across deploys, which an AgentCore agent does not: a deploy resets its state, as it
-does today, and that is decided, so session storage stays.
+So on AgentCore FastAgent opens the SQLite database itself and hands it to pi-durable:
+`new DatabaseSync("file:<path>?vfs=unix-dotfile")`, then `locking_mode = EXCLUSIVE` and `journal_mode = WAL` in that
+order, then pi-durable's `NodeSqliteDatabase` and `SqliteStorage.open`. FastAgent creates the directory, since it
+opens the file itself (pi-durable's own opener would create a directory named after the URI's `file:` prefix instead).
+With `unix-dotfile`, SQLite locks by creating `<path>.lock`, which works on this mount, and the exclusive mode keeps
+WAL's index in the process's memory, so no shared memory is needed; a second opener fails with `database is locked`.
+That is the safety the storage needs, and it is two rules:
 
-Nothing continues a run cut off on AgentCore by itself: a stopped session stays stopped until it is invoked again,
-and the next invocation's process opens the storage and pi-durable carries on (§6.1). A run is cut off when the
-microVM reaches its maximum lifetime (eight hours as deployed), when its host fails, or when FastAgent stops the
-session; a deploy is not one, since it resets the storage. **No alarm is set to continue it.** Every conversation of an
-agent shares one runtime session and one storage, so any invocation wakes them all: a message in any chat, a
-platform's webhook, a schedule's own trigger. Only an agent that receives nothing after the cut leaves its cut-off
-message unanswered until something arrives; a one-shot wake alarm per run (the wake-ups' own mechanism) would close
-that, at a few scheduler calls per run, and is added if that case is seen. A session whose `/ping` answers
+1. **Only the lease holder opens the storage.** One compute per session is not one process per compute: an agent's
+   tools start processes, and `login --deployment` opens a shell on the same `/mnt/data`. The serving process holds
+   the deployment lease, so it is the one that opens the database; anything else that tries is refused.
+2. **The lease holder breaks a stale lock, and says so.** A dotfile lock outlives a stopped microVM (measured), where
+   `flock` does not, so a process that holds the lease knows a `<path>.lock` it finds is a dead process's: it removes
+   it before opening, and logs that it did.
+
+Without locking at all (`vfs=unix-none`), a second opener's writes were accepted and then silently lost (measured),
+which is why the storage keeps a lock.
+
+This is a choice of storage, not a fix of pi-durable's, and nothing upstream is needed. Its alternatives are a mounted
+EFS (POSIX locks, survives deploys, shared across sessions; needs a VPC and so a standing NAT for the model's traffic)
+or a pi-durable storage backend of our own on a database service. Both exist to keep conversations across deploys,
+which an AgentCore agent does not: a deploy resets its state, as it does today, and that is decided, so session
+storage stays.
+
+Nothing continues a run cut off on AgentCore by itself: a stopped session stays stopped until it is invoked again.
+Every process opens the storage and calls pi-durable's `harness.resume()` when it starts, before it handles the
+invocation, so whatever invocation arrives continues the runs the last process left: one that submits nothing (a chat
+message the agent was not summoned for, a platform's URL check) included. A run is cut off when the microVM reaches
+its maximum lifetime (eight hours as deployed) or when its host fails. **No alarm is set to continue it.** Every
+conversation of an agent shares one runtime session and one storage, so any invocation wakes them all: a message in
+any chat, a platform's webhook, a schedule's own trigger. Only an agent that receives nothing after the cut leaves its
+cut-off message unanswered until something arrives; a one-shot wake alarm per run (the wake-ups' own mechanism) would
+close that, at a few scheduler calls per run, and is added if that case is seen. A session whose `/ping` answers
 `HealthyBusy` is not reclaimed for being idle.
+
+**A host failure is not measured**, and is not a graceful stop: what was not yet replicated is lost, and how much of
+the database and its WAL survive is unknown. A process may then find its newest commits missing, against the Agent
+API's promise that nothing accepted is lost, or the database corrupt. It fails visibly then: an open that reports
+`SQLITE_CORRUPT` is an error of the start that says so, never a silent fresh storage, and the next deploy is what
+resets it. This is a limit of session storage while it is a preview, accepted with it.
 
 ### 4.4 Later: shared contexts and agents working together
 
@@ -271,8 +292,9 @@ storage at `/mnt/data`, in `ap-southeast-1`:
 | Question | Measured | So the implementation |
 |---|---|---|
 | What session storage is | NFSv4.0 at `127.0.0.1:/export`, `local_lock=none`, `nocto`, attribute caching of 3600 s; `statfs` reports 1 GiB | Plans for the 1 GB limit (images are inline in entries) |
-| SQLite on it | Every journal mode with locking fails, `database is locked`, so `openNodeSqliteStorage(path)` fails on its first open. `file:<path>?vfs=unix-none` and `?nolock=1` work; with `unix-none`, Node 24 keeps the rollback journal unless `locking_mode = EXCLUSIVE` comes first. pi-durable's JSONL storage works too, holding its whole history in memory | Opens `file:<path>?vfs=unix-none` (§4.3) |
-| A run cut off by `StopRuntimeSession` | The microVM stops at once (the tool's writes stop); nothing runs while the session is not invoked; the next invocation gets a new microVM in about 2 s with the storage and the incarnation as they were, and pi-durable carries on: the cut-off tool is not run again but answered as interrupted, the message is answered, and the one queued behind it too | Needs no recovery of its own on AgentCore |
+| SQLite on it | With its default locks, every journal mode fails, `database is locked`, so `openNodeSqliteStorage(path)` fails on its first open. `file:<path>?vfs=unix-dotfile` with `locking_mode = EXCLUSIVE` then `journal_mode = WAL` works, opened as a `DatabaseSync` and passed through `NodeSqliteDatabase` to `SqliteStorage.open`, and a second process opening it fails with `database is locked`. `vfs=unix-none` works too, but a second process's writes were accepted and then lost. `flock` works: a second taker is refused. pi-durable's JSONL storage works, holding its whole history in memory | Opens the database itself with `unix-dotfile`, EXCLUSIVE and WAL, under the lease (§4.3) |
+| A dotfile lock across a stop | A connection holding the lock when `StopRuntimeSession` came left `<path>.lock` behind; the next microVM's open failed with `database is locked` until the lock was removed, and then read the row committed before the stop | Breaks a stale lock under the lease, and logs it (§4.3) |
+| A run cut off by `StopRuntimeSession` | The microVM stops at once (the tool's writes stop); nothing runs while the session is not invoked; the next invocation gets a new microVM in about 2 s with the storage and the incarnation as they were, and pi-durable carries on: the cut-off tool is not run again but answered as interrupted, the message is answered, and the one queued behind it too | Opens the storage and calls `harness.resume()` when each process starts, before it handles the invocation (§4.3) |
 | Idle timeout (120 s) during a 200 s tool | `/ping` answering `HealthyBusy` kept the session: the tool ran to its end on the same microVM | Answers `HealthyBusy` while a run is live |
 
 Not run: the coding tools' `read` reading a skill's `SKILL.md` through an execution environment.
