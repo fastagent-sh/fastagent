@@ -186,9 +186,32 @@ The agent's own parts carry no prefix. Since the agent chooses the aliases, two 
 
 A host adapter turns the artifact into what its cloud runs, and chooses the storage the harness opens: SQLite on a
 volume (Fly, Railway, Docker), on AgentCore's session storage, or a Cloudflare Durable Object. One process owns a
-storage at a time, so a deployment routes every session of one storage to one process. On a host with no resident
-process, something must start the process when a run was cut off mid-way; the external clock the schedules already
-use is the candidate.
+storage at a time, so a deployment routes every session of one storage to one process.
+
+**AgentCore's session storage** is the managed file system AgentCore mounts per runtime session (a preview feature).
+Measured (§6.1) and documented, it is:
+
+- an NFSv4.0 mount served inside the microVM (`127.0.0.1:/export`, `local_lock=none`), replicated to AWS's storage
+  asynchronously and flushed when the session stops gracefully;
+- isolated per runtime session, with one compute per session at a time, at most 1 GB, and reset by every runtime
+  version update (every deploy) and after 14 idle days;
+- without byte-range locks: AWS documents that advisory locks work within a running session, but SQLite's locks fail
+  there in every journal mode (`database is locked`).
+
+So on AgentCore the storage is SQLite opened without locking, `file:<path>?vfs=unix-none`, which works there. That is
+safe because nothing else opens it: one compute per session, one process per compute. pi-durable's opener passes the
+URI through unchanged, so nothing upstream is needed. The cost is the rollback journal instead of WAL: SQLite takes WAL
+without locks only in exclusive locking mode, which pi-durable's opener gives no way to ask for; a WAL that matters is
+then an upstream option or an adapter of our own over its `SqliteStorage`. This is a choice of storage, not a fix of
+pi-durable's, and its alternatives are a mounted EFS (POSIX locks, survives deploys, shared across sessions; needs a
+VPC and so a standing NAT for the model's traffic) or a pi-durable storage backend of our own on a database service.
+Session storage is kept for now because a deploy already resets an AgentCore agent's state today.
+
+Nothing continues a run cut off on AgentCore by itself: a stopped session stays stopped until it is invoked again,
+and the next invocation's process opens the storage and pi-durable carries on (§6.1). So a run cut off with no message
+following it waits for an external trigger; the one-shot wake alarm the wake-ups already use is the candidate, and
+which runs need it is settled when it is implemented. A session whose `/ping` answers `HealthyBusy` is not reclaimed
+for being idle.
 
 ### 4.4 Later: shared contexts and agents working together
 
@@ -213,9 +236,9 @@ for the steps above.
 
 ## 6. Order
 
-1. **A spike on pi-durable**, run locally on 1.3.0 (§6.1). Still open: SQLite on AgentCore's session storage, and what
-   restarts a run cut off there (§4.3), which need a deployment; and the coding tools' `read` reading a skill's
-   `SKILL.md` through an execution environment, which §3's skills depend on.
+1. **A spike on pi-durable**, on 1.3.0, locally and on AgentCore (§6.1). Still open: the coding tools' `read` reading a
+   skill's `SKILL.md` through an execution environment, which §3's skills depend on, to be checked with the
+   implementation.
 2. The Agent on pi-durable, with the conformance suite in process and over HTTP; channels, schedules, wake-ups, the CLI
    and AgentCore moved onto it; the previous protocol, `LoopPort` and the pi-coding-agent harness deleted.
 3. The artifact: `fastagent build`, and `deploy` from it.
@@ -236,6 +259,16 @@ On pi-durable 1.3.0 with pi-ai's faux model, in process, against memory and SQLi
 | The queue after a run that did not answer | Waits, after a model failure and across a restart (the inbox persists with no run live); a write submission of FastAgent's kind `fastagent.release` with `edits: []` places it (the conversation takes the inputs waiting in its inbox), and lands as an entry | Submits that write after each run that did not answer and at the first open of a conversation whose inbox waits with no run live, and never publishes the entry |
 | Abort | `conversation.abort()` ends the running message and withdraws the queued ones, and a message sent after it settles is taken; but one sent while the aborted run is still settling waits in the inbox, and `abort()` itself waits for a running tool that ignores its signal | Answers `abort` once the stop is recorded (Agent API §5), and submits the `fastagent.release` write once the stopped messages have ended |
 | Ids | Entries, submissions and conversations share one counter per storage, which a new storage starts again (conversation 8 in both); a session-scoped document keeps a random incarnation across reopens and gets a new one in a new storage | Encodes every id as incarnation plus pi-durable's id (§2) |
+
+On AgentCore, with the same pi-durable in a minimal ARM64 container (`/ping`, `/invocations`) whose storage was session
+storage at `/mnt/data`, in `ap-southeast-1`:
+
+| Question | Measured | So the implementation |
+|---|---|---|
+| What session storage is | NFSv4.0 at `127.0.0.1:/export`, `local_lock=none`, `nocto`, attribute caching of 3600 s; `statfs` reports 1 GiB | Plans for the 1 GB limit (images are inline in entries) |
+| SQLite on it | Every journal mode with locking fails, `database is locked`, so `openNodeSqliteStorage(path)` fails on its first open. `file:<path>?vfs=unix-none` and `?nolock=1` work; with `unix-none`, Node 24 keeps the rollback journal unless `locking_mode = EXCLUSIVE` comes first. pi-durable's JSONL storage works too, holding its whole history in memory | Opens `file:<path>?vfs=unix-none` (§4.3) |
+| A run cut off by `StopRuntimeSession` | The microVM stops at once (the tool's writes stop); nothing runs while the session is not invoked; the next invocation gets a new microVM in about 2 s with the storage and the incarnation as they were, and pi-durable carries on: the cut-off tool is not run again but answered as interrupted, the message is answered, and the one queued behind it too | Needs no recovery of its own on AgentCore |
+| Idle timeout (120 s) during a 200 s tool | `/ping` answering `HealthyBusy` kept the session: the tool ran to its end on the same microVM | Answers `HealthyBusy` while a run is live |
 
 Not run: the coding tools' `read` reading a skill's `SKILL.md` through an execution environment.
 
@@ -276,6 +309,6 @@ those protocols are outside the product's goals.
 Settled when they are implemented:
 
 - Hot reload in `dev`: the definition is read on every invoke today; pi-durable installs extensions in a registry.
-- What starts a process on AgentCore to continue a run cut off there (§4.3).
+- Which runs cut off on AgentCore get a wake alarm to continue them (§4.3).
 - Whether pi-ai's `models.json` stays a file or joins `defineAgent`.
 - Bun: pi-durable's portable SQLite core runs there given an adapter over `bun:sqlite`, which does not exist yet.
