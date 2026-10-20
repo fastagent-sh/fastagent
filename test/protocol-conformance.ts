@@ -523,6 +523,15 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         const copied = await all(agent.sessions.get("f"));
         expect(copied.filter((e) => e.kind === "assistant_message")).toHaveLength(answers.length);
         expect(copied.filter((e) => (e.data as { usage?: unknown }).usage !== undefined)).toEqual([]);
+        // The fork's own answers are its cost, also once it is opened again (a thread forked from its room).
+        await drain(agent.invoke({ sessionId: "f", prompt: { text: "two" } }));
+        const own = (entries: Entry[]) =>
+          entries.filter((e) => e.kind === "assistant_message" && !copied.some((c) => c.id === e.id));
+        const fresh = own(await all(agent.sessions.get("f")));
+        expect(fresh.length).toBeGreaterThan(0);
+        for (const answer of fresh) expect((answer.data as { usage?: unknown }).usage).toBeTruthy();
+        const reopened = own(await all((await subject.restart()).sessions.get("f")));
+        expect(reopened).toEqual(fresh);
       });
 
       it("follow catches up, goes live, and a reconnect from the last entry repeats nothing", async () => {
