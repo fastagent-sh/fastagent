@@ -46,7 +46,7 @@ goal needs.
 | **One API of our own: the consumer [Agent API](agent-api.md)**, bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same eight operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
 | **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (settings, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A developer who needs one of those over HTTP adds a route that calls it |
 | **The agent is a public bot.** No identity or session ownership in FastAgent | Who may reach it is decided in front of it. A session id is a name, not a credential: whoever reaches the agent reaches every session. When several users share one deployment, a facade in front keeps each to their own sessions ([security-boundary.md](security-boundary.md) §4) |
-| **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat to its session, a schedule to its session) in its own state, as it already keeps other state |
+| **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another |
 | **No session listing and no deletion** | No consumer needs them; pi-durable has no deletion |
 | **An agent is a standard npm and TypeScript package** (§3) | The artifact is an npm package (§4.1), and an agent must be a value other code can import: an app that embeds it, a deploy by package name and version, another agent that depends on it |
@@ -57,6 +57,24 @@ goal needs.
 | **Schedules are TypeScript**: `defineSchedule({ cron, tz, prompt })`, the prompt a text or a function | A schedule is behaviour, like a tool: a prompt that depends on the time it fires, secrets it may need, and a cron the build checks, including the dialect an external clock accepts |
 | **`SYSTEM.md` is the whole prompt the author writes; `APPEND_SYSTEM.md` goes** | It added to pi-coding-agent's default prompt, which pi-durable does not have |
 | **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; a context package's connectors declare theirs beside each connector. A missing one fails the start, naming where it was declared |
+
+**A mapping is created in one order, in one place.** With Caller-named sessions, a chat's id was its session's, so a
+redelivered first message found its message by key, and two threads created at once met in `conflict`. With sessions
+the Agent names, a channel or a schedule creates a session and records it, and that is a check followed by a write,
+safe only where it is serialized:
+
+1. **Serialized by place.** A mapping is created only inside the work the channel already serializes per place (a
+   chat, a thread): its turn queue, keyed by the place rather than by a session, with its durable turn store. Two
+   messages arriving at once for a new place, or a redelivery of the first, run one after the other, and the second
+   finds the mapping the first wrote. Across processes, one process owns an instance's state at a time (the serving
+   process's lease), so there is one writer.
+2. **Session, then record, then message.** `createSession` (a fork, for a thread), then the mapping written durably,
+   then the invoke into the mapped session with the platform's message id as its `idempotencyKey`. A channel never
+   invokes without `sessionId`, since such an invoke cannot carry a key.
+
+A crash after `createSession` and before the record leaves a session nothing refers to, empty or a fork, which the
+retry does not reuse and nothing deletes; no message is answered twice, since a message is only sent once its session
+is recorded. A crash after the record is a redelivery that finds it, and the key makes the invoke a duplicate.
 
 The previous design's pi-coding-agent harness goes with it: pi's `extensions/` and `.pi/`, `APPEND_SYSTEM.md`, the
 `chat` TUI (replaced by a REPL over the consumer API), and the skills and prompt templates a machine lends from
@@ -190,16 +208,16 @@ for the steps above.
 | `fastagent.config.ts`'s `FastagentConfig`, and `APPEND_SYSTEM.md` | `defineAgent()`, every field optional; `SYSTEM.md` alone |
 | Extensions an agent writes for itself, live on its next session | A build and a deployment, as for any code (§3) |
 | Schedules an agent writes for itself, live within 30 seconds | `wake`'s recurring form, kept in the instance's state (§3) |
-| A thread's Caller-named session, whose existence records that the room was forked ([participant-model.md](participant-model.md) rungs 3 and 4) | The thread's session id, recorded in the channel's state after `createSession` forks the room. The branch point is still found by key (`getMessage` with the platform's message id). A crash between the fork and the record leaves a fork nothing refers to, which the retry does not reuse; nothing deletes it |
-| [agent-service.md](agent-service.md) §7 to §9, [conformance-levels.md](conformance-levels.md) | This note and the Agent API |
+| A thread's Caller-named session, whose existence records that the room was forked ([participant-model.md](participant-model.md) rungs 3 and 4) | The thread's session id, recorded in the channel's state after `createSession` forks the room, in the order and place of §2. The branch point is still found by key (`getMessage` with the platform's message id) |
+| [agent-service.md](agent-service.md) §3.6 and §7 to §14, [conformance-levels.md](conformance-levels.md) | This note and the Agent API |
 
 ## 6. Order
 
 1. **A spike on pi-durable** that answers what the Agent API promises: SQLite on AgentCore's session storage and what
    restarts a run cut off there; the definition rendered and run (`SYSTEM.md`, `AGENTS.md`, skills, tools); how
    images are stored, behind `attachment`; whether an answer being written already has its entry id and its text so
-   far, which `message_delta` and `state.reply` need (pi-durable commits a partial answer at most every 100 ms); whether a fork's copied entries can be told from its own, which
-   `usage` needs; and the queue left waiting after a failed or aborted run.
+   far, which `message_delta` and `state.reply` need (pi-durable commits a partial answer at most every 100 ms); and the
+   queue left waiting after a failed or aborted run.
 2. The Agent on pi-durable, with the conformance suite in process and over HTTP; channels, schedules, wake-ups, the CLI
    and AgentCore moved onto it; the previous protocol, `LoopPort` and the pi-coding-agent harness deleted.
 3. The artifact: `fastagent build`, and `deploy` from it.

@@ -107,7 +107,9 @@ Every operation that returns a `Promise` resolves, and failures are values, not 
 and result MUST be JSON-serializable.
 
 `result` resolves with the message's end whether or not the Caller iterates the events, so a Caller that wants only
-the answer awaits it and reads nothing else. It resolves `unfinished` when the stream stops before the message's end
+the answer awaits it and reads nothing else. The events are produced as they are read: an `Invocation` that is never
+iterated holds nothing but its `result`, and one first iterated later attaches to its message as it is then (§5.1),
+from its receipt, with its entries replayed and the snapshot standing for what was missed live. It resolves `unfinished` when the stream stops before the message's end
 is known, which a `serving_error` event says (§6): the Agent cannot go on with it (its storage failed), or a client of a
 remote Agent lost its connection (§10). `unfinished` names what the receipt said, when
 it arrived; it never says the message was refused, so a Caller asks `getMessage`, or sends again with the same key,
@@ -258,10 +260,11 @@ one thing for as long as the deployment exists, even when its storage is rebuilt
 a storage that is gone answers `not_found` (or `undefined`), never another session, message or entry.
 
 - **`createSession`** creates an empty session, or, with `from`, a fork: the new session starts with the source's
-  history up to `entryId`, or all of it. A fork copies history, not messages: the source's messages, queued or done,
-  stay the source's, and only recorded entries are copied when the source is busy. An unknown source or entry answers
-  `not_found`. `context: "recent"` copies the same history but gives the model only its recent part, as a long session
-  is bounded; a `compaction` entry may record the bound. A chat thread starting from its room is the use: it knows
+  history up to `entryId`, or all of it. A fork shares that history, not messages: its history begins with the
+  source's entries themselves, the same ids and the same data, and what it writes afterwards is its own; the source's
+  messages, queued or done, stay the source's, and when the source is busy only its recorded entries are shared. An
+  unknown source or entry answers `not_found`. `context: "recent"` shares the same history but gives the model only
+  its recent part, as a long session is bounded; a `compaction` entry may record the bound. A chat thread starting from its room is the use: it knows
   what the room knew without paying for all of it.
 - **`read`** returns the state and one page of entries, after or before an entry cursor, oldest first within the page.
   Without a cursor it returns the newest page, so a Caller opening a long session shows the latest entries and pages
@@ -307,6 +310,8 @@ it never showed reads the newest page and resumes after its last entry.
 ```ts
 interface Entry {
   id: string;
+  /** The session that wrote it: a fork's history begins with entries its source wrote. */
+  sessionId: string;
   parentEntryId?: string;
   timestamp: number;
   kind: string;
@@ -328,15 +333,17 @@ type SessionEvent =
   | { type: "serving_error"; error: AgentError };
 ```
 
-- Entries are durable, ordered as appended, and each names its parent, so a fork shares what it inherited. An entry's
-  id is the cursor; `timestamp` is milliseconds since the epoch. Images in an entry are refs, read with `attachment`.
+- Entries are durable, ordered as appended, and each names its parent and the session that wrote it, so a fork shares
+  what it inherited. An entry is the same wherever it is read: the same id and the same data in its session and in
+  every fork that shares it. Its id is the cursor; `timestamp` is milliseconds since the epoch. Images in an entry are refs, read with `attachment`.
 - A `user_message` entry is a message taken, and names it.
 - An `assistant_message` entry is published once it is complete. While it is being written, its id is already known:
   `message_delta` events name it and add up to it, and `state.reply` holds what they added up to so far, so a Caller
   that attaches mid-answer shows it from there and appends the deltas that follow.
 - An `assistant_message` carries the `usage` of the model response it is, and a `compaction` the `usage` of the model
-  calls that wrote its summary. An entry a fork copied carries none: its cost was the source session's. So the sum over
-  a session's entries is what its answers and compactions cost, and the sum over sessions counts each call once.
+  calls that wrote its summary. A session's cost is the sum over the entries it wrote, those whose `sessionId` is its
+  own; an entry a fork shares is its source's cost. Summed that way, each model call counts once, within a session or
+  across sessions.
 - `done` reports a message that has ended.
 - Every other event is live: a Caller that attaches again gets the entries it missed and the snapshot, not the missed
   deltas.
@@ -457,14 +464,14 @@ One executable suite, run against the Agent in process and through the HTTP bind
 
 | Area | Checks |
 |---|---|
-| Invoke | `accepted` first; a `/<name>` among `info().commands` is expanded for the model while its `user_message` holds the text as sent, and an unknown `/<name>` is sent as written; the stream ends with the message's `done` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; `result` resolves with the same `done` whether or not the events are read; a remote invoke whose connection is lost ends with `serving_error` and resolves `result` as `unfinished`, with the receipt's ids once it arrived, never as a rejection; when the storage fails, an in-process invoke and a `resume` end with `serving_error` instead of hanging, and `result` is `unfinished`; iteration never throws; every event is JSON |
+| Invoke | `accepted` first; a `/<name>` among `info().commands` is expanded for the model while its `user_message` holds the text as sent, and an unknown `/<name>` is sent as written; the stream ends with the message's `done` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; `result` resolves with the same `done` whether or not the events are read, and an invocation first iterated after its message is taken begins with its receipt and replays its entries; a remote invoke whose connection is lost ends with `serving_error` and resolves `result` as `unfinished`, with the receipt's ids once it arrived, never as a rejection; when the storage fails, an in-process invoke and a `resume` end with `serving_error` instead of hanging, and `result` is `unfinished`; iteration never throws; every event is JSON |
 | Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is `queued` at position 0 until taken, then taken while the session is still busy; a steer the agent did not take before it stopped is taken no later than the messages queued with `queue`; an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
 | Idempotency | A key without `sessionId` is `invalid_request`; a key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`; a duplicate's stream ends with the same `done`; concurrent invokes with one key make one message |
 | Messages | `getMessage` by id and by key follows a message through queued, taken and done, and answers `undefined` for an unknown one; a detached message is done; `abort` stops the taken message and withdraws the queued ones, all ending `canceled`, reports them, and reports nothing on an idle session; messages invoked after a failed or aborted one are taken; a done message's duplicate replays its own entry through its answer, or its own entry alone, with no snapshot, and one withdrawn before it was taken delivers only `accepted` and `done`; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
 | Restart | A message accepted just before a restart is answered after it, and `getMessage` finds it; queued messages survive and are taken; no message is redone (a tool's effect count does not grow) |
 | Attaching | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; a `resume`, and an invoke stream once its message is taken, sends one `state` snapshot after the replay and before anything live; an invoke stream queued behind another message gets none of that message's entries, live events or `done`, and no `reply` before its own message is taken; one attached mid-answer gets `state.reply`, and the deltas that follow add up to the `assistant_message` entry they name; a reconnect after the last entry it had delivers each entry exactly once; an unknown session or cursor is a single `rejected` |
-| Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` and every `compaction` the session wrote carries `usage`, and no entry a fork copied does; the state moves idle → running → idle |
-| Sessions | A fork holds the history up to its entry and none of the messages, and leaves the source unchanged; an unknown fork source is `not_found` |
+| Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` and every `compaction` carries `usage`; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source, and summing each session's own entries counts each model call once; the state moves idle → running → idle |
+| Sessions | A fork shares the history up to its entry and none of the messages, and leaves the source unchanged; an unknown fork source is `not_found` |
 | HTTP | A `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `Accept: application/json` on an invoke answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between |
 
 ## 10. HTTP binding
@@ -520,6 +527,7 @@ From [SPEC v1](../SPEC.md), which the code implements until this API replaces it
 | `follow` | `resume`: replay by `replayFrom`, a snapshot that MUST be sent, live; an answer can be joined mid-way |
 | An invoke stream that is `messages.follow` of its message | The same, attached to its message, with a snapshot once it is taken |
 | `prompt: { text, images }` | `content` parts, checked against `info().inputs` |
+| A fork's entries copied, with ids of their own and no `usage` | A fork shares its source's entries; every entry names the `sessionId` that wrote it, and a session's cost is its own entries' |
 | `sessions.create({ sessionId, fork })` | `createSession({ from })` |
 | `capabilities`, `durableQueue`, `durableTaken` | Gone: durability is a MUST |
 | The `intercepted` and `interrupted` outcomes; `source`; `takenAt`, `endedAt` | Gone |

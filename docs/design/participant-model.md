@@ -242,8 +242,9 @@ already hold (attachments are deduplicated by message identity; text cannot be, 
 cannot read the session).
 
 > With the decided [Agent API](agent-api.md) the Agent names sessions, so the thread's session id is recorded in the
-> channel's state instead of being the record itself ([architecture.md](architecture.md) §5). This section describes
-> the code until that move lands.
+> channel's state instead of being the record itself, created inside the per-place turn queue in the order
+> `createSession`, record, invoke ([architecture.md](architecture.md) §2, §5). This section describes the code until
+> that move lands.
 
 **Rungs 3 and 4 are one mechanism with two parameters, implemented as a fork of the room's session.** The
 channel knows which place this one branched from and the reply chain the thread starts under (the referent,

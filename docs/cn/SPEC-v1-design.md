@@ -47,6 +47,9 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 停了，原因由流的最后一个事件 `serving_error` 说明：Agent 没法继续（比如存储故障），或者远程客户端的连接断了。流不会悄无声息地停。`unfinished` 带着回执里已知的会话 id 和消息 id（如果回执已经到了），它从不表示“被拒绝”，所以调用方应该用
 `getMessage` 查，或带同一个 key 重发，不带 key 时不要重发。
 
+事件是边读边产生的：从不迭代的 `Invocation` 除了 `result` 什么都不保留；晚些才开始迭代的，从回执开始，按那一刻的状态接上它的
+消息（重放它的 entry，再发快照，快照代替错过的实时内容）。所以只 `await result` 的调用方（比如定时任务）不会让 Agent 缓存事件。
+
 JSON 模式不等消息结束：一次回答可能要几分钟，比大多数部署前面代理的空闲超时（例如 60 秒）还长；等待中连接被切断，没带 key
 的调用方连查询用的 id 都拿不到。所以 JSON 模式一接受就返回回执。
 
@@ -81,8 +84,8 @@ SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照�
 流，即使在第一条 entry 到达之前断线，重连时浏览器带上的 `Last-Event-ID` 也能从快照处接上，不会漏掉断线期间写下的 entry。
 
 **回答中途接上也能看到已经写出的部分。** 正在写的 `assistant_message` 在写完前就有 id：`message_delta` 带上这个 `entryId`，
-快照里的 `state.reply` 是目前已写出的文字。客户端先显示 `reply`，再把后续的 delta 接在后面。pi-durable 每 100 毫秒就把部分回答
-写进存储，所以这一点有基础，spike 时确认。
+快照里的 `state.reply` 是目前已写出的文字。客户端先显示 `reply`，再把后续的 delta 接在后面。pi-durable 最多每 100 毫秒提交一次
+部分回答；回答写完前是否已经有 entry id 和已写出的文字，由 spike 确认。
 
 典型用法：客户端回到一个之前显示过的会话，就从它手里最后一条 entry 之后 `resume`；打开一个很长、从没显示过的会话，就先 `read`
 最新一页，再从这页最后一条之后 `resume`。
@@ -90,13 +93,18 @@ SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照�
 ## 4. 几个关键决定
 
 - **会话 id 由服务端生成，调用方自己记住。** pi-durable 生成 conversation id，不接受调用方指定。channel 和定时任务在自己的
-  状态里记“哪个聊天对应哪个会话”。服务端不提供会话列表，也不提供删除。
+  状态里记“哪个聊天或 thread 对应哪个会话”。服务端不提供会话列表，也不提供删除。
+- **映射按固定顺序、在固定的地方建立**（architecture.md §2）：只在 channel 已经按“位置”（一个聊天、一个 thread）串行处理的地方
+  建立映射，也就是以位置为键的 turn queue 加持久的 turn store，所以同一个新位置并发到达的两条消息、或者首条消息的重投，会先后执行，
+  后一个能看到前一个写下的映射；跨进程时，同一时间只有一个进程持有实例状态（服务进程的租约）。顺序是：先 `createSession`（开 thread
+  时是分叉），再持久地写映射，最后带平台消息 id 作为 key 向映射到的会话 invoke。channel 从不发不带 `sessionId` 的 invoke，因为那样
+  带不了 key。`createSession` 之后、写映射之前崩溃，会留下一个没人引用的会话（空的，或一个 fork），重试不会复用它，也没有东西删除它；
+  但不会有消息被回答两次，因为消息只在映射写好之后才发。
 - **id 是不透明的，永不复用。** pi-durable 的 id 在每个存储里是一个从 2 开始的计数器，而部署可能换掉存储（AgentCore 每次 deploy
   会清空 session storage，卷也可能重建）。所以对外的 id 是“存储的 incarnation（创建存储时生成的随机 id）+ pi-durable 的 id”，
   会话、消息、entry 都这样。存储换掉后，旧 id 得到 `not_found`，而不是别人的新会话；id 本身也说明了它属于哪个存储，多个存储时
   可以据此路由。这是编码，不是查表，不需要存任何映射。
-- **开 thread**：分叉点仍然按 key 找（`getMessage` 带平台消息 id）；thread 对应的会话 id 在 `createSession` 分叉之后记进 channel
-  的状态。如果分叉之后、记录之前进程崩溃，会留下一个没人引用的 fork，重试不会复用它，也没有东西删除它。
+- **开 thread**：分叉点仍然按 key 找（`getMessage` 带平台消息 id）；thread 对应的会话按上面的顺序建立和记录。
 - **会话 id 只是名字，不是凭证。** 它可能是顺序编号。能访问到 agent 的人就能访问它的每个会话：读、接上、发消息、停止、从它分叉。
   多个用户共用一个部署时，用户之间的隔离由前面的一层负责：一个记录“用户 → 会话”映射、只放行自己会话的 facade，包括 fork 的
   源会话和不带 `sessionId` 的 invoke 新建的会话（见 [security-boundary.md](../design/security-boundary.md) §4）。认证、限流也由
@@ -109,8 +117,10 @@ SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照�
 - **消息状态只保留消费者需要的字段：** 没有 `takenAt`、`endedAt`，时间只在 entry 的 `timestamp` 上。
 - **消息的结局只有四种：** `completed`、`max_tokens`、`canceled`、`failed`。没有 `interrupted`：进程重启后 pi-durable 会接着
   回答已取走的消息，排队的消息也还在。`answer` 只在 `completed` 和 `max_tokens` 时出现，执行过工具调用的中间回复不算回答。
-- **用量记在 entry 上：** 每条 `assistant_message` 一份，`compaction` 记生成摘要的那几次调用；fork 复制来的 entry 不带。
-  单个会话内或跨会话相加，每次模型调用都只算一次。
+- **fork 共享源会话的 entry：** fork 的历史开头就是源会话的那些 entry 本身，id 和内容都相同，之后写的才是 fork 自己的。每条 entry
+  带 `sessionId`，说明是哪个会话写的；同一条 entry 不管从哪个会话读，内容都一样。
+- **用量记在 entry 上：** 每条 `assistant_message` 一份，`compaction` 记生成摘要的那几次调用。一个会话的花费是它自己写的 entry
+  （`sessionId` 是它自己的）的 `usage` 之和；fork 共享来的 entry 算源会话的。这样不管是单个会话内还是跨会话相加，每次模型调用都只算一次。
 - **会扩展的取值都是开放的**（§6.1）：事件类型、entry 种类、内容类型、`inputs`、结局、会话状态、错误码。规范定义的名字不含
   `.`；实现方自己加的必须带自己的前缀（例如 `fastagent.plan`）。客户端遇到不认识的事件就忽略，不认识的会话状态当作“忙”，
   不认识的结局当作“结束但没有完成”。
@@ -169,6 +179,7 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | invoke 流等于这条消息的 `messages.follow` | 同样只接这条消息，消息被处理后先发快照 |
 | `prompt: { text, images }` | `content` 内容数组，按 `info().inputs` 检查 |
 | `sessions.create({ sessionId, fork })` | `createSession({ from })` |
+| fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`，会话的花费只算它自己写的 entry |
 | `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
 | `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |
 | `collect`；`Accept: application/json` 返回 `202` | `invocation.result`，可能是 `unfinished`；JSON 模式同样返回 `202` |
