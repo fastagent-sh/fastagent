@@ -34,24 +34,26 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | 操作 | HTTP | 做什么 |
 |---|---|---|
 | `info` | `GET /agent` | bot 的名字、简介，消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`），以及可用的命令（`commands`：prompt 模板和 skill） |
-| `invoke` | `POST /invoke` | 发一条消息：不带 `sessionId` 就新建会话。默认返回 SSE 流；`Accept: application/json` 时一接受就返回 `202` 和回执，之后用 `getMessage` 查或 `resume` 接上 |
+| `invoke` | `POST /invoke` | 向会话发一条消息（不带 `sessionId` 就新建会话）。消息一被持久记录就返回 `202` 和回执，不等它被回答 |
 | `getMessage` | `GET /sessions/{s}/messages/{m}`，或 `?idempotencyKey=` 按 key 查 | 按 id 或发送时的 key 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
 | `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”） |
 | `read` | `GET /sessions/{s}` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
 | `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
-| `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；停止一被记录就返回，不等正在执行的工具退出 |
+| `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样 |
 | `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容 |
 
-进程内的 `invoke` 返回一个既能逐条读事件、又带 `result` 的对象：只想要最终回答就 `await invocation.result`，替代了原来的
-`collect`。`result` 有三种结果：消息结束（`ok: true`）、被拒绝（`error`，什么都没记录），以及 `unfinished`：流在知道结局之前
-停了，原因由流的最后一个事件 `serving_error` 说明：Agent 没法继续（比如存储故障），或者远程客户端的连接断了。流不会悄无声息地停。`unfinished` 带着回执里已知的会话 id 和消息 id（如果回执已经到了），它从不表示“被拒绝”，所以调用方应该用
-`getMessage` 查，或带同一个 key 重发，不带 key 时不要重发。
+**发消息和看会话是分开的两件事**，和 pi-durable 一样：`submit` 返回一个句柄，过程另外用 `watchEvents` 订阅。对应到这里：
 
-事件是边读边产生的：从不迭代的 `Invocation` 除了 `result` 什么都不保留；晚些才开始迭代的，从回执开始，按那一刻的状态接上它的
-消息（重放它的 entry，再发快照，快照代替错过的实时内容）。所以只 `await result` 的调用方（比如定时任务）不会让 Agent 缓存事件。
-
-JSON 模式不等消息结束：一次回答可能要几分钟，比大多数部署前面代理的空闲超时（例如 60 秒）还长；等待中连接被切断，没带 key
-的调用方连查询用的 id 都拿不到。所以 JSON 模式一接受就返回回执。
+- `invoke` 返回回执 `{ sessionId, message, duplicate }`，以及一个 `wait()`，等这条消息结束，对应 pi-durable 的
+  `Submission.wait()`。`wait()` 返回 `done`，或者 `unfinished`（Agent 的存储出错，或远程客户端的连接断了），它从不表示“被拒绝”：
+  调用方应该等 Agent 恢复后用 `getMessage` 查，不带 key 时不要重发。从不调用 `wait()` 的回执不占任何资源。
+- 被拒绝时返回错误，什么都没记录，可以重发。
+- 想看回答怎么写出来，就用 `resume` 订阅会话。**一条消息的回答，是会话事件里它自己那条 `user_message`（会注明是哪条消息）之后、
+  到它的 `done` 为止的内容**；在那之前的事件属于别的消息。为了不漏，调用方在 `invoke` 之前先 `resume`，或者从手里最后一条 entry
+  之后 `resume`。TypeScript 客户端把这件事包成了 `stream(request)`：发消息，并给出从这条消息的 `user_message` 到它的 `done` 的
+  事件。它只是 API 的一个调用方，不增加任何语义。
+- HTTP 上 `POST /invoke` 不等消息被回答：一次回答可能要几分钟，比大多数部署前面代理的空闲超时（例如 60 秒）还长。想看过程就先开
+  `GET /sessions/{s}/events`；只要结果就用 `getMessage` 轮询到 `done`。
 
 消息的输入是内容数组 `content: [{ type: "text", text }, { type: "image", mimeType, data }]`，`user_message` 和 `tool_result`
 entry 也是同样的结构。内容类型是开放的取值（§6.1），以后加新类型不用改结构。
@@ -63,19 +65,13 @@ entry 也是同样的结构。内容类型是开放的取值（§6.1），以后
 
 ## 3. 接上一个会话：重放、快照、实时
 
-这部分参照了 ACP v2 的 `session/resume`。`resume` 接上的是整个会话，invoke 的流接上的是它自己那条消息，两者都分三步：
+这部分参照了 ACP v2 的 `session/resume`。`resume` 分三步：
 
-1. **重放**：`resume` 按 `replayFrom` 决定：不带就不重放；`{ type: "start" }` 重放全部 entry；`{ type: "after", entryId }`
-   重放这条之后的。invoke 的流在消息被取走后，重放这条消息自己从 `user_message` 开始的 entry。重放里只有 entry，没有过去的
-   实时事件和状态。
+1. **重放**：按 `replayFrom` 决定：不带就不重放；`{ type: "start" }` 重放全部 entry；`{ type: "after", entryId }` 重放这条之后的。
+   重放里只有 entry，没有过去的实时事件和状态。
 2. **快照**：然后**必须**发一个 `state`，即使什么都没重放。它是“过去”和“现在”的分界线：客户端以它为准判断 bot 是不是还在回答，
    不要从重放内容去推断。
-3. **实时**：之后是实时事件和新的 entry，和快照之间不漏不重。`resume` 收到整个会话的，每条消息结束时发它的 `done`；invoke 的流
-   只在它的消息被处理期间收到，以它自己的 `done` 结束。
-
-invoke 的流在消息排队期间只收到 `state`，不带 `reply`：排在别的消息后面时，收不到那条消息的 entry、实时事件和 `done`。
-对一条已经结束的消息重复发送，没有实时部分，所以不发快照：重放它从 `user_message` 到回答的 entry（没有回答就只有
-`user_message`，排队时就被撤回的消息什么都没有），然后是 `done`。
+3. **实时**：之后是实时事件和新的 entry，和快照之间不漏不重；每条消息结束时发它的 `done`。
 
 `resume` 只在调用方停止读取，或以 `serving_error` 结束时才结束。HTTP 绑定的 TypeScript 客户端不会自己重连：连接断了就以
 `serving_error` 结束流，由调用方从最后一条 entry 之后再 `resume`。
@@ -115,14 +111,13 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
   上层负责。
 - **幂等 key 必须和 `sessionId` 一起用。** pi-durable 的 key 只在单个会话内有效；不带会话的 invoke 如果重试，会建出两个会话。
   想安全重试第一条消息，就先 `createSession` 拿到 id，再带 key 发。
-- **查一条消息：`getMessage`。** 参照 A2A 的 `GetTask` 和 OpenAI 的 `GET /responses/{id}`。调用方丢了流之后，用它查消息状态，
+- **查一条消息：`getMessage`。** 参照 A2A 的 `GetTask` 和 OpenAI 的 `GET /responses/{id}`。调用方不知道消息怎样了时，用它查状态，
   再用 `resume` 接上会话看 agent 写了什么。用自己的东西（比如聊天平台的消息 id）作 key 的调用方，可以直接按 key 查，不用自己
   维护映射。
 - **消息状态只保留消费者需要的字段：** 没有 `takenAt`、`endedAt`，时间只在 entry 的 `timestamp` 上。
-- **`abort` 不等工具退出。** 停止一被记录就返回，并报告停下了哪些消息；不理会停止信号的工具不会让它挂住。被停下的消息在 agent
-  放手之后以 `canceled` 结束，并发出 `done`，在那之前仍是 `taken`。之后发来的消息，等被停下的消息都结束后照常处理。`abort` 是幂等的：
-  它报告所有还没结束的消息，包括之前一次 `abort` 已经停下的，所以工具不理会停止信号时连发两次 `/stop`，第二次仍会说明正在停止哪些
-  消息。如果 `abort` 已经返回、被停的消息还没结束时进程重启，这条消息在重启后以 `canceled` 结束，不会被接着回答。
+- **`abort` 和 pi-durable 一致。** 它停下正在回答的消息、撤回排队的消息，等这些消息都以 `canceled` 结束后才返回，并报告停下了
+  哪些。停止会先被持久记录再等待，所以调用方不再等待也不会丢掉这次中止，进程重启后这些消息照样以 `canceled` 结束。正在执行的工具
+  要响应中止信号才会结束，这是对工具的要求。
 - **消息的结局只有四种：** `completed`、`max_tokens`、`canceled`、`failed`。没有 `interrupted`：进程重启后 pi-durable 会接着
   回答已取走的消息，排队的消息也还在。`answer` 只在 `completed` 和 `max_tokens` 时出现，执行过工具调用的中间回复不算回答。
 - **fork 共享源会话的 entry：** fork 的历史开头就是源会话的那些 entry 本身，id 和内容都相同，之后写的才是 fork 自己的。每条 entry
@@ -184,12 +179,13 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | `commands()` | 并入 `info().commands`，调用方读一次即可 |
 | `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`（按 id 或 key）；`resume`；`abort` |
 | `follow` | `resume`：按 `replayFrom` 重放，必发快照，再接实时；回答中途也能接上 |
-| invoke 流等于这条消息的 `messages.follow` | 同样只接这条消息，消息被处理后先发快照 |
+| invoke 流式返回这条消息的事件，到它的 `done` 为止 | `invoke` 只返回回执；看过程用 `resume`，等结局用 `wait()`，和 pi-durable 的 `submit`、`watchEvents`、`Submission.wait()` 一样 |
 | `prompt: { text, images }` | `content` 内容数组，按 `info().inputs` 检查 |
 | `sessions.create({ sessionId, fork })` | `createSession({ from })` |
 | fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`，会话的花费只算它自己写的 entry |
 | `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
 | `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |
-| `collect`；`Accept: application/json` 返回 `202` | `invocation.result`，可能是 `unfinished`；JSON 模式同样返回 `202` |
-| `serving_error { message }` | `serving_error { error }`：无法继续的流以它结束 |
+| `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`；`POST /invoke` 总是返回 `202` 和回执 |
+| `abort` 等被停下的消息结束后返回 | 不变，和 pi-durable 的 `conversation.abort()` 一样 |
+| `serving_error { message }` | `serving_error { error }`：无法继续的 `resume` 以它结束 |
 | 只检查带 body 的请求 | 每个 `POST` 都要求 `content-type: application/json` |
