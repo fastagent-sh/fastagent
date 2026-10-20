@@ -70,6 +70,7 @@ my-agent/
   fastagent.config.ts             defineAgent({...}): every field optional
   SYSTEM.md  AGENTS.md            the agent's prompt; how to work on the agent
   skills/<name>/SKILL.md          Agent Skills
+  prompts/<name>.md               prompt templates a user runs as /<name>
   src/
     tools/*.ts                    pi-durable defineTool, with needs([...]) for secrets
     extensions/*.ts               pi-durable defineExtension
@@ -105,12 +106,15 @@ configuration leaves it out; a deployment cannot add one, since code ships in th
 
 `openAgent(agent)` assembles it: pi-ai's model registry and credentials, a pi-durable `Harness` over the instance's
 storage, `SYSTEM.md`, `AGENTS.md` and the skills rendered into pi-durable's prompt sections, the tools and extensions
-installed with the secrets they declared, and the execution environment its context declares. The result is the Agent
+installed with the secrets they declared, and the execution environment its context declares. Prompt templates are
+FastAgent's, not the harness's: `invoke` expands a message that starts with `/<name>` before pi-durable sees it, with
+pi's template format (a `description` in the frontmatter, `$1` and `$@` for arguments), and `info()` lists them with
+the skills as the agent's commands ([Agent API](agent-api.md) §3). The result is the Agent
 API's `Agent`, plus `harness`. `dev`, `start` and an embedder's process call the same function, so an agent behaves the
 same wherever it runs.
 
 **An agent changing itself** ([agent-model.md](agent-model.md) §6) keeps what is text and loses what is code. Its
-text (`SYSTEM.md`, `AGENTS.md`, skills) is read for each request, so a change it makes takes effect on its next
+text (`SYSTEM.md`, `AGENTS.md`, skills, prompt templates) is read for each request, so a change it makes takes effect on its next
 answer, and lasts until the next deployment, as today. Its code is built into the artifact, so a tool, an extension or
 a schedule it writes takes effect only through a build and a deployment, the way its author's does
 ([#605](https://github.com/fastagent-sh/fastagent/issues/605)). Recurring work it sets up for itself is state, not
@@ -184,7 +188,6 @@ for the steps above.
 | `defineTool` with Zod, and its `secrets`; `defineChannel`'s `secrets` | pi-durable's `defineTool`; `needs([...])` in the module that reads them |
 | `tools/`, `channels/` and `schedules/` read by a scan at run time (`loader.ts`); schedules in markdown | `src/` registered by a generated registry; `defineSchedule` |
 | `fastagent.config.ts`'s `FastagentConfig`, and `APPEND_SYSTEM.md` | `defineAgent()`, every field optional; `SYSTEM.md` alone |
-| Prompt templates (`prompts/`, run as `/<name>`) | Nothing: an instruction worth reusing is a skill |
 | Extensions an agent writes for itself, live on its next session | A build and a deployment, as for any code (§3) |
 | Schedules an agent writes for itself, live within 30 seconds | `wake`'s recurring form, kept in the instance's state (§3) |
 | A thread's Caller-named session, whose existence records that the room was forked ([participant-model.md](participant-model.md) rungs 3 and 4) | The thread's session id, recorded in the channel's state after `createSession` forks the room. The branch point is still found by key (`getMessage` with the platform's message id). A crash between the fork and the record leaves a fork nothing refers to, which the retry does not reuse; nothing deletes it |

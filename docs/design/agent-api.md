@@ -65,6 +65,8 @@ interface AgentInfo {
   description?: string;
   /** The content part types a prompt may carry; `text` is always among them. */
   inputs: string[];
+  /** What a Caller may offer as `/<name>`: the agent's prompt templates and skills (§3). */
+  commands: { name: string; description?: string }[];
 }
 
 /** The events of one message, and the message's end as a value. */
@@ -132,6 +134,12 @@ type InvokeEvent =
 
 `content` holds at least one part. A part whose `type` is not among `info().inputs` is refused with
 `invalid_request`, before anything is recorded.
+
+A message whose text starts with `/<name>`, for a `name` among `info().commands`, is a command: the Agent expands it
+before the model sees it, a prompt template into its text with the words after the name as its arguments, a skill into
+an instruction to use it. The `user_message` entry holds what the Caller sent, so a history shows `/review 123`, not
+the expansion. A `/` followed by a name the Agent does not know is sent to the model as written. A chat client shows
+`commands` as a menu, and a channel can register them as its platform's commands.
 
 ### 3.1 The stream
 
@@ -449,7 +457,7 @@ One executable suite, run against the Agent in process and through the HTTP bind
 
 | Area | Checks |
 |---|---|
-| Invoke | `accepted` first; the stream ends with the message's `done` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; `result` resolves with the same `done` whether or not the events are read; a remote invoke whose connection is lost ends with `serving_error` and resolves `result` as `unfinished`, with the receipt's ids once it arrived, never as a rejection; when the storage fails, an in-process invoke and a `resume` end with `serving_error` instead of hanging, and `result` is `unfinished`; iteration never throws; every event is JSON |
+| Invoke | `accepted` first; a `/<name>` among `info().commands` is expanded for the model while its `user_message` holds the text as sent, and an unknown `/<name>` is sent as written; the stream ends with the message's `done` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; `result` resolves with the same `done` whether or not the events are read; a remote invoke whose connection is lost ends with `serving_error` and resolves `result` as `unfinished`, with the receipt's ids once it arrived, never as a rejection; when the storage fails, an in-process invoke and a `resume` end with `serving_error` instead of hanging, and `result` is `unfinished`; iteration never throws; every event is JSON |
 | Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is `queued` at position 0 until taken, then taken while the session is still busy; a steer the agent did not take before it stopped is taken no later than the messages queued with `queue`; an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
 | Idempotency | A key without `sessionId` is `invalid_request`; a key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`; a duplicate's stream ends with the same `done`; concurrent invokes with one key make one message |
 | Messages | `getMessage` by id and by key follows a message through queued, taken and done, and answers `undefined` for an unknown one; a detached message is done; `abort` stops the taken message and withdraws the queued ones, all ending `canceled`, reports them, and reports nothing on an idle session; messages invoked after a failed or aborted one are taken; a done message's duplicate replays its own entry through its answer, or its own entry alone, with no snapshot, and one withdrawn before it was taken delivers only `accepted` and `done`; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
@@ -506,7 +514,8 @@ From [SPEC v1](../SPEC.md), which the code implements until this API replaces it
 |---|---|
 | A harness-neutral protocol, implemented through a harness port and `LoopPort` | The consumer API of one harness, pi-durable |
 | A Caller names a session, or the Agent does | The Agent names every session; ids are opaque and never reused |
-| `sessions.list`, `rewind`, `compact`, `update`, `delete`, the `/control` plane, `models`, `commands` | Gone; operating the agent is pi-durable's own API |
+| `sessions.list`, `rewind`, `compact`, `update`, `delete`, the `/control` plane, `models` | Gone; operating the agent is pi-durable's own API |
+| `commands()` | `info().commands`, which a Caller reads once |
 | `messages.get`, `messages.follow`, `messages.cancel` | `getMessage` by id or key; `resume`; `abort` |
 | `follow` | `resume`: replay by `replayFrom`, a snapshot that MUST be sent, live; an answer can be joined mid-way |
 | An invoke stream that is `messages.follow` of its message | The same, attached to its message, with a snapshot once it is taken |

@@ -33,7 +33,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 
 | 操作 | HTTP | 做什么 |
 |---|---|---|
-| `info` | `GET /agent` | bot 的名字、简介，以及消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`） |
+| `info` | `GET /agent` | bot 的名字、简介，消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`），以及可用的命令（`commands`：prompt 模板和 skill） |
 | `invoke` | `POST /invoke` | 发一条消息：不带 `sessionId` 就新建会话。默认返回 SSE 流；`Accept: application/json` 时一接受就返回 `202` 和回执，之后用 `getMessage` 查或 `resume` 接上 |
 | `getMessage` | `GET /sessions/{s}/messages/{m}`，或 `?idempotencyKey=` 按 key 查 | 按 id 或发送时的 key 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
 | `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”） |
@@ -52,6 +52,11 @@ JSON 模式不等消息结束：一次回答可能要几分钟，比大多数部
 
 消息的输入是内容数组 `content: [{ type: "text", text }, { type: "image", mimeType, data }]`，`user_message` 和 `tool_result`
 entry 也是同样的结构。内容类型是开放的取值（§6.1），以后加新类型不用改结构。
+
+**命令**：消息文字以 `/<name>` 开头、并且 `name` 在 `info().commands` 里时，就是一条命令。Agent 在模型看到之前展开它：prompt
+模板展开成模板正文，名字后面的词作为参数；skill 展开成“使用这个 skill”的指令。`user_message` entry 里记录的是调用方原本发的内容，
+所以历史里显示的是 `/review 123`，不是展开后的文本。`/` 后面跟着不认识的名字，就按原文交给模型。聊天客户端可以把 `commands`
+显示成菜单，channel 可以把它注册成平台的命令列表。
 
 ## 3. 接上一个会话：重放、快照、实时
 
@@ -157,7 +162,8 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 |---|---|
 | harness 无关的协议，通过 harness 端口和 `LoopPort` 实现 | 一个 harness（pi-durable）的消费者接口 |
 | 调用方可以给会话命名，也可以由 Agent 命名 | 全部由 Agent 命名；id 不透明、永不复用 |
-| `sessions.list`、`rewind`、`compact`、`update`、`delete`、`/control` 平面、`models`、`commands` | 去掉；运维用 pi-durable 原生 API |
+| `sessions.list`、`rewind`、`compact`、`update`、`delete`、`/control` 平面、`models` | 去掉；运维用 pi-durable 原生 API |
+| `commands()` | 并入 `info().commands`，调用方读一次即可 |
 | `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`（按 id 或 key）；`resume`；`abort` |
 | `follow` | `resume`：按 `replayFrom` 重放，必发快照，再接实时；回答中途也能接上 |
 | invoke 流等于这条消息的 `messages.follow` | 同样只接这条消息，消息被处理后先发快照 |
