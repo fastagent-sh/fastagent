@@ -1,23 +1,24 @@
 ---
-title: SPEC v1 设计解读
-description: "解读 Agent API v1：一个服务化 agent 对消费者提供的接口，为什么是这个形状，和 ACP、A2A、AG-UI、OpenAI 的对照，以及它和 pi-durable 的关系。"
+title: Agent API 设计解读
+description: "解读 Agent API：一个服务化 agent 对消费者提供的接口，为什么是这个形状，和 ACP、A2A、AG-UI、OpenAI 的对照，以及它和 pi-durable 的关系。"
 status: current
 ---
 
-# SPEC v1 设计解读
+# Agent API 设计解读
 
-规范原文见 [SPEC.md](../SPEC.md)，架构和取舍见 [architecture.md](../design/architecture.md)。两者与本文不一致时，以
-英文原文为准。
+规范原文见 [agent-api.md](../design/agent-api.md)，架构和取舍见 [architecture.md](../design/architecture.md)。两者与本文
+不一致时，以英文原文为准。Agent API 已经定下、还没实现：迁移（#788）完成后它替换 [SPEC.md](../SPEC.md)，在那之前代码实现的
+仍是 SPEC.md。
 
 ## 一句话概括
 
-一个部署好的 agent 就像一个 bot：能访问到它的人都可以和它对话。SPEC v1 只定义这个 bot 对**消费者**提供的接口，一共 8 个操作，
+一个部署好的 agent 就像一个 bot：能访问到它的人都可以和它对话。Agent API 只定义这个 bot 对**消费者**提供的接口，一共 8 个操作，
 进程内（TypeScript）和 HTTP 两种绑定，语义完全相同。其余一切（改模型、压缩、查看所有会话）都是 harness（pi-durable）自己的
-API，不在 SPEC 里。
+API，不在 Agent API 里。
 
 ## 1. 为什么是这个形状
 
-上一版 SPEC v1 想做一个“任何 harness 都能实现”的中立协议，为此定义了 harness 端口和 `LoopPort`，在 pi-coding-agent 上模拟
+现在的 SPEC v1 想做一个“任何 harness 都能实现”的中立协议，为此定义了 harness 端口和 `LoopPort`，在 pi-coding-agent 上模拟
 pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上重建它不保存的事实。这些工作标准化的恰恰是各家 harness 差异最大、
 变化最快的部分，而产品目标里没有一个需要它。
 
@@ -32,20 +33,25 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 
 | 操作 | HTTP | 做什么 |
 |---|---|---|
-| `info` | `GET /agent` | bot 的名字、简介，以及接受哪些输入（`inputs`，比如 `["text", "image"]`；模型不支持图片时界面就不显示上传按钮） |
-| `invoke` | `POST /invoke` | 发一条消息：不带 `sessionId` 就新建会话。默认返回 SSE 流；`Accept: application/json` 时等消息结束后一次性返回 |
+| `info` | `GET /agent` | bot 的名字、简介，以及消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`） |
+| `invoke` | `POST /invoke` | 发一条消息：不带 `sessionId` 就新建会话。默认返回 SSE 流；`Accept: application/json` 时一接受就返回 `202` 和回执，之后用 `getMessage` 查或 `resume` 接上 |
 | `getMessage` | `GET /sessions/{s}/messages/{m}` | 按 id 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
 | `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”） |
 | `read` | `GET /sessions/{s}` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
 | `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
-| `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；命名沿用 pi-durable 的 `abort` |
+| `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息 |
 | `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容 |
 
 进程内的 `invoke` 返回一个既能逐条读事件、又带 `result` 的对象：只想要最终回答就 `await invocation.result`，替代了原来的
-`collect`。
+`collect`。`result` 有三种结果：消息结束（`ok: true`）、被拒绝（`error`，什么都没记录），以及 `unfinished`：远程调用在知道
+结局之前连接断了。`unfinished` 带着回执里已知的会话 id 和消息 id（如果回执已经到了），它从不表示“被拒绝”，所以调用方应该用
+`getMessage` 查，或带同一个 key 重发，不带 key 时不要重发。
+
+JSON 模式不等消息结束：一次回答可能要几分钟，比大多数部署前面代理的空闲超时（例如 60 秒）还长；等待中连接被切断，没带 key
+的调用方连查询用的 id 都拿不到。所以 JSON 模式一接受就返回回执。
 
 消息的输入是内容数组 `content: [{ type: "text", text }, { type: "image", mimeType, data }]`，`user_message` 和 `tool_result`
-entry 也是同样的结构，以后加文件、音频不用再加新字段。ACP、A2A、OpenAI 都是这个形状。
+entry 也是同样的结构。内容类型是开放的取值（§6.1），以后加新类型不用改结构。
 
 ## 3. 接上一个会话：重放、快照、实时
 
@@ -66,14 +72,17 @@ entry 也是同样的结构，以后加文件、音频不用再加新字段。AC
 
 ## 4. 几个关键决定
 
-- **会话 id 由服务端生成，调用方自己记住。** pi-durable 不接受调用方指定的会话 id。channel 和定时任务在自己的状态里记“哪个聊天
-  对应哪个会话”。服务端不提供会话列表，也不提供删除。
-- **会话 id 就是这个会话的钥匙。** bot 对所有人开放，谁持有会话 id，谁就能读、接上、发消息、停止、从它分叉。所以 SPEC 要求
-  会话 id 不可猜测（至少 122 位随机数，和 UUIDv4 一样）。认证、限流由上层负责。
+- **会话 id 由服务端生成，调用方自己记住。** 会话 id 就是 pi-durable 的 conversation id，它由 pi-durable 生成、不接受调用方
+  指定，所以不需要任何映射。channel 和定时任务在自己的状态里记“哪个聊天对应哪个会话”。服务端不提供会话列表，也不提供删除。
+- **会话 id 只是名字，不是凭证。** 它可能是顺序编号。能访问到 agent 的人就能访问它的每个会话：读、接上、发消息、停止、从它分叉。
+  多个用户共用一个部署时，用户之间的隔离由前面的一层负责：一个记录“用户 → 会话”映射、只放行自己会话的 facade，包括 fork 的
+  源会话和不带 `sessionId` 的 invoke 新建的会话（见 [security-boundary.md](../design/security-boundary.md) §4）。认证、限流也由
+  上层负责。
 - **幂等 key 必须和 `sessionId` 一起用。** pi-durable 的 key 只在单个会话内有效；不带会话的 invoke 如果重试，会建出两个会话。
   想安全重试第一条消息，就先 `createSession` 拿到 id，再带 key 发。
-- **查一条消息：`getMessage`。** 所有对照的规范（A2A 的 `GetTask`、OpenAI 的 `GET /responses/{id}`）都有按 id 查状态，
-  它是轮询式客户端（serverless 函数、带超时的 HTTP 调用方）的标准做法，并且直接对应 pi-durable 的 submission 记录。
+- **查一条消息：`getMessage`。** 参照 A2A 的 `GetTask` 和 OpenAI 的 `GET /responses/{id}`。调用方丢了流之后，用它查消息状态，
+  再用 `resume` 接上会话看 agent 写了什么。
+- **消息状态只保留消费者需要的字段：** 没有 `takenAt`、`endedAt`，时间只在 entry 的 `timestamp` 上。
 - **消息的结局只有四种：** `completed`、`max_tokens`、`canceled`、`failed`。没有 `interrupted`：进程重启后 pi-durable 会接着
   回答已取走的消息，排队的消息也还在。`answer` 只在 `completed` 和 `max_tokens` 时出现，执行过工具调用的中间回复不算回答。
 - **用量记在 entry 上：** 每条 `assistant_message` 一份，`compaction` 记生成摘要的那几次调用；fork 复制来的 entry 不带。
@@ -86,7 +95,9 @@ entry 也是同样的结构，以后加文件、音频不用再加新字段。AC
 
 ## 5. 和其他接口规范的对照
 
-| 维度 | SPEC v1 | ACP v2 | A2A 1.0 | AG-UI 1.0 | OpenAI Responses |
+这一节解读 [architecture.md](../design/architecture.md) §7。
+
+| 维度 | Agent API | ACP v2 | A2A 1.0 | AG-UI 1.0 | OpenAI Responses |
 |---|---|---|---|---|---|
 | 会话 id | agent 生成 | agent 生成 | `contextId` | 客户端给 `threadId` | 服务端生成 |
 | 调用方拿到的单位 | message | 写入对话时返回 `messageId` | Task 或 Message | run | response |
@@ -97,37 +108,38 @@ entry 也是同样的结构，以后加文件、音频不用再加新字段。AC
 | 会话忙时 | `queue`、`steer`、`reject` | 不要求支持 | 无 | 无 | 无 |
 | 人工确认 | 暂不做 | permission、elicitation | `input-required` | interrupt | 无 |
 
-ACP v2 独立演化出了和我们几乎一样的模型（agent 生成会话 id、消息写入即返回 id、不暴露 turn id、会话级取消、`idle`/`running`、
-按游标恢复并附状态快照），这是这个设计方向的一个旁证。
+ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入对话后就返回 id、不暴露 turn id、会话级取消、状态只有
+`idle`/`running`、按游标恢复后再告知当前状态。Agent API 从对比中采纳了：`getMessage`（A2A、OpenAI）、重放后的状态快照（ACP）、
+内容数组（ACP、A2A、OpenAI）、`info` 里说明接受哪些输入（ACP 协商的 prompt 能力）、开放取值加带前缀的扩展（ACP 的 `_` 名字）、
+回答中途也能接上（ACP 给逐块输出带消息 id，OpenAI 的序号）。
 
 没有采纳的：把 run/turn/task 当作一等公民的 id（我们以消息为单位）；客户端持有历史、每次把历史发过来（AG-UI，我们由服务端持有）；
 共享状态的 JSON Patch、计划、模式（特定 agent 的功能，用带前缀的自定义事件表达）；客户端提供文件系统和终端（ACP，我们的 agent
-在服务端运行）；会话列表、关闭、删除和多租户字段；JSON-RPC 作为主传输。人工确认、消息结束时推送 webhook、`notice` 提示事件，
-以后按 §6.1 的规则加，不影响现有客户端。
+在服务端运行）；会话列表、关闭、删除和多租户字段；JSON-RPC 作为主传输（REST 加 SSE 对 Web 消费者更简单）。人工确认、
+消息结束时推送 webhook（A2A、OpenAI 后台模式）、`notice` 实时提示事件（ACP），以后按扩展规则加，不影响现有调用方。
 
-## 6. 不在 SPEC 里的
+## 6. 不在 Agent API 里的
 
-| 不在 SPEC 里 | 去哪里 |
+| 不在 Agent API 里 | 去哪里 |
 |---|---|
 | 改模型、思考档位、压缩、查看或列出所有会话 | pi-durable 的原生 API（`agent.harness`）；需要 HTTP 的话，开发者自己写一个路由 |
 | 列出、删除会话 | 不提供：调用方自己记，数据不删除 |
-| rewind、编辑消息、重新生成 | 不提供：用“从这里分叉”加“重新发一次”代替 |
 | 身份、认证、限流 | 上层（网关、私有网络、云的 IAM、嵌入方的中间件） |
 | 人工确认、agent 反问 | 以后的版本按 §6.1 加 |
 | 图片以外的文件上传 | 这一版不做 |
-| ACP、A2A 等其他协议 | 不在当前产品目标里；需要时在这套 API 外面包一层 |
+| ACP、A2A 等其他协议 | 在这套 API 外面调用它；做这些协议的绑定不在当前产品目标里 |
 
-## 7. 和上一版的对照
+## 7. 和现在的 SPEC v1 的对照
 
-| 上一版 v1 | 这一版 v1 |
+| 现在的 SPEC v1（代码实现的） | Agent API |
 |---|---|
-| harness 无关的协议，加 harness 端口和 `LoopPort` | 只有 pi-durable，SPEC 只管消费者接口 |
-| 调用方可以给会话命名 | 服务端生成不可猜测的 id |
+| harness 无关的协议，加 harness 端口和 `LoopPort` | 只有 pi-durable，Agent API 只管消费者接口 |
+| 调用方可以给会话命名 | 服务端生成 id（就是 pi-durable 的 conversation id） |
 | `sessions.list`、`rewind`、`compact`、`update`、`delete`、`/control` 平面 | 去掉；需要的用 pi-durable 原生 API |
 | `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`；接上会话用 `resume`；停止用 `abort` |
 | `follow` | `resume`：按 `replayFrom` 重放，必发状态快照，回答中途也能接上 |
 | `prompt: { text, images }` | `content` 内容数组 |
 | `sessions.create({ fork })` | `createSession({ from })` |
-| `capabilities`、`durableQueue`、`durableTaken` | 去掉：只有一个实现，持久性直接写进 MUST；`info` 只说明接受哪些输入 |
-| `intercepted`、`interrupted` 结局，`source` 字段 | 去掉：pi-durable 不产生前两种，`source` 没有读者 |
-| `collect` | `invocation.result`，或 HTTP 的 JSON 等待模式 |
+| `capabilities`、`durableQueue`、`durableTaken` | 去掉；持久性直接写进 MUST，`info` 说明接受哪些输入 |
+| `intercepted`、`interrupted` 结局，`source` 字段 | 去掉 |
+| `collect` | `invocation.result`（多了 `unfinished` 这种结果）；HTTP 的 JSON 模式返回 `202` 加回执 |

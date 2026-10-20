@@ -78,7 +78,7 @@ function createAgentHandler(
 function connectAgent(options: { url: string; fetchFn?: typeof fetch }): Promise<Agent>;
 ```
 
-`createAgentHandler` serves the agent's API as one Fetch handler ([SPEC v1 §10](SPEC.md#10-http-binding), which the code reaches when #788 lands): the
+`createAgentHandler` serves the agent's API as one Fetch handler ([SPEC v1 §9](SPEC.md#9-http-binding)): the
 user plane always, the control plane (`PATCH`/`DELETE /control/sessions/{s}`) only with `control: true`. Request
 bodies are JSON (`content-type: application/json`), decoded strictly: an unknown field is a 400. It sends no CORS
 headers and answers no preflight unless `corsOrigins` names the origins (exact, or `["*"]`) a page may call it from;

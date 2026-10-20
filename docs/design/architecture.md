@@ -1,14 +1,15 @@
 ---
 title: Architecture
-description: "What FastAgent is for, and the shape that follows: one harness (pi-durable), one consumer API (SPEC v1), a definition that compiles to it, an npm package as the artifact, context packages, and hosts that keep the state off the box."
+description: "What FastAgent is for, and the shape that follows: one harness (pi-durable), one consumer API (the Agent API), a definition that compiles to it, an npm package as the artifact, context packages, and hosts that keep the state off the box."
 type: design-doc
 status: decided
 ---
 
 # Architecture
 
-**Status: decided, not implemented.** This note replaces the harness-neutral design of
-[agent-service.md](agent-service.md) §7 to §9 and [conformance-levels.md](conformance-levels.md). The code still serves
+**Status: decided, not implemented.** This note and the [Agent API](agent-api.md) replace the harness-neutral design of
+[agent-service.md](agent-service.md) §7 to §9, [conformance-levels.md](conformance-levels.md) and
+[SPEC v1](../SPEC.md). The code still serves
 that design until the move lands ([#788](https://github.com/fastagent-sh/fastagent/issues/788)); §6 is the order.
 
 ## 1. What FastAgent is for
@@ -42,13 +43,13 @@ goal needs.
 | Decision | Why |
 |---|---|
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
-| **One API of our own: the consumer API**, [SPEC v1](../SPEC.md), bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same eight operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
+| **One API of our own: the consumer [Agent API](agent-api.md)**, bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same eight operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
 | **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (settings, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A developer who needs one of those over HTTP adds a route that calls it |
-| **The agent is a public bot.** No identity or session ownership in FastAgent | Who may reach it is decided in front of it. A session id is unguessable and is the session's key ([SPEC](../SPEC.md) §8) |
-| **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat to its session, a schedule to its session) in its own state, as it already keeps other state |
+| **The agent is a public bot.** No identity or session ownership in FastAgent | Who may reach it is decided in front of it. A session id is a name, not a credential: whoever reaches the agent reaches every session. When several users share one deployment, a facade in front keeps each to their own sessions ([security-boundary.md](security-boundary.md) §4) |
+| **The Agent names sessions; Callers remember them** | A session's id is its pi-durable conversation id, which pi-durable mints and cannot take from a Caller, so nothing maps one id to another. A channel or a schedule keeps its own mapping (a chat to its session, a schedule to its session) in its own state, as it already keeps other state |
 | **No session listing and no deletion** | No consumer needs them; pi-durable has no deletion |
 | **The definition's harness-specific parts are pi-durable's**: `extensions/` holds pi-durable extensions (`defineExtension`), `tools/` holds pi-durable tools (`defineTool`, TypeBox) | With one harness, a portable layer over its extension and tool APIs would be a second API to learn for nothing |
-| **Secrets are declared in `context.json`** | They were declared beside each tool (`defineTool`'s `secrets`); with pi-durable's `defineTool` they move to the one file that already declares what an agent needs from its environment, so `deploy` still checks them before it ships |
+| **Secrets are declared in `context.json`, and only there** | They were declared beside each tool and each channel (`defineTool`'s and `defineChannel`'s `secrets`). With pi-durable's `defineTool` the tools' move to the one file that already declares what an agent needs from its environment, and the channels' move with them, so `deploy` checks one list before it ships. `add <channel>` writes its channel's names there |
 
 The previous design's pi-coding-agent harness goes with it: pi's `extensions/` and `.pi/`, the `chat` TUI (replaced by
 a REPL over the consumer API), and the skills and prompt templates a machine lends from `~/.pi/agent`.
@@ -68,7 +69,7 @@ my-agent/
 
 `openAgent(dir)` assembles it: pi-ai's model registry and credentials, a pi-durable `Harness` over the instance's
 storage, the definition rendered into pi-durable's prompt sections, its tools and extensions installed, and the
-execution environment its context declares. The result is the SPEC's `Agent`, plus `harness`. `dev`, `start` and an
+execution environment its context declares. The result is the Agent API's `Agent`, plus `harness`. `dev`, `start` and an
 embedder's process call the same function, so an agent behaves the same wherever it runs.
 
 ## 4. Around the agent
@@ -122,18 +123,19 @@ for the steps above.
 
 | Goes | Replaced by |
 |---|---|
-| The previous SPEC v1 surface: `sessions.list`, `sessions.get(...).rewind/compact/update/delete`, `messages.*`, capabilities, `source`, the control plane | SPEC v1 as now written, and `agent.harness` |
+| [SPEC v1](../SPEC.md)'s surface: Caller-named sessions, `sessions.list`, `sessions.get(...).rewind/compact/update/delete`, `messages.*`, capabilities, `source`, the control plane | The [Agent API](agent-api.md), which then becomes `docs/SPEC.md`, and `agent.harness` |
 | `harness-port.ts`, `serving-layer.ts`, `loop-port.ts`, the conformance suite over a harness port | The Agent implemented on pi-durable, and the suite over that Agent |
 | `harnesses/pi/` serving and session code, the `chat` TUI | The pi-durable assembly, and a REPL |
 | `defineTool` with Zod, and its `secrets` | pi-durable's `defineTool`; `secrets` in `context.json` |
-| [agent-service.md](agent-service.md) §7 to §9, [conformance-levels.md](conformance-levels.md), the multi-tenant facade of [security-boundary.md](security-boundary.md) §4 | This note and the SPEC |
+| `defineChannel`'s `secrets` | `secrets` in `context.json` |
+| [agent-service.md](agent-service.md) §7 to §9, [conformance-levels.md](conformance-levels.md) | This note and the Agent API |
 
 ## 6. Order
 
-1. **A spike on pi-durable** that answers what the SPEC now promises: SQLite on AgentCore's session storage and what
+1. **A spike on pi-durable** that answers what the Agent API promises: SQLite on AgentCore's session storage and what
    restarts a run cut off there; the definition rendered and run (`SYSTEM.md`, `AGENTS.md`, skills, tools); how
    images are stored, behind `attachment`; whether an answer being written already has its entry id and its text so
-   far, which `message_delta` and `state.reply` need; whether a fork's copied entries can be told from its own, which
+   far, which `message_delta` and `state.reply` need (pi-durable commits a partial answer at most every 100 ms); whether a fork's copied entries can be told from its own, which
    `usage` needs; and the queue left waiting after a failed or aborted run.
 2. The Agent on pi-durable, with the conformance suite in process and over HTTP; channels, schedules, wake-ups, the CLI
    and AgentCore moved onto it; the previous protocol, `LoopPort` and the pi-coding-agent harness deleted.
@@ -141,7 +143,39 @@ for the steps above.
 4. Context packages.
 5. Shared contexts and agents working together.
 
-## 7. Open
+## 7. Compared with other agent APIs
+
+Four published APIs answer parts of the same question, checked against their documentation: ACP (Agent Client
+Protocol, editor to agent; its v2 documents), A2A 1.0 (agent to agent), AG-UI 1.0 (agent to front end), and OpenAI's
+Responses and Conversations APIs.
+
+| | The Agent API | ACP v2 | A2A 1.0 | AG-UI 1.0 | OpenAI |
+|---|---|---|---|---|---|
+| Session id | The Agent's | The agent's | `contextId` | `threadId`, from the client | The server's |
+| The unit a caller holds | A message | `session/prompt` answers a `messageId` once the message is in the conversation | A Task or a Message | A run | A response |
+| Its status by id | `getMessage` | None | `GetTask` | None | `GET /responses/{id}` |
+| Reconnecting | `resume`: replay, snapshot, live | `session/resume` with `replayFrom`, then a current-state snapshot | `SubscribeToTask` | Snapshot events | `starting_after` a sequence number |
+| Stopping | `abort`, the whole session | `session/cancel`, the whole session | `CancelTask` | None | One response |
+| Deduplication | `idempotencyKey`, per session | None | Optional, by the client's `messageId` | None | None |
+| A busy session | `queue`, `steer`, `reject` | Not required | None | None | None |
+| Asking the user | Not yet | Permission requests, elicitation | `input-required` | Interrupts | None |
+
+ACP v2 arrived independently at the same model: the agent names sessions, a prompt is answered once its message is in
+the conversation, no turn id is exposed, stopping is per session, the state is `idle` or `running`, and a client
+resumes from a cursor and is then told the current state. From the comparison the Agent API took `getMessage` (A2A,
+OpenAI), the snapshot after a replay (ACP), content parts (ACP, A2A, OpenAI), the accepted inputs in `info` (ACP's
+negotiated prompt capabilities), open value sets with prefixed extensions (ACP's `_` names), and an answer that can be
+resumed mid-way (ACP's message ids on chunks, OpenAI's sequence numbers).
+
+It did not take: a run, turn or task as a first-class id (messages are the unit); history owned by the client and sent
+with each run (AG-UI; here the Agent owns it); shared-state JSON patches, plans and modes (agent-specific, so prefixed
+custom events); a file system and terminal the client provides (ACP; this agent runs server-side in its own
+environment); session listing, closing, deletion and a tenant field; JSON-RPC as the transport (REST and SSE serve
+web consumers more simply). Asking the user, a webhook when a message ends (A2A, OpenAI's background mode) and a live
+notice event (ACP) can be added later under the API's rules for extending, without breaking a Caller. Bindings to
+those protocols are outside the product's goals.
+
+## 8. Open
 
 - `APPEND_SYSTEM.md` adds to pi-coding-agent's default prompt, which pi-durable does not have: whether it stays, as the
   part of `SYSTEM.md` an author keeps apart, or goes.

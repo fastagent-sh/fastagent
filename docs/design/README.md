@@ -1,6 +1,6 @@
 ---
 title: Design notes
-description: "What belongs in FastAgent's public design notes, and what is normative: the Agent API SPEC, the code, and the user docs."
+description: "What belongs in FastAgent's public design notes, and what is normative: the Agent Handler SPEC, the code, and the user docs."
 status: current
 ---
 
@@ -12,7 +12,8 @@ This directory contains maintainer-facing design material. It is intentionally k
 
 | Source | Status |
 |---|---|
-| [Agent API SPEC](../SPEC.md) | The consumer API, v1: normative. Changes require explicit review. |
+| [Agent Handler SPEC](../SPEC.md) | Normative protocol contract, v1, which the code implements. Changes require explicit review. Replaced by agent-api.md when #788 lands. |
+| [agent-api.md](agent-api.md) | **Decided, not implemented.** The consumer Agent API that replaces the SPEC: eight operations, in process and over HTTP. |
 | Code in `src/` | Implementation source of truth. |
 | User docs in `docs/` | Product behavior and supported usage. |
 | Documents in `docs/design/` | Explanatory architecture notes. They clarify why the code is shaped the way it is, but they are not a public compatibility promise. |

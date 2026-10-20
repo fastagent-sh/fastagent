@@ -8,8 +8,8 @@ status: proposed
 # Agent service
 
 > **Superseded in part.** [architecture.md](architecture.md) replaces §7 to §9: one harness (pi-durable) instead of a
-> harness port and `LoopPort`, and a consumer API, the new [SPEC v1](../SPEC.md), instead of the serving protocol
-> described here. Those sections describe the code until the move lands; the rest of this note stands.
+> harness port and `LoopPort`, and the consumer [Agent API](agent-api.md) instead of the serving protocol described
+> here. Those sections describe the code until the move lands; the rest of this note stands.
 
 **Status: proposed, partly implemented** (§12 says which steps are done). It extends the
 [agent model](agent-model.md), replaced the v0.1 Agent Handler SPEC with the serving protocol, now
