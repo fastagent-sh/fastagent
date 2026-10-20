@@ -55,15 +55,17 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 - 只有回执的数据部分（`POST /invoke` 返回的 body）要求能 JSON 序列化；`wait()` 是各个绑定提供的方法。
 - 想看回答怎么写出来，就用 `resume` 订阅会话。**一条消息的回答，是会话事件里它自己那条 `user_message`（会注明是哪条消息）之后、
   到它的 `done` 为止的内容**；在那之前的事件属于别的消息。为了不漏，调用方在 `invoke` 之前先 `resume`，这要求会话已经存在：新对话
-  先用 `createSession` 建出来。`done` 不会被重放，所以在 `invoke` 之后才 `resume` 的调用方，要在拿到快照后用 `getMessage` 查一次，
+  先用 `createSession` 建出来，并在发任何消息之前记下它的 id。Agent 保证一条消息的 `done` 先于之后被取走的消息的 entry 发出，即使
+  pi-durable 在同一次提交里结束前一条、放入后一条，所以“从 `user_message` 到 `done`”的划分是可靠的。`done` 不会被重放，所以在 `invoke` 之后才 `resume` 的调用方，要在拿到快照后用 `getMessage` 查一次，
   补上订阅之前就已结束的情况。
 - TypeScript 客户端把这件事包成了 `stream(agent, request)`，适用于任何 `Agent`（进程内或远程），只是 API 的一个调用方，不增加
   任何语义。它返回 `StreamResult`：成功时是回执加 `events`（这条消息 `user_message` 之后、到它的 `done` 为止的事件，会话无法继续
   跟随时以 `serving_error` 结束）；也可能是拒绝（包括新会话没建成）或 `unknown`，和 invoke 的一样。channel 用回执里的 `messageId`
-  记录这一轮，并把拒绝的原因告诉用户。没有 `sessionId` 时它先建会话。它先不带重放地 `resume`，拿到快照后再 `invoke`，然后按回执
-  里的状态处理：新消息或还在排队的，它的 `user_message` 会以实时事件到来；正在处理的重复消息，从它的 `user_message` 之后重新接上，
-  并在快照后用 `getMessage` 补查一次；已经结束的重复消息，用 `read` 读出它之后到回答为止的 entry，再给出 `done`（见 agent-api.md
-  §10）。`wait()` 则在回执已是 `done` 时直接返回，否则在快照后用 `getMessage` 查一次，再等实时的 `done`。
+  记录这一轮，并把拒绝的原因告诉用户。它要求请求带 `sessionId`：只有已存在的会话才能在发消息之前订阅，新对话由调用方先建会话、记下
+  id，这也保证了带 key 重试时始终落在同一个会话里（§3.3）。它先不带重放地 `resume`，拿到快照后再 `invoke`，然后按回执里的状态处理：
+  新消息或还在排队的，它的 `user_message` 会以实时事件到来；正在处理的重复消息，从它的 `user_message` 之后重新接上，先把重放的内容
+  暂存，快照后用 `getMessage` 查一次：仍在处理就把暂存的发出去并接着看实时事件，已经结束就只发到它的回答为止（重放可能已经越过它、
+  进入下一条消息），再给出 `done`；已经结束的重复消息，用 `read` 读出它之后到回答为止的 entry，再给出 `done`（见 agent-api.md §10）。`wait()` 则在回执已是 `done` 时直接返回，否则在快照后用 `getMessage` 查一次，再等实时的 `done`。
 - HTTP 上 `POST /invoke` 不等消息被回答：一次回答可能要几分钟，比大多数部署前面代理的空闲超时（例如 60 秒）还长。想看过程就先开
   `GET /sessions/{s}/events`；只要结果就用 `getMessage` 轮询到 `done`。
 
