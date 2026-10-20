@@ -43,8 +43,8 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容 |
 
 进程内的 `invoke` 返回一个既能逐条读事件、又带 `result` 的对象：只想要最终回答就 `await invocation.result`，替代了原来的
-`collect`。`result` 有三种结果：消息结束（`ok: true`）、被拒绝（`error`，什么都没记录），以及 `unfinished`：远程调用在知道
-结局之前连接断了。`unfinished` 带着回执里已知的会话 id 和消息 id（如果回执已经到了），它从不表示“被拒绝”，所以调用方应该用
+`collect`。`result` 有三种结果：消息结束（`ok: true`）、被拒绝（`error`，什么都没记录），以及 `unfinished`：流在知道结局之前
+停了，原因由流的最后一个事件 `serving_error` 说明：Agent 没法继续（比如存储故障），或者远程客户端的连接断了。流不会悄无声息地停。`unfinished` 带着回执里已知的会话 id 和消息 id（如果回执已经到了），它从不表示“被拒绝”，所以调用方应该用
 `getMessage` 查，或带同一个 key 重发，不带 key 时不要重发。
 
 JSON 模式不等消息结束：一次回答可能要几分钟，比大多数部署前面代理的空闲超时（例如 60 秒）还长；等待中连接被切断，没带 key
@@ -66,6 +66,11 @@ entry 也是同样的结构。内容类型是开放的取值（§6.1），以后
    只在它的消息被处理期间收到，以它自己的 `done` 结束。
 
 invoke 的流在消息排队期间只收到 `state`，不带 `reply`：排在别的消息后面时，收不到那条消息的 entry、实时事件和 `done`。
+对一条已经结束的消息重复发送，没有实时部分，所以不发快照：重放它从 `user_message` 到回答的 entry（没有回答就只有
+`user_message`，排队时就被撤回的消息什么都没有），然后是 `done`。
+
+`resume` 只在调用方停止读取，或以 `serving_error` 结束时才结束。HTTP 绑定的 TypeScript 客户端不会自己重连：连接断了就以
+`serving_error` 结束流，由调用方从最后一条 entry 之后再 `resume`。
 
 SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照时最新的 entry id（会话还没有 entry 时是 `start`）。所以不带游标打开的
 流，即使在第一条 entry 到达之前断线，重连时浏览器带上的 `Last-Event-ID` 也能从快照处接上，不会漏掉断线期间写下的 entry。
@@ -146,15 +151,20 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 
 ## 7. 和现在的 SPEC v1 的对照
 
+这一节解读 agent-api.md §12 的第一张表。
+
 | 现在的 SPEC v1（代码实现的） | Agent API |
 |---|---|
-| harness 无关的协议，加 harness 端口和 `LoopPort` | 只有 pi-durable，Agent API 只管消费者接口 |
-| 调用方可以给会话命名 | 服务端生成不透明、永不复用的 id |
-| `sessions.list`、`rewind`、`compact`、`update`、`delete`、`/control` 平面 | 去掉；需要的用 pi-durable 原生 API |
-| `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`（按 id 或 key）；接上会话用 `resume`；停止用 `abort` |
-| `follow` | `resume`：按 `replayFrom` 重放，必发状态快照，回答中途也能接上 |
-| `prompt: { text, images }` | `content` 内容数组 |
-| `sessions.create({ fork })` | `createSession({ from })` |
-| `capabilities`、`durableQueue`、`durableTaken` | 去掉；持久性直接写进 MUST，`info` 说明接受哪些输入 |
-| `intercepted`、`interrupted` 结局，`source` 字段 | 去掉 |
-| `collect` | `invocation.result`（多了 `unfinished` 这种结果）；HTTP 的 JSON 模式返回 `202` 加回执 |
+| harness 无关的协议，通过 harness 端口和 `LoopPort` 实现 | 一个 harness（pi-durable）的消费者接口 |
+| 调用方可以给会话命名，也可以由 Agent 命名 | 全部由 Agent 命名；id 不透明、永不复用 |
+| `sessions.list`、`rewind`、`compact`、`update`、`delete`、`/control` 平面、`models`、`commands` | 去掉；运维用 pi-durable 原生 API |
+| `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`（按 id 或 key）；`resume`；`abort` |
+| `follow` | `resume`：按 `replayFrom` 重放，必发快照，再接实时；回答中途也能接上 |
+| invoke 流等于这条消息的 `messages.follow` | 同样只接这条消息，消息被处理后先发快照 |
+| `prompt: { text, images }` | `content` 内容数组，按 `info().inputs` 检查 |
+| `sessions.create({ sessionId, fork })` | `createSession({ from })` |
+| `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
+| `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |
+| `collect`；`Accept: application/json` 返回 `202` | `invocation.result`，可能是 `unfinished`；JSON 模式同样返回 `202` |
+| `serving_error { message }` | `serving_error { error }`：无法继续的流以它结束 |
+| 只检查带 body 的请求 | 每个 `POST` 都要求 `content-type: application/json` |
