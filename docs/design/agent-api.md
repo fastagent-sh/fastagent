@@ -241,6 +241,11 @@ A process that stops does not lose what was accepted: the Agent continues it whe
 mid-call is not run again unless it declares that a second run is safe; the agent is told it was interrupted and
 carries on. An Agent MUST NOT redo a message on its own.
 
+These promises, and that an id is never reused (§5), hold as far as the storage the Agent runs on keeps what it was
+given. A host whose storage can lose its newest writes when the machine under it fails can lose the newest accepted
+messages then, and hand out again the ids that went with them: AgentCore's session storage, after a host failure
+([architecture.md](architecture.md) §4.3). A Caller that must not lose a message keeps it until it sees its `done`.
+
 ## 5. Sessions
 
 ```ts
