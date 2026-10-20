@@ -39,7 +39,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”） |
 | `read` | `GET /sessions/{s}` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
 | `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
-| `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息 |
+| `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；停止一被记录就返回，不等正在执行的工具退出 |
 | `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容 |
 
 进程内的 `invoke` 返回一个既能逐条读事件、又带 `result` 的对象：只想要最终回答就 `await invocation.result`，替代了原来的
@@ -83,9 +83,10 @@ invoke 的流在消息排队期间只收到 `state`，不带 `reply`：排在别
 SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照时最新的 entry id（会话还没有 entry 时是 `start`）。所以不带游标打开的
 流，即使在第一条 entry 到达之前断线，重连时浏览器带上的 `Last-Event-ID` 也能从快照处接上，不会漏掉断线期间写下的 entry。
 
-**回答中途接上也能看到已经写出的部分。** 正在写的 `assistant_message` 在写完前就有 id：`message_delta` 带上这个 `entryId`，
-快照里的 `state.reply` 是目前已写出的文字。客户端先显示 `reply`，再把后续的 delta 接在后面。pi-durable 最多每 100 毫秒提交一次
-部分回答；回答写完前是否已经有 entry id 和已写出的文字，由 spike 确认。
+**回答中途接上也能看到已经写出的部分。** `assistant_message` 写完才有 id。写的过程中，快照里的 `state.reply` 是目前已写出的文字，
+`message_delta` 在它后面追加。一个会话同一时间只写一条 agent 消息，所以 delta 不需要带 id：客户端先显示 `reply`，再接上后面的
+delta；收到 `retry_scheduled` 就丢掉已显示的部分（下一次尝试从头写）；`assistant_message` entry 到达后用它替换。
+delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
 
 典型用法：客户端回到一个之前显示过的会话，就从它手里最后一条 entry 之后 `resume`；打开一个很长、从没显示过的会话，就先 `read`
 最新一页，再从这页最后一条之后 `resume`。
@@ -115,6 +116,10 @@ SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照�
   再用 `resume` 接上会话看 agent 写了什么。用自己的东西（比如聊天平台的消息 id）作 key 的调用方，可以直接按 key 查，不用自己
   维护映射。
 - **消息状态只保留消费者需要的字段：** 没有 `takenAt`、`endedAt`，时间只在 entry 的 `timestamp` 上。
+- **`abort` 不等工具退出。** 停止一被记录就返回，并报告停下了哪些消息；不理会停止信号的工具不会让它挂住。被停下的消息在 agent
+  放手之后以 `canceled` 结束，并发出 `done`，在那之前仍是 `taken`。之后发来的消息，等被停下的消息都结束后照常处理。`abort` 是幂等的：
+  它报告所有还没结束的消息，包括之前一次 `abort` 已经停下的，所以工具不理会停止信号时连发两次 `/stop`，第二次仍会说明正在停止哪些
+  消息。如果 `abort` 已经返回、被停的消息还没结束时进程重启，这条消息在重启后以 `canceled` 结束，不会被接着回答。
 - **消息的结局只有四种：** `completed`、`max_tokens`、`canceled`、`failed`。没有 `interrupted`：进程重启后 pi-durable 会接着
   回答已取走的消息，排队的消息也还在。`answer` 只在 `completed` 和 `max_tokens` 时出现，执行过工具调用的中间回复不算回答。
 - **fork 共享源会话的 entry：** fork 的历史开头就是源会话的那些 entry 本身，id 和内容都相同，之后写的才是 fork 自己的。每条 entry
@@ -146,7 +151,7 @@ SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照�
 ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入对话后就返回 id、不暴露 turn id、会话级取消、状态只有
 `idle`/`running`、按游标恢复后再告知当前状态。Agent API 从对比中采纳了：`getMessage`（A2A、OpenAI）、重放后的状态快照（ACP）、
 内容数组（ACP、A2A、OpenAI）、`info` 里说明接受哪些输入（ACP 协商的 prompt 能力）、开放取值加带前缀的扩展（ACP 的 `_` 名字）、
-回答中途也能接上（ACP 给逐块输出带消息 id，OpenAI 的序号）。
+回答中途也能接上（ACP 的 resume 和 OpenAI 的序号都支持）。
 
 没有采纳的：把 run/turn/task 当作一等公民的 id（我们以消息为单位）；客户端持有历史、每次把历史发过来（AG-UI，我们由服务端持有）；
 共享状态的 JSON Patch、计划、模式（特定 agent 的功能，用带前缀的自定义事件表达）；客户端提供文件系统和终端（ACP，我们的 agent
