@@ -43,7 +43,7 @@ export type Outcome =
   | { status: "max_tokens" }
   | { status: "intercepted" }
   | { status: "interrupted" }
-  | { status: "canceled"; by: "cancel" | "abort" | "delete" }
+  | { status: "canceled" }
   | { status: "failed"; error: AgentError };
 
 export type DoneMessage = {
@@ -52,13 +52,10 @@ export type DoneMessage = {
   source?: MessageSource;
   status: "done";
   entryId?: string;
-  /** The history's last entry when the work that took it ended; present whenever `entryId` is. */
-  lastEntryId?: string;
   takenAt?: number;
   endedAt: number;
   outcome: Outcome;
-  /** Reported once per piece of work, on the first message it took (SPEC v1 §4). */
-  usage?: Usage;
+  /** The reply the agent stopped on: only when the outcome is `completed` or `max_tokens` (SPEC v1 §4). */
   answer?: { entryId: string; text: string };
 };
 
@@ -103,7 +100,7 @@ export interface SessionSummary {
 
 /**
  * What a session is doing, as it happens, and not durable: a reconnecting caller sees the entries it missed, not these.
- * A session works on one thing at a time, so they belong to its work in progress, or to a compaction.
+ * They are the session's: what the agent does while it answers its taken messages, or a compaction.
  */
 export type LiveEvent =
   | { type: "message_delta"; channel: "text" | "thinking"; delta: string }
@@ -178,7 +175,7 @@ export interface Capabilities {
   delete: boolean;
   updatable: UpdatableField[];
   durableQueue: boolean;
-  durableWork: boolean;
+  durableTaken: boolean;
   toolProgress: boolean;
   usage: boolean;
 }

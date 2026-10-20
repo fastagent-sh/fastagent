@@ -222,7 +222,7 @@ sessions, and machinery paths. `dev`, `start` and `invoke` share it rather than 
 implementations. Every rung's assembly runs as `agentOf`: `piLoopHarness` behind `loopPort`, behind `servingAgent`
 (§4).
 
-Each piece of work binds a fresh `AgentSession` to its record and disposes it when the work settles. Continuity comes
+Each run binds a fresh `AgentSession` to its record and disposes it when the run settles. Continuity comes
 from `PiSessionRecordStore`, not a resident session: process affinity only while a message is taken or queued (SPEC MUST 8,
 what AgentCore and every scaled channel host require). That is the default on an axis a deployment owns;
 [conformance-levels.md](conformance-levels.md) states what each posture owes.
@@ -258,17 +258,21 @@ each written once:
 |---|---|
 | `serving-layer.ts` (`servingAgent`) | Session ids, the request rules a type cannot carry, the invoke stream (a receipt, then the message replayed from its own entry until its `done`), `follow`, and pages of `read`. The same for every harness |
 | `loop-port.ts` (`loopPort`) | What a harness that is only a loop lacks: admission and the queue, idempotency keys, steering, message records (`message_accepted`, `message_taken`, `message_ended`, never published) written into the session's own log through its one writer, and ending the messages a previous process left open |
-| `harnesses/pi/loop-harness.ts` (`piLoopHarness`) | One `SessionManager` per held session as its log, a fresh `AgentSession` per piece of work, and what became of each message it was handed (taken as a user message, consumed by an extension, or never taken) |
+| `harnesses/pi/loop-harness.ts` (`piLoopHarness`) | One `SessionManager` per held session as its log, a fresh `AgentSession` per run, and what became of each message it was handed (taken as a user message, consumed by an extension, or never taken) |
 
-pi's vocabulary is read in three modules: `live-events.ts` turns its events into the work's live events (deltas, a tool
+pi's vocabulary is read in three modules: `live-events.ts` turns its events into the run's live events (deltas, a tool
 call's status line, retries), `log-records.ts` its journal entries into the log's records and how full the context
 is, and `messages.ts` an answer into its outcome and a thrown error into a failure, `retryable` read from the
 provider's status or network code before its prose. The Promise crossings are `src/effect-port.ts`
 ([Promise ports](#promise-ports)); a fault the port reports is the serving layer's `internal` failure, logged.
 
-A piece of work settles on one outcome, decided in order: a thrown error, a fault while observing it, a failure an
-extension reported for work it owes (a command, or a message it sent), a retry pi started after answer text was
-streamed, the last answer, and, when an extension took the message and no model ran, `intercepted`. A stop that
+A run settles on one outcome, decided in order: a thrown error, a fault while observing it, a failure an extension
+reported for work it owes (a command, or a message it sent), a retry pi started after answer text was streamed, the
+last answer, and, when an extension took the message and no model ran, `intercepted`. Each message the run took ends
+with that outcome; its answer is the reply the run stopped on, for `completed` and `max_tokens` only, and never one
+whose tool calls ran (a run a tool ended has none). What each model call cost rides on its own entry: an
+`assistant_message` or a `compaction` publishes pi's `usage`, except in a fork's copy, which is every entry written
+before the fork's provenance stamp (session-markers.ts). A stop that
 arrives before pi starts its agent run (or the automatic compaction `prompt()` runs first) is applied when it does
 (#691).
 
@@ -374,10 +378,9 @@ would duplicate that rule and drift from it: a result for a call pi-ai later dro
 provider unpaired, and every later turn is rejected. Replay does not make side-effecting tools
 exactly-once.
 
-A session works on one thing at a time (SPEC v1 §3.2). A message that arrives while it works queues behind it by
-default, is taken by the work in progress with `whenBusy: "steer"` (or, arriving after that work answered, by the next
-work, ahead of the queue), or is refused with `busy` with `whenBusy: "reject"`, which is how a schedule's occurrence
-is skipped. Telegram, Slack and Feishu/Lark also serialize their own turns per session (see
+A message that arrives while a session is busy queues behind the ones before it by default (SPEC v1 §3.2), is handed
+to the running run with `whenBusy: "steer"` (or, arriving after that run answered, starts the next run, ahead of the
+queue), or is refused with `busy` with `whenBusy: "reject"`, which is how a schedule's occurrence is skipped. Telegram, Slack and Feishu/Lark also serialize their own turns per session (see
 §7), because each turn reads its discussion when it starts.
 
 ## 7. Channels and hosting

@@ -1,10 +1,11 @@
 /**
- * A `LoopHarness` over an in-memory store, for the protocol suite. What a piece of work does is read from its message:
- * `hold` waits for `release()` (or a stop), `fail` ends with a model error, `effect` runs a side-effecting tool once,
- * `late` is answered at once but its work settles only on `release()`, so a steer sent meanwhile is never taken, and
- * anything else is answered `answer: <text>`. A steered message is taken after the current one, as pi does.
+ * A `LoopHarness` over an in-memory store, for the protocol suite. What a run does is read from its message: `hold`
+ * waits for `release()` (or a stop), `fail` ends with a model error, `effect` runs a side-effecting tool once, `late`
+ * is answered at once but its run settles only on `release()`, so a steer sent meanwhile is never taken, and anything
+ * else is answered `answer: <text>`. A steered message is taken after the current one, as pi does. Every model
+ * response and compaction carries `USAGE`.
  *
- * `restart()` is a process restart: the store (the disk) stays, a new harness opens it, and the old one's work never
+ * `restart()` is a process restart: the store (the disk) stays, a new harness opens it, and the old one's runs never
  * move again, the way a killed process's do not.
  */
 import type {
@@ -17,6 +18,8 @@ import type {
   MessageMarker,
 } from "../src/loop-port.ts";
 import { type Json, type Result, agentError, failure } from "../src/protocol.ts";
+
+const USAGE = { inputTokens: 1, outputTokens: 1 };
 
 interface StoredSession {
   records: LogRecord[];
@@ -50,7 +53,7 @@ export class FakeStore {
     return `e${++this.ids}`;
   }
 
-  /** Lets every piece of work of the current process that is holding go on. */
+  /** Lets every run of the current process that is holding go on. */
   release(): void {
     this.held.open();
     this.held = gate();
@@ -127,7 +130,7 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
             break;
           }
           if (taken.text === "fail") {
-            write("assistant_message", { text: "", error: "boom" });
+            write("assistant_message", { text: "", error: "boom", usage: USAGE });
             outcome = { status: "failed", error: agentError("model_error", "boom") };
             continue;
           }
@@ -137,7 +140,7 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
           }
           const text = `answer: ${taken.text}`;
           emit({ type: "message_delta", channel: "text", delta: text });
-          write("assistant_message", { text });
+          write("assistant_message", { text, usage: USAGE });
           outcome = { status: "completed" };
           if (taken.text === "late") {
             finished = true;
@@ -145,7 +148,7 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
           }
         }
         finished = true;
-        return { outcome, usage: { inputTokens: 1, outputTokens: 1 } };
+        return { outcome };
       })();
       return {
         // A message handed after the loop finished is one it never takes, as pi's late `steer()`.
@@ -184,7 +187,7 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
         const messages = stored.records.filter((r) => r.kind === "user_message" || r.kind === "assistant_message");
         const firstKept = messages.at(-1);
         if (!firstKept) return failure("nothing_to_compact", "nothing to compact");
-        write("compaction", { summary: "earlier talk", firstKeptEntryId: firstKept.id });
+        write("compaction", { summary: "earlier talk", firstKeptEntryId: firstKept.id, usage: USAGE });
         return { ok: true };
       },
       update: async (settings): Promise<Result> => {
@@ -231,8 +234,11 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
             kept.set(record.id, parent);
             continue;
           }
-          const { parentEntryId: _source, ...rest } = record;
-          stored.records.push(parent === undefined ? rest : { ...rest, parentEntryId: parent });
+          // A copy's cost was the source's (SPEC v1 §6).
+          const { parentEntryId: _source, data, ...rest } = record;
+          const { usage: _paid, ...copied } = data as Record<string, Json>;
+          const copy = { ...rest, data: copied };
+          stored.records.push(parent === undefined ? copy : { ...copy, parentEntryId: parent });
           kept.set(record.id, record.id);
         }
         stored.leaf = stored.records.at(-1)?.id;

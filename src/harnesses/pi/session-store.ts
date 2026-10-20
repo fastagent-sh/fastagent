@@ -206,13 +206,14 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       // check.
       if (await openExisting(into)) throw new Error(`session "${into}" already exists`);
       fillStaged(piSessionId(into), (staged) => {
-        // METADATA FIRST, history last. pi has one leaf pointer and every append advances it, so whatever is written
-        // last becomes the fork's `leafEntryId`.
+        // The name before the history: pi has one leaf pointer and every append advances it, and a published entry
+        // written last would be the fork's head. The stamp is last because it is never published, and it marks where
+        // the copy ends.
         const name = parent.getSessionName();
         // The name travels: a fork of "Deploy notes" that lists as untitled is a row a user cannot place.
         if (name) staged.appendSessionInfo(name);
-        stampProvenance(staged, provenance);
         copyBranch(context)(parent, staged, at);
+        stampProvenance(staged, provenance);
       });
     },
     async delete(sessionId) {
@@ -413,11 +414,11 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       if (live.has(into)) throw new Error(`session "${into}" already exists`);
       // Entry-by-entry: there is no file to fork.
       const staged = SessionManager.inMemory(cwd, { id: piSessionId(into) });
-      // METADATA FIRST, history last — the same order the disk store writes in, and for the same reason.
+      // The same order the disk store writes in, and for the same reason.
       const name = parent.getSessionName();
       if (name) staged.appendSessionInfo(name);
-      stampProvenance(staged, provenance);
       copyBranch(context)(parent, staged, at);
+      stampProvenance(staged, provenance);
       live.set(into, staged);
     },
     async delete(sessionId) {

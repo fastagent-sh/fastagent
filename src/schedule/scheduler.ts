@@ -139,7 +139,7 @@ type InvokeEnd = { refused: string; busy: boolean } | { outcome: Outcome } | { u
 
 /**
  * Read an invoke's stream to its message's end, and close it; `onAccepted` hears the receipt. Interrupted, it closes
- * the stream, and the work goes on: a caller that stops reading only detaches (SPEC v1 §3.1).
+ * the stream, and the agent goes on: a caller that stops reading only detaches (SPEC v1 §3.1).
  */
 async function readInvoke(
   agent: ScheduledAgent,
@@ -178,9 +178,9 @@ function settled(outcome: Outcome): { fire: "completed" | "failed" | "interrupte
     case "intercepted":
       return { fire: "completed" };
     case "interrupted":
-      return { fire: "interrupted", detail: "the process stopped before the work ended" };
+      return { fire: "interrupted", detail: "the process stopped before the message ended" };
     case "canceled":
-      return { fire: "failed", detail: `canceled by ${outcome.by}` };
+      return { fire: "failed", detail: "canceled" };
     case "failed":
       return { fire: "failed", detail: outcome.error.message };
   }

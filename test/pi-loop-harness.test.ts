@@ -1,6 +1,6 @@
 /**
  * The SPEC v1 suite against pi-coding-agent through `LoopPort`, on real pi sessions over a record store on disk. What
- * its work does is chosen by its message, as the suite asks: the faux model answers the newest user message, `hold` and
+ * a run does is chosen by its message, as the suite asks: the faux model answers the newest user message, `hold` and
  * `effect` call tools of those names first, and `fail` is an error the model returns.
  */
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
@@ -293,7 +293,7 @@ describe("pi-coding-agent through LoopPort", () => {
     expect(await ext.counted()).toBe(1);
   });
 
-  it("a steer that reaches pi after its run settled is taken by the next work and answered on its own", async () => {
+  it("a steer that reaches pi after its run settled is taken by the next run and answered on its own", async () => {
     const ext = await extensionDir();
     const local = new World();
     const store = piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "pi-loop-")), cwd: process.cwd() });
@@ -341,7 +341,7 @@ describe("pi-coding-agent through LoopPort", () => {
       answer: { text: "answer: hold" },
     });
     const withdrawn = await doneOf(agent, steer.message.messageId);
-    expect(withdrawn).toMatchObject({ outcome: { status: "canceled", by: "cancel" } });
+    expect(withdrawn).toMatchObject({ outcome: { status: "canceled" } });
     expect(withdrawn.entryId).toBeUndefined();
     const page = await agent.sessions.get("s").read();
     const users = page.ok ? page.entries.filter((e) => e.kind === "user_message") : [];
@@ -363,7 +363,7 @@ describe("pi-coding-agent through LoopPort", () => {
     expect(forked?.getEntries().filter(isMessageMarker)).toEqual([]);
   });
 
-  it("a model set during work is written at once, and the next work runs on it", async () => {
+  it("a model set during a run is written at once, and the next run uses it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-loop-"));
     const store = piSessionRecordStore({ dir, cwd: process.cwd() });
     const local = new World();
@@ -389,7 +389,7 @@ describe("pi-coding-agent through LoopPort", () => {
     const answeredBy = (record?.getEntries() ?? []).flatMap((e) =>
       e.type === "message" && e.message.role === "assistant" ? [e.message.model] : [],
     );
-    // The work in progress keeps the model it started on, through its tool call and its answer.
+    // The running run keeps the model it started on, through its tool call and its answer.
     expect(answeredBy).toEqual(["first", "first", "second"]);
   });
 
@@ -536,7 +536,7 @@ describe("an abort right after acceptance", () => {
     ["after setImmediate", () => new Promise<void>((r) => setImmediate(r))],
   ])("stops the first request when sent %s", async (_when, wait) => {
     const { agent } = fauxAgent([untilAborted]);
-    expect(await abortedAfter(agent, "sEarly", wait)).toEqual({ status: "canceled", by: "abort" });
+    expect(await abortedAfter(agent, "sEarly", wait)).toEqual({ status: "canceled" });
   });
 
   it("also stops the automatic compaction prompt() runs before the first agent run", async () => {
@@ -566,7 +566,7 @@ describe("an abort right after acceptance", () => {
       const usage = { input: 2450, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 2450, cost: zero };
       record.appendMessage({ ...fauxAssistantMessage("full"), provider: model.provider, model: model.id, usage });
 
-      expect(await abortedAfter(agent, "sEarlyCompact", async () => {})).toEqual({ status: "canceled", by: "abort" });
+      expect(await abortedAfter(agent, "sEarlyCompact", async () => {})).toEqual({ status: "canceled" });
       // The compaction did start, so the abort above is what stopped it, not a history that needed none.
       expect(debug).toHaveBeenCalledWith(expect.stringMatching(/automatic compaction threshold .*: aborted$/));
     } finally {

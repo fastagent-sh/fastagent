@@ -309,7 +309,7 @@ describe("Pi-native tool loadouts", () => {
     const messageId = read.ok ? read.state.taken[0]?.messageId : undefined;
     if (!messageId) throw new Error("no message taken");
     expect(await agent.sessions.get("cancelled").messages.cancel(messageId)).toEqual({ ok: true });
-    expect(outcomeOf((await run).events)).toEqual({ status: "canceled", by: "cancel" });
+    expect(outcomeOf((await run).events)).toEqual({ status: "canceled" });
     expect(cancelled).toBe(true);
   });
 

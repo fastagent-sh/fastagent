@@ -164,7 +164,7 @@ memory of a conversation: what should outlast it belongs in content, and a chat 
 platform's (§10.2).
 
 A session's record is an append-only log of entries, in pi's format: the messages (the asks, the answers with their
-usage, the tool calls and results), model and thinking-level changes, compactions, the start and end of each run, and
+usage, the tool calls and results), model and thinking-level changes, compactions, and
 FastAgent's own markers, which the model never sees. Each entry names its parent, so forks and branches share what
 they inherited. That log is the session's durable history. The live events (`message_delta`, `tool_*`) are not
 stored: a client that reconnects follows the log from its last entry (`follow`, §7.4). What the service prints is its

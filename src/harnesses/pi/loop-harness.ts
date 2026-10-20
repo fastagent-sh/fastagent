@@ -27,7 +27,6 @@ import {
   type Result,
   type SessionSettings,
   type SessionState,
-  type Usage,
   agentError,
   failure,
 } from "../../protocol.ts";
@@ -38,7 +37,7 @@ import { liveEvents } from "./live-events.ts";
 import { contextOf, isRecord, toRecord } from "./log-records.ts";
 import { answeredOutcome, thrownFailure, toPiPromptOptions } from "./messages.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
-import { MESSAGE_MARKERS, isConversationMessage } from "./session-markers.ts";
+import { MESSAGE_MARKERS, inheritedEntries, isConversationMessage } from "./session-markers.ts";
 import {
   MissingModel,
   modelBySpec,
@@ -58,25 +57,6 @@ export interface PiLoopHarnessOptions extends PiBindingOptions {
   /** The registry a run resolves against, as it is now: for `state()`, `update()` and `models()`. */
   catalog: () => Promise<Models>;
   commands?: () => Promise<AgentCommand[]>;
-}
-
-const usageOf = (message: AssistantMessage): Usage => ({
-  inputTokens: message.usage.input,
-  outputTokens: message.usage.output,
-  cacheReadTokens: message.usage.cacheRead,
-  cacheWriteTokens: message.usage.cacheWrite,
-  cost: message.usage.cost.total,
-});
-
-function addUsage(total: Usage | undefined, more: Usage): Usage {
-  if (!total) return more;
-  return {
-    inputTokens: total.inputTokens + more.inputTokens,
-    outputTokens: total.outputTokens + more.outputTokens,
-    cacheReadTokens: (total.cacheReadTokens ?? 0) + (more.cacheReadTokens ?? 0),
-    cacheWriteTokens: (total.cacheWriteTokens ?? 0) + (more.cacheWriteTokens ?? 0),
-    cost: (total.cost ?? 0) + (more.cost ?? 0),
-  };
 }
 
 function thrownOutcome(error: unknown): LoopOutcome {
@@ -183,6 +163,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
     const records: LogRecord[] = [];
     /** The nearest record at or above each pi entry: what a record's parent is when pi's is not a record. */
     const nearest = new Map<string, string | undefined>();
+    const inherited = inheritedEntries(record.getEntries());
     const take = (entry: PiSessionEntry): LogRecord | undefined => {
       const parent = entry.parentId === null ? undefined : nearest.get(entry.parentId);
       if (!isRecord(entry)) {
@@ -190,7 +171,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
         return undefined;
       }
       nearest.set(entry.id, entry.id);
-      const converted = toRecord(entry, parent);
+      const converted = toRecord(entry, parent, inherited.has(entry.id));
       records.push(converted);
       return converted;
     };
@@ -263,7 +244,6 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
       let enqueueSteer: AgentSession["agent"]["steer"] | undefined;
       let stopRequested = false;
       let finished = false;
-      let usage: Usage | undefined;
       let resolveReady!: (session: AgentSession | undefined) => void;
       const ready = new Promise<AgentSession | undefined>((resolve) => (resolveReady = resolve));
       // One steer at a time: pi queues each only after its `input` handlers, so serializing is what tells whose
@@ -274,10 +254,6 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
         written: (entry) => {
           if (entry.type !== "message") return;
           const written = entry.message as { role: string };
-          if (written.role === "assistant") {
-            usage = addUsage(usage, usageOf(written as AssistantMessage));
-            return;
-          }
           if (written.role !== "user") return;
           // pi appends the very object it queued (its loop replaces only system messages, and in place), so identity
           // is the match; a user message that is none of the steers is the loop's own first.
@@ -431,7 +407,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
           else if (!runStarted && extensionMayTakeInput) outcome = { status: "intercepted" };
           else outcome = { status: "failed", error: agentError("internal", "pi settled the run without an answer") };
           if (outcome.status === "intercepted") said(handed[0] as Handed, { handled: true });
-          return { outcome: await withAuth(bound, outcome), ...(usage ? { usage } : {}) };
+          return { outcome: await withAuth(bound, outcome) };
         } finally {
           finished = true;
           // What pi still holds it will never run: this run has settled.

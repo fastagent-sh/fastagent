@@ -142,7 +142,7 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
         delete: false,
         updatable: [],
         durableQueue: false,
-        durableWork: false,
+        durableTaken: false,
         toolProgress: true,
         usage: false,
       },

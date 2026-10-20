@@ -102,7 +102,7 @@ const usersOf = async (agent: ReturnType<typeof servingAgent>, sessionId: string
 };
 
 describe("LoopPort", () => {
-  it("a steer the harness reports nothing for is taken by the next work, and answered on its own", async () => {
+  it("a steer the harness reports nothing for is taken by the next run, and answered on its own", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(steeringDropped(fakeLoopHarness(store))));
     const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
@@ -133,7 +133,7 @@ describe("LoopPort", () => {
     expect(store.handled).toBe(1);
   });
 
-  it("a steer the harness throws on is still accepted, and the next work takes the message", async () => {
+  it("a steer the harness throws on is still accepted, and the next run takes the message", async () => {
     const store = new FakeStore();
     const harness = fakeLoopHarness(store);
     const throwing = (log: LoopLog): LoopLog => ({
@@ -361,12 +361,12 @@ describe("LoopPort", () => {
       answer: { text: "answer: hold" },
     });
     const withdrawn = await doneOf(agent, "s", steer);
-    expect(withdrawn).toMatchObject({ outcome: { status: "canceled", by: "cancel" } });
+    expect(withdrawn).toMatchObject({ outcome: { status: "canceled" } });
     expect(withdrawn.entryId).toBeUndefined();
     expect((await usersOf(agent, "s")).map((e) => (e.data as { text: string }).text)).toEqual(["hold"]);
   });
 
-  it("a steer the loop can no longer take back is canceled by stopping the work it is part of", async () => {
+  it("a steer the loop can no longer take back is canceled by stopping the run it is part of", async () => {
     const store = new FakeStore();
     const harness = fakeLoopHarness(store);
     const keeping = (log: LoopLog): LoopLog => ({
@@ -388,15 +388,15 @@ describe("LoopPort", () => {
     const steer = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "two" }, whenBusy: "steer" })))
       .message.messageId;
     expect(await agent.sessions.get("s").messages.cancel(steer)).toEqual({ ok: true });
-    const canceled = { outcome: { status: "canceled", by: "cancel" } };
+    const canceled = { outcome: { status: "canceled" } };
     expect(await doneOf(agent, "s", first)).toMatchObject(canceled);
     expect(await doneOf(agent, "s", steer)).toMatchObject(canceled);
   });
 
-  it("an abort after a cancel withdraws the steers the canceled work had not taken", async () => {
+  it("an abort after a cancel withdraws the steers the canceled run had not taken", async () => {
     const store = new FakeStore();
     const harness = fakeLoopHarness(store);
-    // A stop that lands only on release, so the abort arrives while the canceled work is still settling.
+    // A stop that lands only on release, so the abort arrives while the canceled run is still settling.
     const slowStop = (log: LoopLog): LoopLog => ({
       ...log,
       run: (message, hooks) => {
@@ -425,8 +425,8 @@ describe("LoopPort", () => {
     expect(await session.messages.cancel(first)).toEqual({ ok: true });
     expect(await session.abort()).toMatchObject({ ok: true, stopped: { queued: [steer] } });
     store.release();
-    expect(await doneOf(agent, "s", steer)).toMatchObject({ outcome: { status: "canceled", by: "abort" } });
-    expect(await doneOf(agent, "s", first)).toMatchObject({ outcome: { status: "canceled", by: "abort" } });
+    expect(await doneOf(agent, "s", steer)).toMatchObject({ outcome: { status: "canceled" } });
+    expect(await doneOf(agent, "s", first)).toMatchObject({ outcome: { status: "canceled" } });
   });
 
   it("a withdrawal the storage refused still frees the session", async () => {
@@ -449,7 +449,7 @@ describe("LoopPort", () => {
 });
 
 describe("serving layer", () => {
-  it("a caller that detaches releases its subscription; the work goes on", async () => {
+  it("a caller that detaches releases its subscription; the agent goes on", async () => {
     const store = new FakeStore();
     const port = loopPort(fakeLoopHarness(store));
     let watching = 0;
@@ -471,7 +471,7 @@ describe("serving layer", () => {
     await doneOf(agent, "s", first.message.messageId);
   });
 
-  it("a message taken between its status read and its backfill still streams its whole work", async () => {
+  it("a message taken between its status read and its backfill still streams all it is part of", async () => {
     const store = new FakeStore();
     const harness = fakeLoopHarness(store);
     // pi binds before it writes the first message: the message is taken a moment after it is accepted.
@@ -516,7 +516,7 @@ describe("serving layer", () => {
     expect(kinds).toEqual(["accepted", "entry:user_message", "message_delta", "entry:assistant_message", "done"]);
   });
 
-  it("a message taken just before its backfill streams its own work only, each entry once", async () => {
+  it("a message taken just before its backfill streams its own part only, each entry once", async () => {
     const store = new FakeStore();
     const port = loopPort(fakeLoopHarness(store));
     let releaseBeforeRead = false;
@@ -553,7 +553,7 @@ describe("serving layer", () => {
     expect(events.at(-1)).toMatchObject({ type: "done", message: { messageId: steer } });
   });
 
-  it("a follower is told when a message is taken, not only when work starts and ends", async () => {
+  it("a follower is told when a message is taken, not only when a run starts and ends", async () => {
     const store = new FakeStore();
     // Taken a moment after it is accepted, as pi takes a message once its session is bound.
     const harness = fakeLoopHarness(store);
@@ -688,7 +688,7 @@ describe("serving layer", () => {
       for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "first" } })) void _;
       const follow = session.follow()[Symbol.asyncIterator]();
       await follow.next();
-      // Not read while this work writes, so both the invoke's stream and the follow fall behind before its end.
+      // Not read while this run writes, so both the invoke's stream and the follow fall behind before its end.
       const invoked = agent.invoke({ sessionId: "s", prompt: { text: "hold" } })[Symbol.asyncIterator]();
       const receipt = await invoked.next();
       const messageId = receipt.done || receipt.value.type !== "accepted" ? "" : receipt.value.message.messageId;

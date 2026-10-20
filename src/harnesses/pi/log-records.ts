@@ -4,7 +4,7 @@
  * a client renders; `LoopPort`'s message records become their own kinds; settings changes become `settings_changed`; any
  * other harness record keeps its pi type with an empty payload, present so parent chains and cursors stay intact.
  */
-import { contentText } from "@earendil-works/pi-ai";
+import { type Usage as PiUsage, contentText } from "@earendil-works/pi-ai";
 import {
   type SessionEntry as PiSessionEntry,
   type SessionManager,
@@ -13,7 +13,7 @@ import {
   getLastAssistantUsage,
 } from "@earendil-works/pi-coding-agent";
 import type { LogRecord, MessageMarker } from "../../loop-port.ts";
-import type { Json, SessionState } from "../../protocol.ts";
+import type { Json, SessionState, Usage } from "../../protocol.ts";
 import { entryImages } from "./entry-images.ts";
 import { answerOutcome, answerThinking, endsRun } from "./messages.ts";
 import { MESSAGE_MARKERS, isConversationMessage, isMessageMarker, isPlaneMarker } from "./session-markers.ts";
@@ -29,12 +29,23 @@ export function isRecord(entry: PiSessionEntry): boolean {
   return entry.type !== "label" && entry.type !== "usage" && !isPlaneMarker(entry);
 }
 
-/** One pi entry, which {@link isRecord}, as a record of the log, under the nearest ancestor that is one. */
-export function toRecord(entry: PiSessionEntry, parentEntryId: string | undefined): LogRecord {
+const usageOf = (usage: PiUsage): Usage => ({
+  inputTokens: usage.input,
+  outputTokens: usage.output,
+  cacheReadTokens: usage.cacheRead,
+  cacheWriteTokens: usage.cacheWrite,
+  cost: usage.cost.total,
+});
+
+/**
+ * One pi entry, which {@link isRecord}, as a record of the log, under the nearest ancestor that is one. An `inherited`
+ * entry is a fork's copy: it carries no `usage`, because the session it was copied from paid for it (SPEC v1 §6).
+ */
+export function toRecord(entry: PiSessionEntry, parentEntryId: string | undefined, inherited: boolean): LogRecord {
   const base = { id: entry.id, ...(parentEntryId ? { parentEntryId } : {}), timestamp: Date.parse(entry.timestamp) };
   switch (entry.type) {
     case "message":
-      return { ...base, ...messageRecord(entry.id, entry.message) };
+      return { ...base, ...messageRecord(entry.id, entry.message, inherited) };
     case "custom":
       return { ...base, kind: MARKER_KINDS.get(entry.customType) as string, data: (entry.data ?? {}) as Json };
     case "model_change":
@@ -47,7 +58,11 @@ export function toRecord(entry: PiSessionEntry, parentEntryId: string | undefine
       return {
         ...base,
         kind: "compaction",
-        data: { summary: entry.summary, firstKeptEntryId: entry.firstKeptEntryId },
+        data: {
+          summary: entry.summary,
+          firstKeptEntryId: entry.firstKeptEntryId,
+          ...(entry.usage && !inherited ? { usage: usageOf(entry.usage) } : {}),
+        },
       };
     // Which entry the model no longer sees as written: `omitted` when it left the model context (pi's own abandoned
     // retry and overflow attempts, or an extension's edit), otherwise its content was replaced. Never the replacement.
@@ -60,7 +75,7 @@ export function toRecord(entry: PiSessionEntry, parentEntryId: string | undefine
 
 type Message = Extract<PiSessionEntry, { type: "message" }>["message"];
 
-function messageRecord(entryId: string, message: Message): Pick<LogRecord, "kind" | "data"> {
+function messageRecord(entryId: string, message: Message, inherited: boolean): Pick<LogRecord, "kind" | "data"> {
   switch (message.role) {
     case "user":
       return {
@@ -83,6 +98,7 @@ function messageRecord(entryId: string, message: Message): Pick<LogRecord, "kind
           // The same text the live `message_delta { channel: "thinking" }` added up to.
           ...(thinking !== undefined ? { thinking } : {}),
           ...(outcome ? { outcome } : {}),
+          ...(inherited ? {} : { usage: usageOf(message.usage) }),
         },
       };
     }

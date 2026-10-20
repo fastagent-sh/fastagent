@@ -200,9 +200,9 @@ A channel adapter should:
 
 ## Sessions and concurrency
 
-Channels choose the `sessionId`. A session works on one message at a time: a message that arrives while it works
-queues behind the work in progress by default (`whenBusy: "steer"` has the work in progress take it instead,
-`"reject"` refuses it as `busy`).
+Channels choose the `sessionId`. A message that arrives while a session is busy queues behind
+the ones before it by default (`whenBusy: "steer"` hands it to the agent at its next step instead, `"reject"` refuses
+it as `busy`).
 
 Good session choices depend on the external system:
 

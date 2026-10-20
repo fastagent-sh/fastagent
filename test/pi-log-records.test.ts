@@ -152,7 +152,7 @@ describe("an answer", () => {
     expect(outcomeOf(events)).toMatchObject({ status: "canceled" }); // the RUN was stopped
     // The answer failed on its own, before the stop.
     expect(answers(await entries(agent, "aBackoff")).map((e) => e.data)).toEqual([
-      { text: "", outcome: { status: "failed", error: { message: "boom 500" } } },
+      { text: "", outcome: { status: "failed", error: { message: "boom 500" } }, usage: expect.any(Object) },
     ]);
   });
 });
@@ -244,7 +244,7 @@ describe("tool calls", () => {
       toolCallId: "call-t",
       isError: true,
     });
-    expect(answers(truncatedEntries).at(-1)?.data).toEqual({ text: "done" });
+    expect(answers(truncatedEntries).at(-1)?.data).toEqual({ text: "done", usage: expect.any(Object) });
   });
 
   it("a result that ends its run says so in the record; one batched with a call that does not, does not end it", async () => {
@@ -267,7 +267,10 @@ describe("tool calls", () => {
         sessions: disk.sessions(),
       },
     );
-    expect(outcomeOf(await run(ended.agent, "eEnded"))).toEqual({ status: "completed" });
+    const endedEvents = await run(ended.agent, "eEnded");
+    expect(outcomeOf(endedEvents)).toEqual({ status: "completed" });
+    // The only reply asked for the tool that ended the run, so nothing answered the message (SPEC v1 §4).
+    expect(endedEvents.flatMap((e) => (e.type === "done" ? [e.message] : []))[0]?.answer).toBeUndefined();
     // Read back by a store that never saw the run: the record itself carries it.
     const reopened = fauxAgent([], { cwd: disk.cwd, sessions: disk.sessions() });
     expect((await entries(reopened.agent, "eEnded")).filter((e) => e.kind === "tool_result").at(-1)).toMatchObject({

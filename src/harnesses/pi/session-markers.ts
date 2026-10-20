@@ -10,7 +10,8 @@ import type { SessionManager } from "@earendil-works/pi-coding-agent";
 
 /**
  * "This record is a fork of X at Y." Its own entry rather than pi's header `parentSession`, which pi fills from its
- * own fork path and names a FILE, not the branch point idempotency needs.
+ * own fork path and names a FILE, not the branch point idempotency needs. Written after the copy, so it also says
+ * where the copy ends: {@link inheritedEntries}.
  */
 const FORK_PROVENANCE = "fastagent.fork";
 
@@ -73,7 +74,15 @@ export function publishedLeaf(record: SessionManager): string | undefined {
   return undefined;
 }
 
-/** Stamp a fresh fork with where it came from. */
+/**
+ * The entries a fork copied: every entry written before its provenance stamp. A record that is not a fork has none.
+ */
+export function inheritedEntries(entries: readonly { id: string; type?: string; customType?: string }[]): Set<string> {
+  const stamp = entries.findIndex((entry) => entry.type === "custom" && entry.customType === FORK_PROVENANCE);
+  return new Set(entries.slice(0, Math.max(stamp, 0)).map((entry) => entry.id));
+}
+
+/** Stamp a fresh fork, once its copy is written, with where it came from. */
 export function stampProvenance(record: SessionManager, provenance: string): void {
   record.appendCustomEntry(FORK_PROVENANCE, { provenance });
 }

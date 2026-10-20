@@ -147,7 +147,7 @@ dir.
 
 ## `busy`
 
-A session works on one message at a time. A message for a working session queues behind the work in progress by
+A message for a busy session queues behind the ones before it by
 default (`whenBusy: "queue"`), so `busy` means one of two things: the request asked not to wait (`whenBusy: "reject"`,
 which is how a schedule's occurrence is skipped while its previous one goes on), or the session's queue is full
 (`details.reason` says which).
