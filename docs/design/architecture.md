@@ -42,7 +42,7 @@ goal needs.
 | Decision | Why |
 |---|---|
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
-| **One API of our own: the consumer API**, [SPEC v1](../SPEC.md), bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same seven operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
+| **One API of our own: the consumer API**, [SPEC v1](../SPEC.md), bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same eight operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
 | **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (settings, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A developer who needs one of those over HTTP adds a route that calls it |
 | **The agent is a public bot.** No identity or session ownership in FastAgent | Who may reach it is decided in front of it. A session id is unguessable and is the session's key ([SPEC](../SPEC.md) §8) |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat to its session, a schedule to its session) in its own state, as it already keeps other state |
@@ -132,8 +132,9 @@ for the steps above.
 
 1. **A spike on pi-durable** that answers what the SPEC now promises: SQLite on AgentCore's session storage and what
    restarts a run cut off there; the definition rendered and run (`SYSTEM.md`, `AGENTS.md`, skills, tools); how
-   images are stored, behind `attachment`; whether a fork's copied entries can be told from its own, which `usage`
-   needs; and the queue left waiting after a failed or aborted run.
+   images are stored, behind `attachment`; whether an answer being written already has its entry id and its text so
+   far, which `message_delta` and `state.reply` need; whether a fork's copied entries can be told from its own, which
+   `usage` needs; and the queue left waiting after a failed or aborted run.
 2. The Agent on pi-durable, with the conformance suite in process and over HTTP; channels, schedules, wake-ups, the CLI
    and AgentCore moved onto it; the previous protocol, `LoopPort` and the pi-coding-agent harness deleted.
 3. The artifact: `fastagent build`, and `deploy` from it.
