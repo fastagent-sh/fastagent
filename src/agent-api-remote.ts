@@ -322,9 +322,13 @@ export async function connectAgentApi(options: RemoteAgentApiOptions): Promise<A
         } catch (error) {
           throw new AgentRejection(unreachable(error), { cause: error });
         }
+        // The type as the sender declared it; `content-type` is the safe one the server serves the bytes under.
+        const declared = res.headers.get("x-mime-type");
         return {
-          // The type as the sender declared it; `content-type` is the safe one the server serves the bytes under.
-          mimeType: res.headers.get("x-mime-type") ?? res.headers.get("content-type") ?? "application/octet-stream",
+          mimeType:
+            declared === null
+              ? (res.headers.get("content-type") ?? "application/octet-stream")
+              : decodeURIComponent(declared),
           data: toBase64(new Uint8Array(bytes)),
         };
       }),

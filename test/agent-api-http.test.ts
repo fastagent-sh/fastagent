@@ -2,7 +2,7 @@
  * The Agent API over HTTP: the conformance suite through the HTTP client against a real server, and what only the
  * binding has to say (statuses, SSE ids, `Last-Event-ID`, the client's answers when a reply does not arrive).
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { Agent, InvokeResult } from "../src/agent-api.ts";
 import { connectAgentApi } from "../src/agent-api-remote.ts";
 import { createAgentApiHandler } from "../src/channels/agent-api-http.ts";
@@ -19,7 +19,7 @@ afterAll(async () => {
 });
 
 /** A server whose Agent can be replaced, so a restart keeps the URL a client holds. */
-async function serving(): Promise<{ url: string; use(agent: Agent): void }> {
+async function serving(): Promise<{ url: string; use(agent: Agent): void; cut(): void }> {
   let handler = (_req: Request): Response | Promise<Response> => new Response("no agent yet\n", { status: 503 });
   const server = serveNode((req) => handler(req), { port: 0, host: "127.0.0.1" });
   servers.push(server);
@@ -29,6 +29,7 @@ async function serving(): Promise<{ url: string; use(agent: Agent): void }> {
     use: (agent) => {
       handler = createAgentApiHandler(agent);
     },
+    cut: () => server.closeAllConnections(),
   };
 }
 
@@ -81,13 +82,13 @@ describe("the Agent API's HTTP binding", () => {
   const subject = durableSubject();
   afterAll(() => subject.stop());
 
-  async function started() {
-    const { url, use } = await serving();
+  async function started(fetchFn?: typeof fetch) {
+    const { url, use, cut } = await serving();
     use(await subject.start());
-    const agent = await connectAgentApi({ url });
+    const agent = await connectAgentApi({ url, ...(fetchFn === undefined ? {} : { fetchFn }) });
     const created = await agent.createSession();
     if (!created.ok) throw new Error(JSON.stringify(created));
-    return { url, agent, sessionId: created.sessionId };
+    return { url, agent, sessionId: created.sessionId, cut };
   }
 
   async function answered(agent: Agent, sessionId: string, text: string) {
@@ -99,10 +100,16 @@ describe("the Agent API's HTTP binding", () => {
 
   it("refuses a POST without content-type: application/json before reading it, a body-less abort included", async () => {
     const { url, sessionId } = await started();
-    const plain = await fetch(`${url}/invoke`, { method: "POST", body: JSON.stringify({ sessionId, content: [] }) });
-    expect(plain.status).toBe(415);
+    const plain = await fetch(`${url}/invoke`, {
+      method: "POST",
+      body: JSON.stringify({ sessionId, content: [{ type: "text", text: "hi" }] }),
+    });
+    const notJson = { error: { code: "invalid_request", retryable: false } };
+    expect(plain.status).toBe(400);
+    expect(await plain.json()).toMatchObject(notJson);
     const abort = await fetch(`${url}/sessions/${encodeURIComponent(sessionId)}/abort`, { method: "POST" });
-    expect(abort.status).toBe(415);
+    expect(abort.status).toBe(400);
+    expect(await abort.json()).toMatchObject(notJson);
     const read = await fetch(`${url}/sessions/${encodeURIComponent(sessionId)}`);
     expect(await read.json()).toMatchObject({ entries: [] });
   });
@@ -223,5 +230,70 @@ describe("the Agent API's HTTP binding", () => {
       ok: false,
       unknown: { reason: expect.stringContaining("502") },
     });
+  });
+
+  it("ends a resume whose connection is lost with its own serving_error, and a wait on it unfinished", async () => {
+    let watching = 0;
+    const counting = (async (input: string | URL | Request, init?: RequestInit) => {
+      const res = await fetch(input, init);
+      if (String(input).includes("/events")) watching++;
+      return res;
+    }) as typeof fetch;
+    const { agent, sessionId, cut } = await started(counting);
+    const receipt = await agent.invoke({ sessionId, content: [{ type: "text", text: "hold" }] });
+    if (!receipt.ok) throw new Error(JSON.stringify(receipt));
+    await vi.waitFor(() => expect(subject.held()).toBe(1));
+    const stream = agent.resume(sessionId)[Symbol.asyncIterator]();
+    expect(await stream.next()).toMatchObject({ value: { type: "state" } });
+    const waiting = receipt.wait();
+    await vi.waitFor(() => expect(watching).toBe(2));
+    cut();
+    const rest = [];
+    for (let next = await stream.next(); !next.done; next = await stream.next()) rest.push(next.value);
+    expect(rest.at(-1)).toMatchObject({
+      type: "serving_error",
+      error: { code: "unavailable", message: expect.stringContaining("the connection was lost") },
+    });
+    expect(await waiting).toMatchObject({ ok: false, unfinished: { reason: expect.any(String) } });
+    subject.release();
+  });
+
+  it("ends a resume whose stream closes without a serving_error with one of its own", async () => {
+    const state = { type: "state", state: { status: "idle", taken: [], queued: [], usage: { models: {}, tools: {} } } };
+    const { agent, sessionId } = await started((async (input: string | URL | Request, init?: RequestInit) =>
+      String(input).includes("/events")
+        ? new Response(`id: start\ndata: ${JSON.stringify(state)}\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+          })
+        : fetch(input, init)) as typeof fetch);
+    const events = [];
+    for await (const event of agent.resume(sessionId)) events.push(event);
+    expect(events).toEqual([
+      state,
+      {
+        type: "serving_error",
+        error: expect.objectContaining({ code: "unavailable", message: expect.stringContaining("cut off") }),
+      },
+    ]);
+  });
+
+  it("returns an attachment whose declared type no header could carry as it was declared", async () => {
+    const { agent, sessionId } = await started();
+    const mimeType = 'image/png; name="图.png"';
+    const receipt = await agent.invoke({
+      sessionId,
+      content: [
+        { type: "text", text: "look" },
+        { type: "image", mimeType, data: "iVBORw0KGgo=" },
+      ],
+    });
+    if (!receipt.ok) throw new Error(JSON.stringify(receipt));
+    await receipt.wait();
+    const page = await agent.read(sessionId);
+    if (!page.ok) throw new Error(JSON.stringify(page));
+    const [first] = page.entries;
+    if (first === undefined) throw new Error("the session has no entry");
+    const image = (first.data as { content: { ref?: string }[] }).content[1];
+    expect(await agent.attachment(sessionId, image?.ref as string)).toEqual({ mimeType, data: "iVBORw0KGgo=" });
   });
 });

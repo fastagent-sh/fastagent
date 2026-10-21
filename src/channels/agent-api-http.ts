@@ -190,8 +190,9 @@ function attachmentResponse(attachment: Attachment | undefined): Response {
     headers: {
       "content-type": RASTER_IMAGE_TYPES.has(attachment.mimeType) ? attachment.mimeType : "application/octet-stream",
       "x-content-type-options": "nosniff",
-      // The declared type, for a client that wants it back; never one the browser acts on.
-      "x-mime-type": attachment.mimeType,
+      // The declared type, for a client that wants it back; never one the browser acts on. Percent-encoded: a sender
+      // may declare any string, and a header carries Latin-1 without line breaks.
+      "x-mime-type": encodeURIComponent(attachment.mimeType),
       "cache-control": "private, max-age=31536000, immutable",
     },
   });
@@ -323,5 +324,7 @@ export function createAgentApiHandler(agent: Agent, options: { corsOrigins?: rea
       { prefix: "/agent", handler: app({ "GET /agent": () => json(agent.info()) }) },
     ],
     corsOrigins: options.corsOrigins ?? false,
+    // §8: refused as `invalid_request`, an `AgentError` a Caller can read, not the router's plain-text 415.
+    notJson: () => invalid("content-type must be application/json"),
   });
 }
