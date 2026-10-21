@@ -138,6 +138,115 @@ describe("the Agent on pi-durable", () => {
     await agent.close();
   });
 
+  it("creates a session with its chosen model and thinking level in the creating commit, kept after restart", async () => {
+    const path = temporaryStorage();
+    const faux = fauxProvider({ models: [{ id: "default" }, { id: "chosen" }] });
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const ref = (modelId: string) => ({ provider: faux.getModel().provider, modelId });
+    const open = async () =>
+      openDurableAgent({
+        storage: await openNodeSqliteStorage(path),
+        models,
+        registry: createRegistry(),
+        name: "creation",
+        model: ref("default"),
+        thinkingLevel: "high",
+      });
+    let agent = await open();
+    const chosen = { model: ref("chosen"), thinkingLevel: "off" as const };
+    const commits: unknown[] = [];
+    const unsubscribe = agent.harness.subscribeCommits(({ changes }) => {
+      if (changes.some((change) => change.type === "conversation")) {
+        commits.push(
+          changes.flatMap((change) =>
+            change.type === "document" && change.record.kind === "pi.agent" ? [change.value] : [],
+          ),
+        );
+      }
+    });
+    const created = await agent.createSession(chosen);
+    unsubscribe();
+    if (!created.ok) throw new Error(JSON.stringify(created));
+    expect(commits).toEqual([[chosen]]);
+    const conversation = await agent.conversation(created.sessionId);
+    if (conversation === undefined) throw new Error("The created session has no conversation");
+    expect(await agent.harness.snapshot(AgentDoc, conversation.id, context)).toEqual(chosen);
+    await agent.close();
+
+    agent = await open();
+    faux.setResponses([
+      (_context, options, _state, model) => {
+        expect(model.id).toBe("chosen");
+        expect(options?.reasoning).toBeUndefined();
+        return fauxAssistantMessage("chosen answer");
+      },
+    ]);
+    const receipt = await agent.invoke({ sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
+    if (!receipt.ok) throw new Error(JSON.stringify(receipt));
+    expect(await receipt.wait()).toMatchObject({ ok: true, message: { answer: { text: "chosen answer" } } });
+    expect(await agent.harness.snapshot(AgentDoc, conversation.id, context)).toEqual(chosen);
+    await agent.close();
+  });
+
+  it("forks with chosen settings over the source's settings, including an empty source, without changing the source", async () => {
+    const { faux, models, model } = fauxModels();
+    const agent = await openDurableAgent({
+      storage: await openNodeSqliteStorage(temporaryStorage()),
+      models,
+      registry: createRegistry(),
+      name: "fork settings",
+    });
+    const original = { model, thinkingLevel: "high" as const };
+    const created = await agent.createSession(original);
+    if (!created.ok) throw new Error(JSON.stringify(created));
+    const source = await agent.conversation(created.sessionId);
+    if (source === undefined) throw new Error("The created session has no conversation");
+    const replacement = { provider: "another", modelId: "chosen" };
+    const cases = [
+      { options: {}, expected: original },
+      { options: { model: replacement }, expected: { ...original, model: replacement } },
+      { options: { thinkingLevel: "off" as const }, expected: { ...original, thinkingLevel: "off" } },
+      {
+        options: { model: replacement, thinkingLevel: "max" as const },
+        expected: { model: replacement, thinkingLevel: "max" },
+      },
+    ];
+    for (const populated of [false, true]) {
+      if (populated) {
+        faux.setResponses([fauxAssistantMessage("source answer")]);
+        const receipt = await agent.invoke({ sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
+        if (!receipt.ok) throw new Error(JSON.stringify(receipt));
+        await receipt.wait();
+      }
+      const history = await agent.read(created.sessionId);
+      if (!history.ok) throw new Error(JSON.stringify(history));
+      for (const { options, expected } of cases) {
+        const fork = await agent.createSession({ from: { sessionId: created.sessionId }, ...options });
+        if (!fork.ok) throw new Error(JSON.stringify(fork));
+        const conversation = await agent.conversation(fork.sessionId);
+        if (conversation === undefined) throw new Error("The fork has no conversation");
+        expect(await agent.harness.snapshot(AgentDoc, conversation.id, context)).toEqual(expected);
+        expect(await agent.read(fork.sessionId)).toMatchObject({ entries: history.entries });
+      }
+      expect(await agent.harness.snapshot(AgentDoc, source.id, context)).toEqual(original);
+      expect(await agent.read(created.sessionId)).toEqual(history);
+    }
+    const history = await agent.read(created.sessionId);
+    if (!history.ok || history.entries[0] === undefined) throw new Error("The source has no entry to fork at");
+    await source.configure({ thinkingLevel: "low" }, context);
+    const bounded = await agent.createSession({
+      from: { sessionId: created.sessionId, entryId: history.entries[0].id },
+      model: replacement,
+    });
+    if (!bounded.ok) throw new Error(JSON.stringify(bounded));
+    const branch = await agent.conversation(bounded.sessionId);
+    if (branch === undefined) throw new Error("The fork has no conversation");
+    expect(await agent.harness.snapshot(AgentDoc, branch.id, context)).toEqual({ ...original, model: replacement });
+    expect(await agent.harness.snapshot(AgentDoc, source.id, context)).toEqual({ ...original, thinkingLevel: "low" });
+    await agent.close();
+  });
+
   it("refuses a message no model of the agent could answer, recording nothing", async () => {
     const path = temporaryStorage();
     const open = async (modelIds: string[], defaultModel: string | undefined) => {

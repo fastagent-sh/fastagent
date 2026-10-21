@@ -12,7 +12,7 @@ export interface Agent {
     sessionId: string,
     key: { messageId: string } | { idempotencyKey: string },
   ): Promise<MessageStatus | undefined>;
-  createSession(options?: { from?: ForkSource }): Promise<CreateSessionResult>;
+  createSession(options?: CreateSessionOptions): Promise<CreateSessionResult>;
   read(sessionId: string, options?: ReadOptions): Promise<ReadResult>;
   resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
   abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
@@ -50,6 +50,12 @@ export type InvokeResult =
   | { ok: false; unknown: { reason: string } };
 
 export type WaitResult = { ok: true; message: DoneMessage } | { ok: false; unfinished: { reason: string } };
+
+export interface CreateSessionOptions {
+  from?: ForkSource;
+  model?: { provider: string; modelId: string };
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+}
 
 export type CreateSessionResult = { ok: true; sessionId: string } | { ok: false; error: AgentError };
 

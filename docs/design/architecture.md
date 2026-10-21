@@ -44,7 +44,7 @@ goal needs.
 |---|---|
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
 | **One API of our own: the consumer [Agent API](agent-api.md)**, bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same eight operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
-| **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (settings, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A developer who needs one of those over HTTP adds a route that calls it |
+| **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (changing settings, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A consumer may choose the model and thinking level when creating or forking a session through `createSession`; changing an existing session's settings uses the harness. A developer who needs one of those over HTTP adds a route that calls it |
 | **The agent is a public bot.** No identity or session ownership in FastAgent | Who may reach it is decided in front of it. A session id is a name, not a credential: whoever reaches the agent reaches every session. When several users share one deployment, a facade in front keeps each to their own sessions ([security-boundary.md](security-boundary.md) §4) |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
@@ -79,6 +79,11 @@ is recorded. A crash after the record is a redelivery that finds it, and the key
 The previous design's pi-coding-agent harness goes with it: pi's `extensions/` and `.pi/`, `APPEND_SYSTEM.md`, the
 `chat` TUI (replaced by a REPL over the consumer API), and the skills and prompt templates a machine lends from
 `~/.pi/agent`.
+
+A consumer may choose a session's model and thinking level with `createSession({ model, thinkingLevel, from? })`,
+passed to pi-durable's creation options in the same commit. A fork inherits the settings at its branch point and
+applies the supplied overrides. `invoke` uses those settings and accepts no per-message model choice. A session that
+names a model keeps it; FastAgent never replaces it automatically when it becomes unavailable.
 
 ## 3. The definition and its assembly
 

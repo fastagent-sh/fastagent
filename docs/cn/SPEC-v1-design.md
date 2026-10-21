@@ -36,11 +36,17 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | `info` | `GET /agent` | bot 的名字、简介，消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`），以及可用的命令（`commands`：prompt 模板和 skill） |
 | `invoke` | `POST /invoke` | 向会话发一条消息（不带 `sessionId` 就新建会话）。消息一被持久记录就返回 `202` 和回执，不等它被回答 |
 | `getMessage` | `GET /sessions/{s}/messages/{m}`，或 `?idempotencyKey=` 按 key 查 | 按 id 或发送时的 key 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
-| `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”） |
+| `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”）；可以用 `model`、`thinkingLevel` 选择新会话的设置 |
 | `read` | `GET /sessions/{s}` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
 | `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
 | `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样 |
 | `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容 |
+
+创建会话时，`model` 用 `{ provider, modelId }`，`thinkingLevel` 用 pi-durable 原生支持的 `off`、`minimal`、`low`、`medium`、
+`high`、`xhigh`、`max`。它们和会话在同一次提交里保存，重启后保留。fork 继承分叉 entry 当时的设置（空会话继承当前设置），
+每个显式传入的字段分别覆盖继承来的值，不改变源会话。仍然没有设置的字段在收到消息时取部署默认值。创建时和 pi-durable 一样只保存
+选择，不检查模型是否可用；如果发消息时会话没有可用模型，`invoke` 返回 `missing_model`。`invoke` 不接受模型或 thinking level，
+只用会话设置；修改已有会话的设置仍走 harness 的 API。
 
 **发消息和看会话是分开的两件事**，和 pi-durable 一样：`submit` 返回一个句柄，过程另外用 `watchEvents` 订阅。对应到这里：
 
@@ -201,7 +207,7 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | `follow` | `resume`：按 `replayFrom` 重放，必发快照，再接实时；回答中途也能接上 |
 | invoke 流式返回这条消息的事件，到它的 `done` 为止 | `invoke` 只返回回执；看过程用 `resume`，等结局用 `wait()`，和 pi-durable 的 `submit`、`watchEvents`、`Submission.wait()` 一样 |
 | `prompt: { text, images }` | `content` 内容数组，按 `info().inputs` 检查 |
-| `sessions.create({ sessionId, fork })` | `createSession({ from })` |
+| `sessions.create({ sessionId, fork })` | `createSession({ from?, model?, thinkingLevel? })`，模型和 thinking level 传给 pi-durable 的创建选项 |
 | fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`；会话的花费是 `state.usage`，只算它自己的调用；`compaction` 不带 `usage` |
 | `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
 | `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |

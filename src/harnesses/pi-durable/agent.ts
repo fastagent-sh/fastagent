@@ -6,6 +6,7 @@
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import type { ImageContent, Models, ModelThinkingLevel, TextContent } from "@earendil-works/pi-ai";
 import {
+  AgentDoc,
   type Conversation,
   ConversationBusy,
   DEFAULT_RETRY_POLICY,
@@ -31,6 +32,7 @@ import {
   type AgentInfo,
   AgentRejection,
   type ContentPart,
+  type CreateSessionOptions,
   type CreateSessionResult,
   type Entry,
   type InvokeRequest,
@@ -284,12 +286,17 @@ function durableAgent(
       }),
     );
 
-  const createSession = (createOptions?: Parameters<Agent["createSession"]>[0]): Promise<CreateSessionResult> =>
+  const createSession = (createOptions?: CreateSessionOptions): Promise<CreateSessionResult> =>
     resolve<CreateSessionResult>(
       Effect.gen(function* () {
-        const from = createOptions?.from;
+        const { from, model, thinkingLevel } = createOptions ?? {};
+        const agent = {
+          ...(model === undefined ? {} : { model }),
+          ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        };
+        const creation = { ...OWNERLESS, agent };
         if (from === undefined) {
-          const created = yield* port(() => harness.createConversation(OWNERLESS, context));
+          const created = yield* port(() => harness.createConversation(creation, context));
           return { ok: true, sessionId: ids.encode(created.id) };
         }
         if (from.context === "recent") {
@@ -309,8 +316,20 @@ function durableAgent(
         }
         const fork =
           at === undefined
-            ? yield* port(() => harness.createConversation(OWNERLESS, context))
-            : yield* port(() => source.fork(at.id, OWNERLESS, context));
+            ? yield* port(async () => {
+                // pi-durable forks at an entry; an empty source has only settings to inherit.
+                const inherited = await harness.snapshot(AgentDoc, source.id, context);
+                return harness.createConversation(
+                  {
+                    ...creation,
+                    init: async (tx, id) => {
+                      Object.assign(await tx.doc(AgentDoc, id), inherited, agent);
+                    },
+                  },
+                  context,
+                );
+              })
+            : yield* port(() => source.fork(at.id, creation, context));
         return { ok: true, sessionId: ids.encode(fork.id) };
       }),
       failed,
