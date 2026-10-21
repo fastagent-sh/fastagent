@@ -7,7 +7,6 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/conte
 import type { ImageContent, Models, ModelThinkingLevel, TextContent } from "@earendil-works/pi-ai";
 import {
   type Conversation,
-  type ConversationId,
   ConversationBusy,
   DEFAULT_RETRY_POLICY,
   SessionFailed,
@@ -46,7 +45,7 @@ import {
 import { type PortFailure, port, portError } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, parseImageRef } from "./entries.ts";
-import { type Defaults, followDefaults } from "./defaults.ts";
+import { type Defaults, takeDefaults } from "./defaults.ts";
 import { type Ids, storageIds } from "./ids.ts";
 import { type InputRecord, hasEnded, isInput, queuedInputs, requestIdFor } from "./messages.ts";
 import { type Reads, durableReads } from "./reads.ts";
@@ -69,7 +68,7 @@ export interface DurableAgentOptions {
   name: string;
   description?: string;
   commands?: readonly AgentCommand[];
-  /** What a conversation answers with unless it sets its own (defaults.ts). */
+  /** What a conversation answers with when its own settings name none (defaults.ts). */
   model?: ModelRef;
   thinkingLevel?: ModelThinkingLevel;
   inFlightPerProcess?: number;
@@ -103,7 +102,6 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
   const lifetime = Scope.makeUnsafe();
   try {
     const ids = await storageIds(harness, context);
-    await followDefaultsAtStart(harness, defaultsOf(options));
     harness.resume();
     await Effect.runPromise(Scope.provide(releaseWaitingQueues(harness, context), lifetime));
     return durableAgent(harness, ids, lifetime, options);
@@ -191,7 +189,10 @@ function durableAgent(
     Effect.map(({ submissions }) => submissions.filter((record) => record.type === "input").length),
   );
 
-  const defaults = defaultsOf(options);
+  const defaults: Defaults = {
+    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
+  };
 
   const admit = (request: InvokeRequest): Effect.Effect<InvokeResult, PortFailure> =>
     Effect.gen(function* () {
@@ -219,7 +220,7 @@ function durableAgent(
         }
       }
       const target = conversation;
-      yield* port(() => target.commit((tx) => followDefaults(tx, target.id, defaults), context));
+      yield* port(() => target.commit((tx) => takeDefaults(tx, target.id, defaults), context));
       const { content, sent } = expandCommand(request.content, commands);
       const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
       const submitted = yield* port(() =>
@@ -376,22 +377,6 @@ function durableAgent(
       await harness.close(context);
     },
   };
-}
-
-function defaultsOf(options: DurableAgentOptions): Defaults {
-  return {
-    ...(options.model === undefined ? {} : { model: options.model }),
-    ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
-  };
-}
-
-/** A deployment's defaults reach the messages the last process left too, before any of them runs again. */
-async function followDefaultsAtStart(harness: Harness, defaults: Defaults): Promise<void> {
-  const { submissions } = await harness.inspect(BACKGROUND_CONTEXT);
-  const waiting = new Set(submissions.flatMap((record) => (record.type === "input" ? [record.conversationId] : [])));
-  for (const conversationId of waiting) {
-    await harness.commit((tx) => followDefaults(tx, conversationId as ConversationId, defaults), BACKGROUND_CONTEXT);
-  }
 }
 
 function invalidInvoke(request: InvokeRequest): AgentError | undefined {

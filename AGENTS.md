@@ -246,7 +246,7 @@ src/
 │   ├── entries.ts          # pi-durable's entries as published entries, and the entry kinds FastAgent writes
 │   ├── messages.ts         # input submissions as messages: request ids, statuses, outcomes, the session's state
 │   ├── ids.ts              # every id as the storage's incarnation plus pi-durable's id, so none is ever reused
-│   ├── defaults.ts         # the model and thinking level by precedence: the session's own over the deployment's
+│   ├── defaults.ts         # the deployment's default model and thinking level, for a conversation that names none
 │   └── release.ts          # temporary: places the messages a run that did not answer left waiting
 └── harnesses/pi/           # the pi reference implementation
     ├── service.ts          # createAgentService: this harness's opener + the neutral mountAgentService

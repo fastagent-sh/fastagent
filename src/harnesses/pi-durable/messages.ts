@@ -6,8 +6,15 @@ import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import type { EntryRecord, SubmissionRecord } from "@earendil-works/pi-durable";
-import { type DoneMessage, type MessageStatus, type Outcome, type SessionState, agentError } from "../../agent-api.ts";
-import { hasToolCalls, replyText, thinkingOf } from "./entries.ts";
+import {
+  type DoneMessage,
+  type MessageStatus,
+  type Outcome,
+  type SessionState,
+  type Usage,
+  agentError,
+} from "../../agent-api.ts";
+import { hasToolCalls, replyText, thinkingOf, usageOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
 
 export type InputRecord = Extract<SubmissionRecord, { type: "input" }>;
@@ -35,6 +42,10 @@ export function hasEnded(record: InputRecord): record is EndedRecord {
 /** What a conversation's `pi.inbox` and `pi.live` say about its messages, as the documents and an event snapshot hold it. */
 export interface InboxView {
   readonly items: readonly { readonly id: number; readonly mode: string }[];
+}
+export interface UsageView {
+  readonly models: Readonly<Record<string, Parameters<typeof usageOf>[0]>>;
+  readonly tools: Readonly<Record<string, Parameters<typeof usageOf>[0]>>;
 }
 export interface LiveView {
   readonly run?: { readonly inputs: readonly number[] };
@@ -118,7 +129,12 @@ function unanswered(record: Extract<EndedRecord, { status: "unanswered" }>): Out
   }
 }
 
-export function sessionState(live: LiveView | undefined, inbox: InboxView | undefined, ids: Ids): SessionState {
+export function sessionState(
+  live: LiveView | undefined,
+  inbox: InboxView | undefined,
+  usage: UsageView | undefined,
+  ids: Ids,
+): SessionState {
   const partial = live?.generation?.message as Pick<AssistantMessage, "content"> | undefined;
   const thinking = partial === undefined ? undefined : thinkingOf(partial);
   return {
@@ -128,5 +144,10 @@ export function sessionState(live: LiveView | undefined, inbox: InboxView | unde
     ...(partial === undefined
       ? {}
       : { reply: { text: replyText(partial), ...(thinking === undefined ? {} : { thinking }) } }),
+    usage: { models: usagesOf(usage?.models), tools: usagesOf(usage?.tools) },
   };
+}
+
+function usagesOf(bucket: UsageView["models"] | undefined): Record<string, Usage> {
+  return Object.fromEntries(Object.entries(bucket ?? {}).map(([key, value]) => [key, usageOf(value)]));
 }

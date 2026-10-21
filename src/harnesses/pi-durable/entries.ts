@@ -12,7 +12,7 @@ import type {
   UserMessage,
 } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import type { ContentPart, Entry, Json } from "../../agent-api.ts";
+import type { ContentPart, Entry, Json, Usage } from "../../agent-api.ts";
 import type { Ids } from "./ids.ts";
 
 /** A message as it was taken: the model saw the record's content, a Caller sees what it sent (`sent`). */
@@ -142,7 +142,7 @@ export function hasToolCalls(message: AssistantMessage): boolean {
   return message.content.some((block) => block.type === "toolCall");
 }
 
-function usageOf(usage: PiUsage): Json {
+export function usageOf(usage: Pick<PiUsage, "input" | "output" | "cacheRead" | "cacheWrite" | "cost">): Usage {
   return {
     inputTokens: usage.input,
     outputTokens: usage.output,

@@ -11,8 +11,9 @@ import {
   type EntryRecord,
   type Harness,
   InboxDoc,
-  type Submission,
   LiveDoc,
+  type Submission,
+  UsageDoc,
 } from "@earendil-works/pi-durable";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -166,7 +167,8 @@ export function durableReads(harness: Harness, ids: Ids, context: Context) {
     Effect.all([
       port(() => harness.snapshot(LiveDoc, conversation.id, context)),
       port(() => harness.snapshot(InboxDoc, conversation.id, context)),
-    ]).pipe(Effect.map(([live, inbox]) => sessionState(live, inbox, ids)));
+      port(() => harness.snapshot(UsageDoc, conversation.id, context)),
+    ]).pipe(Effect.map(([live, inbox, usage]) => sessionState(live, inbox, usage, ids)));
 
   return {
     conversation,

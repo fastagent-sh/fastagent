@@ -87,7 +87,10 @@ export function resumeStream(
       const present = Stream.fromEffect(
         Effect.gen(function* () {
           if (live.parent === undefined) live.parent = yield* reads.newestPublished(conversation, newest);
-          return { type: "state", state: sessionState(snapshot, { items: snapshot.inbox }, ids) } as SessionEvent;
+          return {
+            type: "state",
+            state: sessionState(snapshot, { items: snapshot.inbox }, snapshot.usage, ids),
+          } as SessionEvent;
         }),
       );
       const events = Stream.fromQueue(batches).pipe(

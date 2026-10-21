@@ -713,7 +713,7 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
 
         expect(await agent.read(sessionId, { limit: 0 })).toEqual({
           ok: true,
-          state: { status: "idle", taken: [], queued: [] },
+          state: { status: "idle", taken: [], queued: [], usage: expect.any(Object) },
           entries: [],
         });
         expect(await agent.read(sessionId, { limit: 501 })).toMatchObject({
@@ -750,6 +750,27 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           "tool_result",
           "assistant_message",
         ]);
+      });
+
+      it("counts a session's own spend in its state, a fork's from nothing", async () => {
+        const sessionId = await newSession(agent);
+        const empty = { models: {}, tools: {} };
+        expect(await agent.read(sessionId, { limit: 0 })).toMatchObject({ state: { usage: empty } });
+        await ended(await accepted(agent, { sessionId, content: text("hi") }));
+        const spent = await agent.read(sessionId, { limit: 0 });
+        if (!spent.ok) throw new Error(JSON.stringify(spent));
+        const calls = Object.values(spent.state.usage.models);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.outputTokens).toBeGreaterThan(0);
+        const reply = (await history(agent, sessionId)).find((entry) => entry.kind === "assistant_message") as Entry;
+        expect(calls[0]).toMatchObject((reply.data as { usage: object }).usage);
+        const fork = await agent.createSession({ from: { sessionId } });
+        if (!fork.ok) throw new Error(JSON.stringify(fork));
+        expect(await agent.read(fork.sessionId, { limit: 0 })).toMatchObject({ state: { usage: empty } });
+        const watching = attach(agent, sessionId);
+        const [state] = await watching.until(isState);
+        await watching.close();
+        expect(state).toMatchObject({ type: "state", state: { usage: spent.state.usage } });
       });
 
       it("moves the state from idle to running and back", async () => {

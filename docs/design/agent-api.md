@@ -263,6 +263,8 @@ interface SessionState {
   queued: string[];     // in the order they will be taken
   /** The agent's message being written, as written so far: present only while one is. */
   reply?: { text: string; thinking?: string };
+  /** What the session has spent: its own model calls by `provider/model`, what its tools reported by tool (§6). */
+  usage: { models: Record<string, Usage>; tools: Record<string, Usage> };
 }
 ```
 
@@ -361,11 +363,11 @@ type SessionEvent =
   a time, so the deltas need no id: a Caller that attaches mid-answer shows `reply`, appends the deltas that follow,
   drops what it shows on a `retry_scheduled` (the next attempt starts over), and replaces it with the
   `assistant_message` entry when that arrives. The deltas can stop short of the entry: its text is the message.
-- An `assistant_message` carries the `usage` of the model response it is. What a session's replies cost is the sum
-  over the entries it wrote, those whose `sessionId` is its own; an entry a fork shares is its source's. Summed that
-  way, each reply counts once, within a session or across sessions. Writing a compaction's summary costs model calls
-  too, and no entry records them: pi-durable counts them only in the session's own ledger (`pi.usage`), which is the
-  harness's API (§11).
+- An `assistant_message` carries the `usage` of the model response it is. A session's spend is `state.usage` (§5),
+  pi-durable's own ledger of it: every model call it made, failed and aborted attempts and the summaries its
+  compactions wrote included, and what its tools reported. It counts the session's own calls only, and a fork's starts
+  from nothing, so each call counts once across sessions; an entry a fork shares is its source's. No entry records a
+  compaction's summary, so a session's entries add up to less than its `state.usage`.
 - `done` reports a message that has ended.
 - Every other event is live: a Caller that attaches again gets the entries it missed and the snapshot, not the missed
   deltas.
@@ -484,7 +486,7 @@ One executable suite, run against the Agent in process and through the HTTP bind
 | Messages | `getMessage` by id and by key follows a message through queued, taken and done, and answers `undefined` for an unknown one; a message whose Caller never waits or watches is done; `abort` stops the taken message and withdraws the queued ones, answers once they have ended `canceled`, and reports them, and reports nothing on an idle session; a second `abort` while a tool that ignores its signal keeps the first one waiting reports the same messages; an `abort` whose `signal` is aborted answers `unknown` and its stop, once recorded, still ends the messages `canceled`; messages invoked after a failed or aborted one are taken, one invoked while an abort is still ending its messages included, also when that `abort`'s `signal` was aborted; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
 | Restart | A message accepted just before a restart is answered after it, and `getMessage` finds it; queued messages survive and are taken; a message an `abort` was stopping when the process stopped ends `canceled` after the restart, unanswered; no message is redone (a tool's effect count does not grow) |
 | Resuming | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; it sends one `state` snapshot after the replay and before anything live, and a `done` for each message that ends, before the `user_message` of the message taken after it, also when one commit ends one and places the other; a `resume` opened before an invoke delivers that message's `user_message` and then its answer, and the events before its `user_message` are another message's; one attached mid-answer gets `state.reply`, and it with the deltas that follow is a prefix of the `assistant_message` entry that ends that answer; a reconnect after the last entry it had delivers each entry exactly once; when the storage fails it ends with `serving_error` instead of hanging; an unknown session or cursor is a single `rejected` |
-| Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` carries `usage`; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source, and summing each session's own entries counts each reply once; the state moves idle → running → idle |
+| Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` carries `usage`; `state.usage` counts the session's own spend, which a fork starts from nothing; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source; the state moves idle → running → idle |
 | Sessions | A fork shares the history up to its entry and none of the messages, and leaves the source unchanged; an unknown fork source is `not_found` |
 | HTTP | A `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `POST /invoke` answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between; the HTTP client's `wait()` gives what the in-process one does, also for a message that ended before it was called; `stream()` over the in-process Agent and over the HTTP client gives the same receipt, refusals and events for a new message, a queued, taken or done duplicate (a taken one whose message ends meanwhile included), and an `abort` |
 
@@ -575,7 +577,7 @@ From [SPEC v1](../SPEC.md), which the code implements until this API replaces it
 | `follow` | `resume`: replay by `replayFrom`, a snapshot that MUST be sent, live; an answer can be joined mid-way |
 | `invoke` streaming its message's events until its `done` | `invoke` answers with the receipt; the session is watched with `resume`, the end awaited with `wait()`, as pi-durable separates `submit` from `watchEvents` and `Submission.wait()` |
 | `prompt: { text, images }` | `content` parts, checked against `info().inputs` |
-| A fork's entries copied, with ids of their own and no `usage` | A fork shares its source's entries; every entry names the `sessionId` that wrote it, and what a session's replies cost is its own entries'; a compaction carries no `usage` |
+| A fork's entries copied, with ids of their own and no `usage` | A fork shares its source's entries; every entry names the `sessionId` that wrote it; a session's spend is `state.usage`, its own calls only; a compaction carries no `usage` |
 | `sessions.create({ sessionId, fork })` | `createSession({ from })` |
 | `capabilities`, `durableQueue`, `durableTaken` | Gone: durability is a MUST |
 | The `intercepted` and `interrupted` outcomes; `source`; `takenAt`, `endedAt` | Gone |

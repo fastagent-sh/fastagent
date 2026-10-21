@@ -110,20 +110,21 @@ export type Outcome =
   | { status: "canceled" }
   | { status: "failed"; error: AgentError };
 
-/** @public */
-export interface Usage {
+export type Usage = {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   cost?: number;
-}
+};
 
 export interface SessionState {
   status: "idle" | "running";
   taken: string[];
   queued: string[];
   reply?: { text: string; thinking?: string };
+  /** What the session has spent: its own model calls by `provider/model`, and what its tools reported, by tool. */
+  usage: { models: Record<string, Usage>; tools: Record<string, Usage> };
 }
 
 export interface Entry {
