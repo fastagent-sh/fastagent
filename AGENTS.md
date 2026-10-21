@@ -30,6 +30,8 @@ one place that cannot drift away from the code it explains. Directories that hav
 src/
 ├── channel.ts              # the Channel contract: ChannelModule / Routes / ChannelHandler / LongConnection*
 ├── protocol.ts             # the Agent contract, SPEC v1 (docs/SPEC.md), as types, plus its limits and error values
+├── agent-api.ts            # the Agent API (docs/design/agent-api.md) as types, plus its limits and error values;
+│                           # imports nothing. Replaces protocol.ts when the move lands (#788)
 ├── harness-port.ts         # what the serving layer calls to run a session's work; a durable harness implements it
 ├── loop-port.ts            # LoopPort: the harness port for a harness that is only a loop: queue, idempotency,
 │                           # message records in the session's own log through its one writer, ending interrupted
@@ -236,6 +238,15 @@ src/
 │   ├── eventbridge-cron.ts # a cron in EventBridge's dialect; discovery refuses what it cannot express
 │   └── state.ts            # schedule state under <stateRoot>/schedule/, incl. THE claim: the decision to fire,
 │                           # the outcome written back into it, and therefore the whole (bounded) fire history
+├── harnesses/pi-durable/   # the Agent API on pi-durable, in process; nothing serves it until the move lands (#788)
+│   ├── agent.ts            # openDurableAgent: a Harness on the instance's storage, and the eight operations over it
+│   ├── reads.ts            # what the operations and resume read: a session's conversation, its published entries,
+│   │                       # a message's status and end, the session's state
+│   ├── resume.ts           # resume: the replay, the `state` snapshot, then what each commit adds
+│   ├── entries.ts          # pi-durable's entries as published entries, and the entry kinds FastAgent writes
+│   ├── messages.ts         # input submissions as messages: request ids, statuses, outcomes, the session's state
+│   ├── ids.ts              # every id as the storage's incarnation plus pi-durable's id, so none is ever reused
+│   └── release.ts          # temporary: places the messages a run that did not answer left waiting
 └── harnesses/pi/           # the pi reference implementation
     ├── service.ts          # createAgentService: this harness's opener + the neutral mountAgentService
     ├── create.ts           # the assembly ladder L1–L2 as a VALUE (binding, store, default model), run as `agentOf`
@@ -279,6 +290,8 @@ src/
     │                       # status): every reader builds it through `agentModels`, never from the parts
     └── report.ts           # startup report (auth/model/skills/tools surface)
 test/                       # vitest; faux models by default + reusable SPEC conformance
+├── agent-api-conformance.ts # the Agent API's conformance suite (agent-api.md §9), run in process by
+│                           # durable-agent.test.ts over durable-subject.ts
 ├── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)
 └── live/                   # probes for what the offline suite FAKES — see test/live/README.md
 docs/                       # SPEC, guides, and maintainer design notes (design/core.md = architecture)
