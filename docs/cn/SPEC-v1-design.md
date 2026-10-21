@@ -36,11 +36,17 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | `info` | `GET /agent` | bot 的名字、简介，消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`），以及可用的命令（`commands`：prompt 模板和 skill） |
 | `invoke` | `POST /invoke` | 向会话发一条消息（不带 `sessionId` 就新建会话）。消息一被持久记录就返回 `202` 和回执，不等它被回答 |
 | `getMessage` | `GET /sessions/{s}/messages/{m}`，或 `?idempotencyKey=` 按 key 查 | 按 id 或发送时的 key 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
-| `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”） |
+| `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”）；可以用 `model`、`thinkingLevel` 选择新会话的设置 |
 | `read` | `GET /sessions/{s}` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
 | `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
 | `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样 |
 | `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容 |
+
+创建会话时，`model` 用 `{ provider, modelId }`，`thinkingLevel` 用 pi-durable 原生支持的 `off`、`minimal`、`low`、`medium`、
+`high`、`xhigh`、`max`。它们和会话在同一次提交里保存，重启后保留。fork 继承分叉 entry 当时的设置（空会话继承当前设置），
+每个显式传入的字段分别覆盖继承来的值，不改变源会话。仍然没有设置的字段在收到消息时取部署默认值。创建时和 pi-durable 一样只保存
+选择，不检查模型是否可用；如果发消息时会话没有可用模型，`invoke` 返回 `missing_model`。`invoke` 不接受模型或 thinking level，
+只用会话设置；修改已有会话的设置仍走 harness 的 API。
 
 **发消息和看会话是分开的两件事**，和 pi-durable 一样：`submit` 返回一个句柄，过程另外用 `watchEvents` 订阅。对应到这里：
 
@@ -50,8 +56,12 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
   pi-durable 的等待 context 一样）。`unfinished` 从不表示“被拒绝”：调用方应该之后用 `getMessage` 查，不带 key 时不要重发。从不
   调用 `wait()` 的回执不占任何资源。
 - 被拒绝时返回错误，什么都没记录，可以重发。
-- 远程客户端在拿到回执之前连接就断了，返回 `unknown`：消息可能已被接受，也可能没有。带 key 的话用同一个 key 重发就能弄清楚；不带
-  key 时不能当作被拒绝。
+- 提交消息或取得完整回执失败，且不能证明消息被拒绝时，返回 `unknown`。包括进程内提交期间存储失败、消息已记录但读状态失败、重复
+  消息的回执读不出来，以及远程客户端在回执到达前断线。提交期间只有明确的拒绝才可返回 rejection，之后的读取失败不能算拒绝。
+  `unknown` 表示没有取得完整回执，不一定是不知道是否接受：拿到了 `messageId` 就能证明已记录。结果必须带上所有已知的 `sessionId`、
+  `messageId`。Agent 恢复后，有消息 id 就用 `getMessage` 查；没有消息 id 时，可以在同一会话用原来的 key 重试。如果两者都没有，
+  不能认定被拒绝，也不能自动重发。HTTP 服务端在这种情况下返回 `503` 和 `{ unknown: { reason, sessionId?, messageId? } }`，
+  客户端保留这个结果和 id，不转成拒绝；连接断开时客户端也返回 `unknown`，带上已知的会话 id。
 - 只有回执的数据部分（`POST /invoke` 返回的 body）要求能 JSON 序列化；`wait()` 是各个绑定提供的方法。
 - 想看回答怎么写出来，就用 `resume` 订阅会话。**一条消息的回答，是会话事件里它自己那条 `user_message`（会注明是哪条消息）之后、
   到它的 `done` 为止的内容**；在那之前的事件属于别的消息。为了不漏，调用方在 `invoke` 之前先 `resume`，这要求会话已经存在：新对话
@@ -60,7 +70,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
   补上订阅之前就已结束的情况。
 - TypeScript 客户端把这件事包成了 `stream(agent, request)`，适用于任何 `Agent`（进程内或远程），只是 API 的一个调用方，不增加
   任何语义。它返回 `StreamResult`：成功时是回执加 `events`（这条消息 `user_message` 之后、到它的 `done` 为止的事件，会话无法继续
-  跟随时以 `serving_error` 结束）；也可能是拒绝（包括新会话没建成）或 `unknown`，和 invoke 的一样。channel 用回执里的 `messageId`
+  跟随时以 `serving_error` 结束）；也可能是 invoke 的拒绝或 `unknown`，包括后者携带的已知 id。channel 用回执里的 `messageId`
   记录这一轮，并把拒绝的原因告诉用户。它要求请求带 `sessionId`：只有已存在的会话才能在发消息之前订阅，新对话由调用方先建会话、记下
   id，这也保证了带 key 重试时始终落在同一个会话里（§3.3）。它先不带重放地 `resume`，拿到快照后再 `invoke`，然后按回执里的状态处理：
   新消息或还在排队的，它的 `user_message` 会以实时事件到来；正在处理的重复消息，从它的 `user_message` 之后重新接上，先把重放的内容
@@ -140,8 +150,10 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
   回答已取走的消息，排队的消息也还在。`answer` 只在 `completed` 和 `max_tokens` 时出现，执行过工具调用的中间回复不算回答。
 - **fork 共享源会话的 entry：** fork 的历史开头就是源会话的那些 entry 本身，id 和内容都相同，之后写的才是 fork 自己的。每条 entry
   带 `sessionId`，说明是哪个会话写的；同一条 entry 不管从哪个会话读，内容都一样。
-- **用量记在 entry 上：** 每条 `assistant_message` 一份，`compaction` 记生成摘要的那几次调用。一个会话的花费是它自己写的 entry
-  （`sessionId` 是它自己的）的 `usage` 之和；fork 共享来的 entry 算源会话的。这样不管是单个会话内还是跨会话相加，每次模型调用都只算一次。
+- **用量：** 每条 `assistant_message` 带这次模型回复的 `usage`。一个会话总共花了多少看 `state.usage`，它就是 pi-durable 给这个
+  会话记的账本（`pi.usage`）：会话自己发出的每次模型调用（包括失败和中止的尝试、生成 compaction 摘要的调用）按
+  `provider/model` 分开，工具报告的花费按工具名分开。它只算会话自己的调用，fork 从零开始记，所以跨会话相加时每次调用只算一次；
+  fork 共享来的 entry 算源会话的。compaction 的摘要没有 entry 记录花费，所以把会话的 entry 加起来会比 `state.usage` 少。
 - **会扩展的取值都是开放的**（§6.1）：事件类型、entry 种类、内容类型、`inputs`、结局、会话状态、错误码。规范定义的名字不含
   `.`；实现方自己加的必须带自己的前缀（例如 `fastagent.plan`）。客户端遇到不认识的事件就忽略，不认识的会话状态当作“忙”，
   不认识的结局当作“结束但没有完成”。
@@ -199,11 +211,11 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | `follow` | `resume`：按 `replayFrom` 重放，必发快照，再接实时；回答中途也能接上 |
 | invoke 流式返回这条消息的事件，到它的 `done` 为止 | `invoke` 只返回回执；看过程用 `resume`，等结局用 `wait()`，和 pi-durable 的 `submit`、`watchEvents`、`Submission.wait()` 一样 |
 | `prompt: { text, images }` | `content` 内容数组，按 `info().inputs` 检查 |
-| `sessions.create({ sessionId, fork })` | `createSession({ from })` |
-| fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`，会话的花费只算它自己写的 entry |
+| `sessions.create({ sessionId, fork })` | `createSession({ from?, model?, thinkingLevel? })`，模型和 thinking level 传给 pi-durable 的创建选项 |
+| fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`；会话的花费是 `state.usage`，只算它自己的调用；`compaction` 不带 `usage` |
 | `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
 | `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |
-| `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`，可以用 `signal` 放弃等待；`POST /invoke` 总是返回 `202` 和回执，远程 invoke 在回执前断线返回 `unknown` |
+| `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`，可以用 `signal` 放弃等待；`POST /invoke` 返回 `202` 和回执，提交或读取回执失败又无法证明拒绝时返回 `503` 和 `unknown`；没有取得完整回执时报告所有已知 id |
 | `abort` 发出停止就返回：撤回排队的消息、通知 run 停止，不等消息结束 | `abort` 等被停下的消息都结束后才返回，和 pi-durable 的 `conversation.abort()` 一样，可以带 `signal`；没拿到答复时返回 `unknown`。所以迁移时，channel 的 `/stop` 不能在确认平台 webhook 的路径上等 `abort` |
 | `serving_error { message }` | `serving_error { error }`：无法继续的 `resume` 以它结束 |
 | 只检查带 body 的请求 | 每个 `POST` 都要求 `content-type: application/json` |
