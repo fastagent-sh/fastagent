@@ -137,6 +137,8 @@ export interface RouterSurface {
    * leaves cross-origin to whoever mounts the handler: no CORS headers, and no preflight answered here.
    */
   corsOrigins?: readonly string[] | false;
+  /** The protocol's own answer to a body that is not JSON; default `415` with a plain-text reason. */
+  notJson?: () => Response;
 }
 
 /**
@@ -157,7 +159,7 @@ export interface RouterSurface {
  * not a property.
  */
 export function router(surface: RouterSurface): ChannelHandler {
-  const { unverified = {}, selfVerifying = {}, mounts = [], corsOrigins = [] } = surface;
+  const { unverified = {}, selfVerifying = {}, mounts = [], corsOrigins = [], notJson } = surface;
   for (const [i, mount] of mounts.entries()) {
     assertRouteKey(mount.prefix, (problem) => `mount prefix "${mount.prefix}" is invalid — ${problem}`);
     if (mount.prefix === "/") {
@@ -229,7 +231,7 @@ export function router(surface: RouterSurface): ChannelHandler {
       // cannot forge its signature anyway.
       if (owned && BODY_METHODS.has(req.method)) {
         const wrongType = refuseNonJsonBody(req);
-        if (wrongType) return wrongType;
+        if (wrongType) return notJson ? notJson() : wrongType;
       }
       // The preflight is the ROUTER's to answer: it names a method the route table does not register, so leaving it
       // to the routes below is a 405 with no CORS headers, which is a browser client that cannot call a route that

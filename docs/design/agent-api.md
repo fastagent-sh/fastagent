@@ -520,8 +520,8 @@ One executable suite, run against the Agent in process and through the HTTP bind
 | `createSession` | `POST /sessions` with `CreateSessionOptions` (`from?`, `model?`, `thinkingLevel?`): `201` and `{ sessionId }` |
 | `read` | `GET /sessions/{s}?after=&before=&limit=` |
 | `resume` | `GET /sessions/{s}/events`, with `?replay=start` or `?after=<entryId>` for `replayFrom`: a `text/event-stream`. Each `entry` event's SSE `id` is the entry id, and the snapshot's is the newest entry id when it was taken, or `start` when the session has none, so a reconnect's `Last-Event-ID` resumes after where the stream had got to even before any entry arrived (`start`: from the first entry). A `Last-Event-ID` header takes precedence over `replay` and `after`: a browser reconnects with the URL it opened and the header, and the header is where it got to. A resume that cannot start is the error's status instead |
-| `abort` | `POST /sessions/{s}/abort`: `200` and `{ stopped }` once the stopped messages have ended |
-| `attachment` | `GET /sessions/{s}/attachments/{ref}`: the bytes with their content type, or `404` with no body |
+| `abort` | `POST /sessions/{s}/abort`: `200` and `{ stopped }` once the stopped messages have ended. The request's own end is the Caller's `signal`. An `unknown` the Agent answers is `503` and `{ "unknown": { reason } }` |
+| `attachment` | `GET /sessions/{s}/attachments/{ref}`: the bytes, served as their type when it is a raster image and as `application/octet-stream` otherwise, with the declared type percent-encoded in `x-mime-type`; or `404` with no body |
 
 A rejected result is answered with its code's status (§7.1) and `{ "error": AgentError }`; an invoke's `unknown` is
 answered as the table says, never translated to a rejection. A successful result is answered with `200`

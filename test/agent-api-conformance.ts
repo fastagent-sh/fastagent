@@ -13,6 +13,7 @@
  *   `hello <args>`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type StreamResult, stream } from "../src/agent-api-stream.ts";
 import type {
   Agent,
   ContentPart,
@@ -75,6 +76,11 @@ async function untilStatus(agent: Agent, sessionId: string, messageId: string, s
     timeout: 5000,
     interval: 10,
   });
+}
+
+async function getDone(agent: Agent, sessionId: string, messageId: string): Promise<DoneMessage> {
+  await untilStatus(agent, sessionId, messageId, "done");
+  return (await statusOf(agent, sessionId, messageId)) as DoneMessage;
 }
 
 async function history(agent: Agent, sessionId: string): Promise<Entry[]> {
@@ -889,6 +895,137 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(await agent.attachment(sessionId, ref)).toEqual({ mimeType: "image/png", data: image.data });
         expect(await agent.attachment(sessionId, "nope")).toBeUndefined();
         expect(await agent.attachment(await newSession(agent), ref)).toBeUndefined();
+      });
+    });
+
+    describe("stream()", () => {
+      type Streamed = Extract<StreamResult, { ok: true }>;
+      const streamed = async (target: Agent, request: InvokeRequest & { sessionId: string }) => {
+        const result = await stream(target, request);
+        if (!result.ok) throw new Error(`stream() was not accepted: ${JSON.stringify(result)}`);
+        return result;
+      };
+      const drain = async ({ events }: Streamed) => {
+        const out: ResumeEvent[] = [];
+        for await (const event of events) out.push(event);
+        return out;
+      };
+      const replies = (events: ResumeEvent[]) =>
+        entriesIn(events).map((entry) => `${entry.kind}:${(entry.data as { text?: string }).text ?? ""}`);
+
+      it("delivers a new message's events after its user_message, through its done", async () => {
+        const sessionId = await newSession(agent);
+        const result = await streamed(agent, { sessionId, content: text("hi") });
+        expect(result).toMatchObject({ sessionId, duplicate: false });
+        const events = await drain(result);
+        expect(replies(events)).toEqual(["assistant_message:answer: hi"]);
+        expect(events.at(-1)).toEqual({
+          type: "done",
+          message: await getDone(agent, sessionId, result.message.messageId),
+        });
+      });
+
+      it("delivers only its own message's events for a message queued behind another", async () => {
+        const sessionId = await newSession(agent);
+        await accepted(agent, { sessionId, content: text("hold") });
+        await holding();
+        const result = await streamed(agent, { sessionId, content: text("next") });
+        expect(result.message).toMatchObject({ status: "queued", position: 0 });
+        subject.release();
+        const events = await drain(result);
+        expect(replies(events)).toEqual(["assistant_message:answer: next"]);
+        expect(events.at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
+      });
+
+      it("delivers a queued duplicate's events once it is taken", async () => {
+        const sessionId = await newSession(agent);
+        await accepted(agent, { sessionId, content: text("hold") });
+        await holding();
+        const first = await accepted(agent, { sessionId, content: text("next"), idempotencyKey: "k" });
+        const result = await streamed(agent, { sessionId, content: text("next"), idempotencyKey: "k" });
+        expect(result).toMatchObject({
+          duplicate: true,
+          message: { messageId: first.message.messageId, status: "queued" },
+        });
+        subject.release();
+        expect(replies(await drain(result))).toEqual(["assistant_message:answer: next"]);
+      });
+
+      it("delivers a taken duplicate's events from its user_message on, what it already wrote included", async () => {
+        const sessionId = await newSession(agent);
+        await accepted(agent, { sessionId, content: text("hold"), idempotencyKey: "k" });
+        await holding();
+        const result = await streamed(agent, { sessionId, content: text("hold"), idempotencyKey: "k" });
+        expect(result).toMatchObject({ duplicate: true, message: { status: "taken" } });
+        subject.release();
+        const events = await drain(result);
+        expect(replies(events)).toEqual(["assistant_message:", "tool_result:", "assistant_message:answer: hold"]);
+        expect(events.at(-1)).toMatchObject({ type: "done", message: { answer: { text: "answer: hold" } } });
+      });
+
+      it("stops a taken duplicate at its answer when it ended before the stream reattached", async () => {
+        const sessionId = await newSession(agent);
+        const held = await accepted(agent, { sessionId, content: text("hold"), idempotencyKey: "k" });
+        await holding();
+        const next = await accepted(agent, { sessionId, content: text("next") });
+        // The message ends, and the next one is answered, between the receipt and the stream's second resume.
+        const late: Agent = {
+          ...agent,
+          resume: (id, options) =>
+            options?.replayFrom === undefined
+              ? agent.resume(id, options)
+              : {
+                  async *[Symbol.asyncIterator]() {
+                    subject.release();
+                    await untilStatus(agent, sessionId, held.message.messageId, "done");
+                    await untilStatus(agent, sessionId, next.message.messageId, "done");
+                    yield* agent.resume(id, options);
+                  },
+                },
+        };
+        const result = await streamed(late, { sessionId, content: text("hold"), idempotencyKey: "k" });
+        const events = await drain(result);
+        expect(replies(events)).toEqual(["assistant_message:", "tool_result:", "assistant_message:answer: hold"]);
+        expect(events.at(-1)).toMatchObject({ type: "done", message: { messageId: held.message.messageId } });
+      });
+
+      it("delivers a done duplicate's entries through its answer, then its done", async () => {
+        const sessionId = await newSession(agent);
+        await ended(await accepted(agent, { sessionId, content: text("effect"), idempotencyKey: "k" }));
+        await ended(await accepted(agent, { sessionId, content: text("after") }));
+        const result = await streamed(agent, { sessionId, content: text("effect"), idempotencyKey: "k" });
+        expect(result).toMatchObject({ duplicate: true, message: { status: "done" } });
+        const events = await drain(result);
+        expect(replies(events)).toEqual(["assistant_message:", "tool_result:", "assistant_message:answer: effect"]);
+        expect(events.at(-1)).toEqual({ type: "done", message: result.message });
+        await ended(await accepted(agent, { sessionId, content: text("fail"), idempotencyKey: "failed" }));
+        const failed = await streamed(agent, { sessionId, content: text("fail"), idempotencyKey: "failed" });
+        expect(await drain(failed)).toEqual([{ type: "done", message: failed.message }]);
+      });
+
+      it("ends with the message's canceled done when it is aborted", async () => {
+        const sessionId = await newSession(agent);
+        const result = await streamed(agent, { sessionId, content: text("hold") });
+        await holding();
+        const events = drain(result);
+        expect(await agent.abort(sessionId)).toMatchObject({ ok: true });
+        expect((await events).at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "canceled" } } });
+      });
+
+      it("answers the invoke's refusal, and an unknown session's, recording nothing", async () => {
+        expect(await stream(agent, { sessionId: "no-such-session", content: text("hi") })).toMatchObject({
+          ok: false,
+          error: { code: "not_found" },
+        });
+        const sessionId = await newSession(agent);
+        await accepted(agent, { sessionId, content: text("hold") });
+        await holding();
+        expect(await stream(agent, { sessionId, content: text("now"), whenBusy: "reject" })).toMatchObject({
+          ok: false,
+          error: { code: "busy" },
+        });
+        expect(await agent.read(sessionId, { limit: 0 })).toMatchObject({ state: { queued: [] } });
+        subject.release();
       });
     });
 

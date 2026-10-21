@@ -39,8 +39,8 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”）；可以用 `model`、`thinkingLevel` 选择新会话的设置 |
 | `read` | `GET /sessions/{s}` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
 | `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
-| `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样 |
-| `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容 |
+| `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样。Agent 回答 `unknown` 时，HTTP 返回 `503` 和 `{ unknown }` |
+| `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容；只有光栅图片按自身类型返回，其他一律 `application/octet-stream`，声明的类型经百分号编码放在 `x-mime-type` 头里 |
 
 创建会话时，`model` 用 `{ provider, modelId }`，`thinkingLevel` 用 pi-durable 原生支持的 `off`、`minimal`、`low`、`medium`、
 `high`、`xhigh`、`max`。它们和会话在同一次提交里保存，重启后保留。fork 继承分叉 entry 当时的设置（空会话继承当前设置），

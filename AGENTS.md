@@ -32,6 +32,9 @@ src/
 ├── protocol.ts             # the Agent contract, SPEC v1 (docs/SPEC.md), as types, plus its limits and error values
 ├── agent-api.ts            # the Agent API (docs/design/agent-api.md) as types, plus its limits and error values;
 │                           # imports nothing. Replaces protocol.ts when the move lands (#788)
+├── agent-api-remote.ts     # connectAgentApi: the Agent API over its HTTP binding; a reply that did not arrive is
+│                           # `unknown` or `serving_error`, never a refusal. Replaces protocol-remote.ts (#788)
+├── agent-api-stream.ts     # stream(agent, request): send a message and read its answer as written, over any Agent
 ├── harness-port.ts         # what the serving layer calls to run a session's work; a durable harness implements it
 ├── loop-port.ts            # LoopPort: the harness port for a harness that is only a loop: queue, idempotency,
 │                           # message records in the session's own log through its one writer, ending interrupted
@@ -119,6 +122,8 @@ src/
 │   ├── busy.ts             # the process's work in flight (every queued or running run and compaction, channel work not yet at one),
 │                           # read by /ping (HealthyBusy) and by `dev` before it restarts: an ACK is not the end
 │                           # of a turn
+│   ├── agent-api-http.ts   # the Agent API over HTTP: createAgentApiHandler, each code's status, the snapshot's SSE
+│   │                       # id. Replaces protocol-http.ts when the move lands (#788)
 │   ├── protocol-http.ts    # SPEC v1 over HTTP: createAgentHandler, and the planes as mounts — the user plane
 │   │                       # (/invoke, /sessions, /agent) and /control,
 │   │                       # each code's status, request bodies decoded strictly (a remote `source` is refused)
@@ -292,7 +297,7 @@ src/
     └── report.ts           # startup report (auth/model/skills/tools surface)
 test/                       # vitest; faux models by default + reusable SPEC conformance
 ├── agent-api-conformance.ts # the Agent API's conformance suite (agent-api.md §9), run in process by
-│                           # durable-agent.test.ts over durable-subject.ts
+│                           # durable-agent.test.ts and over HTTP by agent-api-http.test.ts, both over durable-subject.ts
 ├── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)
 └── live/                   # probes for what the offline suite FAKES — see test/live/README.md
 docs/                       # SPEC, guides, and maintainer design notes (design/core.md = architecture)
