@@ -47,7 +47,7 @@ export interface Receipt {
 export type InvokeResult =
   | ({ ok: true } & Receipt & { wait(options?: { signal?: AbortSignal }): Promise<WaitResult> })
   | { ok: false; error: AgentError }
-  | { ok: false; unknown: { reason: string } };
+  | { ok: false; unknown: { reason: string; sessionId?: string; messageId?: string } };
 
 export type WaitResult = { ok: true; message: DoneMessage } | { ok: false; unfinished: { reason: string } };
 

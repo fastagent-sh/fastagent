@@ -174,6 +174,15 @@ function durableAgent(
       }),
     );
 
+  const unknownReceipt = (conversation: Conversation, messageId: number | undefined, error: unknown): InvokeResult => ({
+    ok: false,
+    unknown: {
+      reason: `${messageId === undefined ? "The submission's acceptance could not be confirmed" : "The message was recorded, but its receipt could not be read"}: ${failureOf(error).message}`,
+      sessionId: ids.encode(conversation.id),
+      ...(messageId === undefined ? {} : { messageId: ids.encode(messageId) }),
+    },
+  });
+
   const receipt = (conversation: Conversation, record: InputRecord, duplicate: boolean) =>
     reads.status(record).pipe(
       Effect.map(
@@ -185,6 +194,7 @@ function durableAgent(
           wait: (waitOptions) => wait(record.id, waitOptions?.signal),
         }),
       ),
+      Effect.catchCause((cause) => Effect.sync(() => unknownReceipt(conversation, record.id, portError(cause)))),
     );
 
   const inFlight = port(() => harness.inspect(context)).pipe(
@@ -240,30 +250,35 @@ function durableAgent(
       if (!settings.ok) return noModel(settings.model);
       const { content, sent } = expandCommand(request.content, commands);
       const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
-      const submitted = yield* port(() =>
-        target.submit(
-          {
-            type: "input",
-            content,
-            requestId,
-            whenBusy: request.whenBusy === "steer" ? "steer" : request.whenBusy === "reject" ? "reject" : "followUp",
-            entry: { kind: USER_ENTRY, data },
-          },
-          context,
-        ),
-      ).pipe(
-        Effect.map((submission) => ({ submission })),
-        Effect.catchIf(
-          (error) => error.cause instanceof ConversationBusy,
-          () => Effect.succeed({ busy: true } as const),
+      let messageId: SubmissionId | undefined;
+      return yield* Effect.gen(function* () {
+        const submission = yield* port(() =>
+          target.submit(
+            {
+              type: "input",
+              content,
+              requestId,
+              whenBusy: request.whenBusy === "steer" ? "steer" : request.whenBusy === "reject" ? "reject" : "followUp",
+              entry: { kind: USER_ENTRY, data },
+            },
+            context,
+          ),
+        );
+        messageId = submission.id;
+        const record = yield* port(() => submission.status(context));
+        if (!isInput(record)) throw new Error(`submission ${record.id} was admitted as a write`);
+        return yield* receipt(target, record, false);
+      }).pipe(
+        // Once submission starts, only pi-durable's explicit refusal proves nothing was recorded.
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            const error = portError(cause);
+            return messageId === undefined && error instanceof ConversationBusy
+              ? failure("busy", "The session is answering another message", { reason: "running" })
+              : unknownReceipt(target, messageId, error);
+          }),
         ),
       );
-      if ("busy" in submitted) {
-        return failure("busy", "The session is answering another message", { reason: "running" });
-      }
-      const record = yield* port(() => submitted.submission.status(context));
-      if (!isInput(record)) throw new Error(`submission ${record.id} was admitted as a write`);
-      return yield* receipt(conversation, record, false);
     });
 
   const invoke = (request: InvokeRequest): Promise<InvokeResult> => {

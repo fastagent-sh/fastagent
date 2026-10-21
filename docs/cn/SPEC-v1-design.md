@@ -56,8 +56,12 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
   pi-durable 的等待 context 一样）。`unfinished` 从不表示“被拒绝”：调用方应该之后用 `getMessage` 查，不带 key 时不要重发。从不
   调用 `wait()` 的回执不占任何资源。
 - 被拒绝时返回错误，什么都没记录，可以重发。
-- 远程客户端在拿到回执之前连接就断了，返回 `unknown`：消息可能已被接受，也可能没有。带 key 的话用同一个 key 重发就能弄清楚；不带
-  key 时不能当作被拒绝。
+- 提交消息或取得完整回执失败，且不能证明消息被拒绝时，返回 `unknown`。包括进程内提交期间存储失败、消息已记录但读状态失败、重复
+  消息的回执读不出来，以及远程客户端在回执到达前断线。提交期间只有明确的拒绝才可返回 rejection，之后的读取失败不能算拒绝。
+  `unknown` 表示没有取得完整回执，不一定是不知道是否接受：拿到了 `messageId` 就能证明已记录。结果必须带上所有已知的 `sessionId`、
+  `messageId`。Agent 恢复后，有消息 id 就用 `getMessage` 查；没有消息 id 时，可以在同一会话用原来的 key 重试。如果两者都没有，
+  不能认定被拒绝，也不能自动重发。HTTP 服务端在这种情况下返回 `503` 和 `{ unknown: { reason, sessionId?, messageId? } }`，
+  客户端保留这个结果和 id，不转成拒绝；连接断开时客户端也返回 `unknown`，带上已知的会话 id。
 - 只有回执的数据部分（`POST /invoke` 返回的 body）要求能 JSON 序列化；`wait()` 是各个绑定提供的方法。
 - 想看回答怎么写出来，就用 `resume` 订阅会话。**一条消息的回答，是会话事件里它自己那条 `user_message`（会注明是哪条消息）之后、
   到它的 `done` 为止的内容**；在那之前的事件属于别的消息。为了不漏，调用方在 `invoke` 之前先 `resume`，这要求会话已经存在：新对话
@@ -66,7 +70,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
   补上订阅之前就已结束的情况。
 - TypeScript 客户端把这件事包成了 `stream(agent, request)`，适用于任何 `Agent`（进程内或远程），只是 API 的一个调用方，不增加
   任何语义。它返回 `StreamResult`：成功时是回执加 `events`（这条消息 `user_message` 之后、到它的 `done` 为止的事件，会话无法继续
-  跟随时以 `serving_error` 结束）；也可能是拒绝（包括新会话没建成）或 `unknown`，和 invoke 的一样。channel 用回执里的 `messageId`
+  跟随时以 `serving_error` 结束）；也可能是 invoke 的拒绝或 `unknown`，包括后者携带的已知 id。channel 用回执里的 `messageId`
   记录这一轮，并把拒绝的原因告诉用户。它要求请求带 `sessionId`：只有已存在的会话才能在发消息之前订阅，新对话由调用方先建会话、记下
   id，这也保证了带 key 重试时始终落在同一个会话里（§3.3）。它先不带重放地 `resume`，拿到快照后再 `invoke`，然后按回执里的状态处理：
   新消息或还在排队的，它的 `user_message` 会以实时事件到来；正在处理的重复消息，从它的 `user_message` 之后重新接上，先把重放的内容
@@ -211,7 +215,7 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`；会话的花费是 `state.usage`，只算它自己的调用；`compaction` 不带 `usage` |
 | `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
 | `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |
-| `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`，可以用 `signal` 放弃等待；`POST /invoke` 总是返回 `202` 和回执，远程 invoke 在回执前断线返回 `unknown` |
+| `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`，可以用 `signal` 放弃等待；`POST /invoke` 返回 `202` 和回执，提交或读取回执失败又无法证明拒绝时返回 `503` 和 `unknown`；没有取得完整回执时报告所有已知 id |
 | `abort` 发出停止就返回：撤回排队的消息、通知 run 停止，不等消息结束 | `abort` 等被停下的消息都结束后才返回，和 pi-durable 的 `conversation.abort()` 一样，可以带 `signal`；没拿到答复时返回 `unknown`。所以迁移时，channel 的 `/stop` 不能在确认平台 webhook 的路径上等 `abort` |
 | `serving_error { message }` | `serving_error { error }`：无法继续的 `resume` 以它结束 |
 | 只检查带 body 的请求 | 每个 `POST` 都要求 `content-type: application/json` |

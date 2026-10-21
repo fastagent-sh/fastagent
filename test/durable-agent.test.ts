@@ -2,8 +2,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { AgentDoc, Harness, createRegistry } from "@earendil-works/pi-durable";
+import { Type, createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { AgentDoc, Harness, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { describe, expect, it } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
@@ -246,6 +246,146 @@ describe("the Agent on pi-durable", () => {
     expect(await agent.harness.snapshot(AgentDoc, source.id, context)).toEqual({ ...original, thinkingLevel: "low" });
     await agent.close();
   });
+
+  it.each(["before_commit", "after_commit", "status", "duplicate_receipt"] as const)(
+    "answers unknown rather than a rejection when submission or its receipt fails at %s",
+    async (stage) => {
+      const path = temporaryStorage();
+      const { faux, models, model } = fauxModels();
+      let effects = 0;
+      const registry = createRegistry();
+      registry.install(
+        defineExtension({
+          name: "receipt failure",
+          tools: [
+            defineTool({
+              name: "effect",
+              description: "Counts an effect",
+              parameters: Type.Object({}),
+              execute: async () => {
+                effects++;
+                return { output: [{ type: "text", text: "effect recorded" }] };
+              },
+            }),
+          ],
+        }),
+      );
+      faux.setResponses(
+        Array.from(
+          { length: 8 },
+          () => (input) =>
+            input.messages.at(-1)?.role === "toolResult"
+              ? fauxAssistantMessage("answer")
+              : fauxAssistantMessage([fauxToolCall("effect", {})], { stopReason: "toolUse" }),
+        ),
+      );
+      const disk = await openNodeSqliteStorage(path);
+      let armed = false;
+      let injected = false;
+      const failRead = () => {
+        armed = false;
+        injected = true;
+        throw new Error(`injected ${stage} failure`);
+      };
+      const storage = new Proxy(disk, {
+        get(target, property) {
+          if (property === "commit") {
+            return async (...args: Parameters<typeof disk.commit>) => {
+              const admitsInput = args[0].some((write) => write.type === "submission" && write.value.type === "input");
+              if (armed && admitsInput && stage === "before_commit") failRead();
+              const result = await target.commit(...args);
+              if (armed && admitsInput && stage === "after_commit") failRead();
+              return result;
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            if (
+              armed &&
+              ((property === "submission" && stage === "status") ||
+                (property === "entry" && stage === "duplicate_receipt"))
+            ) {
+              failRead();
+            }
+            return value.apply(target, args);
+          };
+        },
+      });
+      let agent = await openDurableAgent({ storage, models, registry, model, name: "receipt failure" });
+      const content = [{ type: "text" as const, text: "effect" }];
+      const key = "once";
+      let sessionId: string | undefined;
+      let previousMessageId: string | undefined;
+      // A failed first invoke without a key must still return the session and message ids it learned.
+      if (stage !== "status") {
+        const created = await agent.createSession();
+        if (!created.ok) throw new Error(JSON.stringify(created));
+        sessionId = created.sessionId;
+      }
+      if (stage === "duplicate_receipt") {
+        const receipt = await agent.invoke({ sessionId, content, idempotencyKey: key });
+        if (!receipt.ok) throw new Error(JSON.stringify(receipt));
+        expect(await receipt.wait()).toMatchObject({ ok: true });
+        previousMessageId = receipt.message.messageId;
+      }
+      armed = true;
+      const result = await agent.invoke({
+        content,
+        ...(sessionId === undefined ? {} : { sessionId, idempotencyKey: key }),
+      });
+      expect(injected).toBe(true);
+      expect(result).toMatchObject({ ok: false, unknown: { reason: expect.stringContaining(`injected ${stage}`) } });
+      expect(result).not.toHaveProperty("error");
+      if (result.ok || !("unknown" in result)) throw new Error(JSON.stringify(result));
+      const known = result.unknown;
+      expect(known.sessionId).toEqual(sessionId ?? expect.any(String));
+      if (stage === "status" || stage === "duplicate_receipt") {
+        expect(known.messageId).toEqual(previousMessageId ?? expect.any(String));
+      } else {
+        expect(known.messageId).toBeUndefined();
+      }
+      expect(await agent.harness.closed).toMatchObject({ reason: "failed" });
+      await agent.close();
+
+      agent = await openDurableAgent({
+        storage: await openNodeSqliteStorage(path),
+        models,
+        registry,
+        model,
+        name: "reopened",
+      });
+      const restoredSessionId = known.sessionId as string;
+      const found = await agent.getMessage(
+        restoredSessionId,
+        known.messageId === undefined ? { idempotencyKey: key } : { messageId: known.messageId },
+      );
+      if (stage === "before_commit") expect(found).toBeUndefined();
+      else expect(found).toBeDefined();
+      if (stage === "status") {
+        const watch = agent.resume(restoredSessionId)[Symbol.asyncIterator]();
+        await watch.next();
+        const current = await agent.getMessage(restoredSessionId, { messageId: known.messageId as string });
+        if (current?.status !== "done") {
+          for (let next = await watch.next(); !next.done; next = await watch.next()) {
+            if (next.value.type === "done" && next.value.message.messageId === known.messageId) break;
+          }
+        }
+        await watch.return?.();
+      } else {
+        const retry = await agent.invoke({ sessionId: restoredSessionId, content, idempotencyKey: key });
+        if (!retry.ok) throw new Error(JSON.stringify(retry));
+        expect(retry.duplicate).toBe(stage !== "before_commit");
+        if (found !== undefined) expect(retry.message.messageId).toBe(found.messageId);
+        expect(await retry.wait()).toMatchObject({ ok: true });
+      }
+      const history = await agent.read(restoredSessionId);
+      if (!history.ok) throw new Error(JSON.stringify(history));
+      expect(history.entries.filter((entry) => entry.kind === "user_message")).toHaveLength(1);
+      expect(effects).toBe(1);
+      await agent.close();
+    },
+  );
 
   it("refuses a message no model of the agent could answer, recording nothing", async () => {
     const path = temporaryStorage();
