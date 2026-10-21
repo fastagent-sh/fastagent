@@ -3,7 +3,6 @@
  * snapshot, then what each commit adds. pi-durable captures its snapshot and the registration for later commits
  * atomically, so the replay ends at the snapshot's newest entry and the live part starts after it.
  */
-import { stripVTControlCharacters } from "node:util";
 import type { Context } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
@@ -289,6 +288,11 @@ function liveTranslator(reads: Reads, ids: Ids, maxRetries: number, snapshot: Sn
                 reason: event.errorMessage,
               });
               break;
+            case "tool_execution_end":
+              outputs.delete(event.toolCallId);
+              lines.delete(event.toolCallId);
+              outer.delete(event.toolCallId);
+              break;
             case "submission":
               if (isInput(event.record) && hasEnded(event.record)) settled.push(event.record);
               break;
@@ -312,12 +316,9 @@ function liveTranslator(reads: Reads, ids: Ids, maxRetries: number, snapshot: Sn
   return translator;
 }
 
-/**
- * The line a terminal shows last: control sequences removed, and a bare `\r`, a progress bar redrawing in place, ends a
- * line like `\n` does. Undefined while there is no visible text.
- */
+/** The last line with text, a running tool's status. pi-durable's output already has no control characters. */
 function lastLine(text: string): string | undefined {
-  const lines = stripVTControlCharacters(text).split(/\r\n|\r|\n/);
+  const lines = text.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]?.trim();
     if (line) return line;

@@ -194,6 +194,17 @@ function durableAgent(
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
   };
 
+  const available = (model: ModelRef) => options.models.getModel(model.provider, model.modelId) !== undefined;
+  /** A message no model could answer is refused, recording nothing, rather than accepted only to fail. */
+  const noModel = (model: ModelRef | undefined) =>
+    failure(
+      "missing_model",
+      model === undefined
+        ? "Neither this session nor the agent names a model"
+        : `This session answers with ${model.provider}/${model.modelId}, which is not among this agent's models`,
+      model === undefined ? undefined : { model: `${model.provider}/${model.modelId}` },
+    );
+
   const admit = (request: InvokeRequest): Effect.Effect<InvokeResult, PortFailure> =>
     Effect.gen(function* () {
       const requestId = requestIdFor(request.idempotencyKey);
@@ -210,6 +221,7 @@ function durableAgent(
         return failure("busy", `This agent already holds ${inFlightLimit} messages`, { reason: "capacity" });
       }
       if (conversation === undefined) {
+        if (defaults.model === undefined || !available(defaults.model)) return noModel(defaults.model);
         conversation = yield* port(() => harness.createConversation(OWNERLESS, context));
       } else if (request.whenBusy !== "reject") {
         const inbox = yield* reads.inbox(conversation);
@@ -220,7 +232,10 @@ function durableAgent(
         }
       }
       const target = conversation;
-      yield* port(() => target.commit((tx) => takeDefaults(tx, target.id, defaults), context));
+      const settings = yield* port(() =>
+        target.commit((tx) => takeDefaults(tx, target.id, defaults, available), context),
+      );
+      if (!settings.ok) return noModel(settings.model);
       const { content, sent } = expandCommand(request.content, commands);
       const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
       const submitted = yield* port(() =>

@@ -13,6 +13,8 @@ import {
   createModels,
   createProvider,
   fauxAssistantMessage,
+  fauxText,
+  fauxThinking,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
 import {
@@ -39,17 +41,32 @@ function lastUserText(messages: readonly Message[]): string {
   return "";
 }
 
+const STREAMED = new Set(["slow", "ponder"]);
+
 /** What the model does, chosen by the message it answers (agent-api-conformance.ts lists the words). */
-function respond(context: TranscriptContext) {
-  const last = context.messages.at(-1);
-  if (last?.role === "toolResult") return fauxAssistantMessage(`answer: ${last.toolName}`);
-  const text = lastUserText(context.messages);
+function responder() {
+  let flaked = false;
+  return (context: TranscriptContext) => {
+    const last = context.messages.at(-1);
+    if (last?.role === "toolResult") return fauxAssistantMessage(`answer: ${last.toolName}`);
+    const text = lastUserText(context.messages);
+    if (text === "flaky" && !flaked) {
+      flaked = true;
+      return fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 the model is overloaded" });
+    }
+    return respond(text);
+  };
+}
+
+function respond(text: string) {
   switch (text) {
     case "hold":
     case "mark":
     case "stubborn":
     case "effect":
     case "finish":
+    case "stream":
+    case "nested":
       return fauxAssistantMessage([fauxToolCall(text, {})], { stopReason: "toolUse" });
     case "fail":
       return fauxAssistantMessage("", { stopReason: "error", errorMessage: "The model refused the request" });
@@ -57,13 +74,16 @@ function respond(context: TranscriptContext) {
       return fauxAssistantMessage("cut short", { stopReason: "length" });
     case "slow":
       return fauxAssistantMessage(`answer: ${"slow ".repeat(40).trim()}`);
+    case "ponder":
+      return fauxAssistantMessage([fauxThinking("pondering ".repeat(30).trim()), fauxText("answer: ponder")]);
     default:
       return fauxAssistantMessage(`answer: ${text}`);
   }
 }
 
-/** A model provider whose `slow` answers stream a few tokens at a time, so an answer is seen being written. */
+/** A model provider whose `slow` and `ponder` answers stream a few tokens at a time, so they are seen being written. */
 function subjectModels(signedOut: boolean) {
+  const respond = responder();
   const fast = createFauxCore({ provider: PROVIDER, api: PROVIDER });
   const slow = createFauxCore({
     provider: PROVIDER,
@@ -72,7 +92,7 @@ function subjectModels(signedOut: boolean) {
     tokenSize: { min: 2, max: 2 },
   });
   const stream = (...args: Parameters<typeof fast.streamSimple>) => {
-    const core = lastUserText(args[1].messages) === "slow" && args[1].messages.at(-1)?.role === "user" ? slow : fast;
+    const core = STREAMED.has(lastUserText(args[1].messages)) && args[1].messages.at(-1)?.role === "user" ? slow : fast;
     core.appendResponses([respond]);
     return core.streamSimple(...args);
   };
@@ -164,6 +184,37 @@ export function durableSubject(): AgentApiSubject {
         },
       }),
       defineTool({
+        name: "stream",
+        description: "Writes a few status lines while it runs, keeping only the tail of them",
+        parameters: Type.Object({}),
+        outputLimits: { maxBytes: 24, retain: "tail" },
+        execute: async (_args, api) => {
+          for (const line of ["one\n", "two\n", "three of the lines\n"]) {
+            api.output(line);
+            await new Promise((resolve) => setTimeout(resolve, 150));
+          }
+          return {};
+        },
+      }),
+      defineTool({
+        name: "nested",
+        description: "Calls lookup, as a codemode script does",
+        parameters: Type.Object({}),
+        execute: async (_args, api, context) => {
+          await api.executeTool("lookup", { city: "London" }, context);
+          return { output: [{ type: "text", text: "looked up" }] };
+        },
+      }),
+      defineTool({
+        name: "lookup",
+        description: "Looks a city up, slowly",
+        parameters: Type.Object({ city: Type.String() }),
+        execute: async (args) => {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          return { output: [{ type: "text", text: `found ${args.city}` }] };
+        },
+      }),
+      defineTool({
         name: "finish",
         description: "Ends the run without another model call",
         parameters: Type.Object({}),
@@ -185,7 +236,7 @@ export function durableSubject(): AgentApiSubject {
       name: "subject",
       model,
       commands: [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
-      settings: { retry: { maxRetries: 0 } },
+      settings: { retry: { maxRetries: 1, baseDelayMs: 1 } },
       ...(inFlight === undefined ? {} : { inFlightPerProcess: inFlight }),
     });
     return current;

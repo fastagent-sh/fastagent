@@ -4,8 +4,11 @@
  *
  * - `hold`: a tool call that waits for `release()` and stops when aborted; `stubborn`: one that waits whatever its
  *   abort signal says; `effect`: one whose runs `effects()` counts; `mark`: one that has its counted effect and then
- *   holds; `finish`: one that ends the run without an answer. After a tool call, the answer is `answer: <tool>`.
- * - `fail`: the model call fails; `long`: the answer is cut off (`max_tokens`); `slow`: the answer streams slowly.
+ *   holds; `finish`: one that ends the run without an answer; `stream`: one whose output's lines are `one`, `two`
+ *   and `three of the lines`, written over time; `nested`: one that calls `lookup` with
+ *   `{ city: "London" }` from inside it. After a tool call, the answer is `answer: <tool>`.
+ * - `fail`: the model call fails; `flaky`: it fails once in a way worth retrying, then answers; `long`: the answer is
+ *   cut off (`max_tokens`); `slow`: the answer streams slowly; `ponder`: it streams its thinking slowly, then answers.
  * - Anything else is answered `answer: <text the model saw>`. `info().commands` offers `greet`, which a model sees as
  *   `hello <args>`.
  */
@@ -668,6 +671,81 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(shown).not.toBe("");
         expect(deltas.length).toBeGreaterThan(0);
         expect((answer.data as { text: string }).text.startsWith(shown + deltas.join(""))).toBe(true);
+      });
+
+      it("delivers a running tool's start and its status lines, a nested call as its caller's", async () => {
+        const sessionId = await newSession(agent);
+        const watching = attach(agent, sessionId);
+        await watching.until(isState);
+        const streamed = await accepted(agent, { sessionId, content: text("stream") });
+        const events = await watching.until(doneOf(streamed.message.messageId));
+        const nested = await accepted(agent, { sessionId, content: text("nested") });
+        const more = await watching.until(doneOf(nested.message.messageId));
+        await watching.close();
+
+        const started = events.find((event) => event.type === "tool_started");
+        expect(started).toMatchObject({ type: "tool_started", name: "stream", args: {} });
+        const callId = (started as { toolCallId: string }).toolCallId;
+        const lines = events.flatMap((event) =>
+          event.type === "tool_progress" && event.toolCallId === callId ? [event.text] : [],
+        );
+        expect(lines.length).toBeGreaterThan(0);
+        expect(lines.every((line) => ["one", "two", "three of the lines"].includes(line))).toBe(true);
+        expect(new Set(lines).size).toBe(lines.length);
+        const result = events.findIndex((event) => event.type === "entry" && event.entry.kind === "tool_result");
+        expect(events.indexOf(started as ResumeEvent)).toBeLessThan(result);
+        expect(events.slice(result).some((event) => event.type === "tool_progress")).toBe(false);
+
+        const outer = more.find((event) => event.type === "tool_started");
+        expect(outer).toMatchObject({ name: "nested" });
+        expect(more.filter((event) => event.type === "tool_started")).toHaveLength(1);
+        expect(more).toContainEqual({
+          type: "tool_progress",
+          toolCallId: (outer as { toolCallId: string }).toolCallId,
+          text: "lookup London",
+        });
+      });
+
+      it("explains a quiet gap with retry_scheduled before the attempt that answers", async () => {
+        const sessionId = await newSession(agent);
+        const watching = attach(agent, sessionId);
+        await watching.until(isState);
+        const receipt = await accepted(agent, { sessionId, content: text("flaky") });
+        const events = await watching.until(doneOf(receipt.message.messageId));
+        await watching.close();
+        const retry = events.findIndex((event) => event.type === "retry_scheduled");
+        expect(events[retry]).toMatchObject({
+          type: "retry_scheduled",
+          attempt: 1,
+          maxAttempts: expect.any(Number),
+          delayMs: expect.any(Number),
+          reason: expect.stringContaining("overloaded"),
+        });
+        const answer = events.findIndex(
+          (event) =>
+            event.type === "entry" &&
+            event.entry.kind === "assistant_message" &&
+            (event.entry.data as { outcome?: unknown }).outcome === undefined,
+        );
+        expect(retry).toBeLessThan(answer);
+        expect(events.at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
+      });
+
+      it("streams the model's thinking on its own channel, never folded into the answer", async () => {
+        const sessionId = await newSession(agent);
+        const watching = attach(agent, sessionId);
+        await watching.until(isState);
+        const receipt = await accepted(agent, { sessionId, content: text("ponder") });
+        const events = await watching.until(doneOf(receipt.message.messageId));
+        await watching.close();
+        const deltas = (channel: "text" | "thinking") =>
+          events.flatMap((event) => (event.type === "message_delta" && event.channel === channel ? [event.delta] : []));
+        const reply = entriesIn(events).find((entry) => entry.kind === "assistant_message") as Entry;
+        const data = reply.data as { text: string; thinking?: string };
+        expect(deltas("thinking").length).toBeGreaterThan(0);
+        expect(data.thinking?.startsWith(deltas("thinking").join(""))).toBe(true);
+        expect(data.text).toBe("answer: ponder");
+        expect(data.text.startsWith(deltas("text").join(""))).toBe(true);
       });
 
       it("delivers each entry exactly once across a reconnect after the last entry it had", async () => {

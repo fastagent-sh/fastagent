@@ -11,12 +11,26 @@ export interface Defaults {
   thinkingLevel?: ModelThinkingLevel;
 }
 
-export async function takeDefaults(tx: Tx, conversationId: ConversationId, defaults: Defaults): Promise<void> {
+/**
+ * Take the defaults the conversation's settings lack, unless the model it would answer with is not among the agent's
+ * models: then nothing is written, and that model (or none) is returned so the message can be refused.
+ */
+export async function takeDefaults(
+  tx: Tx,
+  conversationId: ConversationId,
+  defaults: Defaults,
+  available: (model: ModelRef) => boolean,
+): Promise<{ ok: true } | { ok: false; model: ModelRef | undefined }> {
   const agent = await tx.doc(AgentDoc, conversationId);
+  const model = agent.model ?? defaults.model;
+  if (model === undefined || !available(model)) {
+    return { ok: false, model: model === undefined ? undefined : { provider: model.provider, modelId: model.modelId } };
+  }
   await configure(tx, conversationId, {
-    ...(agent.model === undefined && defaults.model !== undefined ? { model: defaults.model } : {}),
+    ...(agent.model === undefined ? { model } : {}),
     ...(agent.thinkingLevel === undefined && defaults.thinkingLevel !== undefined
       ? { thinkingLevel: defaults.thinkingLevel }
       : {}),
   });
+  return { ok: true };
 }

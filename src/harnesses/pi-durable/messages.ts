@@ -112,7 +112,13 @@ function unanswered(record: Extract<EndedRecord, { status: "unanswered" }>): Out
     case "aborted":
       return { status: "canceled" };
     case "no_model":
-      return { status: "failed", error: agentError("missing_model", "The agent has no model to answer with") };
+      return {
+        status: "failed",
+        error: agentError(
+          "missing_model",
+          "The session's model was not among the agent's models when it was to answer",
+        ),
+      };
     case "model_error": {
       const message = detail ?? "The model call failed";
       if (message.startsWith(NOT_CONFIGURED)) return { status: "failed", error: agentError("auth_required", message) };

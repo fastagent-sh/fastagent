@@ -409,7 +409,7 @@ interface AgentError {
 | `invalid_request` | A malformed request; a content part the Agent does not take; a key without `sessionId`; `limit` above the maximum | 400 | false |
 | `not_found` | An unknown session, fork source or entry cursor | 404 | false |
 | `busy` | Admission refused; `details.reason` is `running` (`whenBusy: "reject"`), `queue_full` or `capacity` | 429 | true |
-| `missing_model` | The agent has no model | 422 | false |
+| `missing_model` | The session names no model the agent has: a message is refused with it, or, when the model goes before it is answered, ends with it | 422 | false |
 | `auth_required` | The model provider has no credential | 422 | false |
 | `model_error` | The model call failed | 502 | by the provider's answer |
 | `unavailable` | The Agent's storage cannot answer now | 503 | true |

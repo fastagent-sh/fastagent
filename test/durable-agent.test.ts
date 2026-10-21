@@ -137,4 +137,52 @@ describe("the Agent on pi-durable", () => {
     expect(await answer(agent, first)).toBe("from c");
     await agent.close();
   });
+
+  it("refuses a message no model of the agent could answer, recording nothing", async () => {
+    const path = temporaryStorage();
+    const open = async (modelIds: string[], defaultModel: string | undefined) => {
+      const faux = fauxProvider({ models: modelIds.map((id) => ({ id })) });
+      faux.setResponses(
+        Array.from(
+          { length: 5 },
+          () => (_context: unknown, _options: unknown, _state: unknown, model: { id: string }) =>
+            fauxAssistantMessage(`from ${model.id}`),
+        ),
+      );
+      const models = createModels();
+      models.setProvider(faux.provider);
+      return openDurableAgent({
+        storage: await openNodeSqliteStorage(path),
+        models,
+        registry: createRegistry(),
+        name: "models",
+        ...(defaultModel === undefined ? {} : { model: { provider: faux.getModel().provider, modelId: defaultModel } }),
+      });
+    };
+    const hi = [{ type: "text" as const, text: "hi" }];
+
+    let agent = await open(["a"], undefined);
+    expect(await agent.invoke({ content: hi })).toMatchObject({ ok: false, error: { code: "missing_model" } });
+    await agent.close();
+
+    agent = await open(["a"], "a");
+    const first = await agent.invoke({ content: hi });
+    if (!first.ok) throw new Error(JSON.stringify(first));
+    await first.wait();
+    await agent.close();
+
+    // The deployment's models no longer have the model the session took.
+    agent = await open(["b"], "b");
+    const before = await agent.read(first.sessionId);
+    const refused = await agent.invoke({ sessionId: first.sessionId, content: hi });
+    expect(refused).toMatchObject({
+      ok: false,
+      error: { code: "missing_model", message: expect.stringContaining("faux/a"), details: { model: "faux/a" } },
+    });
+    expect(await agent.read(first.sessionId)).toEqual(before);
+    const fresh = await agent.invoke({ content: hi });
+    if (!fresh.ok) throw new Error(JSON.stringify(fresh));
+    expect(await fresh.wait()).toMatchObject({ ok: true, message: { answer: { text: "from b" } } });
+    await agent.close();
+  });
 });
