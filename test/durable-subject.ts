@@ -46,6 +46,7 @@ function respond(context: TranscriptContext) {
   const text = lastUserText(context.messages);
   switch (text) {
     case "hold":
+    case "mark":
     case "stubborn":
     case "effect":
     case "finish":
@@ -62,7 +63,7 @@ function respond(context: TranscriptContext) {
 }
 
 /** A model provider whose `slow` answers stream a few tokens at a time, so an answer is seen being written. */
-function subjectModels() {
+function subjectModels(signedOut: boolean) {
   const fast = createFauxCore({ provider: PROVIDER, api: PROVIDER });
   const slow = createFauxCore({
     provider: PROVIDER,
@@ -79,7 +80,7 @@ function subjectModels() {
   models.setProvider(
     createProvider({
       id: PROVIDER,
-      auth: { apiKey: { name: "Subject", resolve: async () => ({ auth: {} }) } },
+      auth: { apiKey: { name: "Subject", resolve: async () => (signedOut ? undefined : { auth: {} }) } },
       models: fast.models,
       api: { stream, streamSimple: stream },
     }),
@@ -111,28 +112,37 @@ export function durableSubject(): AgentApiSubject {
   let effects = 0;
   let signalled = 0;
   let inFlight: number | undefined;
+  let signedOut = false;
+
+  const holdTool = (name: string, description: string, before: () => void) =>
+    defineTool({
+      name,
+      description,
+      parameters: Type.Object({}),
+      execute: (_args, _api, context) => {
+        before();
+        return new Promise<ToolExecutionResult>((resolve, reject) => {
+          const release = () => resolve({ output: [{ type: "text", text: "held" }] });
+          held.push(release);
+          context.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              signalled++;
+              held = held.filter((other) => other !== release);
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
 
   const tools = defineExtension({
     name: "subject",
     tools: [
-      defineTool({
-        name: "hold",
-        description: "Waits until the test lets it go; stops when aborted",
-        parameters: Type.Object({}),
-        execute: (_args, _api, context) =>
-          new Promise<ToolExecutionResult>((resolve, reject) => {
-            const release = () => resolve({ output: [{ type: "text", text: "held" }] });
-            held.push(release);
-            context.abortSignal?.addEventListener(
-              "abort",
-              () => {
-                signalled++;
-                held = held.filter((other) => other !== release);
-                reject(new Error("aborted"));
-              },
-              { once: true },
-            );
-          }),
+      holdTool("hold", "Waits until the test lets it go; stops when aborted", () => {}),
+      holdTool("mark", "Has an effect the test counts, then waits like hold", () => {
+        effects++;
       }),
       defineTool({
         name: "stubborn",
@@ -163,7 +173,7 @@ export function durableSubject(): AgentApiSubject {
   });
 
   const open = async (): Promise<DurableAgent> => {
-    const { models, model } = subjectModels();
+    const { models, model } = subjectModels(signedOut);
     const registry = createRegistry();
     registry.install(tools);
     const storage = failable(await openNodeSqliteStorage(join(directory, "agent.sqlite")));
@@ -189,6 +199,7 @@ export function durableSubject(): AgentApiSubject {
       effects = 0;
       signalled = 0;
       inFlight = options?.inFlightPerProcess;
+      signedOut = options?.signedOut ?? false;
       return open();
     },
     async restart() {

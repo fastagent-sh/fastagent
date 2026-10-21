@@ -3,8 +3,8 @@
  * the agent do is chosen by its text, which a subject maps onto its harness:
  *
  * - `hold`: a tool call that waits for `release()` and stops when aborted; `stubborn`: one that waits whatever its
- *   abort signal says; `effect`: one whose runs `effects()` counts; `finish`: one that ends the run without an answer.
- *   After a tool call, the answer is `answer: <tool>`.
+ *   abort signal says; `effect`: one whose runs `effects()` counts; `mark`: one that has its counted effect and then
+ *   holds; `finish`: one that ends the run without an answer. After a tool call, the answer is `answer: <tool>`.
  * - `fail`: the model call fails; `long`: the answer is cut off (`max_tokens`); `slow`: the answer streams slowly.
  * - Anything else is answered `answer: <text the model saw>`. `info().commands` offers `greet`, which a model sees as
  *   `hello <args>`.
@@ -22,8 +22,11 @@ import type {
 } from "../src/agent-api.ts";
 
 export interface AgentApiSubject {
-  /** A fresh agent over fresh storage. `inFlightPerProcess` lowers the messages the process holds. */
-  start(options?: { inFlightPerProcess?: number }): Promise<Agent>;
+  /**
+   * A fresh agent over fresh storage. `inFlightPerProcess` lowers the messages the process holds; `signedOut` leaves
+   * its model provider without a credential.
+   */
+  start(options?: { inFlightPerProcess?: number; signedOut?: boolean }): Promise<Agent>;
   /** The same storage, opened by a new process after the previous one stopped. */
   restart(): Promise<Agent>;
   /** Lets every `hold` and `stubborn` call of the current process go on. */
@@ -521,6 +524,13 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const tool = await ended(await accepted(agent, { sessionId, content: text("effect") }));
         expect(tool.answer?.text).toBe("answer: effect");
       });
+
+      it("ends a message failed with auth_required when its model provider has no credential", async () => {
+        agent = await subject.start({ signedOut: true });
+        const end = await ended(await accepted(agent, { content: text("hi") }));
+        expect(end.outcome).toMatchObject({ status: "failed", error: { code: "auth_required", retryable: false } });
+        expect(end).not.toHaveProperty("answer");
+      });
     });
 
     describe("Restart", () => {
@@ -566,12 +576,16 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(status).not.toHaveProperty("answer");
       });
 
-      it("does not redo a message", async () => {
+      it("does not redo a tool call the process stopped after its effect", async () => {
         const sessionId = await newSession(agent);
-        await ended(await accepted(agent, { sessionId, content: text("effect") }));
+        const receipt = await accepted(agent, { sessionId, content: text("mark") });
+        await holding();
         expect(subject.effects()).toBe(1);
         agent = await subject.restart();
-        await ended(await accepted(agent, { sessionId, content: text("hi") }));
+        await untilStatus(agent, sessionId, receipt.message.messageId, "done");
+        expect(await statusOf(agent, sessionId, receipt.message.messageId)).toMatchObject({
+          outcome: { status: "completed" },
+        });
         expect(subject.effects()).toBe(1);
       });
     });

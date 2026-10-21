@@ -297,13 +297,13 @@ describe("channels/kit is defined by who imports it", () => {
 });
 
 describe("the contracts depend on nothing", () => {
-  // protocol.ts (what every caller speaks) and channel.ts (what a trigger implements) are the product
-  // contracts — pure types, zero packages. The bar is
+  // protocol.ts (what every caller speaks), agent-api.ts (the API that replaces it) and channel.ts (what
+  // a trigger implements) are the product contracts — pure types, zero packages. The bar is
   // ZERO rather than "no harness": an agent directory's hand-written channel imports ChannelModule,
   // and the day that type drags in an HTTP framework, every such file inherits it. This is the check
   // that keeps the split honest, and it is why serving lives in channels/serve.ts instead.
   it("each of them pulls no package at all", () => {
-    const offenders = ["protocol.ts", "channel.ts"].flatMap((contract) =>
+    const offenders = ["protocol.ts", "agent-api.ts", "channel.ts"].flatMap((contract) =>
       [...staticPackageGraph(contract)].map((p) => `${contract} → ${p}`),
     );
     expect(offenders).toEqual([]);

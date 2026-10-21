@@ -21,6 +21,11 @@ export type InputRecord = Extract<SubmissionRecord, { type: "input" }>;
 export type EndedRecord = Extract<InputRecord, { status: "done" | "unanswered" }>;
 
 const KEY = "key:";
+/**
+ * How pi-ai's `Models.applyAuth` says a provider has no credential (`ModelsError` "auth"). The settled submission keeps
+ * only that text, and the outcome is read from what was recorded, so it does not change once a credential is added.
+ */
+const NOT_CONFIGURED = "Provider is not configured: ";
 
 /** Every message is submitted with a request id, so its entry can name it: the Caller's key, or one of our own. */
 export function requestIdFor(idempotencyKey: string | undefined): string {
@@ -110,6 +115,7 @@ function unanswered(record: Extract<EndedRecord, { status: "unanswered" }>): Out
       return { status: "failed", error: agentError("missing_model", "The agent has no model to answer with") };
     case "model_error": {
       const message = detail ?? "The model call failed";
+      if (message.startsWith(NOT_CONFIGURED)) return { status: "failed", error: agentError("auth_required", message) };
       // pi-ai classifies a failed reply by its error text alone, which is all a settled submission keeps.
       const retryable = isRetryableAssistantError({ stopReason: "error", errorMessage: message } as AssistantMessage);
       return { status: "failed", error: { ...agentError("model_error", message), retryable } };

@@ -312,6 +312,7 @@ function durableAgent(
       Effect.gen(function* () {
         const conversation = yield* reads.conversation(sessionId);
         if (conversation === undefined) return failure("not_found", `No session ${sessionId}`);
+        // What it stops is read before the stop: a message admitted between the two is withdrawn but not reported.
         const before = yield* reads.state(conversation);
         const signal = abortOptions?.signal;
         const stopping = signal === undefined ? context : withAbortSignal(signal, context);

@@ -163,12 +163,20 @@ export function durableReads(harness: Harness, ids: Ids, context: Context) {
 
   const inbox = (conversation: Conversation) => port(() => harness.snapshot(InboxDoc, conversation.id, context));
 
+  /** One commit's reads, so a message moving from the inbox into the run is in `queued` or in `taken`, never neither. */
   const state = (conversation: Conversation): Effect.Effect<SessionState, PortFailure> =>
-    Effect.all([
-      port(() => harness.snapshot(LiveDoc, conversation.id, context)),
-      port(() => harness.snapshot(InboxDoc, conversation.id, context)),
-      port(() => harness.snapshot(UsageDoc, conversation.id, context)),
-    ]).pipe(Effect.map(([live, inbox, usage]) => sessionState(live, inbox, usage, ids)));
+    port(() =>
+      harness.commit(
+        async (tx) =>
+          sessionState(
+            await tx.doc(LiveDoc, conversation.id),
+            await tx.doc(InboxDoc, conversation.id),
+            await tx.doc(UsageDoc, conversation.id),
+            ids,
+          ),
+        context,
+      ),
+    );
 
   return {
     conversation,
