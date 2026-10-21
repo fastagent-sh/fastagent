@@ -21,7 +21,8 @@ import {
 } from "../protocol.ts";
 import { MAX_BODY_BYTES, readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
-import { type PrefixMount, assertCorsOrigins, parseRouteKey, router, withoutBody } from "./router.ts";
+import { type PrefixMount, assertCorsOrigins, router } from "./router.ts";
+import { type HttpHandler as Handler, httpTable } from "./http-table.ts";
 import { sseResponse } from "./sse.ts";
 
 /** A valid request body for `POST /invoke`: the CLI's "try it" line, next to the decoder it must satisfy. */
@@ -162,55 +163,11 @@ async function stream(
 
 // ── Routing ──────────────────────────────────────────────────────────────────
 
-type Params = Record<string, string>;
-type Handler = (req: Request, url: URL, params: Params) => Response | Promise<Response>;
-
-/**
- * A mounted table of `"<METHOD> <path>"` → handler, where a `{name}` segment is a percent-encoded variable. A segment
- * that does not decode, or decodes to an id no URL can carry, matches nothing.
- */
-function app(table: Record<string, Handler>): ChannelHandler {
-  const routes = Object.entries(table).map(([key, handler]) => {
-    const { method, path } = parseRouteKey(key);
-    return { method, segments: path.split("/"), handler };
+const app = (table: Record<string, Handler>): ChannelHandler =>
+  httpTable(table, (req, url, error) => {
+    log.error(`[protocol] ${req.method} ${url.pathname} failed: ${String(error)}`);
+    return refused(agentError("internal", "the request failed on the server"));
   });
-  return async (req) => {
-    const url = new URL(req.url);
-    const segments = url.pathname.split("/");
-    const hits: { route: (typeof routes)[number]; params: Params }[] = [];
-    for (const route of routes) {
-      if (route.segments.length !== segments.length) continue;
-      const params: Params = {};
-      const matched = route.segments.every((expected, i) => {
-        const actual = segments[i] as string;
-        if (!expected.startsWith("{")) return expected === actual;
-        if (actual === "") return false;
-        try {
-          params[expected.slice(1, -1)] = decodeURIComponent(actual);
-          return true;
-        } catch {
-          return false;
-        }
-      });
-      if (matched) hits.push({ route, params });
-    }
-    const hit =
-      hits.find((h) => h.route.method === req.method) ??
-      (req.method === "HEAD" ? hits.find((h) => h.route.method === "GET") : undefined);
-    let res: Response;
-    try {
-      res = hit
-        ? await hit.route.handler(req, url, hit.params)
-        : hits.length > 0
-          ? text("method not allowed\n", 405)
-          : text("not found\n", 404);
-    } catch (error) {
-      log.error(`[protocol] ${req.method} ${url.pathname} failed: ${String(error)}`);
-      res = refused(agentError("internal", "the request failed on the server"));
-    }
-    return req.method === "HEAD" ? withoutBody(res) : res;
-  };
-}
 
 /**
  * Where a follow starts. A browser reconnecting an `EventSource` sends the URL it opened, cursor included, and the
