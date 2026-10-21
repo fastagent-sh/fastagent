@@ -7,8 +7,10 @@ status: current
 # Agent API 设计解读
 
 规范原文见 [agent-api.md](../design/agent-api.md)，架构和取舍见 [architecture.md](../design/architecture.md)。两者与本文
-不一致时，以英文原文为准。Agent API 已经定下、还没实现：迁移（#788）完成后它替换 [SPEC.md](../SPEC.md)，在那之前代码实现的
-仍是 SPEC.md。
+不一致时，以英文原文为准。Agent API 已定下，独立实现已存在，但尚未接入服务路径：迁移（#788）完成后它替换
+[SPEC.md](../SPEC.md)，在那之前现有服务仍实现 SPEC.md。新的 Fetch handler 是 `src/channels/agent-api-http.ts` 的
+`createAgentApiHandler`，客户端是 `src/agent-api-remote.ts` 的 `connectAgentApi`，`stream` 和 `waitForMessage` 在
+`src/agent-api-stream.ts`；这些模块尚未从包入口导出。
 
 ## 一句话概括
 

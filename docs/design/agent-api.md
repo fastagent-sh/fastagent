@@ -9,7 +9,7 @@ updated: 2026-10-20
 
 # Agent API — Specification v1
 
-> **Status: decided, not implemented.** This is the API a served agent offers its consumers. It replaces
+> **Status: decided; implemented separately, not yet connected to the serving path.** This is the API a served agent offers its consumers. It replaces
 > [docs/SPEC.md](../SPEC.md), and moves there, when the move lands
 > ([#788](https://github.com/fastagent-sh/fastagent/issues/788)); until then the code implements that file. Changing
 > its semantics needs an explicit decision. Why it has this shape is [architecture.md](architecture.md).
@@ -511,6 +511,11 @@ One executable suite, run against the Agent in process and through the HTTP bind
 | HTTP | A `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `POST /invoke` answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between; the HTTP client's `wait()` gives what the in-process one does, also for a message that ended before it was called; `stream()` over the in-process Agent and over the HTTP client gives the same receipt, refusals and events for a new message, a queued, taken or done duplicate (a taken one whose message ends meanwhile included), and an `abort` |
 
 ## 10. HTTP binding
+
+The reference implementation is `src/channels/agent-api-http.ts` (`createAgentApiHandler`), with the Fetch client in
+`src/agent-api-remote.ts` (`connectAgentApi`) and message consumers in `src/agent-api-stream.ts` (`stream`,
+`waitForMessage`). These modules are not yet exported from the package entry points or connected to the serving path;
+the existing HTTP surface continues to implement [SPEC v1](../SPEC.md) until the cut-over (#788).
 
 | Operation | HTTP |
 |---|---|

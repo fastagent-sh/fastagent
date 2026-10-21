@@ -128,6 +128,8 @@ export function assertCorsOrigins(origins: unknown, where: string): asserts orig
 export interface RouterSurface {
   /** Routes that authenticate NOBODY — the router applies the JSON body gate and the cross-origin policy to them. */
   unverified?: Routes;
+  /** A binding's JSON error envelope for the shared content-type gate; the default is plain text with status 415. */
+  nonJsonBody?: () => Response;
   /** Routes that verify their own caller (a channel's platform signature, a host's IAM). Neither guard applies. */
   selfVerifying?: Routes;
   /** Prefix-owning handlers (the control plane, and the protocol's `/sessions` and `/agent`). Always unverified. */
@@ -229,7 +231,7 @@ export function router(surface: RouterSurface): ChannelHandler {
       // cannot forge its signature anyway.
       if (owned && BODY_METHODS.has(req.method)) {
         const wrongType = refuseNonJsonBody(req);
-        if (wrongType) return wrongType;
+        if (wrongType) return surface.nonJsonBody?.() ?? wrongType;
       }
       // The preflight is the ROUTER's to answer: it names a method the route table does not register, so leaving it
       // to the routes below is a 405 with no CORS headers, which is a browser client that cannot call a route that

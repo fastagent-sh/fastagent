@@ -20,6 +20,7 @@ import {
   agentError,
 } from "../protocol.ts";
 import { MAX_BODY_BYTES, readBodyCapped } from "./body.ts";
+import { attachmentResponse } from "./attachment-response.ts";
 import { text } from "./respond.ts";
 import { type PrefixMount, assertCorsOrigins, router } from "./router.ts";
 import { type HttpHandler as Handler, httpTable } from "./http-table.ts";
@@ -43,9 +44,6 @@ const STATUS: Record<string, number> = {
   unavailable: 503,
   internal: 500,
 };
-
-/** What `attachments/{ref}` may answer under the image's own type: a sender-declared `text/html` would run script. */
-const RASTER_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 const json = (value: unknown, status = 200): Response =>
   new Response(`${JSON.stringify(value)}\n`, { status, headers: { "content-type": "application/json" } });
@@ -186,14 +184,6 @@ function limitOf(url: URL): { limit?: number } | { error: Response } {
 const optional = <K extends string>(key: K, value: string | null | undefined): { [P in K]?: string } =>
   (value === null || value === undefined ? {} : { [key]: value }) as { [P in K]?: string };
 
-/** Base64 without `Buffer`: this module runs in any Fetch runtime. */
-function fromBase64(data: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
 /**
  * The agent's API as one Fetch handler, for an app to mount: the user plane always, `/control` only when asked. It
  * authenticates nobody, and answers no browser cross-origin unless `corsOrigins` names who may: mounted in an app,
@@ -247,7 +237,7 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
     return sseResponse(all, (event) => event, entryId);
   };
 
-  const sessions = (_url: URL, params: Params) => agent.sessions.get(params.s as string);
+  const sessions = (_url: URL, params: Record<string, string>) => agent.sessions.get(params.s as string);
 
   /** What a follow from `after` would be refused with: the session and the cursor, as a read of no entries asks. */
   const refusalOf = async (session: Session, after: { after?: string }): Promise<AgentError | undefined> => {
@@ -283,23 +273,7 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
       return stream(refusalOf(session, after), () => session.follow(after));
     },
     "GET /sessions/{s}/attachments/{ref}": (_req, url, params) =>
-      read(
-        () => sessions(url, params).attachment(params.ref as string),
-        (attachment) =>
-          attachment
-            ? new Response(fromBase64(attachment.data), {
-                headers: {
-                  "content-type": RASTER_IMAGE_TYPES.has(attachment.mimeType)
-                    ? attachment.mimeType
-                    : "application/octet-stream",
-                  "x-content-type-options": "nosniff",
-                  // The declared type, for a client that wants it back; never one the browser acts on.
-                  "x-mime-type": attachment.mimeType,
-                  "cache-control": "private, max-age=31536000, immutable",
-                },
-              })
-            : new Response(null, { status: 404 }),
-      ),
+      read(() => sessions(url, params).attachment(params.ref as string), attachmentResponse),
     "POST /sessions/{s}/abort": async (_req, url, params) => answer(await sessions(url, params).abort()),
     "POST /sessions/{s}/rewind": async (req, url, params) => {
       const body = await decoded(req, RewindBody);
