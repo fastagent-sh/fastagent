@@ -5,7 +5,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Type, createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { AgentDoc, Harness, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { agentApiConformance } from "./agent-api-conformance.ts";
 import { durableSubject } from "./durable-subject.ts";
@@ -42,6 +42,58 @@ describe("the Agent on pi-durable", () => {
     expect(await one.read(created.sessionId)).toMatchObject({ ok: true });
     await Promise.all([one.close(), two.close()]);
   });
+
+  it.each([false, true])(
+    "keeps an empty snapshot's first live entry parentless when a write follows attachment (replay=%s)",
+    async (replay) => {
+      const { faux, models, model } = fauxModels();
+      faux.setResponses([fauxAssistantMessage("answer")]);
+      const storage = await openNodeSqliteStorage(temporaryStorage());
+      const agent = await openDurableAgent({ storage, models, registry: createRegistry(), name: "snapshot", model });
+      const created = await agent.createSession({ model });
+      if (!created.ok) throw new Error(JSON.stringify(created));
+      const conversation = await agent.conversation(created.sessionId);
+      if (conversation === undefined) throw new Error("The created session has no conversation");
+      let submitted: ReturnType<typeof conversation.submit> | undefined;
+      let insert = true;
+      const scanTasks = storage.scanTasks.bind(storage);
+      const spy = vi.spyOn(storage, "scanTasks").mockImplementation(async (...args) => {
+        const tasks = await scanTasks(...args);
+        if (insert && args[0].kind === "pi.generation" && args[0].status === "completing") {
+          insert = false;
+          // watchEvents has captured the empty view on the mutation line; this write runs immediately after it.
+          submitted = conversation.submit({ type: "input", content: "hi" }, context);
+        }
+        return tasks;
+      });
+      const stream = agent
+        .resume(created.sessionId, replay ? { replayFrom: { type: "start" } } : undefined)
+        [Symbol.asyncIterator]();
+      try {
+        expect(await stream.next()).toMatchObject({
+          done: false,
+          value: { type: "state", state: { status: "idle", taken: [], queued: [] } },
+        });
+        expect(submitted).toBeDefined();
+        if (submitted === undefined) throw new Error("The interleaved submission did not start");
+        await (await submitted).wait(context);
+        const live = [];
+        for (let next = await stream.next(); !next.done; next = await stream.next()) {
+          if (next.value.type === "entry") live.push(next.value.entry);
+          if (next.value.type === "done") break;
+        }
+        const read = await agent.read(created.sessionId);
+        if (!read.ok) throw new Error(JSON.stringify(read));
+        expect(live.map((entry) => entry.kind)).toEqual(["user_message", "assistant_message"]);
+        expect(live[0]).not.toHaveProperty("parentEntryId");
+        expect(live).toEqual(read.entries);
+      } finally {
+        await stream.return?.();
+        spy.mockRestore();
+        await agent.close();
+      }
+    },
+  );
 
   it("takes a message a failed run left waiting when the process before it stopped", async () => {
     const path = temporaryStorage();

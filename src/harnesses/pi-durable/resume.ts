@@ -85,7 +85,9 @@ export function resumeStream(
           : replayed(reads, ids, conversation, after, newest, live);
       const present = Stream.fromEffect(
         Effect.gen(function* () {
-          if (live.parent === undefined) live.parent = yield* reads.newestPublished(conversation, newest);
+          if (live.parent === undefined && newest !== undefined) {
+            live.parent = yield* reads.newestPublished(conversation, newest);
+          }
           return {
             type: "state",
             state: sessionState(snapshot, { items: snapshot.inbox }, snapshot.usage, ids),
