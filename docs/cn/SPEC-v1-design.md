@@ -140,8 +140,9 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
   回答已取走的消息，排队的消息也还在。`answer` 只在 `completed` 和 `max_tokens` 时出现，执行过工具调用的中间回复不算回答。
 - **fork 共享源会话的 entry：** fork 的历史开头就是源会话的那些 entry 本身，id 和内容都相同，之后写的才是 fork 自己的。每条 entry
   带 `sessionId`，说明是哪个会话写的；同一条 entry 不管从哪个会话读，内容都一样。
-- **用量记在 entry 上：** 每条 `assistant_message` 一份，`compaction` 记生成摘要的那几次调用。一个会话的花费是它自己写的 entry
-  （`sessionId` 是它自己的）的 `usage` 之和；fork 共享来的 entry 算源会话的。这样不管是单个会话内还是跨会话相加，每次模型调用都只算一次。
+- **用量记在 `assistant_message` 上：** 每条一份。一个会话的回复花了多少，是它自己写的 entry（`sessionId` 是它自己的）的
+  `usage` 之和；fork 共享来的 entry 算源会话的。这样不管是单个会话内还是跨会话相加，每次回复都只算一次。生成 compaction 摘要
+  也要调用模型，但没有 entry 记录这部分花费：pi-durable 只把它记在会话自己的账本 `pi.usage` 里，那属于 harness 的 API（§11）。
 - **会扩展的取值都是开放的**（§6.1）：事件类型、entry 种类、内容类型、`inputs`、结局、会话状态、错误码。规范定义的名字不含
   `.`；实现方自己加的必须带自己的前缀（例如 `fastagent.plan`）。客户端遇到不认识的事件就忽略，不认识的会话状态当作“忙”，
   不认识的结局当作“结束但没有完成”。
@@ -200,7 +201,7 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | invoke 流式返回这条消息的事件，到它的 `done` 为止 | `invoke` 只返回回执；看过程用 `resume`，等结局用 `wait()`，和 pi-durable 的 `submit`、`watchEvents`、`Submission.wait()` 一样 |
 | `prompt: { text, images }` | `content` 内容数组，按 `info().inputs` 检查 |
 | `sessions.create({ sessionId, fork })` | `createSession({ from })` |
-| fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`，会话的花费只算它自己写的 entry |
+| fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`，会话回复的花费只算它自己写的 entry；`compaction` 不带 `usage` |
 | `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
 | `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |
 | `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`，可以用 `signal` 放弃等待；`POST /invoke` 总是返回 `202` 和回执，远程 invoke 在回执前断线返回 `unknown` |

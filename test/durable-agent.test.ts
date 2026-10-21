@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { Harness, createRegistry } from "@earendil-works/pi-durable";
+import { AgentDoc, Harness, createRegistry } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { describe, expect, it } from "vitest";
-import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
+import { describe, expect, it, vi } from "vitest";
+import { type DurableAgent, openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { agentApiConformance } from "./agent-api-conformance.ts";
 import { durableSubject } from "./durable-subject.ts";
 
@@ -82,6 +82,118 @@ describe("the Agent on pi-durable", () => {
     });
     const handle = await agent.harness.submission(waiting.id, context);
     expect(await handle?.wait(context)).toMatchObject({ status: "done" });
+    await agent.close();
+  });
+
+  it("answers with the deployment's default model and thinking level until the session sets its own", async () => {
+    const path = temporaryStorage();
+    const faux = fauxProvider({ models: [{ id: "a" }, { id: "b" }, { id: "c" }] });
+    faux.setResponses(
+      Array.from(
+        { length: 20 },
+        () => (_context: unknown, _options: unknown, _state: unknown, model: { id: string }) =>
+          fauxAssistantMessage(`from ${model.id}`),
+      ),
+    );
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const ref = (modelId: string) => ({ provider: faux.getModel().provider, modelId });
+    const open = async (modelId: string, thinkingLevel: "low" | "high") =>
+      openDurableAgent({
+        storage: await openNodeSqliteStorage(path),
+        models,
+        registry: createRegistry(),
+        name: "defaults",
+        model: ref(modelId),
+        thinkingLevel,
+      });
+    const answer = async (agent: DurableAgent, sessionId: string) => {
+      const receipt = await agent.invoke({ sessionId, content: [{ type: "text", text: "which?" }] });
+      if (!receipt.ok) throw new Error(JSON.stringify(receipt));
+      const end = await receipt.wait();
+      if (!end.ok) throw new Error(end.unfinished.reason);
+      return end.message.answer?.text;
+    };
+    const settings = async (agent: DurableAgent, sessionId: string) =>
+      agent.harness.snapshot(AgentDoc, (await agent.conversation(sessionId))?.id as never, context);
+
+    let agent = await open("a", "low");
+    const created = await agent.createSession();
+    if (!created.ok) throw new Error(JSON.stringify(created));
+    const { sessionId } = created;
+    expect(await answer(agent, sessionId)).toBe("from a");
+    const fork = await agent.createSession({ from: { sessionId } });
+    if (!fork.ok) throw new Error(JSON.stringify(fork));
+    await agent.close();
+
+    agent = await open("b", "high");
+    expect(await answer(agent, sessionId)).toBe("from b");
+    expect(await settings(agent, sessionId)).toMatchObject({ thinkingLevel: "high" });
+    expect(await answer(agent, fork.sessionId)).toBe("from b");
+    await (await agent.conversation(sessionId))?.configure({ model: ref("c") }, context);
+    expect(await answer(agent, sessionId)).toBe("from c");
+    await agent.close();
+
+    agent = await open("a", "low");
+    expect(await answer(agent, sessionId)).toBe("from c");
+    expect(await settings(agent, sessionId)).toMatchObject({ thinkingLevel: "low" });
+    expect(await answer(agent, fork.sessionId)).toBe("from a");
+    await agent.close();
+  });
+
+  it("gives the messages the last process left the new deployment's default model", async () => {
+    const path = temporaryStorage();
+    const faux = fauxProvider({ models: [{ id: "a" }, { id: "b" }] });
+    let stalled = true;
+    faux.setResponses(
+      Array.from(
+        { length: 10 },
+        () =>
+          async (
+            _context: unknown,
+            options: { signal?: AbortSignal } | undefined,
+            _state: unknown,
+            model: { id: string },
+          ) => {
+            if (stalled) {
+              stalled = false;
+              // Holds the session busy until the process closes, so the next message is still queued then.
+              await new Promise((resolve) => options?.signal?.addEventListener("abort", resolve, { once: true }));
+            }
+            return fauxAssistantMessage(`from ${model.id}`);
+          },
+      ),
+    );
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const open = async (modelId: string) =>
+      openDurableAgent({
+        storage: await openNodeSqliteStorage(path),
+        models,
+        registry: createRegistry(),
+        name: "defaults",
+        model: { provider: faux.getModel().provider, modelId },
+      });
+    let agent = await open("a");
+    const send = async (text: string) => {
+      const receipt = await agent.invoke({ content: [{ type: "text", text }], ...(sessionId ? { sessionId } : {}) });
+      if (!receipt.ok) throw new Error(JSON.stringify(receipt));
+      sessionId = receipt.sessionId;
+      return receipt.message.messageId;
+    };
+    let sessionId: string | undefined;
+    await send("running");
+    await vi.waitFor(() => expect(stalled).toBe(false));
+    const queued = await send("queued");
+    await agent.close();
+
+    agent = await open("b");
+    await vi.waitFor(async () =>
+      expect(await agent.getMessage(sessionId as string, { messageId: queued })).toMatchObject({
+        status: "done",
+        answer: { text: "from b" },
+      }),
+    );
     await agent.close();
   });
 });
