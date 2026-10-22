@@ -467,15 +467,17 @@ The Agent authenticates no one and lists no sessions. Whoever reaches it may tal
 often, is decided in front of it (a gateway, a private network, a cloud's IAM, an embedder's own middleware).
 
 - **A session id is not a credential.** Ids are the Agent's names, and may be sequential. Whoever reaches the Agent
-  can reach every session in it: read and resume it, invoke into it, abort it and fork from it. Keeping one user out
+  can reach every session in it: read and resume it, invoke into it, abort it, configure it and fork from it.
+  Configuring is not confined to the Caller's own messages: a model the agent lacks fails the messages the session
+  has taken and queued, whoever sent them, and a costlier one is paid for them too (§5). Keeping one user out
   of another's sessions, when several share one deployment, is the job of the layer in front: a facade that maps
   each user to their sessions and admits only those, including the source of a fork and the session an invoke without
   `sessionId` creates ([security-boundary.md](security-boundary.md) §4).
-- **A browser is a Caller like any other.** Over HTTP, every `POST` MUST carry `content-type: application/json`,
-  whether or not it has a body, and anything else is refused with `invalid_request` before it is read. A `POST` that
-  is a form, `text/plain`, or has no body at all is sent cross-origin without a preflight, so withholding a response
-  would not stop what it already did: a run started, a session aborted, a session created. Which origins may read the
-  answers is the deployment's choice.
+- **A browser is a Caller like any other.** Over HTTP, every `POST` and `PATCH` MUST carry
+  `content-type: application/json`, whether or not it has a body, and anything else is refused with `invalid_request`
+  before it is read. A `POST` that is a form, `text/plain`, or has no body at all is sent cross-origin without a
+  preflight, so withholding a response would not stop what it already did: a run started, a session aborted, a
+  session created. Which origins may read the answers is the deployment's choice.
 
 ## 9. Conformance
 
