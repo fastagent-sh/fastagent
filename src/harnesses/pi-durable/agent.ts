@@ -55,7 +55,7 @@ import { releaseWaitingQueues } from "./release.ts";
 import { resumeStream } from "./resume.ts";
 
 /** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (agent-api.md §3). */
-interface AgentCommand {
+export interface AgentCommand {
   name: string;
   description?: string;
   expand(args: string): string;
@@ -69,7 +69,8 @@ export interface DurableAgentOptions {
   env?: HarnessOptions["env"];
   name: string;
   description?: string;
-  commands?: readonly AgentCommand[];
+  /** Read for every `info()` and invoke, so a command the definition gains is offered without a restart. */
+  commands?: () => readonly AgentCommand[];
   /** What a conversation answers with when its own settings name none (defaults.ts). */
   model?: ModelRef;
   thinkingLevel?: ModelThinkingLevel;
@@ -123,7 +124,7 @@ function durableAgent(
   const context = BACKGROUND_CONTEXT;
   const reads = durableReads(harness, ids, context);
   const admission = Semaphore.makeUnsafe(1);
-  const commands = options.commands ?? [];
+  const commands = options.commands ?? (() => []);
   const inFlightLimit = options.inFlightPerProcess ?? LIMITS.inFlightPerProcess;
   let closing = false;
   harness.subscribeClose(() => {
@@ -147,16 +148,16 @@ function durableAgent(
       program.pipe(Effect.catchCause((cause) => Effect.fail(new AgentRejection(failureOf(portError(cause)))))),
     );
   const failed = (error: unknown) => ({ ok: false as const, error: failureOf(error) });
-  const info: AgentInfo = {
+  const info = (): AgentInfo => ({
     protocolVersion: "1.0",
     name: options.name,
     ...(options.description === undefined ? {} : { description: options.description }),
     inputs: INPUTS,
-    commands: commands.map(({ name, description }) => ({
+    commands: commands().map(({ name, description }) => ({
       name,
       ...(description === undefined ? {} : { description }),
     })),
-  };
+  });
 
   const wait = (id: SubmissionId, signal: AbortSignal | undefined): Promise<WaitResult> =>
     resolve<WaitResult>(
@@ -220,6 +221,8 @@ function durableAgent(
   const admit = (request: InvokeRequest): Effect.Effect<InvokeResult, PortFailure> =>
     Effect.gen(function* () {
       const requestId = requestIdFor(request.idempotencyKey);
+      // Before anything is written: reading or expanding a command reads the definition's files, and may throw.
+      const { content, sent } = expandCommand(request.content, commands());
       let conversation: Conversation | undefined;
       if (request.sessionId !== undefined) {
         conversation = yield* reads.conversation(request.sessionId);
@@ -248,7 +251,6 @@ function durableAgent(
         target.commit((tx) => takeDefaults(tx, target.id, defaults, available), context),
       );
       if (!settings.ok) return noModel(settings.model);
-      const { content, sent } = expandCommand(request.content, commands);
       const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
       let messageId: SubmissionId | undefined;
       return yield* Effect.gen(function* () {
@@ -398,7 +400,7 @@ function durableAgent(
 
   return {
     harness,
-    info: () => info,
+    info,
     invoke,
     getMessage,
     createSession,

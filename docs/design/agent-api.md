@@ -65,7 +65,7 @@ interface AgentInfo {
   description?: string;
   /** The content part types a prompt may carry; `text` is always among them. */
   inputs: string[];
-  /** What a Caller may offer as `/<name>`: the agent's prompt templates and skills (§3). */
+  /** What a Caller may offer as `/<name>`: the agent's prompt templates, and `skill:<name>` for each skill (§3). */
   commands: { name: string; description?: string }[];
 }
 
@@ -157,8 +157,10 @@ interface InvokeRequest {
 `invalid_request`, before anything is recorded.
 
 A message whose text starts with `/<name>`, for a `name` among `info().commands`, is a command: the Agent expands it
-before the model sees it, a prompt template into its text with the words after the name as its arguments, a skill into
-an instruction to use it. The `user_message` entry holds what the Caller sent, so a history shows `/review 123`, not
+before the model sees it: a prompt template into its text, with the words after the name as its arguments, and
+`/skill:<name>` into that skill's instructions, followed by the words after it as the request. Without a command, the
+model is offered each skill by name and description, and loads one's instructions itself when a task matches it, as
+Agent Skills specifies. The `user_message` entry holds what the Caller sent, so a history shows `/review 123`, not
 the expansion. A `/` followed by a name the Agent does not know is sent to the model as written. A chat client shows
 `commands` as a menu, and a channel can register them as its platform's commands.
 

@@ -36,6 +36,15 @@ describe("declared secrets: the rule", () => {
     );
   });
 
+  it("never reports an optional name, unless another declaration requires it, and then names that one", () => {
+    const declared = [
+      { name: "REGION", source: "tools/weather.ts", optional: true },
+      { name: "TOKEN", source: "tools/a.ts", optional: true },
+      { name: "TOKEN", source: "tools/b.ts" },
+    ];
+    expect(missingSecrets(declared, {})).toEqual([{ name: "TOKEN", source: "tools/b.ts" }]);
+  });
+
   it("gates the OWNER about to run, and only that owner", () => {
     // The three policies the gate owns, at their smallest: subset by owner, the refusal's wording,
     // and (below, in the loader cases) reporting load failures before it throws.

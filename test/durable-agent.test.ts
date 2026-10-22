@@ -439,6 +439,32 @@ describe("the Agent on pi-durable", () => {
     },
   );
 
+  it("records nothing when expanding a command fails", async () => {
+    const { models, model } = fauxModels();
+    const storage = await openNodeSqliteStorage(temporaryStorage());
+    const agent = await openDurableAgent({
+      storage,
+      models,
+      registry: createRegistry(),
+      name: "commands",
+      model,
+      commands: () => [
+        {
+          name: "broken",
+          expand: () => {
+            throw new Error("SKILL.md vanished");
+          },
+        },
+      ],
+    });
+    expect(await agent.invoke({ content: [{ type: "text", text: "/broken now" }] })).toMatchObject({
+      ok: false,
+      error: { code: "internal", message: expect.stringContaining("SKILL.md vanished") },
+    });
+    expect((await storage.scanConversations({}, 10, undefined, context)).items).toEqual([]);
+    await agent.close();
+  });
+
   it("refuses a message no model of the agent could answer, recording nothing", async () => {
     const path = temporaryStorage();
     const open = async (modelIds: string[], defaultModel: string | undefined) => {
