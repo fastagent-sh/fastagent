@@ -114,6 +114,7 @@
     "ignore": "^7.0.12",
     "proper-lockfile": "^4.1.2",
     "undici": "^8.6.0",
+    "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -124,7 +125,6 @@
     "fastify": "^5.12.5",
     "knip": "^6.41.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.3",
-    "yaml": "^2.9.0"
+    "vitest": "^5.0.3"
   }
 }

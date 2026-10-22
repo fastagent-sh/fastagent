@@ -56,7 +56,7 @@ goal needs.
 | **Third-party capabilities are pi-durable extensions**, listed in `defineAgent({ extensions })` | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. Contexts, skills, MCP and environments travel as context packages (§4.2) |
 | **Schedules are TypeScript**: `defineSchedule({ cron, tz, prompt })`, the prompt a text or a function | A schedule is behaviour, like a tool: a prompt that depends on the time it fires, secrets it may need, and a cron the build checks, including the dialect an external clock accepts |
 | **`SYSTEM.md` is the whole prompt the author writes; `APPEND_SYSTEM.md` goes** | It added to pi-coding-agent's default prompt, which pi-durable does not have |
-| **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; a context package's connectors declare theirs beside each connector. A missing one fails the start, naming where it was declared |
+| **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; a context package's connectors declare theirs beside each connector. A declaration may say what the secret is for and that the code runs without it (`{ name, description, optional }`). A missing required one fails the start, naming where it was declared. Whoever deploys or runs the agent reads none of that code: preparing the definition writes every declaration into one manifest, `.fastagent/secrets.json` (each name once, what it is for, whether it is optional, where it is declared), which runbooks, an `.env.example` and the deploy check are made from |
 
 **A mapping is created in one order, in one place.** With Caller-named sessions, a chat's id was its session's, so a
 redelivered first message found its message by key, and two threads created at once met in `conflict`. With sessions
@@ -117,6 +117,7 @@ export default defineAgent({
   model: "anthropic/claude-sonnet-4-5",  // a default; a deployment or a session may change it
   thinkingLevel: "medium",
   extensions: [stripe()],                // third-party capabilities
+  providers: [gateway],                  // model providers beyond pi-ai's built-ins
   http: { cors: ["https://app.example.com"] },
   deploy: { agentcore: { idleTimeoutSeconds: 900 } },
 });
@@ -125,14 +126,21 @@ export default defineAgent({
 `fastagent build` generates the registry of `src/`'s four directories and an entry that exports the agent (the
 configuration and the registry), compiles them, and locks the context; `package.json`'s `exports` names that entry.
 `fastagent dev` generates the same and regenerates it as files change. Every tool found is offered unless the
-configuration leaves it out; a deployment cannot add one, since code ships in the artifact.
+configuration leaves it out; a deployment cannot add one, since code ships in the artifact. Each file directly in one
+of the four directories is a module and default-exports one thing (a tool, an extension, a channel, a schedule, or
+`needs(...)` around one); a helper they import lives elsewhere in `src/`, and a test file is not a module.
 
-`openAgent(agent)` assembles it: pi-ai's model registry and credentials, a pi-durable `Harness` over the instance's
-storage, `SYSTEM.md`, `AGENTS.md` and the skills rendered into pi-durable's prompt sections, the tools and extensions
-installed with the secrets they declared, and the execution environment its context declares. Prompt templates are
-FastAgent's, not the harness's: `invoke` expands a message that starts with `/<name>` before pi-durable sees it, with
-pi's template format (a `description` in the frontmatter, `$1` and `$@` for arguments), and `info()` lists them with
-the skills as the agent's commands ([Agent API](agent-api.md) §3). The result is the Agent
+`openAgent(agent)` assembles it: pi-ai's built-in models with the definition's `providers` over a credential store
+(the machine's in development, the instance's `.secrets/` when deployed), a pi-durable `Harness` over the instance's
+storage, `SYSTEM.md` and `AGENTS.md` rendered into pi-durable's prompt sections, pi-durable's coding tools, then the
+definition's tools and extensions installed with the secrets they declared, and an execution environment rooted at the
+agent's directory. Model selection is pi-ai's alone: no `models.json`, no model catalog cache, and no per-account
+model list. Skills are loaded as pi loads them (Agent Skills): a prompt section lists each one's name, description and
+location, the model reads its `SKILL.md` with `read` through the execution environment when a task matches, and
+`/skill:<name>` loads it into the message. Prompt templates are FastAgent's, not the harness's: `invoke` expands a
+message that starts with `/<name>` before pi-durable sees it, with pi's template format (a `description` in the
+frontmatter, `$1`, `$@` and their default and slice forms for arguments), and `info()` lists them with the skills as
+the agent's commands ([Agent API](agent-api.md) §3). The result is the Agent
 API's `Agent`, plus `harness`. `dev`, `start` and an embedder's process call the same function, so an agent behaves the
 same wherever it runs.
 
@@ -282,9 +290,7 @@ for the steps above.
 
 ## 6. Order
 
-1. **A spike on pi-durable**, on 1.3.0, locally and on AgentCore (§6.1). Still open: the coding tools' `read` reading a
-   skill's `SKILL.md` through an execution environment, which §3's skills depend on, to be checked with the
-   implementation.
+1. **A spike on pi-durable**, on 1.3.0, locally and on AgentCore (§6.1).
 2. The Agent on pi-durable, with the conformance suite in process and over HTTP; channels, schedules, wake-ups, the CLI
    and AgentCore moved onto it; the previous protocol, `LoopPort` and the pi-coding-agent harness deleted.
 3. The artifact: `fastagent build`, and `deploy` from it.
@@ -318,7 +324,8 @@ storage at `/mnt/data`, in `ap-southeast-1`:
 | A run cut off by `StopRuntimeSession` | The microVM stops at once (the tool's writes stop); nothing runs while the session is not invoked; the next invocation gets a new microVM in about 2 s with the storage and the incarnation as they were, and pi-durable carries on: the cut-off tool is not run again but answered as interrupted, the message is answered, and the one queued behind it too | Opens the storage and calls `harness.resume()` when each process starts, before it handles the invocation (§4.3) |
 | Idle timeout (120 s) during a 200 s tool | `/ping` answering `HealthyBusy` kept the session: the tool ran to its end on the same microVM | Answers `HealthyBusy` while a run is live |
 
-Not run: the coding tools' `read` reading a skill's `SKILL.md` through an execution environment.
+The coding tools' `read` reading a skill's `SKILL.md` through a `NodeExecutionEnv` rooted at the agent's directory was
+checked with the definition's assembly (test/durable-definition.test.ts): the model's answer carries the file's text.
 
 ## 7. Compared with other agent APIs
 
@@ -357,5 +364,4 @@ those protocols are outside the product's goals.
 Settled when they are implemented:
 
 - Hot reload in `dev`: the definition is read on every invoke today; pi-durable installs extensions in a registry.
-- Whether pi-ai's `models.json` stays a file or joins `defineAgent`.
 - Bun: pi-durable's portable SQLite core runs there given an adapter over `bun:sqlite`, which does not exist yet.

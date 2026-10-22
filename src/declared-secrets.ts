@@ -23,6 +23,8 @@ export interface DeclaredSecret {
   source: string;
   /** What it is for, when the declaration says (`context.json`'s variables do): printed beside it in runbooks. */
   description?: string;
+  /** The code runs without it: no start is refused for its absence, and a runbook marks it optional. */
+  optional?: boolean;
 }
 
 /**
@@ -99,12 +101,13 @@ export function secretValues<const S extends readonly string[]>(
   return values;
 }
 
-/** Declared names with no value in `env` — empty string counts as missing (an unset `.env` line). */
+/** Required names with no value in `env` — empty string counts as missing (an unset `.env` line). A name some
+ *  declaration requires is required, whatever another says. */
 export function missingSecrets(
   declared: readonly DeclaredSecret[],
   env: NodeJS.ProcessEnv = process.env,
 ): DeclaredSecret[] {
-  return dedupeSecrets(declared).filter((s) => !env[s.name]);
+  return dedupeSecrets(declared.filter((s) => s.optional !== true)).filter((s) => !env[s.name]);
 }
 
 /** "X_API_KEY, X_API_SECRET (tools/x-post.ts); SLACK_TOKEN (channels/slack.ts)" — grouped by the

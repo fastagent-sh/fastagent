@@ -244,6 +244,12 @@ src/
 │   └── state.ts            # schedule state under <stateRoot>/schedule/, incl. THE claim: the decision to fire,
 │                           # the outcome written back into it, and therefore the whole (bounded) fire history
 ├── harnesses/pi-durable/   # the Agent API on pi-durable, in process; nothing serves it until the move lands (#788)
+│   ├── open.ts             # openAgent: a definition (config + generated registry) assembled into an Agent; the
+│   │                       # secrets gate and manifest; pi-ai's built-in models with the definition's providers
+│   ├── define.ts           # what an author writes: defineAgent, needs (secrets beside the code that reads them),
+│   │                       # defineSchedule
+│   ├── registry.ts         # the generated `.fastagent/registry.ts`: one default import per module of src/
+│   ├── text.ts             # SYSTEM.md, AGENTS.md, skills (loaded as pi loads them) and prompt templates, read per request
 │   ├── agent.ts            # openDurableAgent: a Harness on the instance's storage, and the eight operations over it
 │   ├── reads.ts            # what the operations and resume read: a session's conversation, its published entries,
 │   │                       # a message's status and end, the session's state

@@ -33,7 +33,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 
 | 操作 | HTTP | 做什么 |
 |---|---|---|
-| `info` | `GET /agent` | bot 的名字、简介，消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`），以及可用的命令（`commands`：prompt 模板和 skill） |
+| `info` | `GET /agent` | bot 的名字、简介，消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`），以及可用的命令（`commands`：prompt 模板，和每个 skill 的 `skill:<name>`） |
 | `invoke` | `POST /invoke` | 向会话发一条消息（不带 `sessionId` 就新建会话）。消息一被持久记录就返回 `202` 和回执，不等它被回答 |
 | `getMessage` | `GET /sessions/{s}/messages/{m}`，或 `?idempotencyKey=` 按 key 查 | 按 id 或发送时的 key 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
 | `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”）；可以用 `model`、`thinkingLevel` 选择新会话的设置 |
@@ -83,7 +83,8 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 entry 也是同样的结构。内容类型是开放的取值（§6.1），以后加新类型不用改结构。
 
 **命令**：消息文字以 `/<name>` 开头、并且 `name` 在 `info().commands` 里时，就是一条命令。Agent 在模型看到之前展开它：prompt
-模板展开成模板正文，名字后面的词作为参数；skill 展开成“使用这个 skill”的指令。`user_message` entry 里记录的是调用方原本发的内容，
+模板展开成模板正文，名字后面的词作为参数；`/skill:<name>` 展开成这个 skill 的完整说明，后面的词作为请求附在后面。不用命令时，模型只
+看到每个 skill 的名字和描述，任务对得上时自己去读它的说明（Agent Skills 规范的按需加载）。`user_message` entry 里记录的是调用方原本发的内容，
 所以历史里显示的是 `/review 123`，不是展开后的文本。`/` 后面跟着不认识的名字，就按原文交给模型。聊天客户端可以把 `commands`
 显示成菜单，channel 可以把它注册成平台的命令列表。
 

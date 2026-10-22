@@ -235,7 +235,7 @@ export function durableSubject(): AgentApiSubject {
       registry,
       name: "subject",
       model,
-      commands: [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
+      commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
       settings: { retry: { maxRetries: 1, baseDelayMs: 1 } },
       ...(inFlight === undefined ? {} : { inFlightPerProcess: inFlight }),
     });
