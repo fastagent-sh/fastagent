@@ -83,6 +83,11 @@ const InvokeBody = Schema.Struct({
   whenBusy: Schema.optionalKey(Schema.Literals(["queue", "steer", "reject"])),
 });
 
+const Settings = {
+  model: Schema.optionalKey(Schema.Struct({ provider: Schema.String, modelId: Schema.String })),
+  thinkingLevel: Schema.optionalKey(Schema.Literals(["off", "minimal", "low", "medium", "high", "xhigh", "max"])),
+};
+
 const CreateBody = Schema.Struct({
   from: Schema.optionalKey(
     Schema.Struct({
@@ -91,9 +96,10 @@ const CreateBody = Schema.Struct({
       context: Schema.optionalKey(Schema.Literals(["full", "recent"])),
     }),
   ),
-  model: Schema.optionalKey(Schema.Struct({ provider: Schema.String, modelId: Schema.String })),
-  thinkingLevel: Schema.optionalKey(Schema.Literals(["off", "minimal", "low", "medium", "high", "xhigh", "max"])),
+  ...Settings,
 });
+
+const ConfigureBody = Schema.Struct(Settings);
 
 /** The body as the schema says, or the answer that it is not. An empty body is `{}`; an unknown field is refused. */
 async function decoded<S extends Schema.Top>(
@@ -281,6 +287,11 @@ export function createAgentApiHandler(agent: Agent, options: { corsOrigins?: rea
           ...limit,
         })
         .then((result) => answer(result));
+    },
+    "PATCH /sessions/{s}": async (req, _url, { s }) => {
+      const body = await decoded(req, ConfigureBody);
+      if ("error" in body) return body.error;
+      return answer(await agent.configure(s as string, body.value));
     },
     "GET /sessions/{s}/events": (req, url, { s }) => {
       const replay = replayOf(req, url);

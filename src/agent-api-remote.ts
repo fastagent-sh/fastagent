@@ -101,7 +101,7 @@ export async function connectAgentApi(options: RemoteAgentApiOptions): Promise<A
     const timeout = AbortSignal.timeout(PAYLOAD_TIMEOUT_MS);
     return fetchFn(`${base}${path}`, {
       ...init,
-      ...(init.method === "POST" ? { headers: { "content-type": "application/json" } } : {}),
+      ...(init.body === undefined ? {} : { headers: { "content-type": "application/json" } }),
       signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
     });
   };
@@ -304,6 +304,8 @@ export async function connectAgentApi(options: RemoteAgentApiOptions): Promise<A
     getMessage,
     createSession: (createOptions = {}) =>
       result<Extract<CreateSessionResult, { ok: true }>>("/sessions", post(createOptions)),
+    configure: (sessionId, settings) =>
+      result<object>(sessionPath(sessionId), { method: "PATCH", body: JSON.stringify(settings) }),
     read: (sessionId, readOptions = {}) => {
       const query = new URLSearchParams();
       for (const [key, value] of Object.entries(readOptions)) if (value !== undefined) query.set(key, String(value));

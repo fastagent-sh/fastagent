@@ -250,7 +250,7 @@ src/
 │   │                       # defineSchedule
 │   ├── registry.ts         # the generated `.fastagent/registry.ts`: one default import per module of src/
 │   ├── text.ts             # SYSTEM.md, AGENTS.md, skills (loaded as pi loads them) and prompt templates, read per request
-│   ├── agent.ts            # openDurableAgent: a Harness on the instance's storage, and the eight operations over it
+│   ├── agent.ts            # openDurableAgent: a Harness on the instance's storage, and the nine operations over it
 │   ├── reads.ts            # what the operations and resume read: a session's conversation, its published entries,
 │   │                       # a message's status and end, the session's state
 │   ├── resume.ts           # resume: the replay, the `state` snapshot, then what each commit adds

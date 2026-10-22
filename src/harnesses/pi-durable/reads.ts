@@ -5,6 +5,7 @@
  */
 import type { Context } from "@earendil-works/chord/context";
 import {
+  AgentDoc,
   type Conversation,
   type ConversationId,
   type EntryQuery,
@@ -172,6 +173,7 @@ export function durableReads(harness: Harness, ids: Ids, context: Context) {
             await tx.doc(LiveDoc, conversation.id),
             await tx.doc(InboxDoc, conversation.id),
             await tx.doc(UsageDoc, conversation.id),
+            await tx.doc(AgentDoc, conversation.id),
             ids,
           ),
         context,
