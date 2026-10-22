@@ -38,8 +38,9 @@ The API has three concepts:
 A Caller remembers its sessions: the Agent lists none. How the agent answers, in steps, turns or runs, and which
 messages it handles together, is not part of the API: each message's facts are its own.
 
-This is the consumer surface, and only that. Operating the agent (its model and settings, compaction, inspecting
-every session) is the harness's own API, used by whoever builds and runs the agent (§11).
+This is the consumer surface, and only that. A Caller chooses a session's model and thinking level; operating the
+agent (its definition, compaction, inspecting every session) is the harness's own API, used by whoever builds and runs
+the agent (§11).
 
 Fields are camelCase; enum values and discriminators are snake_case. A field that refers to another object names its
 kind: `sessionId`, `messageId`, `entryId`, `parentEntryId`. The API has two bindings with the same operations and
@@ -53,6 +54,7 @@ interface Agent {
   invoke(request: InvokeRequest): Promise<InvokeResult>;
   getMessage(sessionId: string, key: { messageId: string } | { idempotencyKey: string }): Promise<MessageStatus | undefined>;
   createSession(options?: CreateSessionOptions): Promise<{ ok: true; sessionId: string } | { ok: false; error: AgentError }>;
+  configure(sessionId: string, settings: SessionSettings): Promise<{ ok: true } | { ok: false; error: AgentError }>;
   read(sessionId: string, options?: { after?: string; before?: string; limit?: number }): Promise<ReadResult>;
   resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
   abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
@@ -83,10 +85,14 @@ type WaitResult =
   | { ok: true; message: DoneMessage }
   | { ok: false; unfinished: { reason: string } };
 
-interface CreateSessionOptions {
-  from?: ForkSource;
+/** What a session answers with. */
+interface SessionSettings {
   model?: { provider: string; modelId: string };
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+}
+
+interface CreateSessionOptions extends SessionSettings {
+  from?: ForkSource;
 }
 
 interface ForkSource { sessionId: string; entryId?: string; context?: "full" | "recent" }
@@ -271,7 +277,8 @@ messages then, and hand out again the ids that went with them: AgentCore's sessi
 ## 5. Sessions
 
 ```ts
-interface SessionState {
+/** Its settings are the session's own: a field it does not name yet is absent (§5's `createSession`). */
+interface SessionState extends SessionSettings {
   status: "idle" | "running";
   taken: string[];      // the messages the agent is answering
   queued: string[];     // in the order they will be taken
@@ -302,7 +309,12 @@ a storage that is gone answers `not_found` (or `undefined`), never another sessi
   takes the deployment's default when a message is admitted if the session still names none. A model is identified by
   `{ provider, modelId }`; creation stores the choice without checking availability, as pi-durable does. An invoke
   whose session names no available model is refused `missing_model` (§7.1). `invoke` itself selects no model or thinking
-  level: it uses the session's settings. Changing an existing session's settings is the harness's API (§11).
+  level: it uses the session's settings.
+- **`configure`** changes a session's model, thinking level or both, as pi-durable's `configure()` does: stored in
+  one commit, without checking availability, as at creation, and used from the session's next model request, so a
+  message being answered continues with it. An unknown session answers `not_found`, and settings that name neither
+  field `invalid_request`; neither records anything. The session's `state` carries its settings, so a Caller reads
+  back what it chose, and what the deployment's default filled in once a message was admitted.
 - **`read`** returns the state and one page of entries, after or before an entry cursor, oldest first within the page.
   Without a cursor it returns the newest page, so a Caller opening a long session shows the latest entries and pages
   back from there. `prev` and `next` are the cursors of the adjacent pages, absent at either end. `limit: 0` returns
@@ -455,15 +467,17 @@ The Agent authenticates no one and lists no sessions. Whoever reaches it may tal
 often, is decided in front of it (a gateway, a private network, a cloud's IAM, an embedder's own middleware).
 
 - **A session id is not a credential.** Ids are the Agent's names, and may be sequential. Whoever reaches the Agent
-  can reach every session in it: read and resume it, invoke into it, abort it and fork from it. Keeping one user out
+  can reach every session in it: read and resume it, invoke into it, abort it, configure it and fork from it.
+  Configuring is not confined to the Caller's own messages: a model the agent lacks fails the messages the session
+  has taken and queued, whoever sent them, and a costlier one is paid for them too (§5). Keeping one user out
   of another's sessions, when several share one deployment, is the job of the layer in front: a facade that maps
   each user to their sessions and admits only those, including the source of a fork and the session an invoke without
   `sessionId` creates ([security-boundary.md](security-boundary.md) §4).
-- **A browser is a Caller like any other.** Over HTTP, every `POST` MUST carry `content-type: application/json`,
-  whether or not it has a body, and anything else is refused with `invalid_request` before it is read. A `POST` that
-  is a form, `text/plain`, or has no body at all is sent cross-origin without a preflight, so withholding a response
-  would not stop what it already did: a run started, a session aborted, a session created. Which origins may read the
-  answers is the deployment's choice.
+- **A browser is a Caller like any other.** Over HTTP, every `POST` and `PATCH` MUST carry
+  `content-type: application/json`, whether or not it has a body, and anything else is refused with `invalid_request`
+  before it is read. A `POST` that is a form, `text/plain`, or has no body at all is sent cross-origin without a
+  preflight, so withholding a response would not stop what it already did: a run started, a session aborted, a
+  session created. Which origins may read the answers is the deployment's choice.
 
 ## 9. Conformance
 
@@ -509,7 +523,7 @@ One executable suite, run against the Agent in process and through the HTTP bind
 | Restart | A message accepted just before a restart is answered after it, and `getMessage` finds it; queued messages survive and are taken; a message an `abort` was stopping when the process stopped ends `canceled` after the restart, unanswered; no message is redone (a tool's effect count does not grow) |
 | Resuming | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; it sends one `state` snapshot after the replay and before anything live, and a `done` for each message that ends, before the `user_message` of the message taken after it, also when one commit ends one and places the other; a `resume` opened before an invoke delivers that message's `user_message` and then its answer, and the events before its `user_message` are another message's; one attached mid-answer gets `state.reply`, and it with the deltas that follow is a prefix of the `assistant_message` entry that ends that answer; a reconnect after the last entry it had delivers each entry exactly once; when the storage fails it ends with `serving_error` instead of hanging; an unknown session or cursor is a single `rejected` |
 | Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` carries `usage`; `state.usage` counts the session's own spend, which a fork starts from nothing; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source; the state moves idle → running → idle |
-| Sessions | A new session stores its chosen model and thinking level in the creating commit and keeps them after a restart; a fork shares the history up to its entry and none of the messages, inherits the source's settings at that entry (its current settings if empty), applies supplied model and thinking level fields independently, and leaves the source unchanged; an unknown fork source is `not_found` |
+| Sessions | A new session stores its chosen model and thinking level in the creating commit and keeps them after a restart; `configure` changes either, the state and a `resume` snapshot read it back, a model the agent lacks refuses the next message `missing_model` and configuring an available one lets it be answered, and an unknown session or empty settings are refused; a fork shares the history up to its entry and none of the messages, inherits the source's settings at that entry (its current settings if empty), applies supplied model and thinking level fields independently, and leaves the source unchanged; an unknown fork source is `not_found` |
 | HTTP | A `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `POST /invoke` answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between; the HTTP client's `wait()` gives what the in-process one does, also for a message that ended before it was called; `stream()` over the in-process Agent and over the HTTP client gives the same receipt, refusals and events for a new message, a queued, taken or done duplicate (a taken one whose message ends meanwhile included), and an `abort` |
 
 ## 10. HTTP binding
@@ -520,6 +534,7 @@ One executable suite, run against the Agent in process and through the HTTP bind
 | `invoke` | `POST /invoke` with the `InvokeRequest`: `202` and the `Receipt`, once the message is recorded. A rejection is the error's status with `{ "error": AgentError }`. When submission or reading the receipt fails without proving refusal: `503` and `{ "unknown": { reason, sessionId?, messageId? } }` |
 | `getMessage` | `GET /sessions/{s}/messages/{m}`, or `GET /sessions/{s}/messages?idempotencyKey=` by key: `200` and the `MessageStatus`, or `200` and `null` for `undefined` |
 | `createSession` | `POST /sessions` with `CreateSessionOptions` (`from?`, `model?`, `thinkingLevel?`): `201` and `{ sessionId }` |
+| `configure` | `PATCH /sessions/{s}` with `SessionSettings` (`model?`, `thinkingLevel?`): `200` and `{}` |
 | `read` | `GET /sessions/{s}?after=&before=&limit=` |
 | `resume` | `GET /sessions/{s}/events`, with `?replay=start` or `?after=<entryId>` for `replayFrom`: a `text/event-stream`. Each `entry` event's SSE `id` is the entry id, and the snapshot's is the newest entry id when it was taken, or `start` when the session has none, so a reconnect's `Last-Event-ID` resumes after where the stream had got to even before any entry arrived (`start`: from the first entry). A `Last-Event-ID` header takes precedence over `replay` and `after`: a browser reconnects with the URL it opened and the header, and the header is where it got to. A resume that cannot start is the error's status instead |
 | `abort` | `POST /sessions/{s}/abort`: `200` and `{ stopped }` once the stopped messages have ended. The request's own end is the Caller's `signal`. An `unknown` the Agent answers is `503` and `{ "unknown": { reason } }` |
@@ -577,8 +592,8 @@ before they attached with `getMessage`:
 
 ## 11. Out of scope
 
-- **Operating the agent**: changing an existing session's model and thinking level, compaction, inspecting or listing sessions, and anything
-  else its harness can do. These are the harness's own API, in the process that runs the agent.
+- **Operating the agent**: changing a session's tools, extensions or instructions, compaction, inspecting or listing
+  sessions, and anything else its harness can do. These are the harness's own API, in the process that runs the agent.
 - **Listing and deleting sessions**: a Caller keeps the sessions it uses, and nothing is deleted.
 - **Identity, authentication, rate limits** (§8).
 - **Asking the user**: an agent that waits for a person's approval or answer mid-message. A later version adds it
@@ -595,7 +610,8 @@ From [SPEC v1](../SPEC.md), which the code implements until this API replaces it
 |---|---|
 | A harness-neutral protocol, implemented through a harness port and `LoopPort` | The consumer API of one harness, pi-durable |
 | A Caller names a session, or the Agent does | The Agent names every session; ids are opaque and never reused |
-| `sessions.list`, `rewind`, `compact`, `update`, `delete`, the `/control` plane, `models` | Gone; operating the agent is pi-durable's own API |
+| `update` on the `/control` plane | `configure`, on the consumer API: a session's model and thinking level are a Caller's choice, as at creation |
+| `sessions.list`, `rewind`, `compact`, `delete`, the rest of the `/control` plane, `models` | Gone; operating the agent is pi-durable's own API |
 | `commands()` | `info().commands`, which a Caller reads once |
 | `messages.get`, `messages.follow`, `messages.cancel` | `getMessage` by id or key; `resume`; `abort` |
 | `follow` | `resume`: replay by `replayFrom`, a snapshot that MUST be sent, live; an answer can be joined mid-way |

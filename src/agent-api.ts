@@ -13,6 +13,7 @@ export interface Agent {
     key: { messageId: string } | { idempotencyKey: string },
   ): Promise<MessageStatus | undefined>;
   createSession(options?: CreateSessionOptions): Promise<CreateSessionResult>;
+  configure(sessionId: string, settings: SessionSettings): Promise<ConfigureResult>;
   read(sessionId: string, options?: ReadOptions): Promise<ReadResult>;
   resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
   abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
@@ -51,13 +52,19 @@ export type InvokeResult =
 
 export type WaitResult = { ok: true; message: DoneMessage } | { ok: false; unfinished: { reason: string } };
 
-export interface CreateSessionOptions {
-  from?: ForkSource;
+/** What a session answers with. */
+export interface SessionSettings {
   model?: { provider: string; modelId: string };
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
+export interface CreateSessionOptions extends SessionSettings {
+  from?: ForkSource;
+}
+
 export type CreateSessionResult = { ok: true; sessionId: string } | { ok: false; error: AgentError };
+
+export type ConfigureResult = { ok: true } | { ok: false; error: AgentError };
 
 /** @public */
 export interface ForkSource {
@@ -124,7 +131,8 @@ export type Usage = {
   cost?: number;
 };
 
-export interface SessionState {
+/** The session as it is now, its settings included: a field it does not name yet is absent. */
+export interface SessionState extends SessionSettings {
   status: "idle" | "running";
   taken: string[];
   queued: string[];

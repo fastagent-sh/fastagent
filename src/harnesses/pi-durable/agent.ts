@@ -1,5 +1,5 @@
 /**
- * The Agent API (docs/design/agent-api.md) over pi-durable: a Harness opened on the instance's storage, and the eight
+ * The Agent API (docs/design/agent-api.md) over pi-durable: a Harness opened on the instance's storage, and the nine
  * operations read from and submitted to it. Admission (a key's lookup, the limits and the submission) is one step per
  * process, since one process owns a storage.
  */
@@ -31,6 +31,7 @@ import {
   type AgentError,
   type AgentInfo,
   AgentRejection,
+  type ConfigureResult,
   type ContentPart,
   type CreateSessionOptions,
   type CreateSessionResult,
@@ -40,6 +41,7 @@ import {
   LIMITS,
   type ReadOptions,
   type ReadResult,
+  type SessionSettings,
   type WaitResult,
   agentError,
   failure,
@@ -352,6 +354,29 @@ function durableAgent(
       failed,
     );
 
+  /** pi-durable's `configure()`, its two fields a Caller sets: stored as given, used from the next model request. */
+  const configure = (sessionId: string, settings: SessionSettings): Promise<ConfigureResult> => {
+    const { model, thinkingLevel } = settings;
+    if (model === undefined && thinkingLevel === undefined) {
+      return Promise.resolve(
+        failure("invalid_request", "Nothing to configure: give a model, a thinking level or both"),
+      );
+    }
+    return resolve<ConfigureResult>(
+      Effect.gen(function* () {
+        const conversation = yield* reads.conversation(sessionId);
+        if (conversation === undefined) return failure("not_found", `No session ${sessionId}`);
+        const change = {
+          ...(model === undefined ? {} : { model: { provider: model.provider, modelId: model.modelId } }),
+          ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        };
+        yield* port(() => conversation.configure(change, context));
+        return { ok: true };
+      }),
+      failed,
+    );
+  };
+
   const read = (sessionId: string, readOptions: ReadOptions = {}): Promise<ReadResult> => {
     const refused = invalidRead(readOptions);
     if (refused !== undefined) return Promise.resolve({ ok: false, error: refused });
@@ -439,6 +464,7 @@ function durableAgent(
     invoke,
     getMessage,
     createSession,
+    configure,
     read,
     resume: (sessionId, resumeOptions) =>
       Stream.toAsyncIterable(

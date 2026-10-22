@@ -811,7 +811,7 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
 
         expect(await agent.read(sessionId, { limit: 0 })).toEqual({
           ok: true,
-          state: { status: "idle", taken: [], queued: [], usage: expect.any(Object) },
+          state: { status: "idle", taken: [], queued: [], usage: expect.any(Object), model: expect.any(Object) },
           entries: [],
         });
         expect(await agent.read(sessionId, { limit: 501 })).toMatchObject({
@@ -1051,6 +1051,50 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const whole = await agent.createSession({ from: { sessionId } });
         if (!whole.ok) throw new Error(JSON.stringify(whole));
         expect(await history(agent, whole.sessionId)).toEqual(source);
+      });
+
+      it("configures a session's model and thinking level, read back in its state and used from its next message", async () => {
+        const state = async (sessionId: string) => {
+          const read = await agent.read(sessionId, { limit: 0 });
+          if (!read.ok) throw new Error(JSON.stringify(read));
+          return read.state;
+        };
+        const chosen = await agent.createSession({ thinkingLevel: "low" });
+        if (!chosen.ok) throw new Error(JSON.stringify(chosen));
+        expect(await state(chosen.sessionId)).toMatchObject({ thinkingLevel: "low" });
+        expect(await state(chosen.sessionId)).not.toHaveProperty("model");
+
+        const sessionId = await newSession(agent);
+        await ended(await accepted(agent, { sessionId, content: text("one") }));
+        const { model } = await state(sessionId);
+        if (model === undefined) throw new Error("the session's first message took no model");
+        expect(await agent.configure(sessionId, { thinkingLevel: "high" })).toEqual({ ok: true });
+        expect(await state(sessionId)).toMatchObject({ model, thinkingLevel: "high" });
+        const watching = attach(agent, sessionId);
+        expect((await watching.until(isState)).at(-1)).toMatchObject({ state: { model, thinkingLevel: "high" } });
+        await watching.close();
+
+        // Stored as given, as at creation: a model the agent lacks refuses the next message, not the change.
+        const elsewhere = { provider: "nowhere", modelId: "none" };
+        expect(await agent.configure(sessionId, { model: elsewhere })).toEqual({ ok: true });
+        expect(await state(sessionId)).toMatchObject({ model: elsewhere, thinkingLevel: "high" });
+        expect(await agent.invoke({ sessionId, content: text("two") })).toMatchObject({
+          ok: false,
+          error: { code: "missing_model", details: { model: "nowhere/none" } },
+        });
+        expect(await agent.configure(sessionId, { model })).toEqual({ ok: true });
+        expect((await ended(await accepted(agent, { sessionId, content: text("three") }))).answer?.text).toBe(
+          "answer: three",
+        );
+      });
+
+      it("refuses to configure an unknown session with not_found, and nothing at all with invalid_request", async () => {
+        expect(await agent.configure("nope", { thinkingLevel: "high" })).toMatchObject({
+          ok: false,
+          error: { code: "not_found" },
+        });
+        const sessionId = await newSession(agent);
+        expect(await agent.configure(sessionId, {})).toMatchObject({ ok: false, error: { code: "invalid_request" } });
       });
 
       it("refuses a fork of an unknown session or entry with not_found", async () => {

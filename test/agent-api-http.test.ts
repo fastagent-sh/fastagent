@@ -136,6 +136,16 @@ describe("the Agent API's HTTP binding", () => {
     );
     expect(extra.status).toBe(400);
     expect(await extra.json()).toMatchObject({ error: { code: "invalid_request" } });
+    const session = `${url}/sessions/${encodeURIComponent(sessionId)}`;
+    const configured = await fetch(session, { ...json({ thinkingLevel: "high" }), method: "PATCH" });
+    expect([configured.status, await configured.json()]).toEqual([200, {}]);
+    for (const body of [{ thinkingLevel: "extreme" }, { model: { provider: "p", modelId: "m" }, tools: [] }]) {
+      const refused = await fetch(session, { ...json(body), method: "PATCH" });
+      expect([refused.status, ((await refused.json()) as { error: { code: string } }).error.code]).toEqual([
+        400,
+        "invalid_request",
+      ]);
+    }
     const missing = await fetch(`${url}/sessions/${encodeURIComponent(sessionId)}/messages/nope`);
     expect([missing.status, await missing.json()]).toEqual([200, null]);
     expect((await fetch(`${url}/sessions/${encodeURIComponent(sessionId)}/attachments/nope`)).status).toBe(404);

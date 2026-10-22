@@ -90,7 +90,7 @@ export function resumeStream(
           }
           return {
             type: "state",
-            state: sessionState(snapshot, { items: snapshot.inbox }, snapshot.usage, ids),
+            state: sessionState(snapshot, { items: snapshot.inbox }, snapshot.usage, snapshot.agent, ids),
           } as SessionEvent;
         }),
       );

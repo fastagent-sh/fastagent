@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
-import type { EntryRecord, SubmissionRecord } from "@earendil-works/pi-durable";
+import type { AgentState, EntryRecord, SubmissionRecord } from "@earendil-works/pi-durable";
 import {
   type DoneMessage,
   type MessageStatus,
@@ -145,6 +145,7 @@ export function sessionState(
   live: LiveView | undefined,
   inbox: InboxView | undefined,
   usage: UsageView | undefined,
+  agent: Pick<AgentState, "model" | "thinkingLevel"> | undefined,
   ids: Ids,
 ): SessionState {
   const partial = live?.generation?.message as Pick<AssistantMessage, "content"> | undefined;
@@ -157,6 +158,8 @@ export function sessionState(
       ? {}
       : { reply: { text: replyText(partial), ...(thinking === undefined ? {} : { thinking }) } }),
     usage: { models: usagesOf(usage?.models), tools: usagesOf(usage?.tools) },
+    ...(agent?.model === undefined ? {} : { model: { provider: agent.model.provider, modelId: agent.model.modelId } }),
+    ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }),
   };
 }
 

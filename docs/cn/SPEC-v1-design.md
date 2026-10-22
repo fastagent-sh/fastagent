@@ -12,9 +12,9 @@ status: current
 
 ## 一句话概括
 
-一个部署好的 agent 就像一个 bot：能访问到它的人都可以和它对话。Agent API 只定义这个 bot 对**消费者**提供的接口，一共 8 个操作，
-进程内（TypeScript）和 HTTP 两种绑定，语义完全相同。其余一切（改模型、压缩、查看所有会话）都是 harness（pi-durable）自己的
-API，不在 Agent API 里。
+一个部署好的 agent 就像一个 bot：能访问到它的人都可以和它对话。Agent API 只定义这个 bot 对**消费者**提供的接口，一共 9 个操作，
+进程内（TypeScript）和 HTTP 两种绑定，语义完全相同。会话用哪个模型、哪个 thinking level 由调用方选择；其余一切（改 agent 的定义、
+压缩、查看所有会话）都是 harness（pi-durable）自己的 API，不在 Agent API 里。
 
 ## 1. 为什么是这个形状
 
@@ -26,10 +26,10 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 
 - **只用一个 harness：pi-durable。** 它原生有服务化需要的东西：按 `whenBusy` 准入、按请求 id 去重、每条消息持久地结束一次、
   重启后接着回答，存储和执行环境也都可以替换。
-- **只定义我们自己必须定义的那一层：消费者 API。** 我们自己的 channels、定时任务、wake 都是消费者，它们只用这 8 个操作
+- **只定义我们自己必须定义的那一层：消费者 API。** 我们自己的 channels、定时任务、wake 都是消费者，它们只用这 9 个操作
   就够了，这说明这一层是完整的。它同时把 pi-durable 的实验性 API 和内部 entry 种类挡在客户端之外。
 
-## 2. 八个操作
+## 2. 九个操作
 
 | 操作 | HTTP | 做什么 |
 |---|---|---|
@@ -37,6 +37,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | `invoke` | `POST /invoke` | 向会话发一条消息（不带 `sessionId` 就新建会话）。消息一被持久记录就返回 `202` 和回执，不等它被回答 |
 | `getMessage` | `GET /sessions/{s}/messages/{m}`，或 `?idempotencyKey=` 按 key 查 | 按 id 或发送时的 key 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
 | `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”）；可以用 `model`、`thinkingLevel` 选择新会话的设置 |
+| `configure` | `PATCH /sessions/{s}` | 修改已有会话的 `model`、`thinkingLevel` 或两者，和 pi-durable 的 `configure()` 一样在一次提交里保存，从会话的下一次模型请求开始生效，正在回答的消息也会接着用新设置 |
 | `read` | `GET /sessions/{s}` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
 | `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
 | `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样。Agent 回答 `unknown` 时，HTTP 返回 `503` 和 `{ unknown }` |
@@ -46,7 +47,9 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 `high`、`xhigh`、`max`。它们和会话在同一次提交里保存，重启后保留。fork 继承分叉 entry 当时的设置（空会话继承当前设置），
 每个显式传入的字段分别覆盖继承来的值，不改变源会话。仍然没有设置的字段在收到消息时取部署默认值。创建时和 pi-durable 一样只保存
 选择，不检查模型是否可用；如果发消息时会话没有可用模型，`invoke` 返回 `missing_model`。`invoke` 不接受模型或 thinking level，
-只用会话设置；修改已有会话的设置仍走 harness 的 API。
+只用会话设置；修改已有会话的设置用 `configure`，同样只保存、不检查可用性。会话不存在返回 `not_found`，两个字段都没给返回
+`invalid_request`，都不记录任何东西。会话的 `state` 带着它当前的 `model` 和 `thinkingLevel`（还没设置的字段不出现），调用方可以读回
+自己的选择，以及第一条消息被接收时填进去的部署默认值。
 
 **发消息和看会话是分开的两件事**，和 pi-durable 一样：`submit` 返回一个句柄，过程另外用 `watchEvents` 订阅。对应到这里：
 
@@ -130,7 +133,9 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
   随之发出的 id 也可能被再次发出。AgentCore 的 session storage 在宿主机故障后就是这种情况（见 architecture.md §4.3）。不能丢消息的
   调用方，应该一直保留消息，直到看到它的 `done`。
 - **开 thread**：分叉点仍然按 key 找（`getMessage` 带平台消息 id）；thread 对应的会话按上面的顺序建立和记录。
-- **会话 id 只是名字，不是凭证。** 它可能是顺序编号。能访问到 agent 的人就能访问它的每个会话：读、接上、发消息、停止、从它分叉。
+- **会话 id 只是名字，不是凭证。** 它可能是顺序编号。能访问到 agent 的人就能访问它的每个会话：读、接上、发消息、停止、改设置、从它分叉。
+  改设置影响的不只是自己的消息：换成 agent 没有的模型，会话里已取走和排队的消息不管是谁发的都会失败；换成更贵的模型，这些消息也按
+  更贵的模型付费。
   多个用户共用一个部署时，用户之间的隔离由前面的一层负责：一个记录“用户 → 会话”映射、只放行自己会话的 facade，包括 fork 的
   源会话和不带 `sessionId` 的 invoke 新建的会话（见 [security-boundary.md](../design/security-boundary.md) §4）。认证、限流也由
   上层负责。
@@ -158,7 +163,7 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
 - **会扩展的取值都是开放的**（§6.1）：事件类型、entry 种类、内容类型、`inputs`、结局、会话状态、错误码。规范定义的名字不含
   `.`；实现方自己加的必须带自己的前缀（例如 `fastagent.plan`）。客户端遇到不认识的事件就忽略，不认识的会话状态当作“忙”，
   不认识的结局当作“结束但没有完成”。
-- **浏览器也只是一个调用方。** HTTP 上每个 `POST`，不管有没有 body，都必须是 `content-type: application/json`，否则在读取之前
+- **浏览器也只是一个调用方。** HTTP 上每个 `POST` 和 `PATCH`，不管有没有 body，都必须是 `content-type: application/json`，否则在读取之前
   就拒绝：表单、`text/plain` 或没有 body 的跨域 POST 不经过预检，拒绝返回结果也挡不住已经做了的事（开始一次运行、中止一个会话、
   建一个会话）。
 
@@ -206,7 +211,8 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 |---|---|
 | harness 无关的协议，通过 harness 端口和 `LoopPort` 实现 | 一个 harness（pi-durable）的消费者接口 |
 | 调用方可以给会话命名，也可以由 Agent 命名 | 全部由 Agent 命名；id 不透明、永不复用 |
-| `sessions.list`、`rewind`、`compact`、`update`、`delete`、`/control` 平面、`models` | 去掉；运维用 pi-durable 原生 API |
+| `/control` 平面的 `update` | `configure`，放在消费者 API 上：会话的模型和 thinking level 和创建时一样由调用方选择 |
+| `sessions.list`、`rewind`、`compact`、`delete`、`/control` 平面的其余部分、`models` | 去掉；运维用 pi-durable 原生 API |
 | `commands()` | 并入 `info().commands`，调用方读一次即可 |
 | `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`（按 id 或 key）；`resume`；`abort` |
 | `follow` | `resume`：按 `replayFrom` 重放，必发快照，再接实时；回答中途也能接上 |
