@@ -5,7 +5,7 @@
  * reads its `SKILL.md` when a task matches, and `/skill:<name>` loads it into the message.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { type PromptSection, section } from "@earendil-works/pi-durable";
 import { parse as parseYaml } from "yaml";
 import { log } from "../../log.ts";
@@ -49,12 +49,21 @@ function report(problem: string): void {
   log.warn(`[fastagent] ${problem}; it is skipped`);
 }
 
-const directories = (dir: string): string[] =>
-  existsSync(dir)
-    ? readdirSync(dir)
-        .sort()
-        .filter((name) => !name.startsWith(".") && statSync(join(dir, name)).isDirectory())
-    : [];
+/** The directories in `dir`. An entry that cannot be read (a symlink to nothing) is reported and skipped. */
+function directories(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .sort()
+    .filter((name) => {
+      if (name.startsWith(".")) return false;
+      try {
+        return statSync(join(dir, name)).isDirectory();
+      } catch (error) {
+        report(`${join(basename(dir), name)}: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
+    });
+}
 
 /** The agent's skills: `skills/<name>/SKILL.md`. One that breaks the specification is reported and skipped. */
 function readSkills(agentDir: string): Skill[] {

@@ -19,7 +19,7 @@ import {
   defineExtension,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { createCodingTools } from "@earendil-works/pi-durable/tools";
+import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { loadEnvironment } from "../../content/file.ts";
 import { type DeclaredSecret, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { declaredVariables } from "../../environment/declare.ts";
@@ -33,6 +33,7 @@ import { definitionSections, readCommands } from "./text.ts";
 const CONFIG_FILE = "fastagent.config.ts";
 const SECRETS_MANIFEST_FILE = "secrets.json";
 const CONFIG_KEYS = ["name", "description", "model", "thinkingLevel", "extensions", "providers", "http", "deploy"];
+const DEFINITION_EXTENSION = "fastagent.definition";
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /** An agent package as it was read: where it is, its configuration, and the modules its registry lists. */
@@ -211,35 +212,53 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   const values = (value: unknown): Record<string, string | undefined> =>
     isNeeds(value) ? Object.fromEntries(value.secrets.map(({ name }) => [name, env[name] || undefined])) : {};
   const { registry, config } = definition;
-  const tools = registry.tools.map(({ file, value }) =>
-    built<ToolRegistration>(file, value, values(value), toolProblem),
-  );
-  for (const [i, tool] of tools.entries()) {
-    const twin = tools.findIndex((other) => other.name === tool.name);
-    if (twin !== i) {
-      throw new Error(
-        `${registry.tools[twin]?.file} and ${registry.tools[i]?.file} both define the tool "${tool.name}"`,
-      );
-    }
-  }
+  const tools = registry.tools.map(({ file, value }) => ({
+    source: file,
+    ...named(built<ToolRegistration>(file, value, values(value), toolProblem)),
+  }));
+  const extensions = [
+    ...registry.extensions.map(({ file, value }) => ({
+      source: file,
+      ...named(built<Extension>(file, value, values(value), extensionProblem)),
+    })),
+    ...(config.extensions ?? []).map((value, i) => {
+      const source = `${CONFIG_FILE} extensions[${i}]`;
+      return { source, ...named(built<Extension>(source, value, values(value), extensionProblem)) };
+    }),
+  ];
+  const schedules = registry.schedules.map(({ file, name, value }) => ({
+    source: file,
+    name,
+    value: built<Schedule>(file, value, values(value), scheduleProblem),
+  }));
+  refuseTwins("tool", tools);
+  // pi-durable replaces an extension installed under a name already taken, its tools and sections with it.
+  refuseTwins("extension", [
+    { source: "pi-durable's coding tools", name: CodingTools.name },
+    { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
+    ...extensions,
+  ]);
+  refuseTwins("schedule", schedules);
   return {
-    tools,
-    extensions: [
-      ...registry.extensions.map(({ file, value }) => built<Extension>(file, value, values(value), extensionProblem)),
-      ...(config.extensions ?? []).map((value, i) =>
-        built<Extension>(`${CONFIG_FILE} extensions[${i}]`, value, values(value), extensionProblem),
-      ),
-    ],
+    tools: tools.map(({ value }) => value),
+    extensions: extensions.map(({ value }) => value),
     providers: (config.providers ?? []).map((value, i) =>
       built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
     ),
-    schedules: new Map(
-      registry.schedules.map(({ file, name, value }) => [
-        name,
-        built<Schedule>(file, value, values(value), scheduleProblem),
-      ]),
-    ),
+    schedules: new Map(schedules.map(({ name, value }) => [name, value])),
   };
+}
+
+const named = <T extends { name: string }>(value: T) => ({ name: value.name, value });
+
+/** Refuse two of a kind under one name: whichever is installed or kept last would silently stand in for the other. */
+function refuseTwins(kind: string, entries: readonly { source: string; name: string }[]): void {
+  const first = new Map<string, string>();
+  for (const { source, name } of entries) {
+    const earlier = first.get(name);
+    if (earlier !== undefined) throw new Error(`${earlier} and ${source} both define the ${kind} "${name}"`);
+    first.set(name, source);
+  }
 }
 
 export interface OpenAgentOptions {
@@ -265,10 +284,10 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     throw new Error(`unknown model "${spec}": no provider "${model.provider}" offers "${model.modelId}"`);
   }
   const registry = createRegistry();
-  registry.install(createCodingTools());
+  registry.install(CodingTools);
   // After the coding tools, so a tool of the definition's own with one of their names replaces it.
   registry.install(
-    defineExtension({ name: "fastagent.definition", sections: definitionSections(dir), tools: code.tools }),
+    defineExtension({ name: DEFINITION_EXTENSION, sections: definitionSections(dir), tools: code.tools }),
   );
   for (const extension of code.extensions) registry.install(extension);
   const thinkingLevel = options.thinkingLevel ?? config.thinkingLevel;

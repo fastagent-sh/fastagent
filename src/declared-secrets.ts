@@ -23,7 +23,7 @@ export interface DeclaredSecret {
   source: string;
   /** What it is for, when the declaration says (`context.json`'s variables do): printed beside it in runbooks. */
   description?: string;
-  /** The code runs without it: no start is refused for its absence, and a runbook marks it optional. */
+  /** The code runs without it: no start is refused for its absence. */
   optional?: boolean;
 }
 

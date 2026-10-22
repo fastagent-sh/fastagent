@@ -221,6 +221,8 @@ function durableAgent(
   const admit = (request: InvokeRequest): Effect.Effect<InvokeResult, PortFailure> =>
     Effect.gen(function* () {
       const requestId = requestIdFor(request.idempotencyKey);
+      // Before anything is written: reading or expanding a command reads the definition's files, and may throw.
+      const { content, sent } = expandCommand(request.content, commands());
       let conversation: Conversation | undefined;
       if (request.sessionId !== undefined) {
         conversation = yield* reads.conversation(request.sessionId);
@@ -249,7 +251,6 @@ function durableAgent(
         target.commit((tx) => takeDefaults(tx, target.id, defaults, available), context),
       );
       if (!settings.ok) return noModel(settings.model);
-      const { content, sent } = expandCommand(request.content, commands());
       const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
       let messageId: SubmissionId | undefined;
       return yield* Effect.gen(function* () {

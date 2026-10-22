@@ -2,7 +2,7 @@
  * A definition assembled onto pi-durable: the generated registry, the secrets manifest, the text read per request
  * (SYSTEM.md, AGENTS.md, skills loaded as pi loads them, prompt templates), and the code built with its secrets.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   InMemoryCredentialStore,
@@ -131,6 +131,38 @@ describe("an agent definition on pi-durable", () => {
     expect([...built.schedules.keys()]).toEqual(["daily"]);
   });
 
+  it("refuses two extensions, two schedules or two tools under one name, naming both", async () => {
+    const extension = (name: string) =>
+      `import { defineExtension } from "@earendil-works/pi-durable";\nexport default defineExtension({ name: "${name}" });\n`;
+    const schedule = `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "0 9 * * *", prompt: "x" });\n`;
+    const tool = `import { Type } from "@earendil-works/pi-ai";
+import { defineTool } from "@earendil-works/pi-durable";
+export default defineTool({ name: "look", description: "d", parameters: Type.Object({}), execute: async () => ({ output: [] }) });
+`;
+    const cases: [Record<string, string>, string][] = [
+      [
+        { "src/tools/a.ts": tool, "src/tools/b.ts": tool },
+        'src/tools/a.ts and src/tools/b.ts both define the tool "look"',
+      ],
+      [
+        { "src/extensions/a.ts": extension("audit"), "src/extensions/b.ts": extension("audit") },
+        'src/extensions/a.ts and src/extensions/b.ts both define the extension "audit"',
+      ],
+      [
+        { "src/extensions/tools.ts": extension("coding-tools") },
+        `pi-durable's coding tools and src/extensions/tools.ts both define the extension "coding-tools"`,
+      ],
+      [
+        { "src/schedules/daily.ts": schedule, "src/schedules/daily.mts": schedule },
+        'src/schedules/daily.mts and src/schedules/daily.ts both define the schedule "daily"',
+      ],
+    ];
+    for (const [files, message] of cases) {
+      const definition = await prepareDefinition(agentPackage(files));
+      expect(() => buildDefinition(definition, {})).toThrow(message);
+    }
+  });
+
   it("refuses a module that is not what its directory holds, a bad cron and an unknown configuration key", async () => {
     const notATool = await prepareDefinition(agentPackage({ "src/tools/x.ts": "export default { name: 'x' };\n" }));
     expect(() => buildDefinition(notATool, {})).toThrow("src/tools/x.ts: must default-export a tool");
@@ -216,7 +248,9 @@ describe("an agent definition on pi-durable", () => {
     });
 
     it("offers its prompt templates and skills as commands, expanded for the model and kept as sent", async () => {
-      const { agent, faux } = await open();
+      const { dir, agent, faux } = await open();
+      // A skill linked in from elsewhere whose target is gone is skipped, not a failure of every request.
+      symlinkSync(join(dir, "nowhere"), join(dir, "skills/ghost"));
       expect(agent.info()).toMatchObject({
         name: "support",
         commands: [
