@@ -439,6 +439,34 @@ describe("the Agent on pi-durable", () => {
     },
   );
 
+  it("reports a message invoked between reading what an abort stops and recording the stop", async () => {
+    const subject = durableSubject();
+    const agent = (await subject.start()) as DurableAgent;
+    const text = (value: string) => [{ type: "text" as const, text: value }];
+    const created = await agent.createSession();
+    if (!created.ok) throw new Error(JSON.stringify(created));
+    const { sessionId } = created;
+    const running = await agent.invoke({ sessionId, content: text("hold") });
+    if (!running.ok) throw new Error(JSON.stringify(running));
+    await vi.waitFor(() => expect(subject.held()).toBe(1), { timeout: 5000, interval: 5 });
+    const conversation = await agent.conversation(sessionId);
+    const prototype = Object.getPrototypeOf(conversation) as { abort: (...args: unknown[]) => Promise<void> };
+    const recordStop = prototype.abort;
+    let late: Awaited<ReturnType<DurableAgent["invoke"]>> | undefined;
+    const spy = vi.spyOn(prototype, "abort").mockImplementationOnce(async function (this: unknown, ...args) {
+      late = await agent.invoke({ sessionId, content: text("hi") });
+      return recordStop.apply(this, args);
+    });
+    const result = await agent.abort(sessionId);
+    spy.mockRestore();
+    if (late === undefined || !late.ok) throw new Error(JSON.stringify(late));
+    expect(result).toEqual({
+      ok: true,
+      stopped: { taken: [running.message.messageId], queued: [late.message.messageId] },
+    });
+    await subject.stop();
+  });
+
   it("records nothing when expanding a command fails", async () => {
     const { models, model } = fauxModels();
     const storage = await openNodeSqliteStorage(temporaryStorage());

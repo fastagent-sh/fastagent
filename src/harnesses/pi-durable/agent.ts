@@ -358,12 +358,43 @@ function durableAgent(
     return resolve<ReadResult>(readPage(reads, sessionId, readOptions), failed);
   };
 
+  /** The conversation's newest message id, ended ones included; 0 before its first. */
+  const newestSubmission = (conversation: Conversation) =>
+    port(() =>
+      options.storage.scanSubmissions({ conversationId: conversation.id, order: "descending" }, 1, undefined, context),
+    ).pipe(Effect.map((page) => page.items[0]?.id ?? 0));
+
+  /** The conversation's messages newer than `boundary` that an abort ended. */
+  const abortedSince = (conversation: Conversation, boundary: number): Effect.Effect<InputRecord[], PortFailure> =>
+    Effect.gen(function* () {
+      const found: InputRecord[] = [];
+      let cursor: Parameters<Storage["scanSubmissions"]>[2];
+      do {
+        const page = yield* port(() =>
+          options.storage.scanSubmissions(
+            { conversationId: conversation.id, status: "unanswered", order: "descending" },
+            LIMITS.queuedPerSession,
+            cursor,
+            context,
+          ),
+        );
+        for (const record of page.items) {
+          if (record.id <= boundary) return found;
+          if (isInput(record) && record.reason === "aborted") found.push(record);
+        }
+        cursor = page.next;
+      } while (cursor !== undefined);
+      return found;
+    });
+
   const abort = (sessionId: string, abortOptions?: { signal?: AbortSignal }): Promise<AbortResult> =>
     resolve<AbortResult>(
       Effect.gen(function* () {
         const conversation = yield* reads.conversation(sessionId);
         if (conversation === undefined) return failure("not_found", `No session ${sessionId}`);
-        // What it stops is read before the stop: a message admitted between the two is withdrawn but not reported.
+        // Read before the state: a message admitted between this read and the stop is newer than it, and one admitted
+        // before it is in the state unless it has ended.
+        const boundary = yield* newestSubmission(conversation);
         const before = yield* reads.state(conversation);
         const signal = abortOptions?.signal;
         const stopping = signal === undefined ? context : withAbortSignal(signal, context);
@@ -374,13 +405,17 @@ function durableAgent(
           ),
         );
         if (stopped !== undefined) return { ok: false, unknown: { reason: stopped } };
-        const canceled = (messageIds: string[]) =>
-          Effect.filter(messageIds, (messageId) =>
-            reads
-              .submission(messageId)
-              .pipe(Effect.map((record) => record?.status === "unanswered" && record.reason === "aborted")),
-          );
-        return { ok: true, stopped: { taken: yield* canceled(before.taken), queued: yield* canceled(before.queued) } };
+        const ended = new Map<number, InputRecord>();
+        for (const messageId of [...before.taken, ...before.queued]) {
+          const record = yield* reads.submission(messageId);
+          if (record?.status === "unanswered" && record.reason === "aborted") ended.set(record.id, record);
+        }
+        // Not told apart: a message invoked after this stop that a later abort ended before this read.
+        for (const record of yield* abortedSince(conversation, boundary)) ended.set(record.id, record);
+        const records = [...ended.values()].sort((a, b) => a.id - b.id);
+        const idsOf = (taken: boolean) =>
+          records.filter((record) => (record.entry !== undefined) === taken).map((record) => ids.encode(record.id));
+        return { ok: true, stopped: { taken: idsOf(true), queued: idsOf(false) } };
       }),
       failed,
     );
