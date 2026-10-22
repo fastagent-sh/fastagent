@@ -12,9 +12,10 @@ status: current
 
 ## 一句话概括
 
-一个部署好的 agent 就像一个 bot：能访问到它的人都可以和它对话。Agent API 只定义这个 bot 对**消费者**提供的接口，一共 9 个操作，
-进程内（TypeScript）和 HTTP 两种绑定，语义完全相同。会话用哪个模型、哪个 thinking level 由调用方选择；其余一切（改 agent 的定义、
-压缩、查看所有会话）都是 harness（pi-durable）自己的 API，不在 Agent API 里。
+一个部署好的 agent 就像一个 bot。每个操作都以一个身份（principal）执行：owner 能访问所有会话，guest 只能访问自己创建的会话。
+Agent API 只定义这个 bot 对**消费者**提供的接口，一共 10 个操作，进程内（TypeScript）和 HTTP 两种绑定，语义完全相同。
+会话用哪个模型、哪个 thinking level 由调用方选择；其余一切（改 agent 的定义、压缩、查看所有会话）都是 harness（pi-durable）
+自己的 API，不在 Agent API 里。
 
 ## 1. 为什么是这个形状
 
@@ -26,10 +27,10 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 
 - **只用一个 harness：pi-durable。** 它原生有服务化需要的东西：按 `whenBusy` 准入、按请求 id 去重、每条消息持久地结束一次、
   重启后接着回答，存储和执行环境也都可以替换。
-- **只定义我们自己必须定义的那一层：消费者 API。** 我们自己的 channels、定时任务、wake 都是消费者，它们只用这 9 个操作
+- **只定义我们自己必须定义的那一层：消费者 API。** 我们自己的 channels、定时任务、wake 都是消费者，它们只用这些操作
   就够了，这说明这一层是完整的。它同时把 pi-durable 的实验性 API 和内部 entry 种类挡在客户端之外。
 
-## 2. 九个操作
+## 2. 十个操作
 
 | 操作 | HTTP | 做什么 |
 |---|---|---|
@@ -42,6 +43,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
 | `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样。Agent 回答 `unknown` 时，HTTP 返回 `503` 和 `{ unknown }` |
 | `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容；只有光栅图片按自身类型返回，其他一律 `application/octet-stream`，声明的类型经百分号编码放在 `x-mime-type` 头里 |
+| `listSessions` | `GET /sessions?before=&limit=` | 列出当前身份能访问的会话，新的在前，每个带 `createdBy`（创建者）；用 `before` 翻页。guest 换了电脑也能找回自己的会话，owner 能找到渠道和定时任务的会话 |
 
 创建会话时，`model` 用 `{ provider, modelId }`，`thinkingLevel` 用 pi-durable 原生支持的 `off`、`minimal`、`low`、`medium`、
 `high`、`xhigh`、`max`。它们和会话在同一次提交里保存，重启后保留。fork 继承分叉 entry 当时的设置（空会话继承当前设置），
@@ -118,7 +120,7 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
 ## 4. 几个关键决定
 
 - **会话 id 由服务端生成，调用方自己记住。** pi-durable 生成 conversation id，不接受调用方指定。channel 和定时任务在自己的
-  状态里记“哪个聊天或 thread 对应哪个会话”。服务端不提供会话列表，也不提供删除。
+  状态里记“哪个聊天或 thread 对应哪个会话”。服务端按身份列出会话（`listSessions`），不提供删除。
 - **映射按固定顺序、在固定的地方建立**（architecture.md §2）：只在 channel 已经按“位置”（一个聊天、一个 thread）串行处理的地方
   建立映射，也就是以位置为键的 turn queue 加持久的 turn store，所以同一个新位置并发到达的两条消息、或者首条消息的重投，会先后执行，
   后一个能看到前一个写下的映射；跨进程时，同一时间只有一个进程持有实例状态（服务进程的租约）。顺序是：先 `createSession`（开 thread
@@ -133,12 +135,21 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
   随之发出的 id 也可能被再次发出。AgentCore 的 session storage 在宿主机故障后就是这种情况（见 architecture.md §4.3）。不能丢消息的
   调用方，应该一直保留消息，直到看到它的 `done`。
 - **开 thread**：分叉点仍然按 key 找（`getMessage` 带平台消息 id）；thread 对应的会话按上面的顺序建立和记录。
-- **会话 id 只是名字，不是凭证。** 它可能是顺序编号。能访问到 agent 的人就能访问它的每个会话：读、接上、发消息、停止、改设置、从它分叉。
-  改设置影响的不只是自己的消息：换成 agent 没有的模型，会话里已取走和排队的消息不管是谁发的都会失败；换成更贵的模型，这些消息也按
-  更贵的模型付费。
-  多个用户共用一个部署时，用户之间的隔离由前面的一层负责：一个记录“用户 → 会话”映射、只放行自己会话的 facade，包括 fork 的
-  源会话和不带 `sessionId` 的 invoke 新建的会话（见 [security-boundary.md](../design/security-boundary.md) §4）。认证、限流也由
-  上层负责。
+- **谁能做什么：身份（principal）、角色和会话的创建者**（agent-api.md §8）。身份是 `{ id, role }`，角色只有 `owner` 和 `guest`。
+  每个会话在创建它的那次提交里记下 `createdBy`（创建者的 id）；fork 记的是发起 fork 的人，不是源会话的创建者。一个策略函数决定
+  所有操作：owner 能访问所有会话；guest 只能访问、fork、列出自己创建的会话，可以新建会话，也可以给自己的会话换模型。guest
+  访问不到的会话，对它来说就是不存在：一律按未知会话回答（`not_found`、`undefined`、被拒绝的 resume、列表里没有），回答里不透露
+  它是否存在。消息、entry、附件都挂在会话下面，检查会话就覆盖了它们。会话 id 仍然只是名字，可能是顺序编号，但知道 id 对 guest
+  没有用。
+- **身份从哪来。** 进程内，打开的 Agent 以 `{ id: "system", role: "owner" }` 执行，`as(principal)` 返回以另一个身份执行的同一组
+  操作，返回的对象没有 `as`，拿到它的代码没法扩大权限。我们自己的 channels、定时任务、wake 是可信代码，用 owner 角色，各带自己的
+  id（如 `channel:telegram`、`schedule:daily`），这样会话能说明自己从哪来。HTTP 上，每个请求用 `Authorization: Bearer <key>`
+  认证，key 对应哪个身份由部署决定（architecture.md §4.4）：owner 的 key 来自 secret `FASTAGENT_OWNER_KEYS`；guest 的 key
+  由 owner 在运行时签发和撤销（`/keys` 路由），这就是 duang 的“邀请”：凭持有生效、可以撤销，不需要身份提供方。认证不了的请求
+  一律 `401`。没配 owner key 时，只有绑定本机回环地址的 `dev` 不要求 key；其他情况 API 返回 `401` 并说明怎么配置，渠道照常
+  工作；显式写 `http.auth: "none"` 才是公开。
+- **guest 挡不住的东西。** agent 回答 guest 的消息时，照样以进程的权限运行所有工具、能读到它的文件和 context，花的是 owner 的
+  模型额度（包括 guest 给自己会话换的更贵的模型）。角色只把 guest 和别人的会话隔开，不是沙箱，也不限制花费。
 - **幂等 key 必须和 `sessionId` 一起用。** pi-durable 的 key 只在单个会话内有效；不带会话的 invoke 如果重试，会建出两个会话。
   想安全重试第一条消息，就先 `createSession` 拿到 id，再带 key 发。
 - **查一条消息：`getMessage`。** 参照 A2A 的 `GetTask` 和 OpenAI 的 `GET /responses/{id}`。调用方不知道消息怎样了时，用它查状态，
@@ -189,16 +200,16 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 
 没有采纳的：把 run/turn/task 当作一等公民的 id（我们以消息为单位）；客户端持有历史、每次把历史发过来（AG-UI，我们由服务端持有）；
 共享状态的 JSON Patch、计划、模式（特定 agent 的功能，用带前缀的自定义事件表达）；客户端提供文件系统和终端（ACP，我们的 agent
-在服务端运行）；会话列表、关闭、删除和多租户字段；JSON-RPC 作为主传输（REST 加 SSE 对 Web 消费者更简单）。人工确认、
+在服务端运行）；关闭、删除会话和多租户字段；JSON-RPC 作为主传输（REST 加 SSE 对 Web 消费者更简单）。人工确认、
 消息结束时推送 webhook（A2A、OpenAI 后台模式）、`notice` 实时提示事件（ACP），以后按扩展规则加，不影响现有调用方。
 
 ## 6. 不在 Agent API 里的
 
 | 不在 Agent API 里 | 去哪里 |
 |---|---|
-| 改模型、思考档位、压缩、查看或列出所有会话 | pi-durable 的原生 API（`agent.harness`）；需要 HTTP 的话，开发者自己写一个路由 |
-| 列出、删除会话 | 不提供：调用方自己记，数据不删除 |
-| 身份、认证、限流 | 上层（网关、私有网络、云的 IAM、嵌入方的中间件） |
+| 改会话的工具、扩展或指令、压缩、查看会话 | pi-durable 的原生 API（`agent.harness`）；需要 HTTP 的话，开发者自己写一个路由 |
+| 删除会话 | 不提供：数据不删除 |
+| 具名身份（身份提供方、登录的人）、按身份限流和预算 | 不提供：key 只代表持有者，不证明是谁；guest 能发多少、花多少不在这里限制 |
 | 人工确认、agent 反问 | 以后的版本按 §6.1 加 |
 | 图片以外的文件上传 | 这一版不做 |
 | ACP、A2A 等其他协议 | 在这套 API 外面调用它；做这些协议的绑定不在当前产品目标里 |
@@ -212,7 +223,9 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | harness 无关的协议，通过 harness 端口和 `LoopPort` 实现 | 一个 harness（pi-durable）的消费者接口 |
 | 调用方可以给会话命名，也可以由 Agent 命名 | 全部由 Agent 命名；id 不透明、永不复用 |
 | `/control` 平面的 `update` | `configure`，放在消费者 API 上：会话的模型和 thinking level 和创建时一样由调用方选择 |
-| `sessions.list`、`rewind`、`compact`、`delete`、`/control` 平面的其余部分、`models` | 去掉；运维用 pi-durable 原生 API |
+| 不认证也不授权：谁能访问由前面一层决定 | HTTP 上每个请求用 key 认证，每个操作按身份的角色和会话的创建者授权 |
+| `sessions.list`：所有会话 | `listSessions`：当前身份能访问的会话 |
+| `rewind`、`compact`、`delete`、`/control` 平面的其余部分、`models` | 去掉；运维用 pi-durable 原生 API |
 | `commands()` | 并入 `info().commands`，调用方读一次即可 |
 | `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`（按 id 或 key）；`resume`；`abort` |
 | `follow` | `resume`：按 `replayFrom` 重放，必发快照，再接实时；回答中途也能接上 |

@@ -30,7 +30,7 @@ What is hard in each, and the part of FastAgent that answers it:
 | 2 | What ships and what must not (secrets, state, cloned content), reproducibly | The artifact (§4.1) |
 | 3 | Composition: precedence, conflicts, version resolution | Context packages (§4.2) |
 | 4 | A box that may vanish, with state that must not | Hosts and their storage (§4.3) |
-| 5 | Concurrent writers to one context; agents calling agents | Later (§4.4) |
+| 5 | Concurrent writers to one context; agents calling agents | Later (§4.5) |
 
 None of these asks FastAgent to define how a harness queues, steers or records messages. The previous design did:
 a harness-neutral protocol, a harness port, and `LoopPort`, which gave pi-coding-agent the queue, idempotency and
@@ -43,12 +43,12 @@ goal needs.
 | Decision | Why |
 |---|---|
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
-| **One API of our own: the consumer [Agent API](agent-api.md)**, bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same nine operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
-| **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (its definition, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A session's model and thinking level are a consumer's choice, at creation, at a fork, or later with `configure`, which is pi-durable's `configure()` with those two fields: a Caller who may use a session may choose what it answers with, and who may use one is the front's decision (§2). A developer who needs more of the harness over HTTP adds a route that calls it |
-| **The agent is a public bot.** No identity or session ownership in FastAgent | Who may reach it is decided in front of it. A session id is a name, not a credential: whoever reaches the agent reaches every session. When several users share one deployment, a facade in front keeps each to their own sessions ([security-boundary.md](security-boundary.md) §4) |
+| **One API of our own: the consumer [Agent API](agent-api.md)**, bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
+| **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (its definition, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A session's model and thinking level are a consumer's choice, at creation, at a fork, or later with `configure`, which is pi-durable's `configure()` with those two fields: a Caller who may use a session may choose what it answers with, and who may use one is the access policy's ([agent-api.md](agent-api.md) §8). A developer who needs more of the harness over HTTP adds a route that calls it |
+| **Access is a key, a role, and who created a session** | An owner and the guests it invites share one instance, as duang's online contacts do: the owner reaches every session, a guest the sessions it created, and a request is one of them by the key it holds (§4.4). A key is held, not proven to be someone, so an invitation is "whoever holds this", revocable, with no identity provider. The rule is one policy the Agent applies to every operation ([agent-api.md](agent-api.md) §8), so isolation does not depend on a facade parsing each request, where a fork's source or an invoke without a session is easy to miss |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
-| **No session listing and no deletion** | No consumer needs them; pi-durable has no deletion |
+| **Sessions are listed per principal; none is deleted** | A client returns to its conversations from another machine, and an owner finds its channels' and schedules' sessions. A list of every session would show each guest everyone's; a list of what the principal may reach shows nothing it could not already read. pi-durable has no deletion |
 | **An agent is a standard npm and TypeScript package** (§3) | The artifact is an npm package (§4.1), and an agent must be a value other code can import: an app that embeds it, a deploy by package name and version, another agent that depends on it |
 | **One configuration file, `fastagent.config.ts`, with `defineAgent()`; every field optional** | It is the `defineConfig` pattern of Vite and its peers: typed, and read by the build. The model, thinking level and tools it names are defaults: a deployment overrides them with a flag or an environment variable, and a session with pi-durable's own API |
 | **Code is registered by where it is, at build time**: `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/` | `fastagent dev` and `build` generate a registry of plain imports, as TanStack Router's route tree and Next.js's route manifest are generated: nothing to import by hand, full types, and a bundler can follow it. Not a scan at run time (no types, no bundling, a loader to keep), and not `import.meta.glob`, which only Vite understands while `dev` runs on Node |
@@ -269,7 +269,52 @@ an eight-hour lifetime or a deploy. A mounted EFS or a storage backend on a data
 is the other reason to choose one of them, besides keeping conversations across deploys; neither is worth a VPC and a
 standing NAT, or a backend of our own, for a failure not yet seen.
 
-### 4.4 Later: shared contexts and agents working together
+### 4.4 Access
+
+The Agent API authorizes every operation by its principal ([agent-api.md](agent-api.md) §8): the owner reaches every
+session, a guest the sessions it created. Serving decides who a request is, by the key it carries. A key is held, not
+proven to be someone: whoever holds a guest's key is that guest, which is what an invitation is, revocable and in need
+of no identity provider. duang's online contacts are what it is for: an owner's own instance, and the people the owner
+invites to it.
+
+- **The owner's keys** are the secret `FASTAGENT_OWNER_KEYS`: one or more, separated by commas, so that a new key can
+  replace an old one without a gap. Each acts as `{ id: "owner", role: "owner" }`. It is declared like every secret,
+  so `deploy` checks that it is set.
+- **A guest's key is issued while the agent runs**, by the owner, so inviting and revoking need no deploy. Each guest
+  has an id of its own, never reused, and the label the owner gave it. A key is `fa_` followed by 32 random bytes in
+  base64url, a prefix secret scanners can match. It is shown once, when it is issued; only its SHA-256 hash is kept, in
+  the instance's storage beside its conversations.
+- **The key routes** are the owner's; a guest is refused `403` `forbidden`:
+
+  | Route | Does |
+  |---|---|
+  | `POST /keys` with `{ label }` | Issues a guest's key: `201` and `{ id, label, key }` |
+  | `GET /keys` | The guests: `200` and `{ keys: [{ id, label, createdAt }] }` |
+  | `DELETE /keys/{id}` | Revokes it: `200` and `{}`. A request with it is `401` from then on. The guest's sessions stay, and the owner still reaches them; the messages it sent go on unless the owner aborts them |
+
+- **Without an owner key**, a serve that can be reached from elsewhere does not open itself, and refuses only what
+  lacks a key, saying how to set one, as Redis's protected mode and Docker's daemon do. A deployment that serves only
+  channels needs no key, and is not stopped for lacking one:
+
+  | Serving | Without `FASTAGENT_OWNER_KEYS` |
+  |---|---|
+  | `dev`, bound to loopback | A request without a key acts as the owner, and the startup report says so |
+  | Any other bind, `dev --tunnel`, `start`, a deployment | Every API request without a key is `401`, saying how to set one. Channels, schedules and wake-ups serve as usual; the startup report and `deploy`'s pre-flight say the API is closed |
+  | `http.auth: "none"` in the deployment's configuration | A request without a key acts as the owner: for a deployment whose network or gateway decides who reaches it. The startup report lists the API as public |
+
+  With an owner key set, every request needs a key, wherever it is served, and `http.auth: "none"` beside it is refused
+  at start. A request with a key acts as that key's principal, or is `401`.
+- **AgentCore** carries the API as `api` envelopes through `InvokeAgentRuntime`, and IAM decides who may send them:
+  they act as the owner. A guest has no door there, and the storage that would keep its key is reset by every deploy
+  (§4.3).
+- **An embedder** gives `createAgentApiHandler(agent, { authenticate })` the function that maps a request to a
+  principal or refuses it, and must: there is no default. FastAgent's keys are one such function. An app with its own
+  sign-in maps each of its users to a guest whose id is its user id, and needs no facade in front.
+- **Not here: limits per guest.** A guest, or whoever holds its key, spends the owner's model account until the key is
+  revoked. A key is replaced by revoking it and issuing another, which is another guest: the sessions of the first
+  remain the owner's to read.
+
+### 4.5 Later: shared contexts and agents working together
 
 Several agents using one context package share its declaration, not its data. Sharing data that is being written needs
 a context service; an agent calling another uses the other's consumer API, or A2A, which AgentCore can host. Both wait
@@ -356,7 +401,7 @@ joined mid-way (as ACP's resume and OpenAI's sequence numbers allow).
 It did not take: a run, turn or task as a first-class id (messages are the unit); history owned by the client and sent
 with each run (AG-UI; here the Agent owns it); shared-state JSON patches, plans and modes (agent-specific, so prefixed
 custom events); a file system and terminal the client provides (ACP; this agent runs server-side in its own
-environment); session listing, closing, deletion and a tenant field; JSON-RPC as the transport (REST and SSE serve
+environment); closing and deleting sessions, and a tenant field; JSON-RPC as the transport (REST and SSE serve
 web consumers more simply). Asking the user, a webhook when a message ends (A2A, OpenAI's background mode) and a live
 notice event (ACP) can be added later under the API's rules for extending, without breaking a Caller. Bindings to
 those protocols are outside the product's goals.
@@ -365,5 +410,7 @@ those protocols are outside the product's goals.
 
 Settled when they are implemented:
 
+- Owner routes for a remote instance's schedules and how each fire ended, which duang asks for: today only the
+  process that serves them, and `fastagent schedules list` on its host, can read them.
 - Hot reload in `dev`: the definition is read on every invoke today; pi-durable installs extensions in a registry.
 - Bun: pi-durable's portable SQLite core runs there given an adapter over `bun:sqlite`, which does not exist yet.

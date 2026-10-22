@@ -4,7 +4,7 @@ description: "The consumer API of a served FastAgent agent: sessions the Agent n
 type: spec
 status: decided
 version: 1.0
-updated: 2026-10-20
+updated: 2026-10-22
 ---
 
 # Agent API — Specification v1
@@ -20,10 +20,10 @@ updated: 2026-10-20
 
 There are three roles:
 
-- **Agent**: one served agent, the way a bot is one: whoever reaches it can talk to it. Who may reach it is decided
-  in front of it (§8).
+- **Agent**: one served agent, the way a bot is one. Every operation acts as a principal: its owner, who reaches every
+  session, or a guest, who reaches the sessions it created (§8).
 - **Caller**: whoever talks to it: an app's front end, a client, a service, another agent, and the implementation's own
-  channels, schedules and wake-ups.
+  channels, schedules and wake-ups. Over HTTP, a Caller authenticates with a key (§10).
 - **Middleware**: both a Caller and an Agent. It wraps an Agent while exposing the same API, for authentication,
   budgets, logging and the like.
 
@@ -35,8 +35,8 @@ The API has three concepts:
 | **Message** | One message a Caller sends into a session, from its acceptance to its outcome | `messageId`, with a status and an outcome (§4) |
 | **Entry** | One record in a session's history: a user's message once taken, the agent's messages, tool results | An id that is the cursor for reading and resuming, and the point for forking (§6) |
 
-A Caller remembers its sessions: the Agent lists none. How the agent answers, in steps, turns or runs, and which
-messages it handles together, is not part of the API: each message's facts are its own.
+A Caller remembers the sessions it uses, or lists the ones it may reach. How the agent answers, in steps, turns or
+runs, and which messages it handles together, is not part of the API: each message's facts are its own.
 
 This is the consumer surface, and only that. A Caller chooses a session's model and thinking level; operating the
 agent (its definition, compaction, inspecting every session) is the harness's own API, used by whoever builds and runs
@@ -59,6 +59,19 @@ interface Agent {
   resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
   abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
   attachment(sessionId: string, ref: string): Promise<Attachment | undefined>;
+  listSessions(options?: { before?: string; limit?: number }): Promise<ListResult>;
+}
+
+interface Principal {
+  /** Stable, never reused for another principal, and never the credential itself. */
+  id: string;
+  role: "owner" | "guest";
+}
+
+/** The Agent as an implementation opens it, acting as `{ id: "system", role: "owner" }`. */
+interface OpenedAgent extends Agent {
+  /** The same operations, acting as `principal` (§8). What it returns has no `as`. */
+  as(principal: Principal): Agent;
 }
 
 interface AgentInfo {
@@ -101,6 +114,10 @@ type ReplayFrom = { type: "start" } | { type: "after"; entryId: string };
 
 type ReadResult =
   | { ok: true; state: SessionState; entries: Entry[]; prev?: string; next?: string }
+  | { ok: false; error: AgentError };
+
+type ListResult =
+  | { ok: true; sessions: { sessionId: string; createdBy: string }[]; next?: string }
   | { ok: false; error: AgentError };
 
 type AbortResult =
@@ -290,7 +307,8 @@ interface SessionState extends SessionSettings {
 ```
 
 The Agent names every session. A Caller gets an id from `createSession` or from the receipt of an invoke without
-`sessionId`, and keeps it. An id is a name, not a credential (§8).
+`sessionId`, and keeps it or finds it again with `listSessions`. An id is a name, not a credential (§8). Every session
+records who created it, `createdBy` (§8).
 
 Session, message and entry ids are opaque strings, and the Agent MUST NOT reuse one: within a deployment, an id names
 one thing for as long as the deployment exists, even when its storage is rebuilt from empty. An id a Caller kept from
@@ -333,6 +351,10 @@ a storage that is gone answers `not_found` (or `undefined`), never another sessi
   have let be. The Caller reads the session's state (`read` with `limit: 0`) and the messages it meant to stop
   (`getMessage`), and aborts again only if it still wants everything stopped.
 - **`attachment`** returns the bytes behind a ref an entry of this session published, or `undefined`.
+- **`listSessions`** lists the sessions the principal may reach (§8), newest first, each with its `createdBy`, a page
+  at a time: `limit` as `read`'s (§7.2), and `before` the `next` of the page before, which names the last session it
+  listed. A `before` that names no session the principal reaches is `not_found`. A guest that lost the ids it kept
+  finds its conversations again; an owner finds its channels' and schedules' sessions.
 
 An unknown session answers `not_found` on every operation, and so does an unknown entry cursor, except `getMessage`
 and `attachment`, which answer `undefined`.
@@ -440,6 +462,7 @@ interface AgentError {
 | Code | When | HTTP | `retryable` |
 |---|---|---|---|
 | `invalid_request` | A malformed request; a content part the Agent does not take; a key without `sessionId`; `limit` above the maximum | 400 | false |
+| `unauthenticated` | Over HTTP, a request without a key the binding maps to a principal (§10) | 401 | false |
 | `not_found` | An unknown session, fork source or entry cursor | 404 | false |
 | `busy` | Admission refused; `details.reason` is `running` (`whenBusy: "reject"`), `queue_full` or `capacity` | 429 | true |
 | `missing_model` | The session names no model the agent has: a message is refused with it, or, when the model goes before it is answered, ends with it | 422 | false |
@@ -456,28 +479,51 @@ A message's `failed` outcome carries `missing_model`, `auth_required`, `model_er
 |---|---|
 | Queued messages per session, steered ones not yet taken included | 20; the next is rejected `busy` / `queue_full` |
 | Messages in flight per process, queued and taken together | Implementation-defined (the reference implementation: 100); past it, `busy` / `capacity` |
-| `read` page | `limit` defaults to 100; above 500 is `invalid_request`. A page MAY hold fewer entries than `limit` (the reference implementation stops at 4 MiB of JSON) but holds at least one when any exist past the cursor |
+| `read` and `listSessions` page | `limit` defaults to 100; above 500 is `invalid_request`. A `read` page MAY hold fewer entries than `limit` (the reference implementation stops at 4 MiB of JSON) but holds at least one when any exist past the cursor |
 | `idempotencyKey` | 1 to 256 characters |
 
 A Caller MUST NOT infer the end of the history from a short page: only an absent `next` (or `prev`) says so.
 
 ## 8. Security model
 
-The Agent authenticates no one and lists no sessions. Whoever reaches it may talk to it: who may reach it, and how
-often, is decided in front of it (a gateway, a private network, a cloud's IAM, an embedder's own middleware).
+Every operation acts as a **principal** (§2), and the Agent decides what it may do from the principal's role and,
+for a session, from who created it. An owner and the guests it lets in share one agent: the owner reaches every
+session, and a guest the sessions it created.
 
-- **A session id is not a credential.** Ids are the Agent's names, and may be sequential. Whoever reaches the Agent
-  can reach every session in it: read and resume it, invoke into it, abort it, configure it and fork from it.
-  Configuring is not confined to the Caller's own messages: a model the agent lacks fails the messages the session
-  has taken and queued, whoever sent them, and a costlier one is paid for them too (§5). Keeping one user out
-  of another's sessions, when several share one deployment, is the job of the layer in front: a facade that maps
-  each user to their sessions and admits only those, including the source of a fork and the session an invoke without
-  `sessionId` creates ([security-boundary.md](security-boundary.md) §4).
+- **Every session records who created it.** `createdBy` is the id of the principal whose `createSession`, fork or
+  invoke without `sessionId` created it, stored in the commit that creates it. A fork records its own creator, not
+  its source's.
+- **One policy decides every operation**, the same in every binding:
+
+  | Operation | `owner` | `guest` |
+  |---|---|---|
+  | `info` | Yes | Yes |
+  | `createSession`, an invoke without `sessionId` | Yes | Yes |
+  | `invoke`, `getMessage`, `configure`, `read`, `resume`, `abort`, `attachment` | Every session | The sessions it created |
+  | `createSession` with `from` | From every session | From the sessions it created |
+  | `listSessions` | Every session | The sessions it created |
+
+- **A session the principal may not reach does not exist for it.** It is answered as a session the Agent does not
+  hold (§5): `not_found`, `undefined`, a `rejected` resume, absent from its list. Every message, entry and attachment
+  is addressed through its session, so the session's check covers them. A session id is still not a credential: ids
+  are the Agent's names and may be sequential, and knowing one gives a guest nothing.
+- **In process, the Agent acts as `{ id: "system", role: "owner" }`** as it is opened, and `as` gives the same
+  operations acting as another principal. The implementation's own channels, schedules and wake-ups are its own code,
+  trusted as the owner, and act under ids of their own (`channel:telegram`, `schedule:daily`), so that a session says
+  where it came from. An Agent returned by `as` has no `as`, so the code it is handed cannot widen it.
+- **Over HTTP, every request is authenticated** (§10). The binding maps the key a request carries to a principal and
+  refuses one it cannot map; no request acts as a principal it did not authenticate as. Which keys exist, and which
+  principal each one is, is the deployment's ([architecture.md](architecture.md) §4.4).
+- **What a guest is not kept from.** The agent answers a guest's message with all of its tools, with the authority of
+  the process it runs in, over everything its files and contexts hold, and pays for it from the owner's model account,
+  with the model the guest configures for its own session. The role keeps guests out of each other's conversations
+  and the owner's; it does not sandbox the agent, and it does not limit what a guest spends.
 - **A browser is a Caller like any other.** Over HTTP, every `POST` and `PATCH` MUST carry
   `content-type: application/json`, whether or not it has a body, and anything else is refused with `invalid_request`
   before it is read. A `POST` that is a form, `text/plain`, or has no body at all is sent cross-origin without a
   preflight, so withholding a response would not stop what it already did: a run started, a session aborted, a
-  session created. Which origins may read the answers is the deployment's choice.
+  session created. Which origins may read the answers is the deployment's choice. A key is never given to a page: a
+  page reaches the agent through its app's server.
 
 ## 9. Conformance
 
@@ -497,11 +543,13 @@ often, is decided in front of it (a gateway, a private network, a cloud's IAM, a
 4. **Durable messages.** An accepted message is recorded before its receipt (§3.4), ends exactly once, recorded
    before it is reported, and survives a restart of the process (§4.1). The Agent never redoes a message on its own.
 5. **One present.** A `resume` sends its `state` snapshot after what it replays and before anything live (§5.1).
+6. **Authorized by principal.** Every operation acts as one principal and is decided by §8's policy. A session the
+   principal may not reach is answered as one the Agent does not hold, and nothing in an answer says that it exists.
 
 ### Caller MUST
 
-6. **Forward compatibility.** A Caller MUST handle values it does not know as §6.1 says.
-7. **Relay passthrough.** Middleware that relays a stream MUST pass unknown events through unchanged.
+7. **Forward compatibility.** A Caller MUST handle values it does not know as §6.1 says.
+8. **Relay passthrough.** Middleware that relays a stream MUST pass unknown events through unchanged.
 
 ### Not guaranteed
 
@@ -524,7 +572,8 @@ One executable suite, run against the Agent in process and through the HTTP bind
 | Resuming | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; it sends one `state` snapshot after the replay and before anything live, and a `done` for each message that ends, before the `user_message` of the message taken after it, also when one commit ends one and places the other; a `resume` opened before an invoke delivers that message's `user_message` and then its answer, and the events before its `user_message` are another message's; one attached mid-answer gets `state.reply`, and it with the deltas that follow is a prefix of the `assistant_message` entry that ends that answer; a reconnect after the last entry it had delivers each entry exactly once; when the storage fails it ends with `serving_error` instead of hanging; an unknown session or cursor is a single `rejected` |
 | Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` carries `usage`; `state.usage` counts the session's own spend, which a fork starts from nothing; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source; the state moves idle → running → idle |
 | Sessions | A new session stores its chosen model and thinking level in the creating commit and keeps them after a restart; `configure` changes either, the state and a `resume` snapshot read it back, a model the agent lacks refuses the next message `missing_model` and configuring an available one lets it be answered, and an unknown session or empty settings are refused; a fork shares the history up to its entry and none of the messages, inherits the source's settings at that entry (its current settings if empty), applies supplied model and thinking level fields independently, and leaves the source unchanged; an unknown fork source is `not_found` |
-| HTTP | A `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `POST /invoke` answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between; the HTTP client's `wait()` gives what the in-process one does, also for a message that ended before it was called; `stream()` over the in-process Agent and over the HTTP client gives the same receipt, refusals and events for a new message, a queued, taken or done duplicate (a taken one whose message ends meanwhile included), and an `abort` |
+| Access | An owner reaches every session, those other principals created included; a guest's every session operation on a session it did not create answers as for an unknown session, and its fork of one is `not_found`; a session a guest creates, by `createSession`, a fork or an invoke without `sessionId`, is reached by that guest and the owner and by no other guest; `listSessions` lists every session for an owner and a guest's own for a guest, newest first, each with its `createdBy`, and pages by `before`; `createdBy` survives a restart; an Agent returned by `as` has no `as` |
+| HTTP | A request without a key the binding maps to a principal is `401` `unauthenticated` on every route, before its body is read, and a CORS preflight needs no key; the principal a key maps to is the one the operation acts as; a `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `POST /invoke` answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between; the HTTP client's `wait()` gives what the in-process one does, also for a message that ended before it was called; `stream()` over the in-process Agent and over the HTTP client gives the same receipt, refusals and events for a new message, a queued, taken or done duplicate (a taken one whose message ends meanwhile included), and an `abort` |
 
 ## 10. HTTP binding
 
@@ -539,6 +588,15 @@ One executable suite, run against the Agent in process and through the HTTP bind
 | `resume` | `GET /sessions/{s}/events`, with `?replay=start` or `?after=<entryId>` for `replayFrom`: a `text/event-stream`. Each `entry` event's SSE `id` is the entry id, and the snapshot's is the newest entry id when it was taken, or `start` when the session has none, so a reconnect's `Last-Event-ID` resumes after where the stream had got to even before any entry arrived (`start`: from the first entry). A `Last-Event-ID` header takes precedence over `replay` and `after`: a browser reconnects with the URL it opened and the header, and the header is where it got to. A resume that cannot start is the error's status instead |
 | `abort` | `POST /sessions/{s}/abort`: `200` and `{ stopped }` once the stopped messages have ended. The request's own end is the Caller's `signal`. An `unknown` the Agent answers is `503` and `{ "unknown": { reason } }` |
 | `attachment` | `GET /sessions/{s}/attachments/{ref}`: the bytes, served as their type when it is a raster image and as `application/octet-stream` otherwise, with the declared type percent-encoded in `x-mime-type`; or `404` with no body |
+| `listSessions` | `GET /sessions?before=&limit=`: `200` and `{ sessions, next? }` |
+
+**Authentication.** A request carries its key as `Authorization: Bearer <key>`. The binding asks its `authenticate`,
+which maps a request to a principal or refuses it, before it reads the body, and runs the operation as that principal
+on the Agent's `as` (§8). Which requests `authenticate` accepts is the deployment's: one that admits a request without
+a key decides so, and says so ([architecture.md](architecture.md) §4.4). A request it refuses is `401`
+`unauthenticated`, with `WWW-Authenticate: Bearer`, on every route; a CORS preflight is answered without a key, since
+a browser sends none with it. The TypeScript client takes the key and sends it with every request, the event streams
+included, which it reads with `fetch`: a browser's `EventSource` cannot send the header.
 
 A rejected result is answered with its code's status (§7.1) and `{ "error": AgentError }`; an invoke's `unknown` is
 answered as the table says, never translated to a rejection. A successful result is answered with `200`
@@ -592,10 +650,11 @@ before they attached with `getMessage`:
 
 ## 11. Out of scope
 
-- **Operating the agent**: changing a session's tools, extensions or instructions, compaction, inspecting or listing
-  sessions, and anything else its harness can do. These are the harness's own API, in the process that runs the agent.
-- **Listing and deleting sessions**: a Caller keeps the sessions it uses, and nothing is deleted.
-- **Identity, authentication, rate limits** (§8).
+- **Operating the agent**: changing a session's tools, extensions or instructions, compaction, inspecting sessions,
+  and anything else its harness can do. These are the harness's own API, in the process that runs the agent.
+- **Deleting sessions**: nothing is deleted.
+- **A named identity, and limits per principal**: a key is held, not proven to be someone, and how much a guest may
+  send or spend is not limited here (§8).
 - **Asking the user**: an agent that waits for a person's approval or answer mid-message. A later version adds it
   under §6.1's rules.
 - **Files other than images in a prompt.**
@@ -611,7 +670,9 @@ From [SPEC v1](../SPEC.md), which the code implements until this API replaces it
 | A harness-neutral protocol, implemented through a harness port and `LoopPort` | The consumer API of one harness, pi-durable |
 | A Caller names a session, or the Agent does | The Agent names every session; ids are opaque and never reused |
 | `update` on the `/control` plane | `configure`, on the consumer API: a session's model and thinking level are a Caller's choice, as at creation |
-| `sessions.list`, `rewind`, `compact`, `delete`, the rest of the `/control` plane, `models` | Gone; operating the agent is pi-durable's own API |
+| No authentication or authorization: who may reach the Agent is decided in front of it | Every HTTP request is authenticated by a key, and every operation is authorized by its principal's role and the session's creator (§8) |
+| `sessions.list`, every session | `listSessions`, the sessions the principal may reach |
+| `rewind`, `compact`, `delete`, the rest of the `/control` plane, `models` | Gone; operating the agent is pi-durable's own API |
 | `commands()` | `info().commands`, which a Caller reads once |
 | `messages.get`, `messages.follow`, `messages.cancel` | `getMessage` by id or key; `resume`; `abort` |
 | `follow` | `resume`: replay by `replayFrom`, a snapshot that MUST be sent, live; an answer can be joined mid-way |
