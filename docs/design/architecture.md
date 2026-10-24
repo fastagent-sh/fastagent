@@ -43,12 +43,12 @@ goal needs.
 | Decision | Why |
 |---|---|
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
-| **One API of our own: the consumer [Agent API](agent-api.md)**, bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
+| **One API of our own: the consumer [Agent API](agent-api.md)**, bound in TypeScript and over HTTP | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same nine operations. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
 | **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (its definition, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A session's model and thinking level are a consumer's choice, at creation, at a fork, or later with `configure`, which is pi-durable's `configure()` with those two fields: a Caller who may use a session may choose what it answers with, and who may use one is the access policy's ([agent-api.md](agent-api.md) §8). A developer who needs more of the harness over HTTP adds a route that calls it |
 | **Access is a key, a role, and who created a session** | An owner and the guests it invites share one instance, as duang's online contacts do: the owner reaches every session, a guest the sessions it created, and a request is one of them by the key it holds (§4.4). A key is held, not proven to be someone, so an invitation is "whoever holds this", revocable, with no identity provider. The rule is one policy the Agent applies to every operation ([agent-api.md](agent-api.md) §8), so isolation does not depend on a facade parsing each request, where a fork's source or an invoke without a session is easy to miss |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
-| **Sessions are listed per principal; none is deleted** | A client returns to its conversations from another machine, and an owner finds its channels' and schedules' sessions. A list of every session would show each guest everyone's; a list of what the principal may reach shows nothing it could not already read. pi-durable has no deletion |
+| **No session listing and no deletion** | Every operation acts on the one session it names, or creates one, which is what lets a deployment spread sessions over several storages (§4.3). A list spans them all: it would ask every storage, or need an index every storage writes to. A Caller keeps the sessions it uses, as a channel keeps a chat's and a schedule its own, and an owner asks those for theirs. A list waits for a Caller that needs one and a placement that keeps it within one storage. pi-durable has no deletion |
 | **An agent is a standard npm and TypeScript package** (§3) | The artifact is an npm package (§4.1), and an agent must be a value other code can import: an app that embeds it, a deploy by package name and version, another agent that depends on it |
 | **One configuration file, `fastagent.config.ts`, with `defineAgent()`; every field optional** | It is the `defineConfig` pattern of Vite and its peers: typed, and read by the build. The model, thinking level and tools it names are defaults: a deployment overrides them with a flag or an environment variable, and a session with pi-durable's own API |
 | **Code is registered by where it is, at build time**: `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/` | `fastagent dev` and `build` generate a registry of plain imports, as TanStack Router's route tree and Next.js's route manifest are generated: nothing to import by hand, full types, and a bundler can follow it. Not a scan at run time (no types, no bundling, a loader to keep), and not `import.meta.glob`, which only Vite understands while `dev` runs on Node |
@@ -203,6 +203,14 @@ A host adapter turns the artifact into what its cloud runs, and chooses the stor
 volume (Fly, Railway, Docker), on AgentCore's session storage, or a Cloudflare Durable Object. One process owns a
 storage at a time, so a deployment routes every session of one storage to one process.
 
+**Every operation is answered by one storage.** An operation of the Agent API acts on the one session it names, or
+creates one (`info` reads none), and a session id names its storage (§2), so a deployment that spreads sessions over
+several storages routes each request by its session id to the one process that can answer it. Where a new session
+goes is the deployment's choice; a fork goes where its source is, since pi-durable forks within one storage. Access is
+decided there too: who created a session is stored with it ([agent-api.md](agent-api.md) §8). What every process
+must know whatever the session, the keys a request may carry (§4.4), is kept apart from the sessions' storage. An
+operation across sessions is added only with a way to answer it from one storage.
+
 **AgentCore's session storage** is the managed file system AgentCore mounts per runtime session (a preview feature).
 Measured (§6.1) and documented, it is:
 
@@ -282,8 +290,10 @@ invites to it.
   so `deploy` checks that it is set.
 - **A guest's key is issued while the agent runs**, by the owner, so inviting and revoking need no deploy. Each guest
   has an id of its own, never reused, and the label the owner gave it. A key is `fa_` followed by 32 random bytes in
-  base64url, a prefix secret scanners can match. It is shown once, when it is issued; only its SHA-256 hash is kept, in
-  the instance's storage beside its conversations.
+  base64url, a prefix secret scanners can match. It is shown once, when it is issued, and only its SHA-256 hash is
+  kept, in a store of the deployment's, apart from the sessions' storage: whichever storage a request's session is
+  in, the process that serves it verifies the key (§4.3). While a deployment has one storage, that storage is the
+  store.
 - **The key routes** are the owner's; a guest is refused `403` `forbidden`:
 
   | Route | Does |
@@ -305,8 +315,7 @@ invites to it.
   With an owner key set, every request needs a key, wherever it is served, and `http.auth: "none"` beside it is refused
   at start. A request with a key acts as that key's principal, or is `401`.
 - **AgentCore** carries the API as `api` envelopes through `InvokeAgentRuntime`, and IAM decides who may send them:
-  they act as the owner. A guest has no door there, and the storage that would keep its key is reset by every deploy
-  (§4.3).
+  they act as the owner. A guest has no door there.
 - **An embedder** gives `createAgentApiHandler(agent, { authenticate })` the function that maps a request to a
   principal or refuses it, and must: there is no default. FastAgent's keys are one such function. An app with its own
   sign-in maps each of its users to a guest whose id is its user id, and needs no facade in front.
@@ -401,7 +410,7 @@ joined mid-way (as ACP's resume and OpenAI's sequence numbers allow).
 It did not take: a run, turn or task as a first-class id (messages are the unit); history owned by the client and sent
 with each run (AG-UI; here the Agent owns it); shared-state JSON patches, plans and modes (agent-specific, so prefixed
 custom events); a file system and terminal the client provides (ACP; this agent runs server-side in its own
-environment); closing and deleting sessions, and a tenant field; JSON-RPC as the transport (REST and SSE serve
+environment); session listing, closing, deletion and a tenant field; JSON-RPC as the transport (REST and SSE serve
 web consumers more simply). Asking the user, a webhook when a message ends (A2A, OpenAI's background mode) and a live
 notice event (ACP) can be added later under the API's rules for extending, without breaking a Caller. Bindings to
 those protocols are outside the product's goals.

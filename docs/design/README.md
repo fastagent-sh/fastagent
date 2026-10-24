@@ -13,7 +13,7 @@ This directory contains maintainer-facing design material. It is intentionally k
 | Source | Status |
 |---|---|
 | [Agent Handler SPEC](../SPEC.md) | Normative protocol contract, v1, which the code implements. Changes require explicit review. Replaced by agent-api.md when #788 lands. |
-| [agent-api.md](agent-api.md) | **Decided, not implemented.** The consumer Agent API that replaces the SPEC: its operations, in process and over HTTP, and who may use them. |
+| [agent-api.md](agent-api.md) | **Decided, not implemented.** The consumer Agent API that replaces the SPEC: nine operations, in process and over HTTP, and who may use them. |
 | Code in `src/` | Implementation source of truth. |
 | User docs in `docs/` | Product behavior and supported usage. |
 | Documents in `docs/design/` | Explanatory architecture notes. They clarify why the code is shaped the way it is, but they are not a public compatibility promise. |
