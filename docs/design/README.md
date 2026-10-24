@@ -13,7 +13,7 @@ This directory contains maintainer-facing design material. It is intentionally k
 | Source | Status |
 |---|---|
 | [Agent Handler SPEC](../SPEC.md) | Normative protocol contract, v1, which the code implements. Changes require explicit review. Replaced by agent-api.md when #788 lands. |
-| [agent-api.md](agent-api.md) | **Decided, not implemented.** The consumer Agent API that replaces the SPEC: nine operations, in process and over HTTP. |
+| [agent-api.md](agent-api.md) | **Decided, not implemented.** The consumer Agent API that replaces the SPEC: nine operations, in process and over HTTP, and who may use them. |
 | Code in `src/` | Implementation source of truth. |
 | User docs in `docs/` | Product behavior and supported usage. |
 | Documents in `docs/design/` | Explanatory architecture notes. They clarify why the code is shaped the way it is, but they are not a public compatibility promise. |
@@ -42,4 +42,4 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 | [conformance-levels.md](conformance-levels.md) | **Superseded by architecture.md.** Where a session's state lives: the deployment axis, the postures that pin it, and what each owes. |
 | [participant-model.md](participant-model.md) | How a chat bot behaves in a collaboration tool: the participant axiom and the summon/placement/memory rules derived from it. |
 | [place-history.md](place-history.md) | Proposed: a chat place's history read from the platform when a turn needs it, replacing the context buffer (#633, #374). |
-| [security-boundary.md](security-boundary.md) | Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, the JSON body gate and CORS, and a multi-tenant facade in front of one deployment. |
+| [security-boundary.md](security-boundary.md) | Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, the JSON body gate and CORS, and a multi-tenant facade in front of one deployment. Replaced by agent-api.md §8 and architecture.md §4.4 when #788 lands. |
