@@ -10,8 +10,9 @@ import {
   listWakeups,
   removeWakeup,
   takeFirstDueWakeup,
+  parseDelayMs,
 } from "../src/schedule/wakeups.ts";
-import { makeWakeTool, parseDelayMs, withWakeTool } from "../src/harnesses/pi/wake-tool.ts";
+import { makeWakeTool, withWakeTool } from "../src/harnesses/pi/wake-tool.ts";
 import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
 import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 

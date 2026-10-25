@@ -1,5 +1,5 @@
 /**
- * The Agent API (docs/design/agent-api.md) over pi-durable: a Harness opened on the instance's storage, and the nine
+ * The Agent API (docs/design/agent-api.md) over pi-durable: a Harness opened on the instance's storage, and the ten
  * operations read from and submitted to it. Admission (a key's lookup, the limits and the submission) is one step per
  * process, since one process owns a storage.
  */
@@ -39,6 +39,8 @@ import {
   type InvokeRequest,
   type InvokeResult,
   LIMITS,
+  type ListOptions,
+  type ListResult,
   type ReadOptions,
   type ReadResult,
   type SessionSettings,
@@ -55,6 +57,7 @@ import { type InputRecord, hasEnded, isInput, queuedInputs, requestIdFor } from 
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
 import { resumeStream } from "./resume.ts";
+import { type Sessions, trackSessions } from "./sessions.ts";
 
 /** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (agent-api.md §3). */
 export interface AgentCommand {
@@ -107,9 +110,10 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
   const lifetime = Scope.makeUnsafe();
   try {
     const ids = await storageIds(harness, context);
+    const sessions = await Effect.runPromise(Scope.provide(trackSessions(harness, options.storage, context), lifetime));
     harness.resume();
     await Effect.runPromise(Scope.provide(releaseWaitingQueues(harness, context), lifetime));
-    return durableAgent(harness, ids, lifetime, options);
+    return durableAgent(harness, ids, sessions, lifetime, options);
   } catch (error) {
     await Effect.runPromise(Scope.close(lifetime, Exit.void));
     await harness.close(context);
@@ -120,11 +124,12 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
 function durableAgent(
   harness: Harness,
   ids: Ids,
+  sessions: Sessions,
   lifetime: Scope.Closeable,
   options: DurableAgentOptions,
 ): DurableAgent {
   const context = BACKGROUND_CONTEXT;
-  const reads = durableReads(harness, ids, context);
+  const reads = durableReads(harness, ids, sessions, context);
   const admission = Semaphore.makeUnsafe(1);
   const commands = options.commands ?? (() => []);
   const inFlightLimit = options.inFlightPerProcess ?? LIMITS.inFlightPerProcess;
@@ -458,6 +463,27 @@ function durableAgent(
       }),
     );
 
+  /** Most recently active first; the cursor is the activity of the last session a page listed. */
+  const listSessions = async (listOptions: ListOptions = {}): Promise<ListResult> => {
+    const { before, limit = LIMITS.readDefault } = listOptions;
+    if (!Number.isInteger(limit) || limit < 1 || limit > LIMITS.readMax) {
+      return failure("invalid_request", `limit is an integer from 1 to ${LIMITS.readMax}`);
+    }
+    const after = before === undefined ? undefined : ids.decodeCursor(before);
+    if (before !== undefined && after === undefined) {
+      return failure("invalid_request", `${JSON.stringify(before)} is not a cursor of this agent's`);
+    }
+    const ordered = sessions.byActivity();
+    const rest = after === undefined ? ordered : ordered.filter(({ activity }) => activity < after);
+    const page = rest.slice(0, limit);
+    const last = page.at(-1);
+    return {
+      ok: true,
+      sessions: page.map(({ conversationId }) => ({ sessionId: ids.encode(conversationId) })),
+      ...(rest.length > limit && last !== undefined ? { next: ids.encodeCursor(last.activity) } : {}),
+    };
+  };
+
   return {
     harness,
     info,
@@ -483,6 +509,7 @@ function durableAgent(
       ),
     abort,
     attachment,
+    listSessions,
     conversation: (sessionId) => Effect.runPromise(reads.conversation(sessionId)),
     close: async () => {
       closing = true;

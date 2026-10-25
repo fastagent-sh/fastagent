@@ -7,6 +7,7 @@ import { AgentDoc, Harness, createRegistry, defineExtension, defineTool } from "
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
+import { sessionIdOf } from "../src/harnesses/pi-durable/ids.ts";
 import { agentApiConformance } from "./agent-api-conformance.ts";
 import { durableSubject } from "./durable-subject.ts";
 
@@ -539,5 +540,63 @@ describe("the Agent on pi-durable", () => {
     if (!fresh.ok) throw new Error(JSON.stringify(fresh));
     expect(await fresh.wait()).toMatchObject({ ok: true, message: { answer: { text: "from b" } } });
     await agent.close();
+  });
+
+  it("does not list a conversation a task owns, as a subagent's is", async () => {
+    const { faux, models, model } = fauxModels();
+    const registry = createRegistry();
+    registry.install(
+      defineExtension({
+        name: "subagent",
+        tools: [
+          defineTool({
+            name: "spawn",
+            description: "Creates a conversation its task owns",
+            parameters: Type.Object({}),
+            execute: async (_args, api, toolContext) => {
+              await api.commit(
+                (tx) => tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } }),
+                toolContext,
+              );
+              return { output: [{ type: "text", text: "spawned" }] };
+            },
+          }),
+        ],
+      }),
+    );
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("spawn", {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("spawned"),
+    ]);
+    const storage = await openNodeSqliteStorage(temporaryStorage());
+    const agent = await openDurableAgent({ storage, models, registry, name: "subagents", model });
+    const sent = await agent.invoke({ content: [{ type: "text", text: "go" }] });
+    if (!sent.ok) throw new Error(JSON.stringify(sent));
+    expect(await sent.wait()).toMatchObject({ ok: true, message: { answer: { text: "spawned" } } });
+    const all = await storage.scanConversations({}, 10, undefined, context);
+    const owned = all.items.filter((conversation) => conversation.owner !== undefined);
+    expect(owned).toHaveLength(1);
+    expect(await agent.listSessions()).toEqual({ ok: true, sessions: [{ sessionId: sent.sessionId }] });
+    // Its id as the Agent would encode it: the session's incarnation, the subagent's number.
+    const subagent = sent.sessionId.replace(/\.\d+$/, `.${owned[0]?.id}`);
+    expect(await agent.read(subagent, { limit: 0 })).toMatchObject({ ok: false, error: { code: "not_found" } });
+    expect(await agent.invoke({ sessionId: subagent, content: [{ type: "text", text: "hi" }] })).toMatchObject({
+      ok: false,
+      error: { code: "not_found" },
+    });
+    await agent.close();
+  });
+
+  it("gives a tool its session id, and none in a conversation a task owns", async () => {
+    const incarnation = "inc";
+    const api = (owner: { conversationId: number; taskId: number } | undefined) =>
+      ({
+        conversationId: 7,
+        snapshot: async () => ({ incarnation }),
+        commit: async (change: (tx: unknown) => unknown) =>
+          change({ conversation: async (id: number) => ({ id, ...(owner === undefined ? {} : { owner }) }) }),
+      }) as unknown as Parameters<typeof sessionIdOf>[0];
+    expect(await sessionIdOf(api(undefined), context)).toBe("inc.7");
+    expect(await sessionIdOf(api({ conversationId: 2, taskId: 5 }), context)).toBeUndefined();
   });
 });

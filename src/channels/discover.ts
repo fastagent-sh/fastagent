@@ -23,10 +23,18 @@ function longConnectionModule(value: unknown): value is LongConnectionChannelMod
   return value !== null && typeof value === "object" && typeof (value as { connect?: unknown }).connect === "function";
 }
 
-function validateLongConnectionModule(value: LongConnectionChannelModule, label: string): void {
-  if (typeof value.name !== "string" || value.name.trim() === "") {
-    throw new Error(`${label}: long-connection channel name must be a non-empty string`);
-  }
+/** Why `value` is not a channel module: a route channel's `(ctx) => Routes`, or a long connection's object. */
+export function channelModuleProblem(value: unknown): string | undefined {
+  if (typeof value === "function") return undefined;
+  if (!longConnectionModule(value)) return "must default-export (ctx) => Routes or { name, connect(ctx, signal) }";
+  return typeof value.name === "string" && value.name.trim() !== ""
+    ? undefined
+    : "long-connection channel name must be a non-empty string";
+}
+
+function assertChannelModule(value: unknown, label: string): void {
+  const problem = channelModuleProblem(value);
+  if (problem !== undefined) throw new Error(`${label}: ${problem}`);
 }
 
 /** HOW A CHANNEL IS REACHED — the authored structural fact, and the ONE shape it travels in. */
@@ -59,14 +67,8 @@ export async function inspectChannels(dir: string): Promise<{
     try {
       const declaration = readSecretDeclaration(mod.default, label);
       if (declaration.error !== undefined) throw new Error(declaration.error);
-      if (typeof mod.default === "function") {
-        channels.push({ name, ingress: "webhook" });
-      } else if (longConnectionModule(mod.default)) {
-        validateLongConnectionModule(mod.default, label);
-        channels.push({ name, ingress: "long-connection" });
-      } else {
-        throw new Error(`${label} must default-export (ctx) => Routes or { name, connect(ctx, signal) }`);
-      }
+      assertChannelModule(mod.default, label);
+      channels.push({ name, ingress: typeof mod.default === "function" ? "webhook" : "long-connection" });
       secrets.set(name, declaration.secrets);
     } catch (error) {
       failures.push({ label, file, message: (error as Error).message });
@@ -128,8 +130,8 @@ export async function loadChannels(
 
   for (const { name, label, file, mod, secrets } of declaring) {
     try {
+      assertChannelModule(mod.default, label);
       if (longConnectionModule(mod.default)) {
-        validateLongConnectionModule(mod.default, label);
         const channel = mod.default;
         longConnections.push({
           name: channel.name,
@@ -137,9 +139,6 @@ export async function loadChannels(
         });
         declaredSecrets.set(name, secrets);
         continue;
-      }
-      if (typeof mod.default !== "function") {
-        throw new Error(`${label} must default-export (ctx) => Routes or { name, connect(ctx, signal) }`);
       }
       const declared = (mod.default as ChannelModule)(ctx) as unknown;
       if (

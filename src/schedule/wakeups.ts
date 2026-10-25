@@ -21,6 +21,18 @@ export interface Wakeup {
   tz?: string;
 }
 
+/**
+ * Parse a delay to milliseconds: a number is SECONDS; a string MUST carry a unit — `"<n><s|m|h|d>"` ("30m", "2h",
+ * "1d").
+ */
+export function parseDelayMs(input: string | number): number | undefined {
+  if (typeof input === "number") return Number.isFinite(input) && input > 0 ? input * 1000 : undefined;
+  const m = input.trim().match(/^(\d+(?:\.\d+)?)\s*(s|m|h|d)$/i); // unit REQUIRED on a string
+  if (!m) return undefined;
+  const mult = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[(m[2] as string).toLowerCase() as "s"];
+  return Number(m[1]) * mult;
+}
+
 /** The minimum delay a wake-up may be scheduled for — rejects a busy-loop (`wake in 1s`, then again…). */
 export const MIN_WAKE_MS = 60_000; // 1 minute
 /**

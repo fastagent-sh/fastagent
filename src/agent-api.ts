@@ -18,6 +18,7 @@ export interface Agent {
   resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
   abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
   attachment(sessionId: string, ref: string): Promise<Attachment | undefined>;
+  listSessions(options?: ListOptions): Promise<ListResult>;
 }
 
 export interface AgentInfo {
@@ -83,6 +84,15 @@ export interface ReadOptions {
 
 export type ReadResult =
   | { ok: true; state: SessionState; entries: Entry[]; prev?: string; next?: string }
+  | { ok: false; error: AgentError };
+
+export interface ListOptions {
+  before?: string;
+  limit?: number;
+}
+
+export type ListResult =
+  | { ok: true; sessions: { sessionId: string }[]; next?: string }
   | { ok: false; error: AgentError };
 
 export type AbortResult =

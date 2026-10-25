@@ -23,6 +23,7 @@ import type { DoneMessage, Entry, MessageStatus, SessionState } from "../../agen
 import { type PortFailure, port } from "../../effect-port.ts";
 import { isPublished, publishEntry, requestIdOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
+import type { Sessions } from "./sessions.ts";
 import {
   type EndedRecord,
   type InputRecord,
@@ -38,10 +39,11 @@ const SCAN_PAGE = 100;
 
 export type Reads = ReturnType<typeof durableReads>;
 
-export function durableReads(harness: Harness, ids: Ids, context: Context) {
+export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions, "has">, context: Context) {
+  /** The session `sessionId` names: a conversation that is not a session (a subagent's) is no more reachable than none. */
   const conversation = (sessionId: string): Effect.Effect<Conversation | undefined, PortFailure> => {
-    const id = ids.decode(sessionId);
-    return id === undefined ? Effect.undefined : port(() => harness.conversation(id as ConversationId, context));
+    const id = ids.decode(sessionId) as ConversationId | undefined;
+    return id === undefined || !sessions.has(id) ? Effect.undefined : port(() => harness.conversation(id, context));
   };
 
   /** The conversation's history in `query`'s range and order, its own entries and those a fork shares, a page at a time. */
