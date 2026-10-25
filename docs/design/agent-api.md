@@ -1,10 +1,10 @@
 ---
 title: Agent API — Specification v1
-description: "The consumer API of a served FastAgent agent: sessions the Agent names, messages whose outcome outlives their callers, durable entries, resumable event streams, in process and over HTTP."
+description: "The consumer API of a served FastAgent agent: sessions the Agent names, messages whose outcome outlives their callers, durable entries, resumable event streams, in process."
 type: spec
 status: decided
 version: 1.0
-updated: 2026-10-20
+updated: 2026-10-25
 ---
 
 # Agent API — Specification v1
@@ -20,12 +20,13 @@ updated: 2026-10-20
 
 There are three roles:
 
-- **Agent**: one served agent, the way a bot is one: whoever reaches it can talk to it. Who may reach it is decided
-  in front of it (§8).
-- **Caller**: whoever talks to it: an app's front end, a client, a service, another agent, and the implementation's own
-  channels, schedules and wake-ups.
-- **Middleware**: both a Caller and an Agent. It wraps an Agent while exposing the same API, for authentication,
-  budgets, logging and the like.
+- **Agent**: one served agent, the way a bot is one, and one trust domain: whoever holds it can do everything it can
+  (§8).
+- **Caller**: code in the process that runs it: the implementation's own channels, schedules, wake-ups and REPL, and an
+  app that embeds the agent. A front end, a client or another agent reaches it through one of these.
+- **Middleware**: both a Caller and an Agent. It wraps an Agent while exposing the same API, for budgets, logging and
+  the like. The operations carry no caller's identity, so authentication belongs to whatever puts the agent on a
+  network (§8).
 
 The API has three concepts:
 
@@ -43,8 +44,8 @@ agent (its definition, compaction, inspecting every session) is the harness's ow
 the agent (§11).
 
 Fields are camelCase; enum values and discriminators are snake_case. A field that refers to another object names its
-kind: `sessionId`, `messageId`, `entryId`, `parentEntryId`. The API has two bindings with the same operations and
-the same semantics: TypeScript, in process (§2), and HTTP (§10).
+kind: `sessionId`, `messageId`, `entryId`, `parentEntryId`. The API is bound in TypeScript, in process (§2); it has
+no network binding (§10).
 
 ## 2. Operations
 
@@ -77,7 +78,7 @@ type InvokeResult =
   | { ok: false; error: AgentError }                     // rejected: nothing was recorded
   | { ok: false; unknown: { reason: string; sessionId?: string; messageId?: string } }; // no complete receipt
 
-/** The receipt's data: what `POST /invoke` answers with. */
+/** The receipt's data: an invoke's answer without its `wait()`. */
 interface Receipt { sessionId: string; message: MessageStatus; duplicate: boolean }
 
 /** A message's end, or why it is not known here. */
@@ -124,13 +125,13 @@ interface Attachment { mimeType: string; data: string }    // base64
 Every operation that returns a `Promise` resolves, and failures are values, not rejections. The exception is
 `getMessage` and `attachment`, whose answers have no failure branch: they MAY reject with an `AgentError` of code
 `unavailable` when the Agent's storage cannot answer, because `undefined` would be a false answer. Every event, entry
-and result's data MUST be JSON-serializable: an invoke's is its `Receipt`, the body of `POST /invoke`, and `wait()` is
-a method each binding provides, in process over pi-durable's `Submission.wait()`, and in the HTTP client as §10 says.
+and result's data MUST be JSON-serializable, so that an app can send it on as it is: an invoke's is its `Receipt`, and
+`wait()` is a method beside it, over pi-durable's `Submission.wait()`.
 
 `invoke` answers once the message is recorded, with its receipt, and does not wait for it to be answered. It answers
 `unknown` when submission or obtaining the receipt fails and nothing proves the message was refused. This includes
-an in-process storage failure during submission, a failed status read after the message was recorded, a duplicate
-whose receipt cannot be read, and a remote connection lost before the receipt arrives (§10). Only an explicit
+a storage failure during submission, a failed status read after the message was recorded, and a duplicate whose
+receipt cannot be read. Only an explicit
 refusal from submission may still be reported as a rejection; a later read failure MUST NOT be.
 
 `unknown` means no complete receipt was obtained, not necessarily that acceptance is unknown: a message id proves
@@ -140,9 +141,8 @@ Without either a message id or a key, the Caller MUST NOT infer refusal or autom
 
 `wait()` resolves once the message has ended, with its `done` (§4), as pi-durable's `Submission.wait()` does, also
 when the message had ended before `wait()` was called. It resolves `unfinished` when the end is not known from where
-it waits: the Agent's storage failed, a client of a remote Agent lost its connection (§10), or its `signal` was
-aborted. Aborting the signal ends that wait and releases what it held, never the message, as cancelling pi-durable's
-wait context does. `unfinished` never says the message was refused: a Caller asks `getMessage` later, and does not
+it waits: the Agent's storage failed, or its `signal` was aborted. Aborting the signal ends that wait and releases
+what it held, never the message, as cancelling pi-durable's wait context does. `unfinished` never says the message was refused: a Caller asks `getMessage` later, and does not
 send again without a key. A receipt whose `wait()` is never called holds nothing.
 
 ## 3. Invoke
@@ -181,9 +181,34 @@ the expansion. A `/` followed by a name the Agent does not know is sent to the m
   before it invokes, which needs the session to exist: a new conversation is created first (`createSession`), and its
   id kept, before anything is sent into it. A `done`
   is never replayed (§5.1), so a Caller that resumes only after it invoked reads an end that came before it attached
-  with `getMessage` once the snapshot arrives. The TypeScript client offers this as `stream(agent, request)`, over any
-  `Agent`, in process or remote; it is a Caller of this API and adds nothing to it (§10).
+  with `getMessage` once the snapshot arrives. `stream(agent, request)` does this over any `Agent`; it is a Caller of
+  this API and adds nothing to it.
 - A Caller that stops waiting or watching **detaches**: the agent goes on. `abort` stops it (§5).
+
+**`stream(agent, request)`** sends a message and delivers its answer as it is written:
+
+```ts
+function stream(agent: Agent, request: InvokeRequest & { sessionId: string }): Promise<StreamResult>;
+type StreamResult =
+  | ({ ok: true } & Receipt & { events: AsyncIterable<SessionEvent> })  // after its user_message, through its done
+  | Extract<InvokeResult, { ok: false }>;                            // the invoke's rejection or unknown
+```
+
+The receipt, a rejection and `unknown` are the invoke's own (a channel keys its turn by the receipt's `messageId` and
+tells its user why a message was refused); `events` ends with the message's `done`, or with a `serving_error` when the
+session cannot be followed. It takes a session that exists, since only one can be resumed before the message is sent:
+a Caller with a new conversation creates the session and keeps its id first, which is also what keeps a key's retry in
+one session (§3.3). It resumes the session without replay, invokes once the snapshot arrives, and then, by the
+receipt:
+
+- a new or `queued` message: the events after its `user_message`, which arrives live;
+- a `taken` duplicate, whose `user_message` was written before: it resumes again after that entry
+  (`{ type: "after", entryId: message.entryId }`), holds what that replays, and asks `getMessage` once its snapshot
+  arrives. Still taken, it delivers the held entries and goes on live; done meanwhile, it delivers the held entries
+  through its answer only (none when it has none), since the replay can run on into a message taken after it, and
+  then its `done`;
+- a `done` duplicate: it reads the entries after its `user_message` through its answer (`read`, after
+  `message.entryId`), or none when it has no answer, then delivers its `done`.
 
 ### 3.2 A busy session
 
@@ -327,8 +352,8 @@ a storage that is gone answers `not_found` (or `undefined`), never another sessi
   `canceled`, after a restart too. A running tool ends when it honors its abort signal, which a tool must; until it
   does, `abort` waits. It reports every message that has not ended and that it stops, one an earlier `abort` is still
   stopping included. Messages invoked after it are taken as usual.
-- **An `abort` whose answer did not arrive** answers `unknown`: its `signal` was aborted, or a client of a remote
-  Agent lost its connection while it waited (a proxy's idle timeout). Whether the stop was recorded is not known, and
+- **An `abort` whose answer did not arrive** answers `unknown`: its `signal` was aborted while it waited, or the
+  Agent's storage failed. Whether the stop was recorded is not known, and
   sending `abort` again is not the way to find out: it would also stop what was sent since, which the first one would
   have let be. The Caller reads the session's state (`read` with `limit: 0`) and the messages it meant to stop
   (`getMessage`), and aborts again only if it still wants everything stopped.
@@ -352,9 +377,6 @@ and `attachment`, which answer `undefined`.
    commit records both (pi-durable places the next queued message in the commit that ends a run), so a Caller can
    take a message's events as running from its `user_message` to its `done`. It ends only when the Caller stops
    reading, or with a `serving_error` (§6).
-
-The TypeScript client of the HTTP binding does not reconnect on its own: when its connection is lost, it ends the
-stream with a `serving_error`, and the Caller resumes after the last entry it had.
 
 A Caller coming back to a session it showed before resumes after the last entry it has. One opening a long session
 it never showed reads the newest page and resumes after its last entry.
@@ -407,10 +429,9 @@ type SessionEvent =
 - `thinking` is the model's reasoning: a Caller MUST NOT fold it into the answer.
 - `tool_progress` is the current status line of a running tool, each replacing the last; an Agent MAY drop one its
   Caller has not read. It carries the same trust as the tool's output.
-- `serving_error` is the last event of a `resume` that stops before the Caller does, and says why: the Agent cannot go on
-  serving it (its storage failed: `unavailable`), or, sent by the client of a remote Agent, the connection was lost
-  (`unavailable`). It ends the stream, not the message, which may still end and be read with `getMessage`; a Caller
-  resumes the session, or asks again, once the Agent is back. No stream stops silently.
+- `serving_error` is the last event of a `resume` that stops before the Caller does, and says why: the Agent cannot go
+  on serving it (its storage failed: `unavailable`). It ends the stream, not the message, which may still end and be
+  read with `getMessage`; a Caller resumes the session, or asks again, once the Agent is back. No stream stops silently.
 - `retry_scheduled` explains a quiet gap while the agent waits to retry a model call.
 
 ### 6.1 Extending
@@ -437,16 +458,16 @@ interface AgentError {
 
 ### 7.1 Error codes
 
-| Code | When | HTTP | `retryable` |
-|---|---|---|---|
-| `invalid_request` | A malformed request; a content part the Agent does not take; a key without `sessionId`; `limit` above the maximum | 400 | false |
-| `not_found` | An unknown session, fork source or entry cursor | 404 | false |
-| `busy` | Admission refused; `details.reason` is `running` (`whenBusy: "reject"`), `queue_full` or `capacity` | 429 | true |
-| `missing_model` | The session names no model the agent has: a message is refused with it, or, when the model goes before it is answered, ends with it | 422 | false |
-| `auth_required` | The model provider has no credential | 422 | false |
-| `model_error` | The model call failed | 502 | by the provider's answer |
-| `unavailable` | The Agent's storage cannot answer now | 503 | true |
-| `internal` | Anything else | 500 | false |
+| Code | When | `retryable` |
+|---|---|---|
+| `invalid_request` | A malformed request; a content part the Agent does not take; a key without `sessionId`; `limit` above the maximum | false |
+| `not_found` | An unknown session, fork source or entry cursor | false |
+| `busy` | Admission refused; `details.reason` is `running` (`whenBusy: "reject"`), `queue_full` or `capacity` | true |
+| `missing_model` | The session names no model the agent has: a message is refused with it, or, when the model goes before it is answered, ends with it | false |
+| `auth_required` | The model provider has no credential | false |
+| `model_error` | The model call failed | by the provider's answer |
+| `unavailable` | The Agent's storage cannot answer now | true |
+| `internal` | Anything else | false |
 
 A message's `failed` outcome carries `missing_model`, `auth_required`, `model_error` or `internal`.
 
@@ -463,21 +484,22 @@ A Caller MUST NOT infer the end of the history from a short page: only an absent
 
 ## 8. Security model
 
-The Agent authenticates no one and lists no sessions. Whoever reaches it may talk to it: who may reach it, and how
-often, is decided in front of it (a gateway, a private network, a cloud's IAM, an embedder's own middleware).
+An Agent is one trust domain. It authenticates no one and lists no sessions, and whoever holds it can do everything it
+can: invoke into, read, resume, configure, abort and fork every session, with the agent's tools acting with the
+authority of the process it runs in.
 
-- **A session id is not a credential.** Ids are the Agent's names, and may be sequential. Whoever reaches the Agent
-  can reach every session in it: read and resume it, invoke into it, abort it, configure it and fork from it.
-  Configuring is not confined to the Caller's own messages: a model the agent lacks fails the messages the session
-  has taken and queued, whoever sent them, and a costlier one is paid for them too (§5). Keeping one user out
-  of another's sessions, when several share one deployment, is the job of the layer in front: a facade that maps
-  each user to their sessions and admits only those, including the source of a fork and the session an invoke without
-  `sessionId` creates ([security-boundary.md](security-boundary.md) §4).
-- **A browser is a Caller like any other.** Over HTTP, every `POST` and `PATCH` MUST carry
-  `content-type: application/json`, whether or not it has a body, and anything else is refused with `invalid_request`
-  before it is read. A `POST` that is a form, `text/plain`, or has no body at all is sent cross-origin without a
-  preflight, so withholding a response would not stop what it already did: a run started, a session aborted, a
-  session created. Which origins may read the answers is the deployment's choice.
+- **The API is not on the network.** Its Callers are code in the process that runs the agent (§10). Whoever puts the
+  agent on a network decides who may reach it, and how: a channel MUST verify that a request comes from its platform,
+  by the platform's signature or token, and an app that embeds the agent serves its own routes behind its own
+  authentication.
+- **Everyone who reaches the agent is inside its trust domain.** A platform's signature proves the platform, not the
+  person: everyone who can message a channel's bot can ask the agent for anything its tools reach, every other chat's
+  conversation included, and so can every user an embedding app lets through. Sessions in one Agent are not kept from
+  each other: the agent's tools reach its storage and its files, whichever session asked them to.
+- **One instance per customer.** People who must not read each other's conversations get an instance each, with its
+  own storage, process and files, or an agent whose tools reach neither ([architecture.md](architecture.md) §2). A
+  public bot's users and its owner's other chats are one trust domain unless they are split this way.
+- **A session id is not a credential.** Ids are the Agent's names, and may be sequential.
 
 ## 9. Conformance
 
@@ -512,11 +534,11 @@ often, is decided in front of it (a gateway, a private network, a cloud's IAM, a
 
 ### The conformance suite
 
-One executable suite, run against the Agent in process and through the HTTP binding, checks:
+One executable suite, run against the Agent, checks:
 
 | Area | Checks |
 |---|---|
-| Invoke | An invoke answers with a receipt once the message is recorded, without waiting for it to be answered; a rejection records nothing; an invoke whose submission fails without proving refusal, whose status cannot be read after acceptance, or whose remote connection fails before the receipt answers `unknown`, never a rejection, carrying every known id; a duplicate whose receipt cannot be read does the same; after reopening the storage, querying by id or retrying with the same key finds one message and produces no repeated tool effect; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; a `/<name>` among `info().commands` is expanded for the model while its `user_message` holds the text as sent, and an unknown `/<name>` is sent as written; `wait()` resolves with the message's `done`, also when it is called after the message ended, and with `unfinished`, never a rejection, when the storage fails, a remote client's connection is lost or its `signal` is aborted, which leaves the message going on; a receipt whose `wait()` is never called holds nothing; every result's data and every event is JSON |
+| Invoke | An invoke answers with a receipt once the message is recorded, without waiting for it to be answered; a rejection records nothing; an invoke whose submission fails without proving refusal, or whose status cannot be read after acceptance, answers `unknown`, never a rejection, carrying every known id; a duplicate whose receipt cannot be read does the same; after reopening the storage, querying by id or retrying with the same key finds one message and produces no repeated tool effect; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; a `/<name>` among `info().commands` is expanded for the model while its `user_message` holds the text as sent, and an unknown `/<name>` is sent as written; `wait()` resolves with the message's `done`, also when it is called after the message ended, and with `unfinished`, never a rejection, when the storage fails or its `signal` is aborted, which leaves the message going on; a receipt whose `wait()` is never called holds nothing; every result's data and every event is JSON |
 | Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is `queued` at position 0 until taken, then taken while the session is still busy; a steer the agent did not take before it stopped is taken no later than the messages queued with `queue`; an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
 | Idempotency | A key without `sessionId` is `invalid_request`; a key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`, and its `wait()` resolves with the same end; concurrent invokes with one key make one message |
 | Messages | `getMessage` by id and by key follows a message through queued, taken and done, and answers `undefined` for an unknown one; a message whose Caller never waits or watches is done; `abort` stops the taken message and withdraws the queued ones, answers once they have ended `canceled`, and reports them, and reports nothing on an idle session; a second `abort` while a tool that ignores its signal keeps the first one waiting reports the same messages; an `abort` whose `signal` is aborted answers `unknown` and its stop, once recorded, still ends the messages `canceled`; messages invoked after a failed or aborted one are taken, one invoked while an abort is still ending its messages included, also when that `abort`'s `signal` was aborted; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
@@ -524,82 +546,27 @@ One executable suite, run against the Agent in process and through the HTTP bind
 | Resuming | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; it sends one `state` snapshot after the replay and before anything live, and a `done` for each message that ends, before the `user_message` of the message taken after it, also when one commit ends one and places the other; a `resume` opened before an invoke delivers that message's `user_message` and then its answer, and the events before its `user_message` are another message's; one attached mid-answer gets `state.reply`, and it with the deltas that follow is a prefix of the `assistant_message` entry that ends that answer; a reconnect after the last entry it had delivers each entry exactly once; when the storage fails it ends with `serving_error` instead of hanging; an unknown session or cursor is a single `rejected` |
 | Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` carries `usage`; `state.usage` counts the session's own spend, which a fork starts from nothing; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source; the state moves idle → running → idle |
 | Sessions | A new session stores its chosen model and thinking level in the creating commit and keeps them after a restart; `configure` changes either, the state and a `resume` snapshot read it back, a model the agent lacks refuses the next message `missing_model` and configuring an available one lets it be answered, and an unknown session or empty settings are refused; a fork shares the history up to its entry and none of the messages, inherits the source's settings at that entry (its current settings if empty), applies supplied model and thinking level fields independently, and leaves the source unchanged; an unknown fork source is `not_found` |
-| HTTP | A `POST` without `content-type: application/json` is refused before it is read, a body-less `abort` included; `POST /invoke` answers `202` and the receipt; `Last-Event-ID` resumes after its entry, and takes precedence over `replay` and `after`; a stream opened without a cursor and cut before its first entry resumes from its snapshot's id and misses no entry written in between; the HTTP client's `wait()` gives what the in-process one does, also for a message that ended before it was called; `stream()` over the in-process Agent and over the HTTP client gives the same receipt, refusals and events for a new message, a queued, taken or done duplicate (a taken one whose message ends meanwhile included), and an `abort` |
+| `stream()` | It delivers a new message's events after its `user_message` through its `done`, and only its own message's for one queued behind another; a queued duplicate's once it is taken; a taken duplicate's from its `user_message` on, what it already wrote included, stopping at its answer when it ended before the stream reattached; a done duplicate's entries through its answer, then its `done`; the message's `canceled` `done` when it is aborted; and the invoke's refusal, and an unknown session's, recording nothing |
 
-## 10. HTTP binding
+## 10. No network binding
 
-| Operation | HTTP |
-|---|---|
-| `info` | `GET /agent` |
-| `invoke` | `POST /invoke` with the `InvokeRequest`: `202` and the `Receipt`, once the message is recorded. A rejection is the error's status with `{ "error": AgentError }`. When submission or reading the receipt fails without proving refusal: `503` and `{ "unknown": { reason, sessionId?, messageId? } }` |
-| `getMessage` | `GET /sessions/{s}/messages/{m}`, or `GET /sessions/{s}/messages?idempotencyKey=` by key: `200` and the `MessageStatus`, or `200` and `null` for `undefined` |
-| `createSession` | `POST /sessions` with `CreateSessionOptions` (`from?`, `model?`, `thinkingLevel?`): `201` and `{ sessionId }` |
-| `configure` | `PATCH /sessions/{s}` with `SessionSettings` (`model?`, `thinkingLevel?`): `200` and `{}` |
-| `read` | `GET /sessions/{s}?after=&before=&limit=` |
-| `resume` | `GET /sessions/{s}/events`, with `?replay=start` or `?after=<entryId>` for `replayFrom`: a `text/event-stream`. Each `entry` event's SSE `id` is the entry id, and the snapshot's is the newest entry id when it was taken, or `start` when the session has none, so a reconnect's `Last-Event-ID` resumes after where the stream had got to even before any entry arrived (`start`: from the first entry). A `Last-Event-ID` header takes precedence over `replay` and `after`: a browser reconnects with the URL it opened and the header, and the header is where it got to. A resume that cannot start is the error's status instead |
-| `abort` | `POST /sessions/{s}/abort`: `200` and `{ stopped }` once the stopped messages have ended. The request's own end is the Caller's `signal`. An `unknown` the Agent answers is `503` and `{ "unknown": { reason } }` |
-| `attachment` | `GET /sessions/{s}/attachments/{ref}`: the bytes, served as their type when it is a raster image and as `application/octet-stream` otherwise, with the declared type percent-encoded in `x-mime-type`; or `404` with no body |
-
-A rejected result is answered with its code's status (§7.1) and `{ "error": AgentError }`; an invoke's `unknown` is
-answered as the table says, never translated to a rejection. A successful result is answered with `200`
-and the value without its `ok`. `getMessage` answers an unknown message with `null` rather than `404`, because any
-router answers `404` for a path it does not know, and this answer decides whether a Caller sends again.
-
-A connection that fails before the receipt arrives leaves it unknown whether the message was accepted: the server
-may still be reading or submitting the request, or may already have recorded it. The client answers `unknown`
-then, including the session id if known, and MUST NOT answer a rejection: that says nothing was recorded, and a
-Caller would send it again. It also preserves an `unknown` returned by the server, including its ids. Recovery is the
-same in either binding (§2): query by message id when known, otherwise retry with an `idempotencyKey` in the same
-session, which finds the first message or accepts one.
-
-`POST /invoke` does not wait for the message to be answered: an answer can take minutes, longer than the idle timeout
-of the proxies in front of most deployments. A Caller that wants the answer as it is written opens
-`GET /sessions/{s}/events` first; one that wants only the end asks `getMessage` until it is `done`. An `abort` does
-wait, as pi-durable's does, so one cut by such a timeout answers `unknown` in the client, and its Caller reads the
-state before it decides anything (§5).
-
-**The TypeScript client.** Its `wait()` and the `stream()` helper are Callers of the operations above, and §9 checks
-that they give what the in-process ones do. A `done` is a live event, never replayed, so both read an end that came
-before they attached with `getMessage`:
-
-- **`wait()`** answers at once when the receipt's message is already `done`. Otherwise it resumes the session without
-  replay and, once the snapshot arrives, asks `getMessage`: a message that ended before the snapshot is `done` there,
-  and one that ends after it arrives as a live `done`. A lost connection, or an aborted `signal`, ends it
-  `unfinished`.
-- **`stream(agent, request)`** sends a message and delivers its answer as it is written:
-
-  ```ts
-  function stream(agent: Agent, request: InvokeRequest & { sessionId: string }): Promise<StreamResult>;
-  type StreamResult =
-    | ({ ok: true } & Receipt & { events: AsyncIterable<SessionEvent> })  // after its user_message, through its done
-    | Extract<InvokeResult, { ok: false }>;                            // the invoke's rejection or unknown
-  ```
-
-  The receipt, a rejection and `unknown` are the invoke's own (a channel keys its turn by the receipt's `messageId`
-  and tells its user why a message was refused); `events` ends with the message's `done`, or with a `serving_error`
-  when the session cannot be followed. It takes a session that exists, since only one can be resumed before the
-  message is sent: a Caller with a new conversation creates the session and keeps its id first, which is also what
-  keeps a key's retry in one session (§3.3). It resumes the session without replay, invokes once the snapshot arrives,
-  and then, by the receipt:
-  - a new or `queued` message: the events after its `user_message`, which arrives live;
-  - a `taken` duplicate, whose `user_message` was written before: it resumes again after that entry
-    (`{ type: "after", entryId: message.entryId }`), holds what that replays, and asks `getMessage` once its snapshot
-    arrives. Still taken, it delivers the held entries and goes on live; done meanwhile, it delivers the held entries
-    through its answer only (none when it has none), since the replay can run on into a message taken after it, and
-    then its `done`;
-  - a `done` duplicate: it reads the entries after its `user_message` through its answer (`read`, after
-    `message.entryId`), or none when it has no answer, then delivers its `done`.
+The API is TypeScript, in process. FastAgent serves it over no network: a deployment's served routes are its channels'
+own, which MUST verify that a request comes from their platform (§8), and its host's (AgentCore's, behind IAM). An app that wants the agent on its own
+network writes routes over this API, behind its own authentication, with `stream()` (§3.1) for an answer as it is
+written; every result and event is JSON (§2), so it can send them on as they are. A remote binding is designed when a
+Caller needs one, with that Caller's own requirements: who hosts the agent, and who decides who reaches it.
 
 ## 11. Out of scope
 
 - **Operating the agent**: changing a session's tools, extensions or instructions, compaction, inspecting or listing
   sessions, and anything else its harness can do. These are the harness's own API, in the process that runs the agent.
 - **Listing and deleting sessions**: a Caller keeps the sessions it uses, and nothing is deleted.
-- **Identity, authentication, rate limits** (§8).
+- **Identity, authentication, rate limits**: an Agent is one trust domain, and whoever puts it on a network decides
+  who reaches it (§8).
 - **Asking the user**: an agent that waits for a person's approval or answer mid-message. A later version adds it
   under §6.1's rules.
 - **Files other than images in a prompt.**
-- **Other transports and protocols**: they sit outside and call this API.
+- **A network binding, other transports and protocols**: they sit outside and call this API (§10).
 - **The agent definition, packaging and deployment**: [architecture.md](architecture.md).
 
 ## 12. Changes
@@ -621,10 +588,10 @@ From [SPEC v1](../SPEC.md), which the code implements until this API replaces it
 | `sessions.create({ sessionId, fork })` | `createSession({ from?, model?, thinkingLevel? })`, with model and thinking level passed to pi-durable's creation options |
 | `capabilities`, `durableQueue`, `durableTaken` | Gone: durability is a MUST |
 | The `intercepted` and `interrupted` outcomes; `source`; `takenAt`, `endedAt` | Gone |
-| `collect`; `Accept: application/json` answering `202` | `wait()`, which can be `unfinished` and takes a `signal`; `POST /invoke` answers `202` and the receipt, or `503` and `unknown` when submission or reading the receipt fails without proving refusal; an invoke with no complete receipt reports every known id |
+| `collect`; `Accept: application/json` answering `202` | `wait()`, which can be `unfinished` and takes a `signal`; an invoke answers `unknown` when submission or reading the receipt fails without proving refusal, and reports every known id |
 | `abort` that answers once the stop is signalled: queued messages withdrawn and the run told to stop, without waiting for them to end | `abort` that waits until the messages it stopped have ended, as pi-durable's `conversation.abort()`, and takes a `signal`; one whose answer did not arrive is `unknown`. A channel's `/stop` must therefore not await it on the path that acknowledges its platform's webhook |
 | `serving_error { message }` | `serving_error { error }`, the end of a `resume` that cannot go on |
-| A body-only JSON gate | Every `POST` requires `content-type: application/json` |
+| An HTTP binding served by every serve, unauthenticated, behind a JSON body gate and CORS; `connectAgent` | No network binding: Callers are in process, and an app that puts the agent on a network writes its own routes (§10) |
 
 From v0.1, the last released protocol:
 

@@ -1,11 +1,19 @@
 ---
 title: Security boundary
-description: "Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, the two browser-facing rules (the JSON body gate and CORS), and how a multi-tenant facade in front of one deployment stays safe."
+description: "Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, the two browser-facing rules (the JSON body gate and CORS), and why an instance is one trust domain: a facade in front of one deployment keeps users apart only for an agent without tools that reach its storage."
 type: design-doc
 status: current
 ---
 
 # Security boundary
+
+> This is the boundary the code serves today. An instance is one trust domain today as well: the coding tools (`read`,
+> `bash`) reach every session's record under the state root (`.state/sessions/`), whichever session asked, so the
+> facade of §4 keeps users apart only for an agent without tools that reach its instance's storage and files; with
+> them, give each customer an instance of its own. When the move lands
+> ([#788](https://github.com/fastagent-sh/fastagent/issues/788)), a serve publishes no API: the Agent API is TypeScript in
+> process, and a deployment serves only routes that verify their caller ([architecture.md](architecture.md) §2,
+> [agent-api.md](agent-api.md) §8 and §10).
 
 FastAgent authenticates no caller, on any plane. Authentication belongs to the deployment: an API gateway, an
 IdP-backed proxy, a private network, AgentCore's IAM, or an embedder's own middleware in front of the Fetch handler.
@@ -98,6 +106,10 @@ would meet a 403 unless a host allowlist ships with it. A `dev` serve that matte
 something that authenticates.
 
 ## 4. A multi-tenant facade
+
+**Only for an agent whose tools cannot reach its instance's storage or files.** An agent with the coding tools reads
+any session's record through them, whichever user asked it to, so no facade keeps its users apart: give each customer
+an instance of its own.
 
 N users behind one deployment, each reaching only their own sessions: the facade authenticates its user, reads the
 session id from the request, checks it against its own user-to-session mapping, and forwards. It never parses an

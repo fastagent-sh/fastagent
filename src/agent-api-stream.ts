@@ -1,6 +1,6 @@
 /**
- * `stream(agent, request)` (docs/design/agent-api.md §10): send a message and read its answer as it is written. A Caller
- * of the Agent API, over any `Agent`, in process or remote, adding nothing to it. Imports no harness.
+ * `stream(agent, request)` (docs/design/agent-api.md §3.1): send a message and read its answer as it is written. A
+ * Caller of the Agent API, over any `Agent`, adding nothing to it. Imports no harness.
  */
 import {
   type Agent,

@@ -397,9 +397,14 @@ that imports it; keep package versions aligned.
   `createAgentHandler(agent)`, or consume `agent.invoke` directly. The API handler alone does not
   mount native channels or start schedules.
 
-The application owns authentication, users, session ownership, database, and deployment. Preserve raw
-webhook bodies when mounting under a framework. Follow [Embedding](embedding.md) rather than rebuilding
-the service assembly, Slack transport, or a separate scheduler. Nothing in the assembly isolates the process.
+The application owns authentication, users, database, and deployment. Preserve raw webhook bodies when
+mounting under a framework. Follow [Embedding](embedding.md) rather than rebuilding the service assembly,
+Slack transport, or a separate scheduler. Nothing in the assembly isolates the process.
+
+One agent instance is one trust domain. Recording which user owns which session does not keep users apart: the
+coding tools (`read`, `bash`) read every session's record under the state root, whichever user's message asked them
+to. Users who must not see each other's conversations get an instance each, or an agent without tools that reach its
+instance's storage and files ([security boundary](design/security-boundary.md) §4).
 
 ## 9. Deploy and preserve the right data
 
