@@ -13,8 +13,8 @@ status: current
 ## 一句话概括
 
 一个部署好的 agent 就像一个 bot，也是一个信任域：拿到它的代码能做它能做的一切。Agent API 只定义这个 bot 对**消费者**提供的
-接口，一共 9 个操作，只有进程内的 TypeScript 绑定，FastAgent 不把它放到任何网络上。会话用哪个模型、哪个 thinking level 由调用方选择；其余一切（改 agent 的定义、
-压缩、查看所有会话）都是 harness（pi-durable）自己的 API，不在 Agent API 里。
+接口，一共 10 个操作，只有进程内的 TypeScript 绑定，FastAgent 不把它放到任何网络上。会话用哪个模型、哪个 thinking level
+由调用方选择；其余一切（改 agent 的定义、压缩、查看会话内部）都是 harness（pi-durable）自己的 API，不在 Agent API 里。
 
 ## 1. 为什么是这个形状
 
@@ -26,10 +26,10 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 
 - **只用一个 harness：pi-durable。** 它原生有服务化需要的东西：按 `whenBusy` 准入、按请求 id 去重、每条消息持久地结束一次、
   重启后接着回答，存储和执行环境也都可以替换。
-- **只定义我们自己必须定义的那一层：消费者 API。** 我们自己的 channels、定时任务、wake 都是消费者，它们只用这 9 个操作
+- **只定义我们自己必须定义的那一层：消费者 API。** 我们自己的 channels、定时任务、wake 都是消费者，它们只用这 10 个操作
   就够了，这说明这一层是完整的。它同时把 pi-durable 的实验性 API 和内部 entry 种类挡在客户端之外。
 
-## 2. 九个操作
+## 2. 十个操作
 
 | 操作 | 做什么 |
 |---|---|
@@ -42,6 +42,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | `resume` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
 | `abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样；没拿到答复时返回 `unknown` |
 | `attachment` | 读历史里图片的内容：base64 数据和声明的类型 |
+| `listSessions` | 列出 Agent 持有的所有会话，最近有活动的排在前面，不管是谁建的（channel、定时任务、REPL、嵌入的应用）。会话的活动指它的创建、它接收的消息和它写下的 entry 中最新的一个；用 `before` 加不透明的游标翻页；每个会话的状态和最新内容用 `read` 读。harness 为自己的工作建的对话（比如子 agent 的）不算会话，不列出 |
 
 创建会话时，`model` 用 `{ provider, modelId }`，`thinkingLevel` 用 pi-durable 原生支持的 `off`、`minimal`、`low`、`medium`、
 `high`、`xhigh`、`max`。它们和会话在同一次提交里保存，重启后保留。fork 继承分叉 entry 当时的设置（空会话继承当前设置），
@@ -111,7 +112,9 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
 ## 4. 几个关键决定
 
 - **会话 id 由服务端生成，调用方自己记住。** pi-durable 生成 conversation id，不接受调用方指定。channel 和定时任务在自己的
-  状态里记“哪个聊天或 thread 对应哪个会话”。服务端不提供会话列表，也不提供删除。
+  状态里记“哪个聊天或 thread 对应哪个会话”。服务端按最近活动列出所有会话（`listSessions`），这样 duang 的侧栏能显示 channel、定时任务、REPL 发起的对话；但不提供删除，
+  因为 pi-durable 没有删除。同一个存储里，pi-durable 给会话、消息、entry 分配 id 用的是同一个递增计数器，所以一个会话最新的那个
+  id 就代表它最近的活动，排序不需要时钟；一个实例跨多个存储时按时间比较，和横向扩展一起设计。
 - **映射按固定顺序、在固定的地方建立**（architecture.md §2）：只在 channel 已经按“位置”（一个聊天、一个 thread）串行处理的地方
   建立映射，也就是以位置为键的 turn queue 加持久的 turn store，所以同一个新位置并发到达的两条消息、或者首条消息的重投，会先后执行，
   后一个能看到前一个写下的映射；跨进程时，同一时间只有一个进程持有实例状态（服务进程的租约）。顺序是：先 `createSession`（开 thread
@@ -186,7 +189,7 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 
 没有采纳的：把 run/turn/task 当作一等公民的 id（我们以消息为单位）；客户端持有历史、每次把历史发过来（AG-UI，我们由服务端持有）；
 共享状态的 JSON Patch、计划、模式（特定 agent 的功能，用带前缀的自定义事件表达）；客户端提供文件系统和终端（ACP，我们的 agent
-在服务端运行）；会话列表、关闭、删除和多租户字段；自己的传输协议（它是进程内的 TypeScript，放到网络上的应用自己决定怎么传）。人工确认、
+在服务端运行）；关闭、删除会话和多租户字段；自己的传输协议（它是进程内的 TypeScript，放到网络上的应用自己决定怎么传）。人工确认、
 消息结束时推送 webhook（A2A、OpenAI 后台模式）、`notice` 实时提示事件（ACP），以后按扩展规则加，不影响现有调用方。
 
 ## 6. 不在 Agent API 里的
@@ -194,7 +197,7 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | 不在 Agent API 里 | 去哪里 |
 |---|---|
 | 改会话的工具、扩展或指令、压缩、查看所有会话 | pi-durable 的原生 API（`agent.harness`） |
-| 列出、删除会话 | 不提供：调用方自己记，数据不删除 |
+| 删除会话 | 不提供：pi-durable 没有删除 |
 | 身份、认证、限流 | 实例是一个信任域；谁把它放到网络上，谁决定谁能访问（channel 的平台签名、宿主的 IAM、嵌入方自己的认证） |
 | 网络绑定（HTTP 等） | 不提供：嵌入方在自己的路由里调用这套 API；远程绑定等有使用方时再按它的需求设计 |
 | 人工确认、agent 反问 | 以后的版本按 §6.1 加 |
@@ -210,7 +213,8 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | harness 无关的协议，通过 harness 端口和 `LoopPort` 实现 | 一个 harness（pi-durable）的消费者接口 |
 | 调用方可以给会话命名，也可以由 Agent 命名 | 全部由 Agent 命名；id 不透明、永不复用 |
 | `/control` 平面的 `update` | `configure`，放在消费者 API 上：会话的模型和 thinking level 和创建时一样由调用方选择 |
-| `sessions.list`、`rewind`、`compact`、`delete`、`/control` 平面的其余部分、`models` | 去掉；运维用 pi-durable 原生 API |
+| `sessions.list` | `listSessions`，最近有活动的排在前面，分页读取 |
+| `rewind`、`compact`、`delete`、`/control` 平面的其余部分、`models` | 去掉；运维用 pi-durable 原生 API |
 | `commands()` | 并入 `info().commands`，调用方读一次即可 |
 | `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`（按 id 或 key）；`resume`；`abort` |
 | `follow` | `resume`：按 `replayFrom` 重放，必发快照，再接实时；回答中途也能接上 |
