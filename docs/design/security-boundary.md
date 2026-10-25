@@ -7,6 +7,11 @@ status: current
 
 # Security boundary
 
+> This is the boundary the code serves today. When the move lands
+> ([#788](https://github.com/fastagent-sh/fastagent/issues/788)), a serve publishes no API: the Agent API is TypeScript in
+> process, a deployment serves only routes that verify their caller, and an instance is one trust domain
+> ([architecture.md](architecture.md) §2, [agent-api.md](agent-api.md) §8 and §10).
+
 FastAgent authenticates no caller, on any plane. Authentication belongs to the deployment: an API gateway, an
 IdP-backed proxy, a private network, AgentCore's IAM, or an embedder's own middleware in front of the Fetch handler.
 The planes and their routes are [agent service](agent-service.md) §7.7; this note is what that choice obliges.

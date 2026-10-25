@@ -12,8 +12,8 @@ status: current
 
 ## 一句话概括
 
-一个部署好的 agent 就像一个 bot：能访问到它的人都可以和它对话。Agent API 只定义这个 bot 对**消费者**提供的接口，一共 9 个操作，
-进程内（TypeScript）和 HTTP 两种绑定，语义完全相同。会话用哪个模型、哪个 thinking level 由调用方选择；其余一切（改 agent 的定义、
+一个部署好的 agent 就像一个 bot，也是一个信任域：拿到它的代码能做它能做的一切。Agent API 只定义这个 bot 对**消费者**提供的
+接口，一共 9 个操作，只有进程内的 TypeScript 绑定，FastAgent 不把它放到任何网络上。会话用哪个模型、哪个 thinking level 由调用方选择；其余一切（改 agent 的定义、
 压缩、查看所有会话）都是 harness（pi-durable）自己的 API，不在 Agent API 里。
 
 ## 1. 为什么是这个形状
@@ -31,17 +31,17 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 
 ## 2. 九个操作
 
-| 操作 | HTTP | 做什么 |
-|---|---|---|
-| `info` | `GET /agent` | bot 的名字、简介，消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`），以及可用的命令（`commands`：prompt 模板，和每个 skill 的 `skill:<name>`） |
-| `invoke` | `POST /invoke` | 向会话发一条消息（不带 `sessionId` 就新建会话）。消息一被持久记录就返回 `202` 和回执，不等它被回答 |
-| `getMessage` | `GET /sessions/{s}/messages/{m}`，或 `?idempotencyKey=` 按 key 查 | 按 id 或发送时的 key 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
-| `createSession` | `POST /sessions` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”）；可以用 `model`、`thinkingLevel` 选择新会话的设置 |
-| `configure` | `PATCH /sessions/{s}` | 修改已有会话的 `model`、`thinkingLevel` 或两者，和 pi-durable 的 `configure()` 一样在一次提交里保存，从会话的下一次模型请求开始生效，正在回答的消息也会接着用新设置 |
-| `read` | `GET /sessions/{s}` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
-| `resume` | `GET /sessions/{s}/events` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
-| `abort` | `POST /sessions/{s}/abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样。Agent 回答 `unknown` 时，HTTP 返回 `503` 和 `{ unknown }` |
-| `attachment` | `GET /sessions/{s}/attachments/{ref}` | 读历史里图片的内容；只有光栅图片按自身类型返回，其他一律 `application/octet-stream`，声明的类型经百分号编码放在 `x-mime-type` 头里 |
+| 操作 | 做什么 |
+|---|---|
+| `info` | bot 的名字、简介，消息可以带哪些内容类型（`inputs`，比如 `["text", "image"]`），以及可用的命令（`commands`：prompt 模板，和每个 skill 的 `skill:<name>`） |
+| `invoke` | 向会话发一条消息（不带 `sessionId` 就新建会话）。消息一被持久记录就返回回执，不等它被回答 |
+| `getMessage` | 按 id 或发送时的 key 查一条消息现在的状态：排队、处理中、已结束（结局和回答） |
+| `createSession` | 新建空会话；带 `from` 就是从某个会话的某条 entry 分叉（开 thread、“从这里分支”）；可以用 `model`、`thinkingLevel` 选择新会话的设置 |
+| `configure` | 修改已有会话的 `model`、`thinkingLevel` 或两者，和 pi-durable 的 `configure()` 一样在一次提交里保存，从会话的下一次模型请求开始生效，正在回答的消息也会接着用新设置 |
+| `read` | 状态加一页历史；不带游标返回最新一页，`before` 往前翻，`after` 往后读 |
+| `resume` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
+| `abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样；没拿到答复时返回 `unknown` |
+| `attachment` | 读历史里图片的内容：base64 数据和声明的类型 |
 
 创建会话时，`model` 用 `{ provider, modelId }`，`thinkingLevel` 用 pi-durable 原生支持的 `off`、`minimal`、`low`、`medium`、
 `high`、`xhigh`、`max`。它们和会话在同一次提交里保存，重启后保留。fork 继承分叉 entry 当时的设置（空会话继承当前设置），
@@ -54,33 +54,30 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 **发消息和看会话是分开的两件事**，和 pi-durable 一样：`submit` 返回一个句柄，过程另外用 `watchEvents` 订阅。对应到这里：
 
 - `invoke` 返回回执 `{ sessionId, message, duplicate }`，以及一个 `wait()`，等这条消息结束，对应 pi-durable 的
-  `Submission.wait()`。即使消息在调用 `wait()` 之前就结束了，`wait()` 也会返回它的 `done`。`wait()` 返回 `unfinished` 有三种
-  情况：Agent 的存储出错、远程客户端的连接断了、调用方通过 `signal` 放弃等待。放弃等待只结束这一次等待，不影响消息本身（和取消
+  `Submission.wait()`。即使消息在调用 `wait()` 之前就结束了，`wait()` 也会返回它的 `done`。`wait()` 返回 `unfinished` 有两种
+  情况：Agent 的存储出错、调用方通过 `signal` 放弃等待。放弃等待只结束这一次等待，不影响消息本身（和取消
   pi-durable 的等待 context 一样）。`unfinished` 从不表示“被拒绝”：调用方应该之后用 `getMessage` 查，不带 key 时不要重发。从不
   调用 `wait()` 的回执不占任何资源。
 - 被拒绝时返回错误，什么都没记录，可以重发。
-- 提交消息或取得完整回执失败，且不能证明消息被拒绝时，返回 `unknown`。包括进程内提交期间存储失败、消息已记录但读状态失败、重复
-  消息的回执读不出来，以及远程客户端在回执到达前断线。提交期间只有明确的拒绝才可返回 rejection，之后的读取失败不能算拒绝。
+- 提交消息或取得完整回执失败，且不能证明消息被拒绝时，返回 `unknown`。包括提交期间存储失败、消息已记录但读状态失败、重复消息的
+  回执读不出来。提交期间只有明确的拒绝才可返回 rejection，之后的读取失败不能算拒绝。
   `unknown` 表示没有取得完整回执，不一定是不知道是否接受：拿到了 `messageId` 就能证明已记录。结果必须带上所有已知的 `sessionId`、
   `messageId`。Agent 恢复后，有消息 id 就用 `getMessage` 查；没有消息 id 时，可以在同一会话用原来的 key 重试。如果两者都没有，
-  不能认定被拒绝，也不能自动重发。HTTP 服务端在这种情况下返回 `503` 和 `{ unknown: { reason, sessionId?, messageId? } }`，
-  客户端保留这个结果和 id，不转成拒绝；连接断开时客户端也返回 `unknown`，带上已知的会话 id。
-- 只有回执的数据部分（`POST /invoke` 返回的 body）要求能 JSON 序列化；`wait()` 是各个绑定提供的方法。
+  不能认定被拒绝，也不能自动重发。
+- 结果、事件和 entry 的数据都能 JSON 序列化，嵌入方可以原样转发给自己的客户端；回执里的 `wait()` 是附在数据旁边的方法。
 - 想看回答怎么写出来，就用 `resume` 订阅会话。**一条消息的回答，是会话事件里它自己那条 `user_message`（会注明是哪条消息）之后、
   到它的 `done` 为止的内容**；在那之前的事件属于别的消息。为了不漏，调用方在 `invoke` 之前先 `resume`，这要求会话已经存在：新对话
   先用 `createSession` 建出来，并在发任何消息之前记下它的 id。Agent 保证一条消息的 `done` 先于之后被取走的消息的 entry 发出，即使
   pi-durable 在同一次提交里结束前一条、放入后一条，所以“从 `user_message` 到 `done`”的划分是可靠的。`done` 不会被重放，所以在 `invoke` 之后才 `resume` 的调用方，要在拿到快照后用 `getMessage` 查一次，
   补上订阅之前就已结束的情况。
-- TypeScript 客户端把这件事包成了 `stream(agent, request)`，适用于任何 `Agent`（进程内或远程），只是 API 的一个调用方，不增加
-  任何语义。它返回 `StreamResult`：成功时是回执加 `events`（这条消息 `user_message` 之后、到它的 `done` 为止的事件，会话无法继续
+- `stream(agent, request)` 把这件事包了起来，适用于任何 `Agent`，只是 API 的一个调用方，不增加任何语义（见 agent-api.md
+  §3.1）。它返回 `StreamResult`：成功时是回执加 `events`（这条消息 `user_message` 之后、到它的 `done` 为止的事件，会话无法继续
   跟随时以 `serving_error` 结束）；也可能是 invoke 的拒绝或 `unknown`，包括后者携带的已知 id。channel 用回执里的 `messageId`
   记录这一轮，并把拒绝的原因告诉用户。它要求请求带 `sessionId`：只有已存在的会话才能在发消息之前订阅，新对话由调用方先建会话、记下
   id，这也保证了带 key 重试时始终落在同一个会话里（§3.3）。它先不带重放地 `resume`，拿到快照后再 `invoke`，然后按回执里的状态处理：
   新消息或还在排队的，它的 `user_message` 会以实时事件到来；正在处理的重复消息，从它的 `user_message` 之后重新接上，先把重放的内容
   暂存，快照后用 `getMessage` 查一次：仍在处理就把暂存的发出去并接着看实时事件，已经结束就只发到它的回答为止（重放可能已经越过它、
-  进入下一条消息），再给出 `done`；已经结束的重复消息，用 `read` 读出它之后到回答为止的 entry，再给出 `done`（见 agent-api.md §10）。`wait()` 则在回执已是 `done` 时直接返回，否则在快照后用 `getMessage` 查一次，再等实时的 `done`。
-- HTTP 上 `POST /invoke` 不等消息被回答：一次回答可能要几分钟，比大多数部署前面代理的空闲超时（例如 60 秒）还长。想看过程就先开
-  `GET /sessions/{s}/events`；只要结果就用 `getMessage` 轮询到 `done`。
+  进入下一条消息），再给出 `done`；已经结束的重复消息，用 `read` 读出它之后到回答为止的 entry，再给出 `done`。
 
 消息的输入是内容数组 `content: [{ type: "text", text }, { type: "image", mimeType, data }]`，`user_message` 和 `tool_result`
 entry 也是同样的结构。内容类型是开放的取值（§6.1），以后加新类型不用改结构。
@@ -101,11 +98,7 @@ entry 也是同样的结构。内容类型是开放的取值（§6.1），以后
    不要从重放内容去推断。
 3. **实时**：之后是实时事件和新的 entry，和快照之间不漏不重；每条消息结束时发它的 `done`。
 
-`resume` 只在调用方停止读取，或以 `serving_error` 结束时才结束。HTTP 绑定的 TypeScript 客户端不会自己重连：连接断了就以
-`serving_error` 结束流，由调用方从最后一条 entry 之后再 `resume`。
-
-SSE 上，每个 `entry` 事件的 id 是 entry id，快照的 id 是拍快照时最新的 entry id（会话还没有 entry 时是 `start`）。所以不带游标打开的
-流，即使在第一条 entry 到达之前断线，重连时浏览器带上的 `Last-Event-ID` 也能从快照处接上，不会漏掉断线期间写下的 entry。
+`resume` 只在调用方停止读取，或以 `serving_error` 结束时才结束。
 
 **回答中途接上也能看到已经写出的部分。** `assistant_message` 写完才有 id。写的过程中，快照里的 `state.reply` 是目前已写出的文字，
 `message_delta` 在它后面追加。一个会话同一时间只写一条 agent 消息，所以 delta 不需要带 id：客户端先显示 `reply`，再接上后面的
@@ -133,12 +126,15 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
   随之发出的 id 也可能被再次发出。AgentCore 的 session storage 在宿主机故障后就是这种情况（见 architecture.md §4.3）。不能丢消息的
   调用方，应该一直保留消息，直到看到它的 `done`。
 - **开 thread**：分叉点仍然按 key 找（`getMessage` 带平台消息 id）；thread 对应的会话按上面的顺序建立和记录。
-- **会话 id 只是名字，不是凭证。** 它可能是顺序编号。能访问到 agent 的人就能访问它的每个会话：读、接上、发消息、停止、改设置、从它分叉。
-  改设置影响的不只是自己的消息：换成 agent 没有的模型，会话里已取走和排队的消息不管是谁发的都会失败；换成更贵的模型，这些消息也按
-  更贵的模型付费。
-  多个用户共用一个部署时，用户之间的隔离由前面的一层负责：一个记录“用户 → 会话”映射、只放行自己会话的 facade，包括 fork 的
-  源会话和不带 `sessionId` 的 invoke 新建的会话（见 [security-boundary.md](../design/security-boundary.md) §4）。认证、限流也由
-  上层负责。
+- **一个实例就是一个信任域，Agent API 不上网络**（agent-api.md §8、§10；architecture.md §2）。Agent 不认证任何人；拿到它的
+  代码能做它能做的一切：对每个会话发消息、读取、接上、改设置、停止、分叉，agent 的工具也带着进程的全部权限。它的调用方都在运行
+  agent 的那个进程里：我们自己的 channels、定时任务、wake、REPL，以及嵌入 agent 的应用。谁把 agent 放到网络上，谁决定谁能访问：
+  channel 校验平台签名，嵌入方用自己应用的认证保护自己写的路由。FastAgent 的部署只暴露会校验调用方的入口（channel 的 webhook，
+  宿主自己的入口，比如 AgentCore 的 IAM）。没有使用方需要通过网络访问 Agent API；唯一的远程需求（duang 的线上 agent）还没开始做，
+  等做的时候按它的实际需求再设计远程绑定。
+- **按实例隔离客户。** 同一个实例里的会话彼此之间并不隔离：agent 的工具能读到这个实例的存储和文件，不管是哪个会话让它去读的。
+  要把一个客户和另一个客户分开，就给每个客户一个自己的实例（自己的存储、进程和文件）。会话 id 只是名字，不是凭证，可能是顺序
+  编号。
 - **幂等 key 必须和 `sessionId` 一起用。** pi-durable 的 key 只在单个会话内有效；不带会话的 invoke 如果重试，会建出两个会话。
   想安全重试第一条消息，就先 `createSession` 拿到 id，再带 key 发。
 - **查一条消息：`getMessage`。** 参照 A2A 的 `GetTask` 和 OpenAI 的 `GET /responses/{id}`。调用方不知道消息怎样了时，用它查状态，
@@ -149,7 +145,7 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
   哪些。停止会先被持久记录再等待，所以调用方不再等待也不会丢掉这次中止，进程重启后这些消息照样以 `canceled` 结束。正在执行的工具
   要响应中止信号才会结束，这是对工具的要求；在那之前 `abort` 一直等，也可以用 `signal` 放弃等待。它报告所有还没结束、被它停下的
   消息，包括上一次 `abort` 还在停的。
-- **`abort` 没拿到答复时返回 `unknown`**：`signal` 被触发，或者远程客户端在等待中被切断（比如代理的空闲超时）。这时不知道停止有没有
+- **`abort` 没拿到答复时返回 `unknown`**：等待中 `signal` 被触发，或者存储出错。这时不知道停止有没有
   被记录，而且**不能靠再调一次 `abort` 来弄清楚**：那会把这期间新发来的消息也一起停掉，而第一次 `abort` 本来不会停它们。调用方应该先用
   `read`（`limit: 0`）看会话状态、用 `getMessage` 看要停的那些消息，确实还想全部停下时再调一次。
 - **消息的结局只有四种：** `completed`、`max_tokens`、`canceled`、`failed`。没有 `interrupted`：进程重启后 pi-durable 会接着
@@ -163,9 +159,6 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
 - **会扩展的取值都是开放的**（§6.1）：事件类型、entry 种类、内容类型、`inputs`、结局、会话状态、错误码。规范定义的名字不含
   `.`；实现方自己加的必须带自己的前缀（例如 `fastagent.plan`）。客户端遇到不认识的事件就忽略，不认识的会话状态当作“忙”，
   不认识的结局当作“结束但没有完成”。
-- **浏览器也只是一个调用方。** HTTP 上每个 `POST` 和 `PATCH`，不管有没有 body，都必须是 `content-type: application/json`，否则在读取之前
-  就拒绝：表单、`text/plain` 或没有 body 的跨域 POST 不经过预检，拒绝返回结果也挡不住已经做了的事（开始一次运行、中止一个会话、
-  建一个会话）。
 
 ## 5. 和其他接口规范的对照
 
@@ -189,16 +182,17 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 
 没有采纳的：把 run/turn/task 当作一等公民的 id（我们以消息为单位）；客户端持有历史、每次把历史发过来（AG-UI，我们由服务端持有）；
 共享状态的 JSON Patch、计划、模式（特定 agent 的功能，用带前缀的自定义事件表达）；客户端提供文件系统和终端（ACP，我们的 agent
-在服务端运行）；会话列表、关闭、删除和多租户字段；JSON-RPC 作为主传输（REST 加 SSE 对 Web 消费者更简单）。人工确认、
+在服务端运行）；会话列表、关闭、删除和多租户字段；自己的传输协议（它是进程内的 TypeScript，放到网络上的应用自己决定怎么传）。人工确认、
 消息结束时推送 webhook（A2A、OpenAI 后台模式）、`notice` 实时提示事件（ACP），以后按扩展规则加，不影响现有调用方。
 
 ## 6. 不在 Agent API 里的
 
 | 不在 Agent API 里 | 去哪里 |
 |---|---|
-| 改模型、思考档位、压缩、查看或列出所有会话 | pi-durable 的原生 API（`agent.harness`）；需要 HTTP 的话，开发者自己写一个路由 |
+| 改会话的工具、扩展或指令、压缩、查看所有会话 | pi-durable 的原生 API（`agent.harness`） |
 | 列出、删除会话 | 不提供：调用方自己记，数据不删除 |
-| 身份、认证、限流 | 上层（网关、私有网络、云的 IAM、嵌入方的中间件） |
+| 身份、认证、限流 | 实例是一个信任域；谁把它放到网络上，谁决定谁能访问（channel 的平台签名、宿主的 IAM、嵌入方自己的认证） |
+| 网络绑定（HTTP 等） | 不提供：嵌入方在自己的路由里调用这套 API；远程绑定等有使用方时再按它的需求设计 |
 | 人工确认、agent 反问 | 以后的版本按 §6.1 加 |
 | 图片以外的文件上传 | 这一版不做 |
 | ACP、A2A 等其他协议 | 在这套 API 外面调用它；做这些协议的绑定不在当前产品目标里 |
@@ -222,7 +216,7 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`；会话的花费是 `state.usage`，只算它自己的调用；`compaction` 不带 `usage` |
 | `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
 | `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |
-| `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`，可以用 `signal` 放弃等待；`POST /invoke` 返回 `202` 和回执，提交或读取回执失败又无法证明拒绝时返回 `503` 和 `unknown`；没有取得完整回执时报告所有已知 id |
+| `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`，可以用 `signal` 放弃等待；提交或读取回执失败又无法证明拒绝时返回 `unknown`，并报告所有已知 id |
 | `abort` 发出停止就返回：撤回排队的消息、通知 run 停止，不等消息结束 | `abort` 等被停下的消息都结束后才返回，和 pi-durable 的 `conversation.abort()` 一样，可以带 `signal`；没拿到答复时返回 `unknown`。所以迁移时，channel 的 `/stop` 不能在确认平台 webhook 的路径上等 `abort` |
 | `serving_error { message }` | `serving_error { error }`：无法继续的 `resume` 以它结束 |
-| 只检查带 body 的请求 | 每个 `POST` 都要求 `content-type: application/json` |
+| 每次服务都对外提供、不认证的 HTTP API，带 JSON 门槛和 CORS；`connectAgent` | 没有网络绑定：调用方都在进程内，要放到网络上的应用自己写路由 |
