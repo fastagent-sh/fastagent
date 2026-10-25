@@ -24,8 +24,9 @@ There are three roles:
   (§8).
 - **Caller**: code in the process that runs it: the implementation's own channels, schedules, wake-ups and REPL, and an
   app that embeds the agent. A front end, a client or another agent reaches it through one of these.
-- **Middleware**: both a Caller and an Agent. It wraps an Agent while exposing the same API, for authentication,
-  budgets, logging and the like.
+- **Middleware**: both a Caller and an Agent. It wraps an Agent while exposing the same API, for budgets, logging and
+  the like. The operations carry no caller's identity, so authentication belongs to whatever puts the agent on a
+  network (§8).
 
 The API has three concepts:
 

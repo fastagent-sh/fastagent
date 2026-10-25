@@ -17,8 +17,8 @@ export interface AgentConfig {
   extensions?: readonly (Extension | Needs<Extension>)[];
   /** Model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
   providers?: readonly (Provider | Needs<Provider>)[];
-  /** What a serve publishes on its port, and to which browsers. */
-  http?: { port?: number; cors?: readonly string[] };
+  /** The port a serve listens on, for its channels' webhooks and its health check. */
+  http?: { port?: number };
   /** How the agent is deployed, where a host needs to be told. */
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
 }

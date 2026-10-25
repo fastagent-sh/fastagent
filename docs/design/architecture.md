@@ -45,7 +45,7 @@ goal needs.
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
 | **One API of our own: the consumer [Agent API](agent-api.md)**, bound in TypeScript, in process | Every consumer, ours included (channels, schedules, wake-ups, the REPL), needs the same nine operations, and every one runs in the process that runs the agent, as does an app that embeds it. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
 | **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (its definition, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A session's model and thinking level are a consumer's choice, at creation, at a fork, or later with `configure`, which is pi-durable's `configure()` with those two fields: a Caller who may use a session may choose what it answers with |
-| **An instance is one trust domain, and serves nothing that does not verify its caller** | Whoever holds the Agent can do everything it can, every session and the agent's tools included, so FastAgent serves the API on no network ([agent-api.md](agent-api.md) §8, §10). A deployment's routes are its channels', which verify their platform's signature, and its host's own (AgentCore's, behind IAM); an app that embeds the agent serves its own routes behind its own authentication. No consumer needs the API over a network: channels, schedules, wake-ups, the REPL and an embedding app call it in process, and the one remote need, duang's online agents, is not built, so its binding is designed when it is, with its requirements. Customers are kept apart by giving each an instance, not inside one: the agent's tools reach every session of their instance, whichever session asked, so a check on session ids would not keep them apart. A session id is a name, not a credential |
+| **An instance is one trust domain, and serves nothing that does not verify its caller** | Whoever holds the Agent can do everything it can, every session and the agent's tools included, so FastAgent serves the API on no network ([agent-api.md](agent-api.md) §8, §10). A deployment's routes are its channels', which verify their platform's signature, and its host's own (AgentCore's, behind IAM); an app that embeds the agent serves its own routes behind its own authentication. No consumer needs the API over a network: channels, schedules, wake-ups, the REPL and an embedding app call it in process, and the remote needs, duang's online agents and agents calling agents (§4.4), are not built, so a binding is designed when one is, with its requirements. Customers are kept apart by giving each an instance, not inside one: the agent's tools reach every session of their instance, whichever session asked, so a check on session ids would not keep them apart. A session id is a name, not a credential |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
 | **No session listing and no deletion** | No consumer needs them; pi-durable has no deletion |
@@ -120,7 +120,6 @@ export default defineAgent({
   thinkingLevel: "medium",
   extensions: [stripe()],                // third-party capabilities
   providers: [gateway],                  // model providers beyond pi-ai's built-ins
-  http: { cors: ["https://app.example.com"] },
   deploy: { agentcore: { idleTimeoutSeconds: 900 } },
 });
 ```
@@ -272,8 +271,9 @@ standing NAT, or a backend of our own, for a failure not yet seen.
 ### 4.4 Later: shared contexts and agents working together
 
 Several agents using one context package share its declaration, not its data. Sharing data that is being written needs
-a context service; an agent calling another uses the other's consumer API, or A2A, which AgentCore can host. Both wait
-for the steps above.
+a context service. An agent calling another, in another instance, is a remote Caller: the API has no network binding
+(§2), so that binding, or A2A, which AgentCore can host, is designed when this is built, with its requirements. Both
+wait for the steps above.
 
 ## 5. What goes
 
