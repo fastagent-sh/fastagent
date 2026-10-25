@@ -71,6 +71,6 @@ These are not required to use FastAgent, but they explain public architecture de
 | [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
 | [Place history](design/place-history.md) | In progress: what a chat place said, read from the platform when a turn needs it instead of copied into a buffer |
 | [Channels across environments](design/channel-environments.md) | A deployment receives Feishu/Lark by webhook by default and `dev` keeps WebSocket (`FEISHU_INGRESS`); one app serves one environment at a time until per-environment apps (#749) |
-| [Security boundary](design/security-boundary.md) | Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, and a multi-tenant facade in front of one deployment |
+| [Security boundary](design/security-boundary.md) | Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, and a multi-tenant facade in front of one deployment. Replaced by the decided access model (agent-api.md §8, architecture.md §4.4) when #788 lands |
 
 For contribution workflow, see [../CONTRIBUTING.md](../CONTRIBUTING.md).

@@ -138,19 +138,25 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
   调用方，应该一直保留消息，直到看到它的 `done`。
 - **开 thread**：分叉点仍然按 key 找（`getMessage` 带平台消息 id）；thread 对应的会话按上面的顺序建立和记录。
 - **谁能做什么：身份（principal）、角色和会话的创建者**（agent-api.md §8）。身份是 `{ id, role }`，角色只有 `owner` 和 `guest`。
-  每个会话在创建它的那次提交里记下 `createdBy`（创建者的 id）；fork 记的是发起 fork 的人，不是源会话的创建者。一个策略函数决定
-  所有操作：owner 能访问所有会话；guest 只能访问和 fork 自己创建的会话，可以新建会话，也可以给自己的会话换模型。guest
+  每个会话在创建它的那次提交里记下 `createdBy`（创建者这个身份，包括 id 和角色）；fork 记的是发起 fork 的人，不是源会话的
+  创建者。`createdBy` 只给策略函数用，不出现在任何回答里。一个策略函数决定所有操作：owner 能访问所有会话；guest 只能访问和
+  fork `createdBy` 是 guest、并且 id 等于自己的会话，可以新建会话，也可以给自己的会话换模型。同时比较角色，是为了让 id 恰好叫
+  `system`、`owner` 的 guest 也碰不到 owner 的会话，不管部署给 guest 起什么 id。guest
   访问不到的会话，对它来说就是不存在：一律按未知会话回答（`not_found`、`undefined`、被拒绝的 resume），回答里不透露
   它是否存在。消息、entry、附件都挂在会话下面，检查会话就覆盖了它们。会话 id 仍然只是名字，可能是顺序编号，但知道 id 对 guest
   没有用。
 - **身份从哪来。** 进程内，打开的 Agent 以 `{ id: "system", role: "owner" }` 执行，`as(principal)` 返回以另一个身份执行的同一组
-  操作，返回的对象没有 `as`，拿到它的代码没法扩大权限。我们自己的 channels、定时任务、wake 是可信代码，用 owner 角色，各带自己的
-  id（如 `channel:telegram`、`schedule:daily`），这样会话能说明自己从哪来。HTTP 上，每个请求用 `Authorization: Bearer <key>`
-  认证，key 对应哪个身份由部署决定（architecture.md §4.4）：owner 的 key 来自 secret `FASTAGENT_OWNER_KEYS`；guest 的 key
-  由 owner 在运行时签发和撤销（`/keys` 路由），只存哈希，放在部署级的存储里，和会话的存储分开（不管会话在哪个存储，处理请求的
+  操作，返回的对象没有 `as`，拿到它的代码没法扩大权限。我们自己的 channels、定时任务、wake 是可信代码，和打开的 Agent 一样以
+  owner 身份执行。按身份做事的 middleware（比如按 guest 计预算）包装的是 `OpenedAgent`，自己也提供 `as`，HTTP 绑定挂的就是它。
+  HTTP 上，每个请求用 `Authorization: Bearer <key>`
+  认证，key 对应哪个身份由部署决定（architecture.md §4.4）：owner 的 key 来自可选的 secret `FASTAGENT_OWNER_KEYS`（AgentCore 上不读，那里由 IAM
+  放行，按 owner 执行）；guest 的 key 由 owner 在运行时签发和撤销（`/keys` 路由，guest 调用返回 `403` `forbidden`；撤销后
+  这个 key 打开的事件流也会被关掉），只存哈希，放在部署级的存储里，和会话的存储分开（不管会话在哪个存储，处理请求的
   进程都要能验证 key），这就是 duang 的“邀请”：凭持有生效、可以撤销，不需要身份提供方。认证不了的请求
-  一律 `401`。没配 owner key 时，只有绑定本机回环地址的 `dev` 不要求 key；其他情况 API 返回 `401` 并说明怎么配置，渠道照常
-  工作；显式写 `http.auth: "none"` 才是公开。
+  一律 `401`。没配 owner key 时，只有绑定本机回环地址的 `dev` 不要求 key，而且只限 `Host` 是回环地址、`Origin`（如果有）
+  也是本机页面的请求，这样用户浏览器里打开的任意网页（包括把域名重新解析到 `127.0.0.1` 的网页）都不能以 owner 身份驱动
+  agent；其他情况 API 返回 `401` 并说明怎么配置，渠道照常工作，部署也不会因为缺这个 secret 而失败；显式写 `http.auth: "none"`
+  才是公开。
 - **guest 挡不住的东西。** agent 回答 guest 的消息时，照样以进程的权限运行所有工具、能读到它的文件和 context，花的是 owner 的
   模型额度（包括 guest 给自己会话换的更贵的模型）。角色只把 guest 和别人的会话隔开，不是沙箱，也不限制花费。
 - **幂等 key 必须和 `sessionId` 一起用。** pi-durable 的 key 只在单个会话内有效；不带会话的 invoke 如果重试，会建出两个会话。

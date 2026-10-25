@@ -286,21 +286,21 @@ of no identity provider. duang's online contacts are what it is for: an owner's 
 invites to it.
 
 - **The owner's keys** are the secret `FASTAGENT_OWNER_KEYS`: one or more, separated by commas, so that a new key can
-  replace an old one without a gap. Each acts as `{ id: "owner", role: "owner" }`. It is declared like every secret,
-  so `deploy` checks that it is set.
+  replace an old one without a gap. Each acts as `{ id: "owner", role: "owner" }`. It is declared as an optional
+  secret: a deployment without it runs, with its API closed (below), and `deploy`'s pre-flight says so.
 - **A guest's key is issued while the agent runs**, by the owner, so inviting and revoking need no deploy. Each guest
-  has an id of its own, never reused, and the label the owner gave it. A key is `fa_` followed by 32 random bytes in
-  base64url, a prefix secret scanners can match. It is shown once, when it is issued, and only its SHA-256 hash is
-  kept, in a store of the deployment's, apart from the sessions' storage: whichever storage a request's session is
-  in, the process that serves it verifies the key (§4.3). While a deployment has one storage, that storage is the
-  store.
+  has an id of its own, random and never reused, and the label the owner gave it. A key is `fa_` followed by 32
+  random bytes in base64url, a prefix secret scanners can match. It is shown once, when it is issued, and only its
+  SHA-256 hash is kept, in a store of the deployment's, apart from the sessions' storage: whichever storage a
+  request's session is in, the process that serves it verifies the key (§4.3). While a deployment has one storage,
+  that storage is the store.
 - **The key routes** are the owner's; a guest is refused `403` `forbidden`:
 
   | Route | Does |
   |---|---|
   | `POST /keys` with `{ label }` | Issues a guest's key: `201` and `{ id, label, key }` |
   | `GET /keys` | The guests: `200` and `{ keys: [{ id, label, createdAt }] }` |
-  | `DELETE /keys/{id}` | Revokes it: `200` and `{}`. A request with it is `401` from then on. The guest's sessions stay, and the owner still reaches them; the messages it sent go on unless the owner aborts them |
+  | `DELETE /keys/{id}` | Revokes it: `200` and `{}`. A request with it is `401` from then on, and the event streams opened with it are closed, so a revoked guest reads nothing more of its sessions. The guest's sessions stay, and the owner still reaches them; the messages it sent go on unless the owner aborts them |
 
 - **Without an owner key**, a serve that can be reached from elsewhere does not open itself, and refuses only what
   lacks a key, saying how to set one, as Redis's protected mode and Docker's daemon do. A deployment that serves only
@@ -308,14 +308,14 @@ invites to it.
 
   | Serving | Without `FASTAGENT_OWNER_KEYS` |
   |---|---|
-  | `dev`, bound to loopback | A request without a key acts as the owner, and the startup report says so |
+  | `dev`, bound to loopback | A request without a key acts as the owner when its `Host` names the loopback address and its `Origin`, if it has one, is a loopback page; any other is `401`. A page the user's browser visits elsewhere sends its own `Origin`, and one that rebinds its name to `127.0.0.1` sends its own `Host`, so neither drives the agent as the owner. The startup report says so |
   | Any other bind, `dev --tunnel`, `start`, a deployment | Every API request without a key is `401`, saying how to set one. Channels, schedules and wake-ups serve as usual; the startup report and `deploy`'s pre-flight say the API is closed |
   | `http.auth: "none"` in the deployment's configuration | A request without a key acts as the owner: for a deployment whose network or gateway decides who reaches it. The startup report lists the API as public |
 
-  With an owner key set, every request needs a key, wherever it is served, and `http.auth: "none"` beside it is refused
-  at start. A request with a key acts as that key's principal, or is `401`.
+  With an owner key set, every request needs a key wherever it is served but AgentCore (below), and `http.auth:
+  "none"` beside it is refused at start. A request with a key acts as that key's principal, or is `401`.
 - **AgentCore** carries the API as `api` envelopes through `InvokeAgentRuntime`, and IAM decides who may send them:
-  they act as the owner. A guest has no door there.
+  they act as the owner, and `FASTAGENT_OWNER_KEYS` is not read there. A guest has no door there.
 - **An embedder** gives `createAgentApiHandler(agent, { authenticate })` the function that maps a request to a
   principal or refuses it, and must: there is no default. FastAgent's keys are one such function. An app with its own
   sign-in maps each of its users to a guest whose id is its user id, and needs no facade in front.
