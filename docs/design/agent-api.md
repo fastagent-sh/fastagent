@@ -4,7 +4,7 @@ description: "The consumer API of a served FastAgent agent: sessions the Agent n
 type: spec
 status: decided
 version: 1.0
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 # Agent API — Specification v1
@@ -36,8 +36,9 @@ The API has three concepts:
 | **Message** | One message a Caller sends into a session, from its acceptance to its outcome | `messageId`, with a status and an outcome (§4) |
 | **Entry** | One record in a session's history: a user's message once taken, the agent's messages, tool results | An id that is the cursor for reading and resuming, and the point for forking (§6) |
 
-A Caller remembers its sessions: the Agent lists none. How the agent answers, in steps, turns or runs, and which
-messages it handles together, is not part of the API: each message's facts are its own.
+A Caller keeps the sessions it uses, and lists every session the Agent holds, most recently active first (§5). How
+the agent answers, in steps, turns or runs, and which messages it handles together, is not part of the API: each
+message's facts are its own.
 
 This is the consumer surface, and only that. A Caller chooses a session's model and thinking level; operating the
 agent (its definition, compaction, inspecting every session) is the harness's own API, used by whoever builds and runs
@@ -60,6 +61,7 @@ interface Agent {
   resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
   abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
   attachment(sessionId: string, ref: string): Promise<Attachment | undefined>;
+  listSessions(options?: { before?: string; limit?: number }): Promise<ListResult>;
 }
 
 interface AgentInfo {
@@ -102,6 +104,10 @@ type ReplayFrom = { type: "start" } | { type: "after"; entryId: string };
 
 type ReadResult =
   | { ok: true; state: SessionState; entries: Entry[]; prev?: string; next?: string }
+  | { ok: false; error: AgentError };
+
+type ListResult =
+  | { ok: true; sessions: { sessionId: string }[]; next?: string }
   | { ok: false; error: AgentError };
 
 type AbortResult =
@@ -315,7 +321,7 @@ interface SessionState extends SessionSettings {
 ```
 
 The Agent names every session. A Caller gets an id from `createSession` or from the receipt of an invoke without
-`sessionId`, and keeps it. An id is a name, not a credential (§8).
+`sessionId`, and keeps it, or finds it with `listSessions`. An id is a name, not a credential (§8).
 
 Session, message and entry ids are opaque strings, and the Agent MUST NOT reuse one: within a deployment, an id names
 one thing for as long as the deployment exists, even when its storage is rebuilt from empty. An id a Caller kept from
@@ -358,6 +364,14 @@ a storage that is gone answers `not_found` (or `undefined`), never another sessi
   have let be. The Caller reads the session's state (`read` with `limit: 0`) and the messages it meant to stop
   (`getMessage`), and aborts again only if it still wants everything stopped.
 - **`attachment`** returns the bytes behind a ref an entry of this session published, or `undefined`.
+- **`listSessions`** lists the sessions the Agent holds, most recently active first, whoever created them: a channel,
+  a schedule, the REPL or an app. A session's activity is the newest of its creation, the messages it accepted and the
+  entries it wrote, so one just created or written to leads. A page holds up to `limit` sessions (§7.2); `next` is an
+  opaque cursor that `before` takes for the page after it, and a `before` that is not one the Agent handed out is
+  `invalid_request`. A session that becomes active while a Caller pages moves to the front, so a later page does not
+  list it: a Caller that wants it reads the first page again. What a list shows of each session, its status and its
+  newest entries, is `read`'s. A conversation the harness creates for its own work, such as a subagent's, is not a
+  session and is not listed.
 
 An unknown session answers `not_found` on every operation, and so does an unknown entry cursor, except `getMessage`
 and `attachment`, which answer `undefined`.
@@ -477,15 +491,15 @@ A message's `failed` outcome carries `missing_model`, `auth_required`, `model_er
 |---|---|
 | Queued messages per session, steered ones not yet taken included | 20; the next is rejected `busy` / `queue_full` |
 | Messages in flight per process, queued and taken together | Implementation-defined (the reference implementation: 100); past it, `busy` / `capacity` |
-| `read` page | `limit` defaults to 100; above 500 is `invalid_request`. A page MAY hold fewer entries than `limit` (the reference implementation stops at 4 MiB of JSON) but holds at least one when any exist past the cursor |
+| `read` and `listSessions` page | `limit` defaults to 100; above 500 is `invalid_request`. A `read` page MAY hold fewer entries than `limit` (the reference implementation stops at 4 MiB of JSON) but holds at least one when any exist past the cursor |
 | `idempotencyKey` | 1 to 256 characters |
 
 A Caller MUST NOT infer the end of the history from a short page: only an absent `next` (or `prev`) says so.
 
 ## 8. Security model
 
-An Agent is one trust domain. It authenticates no one and lists no sessions, and whoever holds it can do everything it
-can: invoke into, read, resume, configure, abort and fork every session, with the agent's tools acting with the
+An Agent is one trust domain. It authenticates no one, and whoever holds it can do everything it can: list, invoke
+into, read, resume, configure, abort and fork every session, with the agent's tools acting with the
 authority of the process it runs in.
 
 - **The API is not on the network.** Its Callers are code in the process that runs the agent (§10). Whoever puts the
@@ -546,6 +560,7 @@ One executable suite, run against the Agent, checks:
 | Resuming | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; it sends one `state` snapshot after the replay and before anything live, and a `done` for each message that ends, before the `user_message` of the message taken after it, also when one commit ends one and places the other; a `resume` opened before an invoke delivers that message's `user_message` and then its answer, and the events before its `user_message` are another message's; one attached mid-answer gets `state.reply`, and it with the deltas that follow is a prefix of the `assistant_message` entry that ends that answer; a reconnect after the last entry it had delivers each entry exactly once; when the storage fails it ends with `serving_error` instead of hanging; an unknown session or cursor is a single `rejected` |
 | Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` carries `usage`; `state.usage` counts the session's own spend, which a fork starts from nothing; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source; the state moves idle → running → idle |
 | Sessions | A new session stores its chosen model and thinking level in the creating commit and keeps them after a restart; `configure` changes either, the state and a `resume` snapshot read it back, a model the agent lacks refuses the next message `missing_model` and configuring an available one lets it be answered, and an unknown session or empty settings are refused; a fork shares the history up to its entry and none of the messages, inherits the source's settings at that entry (its current settings if empty), applies supplied model and thinking level fields independently, and leaves the source unchanged; an unknown fork source is `not_found` |
+| Listing | `listSessions` lists every session created through the API, most recently active first: creating a session, accepting a message into one and writing its entries each move it to the front; it pages by `before` and `limit`, repeating no session and skipping none that did not change; a `before` the Agent did not hand out is `invalid_request`; the order survives a restart |
 | `stream()` | It delivers a new message's events after its `user_message` through its `done`, and only its own message's for one queued behind another; a queued duplicate's once it is taken; a taken duplicate's from its `user_message` on, what it already wrote included, stopping at its answer when it ended before the stream reattached; a done duplicate's entries through its answer, then its `done`; the message's `canceled` `done` when it is aborted; and the invoke's refusal, and an unknown session's, recording nothing |
 
 ## 10. No network binding
@@ -558,9 +573,9 @@ Caller needs one, with that Caller's own requirements: who hosts the agent, and 
 
 ## 11. Out of scope
 
-- **Operating the agent**: changing a session's tools, extensions or instructions, compaction, inspecting or listing
-  sessions, and anything else its harness can do. These are the harness's own API, in the process that runs the agent.
-- **Listing and deleting sessions**: a Caller keeps the sessions it uses, and nothing is deleted.
+- **Operating the agent**: changing a session's tools, extensions or instructions, compaction, inspecting sessions,
+  and anything else its harness can do. These are the harness's own API, in the process that runs the agent.
+- **Deleting sessions**: pi-durable has no deletion, so nothing is deleted.
 - **Identity, authentication, rate limits**: an Agent is one trust domain, and whoever puts it on a network decides
   who reaches it (§8).
 - **Asking the user**: an agent that waits for a person's approval or answer mid-message. A later version adds it
@@ -578,7 +593,8 @@ From [SPEC v1](../SPEC.md), which the code implements until this API replaces it
 | A harness-neutral protocol, implemented through a harness port and `LoopPort` | The consumer API of one harness, pi-durable |
 | A Caller names a session, or the Agent does | The Agent names every session; ids are opaque and never reused |
 | `update` on the `/control` plane | `configure`, on the consumer API: a session's model and thinking level are a Caller's choice, as at creation |
-| `sessions.list`, `rewind`, `compact`, `delete`, the rest of the `/control` plane, `models` | Gone; operating the agent is pi-durable's own API |
+| `sessions.list` | `listSessions`, most recently active first, a page at a time |
+| `rewind`, `compact`, `delete`, the rest of the `/control` plane, `models` | Gone; operating the agent is pi-durable's own API |
 | `commands()` | `info().commands`, which a Caller reads once |
 | `messages.get`, `messages.follow`, `messages.cancel` | `getMessage` by id or key; `resume`; `abort` |
 | `follow` | `resume`: replay by `replayFrom`, a snapshot that MUST be sent, live; an answer can be joined mid-way |
