@@ -2,8 +2,10 @@
  * A definition assembled onto pi-durable: the generated registry, the secrets manifest, the text read per request
  * (SYSTEM.md, AGENTS.md, skills loaded as pi loads them, prompt templates), and the code built with its secrets.
  */
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   InMemoryCredentialStore,
   type TranscriptContext,
@@ -16,12 +18,14 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { afterAll, describe, expect, it } from "vitest";
 import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import {
+  type OpenAgentOptions,
   buildDefinition,
   loadDefinition,
   openAgent,
   prepareDefinition,
   secretsManifest,
 } from "../src/harnesses/pi-durable/open.ts";
+import { listWakeups } from "../src/schedule/wakeups.ts";
 import { registrySource } from "../src/harnesses/pi-durable/registry.ts";
 import { expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
 
@@ -131,6 +135,31 @@ describe("an agent definition on pi-durable", () => {
     expect([...built.schedules.keys()]).toEqual(["daily"]);
   });
 
+  it("builds its channels, a route channel and a long connection, each with the secrets it declared", async () => {
+    const definition = await prepareDefinition(
+      agentPackage({
+        "src/channels/hook.ts": `import { needs } from "${DEFINE}";
+export default needs(["HOOK_SECRET"], ({ HOOK_SECRET }) => () => ({ "POST /hook": () => new Response(HOOK_SECRET) }));
+`,
+        "src/channels/stream.ts":
+          "export default { name: 'stream', connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };\n",
+      }),
+    );
+    expect(secretsManifest(definition)).toEqual([
+      { name: "HOOK_SECRET", optional: false, declaredIn: ["src/channels/hook.ts"] },
+    ]);
+    expect(() => buildDefinition(definition, {})).toThrow(
+      "missing required secrets: HOOK_SECRET (src/channels/hook.ts)",
+    );
+    const { channels } = buildDefinition(definition, { HOOK_SECRET: "s-1" });
+    expect([...channels.keys()]).toEqual(["hook", "stream"]);
+    const hook = channels.get("hook");
+    if (typeof hook !== "function") throw new Error("hook is not a route channel");
+    const routes = hook({} as Parameters<typeof hook>[0]);
+    expect(await (routes["POST /hook"] as () => Response)().text()).toBe("s-1");
+    expect(channels.get("stream")).toMatchObject({ name: "stream" });
+  });
+
   it("refuses two extensions, two schedules or two tools under one name, naming both", async () => {
     const extension = (name: string) =>
       `import { defineExtension } from "@earendil-works/pi-durable";\nexport default defineExtension({ name: "${name}" });\n`;
@@ -166,6 +195,14 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
   it("refuses a module that is not what its directory holds, a bad cron and an unknown configuration key", async () => {
     const notATool = await prepareDefinition(agentPackage({ "src/tools/x.ts": "export default { name: 'x' };\n" }));
     expect(() => buildDefinition(notATool, {})).toThrow("src/tools/x.ts: must default-export a tool");
+    const notAChannel = await prepareDefinition(
+      agentPackage({ "src/channels/x.ts": "export default { name: 'x' };\n" }),
+    );
+    expect(() => buildDefinition(notAChannel, {})).toThrow("src/channels/x.ts: must default-export (ctx) => Routes");
+    const unnamed = await prepareDefinition(
+      agentPackage({ "src/channels/x.ts": "export default { name: ' ', connect() {} };\n" }),
+    );
+    expect(() => buildDefinition(unnamed, {})).toThrow("src/channels/x.ts: long-connection channel name");
     const badCron = await prepareDefinition(
       agentPackage({
         "src/schedules/often.ts": `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "not a cron", prompt: "x" });\n`,
@@ -184,7 +221,7 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       for (const agent of opened) await agent.close();
     });
 
-    async function open(files = FILES) {
+    async function open(files = FILES, options: Partial<OpenAgentOptions> = {}) {
       const dir = agentPackage(files);
       const definition = await prepareDefinition(dir);
       const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
@@ -192,6 +229,7 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
         storage: new MemoryStorage(),
         credentials: new InMemoryCredentialStore(),
         env: ENV,
+        ...options,
       });
       opened.push(agent);
       return { dir, agent, faux };
@@ -272,6 +310,66 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       expect(seen[1]).toContain('<skill name=\\"lookup-order\\"');
       expect(seen[1]).toContain("Ask for the order number");
       expect(seen[1]).toContain("order 7");
+    });
+
+    const offered = async (agent: DurableAgent) => {
+      const created = await agent.createSession();
+      if (!created.ok) throw new Error(JSON.stringify(created));
+      const conversation = await agent.conversation(created.sessionId);
+      if (conversation === undefined) throw new Error("the new session has no conversation");
+      return (await conversation.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name);
+    };
+
+    it("offers wake and unwake when a serve gives its state, and neither when the definition defines one", async () => {
+      const stateRoot = mkdtempSync(join(tmpdir(), "fastagent-wake-"));
+      expect(await offered((await open()).agent)).not.toContain("wake");
+      expect(await offered((await open(FILES, { stateRoot })).agent)).toEqual(
+        expect.arrayContaining(["wake", "unwake"]),
+      );
+      const ownWake = {
+        ...FILES,
+        "src/tools/wake.ts": `import { Type } from "@earendil-works/pi-ai";
+import { defineTool } from "@earendil-works/pi-durable";
+export default defineTool({
+  name: "wake",
+  description: "The author's own",
+  parameters: Type.Object({}),
+  execute: async () => ({ output: [{ type: "text", text: "own" }] }),
+});
+`,
+      };
+      const tools = await offered((await open(ownWake, { stateRoot })).agent);
+      expect(tools).toContain("wake");
+      expect(tools).not.toContain("unwake");
+    });
+
+    it("keeps a wake-up for the session it was set in, and cancels it there with unwake", async () => {
+      const stateRoot = mkdtempSync(join(tmpdir(), "fastagent-wake-"));
+      const { agent, faux } = await open(FILES, { stateRoot });
+      faux.setResponses([
+        () => toolCall("wake", { in: "30m", prompt: "check the deploy" }),
+        (context) => fauxAssistantMessage(lastToolResult(context)),
+      ]);
+      const receipt = await agent.invoke({ content: [{ type: "text", text: "remind me" }] });
+      if (!receipt.ok) throw new Error(JSON.stringify(receipt));
+      await receipt.wait();
+      const [wakeup] = listWakeups(stateRoot);
+      if (wakeup === undefined) throw new Error("wake kept no wake-up");
+      expect(wakeup).toMatchObject({ session: receipt.sessionId, prompt: "check the deploy" });
+      faux.setResponses([
+        () => toolCall("unwake", { id: wakeup.id }),
+        (context) => fauxAssistantMessage(lastToolResult(context)),
+      ]);
+      const again = await agent.invoke({
+        sessionId: receipt.sessionId,
+        content: [{ type: "text", text: "never mind" }],
+      });
+      if (!again.ok) throw new Error(JSON.stringify(again));
+      expect(await again.wait()).toMatchObject({
+        ok: true,
+        message: { answer: { text: `OK — wake-up ${wakeup.id} cancelled.` } },
+      });
+      expect(listWakeups(stateRoot)).toEqual([]);
     });
   });
 });

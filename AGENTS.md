@@ -247,13 +247,16 @@ src/
 │   │                       # defineSchedule
 │   ├── registry.ts         # the generated `.fastagent/registry.ts`: one default import per module of src/
 │   ├── text.ts             # SYSTEM.md, AGENTS.md, skills (loaded as pi loads them) and prompt templates, read per request
-│   ├── agent.ts            # openDurableAgent: a Harness on the instance's storage, and the nine operations over it
+│   ├── agent.ts            # openDurableAgent: a Harness on the instance's storage, and the ten operations over it
 │   ├── reads.ts            # what the operations and resume read: a session's conversation, its published entries,
 │   │                       # a message's status and end, the session's state
 │   ├── resume.ts           # resume: the replay, the `state` snapshot, then what each commit adds
+│   ├── sessions.ts         # every session with its latest activity, its newest own id: what listSessions orders by
 │   ├── entries.ts          # pi-durable's entries as published entries, and the entry kinds FastAgent writes
 │   ├── messages.ts         # input submissions as messages: request ids, statuses, outcomes, the session's state
-│   ├── ids.ts              # every id as the storage's incarnation plus pi-durable's id, so none is ever reused
+│   ├── ids.ts              # every id as the storage's incarnation plus pi-durable's id, so none is ever reused;
+│   │                       # the session id a tool runs in
+│   ├── wake.ts             # `wake` and `unwake` as pi-durable tools, installed when a serve gives the state root
 │   ├── defaults.ts         # the deployment's default model and thinking level, for a conversation that names none
 │   └── release.ts          # temporary: places the messages a run that did not answer left waiting
 └── harnesses/pi/           # the pi reference implementation

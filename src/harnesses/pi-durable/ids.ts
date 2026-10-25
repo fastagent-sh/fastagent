@@ -5,7 +5,7 @@
  */
 import { randomBytes } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
-import { type Harness, defineDoc } from "@earendil-works/pi-durable";
+import { type Harness, type ToolExecutionApi, defineDoc } from "@earendil-works/pi-durable";
 
 const StorageDoc = defineDoc<{ incarnation: string }>({
   kind: "fastagent.storage",
@@ -27,6 +27,16 @@ export async function storageIds(harness: Harness, context: Context): Promise<Id
     return doc.incarnation;
   }, context);
   return idsOf(incarnation);
+}
+
+/** The session id of the conversation a tool runs in, as the Agent hands it out: from the storage the tool runs on. */
+export async function sessionIdOf(
+  api: Pick<ToolExecutionApi, "conversationId" | "snapshot">,
+  context: Context,
+): Promise<string> {
+  const incarnation = (await api.snapshot(StorageDoc, context))?.incarnation;
+  if (!incarnation) throw new Error("this storage has no incarnation: the Agent did not open it");
+  return idsOf(incarnation).encode(api.conversationId);
 }
 
 function idsOf(incarnation: string): Ids {

@@ -366,10 +366,10 @@ a storage that is gone answers `not_found` (or `undefined`), never another sessi
 - **`attachment`** returns the bytes behind a ref an entry of this session published, or `undefined`.
 - **`listSessions`** lists the sessions the Agent holds, most recently active first, whoever created them: a channel,
   a schedule, the REPL or an app. A session's activity is the newest of its creation, the messages it accepted and the
-  entries it wrote, so one just created or written to leads. A page holds up to `limit` sessions (§7.2); `next` is an
-  opaque cursor that `before` takes for the page after it, and a `before` that is not one the Agent handed out is
-  `invalid_request`. A session that becomes active while a Caller pages moves to the front, so a later page does not
-  list it: a Caller that wants it reads the first page again. What a list shows of each session, its status and its
+  entries it wrote, so one just created or written to leads. A page holds up to `limit` sessions, from 1 (§7.2);
+  `next` is an opaque cursor that `before` takes for the page after it, and a `before` the Agent cannot read as one of
+  its cursors is `invalid_request`. A session that becomes active while a Caller pages moves to the front, so a later
+  page does not list it: a Caller that wants it reads the first page again. What a list shows of each session, its status and its
   newest entries, is `read`'s. A conversation the harness creates for its own work, such as a subagent's, is not a
   session and is not listed.
 

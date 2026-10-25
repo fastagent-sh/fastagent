@@ -1,5 +1,5 @@
 /**
- * The Agent API (docs/design/agent-api.md) over pi-durable: a Harness opened on the instance's storage, and the nine
+ * The Agent API (docs/design/agent-api.md) over pi-durable: a Harness opened on the instance's storage, and the ten
  * operations read from and submitted to it. Admission (a key's lookup, the limits and the submission) is one step per
  * process, since one process owns a storage.
  */
@@ -39,6 +39,8 @@ import {
   type InvokeRequest,
   type InvokeResult,
   LIMITS,
+  type ListOptions,
+  type ListResult,
   type ReadOptions,
   type ReadResult,
   type SessionSettings,
@@ -55,6 +57,7 @@ import { type InputRecord, hasEnded, isInput, queuedInputs, requestIdFor } from 
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
 import { resumeStream } from "./resume.ts";
+import { sessionsByActivity } from "./sessions.ts";
 
 /** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (agent-api.md §3). */
 export interface AgentCommand {
@@ -458,6 +461,33 @@ function durableAgent(
       }),
     );
 
+  /** Most recently active first; the cursor is the activity of the last session a page listed. */
+  const listSessions = (listOptions: ListOptions = {}): Promise<ListResult> => {
+    const { before, limit = LIMITS.readDefault } = listOptions;
+    if (!Number.isInteger(limit) || limit < 1 || limit > LIMITS.readMax) {
+      return Promise.resolve(failure("invalid_request", `limit is an integer from 1 to ${LIMITS.readMax}`));
+    }
+    const after = before === undefined ? undefined : ids.decode(before);
+    if (before !== undefined && after === undefined) {
+      return Promise.resolve(failure("invalid_request", `${JSON.stringify(before)} is not a cursor of this agent's`));
+    }
+    return resolve<ListResult>(
+      sessionsByActivity(options.storage, context).pipe(
+        Effect.map((sessions): ListResult => {
+          const rest = after === undefined ? sessions : sessions.filter(({ activity }) => activity < after);
+          const page = rest.slice(0, limit);
+          const last = page.at(-1);
+          return {
+            ok: true,
+            sessions: page.map(({ conversationId }) => ({ sessionId: ids.encode(conversationId) })),
+            ...(rest.length > limit && last !== undefined ? { next: ids.encode(last.activity) } : {}),
+          };
+        }),
+      ),
+      failed,
+    );
+  };
+
   return {
     harness,
     info,
@@ -483,6 +513,7 @@ function durableAgent(
       ),
     abort,
     attachment,
+    listSessions,
     conversation: (sessionId) => Effect.runPromise(reads.conversation(sessionId)),
     close: async () => {
       closing = true;

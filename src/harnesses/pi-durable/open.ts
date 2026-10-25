@@ -23,12 +23,15 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { loadEnvironment } from "../../content/file.ts";
 import { type DeclaredSecret, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { declaredVariables } from "../../environment/declare.ts";
+import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
+import { channelModuleProblem } from "../../channels/discover.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { cronError } from "../../schedule/cron.ts";
 import { type DurableAgent, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type Needs, type Schedule, isNeeds } from "./define.ts";
 import { GENERATED_DIR, REGISTRY_FILE, REGISTRY_KINDS, type Registry, generateRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
+import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
 
 const CONFIG_FILE = "fastagent.config.ts";
 const SECRETS_MANIFEST_FILE = "secrets.json";
@@ -196,6 +199,8 @@ export interface BuiltDefinition {
   tools: ToolRegistration[];
   extensions: Extension[];
   providers: Provider[];
+  /** By name, the file's: what a serve mounts or connects. */
+  channels: Map<string, ChannelModule | LongConnectionChannelModule>;
   /** By name, the file's: what D's scheduler fires. */
   schedules: Map<string, Schedule>;
 }
@@ -226,6 +231,10 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
       return { source, ...named(built<Extension>(source, value, values(value), extensionProblem)) };
     }),
   ];
+  const channels = registry.channels.map(({ file, name, value }) => ({
+    name,
+    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), channelModuleProblem),
+  }));
   const schedules = registry.schedules.map(({ file, name, value }) => ({
     source: file,
     name,
@@ -236,6 +245,7 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   refuseTwins("extension", [
     { source: "pi-durable's coding tools", name: CodingTools.name },
     { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
+    { source: "FastAgent's wake tools", name: WAKE_EXTENSION },
     ...extensions,
   ]);
   refuseTwins("schedule", schedules);
@@ -245,6 +255,7 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
     providers: (config.providers ?? []).map((value, i) =>
       built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
     ),
+    channels: new Map(channels.map(({ name, value }) => [name, value])),
     schedules: new Map(schedules.map(({ name, value }) => [name, value])),
   };
 }
@@ -270,6 +281,8 @@ export interface OpenAgentOptions {
   thinkingLevel?: ModelThinkingLevel;
   settings?: HarnessSettings;
   env?: NodeJS.ProcessEnv;
+  /** Where the instance's state is: given by a serve, whose scheduler fires the wake-ups `wake` keeps there. */
+  stateRoot?: string;
 }
 
 /** Open the definition as an Agent: pi-ai's built-in models and the definition's providers, the coding tools, then its own. */
@@ -290,6 +303,10 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     defineExtension({ name: DEFINITION_EXTENSION, sections: definitionSections(dir), tools: code.tools }),
   );
   for (const extension of code.extensions) registry.install(extension);
+  const ownWake = [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].some(({ name }) =>
+    WAKE_TOOLS.includes(name),
+  );
+  if (options.stateRoot !== undefined && !ownWake) registry.install(wakeExtension(options.stateRoot));
   const thinkingLevel = options.thinkingLevel ?? config.thinkingLevel;
   return openDurableAgent({
     storage: options.storage,

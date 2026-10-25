@@ -1029,6 +1029,68 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
       });
     });
 
+    describe("Listing", () => {
+      const listed = async (options?: Parameters<Agent["listSessions"]>[0]) => {
+        const result = await agent.listSessions(options);
+        if (!result.ok) throw new Error(`listSessions failed: ${JSON.stringify(result)}`);
+        return result;
+      };
+      const order = async () => (await listed()).sessions.map(({ sessionId }) => sessionId);
+
+      it("lists every session, most recently created first", async () => {
+        const a = await newSession(agent);
+        const b = await newSession(agent);
+        const { sessionId: c } = await accepted(agent, { content: text("hello") });
+        expect(await order()).toEqual([c, b, a]);
+      });
+
+      it("moves a session to the front when it accepts a message, and when it writes an entry", async () => {
+        const a = await newSession(agent);
+        const held = await accepted(agent, { sessionId: a, content: text("hold") });
+        await holding();
+        const b = await newSession(agent);
+        expect(await order()).toEqual([b, a]);
+        const queued = await accepted(agent, { sessionId: a, content: text("later") });
+        expect(queued.message.status).toBe("queued");
+        expect(await order()).toEqual([a, b]);
+        const c = await newSession(agent);
+        expect(await order()).toEqual([c, a, b]);
+        subject.release();
+        await ended(held);
+        await ended(queued);
+        expect(await order()).toEqual([a, c, b]);
+      });
+
+      it("pages by before and limit, repeating no session and skipping none", async () => {
+        const created: string[] = [];
+        for (let i = 0; i < 5; i++) created.unshift(await newSession(agent));
+        const first = await listed({ limit: 2 });
+        expect(first.sessions.map(({ sessionId }) => sessionId)).toEqual(created.slice(0, 2));
+        const second = await listed({ limit: 2, before: first.next as string });
+        expect(second.sessions.map(({ sessionId }) => sessionId)).toEqual(created.slice(2, 4));
+        const last = await listed({ limit: 2, before: second.next as string });
+        expect(last.sessions.map(({ sessionId }) => sessionId)).toEqual(created.slice(4));
+        expect(last.next).toBeUndefined();
+      });
+
+      it("refuses a limit out of range and a cursor it did not hand out, as invalid_request", async () => {
+        await newSession(agent);
+        for (const options of [{ limit: 0 }, { limit: 501 }, { limit: 1.5 }, { before: "no-such-cursor" }]) {
+          expect(await agent.listSessions(options)).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+        }
+      });
+
+      it("keeps the order after a restart", async () => {
+        const a = await newSession(agent);
+        await ended(await accepted(agent, { content: text("hello") }));
+        await ended(await accepted(agent, { sessionId: a, content: text("again") }));
+        const before = await order();
+        agent = await subject.restart();
+        expect(await order()).toEqual(before);
+        expect(before[0]).toBe(a);
+      });
+    });
+
     describe("Sessions", () => {
       it("forks the history up to an entry and none of the messages, leaving the source unchanged", async () => {
         const sessionId = await newSession(agent);
