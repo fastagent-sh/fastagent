@@ -827,7 +827,9 @@ client-side.
 - It is re-read on every call. `[]` means the agent exposes none.
 
 `sessions.list()` returns every session in the deployment, keyed by the caller's id. Do not expose it through a
-multi-tenant facade. It reads every record on each call (about 20 ms for 100 sessions / 8 MB), so poll it at human
+multi-tenant facade, and do not count on such a facade to keep users apart when the agent has the coding tools:
+`read` and `bash` reach every session's record, whichever user asked, so users who must not see each other's
+conversations get an instance each ([security boundary](design/security-boundary.md) §4). It reads every record on each call (about 20 ms for 100 sessions / 8 MB), so poll it at human
 intervals and follow an open conversation with `follow()`.
 
 Settings persist in the session and apply to every later run, channels included. A thinking level the current

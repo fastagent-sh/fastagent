@@ -489,11 +489,16 @@ can: invoke into, read, resume, configure, abort and fork every session, with th
 authority of the process it runs in.
 
 - **The API is not on the network.** Its Callers are code in the process that runs the agent (§10). Whoever puts the
-  agent on a network decides who may reach it, and how: a channel verifies its platform's signature, and an app that
-  embeds the agent serves its own routes behind its own authentication.
-- **One instance per customer.** Sessions in one Agent are not kept from each other: the agent's tools reach its
-  storage and its files, whichever session asked them to. Keeping one customer from another is giving each an
-  instance of its own, with its own storage, process and files ([architecture.md](architecture.md) §2).
+  agent on a network decides who may reach it, and how: a channel MUST verify that a request comes from its platform,
+  by the platform's signature or token, and an app that embeds the agent serves its own routes behind its own
+  authentication.
+- **Everyone who reaches the agent is inside its trust domain.** A platform's signature proves the platform, not the
+  person: everyone who can message a channel's bot can ask the agent for anything its tools reach, every other chat's
+  conversation included, and so can every user an embedding app lets through. Sessions in one Agent are not kept from
+  each other: the agent's tools reach its storage and its files, whichever session asked them to.
+- **One instance per customer.** People who must not read each other's conversations get an instance each, with its
+  own storage, process and files, or an agent whose tools reach neither ([architecture.md](architecture.md) §2). A
+  public bot's users and its owner's other chats are one trust domain unless they are split this way.
 - **A session id is not a credential.** Ids are the Agent's names, and may be sequential.
 
 ## 9. Conformance
@@ -546,7 +551,7 @@ One executable suite, run against the Agent, checks:
 ## 10. No network binding
 
 The API is TypeScript, in process. FastAgent serves it over no network: a deployment's served routes are its channels'
-own, which verify their callers, and its host's (AgentCore's, behind IAM). An app that wants the agent on its own
+own, which MUST verify that a request comes from their platform (§8), and its host's (AgentCore's, behind IAM). An app that wants the agent on its own
 network writes routes over this API, behind its own authentication, with `stream()` (§3.1) for an answer as it is
 written; every result and event is JSON (§2), so it can send them on as they are. A remote binding is designed when a
 Caller needs one, with that Caller's own requirements: who hosts the agent, and who decides who reaches it.
