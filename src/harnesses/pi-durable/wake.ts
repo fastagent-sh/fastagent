@@ -13,6 +13,8 @@ export const WAKE_TOOLS = ["wake", "unwake"];
 
 const said = (text: string): ToolExecutionResult => ({ output: [{ type: "text", text }] });
 const refused = (text: string): ToolExecutionResult => ({ output: [{ type: "text", text }], isError: true });
+const NOT_A_SESSION =
+  "wake-ups belong to a session, and this conversation is not one (a subagent's): nothing would wake it.";
 
 export function wakeExtension(stateRoot: string, now: () => Date = () => new Date()): Extension {
   return defineExtension({
@@ -46,13 +48,11 @@ export function wakeExtension(stateRoot: string, now: () => Date = () => new Dat
           if ((args.in === undefined) === (args.cron === undefined)) {
             return refused("pass exactly one of `in` (one-shot) or `cron` (recurring).");
           }
+          const session = await sessionIdOf(api, context);
+          if (session === undefined) return refused(NOT_A_SESSION);
           const at = now();
           if (args.cron !== undefined) {
-            const added = addWakeup(
-              stateRoot,
-              { session: await sessionIdOf(api, context), prompt: args.prompt, cron: args.cron, tz: args.tz },
-              at,
-            );
+            const added = addWakeup(stateRoot, { session, prompt: args.prompt, cron: args.cron, tz: args.tz }, at);
             if (!added.ok) return refused(added.error);
             return said(
               `OK — recurring wake ${added.id} (cron "${args.cron}"${args.tz ? ` ${args.tz}` : ""}), first at ${added.fireAt}: ${args.prompt}. Use unwake({ id: "${added.id}" }) to stop it.`,
@@ -64,11 +64,7 @@ export function wakeExtension(stateRoot: string, now: () => Date = () => new Dat
               `couldn't parse "in" (${JSON.stringify(args.in)}): use a unit like "30m" / "2h" / "1d", or a number of seconds (a bare number as text like "120" is rejected).`,
             );
           }
-          const added = addWakeup(
-            stateRoot,
-            { session: await sessionIdOf(api, context), prompt: args.prompt, fireAt: new Date(at.getTime() + ms) },
-            at,
-          );
+          const added = addWakeup(stateRoot, { session, prompt: args.prompt, fireAt: new Date(at.getTime() + ms) }, at);
           if (!added.ok) return refused(added.error);
           return said(
             `OK — I'll wake up at ${added.fireAt} (id ${added.id}) to: ${args.prompt}. Use unwake({ id: "${added.id}" }) if it becomes unnecessary.`,
@@ -83,10 +79,13 @@ export function wakeExtension(stateRoot: string, now: () => Date = () => new Dat
         parameters: Type.Object({
           id: Type.String({ minLength: 1, description: "the wake-up id (returned by `wake`)" }),
         }),
-        execute: async (args, api, context) =>
-          removeWakeup(stateRoot, args.id, await sessionIdOf(api, context))
+        execute: async (args, api, context) => {
+          const session = await sessionIdOf(api, context);
+          if (session === undefined) return refused(NOT_A_SESSION);
+          return removeWakeup(stateRoot, args.id, session)
             ? said(`OK — wake-up ${args.id} cancelled.`)
-            : refused(`no pending wake-up ${args.id} in this conversation (already fired, or not yours).`),
+            : refused(`no pending wake-up ${args.id} in this conversation (already fired, or not yours).`);
+        },
       }),
     ],
   });

@@ -21,7 +21,7 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { loadEnvironment } from "../../content/file.ts";
-import { type DeclaredSecret, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
+import { type DeclaredSecret, describeSecrets, missingSecrets, readSecretDeclaration } from "../../declared-secrets.ts";
 import { declaredVariables } from "../../environment/declare.ts";
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { channelModuleProblem } from "../../channels/discover.ts";
@@ -185,6 +185,15 @@ const extensionProblem = (value: unknown): string | undefined =>
     : "must be an extension (defineExtension from @earendil-works/pi-durable), or needs(...) around one";
 const providerProblem = (value: unknown): string | undefined =>
   typeof (value as Partial<Provider> | null)?.id === "string" ? undefined : "must be a pi-ai provider (createProvider)";
+/** A channel's secrets are `needs(...)`'s here: `defineChannel` reads them at import, past the manifest and the gate. */
+const channelProblem = (value: unknown): string | undefined => {
+  const shape = channelModuleProblem(value);
+  if (shape !== undefined) return shape;
+  const declared = readSecretDeclaration(value, "");
+  return declared.error === undefined && declared.secrets.length === 0
+    ? undefined
+    : "declares its secrets with defineChannel, which a package does not read: wrap the channel in needs([...], (secrets) => ...)";
+};
 const scheduleProblem = (value: unknown): string | undefined => {
   const schedule = value as Partial<Schedule> | null;
   if (schedule?.kind !== "fastagent.schedule")
@@ -232,8 +241,9 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
     }),
   ];
   const channels = registry.channels.map(({ file, name, value }) => ({
+    source: file,
     name,
-    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), channelModuleProblem),
+    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), channelProblem),
   }));
   const schedules = registry.schedules.map(({ file, name, value }) => ({
     source: file,
@@ -248,6 +258,7 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
     { source: "FastAgent's wake tools", name: WAKE_EXTENSION },
     ...extensions,
   ]);
+  refuseTwins("channel", channels);
   refuseTwins("schedule", schedules);
   return {
     tools: tools.map(({ value }) => value),

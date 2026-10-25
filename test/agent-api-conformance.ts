@@ -1073,9 +1073,15 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(last.next).toBeUndefined();
       });
 
-      it("refuses a limit out of range and a cursor it did not hand out, as invalid_request", async () => {
-        await newSession(agent);
-        for (const options of [{ limit: 0 }, { limit: 501 }, { limit: 1.5 }, { before: "no-such-cursor" }]) {
+      it("refuses a limit out of range and what it cannot read as one of its cursors, a session id included", async () => {
+        const sessionId = await newSession(agent);
+        for (const options of [
+          { limit: 0 },
+          { limit: 501 },
+          { limit: 1.5 },
+          { before: "no-such-cursor" },
+          { before: sessionId },
+        ]) {
           expect(await agent.listSessions(options)).toMatchObject({ ok: false, error: { code: "invalid_request" } });
         }
       });

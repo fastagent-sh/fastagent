@@ -160,7 +160,7 @@ export default needs(["HOOK_SECRET"], ({ HOOK_SECRET }) => () => ({ "POST /hook"
     expect(channels.get("stream")).toMatchObject({ name: "stream" });
   });
 
-  it("refuses two extensions, two schedules or two tools under one name, naming both", async () => {
+  it("refuses two extensions, channels, schedules or tools under one name, naming both", async () => {
     const extension = (name: string) =>
       `import { defineExtension } from "@earendil-works/pi-durable";\nexport default defineExtension({ name: "${name}" });\n`;
     const schedule = `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "0 9 * * *", prompt: "x" });\n`;
@@ -168,6 +168,7 @@ export default needs(["HOOK_SECRET"], ({ HOOK_SECRET }) => () => ({ "POST /hook"
 import { defineTool } from "@earendil-works/pi-durable";
 export default defineTool({ name: "look", description: "d", parameters: Type.Object({}), execute: async () => ({ output: [] }) });
 `;
+    const channel = "export default () => ({});\n";
     const cases: [Record<string, string>, string][] = [
       [
         { "src/tools/a.ts": tool, "src/tools/b.ts": tool },
@@ -184,6 +185,10 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       [
         { "src/schedules/daily.ts": schedule, "src/schedules/daily.mts": schedule },
         'src/schedules/daily.mts and src/schedules/daily.ts both define the schedule "daily"',
+      ],
+      [
+        { "src/channels/hook.ts": channel, "src/channels/hook.mjs": channel },
+        'src/channels/hook.mjs and src/channels/hook.ts both define the channel "hook"',
       ],
     ];
     for (const [files, message] of cases) {
@@ -203,6 +208,14 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       agentPackage({ "src/channels/x.ts": "export default { name: ' ', connect() {} };\n" }),
     );
     expect(() => buildDefinition(unnamed, {})).toThrow("src/channels/x.ts: long-connection channel name");
+    const declaring = await prepareDefinition(
+      agentPackage({
+        "src/channels/x.ts": "const channel = () => ({});\nchannel.secrets = ['X_TOKEN'];\nexport default channel;\n",
+      }),
+    );
+    expect(() => buildDefinition(declaring, {})).toThrow(
+      "src/channels/x.ts: declares its secrets with defineChannel, which a package does not read",
+    );
     const badCron = await prepareDefinition(
       agentPackage({
         "src/schedules/often.ts": `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "not a cron", prompt: "x" });\n`,
