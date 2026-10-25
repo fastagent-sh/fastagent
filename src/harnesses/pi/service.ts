@@ -1,6 +1,6 @@
 /** `createAgentService` — the product as one call, with pi supplying the harness. */
 import { type AgentService, type MountAgentServiceOptions, mountAgentService } from "../../service.ts";
-import type { CredentialSourceOptions } from "./auth.ts";
+import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { createPiAgentFromDir } from "./open.ts";
 
 export interface CreateAgentServiceOptions extends MountAgentServiceOptions, CredentialSourceOptions {

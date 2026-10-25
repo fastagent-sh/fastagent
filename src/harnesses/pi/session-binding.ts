@@ -49,7 +49,7 @@ import { type MountedTool, isDefaultActiveTool } from "./tool.ts";
 import { resolveModel } from "./config.ts";
 import { MissingModel, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./models.ts";
-import { registerAccountModels } from "./openai-account-models.ts";
+import { registerAccountModels } from "../models/account-models.ts";
 import { abortedAnswer, asksToEndRun, markEndsRun } from "./messages.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 import type { DefinitionPrompt } from "./definition.ts";

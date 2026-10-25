@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { GLOBAL_AUTH_PATH } from "../src/harnesses/pi/auth.ts";
+import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
 import { assemblePiFromDefinition } from "../src/harnesses/pi/create.ts";
 import { probeAuthSource } from "../src/harnesses/pi/models.ts";
 import { agentModels } from "../src/harnesses/pi/agent-models.ts";

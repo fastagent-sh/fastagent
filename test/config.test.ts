@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { createPiAgentFromDir, createPiModels, type FastagentConfig, listModels, resolveModel } from "../src/index.ts";
-import { GLOBAL_AUTH_PATH, resolveAuthLayers, resolveAuthPath } from "../src/harnesses/pi/auth.ts";
+import { GLOBAL_AUTH_PATH, resolveAuthLayers, resolveAuthPath } from "../src/harnesses/models/credentials.ts";
 import { loadConfig, resolveModelSpec } from "../src/harnesses/pi/config.ts";
 import { probeAuthSource } from "../src/harnesses/pi/models.ts";
 import { resolveSecretsDir, resolveSessionsDir, resolveStateRoot } from "../src/paths.ts";

@@ -20,7 +20,7 @@ import {
   assertOneCredentialSource,
   fastagentCredentialStore,
   resolveAuthLayers,
-} from "./auth.ts";
+} from "../models/credentials.ts";
 import { log } from "../../log.ts";
 import {
   type ModelFiles,

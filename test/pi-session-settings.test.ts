@@ -17,7 +17,7 @@ import {
   getSupportedThinkingLevels,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { fastagentCredentialStore } from "../src/harnesses/pi/auth.ts";
+import { fastagentCredentialStore } from "../src/harnesses/models/credentials.ts";
 import { piLoopHarness } from "../src/harnesses/pi/loop-harness.ts";
 import { type AnyModel, createPiModelRuntime } from "../src/harnesses/pi/models.ts";
 import { piSessionBinder } from "../src/harnesses/pi/session-binding.ts";

@@ -25,7 +25,7 @@ import {
   refreshCatalog,
   modelRuntimeFiles,
 } from "../src/harnesses/pi/models.ts";
-import { fastagentCredentialStore } from "../src/harnesses/pi/auth.ts";
+import { fastagentCredentialStore } from "../src/harnesses/models/credentials.ts";
 import { agentModels, createPiModels } from "../src/harnesses/pi/agent-models.ts";
 import { resolveModel } from "../src/harnesses/pi/config.ts";
 import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";

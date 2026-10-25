@@ -34,7 +34,7 @@ import {
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { type ResolvedContent, checkBinding, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
 import type { ContentAddition } from "../../content/source.ts";
-import { type LockResult, withLockedFile } from "./locked-file.ts";
+import { type LockResult, withLockedFile } from "../models/locked-file.ts";
 
 /** `context.json` is part of the definition, read by whoever reads the agent. */
 const CONTEXT_FILE_MODE = 0o644;

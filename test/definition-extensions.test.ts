@@ -14,7 +14,7 @@ import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../s
 import { definitionServices } from "../src/harnesses/pi/session-binding.ts";
 import { agentModels } from "../src/harnesses/pi/agent-models.ts";
 import { withModelRegistration } from "../src/harnesses/pi/models.ts";
-import { registerAccountModels } from "../src/harnesses/pi/openai-account-models.ts";
+import { registerAccountModels } from "../src/harnesses/models/account-models.ts";
 import { assemblePiFromDefinition } from "../src/harnesses/pi/create.ts";
 import { loadExtensionPaths } from "../src/harnesses/pi/definition.ts";
 import { buildAgentSessionRuntime } from "../src/harnesses/pi/session-builder.ts";

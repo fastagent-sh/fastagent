@@ -6,7 +6,7 @@ import { enterAgentDirectory, reportAssembly, reportAuth } from "../src/cli/shar
 import { setLogLevel } from "../src/log.ts";
 import * as models from "../src/harnesses/pi/models.ts";
 import { agentModels } from "../src/harnesses/pi/agent-models.ts";
-import { GLOBAL_AUTH_PATH } from "../src/harnesses/pi/auth.ts";
+import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
 
 // enterAgentDirectory installs the proxy fetch, and undici.install() swaps this process's fetch/Response/
 // Headers/FormData/WebSocket with no way back. Keep the side effect out of the test process.

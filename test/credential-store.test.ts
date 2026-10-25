@@ -18,10 +18,10 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collect } from "../src/protocol-collect.ts";
-import { GLOBAL_AUTH_PATH } from "../src/harnesses/pi/auth.ts";
+import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
 import { createPiAgent } from "../src/harnesses/pi/create.ts";
 import { createAgentService } from "../src/harnesses/pi/service.ts";
-import { login, loginOptions } from "../src/harnesses/pi/login.ts";
+import { login, loginOptions } from "../src/harnesses/models/login.ts";
 import { probeAuthSource } from "../src/harnesses/pi/models.ts";
 import { createPiModels } from "../src/harnesses/pi/agent-models.ts";
 import { availableModelsFromDir, createPiAgentFromDir } from "../src/harnesses/pi/open.ts";

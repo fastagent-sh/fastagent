@@ -60,7 +60,7 @@ export {
   type PiSessionRecordStore,
 } from "./harnesses/pi/session-store.ts";
 
-export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./harnesses/pi/auth.ts";
+export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./harnesses/models/credentials.ts";
 export { createPiModels, type CreatePiModelsOptions } from "./harnesses/pi/agent-models.ts";
 export { probeAuthSource } from "./harnesses/pi/models.ts";
 export {
@@ -71,7 +71,7 @@ export {
   type LoginOption,
   type LoginRequest,
   type LoginResult,
-} from "./harnesses/pi/login.ts";
+} from "./harnesses/models/login.ts";
 /** pi-ai's sign-in types, and the `CredentialStore` a caller supplies as `credentialStore` (with what it holds). */
 export type { AuthEvent, AuthInteraction, AuthPrompt, Credential, CredentialStore } from "@earendil-works/pi-ai";
 export type { Models } from "@earendil-works/pi-ai";

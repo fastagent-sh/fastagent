@@ -16,7 +16,7 @@ const MAX_TURN_ATTEMPTS = 3;
 /** What every persisted turn record carries regardless of channel. */
 export interface TurnRecordBase {
   id: string;
-  session: string;
+  place: string;
   attempts: number;
   /**
    * The completed reply, recorded BEFORE it is delivered. Its presence is the difference between the two things a
@@ -149,7 +149,7 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
         // poisoned the process or a deploy/OOM took it down each time.
         log.error(
           `${label} dropping turn ${id} after starting ${rec.attempts} time(s) without finishing ` +
-            `(session=${rec.session}) — it may be crashing the process, or was killed mid-run each time; it will not ` +
+            `(place=${rec.place}) — it may be crashing the process, or was killed mid-run each time; it will not ` +
             `be run again`,
         );
         turns.delete(id);
@@ -165,7 +165,7 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
         turns.set(id, rec);
         log.error(
           `${label} cannot persist turn ${id}'s attempt count — deferring it to the next start rather ` +
-            `than run it untracked (session=${rec.session}): ${String(e)}`,
+            `than run it untracked (place=${rec.place}): ${String(e)}`,
         );
         return "defer";
       }

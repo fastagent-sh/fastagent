@@ -8,7 +8,6 @@ import { writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CredentialStore, ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
   type Extension,
   type HarnessSettings,
@@ -27,6 +26,7 @@ import type { ChannelModule, LongConnectionChannelModule } from "../../channel.t
 import { channelModuleProblem } from "../../channels/discover.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { cronError } from "../../schedule/cron.ts";
+import { modelsOver } from "../models/models.ts";
 import { type DurableAgent, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type Needs, type Schedule, isNeeds } from "./define.ts";
 import { GENERATED_DIR, REGISTRY_FILE, REGISTRY_KINDS, type Registry, generateRegistry } from "./registry.ts";
@@ -300,8 +300,7 @@ export interface OpenAgentOptions {
 export async function openAgent(definition: AgentDefinition, options: OpenAgentOptions): Promise<DurableAgent> {
   const { dir, config } = definition;
   const code = buildDefinition(definition, options.env);
-  const models = builtinModels({ credentials: options.credentials });
-  for (const provider of code.providers) models.setProvider(provider);
+  const models = modelsOver(options.credentials, code.providers);
   const spec = options.model ?? config.model;
   const model = spec === undefined ? undefined : modelRefOf(spec, "the default model");
   if (model !== undefined && models.getModel(model.provider, model.modelId) === undefined) {

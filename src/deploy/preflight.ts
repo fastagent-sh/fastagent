@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, providerOf } from "../harnesses/pi/config.ts";
-import { resolveAuthPath } from "../harnesses/pi/auth.ts";
+import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, LOCAL_CONTEXT_FILE, exists } from "../paths.ts";

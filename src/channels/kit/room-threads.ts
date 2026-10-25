@@ -5,10 +5,9 @@
  * The room is never an argument. A model can be asked to read any chat ("what did they say in the other group?"), and
  * the platform lets the bot read every chat it is in, so a room the tool were told would let one chat read another.
  * The channel names the room instead: while a group turn runs, it registers that turn's room under the turn's session,
- * and the tool, asking with its own session (`ctx.sessionManager`), gets that room or nothing. A turn holds its
- * session's lease, so one session has one running turn and one room.
+ * and the tool, asking with its own session (`sessionIdOf`), gets that room or nothing. A place's turns run one at a
+ * time, so one session has one running turn and one room.
  */
-import { resolveStateRoot } from "../../paths.ts";
 import { truncateCodePointPrefix } from "./text.ts";
 
 /** A channel's reads of its rooms' threads. Each resolves to text for the model; a failed read rejects. */
@@ -19,12 +18,12 @@ export interface ThreadReader {
   read(room: string, threadId: string): Promise<string>;
 }
 
-/** The rooms of a channel's running group turns, by session, and how to read their threads. */
+/** The rooms of a channel's running group turns, by session id, and how to read their threads. */
 export interface RoomThreads {
-  /** The turn of `session` runs in `room` until the returned function is called. */
-  enter(session: string, room: string): () => void;
+  /** The turn of `sessionId` runs in `room` until the returned function is called. */
+  enter(sessionId: string, room: string): () => void;
   readonly reader: ThreadReader;
-  roomOf(session: string): string | undefined;
+  roomOf(sessionId: string): string | undefined;
 }
 
 export function createRoomThreads(reader: ThreadReader): RoomThreads {
@@ -41,7 +40,10 @@ export function createRoomThreads(reader: ThreadReader): RoomThreads {
   };
 }
 
-/** Per channel kind, per agent state root: the mounted channel's rooms. A remount replaces the entry. */
+/**
+ * Per channel kind, per agent state root: the mounted channel's rooms. A remount replaces the entry. A session id
+ * names its storage, so it finds its agent's channel among every agent's of one kind in the process.
+ */
 const mounted = new Map<string, Map<string, RoomThreads>>();
 
 export function registerRoomThreads(kind: string, stateRoot: string, rooms: RoomThreads): void {
@@ -50,18 +52,18 @@ export function registerRoomThreads(kind: string, stateRoot: string, rooms: Room
   mounted.set(kind, byRoot);
 }
 
-/** The threads a tool's turn may read, for the channel `kind` serving the tool's agent (`ctx.cwd`). */
+/** The threads the turn running in `sessionId` may read, from the `kind` channel it was asked through. */
 export function roomThreads(
   kind: string,
-  ctx: { cwd: string; sessionManager?: { getSessionId(): string } },
+  sessionId: string | undefined,
 ): { list(): Promise<string>; read(threadId: string): Promise<string> } {
-  const rooms = mounted.get(kind)?.get(resolveStateRoot(ctx.cwd));
-  if (!rooms) {
-    throw new Error(`no ${kind} channel is serving this agent in this process: threads are read only in a chat turn`);
+  const serving = [...(mounted.get(kind)?.values() ?? [])];
+  if (serving.length === 0) {
+    throw new Error(`no ${kind} channel is serving in this process: threads are read only in a chat turn`);
   }
-  const session = ctx.sessionManager?.getSessionId();
-  const room = session === undefined ? undefined : rooms.roomOf(session);
-  if (room === undefined) {
+  const rooms = sessionId === undefined ? undefined : serving.find((each) => each.roomOf(sessionId) !== undefined);
+  const room = sessionId === undefined ? undefined : rooms?.roomOf(sessionId);
+  if (rooms === undefined || room === undefined) {
     throw new Error(
       `this turn was not asked in a ${kind} group chat: threads are read only from the group a turn was asked in`,
     );

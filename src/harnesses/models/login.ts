@@ -14,11 +14,12 @@ import {
   type Models,
   type Provider,
 } from "@earendil-works/pi-ai";
-import { dirname } from "node:path";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
-import { fastagentCredentialStore } from "./auth.ts";
-import { createPiModelRuntime, interactiveAuth, loginProviders, piModelsOver, probeApiKey } from "./models.ts";
-import { agentModels } from "./agent-models.ts";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { writeFileAtomic } from "../../atomic-write.ts";
+import { fastagentCredentialStore } from "./credentials.ts";
+import { interactiveAuth, loginProviders, modelsOver, probeApiKey } from "./models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
 
@@ -80,9 +81,9 @@ export async function loginOptionsOver(
 
 export type LoginRequest = {
   /**
-   * Stable installation identity (Sign in with ChatGPT requires one). With `authPath` it defaults to Pi settings
-   * beside that file (`settings.json`, written before the flow runs); over a caller's `credentialStore` there is no
-   * file to keep it beside, so a flow that needs one fails unless this supplies it.
+   * Stable installation identity (Sign in with ChatGPT requires one). With `authPath` it defaults to `device.json`
+   * beside that file, written before the flow runs; over a caller's `credentialStore` there is no file to keep it
+   * beside, so a flow that needs one fails unless this supplies it.
    */
   getDeviceId?: () => string;
   provider: string;
@@ -125,7 +126,6 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
  * written. Credentials are provider-scoped, so any of the provider's models answers the question the check asks (does
  * the provider refuse the key, HTTP 401); a key the provider rejects is never stored, and the provider's key flow runs
  * again (the provider and method were not the mistake). Progress and outcome go out through `interaction.notify`.
- * A provider an agent's models.json points elsewhere is not this call's: store that key with `fastagentCredentialStore`.
  *
  * Aborting `interaction.signal` at any point, the verification included, rejects with {@link LoginCancelled} and
  * writes no credential (an OAuth device ID, the installation's identity, is kept once created). Every prompt carries a signal that aborts on it, on the prompt's own signal (a callback server
@@ -137,14 +137,11 @@ export function login(request: LoginRequest): Promise<LoginResult> {
 
 /** Not public: what the CLI and the tests add to {@link login}. */
 export interface LoginInternals {
-  /** Providers added to pi's built-ins (a same id replaces one): a test seam. */
-  providers?: readonly Provider[];
   /**
-   * The agent the key is for. Verification then runs on THAT agent's registry (its models.json and the machine's over
-   * the built-ins), so the check reaches the endpoint its turns will: a models.json can point a built-in provider at a
-   * gateway, where the provider's own endpoint would refuse the gateway's key and loop the person through re-entry.
+   * The definition's providers, added to pi's built-ins (a same id replaces one): a key is verified against the
+   * endpoint its turns will reach, which a provider in code can point at a gateway.
    */
-  agentDir?: string;
+  providers?: readonly Provider[];
   /**
    * A model spec to verify an entered key with, when the registry has it as one of this provider's models: the
    * first-run picker's choice, the request the agent is about to make. Otherwise pi's default model for the provider
@@ -155,7 +152,7 @@ export interface LoginInternals {
 
 /** {@link login}, plus {@link LoginInternals}. */
 export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<LoginResult> {
-  const { providers, verifyWith, agentDir } = internals;
+  const { providers, verifyWith } = internals;
   const { method, interaction } = request;
   if (request.credentialStore === undefined && typeof request.authPath !== "string") {
     throw new Error("login needs authPath or credentialStore: where the sign-in is written");
@@ -167,33 +164,15 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   const flow = auth.login.bind(auth);
   // The key under test lives here, not in the file, until it passes.
   const trial = new InMemoryCredentialStore();
-  // Only a key needs the registry, and building an agent's fails on a broken models.json: an OAuth sign-in must not.
-  // For a key it is built BEFORE the flow, so that failure comes before the person types anything.
-  const models: Models | undefined =
-    method !== "api_key"
-      ? undefined
-      : agentDir
-        ? await createPiModelRuntime({
-            agentDir,
-            credentials: trial,
-            ...(providers ? { providers: [...providers] } : {}),
-          })
-        : piModelsOver(trial, providers);
-  const store = agentModels(undefined, request).credentials;
+  // Only a key needs the registry: it is checked with one request before it is kept.
+  const models: Models | undefined = method === "api_key" ? modelsOver(trial, providers) : undefined;
+  const store = request.credentialStore ?? fastagentCredentialStore(request.authPath);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
   const notify = (event: AuthEvent) => interaction.notify(event);
   let getDeviceId = request.getDeviceId;
   if (method === "oauth" && !getDeviceId && request.authPath !== undefined) {
-    // Only the settings file beside the credentials: no project's `.pi/settings.json` has a say in this write.
-    const settings = SettingsManager.create(dirname(request.authPath), dirname(request.authPath), {
-      projectTrusted: false,
-    });
-    const deviceId = settings.getOrCreateDeviceId();
-    await settings.flush();
-    const errors = settings.drainErrors();
-    if (errors.length)
-      throw new Error(`could not persist login device ID: ${errors.map(({ error }) => error.message).join("; ")}`);
+    const deviceId = await deviceIdBeside(request.authPath);
     getDeviceId = () => deviceId;
   }
 
@@ -210,6 +189,26 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
     await store.modify(provider.id, async () => credential);
     return { provider: provider.id, method, verified };
   }
+}
+
+/** The installation's identity, kept beside the credentials file it signs in to: created once, then read. */
+async function deviceIdBeside(authPath: string): Promise<string> {
+  const path = join(dirname(authPath), "device.json");
+  let text: string | undefined;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (text !== undefined) {
+    const stored = (JSON.parse(text) as { deviceId?: unknown }).deviceId;
+    if (typeof stored !== "string" || stored === "") throw new Error(`${path} holds no deviceId`);
+    return stored;
+  }
+  const deviceId = randomUUID();
+  await mkdir(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify({ deviceId })}\n`);
+  return deviceId;
 }
 
 async function runFlow(
@@ -412,8 +411,6 @@ export async function loginFlow(
     signal?: AbortSignal;
     /** {@link LoginInternals.verifyWith}. */
     verifyWith?: string;
-    /** {@link LoginInternals.agentDir}. */
-    agentDir?: string;
   },
 ): Promise<LoginResult> {
   const offered = await loginOptionsOver(options.authPath, options.providers);
@@ -455,7 +452,6 @@ export async function loginFlow(
     {
       ...(options.providers ? { providers: options.providers } : {}),
       ...(options.verifyWith ? { verifyWith: options.verifyWith } : {}),
-      ...(options.agentDir ? { agentDir: options.agentDir } : {}),
     },
   );
 }

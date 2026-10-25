@@ -16,7 +16,7 @@ import {
   resolveModelSpec,
   rewriteConfigModel,
 } from "../harnesses/pi/config.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../harnesses/pi/login.ts";
+import { LoginCancelled, type LoginIO, loginFlow } from "../harnesses/models/login.ts";
 import { readMachine, withMachine } from "../harnesses/pi/machine.ts";
 import { providerAuthStatuses } from "../harnesses/pi/models.ts";
 import { type AgentModels, agentModels } from "../harnesses/pi/agent-models.ts";

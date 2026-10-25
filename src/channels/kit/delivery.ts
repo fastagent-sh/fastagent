@@ -6,7 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { InvokeEvent } from "../../protocol.ts";
+import type { TurnEvent } from "./invoke-turn-kit.ts";
 import { log } from "../../log.ts";
 import type { ChannelFailure } from "./preview-kit.ts";
 import { PortFailure, portJoin } from "../../effect-port.ts";
@@ -15,20 +15,21 @@ import { PortFailure, portJoin } from "../../effect-port.ts";
 export type TurnEnd = { answered: true } | { failure: ChannelFailure };
 
 /**
- * Whether this event ends the turn, and how: the invoke refused (nothing ran), or the turn's message ended. A message
- * the agent stopped answering at its output limit, or that a command took, still answers with what was written.
+ * Whether this event ends the turn, and how: the message was refused (nothing was recorded), not known to be taken
+ * (the same key finds it again, so it is worth another try), or the turn's message ended. A message the agent stopped
+ * answering at its output limit still answers with what was written.
  */
-export function turnEnd(event: InvokeEvent, messageId: string | undefined): TurnEnd | undefined {
+export function turnEnd(event: TurnEvent, messageId: string | undefined): TurnEnd | undefined {
   if (event.type === "rejected") {
     const { code, message, retryable } = event.error;
     return { failure: { details: message, retryable, code } };
   }
+  if (event.type === "unknown") return { failure: { details: event.reason, retryable: true, code: "unknown" } };
   if (event.type !== "done" || event.message.messageId !== messageId) return undefined;
   const { outcome } = event.message;
   switch (outcome.status) {
     case "completed":
     case "max_tokens":
-    case "intercepted":
       return { answered: true };
     case "failed":
       return {
@@ -36,8 +37,6 @@ export function turnEnd(event: InvokeEvent, messageId: string | undefined): Turn
       };
     case "canceled":
       return { failure: { details: "the message was canceled", retryable: false, code: "canceled" } };
-    case "interrupted":
-      return { failure: { details: "the message was interrupted", retryable: true, code: "interrupted" } };
   }
 }
 
@@ -51,10 +50,10 @@ export function unfinishedTurn(servingError: string | undefined): ChannelFailure
 
 /** Snapshot/edit renderers share terminal ownership; platform-specific settle policies stay injected. */
 export function renderReply(
-  events: Stream.Stream<InvokeEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PortFailure>,
   opts: {
     label: string;
-    onEvent: (event: InvokeEvent) => void;
+    onEvent: (event: TurnEvent) => void;
     finish: Effect.Effect<void>;
     answer: () => string;
     settle: (text: string) => Effect.Effect<void, PortFailure>;
@@ -90,7 +89,7 @@ export function renderReply(
       });
     yield* Stream.runForEachWhile(events, (event) => {
       if (event.type === "accepted") messageId = event.message.messageId;
-      if (event.type === "serving_error") servingError = event.message;
+      if (event.type === "serving_error") servingError = event.error.message;
       const end = turnEnd(event, messageId);
       if (end === undefined) {
         return Effect.try({

@@ -17,47 +17,87 @@
  */
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import type { Agent, InvokeEvent, InvokeRequest } from "../../protocol.ts";
+import type { Agent, AgentError, Attachment, ContentPart, MessageStatus, SessionEvent } from "../../agent-api.ts";
+import { stream } from "../../agent-api-stream.ts";
 import { log } from "../../log.ts";
 import { eventStream } from "./event-stream.ts";
 import { type PortFailure, portJoin } from "../../effect-port.ts";
 
 /**
- * One turn, end to end: prepare the platform inputs, then stream `agent.invoke`. All three chat channels wrote this
- * out, and the copies had already disagreed about the one thing that is actually a per-platform judgement (whether a
- * preparation failure is worth a redelivery) while agreeing on everything that is not.
+ * What a turn reads, in order: the message's receipt or why there is none, then its session's events through its
+ * `done` (agent-api.md §3.1). `unknown`: whether the message was taken is not known, and the same key finds it again.
+ */
+export type TurnEvent =
+  | { type: "accepted"; sessionId: string; message: MessageStatus; duplicate: boolean }
+  | { type: "rejected"; error: AgentError }
+  | { type: "unknown"; reason: string }
+  | SessionEvent;
+
+/** A turn's text and images as the content of one message. */
+export function promptContent(text: string, images: readonly Attachment[] | undefined): ContentPart[] {
+  return [{ type: "text", text }, ...(images ?? []).map((image) => ({ type: "image" as const, ...image }))];
+}
+
+/**
+ * One turn, end to end: the session the turn's place talks in (created and recorded first, place-sessions.ts), the
+ * platform inputs prepared, then the message sent and its answer read as it is written (`stream`).
  *
- * The invoke queues behind whatever runs in the session (a wake-up, an API caller): the channel's own turns never
- * collide, its queue serializes them per session. Its key is the turn's, so a turn run again after a restart is the
- * message it already sent: one that ended is replayed, answer included, and only an `interrupted` one is taken again.
+ * The message queues behind whatever runs in the session (a wake-up, a schedule): the channel's own turns never
+ * collide, its queue serializes them per place. Its key is the turn's, so a turn run again after a restart is the
+ * message it already sent: one that ended is read back, answer included.
  *
- * A preparation failure is the invoke's `rejected` event: nothing ran. It must never throw out of the stream, since
- * the turn's own settlement path is what tells the user — an exception here would take the reply with it.
+ * A failure to prepare is the turn's `rejected` event: nothing was sent. It must never throw out of the stream, since
+ * the turn's own settlement path is what tells the user; an exception here would take the reply with it.
  */
 export function turnStream<R>(opts: {
-  agent: Pick<Agent, "invoke">;
+  agent: Agent;
   label: string;
-  source: NonNullable<InvokeRequest["source"]>;
-  /** Prepare this turn's inputs (download attachments, walk a reply chain, start a thread from its room). */
+  /** The session the turn's place talks in: the one it has, or one created and recorded before anything is sent. */
+  session: () => Promise<string>;
+  /** While the turn runs, what its session reaches by its id (a thread-reading tool's room); released when it ends. */
+  enter?: (sessionId: string) => () => void;
+  /** Prepare this turn's inputs (download attachments, walk a reply chain). */
   resolve: () => Promise<R>;
-  /** What the prepared inputs make of the turn: where it runs, what it asks, and the key it is known by. */
-  turn: (resolved: R) => Pick<InvokeRequest, "prompt"> & { sessionId: string; idempotencyKey: string };
+  /** What the prepared inputs make of the turn: what it asks, and the key it is known by. */
+  turn: (resolved: R) => { content: ContentPart[]; idempotencyKey: string };
   /** Whether a failed preparation is worth a platform redelivery. Stated per channel because it IS a
    *  platform question — Slack reads its API error's status, and a transport that cannot tell says
    *  yes, since a retried download is cheap next to an unanswered ask. */
   retryableLoadFailure: (cause: unknown) => boolean;
-}): Stream.Stream<InvokeEvent, PortFailure> {
+}): Stream.Stream<TurnEvent, PortFailure> {
   return Stream.unwrap(
-    portJoin(opts.resolve).pipe(
-      Effect.map((resolved) => {
-        const request: InvokeRequest = { ...opts.turn(resolved), whenBusy: "queue", source: opts.source };
-        return eventStream(() => opts.agent.invoke(request), `${opts.label} (session=${request.sessionId})`).pipe(
-          Stream.scoped,
-        );
-      }),
+    portJoin(async () => {
+      const sessionId = await opts.session();
+      return { sessionId, resolved: await opts.resolve() };
+    }).pipe(
+      Effect.flatMap(({ sessionId, resolved }) =>
+        Effect.gen(function* () {
+          const enter = opts.enter;
+          if (enter !== undefined)
+            yield* Effect.acquireRelease(
+              Effect.sync(() => enter(sessionId)),
+              (leave) => Effect.sync(leave),
+            );
+          const result = yield* portJoin(() =>
+            stream(opts.agent, { sessionId, ...opts.turn(resolved), whenBusy: "queue" }),
+          );
+          if (!result.ok) {
+            return Stream.succeed<TurnEvent>(
+              "error" in result
+                ? { type: "rejected", error: result.error }
+                : { type: "unknown", reason: result.unknown.reason },
+            );
+          }
+          const { ok: _, events, ...receipt } = result;
+          return Stream.concat(
+            Stream.succeed<TurnEvent>({ type: "accepted", ...receipt }),
+            eventStream(() => events, `${opts.label} (session=${sessionId})`).pipe(Stream.scoped),
+          );
+        }),
+      ),
       Effect.catchTag("PortFailure", ({ cause }) =>
         Effect.succeed(
-          Stream.succeed<InvokeEvent>({
+          Stream.succeed<TurnEvent>({
             type: "rejected",
             error: {
               code: "unavailable",
