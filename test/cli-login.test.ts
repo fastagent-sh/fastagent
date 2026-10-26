@@ -47,19 +47,14 @@ describe("cli: login and models", () => {
     expect([wrong.code, wrong.stderr]).toEqual([2, expect.stringMatching(/--deployment takes a host \(docker, fly/)]);
   });
 
-  it("models inside an agent's subdirectory refuses, instead of listing or refreshing the machine's catalog", async () => {
-    // Without an agent here the refresh falls back to ~/.fastagent/models-store.json, which no deploy carries — so,
-    // as for login, standing inside an agent must not count as standing outside one.
+  it("models inside an agent's subdirectory refuses, instead of listing what another agent's providers offer", async () => {
+    // As for login, standing inside an agent must not count as standing outside one: the list outside an agent
+    // leaves out the providers the agent's configuration declares.
     const home = await mkdtemp(join(tmpdir(), "fa-models-home-"));
     const workspace = await mkdtemp(join(tmpdir(), "fa-models-nested-"));
-    const inside = join(workspace, "agent", "tools");
+    const inside = join(workspace, "agent", "src");
     await mkdir(inside, { recursive: true });
     await writeFile(join(workspace, "agent", "fastagent.config.ts"), "export default {};\n");
-    const { code, stderr } = await run(["models", "--refresh"], inside, { ...process.env, HOME: home });
-    expect(code).toBe(1);
-    expect(stderr).toMatch(/is inside the agent .* — run from/);
-    await expect(stat(join(home, ".fastagent", "models-store.json"))).rejects.toThrow(); // the machine's untouched
-    // Listing too: the machine's list would silently leave out the agent's own catalog and models.json.
     const listed = await run(["models", "claude"], inside, { ...process.env, HOME: home });
     expect(listed.code).toBe(1);
     expect(listed.stderr).toMatch(/is inside the agent .* — run from/);

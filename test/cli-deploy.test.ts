@@ -25,9 +25,12 @@ describe("cli: deploy", () => {
     const dir = await agentWorkspace("fa-deploy-new-app-", {
       "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
       ".secrets/.env": "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\nFEISHU_VERIFICATION_TOKEN=dev_token\n",
-      "channels/feishu.mjs": `const channel = () => ({ "POST /feishu": () => new Response("ok") });
-channel.secrets = ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"];
-export default channel;\n`,
+      // As \`needs\` returns it, so the fixture needs no package of its own.
+      "src/channels/feishu.mjs": `export default {
+  kind: "fastagent.needs",
+  secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"].map((name) => ({ name, optional: false })),
+  build: () => () => ({ "POST /feishu": () => new Response("ok") }),
+};\n`,
     });
     const result = await run(["deploy", "fly", dir, "--run", "--no-input"]);
     expect(result.code).toBe(1);

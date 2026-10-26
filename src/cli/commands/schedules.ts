@@ -7,7 +7,7 @@
  */
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
-import { buildDefinition, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
+import { buildDefinitionShape, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { scheduleSessions } from "../../schedule/scheduler.ts";
@@ -24,8 +24,9 @@ export async function runSchedulesList(dirArg: string, json: boolean): Promise<v
   const target = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
+  // Its shape only: listing what will fire needs none of the values the code reads.
   const { schedules } = await prepareDefinition(target)
-    .then((definition) => buildDefinition(definition))
+    .then((definition) => buildDefinitionShape(definition, process.env))
     .catch(failStartup);
   const sessions = scheduleSessions(stateRoot);
   const now = new Date();
