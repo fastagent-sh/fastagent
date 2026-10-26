@@ -5,7 +5,6 @@ import type * as Scope from "effect/Scope";
 import { log } from "../../log.ts";
 import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
 import type { DiscussionSource } from "./place-history.ts";
-import type { RoomThreads } from "./room-threads.ts";
 import { createTurnQueue } from "./turn-queue.ts";
 import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-store.ts";
 
@@ -30,11 +29,6 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   discussionKey(rec: R): P | undefined;
   /** The place, for the lifecycle log line (`chat=… thread=…`). */
   where(rec: R): string;
-  /**
-   * The room whose threads this turn's tool may read while it runs (`room-threads.ts`): a group turn's chat; undefined
-   * for a turn with none (a DM, a routed turn).
-   */
-  room?: { threads: RoomThreads; of(rec: R): string | undefined };
   /** Queue feedback when a turn is scheduled BEHIND an active one. */
   onQueuedBehind?(rec: R): { done: Promise<void>; cancel?: () => void };
   /** Runs before the attempt is counted. */
@@ -57,7 +51,7 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
    * preview — the one the answer was written for died with its process.
    *
    * A notice THIS process put up is a different thing and must still be settled: a record recovered behind another
-   * turn in the same session goes through `onQueuedBehind` like any other, so it can hold a fresh "queued" message
+   * turn in the same conversation goes through `onQueuedBehind` like any other, so it can hold a fresh "queued" message
    * or status that only this call can take over or clear.
    */
   deliverAnswer(rec: R, answer: string): Effect.Effect<void, PortFailure, Scope.Scope>;
@@ -73,20 +67,6 @@ export interface TurnRunner<R, S> {
   recover(): S[];
   /** Resolve once no turn is in flight — the test/observability seam. */
   idle(): Promise<void>;
-}
-
-/** For the turn's lifetime (its scope), the room its thread-reading tool reads. */
-function enterRoom<R extends PendingBase<S>, S extends TurnRecordBase, E, P>(
-  options: TurnRunnerOptions<R, S, E, P>,
-  rec: R,
-): Effect.Effect<unknown, never, Scope.Scope> {
-  const room = options.room?.of(rec);
-  if (options.room === undefined || room === undefined) return Effect.void;
-  const { threads } = options.room;
-  return Effect.acquireRelease(
-    Effect.sync(() => threads.enter(rec.session, room)),
-    (leave) => Effect.sync(leave),
-  );
 }
 
 export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, E, P = string>(
@@ -114,14 +94,14 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
             Effect.sync(() =>
               log.info(
                 `${label} turn ${rec.id} hit the execution ceiling, but the answer it had already recorded was ` +
-                  `delivered (session=${rec.session})`,
+                  `delivered (conversation=${rec.conversation})`,
               ),
             ),
           onFailure: (error) =>
             Effect.sync(() => {
               log.error(
                 `${label} turn ${rec.id} hit the execution ceiling and its recorded answer could not be delivered ` +
-                  `either (session=${rec.session}) — the answer is gone: ${String(error.cause)}`,
+                  `either (conversation=${rec.conversation}) — the answer is gone: ${String(error.cause)}`,
               );
               // The record is off disk, so nothing will retry this. The asker is owed an ending — without one, a
               // queue notice this turn put up stays in the chat forever reading "Queued".
@@ -142,7 +122,7 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
     // One stable prefix, so every `turn done:`/`turn failed:` has a `turn start:` to grep back to; what kind of work
     // it is rides along as a field.
     log.info(
-      `${label} turn start: turn=${rec.id} session=${rec.session} ${options.where(rec)}` +
+      `${label} turn start: turn=${rec.id} conversation=${rec.conversation} ${options.where(rec)}` +
         `${recovered === undefined ? "" : " mode=re-delivery (answer recovered from a prior run)"}`,
     );
     const work =
@@ -154,7 +134,6 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
             return Effect.promise(async () =>
               key === undefined ? { text: "", consumed: [] as E[] } : source.peek(key),
             ).pipe(
-              Effect.tap(() => enterRoom(options, rec)),
               Effect.flatMap((discussion) =>
                 options.execute(rec, discussion, (answer) => {
                   // Only a recorded answer is recoverable — an untracked run has no record to keep it in.
@@ -170,13 +149,15 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
       Effect.matchEffect({
         onSuccess: () =>
           Effect.sync(() => {
-            log.info(`${label} turn done: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms)`);
+            log.info(
+              `${label} turn done: turn=${rec.id} conversation=${rec.conversation} (${Date.now() - startedAt}ms)`,
+            );
             return true;
           }),
         onFailure: (error) =>
           Effect.sync(() => {
             log.error(
-              `${label} turn failed: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms): ${String(error.cause)}`,
+              `${label} turn failed: turn=${rec.id} conversation=${rec.conversation} (${Date.now() - startedAt}ms): ${String(error.cause)}`,
             );
             return false;
           }),
@@ -190,14 +171,14 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
       return;
     }
     log.warn(
-      `${label} turn ${rec.id} produced an answer that was not delivered (session=${rec.session}) — ` +
+      `${label} turn ${rec.id} produced an answer that was not delivered (conversation=${rec.conversation}) — ` +
         `keeping it to re-deliver on the next start`,
     );
   });
 }
 
 export function createTurnRunner<
-  R extends PendingBase<S> & { id: string; session: string },
+  R extends PendingBase<S> & { id: string; conversation: string },
   S extends TurnRecordBase,
   E,
   P = string,
@@ -216,7 +197,7 @@ export function createTurnRunner<
             Effect.catchCause((cause) =>
               Effect.sync(() =>
                 log.warn(
-                  `${label} queue notice failed: turn=${rec.id} session=${rec.session}: ${String(portError(cause))}`,
+                  `${label} queue notice failed: turn=${rec.id} conversation=${rec.conversation}: ${String(portError(cause))}`,
                 ),
               ),
             ),

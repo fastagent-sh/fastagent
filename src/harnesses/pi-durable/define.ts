@@ -5,6 +5,8 @@
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
 import type { Extension } from "@earendil-works/pi-durable";
+import { isEnvName } from "../../declared-secrets.ts";
+import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
 export interface AgentConfig {
   /** Default: `package.json`'s name. */
@@ -50,8 +52,6 @@ export interface Needs<T> {
   build(values: Record<string, string | undefined>): T;
 }
 
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
 /** @public */
 export function needs<const S extends readonly SecretSpec[], T>(
   secrets: S,
@@ -68,7 +68,7 @@ export function needs<const S extends readonly SecretSpec[], T>(
   );
   for (const { name } of declared) {
     // Written verbatim into env files and deploy artifacts, where a malformed name breaks somewhere far away.
-    if (!ENV_NAME.test(name)) throw new Error(`needs: ${JSON.stringify(name)} is not an environment variable name`);
+    if (!isEnvName(name)) throw new Error(`needs: ${JSON.stringify(name)} is not an environment variable name`);
   }
   return { kind: "fastagent.needs", secrets: declared, build: (values) => build(values as SecretValues<S>) };
 }
@@ -77,21 +77,12 @@ export function isNeeds(value: unknown): value is Needs<unknown> {
   return (value as { kind?: unknown } | null)?.kind === "fastagent.needs";
 }
 
-/** @public */
-export interface ScheduleConfig {
-  /** Five fields, minute first; checked when the definition loads. */
-  cron: string;
-  /** IANA timezone. Default: UTC. */
-  tz?: string;
-  /** What the agent is told when it fires: a text, or one made for the time it fires. */
-  prompt: string | ((fire: { at: Date }) => string | Promise<string>);
-}
-
-export interface Schedule extends ScheduleConfig {
+/** What `src/schedules/<name>.ts` default-exports. */
+export interface DefinedSchedule extends ScheduleConfig {
   readonly kind: "fastagent.schedule";
 }
 
 /** @public */
-export function defineSchedule(config: ScheduleConfig): Schedule {
+export function defineSchedule(config: ScheduleConfig): DefinedSchedule {
   return { kind: "fastagent.schedule", ...config };
 }

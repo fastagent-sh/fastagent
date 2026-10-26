@@ -3,27 +3,12 @@ import { Buffer } from "node:buffer";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Agent } from "../src/protocol.ts";
-import { loopPort } from "../src/loop-port.ts";
-import { servingAgent } from "../src/serving-layer.ts";
-import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 import { agentcoreRoutes, type RouteSurface } from "../src/channels/agentcore.ts";
 import type { AgentcoreEnvelope, WebhookReply } from "../src/channels/agentcore-protocol.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import type { Routes } from "../src/channel.ts";
 import { readWakeAlarmUrl, rememberWakeAlarmUrl } from "../src/schedule/wake-alarm.ts";
-import { INVOKE_PAYLOAD } from "../src/deploy/agentcore/plan.ts";
-
-const scriptedAgent = (): Agent => servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
-const invokeBody = (text: string) =>
-  Buffer.from(JSON.stringify({ sessionId: "s".repeat(33), prompt: { text } })).toString("base64");
-const invokeEnvelope = (text = "hi"): AgentcoreEnvelope => ({
-  kind: "api",
-  method: "POST",
-  path: "/invoke",
-  headers: { "content-type": "application/json" },
-  bodyB64: invokeBody(text),
-});
+import { PROBE_PAYLOAD } from "../src/deploy/agentcore/plan.ts";
 
 /** The forwarder→runtime shared secret (FASTAGENT_INGRESS_SECRET) in these tests. */
 const SECRET = "ingress-s3cret";
@@ -32,7 +17,6 @@ interface AdapterOverrides {
   /** A surface, or a factory for one. Production takes only the factory (construction must not run
    *  until the state root is authoritative); the plain value is this fixture's shorthand. */
   channels?: RouteSurface | (() => Promise<RouteSurface> | RouteSurface);
-  agent?: Agent;
   isBusy?: () => boolean;
   fireSchedule?: (name: string, occurrence: Date) => Promise<Response>;
   ingressSecret?: string;
@@ -48,7 +32,6 @@ const asFactory = (given: AdapterOverrides["channels"]): (() => Promise<RouteSur
 const adapter = (over: AdapterOverrides = {}): Routes =>
   agentcoreRoutes({
     channels: asFactory(over.channels),
-    agent: over.agent ?? scriptedAgent(),
     stateRoot,
     isBusy: over.isBusy ?? (() => false),
     // Unused by most cases: a schedule fire is the handler's to answer, which these do not reach.
@@ -368,7 +351,6 @@ describe("agentcore adapter: wake-poke envelope + wake-url capture", () => {
     const root = await mkdtemp(join(tmpdir(), "fa-wake-url-"));
     const routes = agentcoreRoutes({
       channels: () => ({ routes: {} }),
-      agent: scriptedAgent(),
       stateRoot: root,
       fireSchedule: async () => Response.json({}),
       isBusy: () => false,
@@ -384,41 +366,11 @@ describe("agentcore adapter: wake-poke envelope + wake-url capture", () => {
   });
 });
 
-describe("agentcore adapter: api envelope", () => {
-  it("carries a request to the agent's API and streams its answer back", async () => {
-    const res = await postUntrusted(adapter(), invokeEnvelope("hello"));
+describe("agentcore adapter: probe envelope", () => {
+  it("the payload the deploy prints is the IAM door's one kind, and opens the workspace", async () => {
+    const res = await post(adapter(), PROBE_PAYLOAD);
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("text/event-stream");
-    const body = await res.text();
-    expect(body).toContain('"kind":"assistant_message","data":{"text":"answer: hello"');
-    expect(body).toContain('"status":"completed"');
-  });
-
-  it("the payload the deploy prints runs a turn as printed", async () => {
-    const res = await post(adapter(), INVOKE_PAYLOAD);
-    expect(res.status).toBe(200);
-    expect(await res.text()).toContain('"type":"done"');
-  });
-
-  it("serves BOTH planes (IAM is the gateway), and refuses a request it cannot carry", async () => {
-    const routes = adapter();
-    expect((await postUntrusted(routes, invokeEnvelope())).status).toBe(200);
-    const session = "s".repeat(33);
-    const read = await postUntrusted(routes, {
-      kind: "api",
-      method: "GET",
-      path: `/sessions/${session}`,
-      query: "limit=0",
-    });
-    expect(read.status).toBe(200);
-    expect(await read.json()).toMatchObject({ state: { status: "idle" } });
-    const control = await postUntrusted(routes, {
-      kind: "api",
-      method: "DELETE",
-      path: `/control/sessions/${session}`,
-    });
-    expect(control.status).toBe(200);
-    expect((await postUntrusted(routes, { kind: "api", method: "GET", path: "sessions" })).status).toBe(400);
+    expect(await res.json()).toEqual({ ok: true });
   });
 });
 
@@ -469,22 +421,19 @@ describe("agentcore adapter: the authentication boundary", () => {
     expect(fire).not.toHaveBeenCalled();
   });
 
-  it("public invoke cannot redirect the wake-alarm callback", async () => {
+  it("an IAM probe cannot redirect the wake-alarm callback", async () => {
     const routes = adapter();
 
-    const res = await postUntrusted(routes, {
-      ...invokeEnvelope(),
-      wake: { url: "https://attacker/" },
-    } as AgentcoreEnvelope);
+    const res = await postUntrusted(routes, { kind: "probe", wake: { url: "https://attacker/" } } as AgentcoreEnvelope);
 
-    expect(res.status).toBe(200); // the public data plane keeps working
+    expect(res.status).toBe(200); // the probe still answers
     expect(readWakeAlarmUrl(stateRoot)).not.toBe("https://attacker/");
   });
 
-  it("with no ingress secret configured (invoke-only topology) nothing internal is servable", async () => {
+  it("with no ingress secret configured (probe-only topology) nothing internal is servable", async () => {
     const routes = adapter({ ingressSecret: undefined });
     expect((await postEnvelope(routes, { kind: "wake-poke" })).status).toBe(403);
-    expect((await postEnvelope(routes, invokeEnvelope())).status).toBe(200);
+    expect((await postUntrusted(routes, { kind: "probe" })).status).toBe(200);
   });
 });
 
@@ -532,7 +481,7 @@ describe("agentcore adapter: activation hooks", () => {
       expect(readWakeAlarmUrl(stateRoot)).toBe("https://current.lambda-url.on.aws/");
     });
     const routes = adapter({ onStateReady });
-    expect((await postUntrusted(routes, invokeEnvelope())).status).toBe(200);
+    expect((await postUntrusted(routes, { kind: "probe" })).status).toBe(200);
     expect(onStateReady).not.toHaveBeenCalled();
     const envelope: AgentcoreEnvelope = { kind: "wake-poke", wake: { url: "https://current.lambda-url.on.aws/" } };
     await postEnvelope(routes, envelope);
@@ -545,7 +494,6 @@ describe("agentcore adapter: activation hooks", () => {
     await writeFile(notADir, "");
     const routes = agentcoreRoutes({
       channels: () => ({ routes: {} }),
-      agent: scriptedAgent(),
       stateRoot: notADir,
       fireSchedule: async () => Response.json({}),
       isBusy: () => false,

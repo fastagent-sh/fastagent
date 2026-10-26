@@ -2,9 +2,7 @@
  * CLI presenter for the model-facing commands: `fastagent models [search]` output and the first-run picker's option
  * list.
  */
-import { providerOf } from "../harnesses/pi/config.ts";
-import type { InteractiveLoginKind } from "../harnesses/pi/models.ts";
-import type { ProviderAuthStatus } from "../harnesses/pi/models.ts";
+import { type InteractiveLoginKind, type ProviderAuthStatus, providerOf } from "../harnesses/models/models.ts";
 
 /** One first-run picker entry (@clack/prompts option shape). */
 export interface ModelPickerOption {

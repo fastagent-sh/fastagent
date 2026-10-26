@@ -2,8 +2,8 @@
 import { lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { AGENT_CONFIG_FILE, SECRETS_DIRNAME, displayPath, enclosingAgentDir } from "../paths.ts";
-import { WEB_ACCESS_PACKAGE, baseTemplate, packageJson, toPackageName } from "./templates.ts";
-import { fastagentVersion } from "../version.ts";
+import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
+import { fastagentBuild } from "../version.ts";
 import { GitNotInstalled, gitFor } from "../git.ts";
 
 interface ScaffoldFile {
@@ -23,27 +23,18 @@ export interface ScaffoldResult {
 /** Entries a directory may hold and still count as empty. */
 const IGNORABLE = [".DS_Store", ".gitkeep", ".keep"];
 
-export interface ScaffoldOptions {
-  /**
-   * Give the agent web access: `extensions/web-access.ts`, which loads {@link WEB_ACCESS_PACKAGE}, and that package in
-   * `package.json`. The agent runs without it installed; its web tools load only once `npm install` has installed
-   * it, and until then are left out with a warning.
-   */
-  webAccess?: boolean;
-}
-
 /**
  * Scaffold a runnable agent INTO `dir`, which must be new or empty. An agent is a directory of its own: what it works
  * on is declared, never the directory around it.
  */
-export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
+export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
   const skill = (name: string) => ({
     rel: join("skills", "writing-great-skills", name),
     content: baseTemplate(`skills/writing-great-skills/${name}`),
   });
   const files: ScaffoldFile[] = [
-    // Standing instructions, added to pi's default prompt (SYSTEM.md would replace it).
-    { rel: "APPEND_SYSTEM.md", content: baseTemplate("APPEND_SYSTEM.md") },
+    // Standing instructions: the agent's system prompt.
+    { rel: "SYSTEM.md", content: baseTemplate("SYSTEM.md") },
     // The example skill: how to author skills well — the core of self-iteration.
     skill("SKILL.md"),
     skill("GLOSSARY.md"),
@@ -54,18 +45,8 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     { rel: ".gitignore", content: baseTemplate("gitignore") },
     { rel: join(SECRETS_DIRNAME, ".gitignore"), content: baseTemplate("secrets.gitignore") },
     { rel: join(SECRETS_DIRNAME, ".env.example"), content: baseTemplate("env.example") },
-    ...(options.webAccess
-      ? [{ rel: join("extensions", "web-access.ts"), content: baseTemplate("extensions/web-access.ts") }]
-      : []),
     // The agent's own manifest, named after its directory.
-    {
-      rel: "package.json",
-      content: packageJson(
-        toPackageName(dir),
-        await fastagentVersion(),
-        options.webAccess ? { [WEB_ACCESS_PACKAGE.name]: WEB_ACCESS_PACKAGE.range } : {},
-      ),
-    },
+    { rel: "package.json", content: packageJson(toPackageName(dir), await fastagentBuild()) },
   ];
 
   const shown = displayPath(process.cwd(), dir) ?? dir;

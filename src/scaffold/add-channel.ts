@@ -1,5 +1,5 @@
 /**
- * `fastagent add <channel>`: drop a `channels/<kind>.ts` adapter-glue file (+ any companion tool, +
+ * `fastagent add <channel>`: drop a `src/channels/<kind>.ts` adapter-glue file (+ any companion tool, +
  * `.secrets/.env.example` vars) into an existing agent.
  */
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -304,7 +304,7 @@ export async function appendChannelDotEnv(
 
 /** The path `add <kind>` scaffolds to. */
 function channelPath(dir: string, kind: ChannelKind): string {
-  return join(dir, "channels", `${kind}.ts`);
+  return join(dir, "src", "channels", `${kind}.ts`);
 }
 
 /** Whether a channel file already exists — checked before any mutation, so a no-clobber re-add is side-effect-free. */
@@ -312,11 +312,11 @@ export async function channelExists(dir: string, kind: ChannelKind): Promise<boo
   return exists(channelPath(dir, kind));
 }
 
-/** Scaffold `channels/<kind>.ts` into {@link dir}. */
+/** Scaffold `src/channels/<kind>.ts` into {@link dir}. */
 export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<string> {
-  const channelsDir = join(dir, "channels");
-  // Don't write through a channels/ symlink that escapes the agent dir; one inside it is fine.
-  await assertInsideAgentDir(dir, "channels");
+  const channelsDir = join(dir, "src", "channels");
+  // Don't write through a src/ symlink that escapes the agent dir; one inside it is fine.
+  await assertInsideAgentDir(dir, "src");
   const file = channelPath(dir, kind);
   if (await exists(file)) {
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
@@ -326,12 +326,12 @@ export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<s
   return file;
 }
 
-/** The bundle's companion tools (every `.ts` beside `channel.ts` → `tools/<name>`). */
+/** The bundle's companion tools (every `.ts` beside `channel.ts` → `src/tools/<name>`). */
 export async function scaffoldCompanionTools(dir: string, kind: ChannelKind): Promise<string[]> {
   const written: string[] = [];
   for (const name of channelBundleFiles(kind)) {
     if (name === "channel.ts") continue; // the channel, not a tool
-    const file = join(dir, "tools", name);
+    const file = join(dir, "src", "tools", name);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, channelTemplate(kind, name));
     written.push(file);

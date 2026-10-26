@@ -26,6 +26,7 @@ import {
   secretsManifest,
 } from "../src/harnesses/pi-durable/open.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
+import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 import { registrySource } from "../src/harnesses/pi-durable/registry.ts";
 import { expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
 
@@ -132,7 +133,7 @@ describe("an agent definition on pi-durable", () => {
     const built = buildDefinition(definition, ENV);
     expect(built.tools.map((tool) => tool.name)).toEqual(["weather"]);
     expect(built.extensions.map((extension) => extension.name)).toEqual(["audit"]);
-    expect([...built.schedules.keys()]).toEqual(["daily"]);
+    expect(built.schedules.map((schedule) => schedule.name)).toEqual(["daily"]);
   });
 
   it("builds its channels, a route channel and a long connection, each with the secrets it declared", async () => {
@@ -208,23 +209,22 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       agentPackage({ "src/channels/x.ts": "export default { name: ' ', connect() {} };\n" }),
     );
     expect(() => buildDefinition(unnamed, {})).toThrow("src/channels/x.ts: long-connection channel name");
-    const declaring = await prepareDefinition(
-      agentPackage({
-        "src/channels/x.ts": "const channel = () => ({});\nchannel.secrets = ['X_TOKEN'];\nexport default channel;\n",
-      }),
-    );
-    expect(() => buildDefinition(declaring, {})).toThrow(
-      "src/channels/x.ts: declares its secrets with defineChannel, which a package does not read",
-    );
     const badCron = await prepareDefinition(
       agentPackage({
         "src/schedules/often.ts": `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "not a cron", prompt: "x" });\n`,
       }),
     );
     expect(() => buildDefinition(badCron, {})).toThrow("src/schedules/often.ts:");
-    await expect(
-      prepareDefinition(agentPackage({ "fastagent.config.ts": "export default { modle: 'a/b' };\n" })),
-    ).rejects.toThrow('unknown key "modle"');
+    const configured = (config: string) =>
+      prepareDefinition(agentPackage({ "fastagent.config.ts": `export default ${config};\n` }));
+    await expect(configured("{ modle: 'a/b' }")).rejects.toThrow('unknown key "modle"');
+    // Below the top level too: a nested typo is as silent as a top-level one.
+    await expect(configured("{ http: { prot: 80 } }")).rejects.toThrow('"http": unknown key "prot" (keys: port)');
+    await expect(configured("{ http: { port: 70000 } }")).rejects.toThrow('"http.port" must be an integer 0-65535');
+    await expect(configured("{ deploy: { agentcore: { idleTimeoutSeconds: 30 } } }")).rejects.toThrow(
+      '"deploy.agentcore.idleTimeoutSeconds" must be an integer 60-1209600',
+    );
+    await expect(configured("{ deploy: { fly: {} } }")).rejects.toThrow('"deploy": unknown key "fly"');
     await expect(loadDefinition(agentPackage({}))).rejects.toThrow(".fastagent/registry.ts is missing");
   });
 
@@ -241,7 +241,7 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       const agent = await openAgent(definition, {
         storage: new MemoryStorage(),
         credentials: new InMemoryCredentialStore(),
-        env: ENV,
+        code: buildDefinition(definition, ENV),
         ...options,
       });
       opened.push(agent);
@@ -287,6 +287,21 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       ]);
       const end = await ask(agent, "where is order 7?");
       expect(end.answer?.text).toContain("Ask for the order number, then read references/codes.md.");
+    });
+
+    it("what it runs from a dev process is not dev: the bash tool's children do not inherit the mark", async () => {
+      const { agent, faux } = await open();
+      process.env[DEV_SERVE_ENV] = "1";
+      try {
+        faux.setResponses([
+          () => toolCall("bash", { command: `printf "[%s]" "$${DEV_SERVE_ENV}"` }),
+          (context) => fauxAssistantMessage(lastToolResult(context)),
+        ]);
+        expect((await ask(agent, "run it")).answer?.text).toContain("[]");
+        expect(process.env[DEV_SERVE_ENV]).toBe("1"); // the serving process itself keeps it
+      } finally {
+        delete process.env[DEV_SERVE_ENV];
+      }
     });
 
     it("runs its tool with the secret it declared, an unset optional one absent", async () => {

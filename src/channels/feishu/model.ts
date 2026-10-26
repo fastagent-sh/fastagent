@@ -52,7 +52,8 @@ export interface FeishuMessageEvent {
 
 /** Existing public route result: act with these overrides, or return null to ignore the message. */
 export interface FeishuRoute {
-  session?: string;
+  /** Which conversation it belongs to, the one its session is kept by (default: the chat, or the thread). */
+  conversation?: string;
   chatId?: string;
   text?: string;
 }

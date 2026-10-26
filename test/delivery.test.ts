@@ -1,5 +1,5 @@
 import { ev } from "./scripted-run.ts";
-import type { InvokeEvent } from "../src/protocol.ts";
+import type { TurnEvent as InvokeEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -233,7 +233,10 @@ it("a stream that ends on a serving error tells the asker it was temporary, and 
           Stream.fromIterable([
             ev.accepted(),
             ev.text("part"),
-            { type: "serving_error", message: "the run's end could not be recorded: ENOSPC" } as InvokeEvent,
+            {
+              type: "serving_error",
+              error: { code: "internal", message: "the run's end could not be recorded: ENOSPC", retryable: true },
+            } as InvokeEvent,
           ]),
           {
             label: "[test]",
@@ -301,18 +304,16 @@ it("turnEnd: a refusal or the turn's own done ends the turn, and says how", () =
   const run = "message";
   expect(turnEnd(ev.rejected("busy"), undefined)).toMatchObject({ failure: { code: "busy" } });
   expect(turnEnd(ev.ended(), run)).toEqual({ answered: true });
-  // Stopped at its output limit, or taken by a command: still an answer, with whatever it wrote.
+  // Stopped at its output limit: still an answer, with whatever it wrote.
   expect(turnEnd(ev.ended({ status: "max_tokens" }), run)).toEqual({ answered: true });
-  expect(turnEnd(ev.ended({ status: "intercepted" }), run)).toEqual({ answered: true });
   expect(turnEnd(ev.failed("boom", { retryable: true }), run)).toEqual({
     failure: { details: "boom", retryable: true, code: "model_error" },
   });
   expect(turnEnd(ev.ended({ status: "canceled" }), run)).toMatchObject({
     failure: { retryable: false, code: "canceled" },
   });
-  expect(turnEnd(ev.ended({ status: "interrupted" }), run)).toMatchObject({
-    failure: { retryable: true, code: "interrupted" },
-  });
+  // Whether the message was taken is not known: the same key finds it again.
+  expect(turnEnd(ev.unknown(), undefined)).toMatchObject({ failure: { retryable: true, code: "unknown" } });
   // Another message's ending, or anything else, is not this turn's.
   expect(turnEnd(ev.ended({ status: "completed" }, "other"), run)).toBeUndefined();
   expect(turnEnd(ev.text("x"), run)).toBeUndefined();

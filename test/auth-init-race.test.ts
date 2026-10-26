@@ -25,7 +25,7 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-import { fastagentCredentialStore } from "../src/harnesses/pi/auth.ts";
+import { fastagentCredentialStore } from "../src/harnesses/models/credentials.ts";
 
 describe("first-write init race (stale existence check simulated)", () => {
   it("exclusive create refuses to clobber a file another process already initialized", async () => {

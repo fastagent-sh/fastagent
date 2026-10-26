@@ -16,8 +16,8 @@ import { dirname } from "node:path";
  * redundant with it: `writeFileSync` honours `mode` only when it CREATES the file, so a temp left behind by a crashed
  * writer would keep its old, possibly looser permissions.
  *
- * `sharedWriters` is for a file SEVERAL processes may write at once (the merged models file, content-addressed, so
- * every writer writes the same bytes): each writes its own temp, and the last rename wins. A fixed temp there would
+ * `sharedWriters` is for a file SEVERAL processes may write at once (the generated `.fastagent/` files, which every
+ * command that reads the definition writes with the same bytes): each writes its own temp, and the last rename wins. A fixed temp there would
  * let one writer's rename take the other's file and fail it with ENOENT. No test exercises that race: it needs two
  * processes renaming within the same moment, which a test cannot arrange without being flaky.
  */

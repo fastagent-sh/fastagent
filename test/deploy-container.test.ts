@@ -1,8 +1,7 @@
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts, imageHasGit } from "../src/deploy/container.ts";
-import { fastagentPromptSections } from "../src/harnesses/pi/create.ts";
-import type { MountedTool } from "../src/harnesses/pi/tool.ts";
+import { definitionSections } from "../src/harnesses/pi-durable/text.ts";
 
 const input = {
   releaseId: "release-one",
@@ -130,8 +129,10 @@ describe("deploy/container: shared Docker context", () => {
     try {
       delete process.env.FASTAGENT_RELEASE_FILE;
       delete process.env.FASTAGENT_AGENTCORE;
-      const note = (tools: MountedTool[] = []) =>
-        fastagentPromptSections({ tools, builtinExtensions: [] }).self_change ?? "";
+      const note = (wake = false) => {
+        const section = definitionSections("/agent", [], { wake }).find(({ key }) => key === "self_change");
+        return (section?.render({} as never, {} as never) as string | undefined) ?? "";
+      };
       expect(note()).not.toContain("survives restarts");
       process.env.FASTAGENT_RELEASE_FILE = values[0];
       expect(note()).toContain("Your directory survives restarts");
@@ -139,11 +140,11 @@ describe("deploy/container: shared Docker context", () => {
       // The agent's runtime path to a new capability is a skill + script, not a code reload — and that skill is
       // gone with the definition at the next deployment, which the same sentence has to say.
       expect(note()).toContain("To give yourself a new capability now, write a skill");
-      expect(note()).toContain("Either lasts until the next deployment replaces that directory");
-      expect(note()).toContain("a pi extension in extensions/, loaded from your next session on");
+      expect(note()).toContain("It lasts until the next deployment replaces that directory");
+      expect(note()).toContain("changes to code in src/");
       // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
       expect(note()).not.toContain("wake tool");
-      expect(note([{ name: "wake" } as MountedTool])).toContain("use the wake tool.");
+      expect(note(true)).toContain("use the wake tool.");
       // What the agent installs itself is the machine's.
       expect(note()).toContain("A tool you install yourself (apt-get, npm install -g) belongs to this machine");
       // The host whose storage a deploy RESETS says so, rather than the release replacing only the directory.
@@ -152,8 +153,7 @@ describe("deploy/container: shared Docker context", () => {
       expect(note()).toContain("resets this host's storage entirely");
       // Same path, same lifetime warning: this host's next deploy erases the definition along with the rest.
       expect(note()).toContain("To give yourself a new capability now, write a skill");
-      expect(note()).toContain("Either lasts until the next deployment replaces that directory");
-      expect(note()).toContain("a pi extension in extensions/, loaded from your next session on");
+      expect(note()).toContain("It lasts until the next deployment replaces that directory");
     } finally {
       for (const [key, value] of [
         ["FASTAGENT_RELEASE_FILE", before],

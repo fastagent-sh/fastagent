@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { log, setLogLevel } from "../src/log.ts";
-import { reportModuleLoadFailures } from "../src/loader.ts";
 
 describe("runtime logger", () => {
   beforeEach(() => {
@@ -64,10 +63,5 @@ describe("runtime logger", () => {
         "DEBUG second",
       ]);
     }
-  });
-
-  it("reports module failures through the same runtime logger", () => {
-    reportModuleLoadFailures([{ label: "tools/broken.ts", file: "/agent/tools/broken.ts", message: "bad export" }]);
-    expect(lines()).toEqual(["WARN  [fastagent] tools/broken.ts failed to load, skipping it — bad export"]);
   });
 });

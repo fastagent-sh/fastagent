@@ -17,7 +17,7 @@ import {
 } from "../add-feishu.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { loadConfig } from "../../harnesses/pi/config.ts";
+import { loadConfig } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive } from "../shared.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";
@@ -86,11 +86,9 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
-  // The picker's write-back lands the model in fastagent.config.ts. ONE deploy semantic: bake the agent directory
-  // (WYSIWYG).
   selectAgentEnvironment("production");
   const { agentDir } = await enterAgentDirectory(dirArg, opts);
-  const { config } = await loadConfig(agentDir).catch(failStartup);
+  const config = await loadConfig(agentDir).catch(failStartup);
   // Never `dev`, whatever spawned this; and what decides a channel's shape is read here as the box will read it.
   unmarkDevServe();
   const shaped = divergentSettingsGate(
@@ -116,9 +114,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       run: !!opts.run,
       force: !!opts.force,
       noResidentProcess: host === "agentcore", // alarms and webhooks wake the container there — no machine to keep up
-      // AgentCore DOES get a public URL (the forwarder's, AuthType NONE) — but nothing of ours answers behind it:
-      // that relay reaches the channels' routes only, each verifying its platform's signature (agentcore-service.ts).
-      publicUrl: host !== "agentcore",
       // Every AgentCore deployment starts the storage over (core.md §9).
       storageResets: host === "agentcore",
     }).catch(failStartup);

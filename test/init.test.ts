@@ -19,12 +19,12 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
+import { InMemoryCredentialStore, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { MemoryStorage } from "@earendil-works/pi-durable";
+import { buildDefinition, openAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { readSkills } from "../src/harnesses/pi-durable/text.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
-import { loadAgentDefinition } from "../src/harnesses/pi/definition.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
-import { WEB_ACCESS_PACKAGE } from "../src/scaffold/templates.ts";
 
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
 
@@ -53,14 +53,13 @@ function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = withIdent
 describe("init: scaffoldAgent", () => {
   it("scaffolds a COMPLETE agent INTO the directory it names", async () => {
     const dir = join(await freshDir(), "reviewer");
-    const { created } = await scaffoldAgent(dir, { webAccess: true });
+    const { created } = await scaffoldAgent(dir);
     expect(created.sort()).toEqual(
       [
-        "APPEND_SYSTEM.md",
+        "SYSTEM.md",
         join("skills", "writing-great-skills", "SKILL.md"),
         join("skills", "writing-great-skills", "GLOSSARY.md"),
         join("skills", "writing-great-skills", "LICENSE"),
-        join("extensions", "web-access.ts"),
         "fastagent.config.ts",
         "package.json",
         ".gitignore",
@@ -87,6 +86,7 @@ describe("init: scaffoldAgent", () => {
     // No trailing slash: `node_modules/` would miss a SYMLINKED one (this repo's own .gitignore
     // carries the same fix, for the same reason).
     expect(rootIgnore).toMatch(/^node_modules$/m);
+    expect(ig.ignores(".fastagent/registry.ts")).toBe(true); // generated each time the agent opens
     expect(await readFile(join(dir, ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
 
     // .env.example documents env knobs without misleading: all-commented (sets nothing), and it
@@ -106,39 +106,33 @@ describe("init: scaffoldAgent", () => {
     // The fastagent dep tracks this build's version (not a stale hard-coded range), so a fresh
     // agent installs a version that has the API/exports it was scaffolded against. Oracle is the
     // package's real version read DIRECTLY (not fastagentVersion's output) so a corrupt read is caught.
-    const realVersion = (
-      JSON.parse(await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")) as {
-        version: string;
-      }
-    ).version;
+    const real = JSON.parse(await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")) as {
+      version: string;
+      dependencies: Record<string, string>;
+    };
+    // Its code is pi-durable code, its providers pi-ai's: at the versions this build runs.
     expect(pkg.dependencies).toEqual({
-      "@fastagent-sh/fastagent": `^${realVersion}`,
-      [WEB_ACCESS_PACKAGE.name]: WEB_ACCESS_PACKAGE.range, // what extensions/web-access.ts loads
+      "@fastagent-sh/fastagent": `^${real.version}`,
+      "@earendil-works/pi-durable": real.dependencies["@earendil-works/pi-durable"],
+      "@earendil-works/pi-ai": real.dependencies["@earendil-works/pi-ai"],
     });
-    expect(await readFile(join(dir, "extensions", "web-access.ts"), "utf8")).toContain(
-      `from "${WEB_ACCESS_PACKAGE.name}"`,
-    );
-    const standing = await readFile(join(dir, "APPEND_SYSTEM.md"), "utf8");
+    const standing = await readFile(join(dir, "SYSTEM.md"), "utf8");
     expect(standing).toContain("Use only the tools actually listed in your system prompt");
     expect(standing).not.toMatch(/workspace/i);
-    // Added to pi's default prompt, which already says who the agent is: an identity here would give it two.
-    expect(standing).not.toMatch(/^You are/m);
-    const configTemplate = await readFile(join(dir, "fastagent.config.ts"), "utf8");
-    expect(configTemplate).not.toContain("codingTools");
 
-    // The scaffolded agent ASSEMBLES, from the directory itself.
-    const a = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });
-    expect(a.agentDir).toBe(dir);
-    expect(a.definition.appendSystemPrompt?.content).toContain("Standing instructions");
-    expect(a.definition.skills.map((s) => s.name)).toEqual(["writing-great-skills"]);
+    // The scaffolded agent builds, from the directory itself.
+    const definition = await prepareDefinition(dir);
+    expect(definition.name).toBe("reviewer");
+    expect(buildDefinition(definition, {})).toMatchObject({ tools: [], channels: new Map(), schedules: [] });
+    expect(readSkills(dir).map((s) => s.name)).toEqual(["writing-great-skills"]);
   });
 
-  it("the skill APPEND_SYSTEM.md sends the agent to is listed in its prompt, with where it is", async () => {
+  it("the skill SYSTEM.md sends the agent to is listed in its prompt, with where it is", async () => {
     // Named, not given as a relative path: pi tells the model to resolve a relative path against a skill's own
     // directory, and a path to a skill the prompt does not list sent models guessing at another package's directory.
     const dir = join(await freshDir(), "agent");
     await scaffoldAgent(dir);
-    expect(await readFile(join(dir, "APPEND_SYSTEM.md"), "utf8")).toContain("Read the `writing-great-skills` skill");
+    expect(await readFile(join(dir, "SYSTEM.md"), "utf8")).toContain("Read the `writing-great-skills` skill");
     const { faux } = makeFaux();
     let prompt = "";
     faux.setResponses([
@@ -147,8 +141,16 @@ describe("init: scaffoldAgent", () => {
         return fauxAssistantMessage("ok");
       },
     ]);
-    const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
+    const definition = await prepareDefinition(dir);
+    const agent = await openAgent(definition, {
+      storage: new MemoryStorage(),
+      code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
+      credentials: new InMemoryCredentialStore(),
+      model: "faux/faux-1",
+    });
+    const sent = await agent.invoke({ content: [{ type: "text", text: "hi" }] });
+    if (sent.ok) await sent.wait();
+    await agent.close();
     expect(prompt).toContain(
       `<name>writing-great-skills</name>\n    <description>Reference for writing and editing skills well`,
     );
@@ -159,7 +161,7 @@ describe("init: scaffoldAgent", () => {
     const project = await freshDir();
     await writeFile(join(project, "tsconfig.json"), "{}");
     await expect(scaffoldAgent(project)).rejects.toThrow(/is not empty \(it holds tsconfig\.json\).*fastagent init/);
-    expect(await exists(join(project, "APPEND_SYSTEM.md"))).toBe(false); // side-effect-free refusal
+    expect(await exists(join(project, "SYSTEM.md"))).toBe(false); // side-effect-free refusal
 
     const agent = await freshDir();
     await writeFile(join(agent, "fastagent.config.ts"), "export default {};\n");
@@ -168,12 +170,12 @@ describe("init: scaffoldAgent", () => {
     // Finder noise and the standard commit-an-empty-dir placeholders are not someone's content.
     const noisy = await freshDir();
     for (const noise of [".DS_Store", ".gitkeep"]) await writeFile(join(noisy, noise), "");
-    expect((await scaffoldAgent(noisy)).created).toContain("APPEND_SYSTEM.md");
+    expect((await scaffoldAgent(noisy)).created).toContain("SYSTEM.md");
 
     // A path that does not exist yet is created, every level of it.
     const deep = join(await freshDir(), "some", "agent");
     await scaffoldAgent(deep);
-    expect(await exists(join(deep, "APPEND_SYSTEM.md"))).toBe(true);
+    expect(await exists(join(deep, "SYSTEM.md"))).toBe(true);
   });
 
   it("a FILE or symlink where the agent should go fails before any write", async () => {
@@ -208,7 +210,7 @@ describe("init: scaffoldAgent", () => {
     await chmod(agent, 0o700);
     expect(await exists(agent)).toBe(true); // theirs, not ours — preserved
     expect(await readdir(agent)).toEqual([]); // …and empty, so the retry is a fresh scaffold
-    expect((await scaffoldAgent(agent)).created).toContain("APPEND_SYSTEM.md");
+    expect((await scaffoldAgent(agent)).created).toContain("SYSTEM.md");
   });
 
   it("refuses inside another agent, at any depth — that directory is the outer agent's own", async () => {
@@ -269,7 +271,7 @@ describe("init: scaffoldAgent", () => {
     expect(git(["log", "--format=%s"], mine)).toBe("Create the agent with fastagent");
     expect(git(["status", "--porcelain"], mine)).toBe(""); // all of it committed
     expect(git(["ls-files"], mine).split("\n")).toEqual(
-      expect.arrayContaining(["fastagent.config.ts", "APPEND_SYSTEM.md", ".gitignore", ".secrets/.env.example"]),
+      expect.arrayContaining(["fastagent.config.ts", "SYSTEM.md", ".gitignore", ".secrets/.env.example"]),
     );
 
     // Inside a repository already: that one tracks the agent, and no second one hides its files from it.
@@ -312,9 +314,7 @@ describe("init: scaffoldAgent", () => {
     expect(out).toMatch(/created .*my-agent/);
     expect(out).toMatch(/^ {4}cd my-agent$/m);
     expect(out).toMatch(/fastagent dev/);
-    expect(await exists(join(base, "my-agent", "APPEND_SYSTEM.md"))).toBe(true);
-    // The CLI's scaffold carries web access (it installs the package that loads); the API's does not by default.
-    expect(await exists(join(base, "my-agent", "extensions", "web-access.ts"))).toBe(true);
+    expect(await exists(join(base, "my-agent", "SYSTEM.md"))).toBe(true);
 
     // No directory is a usage error: an agent is a directory of its own, so there is no default to guess.
     expect(await cliInit(["init", "--no-install"], await freshDir())).toMatch(/missing required argument/);
@@ -351,30 +351,30 @@ describe("add: fastagent add <channel>", () => {
     );
 
     const out = await cliInit(["add", "telegram", "fastagent"], dir);
-    expect(out).toContain(join("fastagent", "channels", "telegram.ts")); // reported relative to where it ran
-    expect(await exists(join(root, "channels", "telegram.ts"))).toBe(true); // in the agent dir…
-    expect(await exists(join(root, "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
-    expect(await exists(join(dir, "channels"))).toBe(false); // NOT where the command ran
+    expect(out).toContain(join("fastagent", "src", "channels", "telegram.ts")); // reported relative to where it ran
+    expect(await exists(join(root, "src", "channels", "telegram.ts"))).toBe(true); // in the agent dir…
+    expect(await exists(join(root, "src", "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
+    expect(await exists(join(dir, "src"))).toBe(false); // NOT where the command ran
     expect(await readFile(join(root, ".secrets", ".env.example"), "utf8")).toContain("TELEGRAM_BOT_TOKEN");
     expect(await readFile(join(root, ".secrets", ".env"), "utf8")).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
   });
 
-  it("scaffolds channels/telegram.ts into a ready agent, mutates nothing else, and keeps authored glue", async () => {
+  it("scaffolds src/channels/telegram.ts into a ready agent, mutates nothing else, and keeps authored glue", async () => {
     const dir = await readyAgent();
     await mkdir(join(dir, ".secrets"), { recursive: true });
     await writeFile(join(dir, ".secrets", ".env.example"), "# env\n"); // add injects channel env vars here
     const out = await cliInit(["add", "telegram"], dir);
-    expect(out).toContain("channels/telegram.ts");
-    const src = await readFile(join(dir, "channels", "telegram.ts"), "utf8");
+    expect(out).toContain("src/channels/telegram.ts");
+    const src = await readFile(join(dir, "src", "channels", "telegram.ts"), "utf8");
     expect(src).toContain('from "@fastagent-sh/fastagent/telegram"'); // the adapter
     expect(src).toContain("POST /telegram");
     expect(src).toContain("telegramChannel({"); // policy-only glue (agent/stateDir arrive via ctx)
     expect(src).not.toContain("sendDocument"); // the channel file is the channel, NOT the send-tool (no misroute)
     // the companion tool lands in tools/ by the bundle convention (so the agent can send files back)
-    const sendTool = await readFile(join(dir, "tools", "telegram-send.ts"), "utf8");
+    const sendTool = await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8");
     expect(sendTool).toContain('from "@fastagent-sh/fastagent"');
     // It rides the channel's transport, which is what records a sent message into the chat's discussion.
-    expect(sendTool).toContain("telegramTransport(ctx.cwd)");
+    expect(sendTool).toContain("telegramTransport(TELEGRAM_BOT_TOKEN)");
     // next steps carry this channel's env vars (with hints)
     expect(out).toContain("TELEGRAM_BOT_TOKEN");
     expect(out).toContain("@BotFather");
@@ -396,12 +396,12 @@ describe("add: fastagent add <channel>", () => {
 
     // Re-running add on an existing channel keeps the authored glue and rewrites the package-owned
     // companion tool — the upgrade path for an agent scaffolded by an earlier release.
-    await writeFile(join(dir, "channels", "telegram.ts"), `${src}// edited\n`);
-    await writeFile(join(dir, "tools", "telegram-send.ts"), "// 0.20.0\n");
+    await writeFile(join(dir, "src", "channels", "telegram.ts"), `${src}// edited\n`);
+    await writeFile(join(dir, "src", "tools", "telegram-send.ts"), "// 0.20.0\n");
     const out3 = await cliInit(["add", "telegram"], dir);
-    expect(out3).toContain("channels/telegram.ts already exists — keeping it");
-    expect(await readFile(join(dir, "channels", "telegram.ts"), "utf8")).toBe(`${src}// edited\n`);
-    expect(await readFile(join(dir, "tools", "telegram-send.ts"), "utf8")).toBe(sendTool);
+    expect(out3).toContain("src/channels/telegram.ts already exists — keeping it");
+    expect(await readFile(join(dir, "src", "channels", "telegram.ts"), "utf8")).toBe(`${src}// edited\n`);
+    expect(await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8")).toBe(sendTool);
   });
 
   it("writes a generated channel secret to .secrets/.env (kind-neutral), keeping any value already there", async () => {
@@ -470,14 +470,14 @@ describe("add: fastagent add <channel>", () => {
       const dir = await readyAgent();
       expect(await cliInit(["add", kind, "--no-onboard"], dir)).not.toMatch(/Error|creating the Feishu app/);
       // An agent from an earlier release: its channel edited, and no thread tool yet.
-      const channel = join(dir, "channels", `${kind}.ts`);
+      const channel = join(dir, "src", "channels", `${kind}.ts`);
       const authored = `${await readFile(channel, "utf8")}// edited\n`;
       await writeFile(channel, authored);
-      await rm(join(dir, "tools", `${kind}-threads.ts`));
+      await rm(join(dir, "src", "tools", `${kind}-threads.ts`));
       const out = await cliInit(["add", kind, "--no-onboard"], dir);
       expect(out).not.toMatch(/Error|creating the Feishu app/);
       expect(await readFile(channel, "utf8")).toBe(authored);
-      expect(await readFile(join(dir, "tools", `${kind}-threads.ts`), "utf8")).toContain("defineTool(");
+      expect(await readFile(join(dir, "src", "tools", `${kind}-threads.ts`), "utf8")).toContain("defineTool(");
     }
   });
 
@@ -501,7 +501,7 @@ describe("add: fastagent add <channel>", () => {
   it("add --env production keeps the dev credentials and channel file while setting up a separate app", async () => {
     const dir = await readyAgent();
     await cliInit(["add", "feishu", "--no-onboard"], dir);
-    const file = join(dir, "channels", "feishu.ts");
+    const file = join(dir, "src", "channels", "feishu.ts");
     const channel = await readFile(file, "utf8");
     const dev = "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\nFEISHU_INGRESS=websocket\n";
     await writeFile(join(dir, ".secrets", ".env"), dev);
@@ -522,11 +522,11 @@ describe("add: fastagent add <channel>", () => {
 
   it("rewrites the companion tool on every add — it is the package's, so a re-add upgrades it", async () => {
     const dir = await readyAgent();
-    await mkdir(join(dir, "tools"), { recursive: true });
-    await writeFile(join(dir, "tools", "telegram-send.ts"), "// from an older package\n");
+    await mkdir(join(dir, "src", "tools"), { recursive: true });
+    await writeFile(join(dir, "src", "tools", "telegram-send.ts"), "// from an older package\n");
     await cliInit(["add", "telegram"], dir);
-    expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true);
-    expect(await readFile(join(dir, "tools", "telegram-send.ts"), "utf8")).toContain("defineTool(");
+    expect(await exists(join(dir, "src", "channels", "telegram.ts"))).toBe(true);
+    expect(await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8")).toContain("defineTool(");
   });
 
   it("refuses (writing nothing) when the agent dir is not channel-ready, with an actionable message", async () => {
@@ -549,27 +549,27 @@ describe("add: fastagent add <channel>", () => {
       const dir = await make();
       const out = await cliInit(["add", "telegram"], dir);
       expect(out).toMatch(msg);
-      expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(false); // nothing scaffolded
+      expect(await exists(join(dir, "src", "channels", "telegram.ts"))).toBe(false); // nothing scaffolded
     }
   });
 
-  it("scaffolds through an IN-agent symlinked channels/, but rejects one that ESCAPES (no outside write)", async () => {
-    // in-agent symlink (channels → ./real): followed, telegram.ts written inside the agent
+  it("scaffolds through an IN-agent symlinked src/, but rejects one that ESCAPES (no outside write)", async () => {
+    // in-agent symlink (src → ./real): followed, telegram.ts written inside the agent
     const dir = await readyAgent();
     await mkdir(join(dir, "real"));
-    await symlink(join(dir, "real"), join(dir, "channels"));
+    await symlink(join(dir, "real"), join(dir, "src"));
     const out = await cliInit(["add", "telegram"], dir);
     expect(out).toMatch(/created/);
-    expect(await exists(join(dir, "real", "telegram.ts"))).toBe(true); // written through the in-agent symlink
+    expect(await exists(join(dir, "real", "channels", "telegram.ts"))).toBe(true); // written through the symlink
 
-    // escaping symlink (channels → external dir): rejected, nothing written outside the agent
+    // escaping symlink (src → external dir): rejected, nothing written outside the agent
     const esc = await readyAgent();
     const ext = await freshDir();
-    await mkdir(join(ext, "ch"));
-    await symlink(join(ext, "ch"), join(esc, "channels"));
+    await mkdir(join(ext, "code"));
+    await symlink(join(ext, "code"), join(esc, "src"));
     const out2 = await cliInit(["add", "telegram"], esc);
     expect(out2).toMatch(/outside the agent dir/);
-    expect(await exists(join(ext, "ch", "telegram.ts"))).toBe(false); // not written outside
+    expect(await exists(join(ext, "code", "channels", "telegram.ts"))).toBe(false); // not written outside
   });
 });
 
@@ -591,11 +591,9 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(r.description).toContain("Greet");
     expect(r.dest).toBe("skills/greeter");
     expect(r.hasScripts).toBe(true); // scripts/ → trust-warning path
-    expect(r.diagnostics).toEqual([]); // spec-clean, no name/desc warnings
     expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true);
     expect(await exists(join(ws, "skills", "greeter", "scripts", "hi.sh"))).toBe(true);
-    const def = await loadAgentDefinition(ws);
-    expect(def.skills.map((s) => s.name)).toContain("greeter"); // really mounted by the runtime loader
+    expect(readSkills(ws).map((s) => s.name)).toContain("greeter"); // really read by the agent's loader
 
     await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/already exists/); // refuse overwrite
   });
@@ -734,7 +732,7 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(await exists(join(ws, "skills", ".greeter.vendoring"))).toBe(false); // no staging leftover
   });
 
-  it("attributes diagnostics by exact skill dir, not a loose prefix (pdf must not absorb pdf-tools')", async () => {
+  it("reports the skill by its exact directory, not a loose prefix (pdf must not absorb pdf-tools')", async () => {
     const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
     // pdf-tools: frontmatter name ≠ dir → a real spec diagnostic, at skills/pdf-tools/
     await mkdir(join(srcRoot, "pdf-tools"), { recursive: true });
@@ -745,13 +743,11 @@ describe("add: fastagent add skill (vendor)", () => {
 
     const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
     await writeFile(join(ws, "AGENTS.md"), "# Bot\n");
-    await vendorSkill(ws, join(srcRoot, "pdf-tools")); // carries a diagnostic
+    await vendorSkill(ws, join(srcRoot, "pdf-tools")); // its name is not its directory's: the loader refuses it
     const r = await vendorSkill(ws, join(srcRoot, "pdf")); // clean
 
-    // `skills/pdf` ⊂ `skills/pdf-tools`: a loose-prefix filter would wrongly pull pdf-tools' diagnostic
-    // into pdf's. Exact dir match → pdf is clean.
+    // `skills/pdf` ⊂ `skills/pdf-tools`: a loose-prefix match would report the wrong skill. Exact dir match → pdf.
     expect(r.name).toBe("pdf");
     expect(r.description).toContain("clean");
-    expect(r.diagnostics).toEqual([]);
   });
 });

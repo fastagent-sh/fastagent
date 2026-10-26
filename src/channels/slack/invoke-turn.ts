@@ -1,5 +1,5 @@
 /** Resolve Slack file IDs at dequeue, then stream one harness-neutral Agent turn. */
-import type { Agent, ImageRef, InvokeEvent } from "../../protocol.ts";
+import type { Agent, Attachment as ImageRef } from "../../agent-api.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import {
@@ -9,6 +9,8 @@ import {
   loadBackground,
   missingAttachmentsNote,
   turnStream,
+  type TurnEvent,
+  promptContent,
 } from "../kit/invoke-turn-kit.ts";
 import type { SlackBufferedFileRef } from "./history.ts";
 import { type DownloadedSlackFile, type SlackApi, SlackApiError } from "./slack-api.ts";
@@ -86,23 +88,26 @@ async function resolveInputs(
 
 /** One turn: resolve its files, then ask the agent. `key` is the turn's: the message it answers. */
 export function slackTurnStream(
-  agent: Pick<Agent, "invoke">,
-  turn: { session: string; key: string; text: string },
+  agent: Agent,
+  turn: {
+    session: () => Promise<string>;
+    /** While it runs, the room its thread-reading tool reads (a channel turn's channel). */
+    enter?: (sessionId: string) => () => void;
+    key: string;
+    text: string;
+  },
   transport: SlackTurnTransport,
   attachments: SlackTurnAttachments,
-): Stream.Stream<InvokeEvent, PortFailure> {
+): Stream.Stream<TurnEvent, PortFailure> {
   return turnStream({
     agent,
     label: transport.label,
-    source: { kind: "channel", name: "slack" },
+    session: turn.session,
+    ...(turn.enter === undefined ? {} : { enter: turn.enter }),
     resolve: () => resolveInputs(transport, attachments),
     turn: (resolved) => ({
-      sessionId: turn.session,
       idempotencyKey: turn.key,
-      prompt: {
-        text: `${turn.text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`,
-        ...(resolved.images ? { images: resolved.images } : {}),
-      },
+      content: promptContent(`${turn.text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, resolved.images),
     }),
     // Slack says which failures are transient; anything else (a deleted file, a missing scope) will
     // fail the same way on redelivery.

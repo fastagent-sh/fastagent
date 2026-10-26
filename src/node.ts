@@ -1,11 +1,10 @@
 /** Binding a Fetch handler to a Node HTTP server. */
 export { nodeListener, serveNode } from "./channels/serve.ts";
 
-// The assembly: a MountableAgent becomes a mounted service.
+// The assembly: an opened agent becomes a mounted service.
 export {
   mountAgentService,
   type AgentService,
-  type HttpSurface,
   type MountableAgent,
   type MountAgentServiceOptions,
 } from "./service.ts";
@@ -23,3 +22,14 @@ export { loadContent } from "./content/file.ts";
 export { cloneContent, contentAbsentHere, resolveContent, type ResolvedContent } from "./content/resolve.ts";
 // A directory or `github:owner/repo` read as an addition, the way `init --content` and `content add` read it.
 export { type ContentAddition, readContentSource, type SourceOptions } from "./content/source.ts";
+// Creating an agent and editing its content: what `fastagent init` and `fastagent content` run.
+export {
+  addContent,
+  ContentNameError,
+  createAgent,
+  listContent,
+  removeContent,
+  type ContentEdit,
+  type CreateAgentOptions,
+  type CreatedAgent,
+} from "./authoring.ts";

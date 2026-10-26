@@ -1,9 +1,8 @@
 /**
- * The Channel contract — the trigger side of the product boundary (core.md §1), beside `agent.ts` (what a harness
- * implements) and `session.ts` (the serving control plane). Pure types: importing a host, a framework, or a harness
- * here is forbidden, as in those two.
+ * The Channel contract: how a channel is mounted beside the Agent it talks to (agent-api.ts). Pure types: importing a
+ * host, a framework, or a harness here is forbidden.
  */
-import type { Agent } from "./protocol.ts";
+import type { Agent } from "./agent-api.ts";
 
 /** A mounted request handler (a channel's fetch, or a plain route like health). */
 export type ChannelHandler = (req: Request) => Response | Promise<Response>;
@@ -12,8 +11,8 @@ export type ChannelHandler = (req: Request) => Response | Promise<Response>;
 export type Routes = Record<string, ChannelHandler>;
 
 /**
- * What the framework hands a channel at mount time: the assembled agent (SPEC v1: running, reading and stopping its
- * sessions) plus the resolved state ROOT (absolute; `FASTAGENT_STATE_DIR` > `<root>/.state`).
+ * What the framework hands a channel at mount time: the Agent, in process, and the resolved state ROOT (absolute;
+ * `FASTAGENT_STATE_DIR` > `<root>/.state`), where the channel keeps which session each of its places talks in.
  */
 export interface ChannelContext {
   agent: Agent;

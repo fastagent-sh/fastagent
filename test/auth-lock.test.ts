@@ -16,7 +16,7 @@ const { releaseMock, lockMock } = vi.hoisted(() => {
 
 vi.mock("proper-lockfile", () => ({ default: { lock: lockMock } }));
 
-import { fastagentCredentialStore } from "../src/harnesses/pi/auth.ts";
+import { fastagentCredentialStore } from "../src/harnesses/models/credentials.ts";
 
 beforeEach(() => {
   releaseMock.mockReset();

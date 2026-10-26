@@ -9,10 +9,10 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { environmentAuthSource } from "../src/harnesses/pi/models.ts";
+import { environmentAuth } from "../src/harnesses/models/models.ts";
 
-vi.mock("../src/harnesses/pi/login.ts", async (original) => ({
-  ...(await original<typeof import("../src/harnesses/pi/login.ts")>()),
+vi.mock("../src/harnesses/models/login.ts", async (original) => ({
+  ...(await original<typeof import("../src/harnesses/models/login.ts")>()),
   loginFlow: vi.fn(async () => ({ provider: "anthropic", method: "oauth", verified: "n/a" })),
 }));
 vi.mock("../src/cli/shared.ts", async (original) => ({
@@ -47,11 +47,11 @@ async function login(cwd: string, global: boolean): Promise<string> {
 }
 
 describe("login: a global credential the environment shadows", () => {
-  it("environmentAuthSource answers for the environment it is given, not for process.env", async () => {
+  it("environmentAuth answers for the environment it is given, not for process.env", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-process");
-    expect(await environmentAuthSource("anthropic", { ANTHROPIC_API_KEY: "sk-shell" })).toBe("ANTHROPIC_API_KEY");
-    expect(await environmentAuthSource("anthropic", {})).toBeUndefined();
-    expect(await environmentAuthSource("anthropic", { ANTHROPIC_API_KEY: " " })).toBeUndefined(); // blank is unset
+    expect((await environmentAuth("anthropic", { ANTHROPIC_API_KEY: "sk-shell" }))?.source).toBe("ANTHROPIC_API_KEY");
+    expect((await environmentAuth("anthropic", {}))?.source).toBeUndefined();
+    expect((await environmentAuth("anthropic", { ANTHROPIC_API_KEY: " " }))?.source).toBeUndefined(); // blank is unset
   });
 
   it("warns after a global login the environment shadows, and only then", async () => {

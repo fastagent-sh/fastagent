@@ -7,11 +7,10 @@
  */
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
+import { buildDefinitionShape, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
 import { resolveStateRoot } from "../../paths.ts";
-import { reportModuleLoadFailures } from "../../loader.ts";
 import { nextRun } from "../../schedule/cron.ts";
-import { loadSchedules } from "../../schedule/discover.ts";
-import { scheduleSession } from "../../schedule/schedule.ts";
+import { scheduleSessions } from "../../schedule/scheduler.ts";
 import { latestFire, readFires } from "../../schedule/state.ts";
 import { listWakeups } from "../../schedule/wakeups.ts";
 import { failStartup, agentDirOrExit } from "../fail.ts";
@@ -19,14 +18,17 @@ import { failStartup, agentDirOrExit } from "../fail.ts";
 /**
  * Text mode answers "when does each run next, and did the last run work?" from the newest claim alone, so an old file
  * in the retained window cannot fail it; `--json` adds each schedule's whole retained fire history (the claims under
- * `schedule/claims/<name>/`). What a run SAID is in its session, `schedule:<name>`.
+ * `schedule/claims/<name>/`). What a run SAID is in its session, once it has fired.
  */
 export async function runSchedulesList(dirArg: string, json: boolean): Promise<void> {
   const target = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
-  const { schedules, failures } = await loadSchedules(target).catch(failStartup);
-  reportModuleLoadFailures(failures);
+  // Its shape only: listing what will fire needs none of the values the code reads.
+  const { schedules } = await prepareDefinition(target)
+    .then((definition) => buildDefinitionShape(definition, process.env))
+    .catch(failStartup);
+  const sessions = scheduleSessions(stateRoot);
   const now = new Date();
   // A claim state this command cannot read is the operator's to fix: one line, never a Node stack.
   const read = <T>(name: string, what: string, fn: () => T): T => {
@@ -36,10 +38,13 @@ export async function runSchedulesList(dirArg: string, json: boolean): Promise<v
       failStartup(new Error(`the ${what} of "${name}" is unreadable (state: ${stateRoot}): ${String(e)}`));
     }
   };
-  const rows = schedules.map((s) => ({
-    ...s,
-    next: nextRun(s.cron, s.tz, now)?.toISOString() ?? null,
-    session: scheduleSession(s.name),
+  const rows = schedules.map(({ name, cron, tz, prompt }) => ({
+    name,
+    cron,
+    ...(tz === undefined ? {} : { tz }),
+    ...(typeof prompt === "string" ? { prompt } : {}),
+    next: nextRun(cron, tz, now)?.toISOString() ?? null,
+    session: sessions.get(name) ?? null,
   }));
   const wakeups = listWakeups(stateRoot);
   if (json) {
@@ -51,14 +56,14 @@ export async function runSchedulesList(dirArg: string, json: boolean): Promise<v
     return;
   }
   if (rows.length === 0 && wakeups.length === 0) {
-    console.error(`nothing scheduled — no schedules/*.md, no wake-ups (agent: ${target})`);
+    console.error(`nothing scheduled — no src/schedules/, no wake-ups (agent: ${target})`);
     return;
   }
   for (const r of rows) {
     const last = read(r.name, "last fire", () => latestFire(stateRoot, r.name));
     const lastRun = last ? `last ${last.firedAt} ${last.outcome ?? "unreported"}` : "never run";
     console.log(
-      `${r.name.padEnd(20)} next ${(r.next ?? "(never)").padEnd(26)}cron ${r.cron}${r.tz ? ` ${r.tz}` : ""}  ${lastRun}  session=${r.session}`,
+      `${r.name.padEnd(20)} next ${(r.next ?? "(never)").padEnd(26)}cron ${r.cron}${r.tz ? ` ${r.tz}` : ""}  ${lastRun}  session=${r.session ?? "(none yet)"}`,
     );
   }
   for (const w of wakeups) {

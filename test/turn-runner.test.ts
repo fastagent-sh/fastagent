@@ -7,7 +7,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ContextBuffer, createContextBuffer } from "../src/channels/kit/context-buffer.ts";
-import { createRoomThreads } from "../src/channels/kit/room-threads.ts";
 import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/channels/kit/turn-runner.ts";
 import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
 import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
@@ -72,8 +71,8 @@ function runnerOptions(
     seen: { add: (id) => calls.push(`seen ${id}`) },
     toStored: ({ notice: _n, ...intent }) => ({ ...intent, attempts: 0 }),
     fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, notice: undefined }),
-    discussionKey: (rec) => `place:${rec.session}`,
-    where: (rec) => `session=${rec.session}`,
+    discussionKey: (rec) => `place:${rec.conversation}`,
+    where: (rec) => `conversation=${rec.conversation}`,
     onDeferred: (rec) => calls.push(`deferred ${rec.id}`),
     notifyDropped: (rec) => calls.push(`dropped ${rec.id}`),
     deliverAnswer: (rec, answer) =>
@@ -152,7 +151,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
             await new Promise(() => {});
           }),
         });
-        runner.submit({ id: 'a', session: 's', text: '' }, true);
+        runner.submit({ id: 'a', conversation: 's', text: '' }, true);
       `,
         ],
         { stdio: ["ignore", "ignore", "pipe", "ipc"] },
@@ -182,7 +181,13 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       }
       // Killed mid-delivery, the answer is on disk to re-deliver; killed mid-run, only the intent is.
       expect(openStore().recover(), phase).toEqual([
-        { id: "a", session: "s", text: "", attempts: 1, ...(phase === "committed" ? { answer: "the answer" } : {}) },
+        {
+          id: "a",
+          conversation: "s",
+          text: "",
+          attempts: 1,
+          ...(phase === "committed" ? { answer: "the answer" } : {}),
+        },
       ]);
       expect(openBuffer().peek("place:s").consumed, phase).toEqual(phase === "running" ? ["earlier"] : ["later"]);
     }
@@ -203,8 +208,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
           }
         }),
     });
-    r.submit({ id: "a", session: "s", text: "" }, true);
-    r.submit({ id: "b", session: "s", text: "" }, true);
+    r.submit({ id: "a", conversation: "s", text: "" }, true);
+    r.submit({ id: "b", conversation: "s", text: "" }, true);
     try {
       await entered.promise;
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -232,8 +237,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         },
       }),
     });
-    r.submit({ id: "a", session: "s", text: "" }, true);
-    r.submit({ id: "b", session: "s", text: "" }, true);
+    r.submit({ id: "a", conversation: "s", text: "" }, true);
+    r.submit({ id: "b", conversation: "s", text: "" }, true);
     try {
       await cancelled.promise;
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -252,7 +257,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     for (const completed of [false, true]) {
       const { store, buffer, openStore, openBuffer } = durable();
       buffer.push("place:s", "earlier");
-      store.add({ id: "a", session: "s", text: "", attempts: 0 });
+      store.add({ id: "a", conversation: "s", text: "", attempts: 0 });
       const entered = Promise.withResolvers<void>();
       const finish = Promise.withResolvers<void>();
       let running!: Fiber.Fiber<unknown, unknown>;
@@ -275,7 +280,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
             yield* runQueuedTurn(opts, rec);
           }),
       });
-      queue.accept({ id: "a", session: "s", text: "" });
+      queue.accept({ id: "a", conversation: "s", text: "" });
       await entered.promise;
       buffer.push("place:s", "later");
       const label = `completed=${completed}`;
@@ -292,7 +297,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       // Either way the record survives interruption — but it means different work on the next start: an answer to
       // deliver, or a turn to run.
       expect(openStore().recover(), label).toEqual([
-        { id: "a", session: "s", text: "", attempts: 1, ...(completed ? { answer: "the answer" } : {}) },
+        { id: "a", conversation: "s", text: "", attempts: 1, ...(completed ? { answer: "the answer" } : {}) },
       ]);
       expect(openBuffer().peek("place:s").consumed, label).toEqual(completed ? ["later"] : ["earlier", "later"]);
       const calls: string[] = [];
@@ -317,7 +322,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     const write = vi.spyOn(atomic, "writeFileAtomic").mockImplementation(() => {
       throw new Error("disk failed");
     });
-    const rec = { id: "a", session: "s", text: "" };
+    const rec = { id: "a", conversation: "s", text: "" };
     expect(() => r.submit(rec, true)).toThrow("disk failed");
     expect(calls).toEqual([]);
     expect(activeWork()).toBe(base);
@@ -345,8 +350,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         }),
       }),
     });
-    r.submit({ id: "a", session: "s", text: "one" }, true);
-    r.submit({ id: "b", session: "s", text: "two" }, true); // queued behind a → gets the notice
+    r.submit({ id: "a", conversation: "s", text: "one" }, true);
+    r.submit({ id: "b", conversation: "s", text: "two" }, true); // queued behind a → gets the notice
     await r.idle();
     expect(calls).toEqual([
       "add a",
@@ -372,8 +377,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
   it("a turn at the ceiling is dropped and told; a deferred one is left for the next start", async () => {
     const { store, calls } = fakeStore({ x: "exceeded", d: "defer" });
     const r = runner(store, calls);
-    r.submit({ id: "x", session: "s1", text: "" }, false);
-    r.submit({ id: "d", session: "s2", text: "" }, false);
+    r.submit({ id: "x", conversation: "s1", text: "" }, false);
+    r.submit({ id: "d", conversation: "s2", text: "" }, false);
     await r.idle();
     expect(calls.filter((c) => !c.startsWith("attempt"))).toEqual(["dropped x", "deferred d"]);
   });
@@ -383,7 +388,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     // recorded answer runs no model, so an answer that exists must not be replaced by "please ask again".
     const { store, calls } = fakeStore({ x: "exceeded" });
     const r = runner(store, calls);
-    r.submit({ id: "x", session: "s1", text: "", answer: "the answer nobody received" }, false);
+    r.submit({ id: "x", conversation: "s1", text: "", answer: "the answer nobody received" }, false);
     await r.idle();
     expect(calls.filter((c) => !c.startsWith("attempt"))).toEqual(["deliver x answer=the answer nobody received"]);
   });
@@ -398,7 +403,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
           throw new Error("chat not found");
         }),
     });
-    r.submit({ id: "x", session: "s1", text: "", answer: "the answer nobody received" }, false);
+    r.submit({ id: "x", conversation: "s1", text: "", answer: "the answer nobody received" }, false);
     await r.idle();
     // The record is already off disk, so this is the last chance to say anything to the asker.
     expect(calls.filter((c) => !c.startsWith("attempt"))).toEqual(["deliver x", "dropped x"]);
@@ -408,7 +413,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
   it("beforeRun false leaves the intent untouched — nothing counted, nothing run, nothing removed", async () => {
     const { store, calls } = fakeStore();
     const r = runner(store, calls, { beforeRun: async () => false });
-    r.submit({ id: "a", session: "s", text: "" }, false);
+    r.submit({ id: "a", conversation: "s", text: "" }, false);
     await r.idle();
     expect(calls).toEqual([]);
   });
@@ -418,8 +423,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     try {
       const { store, calls } = fakeStore();
       const r = runner(store, calls, { onQueuedBehind: () => ({ done: Promise.reject(new Error("post failed")) }) });
-      r.submit({ id: "a", session: "s", text: "one" }, false);
-      r.submit({ id: "b", session: "s", text: "two" }, false); // queued behind a → gets the failing notice
+      r.submit({ id: "a", conversation: "s", text: "one" }, false);
+      r.submit({ id: "b", conversation: "s", text: "two" }, false); // queued behind a → gets the failing notice
       await r.idle();
       expect(calls.filter((c) => c.endsWith(" b") || c.startsWith("execute b"))).toEqual([
         "attempt b",
@@ -436,7 +441,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
 
   it("a failed execute still drops the intent, and a recovered turn is re-enqueued without re-persisting", async () => {
     const { store, calls, recovered } = fakeStore();
-    recovered.push({ id: "r", session: "s", text: "again", attempts: 1 });
+    recovered.push({ id: "r", conversation: "s", text: "again", attempts: 1 });
     const r = runner(store, calls, {
       execute: (rec) =>
         portJoin(async () => {
@@ -447,25 +452,5 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     expect(r.recover()).toHaveLength(1);
     await r.idle();
     expect(calls).toEqual(["attempt r", "peek place:s", "execute r", "remove r"]);
-  });
-
-  it("a turn's room is open to its thread tool while it executes, and closed after, whether it succeeds or fails", async () => {
-    const { store, calls } = fakeStore();
-    const threads = createRoomThreads({ list: async () => "", read: async () => "" });
-    const during = new Map<string, string | undefined>();
-    const r = runner(store, calls, {
-      room: { threads, of: (rec) => (rec.id === "dm" ? undefined : `room-of-${rec.id}`) },
-      execute: (rec) =>
-        portJoin(async () => {
-          during.set(rec.id, threads.roomOf(rec.session));
-          if (rec.id === "boom") throw new Error("transport down");
-        }),
-    });
-    r.submit({ id: "ok", session: "s1", text: "" }, true);
-    r.submit({ id: "boom", session: "s2", text: "" }, true);
-    r.submit({ id: "dm", session: "s3", text: "" }, true);
-    await r.idle();
-    expect(Object.fromEntries(during)).toEqual({ ok: "room-of-ok", boom: "room-of-boom", dm: undefined });
-    expect(["s1", "s2", "s3"].map((session) => threads.roomOf(session))).toEqual([undefined, undefined, undefined]);
   });
 });

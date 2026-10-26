@@ -17,7 +17,7 @@ import {
   isGeneratedDockerignore,
 } from "../../../deploy/container.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
-import type { FastagentConfig } from "../../../harnesses/pi/config.ts";
+import type { AgentConfig } from "../../../harnesses/pi-durable/define.ts";
 import { exists, resolveStateRoot } from "../../../paths.ts";
 import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
 import { loginOnBox } from "../../box-login.ts";
@@ -39,7 +39,7 @@ export interface DeployOptions {
 interface DeployContext {
   opts: DeployOptions;
   agentDir: string;
-  config: FastagentConfig;
+  config: AgentConfig;
   pre: Extract<DeployPreflight, { ok: true }>;
   channels: readonly DeclaredChannel[];
   webhookChannels: readonly DeclaredChannel[];

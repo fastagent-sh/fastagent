@@ -1,44 +1,40 @@
-// Harness-neutral: the Agent Handler protocol (SPEC v1), consuming and serving it, the channel kit, and time triggers.
+// Harness-neutral: the Agent API (docs/design/agent-api.md), reading a message's answer as it is written, and the
+// channel contract a channel is written against. No Node built-in, no harness.
 export type {
   AbortResult,
   Agent,
-  AgentCommand,
   AgentError,
   AgentInfo,
   Attachment,
-  Capabilities,
+  ConfigureResult,
+  ContentPart,
+  CreateSessionOptions,
+  CreateSessionResult,
+  DoneMessage,
   Entry,
   ErrorCode,
-  FollowEvent,
   ForkSource,
-  InvokeEvent,
   InvokeRequest,
+  InvokeResult,
   Json,
-  LiveEvent,
-  ModelDescriptor,
-  Prompt,
-  DoneMessage,
-  MessageKey,
-  MessageSource,
+  ListOptions,
+  ListResult,
   MessageStatus,
   Outcome,
+  ReadOptions,
   ReadResult,
-  Result,
-  Session,
+  Receipt,
+  ReplayFrom,
+  ResumeEvent,
   SessionEvent,
   SessionSettings,
   SessionState,
-  SessionSummary,
   Usage,
+  WaitResult,
   WhenBusy,
-} from "./protocol.ts";
-export { AgentRejection, LIMITS } from "./protocol.ts";
-export { collect, type CollectedMessage, MessageNotCompleted, MessageUnfinished } from "./protocol-collect.ts";
-export type { ModuleLoadFailure } from "./loader.ts";
-
-// The agent's API over HTTP: serve it inside an app, and call one that is served.
-export { createAgentHandler } from "./channels/protocol-http.ts";
-export { connectAgent, type RemoteAgentOptions } from "./protocol-remote.ts";
+} from "./agent-api.ts";
+export { AgentRejection, LIMITS } from "./agent-api.ts";
+export { type StreamResult, stream } from "./agent-api-stream.ts";
 export { readBodyCapped } from "./channels/body.ts";
 export { text, textHeaders } from "./channels/respond.ts";
 export type {
@@ -49,10 +45,5 @@ export type {
   LongConnectionChannelModule,
   Routes,
 } from "./channel.ts";
-// What a `schedules/<name>.md` loads into (`AgentService.schedules`).
-export type { Schedule } from "./schedule/schedule.ts";
-// What a `channels/*.ts` file is written against when it needs credentials: declaring them is what
-// lets `deploy` carry them and the serve refuse to start without them.
-export { defineChannel, type DefineChannelOptions } from "./channels/define-channel.ts";
-// The one shape "which env vars does this agent need" travels in, from every authoring surface.
+export type { Schedule, ScheduleConfig } from "./schedule/schedule.ts";
 export type { DeclaredSecret } from "./declared-secrets.ts";

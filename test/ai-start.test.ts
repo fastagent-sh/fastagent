@@ -31,12 +31,12 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     const config = await readFile(join(agentDir, "fastagent.config.ts"), "utf8");
     for (const file of [
       "tsconfig.json",
-      "APPEND_SYSTEM.md",
+      "SYSTEM.md",
       "skills/review-batches/SKILL.md",
       "lib/batches.ts",
-      "tools/plan-batches.ts",
+      "src/tools/plan-batches.ts",
       "test/batches.test.ts",
-      "schedules/daily-review.md",
+      "src/schedules/daily-review.ts",
     ]) {
       const path = join(agentDir, file);
       await mkdir(dirname(path), { recursive: true });
@@ -53,25 +53,22 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     const reexport = `export * from ${JSON.stringify(join(root, "src/index.ts"))};\n`;
     await writeFile(join(alias, "index.js"), reexport);
     await writeFile(join(alias, "index.d.ts"), reexport);
-    await symlink(join(root, "node_modules/@types"), join(agentDir, "node_modules/@types"), "dir");
+    // The packages an agent's code is written against, which its own install would bring.
+    for (const scope of ["@types", "@earendil-works"]) {
+      await symlink(join(root, "node_modules", scope), join(agentDir, "node_modules", scope), "dir");
+    }
+    await symlink(join(root, "node_modules/typebox"), join(agentDir, "node_modules/typebox"), "dir");
 
     const tsc = join(root, "node_modules/typescript/bin/tsc");
     await node([tsc, "--noEmit"], agentDir);
     await node(["--test", "test/batches.test.ts"], agentDir);
-    const tool = await cli(["tool", "plan-batches", '{"items":5,"size":2}']);
-    expect(JSON.parse(tool.stdout)).toEqual({ batches: 3 });
     const info = JSON.parse((await cli(["info", "--json"])).stdout);
     expect(info).toMatchObject({
       agentDir,
       content: [],
-      appendSystemPrompt: join(agentDir, "APPEND_SYSTEM.md"),
-      tools: expect.arrayContaining(["plan-batches"]),
-      skills: expect.arrayContaining([expect.objectContaining({ name: "review-batches" })]),
+      tools: ["plan-batches"],
+      commands: expect.arrayContaining([expect.objectContaining({ name: "skill:review-batches" })]),
       schedules: [expect.objectContaining({ name: "daily-review", cron: "0 9 * * *" })],
-      toolError: null,
-      toolFailures: [],
-      scheduleFailures: [],
-      diagnostics: [],
     });
     expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toBe(config);
 

@@ -6,11 +6,10 @@ import { listenForRestart, runDevSupervisor } from "../../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
-import { createPiAgentFromDir } from "../../harnesses/pi/open.ts";
+import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService } from "../../service.ts";
-import { logAgentLoop } from "../../observe.ts";
 import { failStartup } from "../fail.ts";
-import { assertTunnelBindable, cliMountOptions, serveService, withRunOverrides } from "../serve.ts";
+import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 /**
@@ -26,8 +25,6 @@ export interface DevOptions {
   /** false ⇔ `--no-watch`. */
   watch?: boolean;
   tunnel?: boolean;
-  /** false ⇔ `--no-api`: withhold the agent's API for THIS run (`http.api` is the persistent form). */
-  api?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
 }
@@ -61,18 +58,15 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   const host = parseBind(opts.bind) ?? DEV_BIND;
   const tunnel = opts.tunnel ?? false;
   assertTunnelBindable(host, tunnel);
-  const a = await createPiAgentFromDir(agentDir, {
-    model: modelSpec,
-    serving: true, // long-running serve: the scheduler poller runs (and the wake tool is mounted)
-  }).catch(failStartup);
-  // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
-  await reportAssembly({ ...a, modelSpec }, { beforeModel: [["config", a.configPath ?? "(none)"]] });
-  // The SAME assembly an embedder gets from `createAgentService` — channels, control plane, schedules, long
-  // connections.
-  const service = await mountAgentService(withRunOverrides(a, opts), cliMountOptions(logAgentLoop)).catch(failStartup);
+  const opened = await openServing(agentDir, { model: modelSpec }).catch(failStartup);
+  await reportAssembly(opened, modelSpec);
+  const service = await mountAgentService(
+    { ...opened, channels: opened.code.channels, schedules: opened.code.schedules },
+    cliMountOptions(),
+  ).catch(failStartup);
   serveService(
     service,
-    { port: portFlag ?? a.config.http?.port ?? DEFAULT_HTTP_PORT, host },
-    { tunnel, agentDir: a.agentDir, stateRoot: a.stateRoot },
+    { port: portFlag ?? opened.definition.config.http?.port ?? DEFAULT_HTTP_PORT, host },
+    { tunnel, agentDir, stateRoot: opened.stateRoot },
   );
 }

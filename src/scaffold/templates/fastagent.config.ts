@@ -1,29 +1,22 @@
-// fastagent.config.ts — deployment choices only (model / http; code tools auto-discover from tools/).
-// Your agent's prompt lives in SYSTEM.md / APPEND_SYSTEM.md; its capabilities in skills/ + tools/ — never here.
-// Model precedence: `--model` flag > FASTAGENT_MODEL env > this default.
-// No model is preset: `fastagent dev` shows the full model catalog (models you already have
-// credentials for come first; picking one that needs auth logs you in inline) and writes your choice
-// below. Or set it by hand to a "provider/modelId" (`fastagent models` lists them).
-// Self-hosted model (vLLM/Ollama/…) or your own gateway? Declare it in a models.json next to this
-// file and select it like any other spec — see docs/configuration.md "Custom model endpoints".
+// fastagent.config.ts — the agent's configuration: its default model and how it is served. Its prompt lives in
+// SYSTEM.md, its capabilities in skills/ and src/ (tools, extensions, channels, schedules) — never here.
 //
-// `satisfies` is what makes your editor complete these keys and describe them on hover — and what
-// turns a typo into an error you see while writing rather than one `fastagent dev` reports. The
-// import is TYPE-only: nothing is loaded at runtime. Every key is optional; the commented lines
-// below carry the default.
-import type { FastagentConfig } from "@fastagent-sh/fastagent";
+// Model precedence: `--model` flag > FASTAGENT_MODEL env > this default. No model is preset: `fastagent dev` shows
+// the model catalog (models you already have credentials for come first; picking one that needs auth logs you in
+// inline) and runs with your choice; set it below to keep it. `fastagent models` lists every "provider/modelId".
+// A self-hosted model (vLLM, Ollama, …) or your own gateway is a provider in code: `providers: [...]`, built with
+// pi-ai's `createProvider`.
+//
+// Every key is optional; the commented lines carry an example. `satisfies` is what makes your editor complete these
+// keys and turns a typo into an error you see while writing. The import is TYPE-only: nothing is loaded at runtime,
+// so the agent opens before `npm install` has run.
+import type { AgentConfig } from "@fastagent-sh/fastagent";
 
 export default {
   // model: "openai-codex/gpt-5.5",
-  // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
-  // add `host: "127.0.0.1"` here to pin the bind address; default: `start` all interfaces (what containers
-  // need), `dev` loopback. `cors: ["https://your-app.example.com"]` pins which origins a browser may call
-  // this serve from. The default is `*` on every bind — any page your users visit can call this port and
-  // read the reply, a loopback bind included (it stops another machine, not your own browser).
-  // `api: false` withholds the agent's API (POST /invoke, /sessions/*, /agent/*), for a serve meant to be reached
-  // only through its channels; `control: true` adds /control/* (rename, reconfigure, delete a session).
+  // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max)
+  // The port a serve listens on, for its channels' webhooks and its health check.
   http: { port: 8787 },
-  // tools: [], // programmatically defined tools, appended after the coding ones — tools/ is the usual way
   // The commands the agent needs (CLIs, runtimes, apt packages) live in context.json: `fastagent env add gh`.
   // deploy: { agentcore: { idleTimeoutSeconds: 180 } }, // `deploy agentcore` only: idle microVM tail, 60–1209600s
-} satisfies FastagentConfig;
+} satisfies AgentConfig;

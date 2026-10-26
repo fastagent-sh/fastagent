@@ -1,68 +1,41 @@
-// The pi reference implementation: assembly, agent discovery, tools, config, models, auth, and state ports.
+// The agent on pi-durable: what an author writes, opening a definition as an Agent, and the model environment it
+// answers with.
 export {
-  createPiAgent,
-  createPiAgentFromDefinition,
-  type CreatePiAgentFromDefinitionOptions,
-  type CreatePiAgentOptions,
-} from "./harnesses/pi/create.ts";
+  defineAgent,
+  defineSchedule,
+  needs,
+  type AgentConfig,
+  type Needs,
+  type SecretSpec,
+  type SecretValues,
+} from "./harnesses/pi-durable/define.ts";
+export {
+  buildDefinition,
+  loadDefinition,
+  openAgent,
+  prepareDefinition,
+  secretsManifest,
+  type AgentDefinition,
+  type BuiltDefinition,
+  type OpenAgentOptions,
+} from "./harnesses/pi-durable/open.ts";
+export { type OpenedServing, type OpenServingOptions, openServing } from "./harnesses/pi-durable/serve.ts";
+export type { DurableAgent } from "./harnesses/pi-durable/agent.ts";
+// A tool's own session id, as the Agent hands it out: what a channel's thread-reading tool asks with.
+export { sessionIdOf } from "./harnesses/pi-durable/ids.ts";
 
 export {
-  defineTool,
-  type DefineToolOptions,
-  type FastagentTool,
-  type MountedTool,
-  type ToolCollision,
-  type ToolContext,
-} from "./harnesses/pi/tool.ts";
-export type { ReadonlySessionManager, ToolActivation } from "./harnesses/pi/tool-context.ts";
-export { z } from "zod";
-export type { AgentTool } from "@earendil-works/pi-agent-core";
-export type { Skill } from "@earendil-works/pi-coding-agent";
-/** A conversation record, as the tool runtime and the session store hold it. */
-export type { SessionManager, SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
-
+  GLOBAL_AUTH_PATH,
+  fastagentCredentialStore,
+  type FastagentAuthOptions,
+} from "./harnesses/models/credentials.ts";
 export {
-  availableModelsFromDir,
-  createPiAgentFromDir,
-  type CreatePiAgentFromDirOptions,
-  refreshMachineModelCatalog,
-  refreshModelCatalog,
-} from "./harnesses/pi/open.ts";
-export type {
-  DefinitionDiagnostic,
-  DefinitionFile,
-  DefinitionPrompt,
-  DefinitionShadow,
-  LoadedDefinition,
-  SkillCollision,
-} from "./harnesses/pi/definition.ts";
-
-export {
-  defineConfig,
-  listModels,
-  resolveModel,
-  type FastagentConfig,
-} from "./harnesses/pi/config.ts";
-// Creating an agent and editing its content: what `fastagent init` and `fastagent content` run.
-export {
-  addContent,
-  ContentNameError,
-  createAgent,
-  listContent,
-  removeContent,
-  type ContentEdit,
-  type CreateAgentOptions,
-  type CreatedAgent,
-} from "./harnesses/pi/authoring.ts";
-export {
-  piInMemorySessionRecordStore,
-  piSessionRecordStore,
-  type PiSessionRecordStore,
-} from "./harnesses/pi/session-store.ts";
-
-export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./harnesses/pi/auth.ts";
-export { createPiModels, type CreatePiModelsOptions } from "./harnesses/pi/agent-models.ts";
-export { probeAuthSource } from "./harnesses/pi/models.ts";
+  createPiModels,
+  modelEnvironment,
+  type CreatePiModelsOptions,
+  type ModelEnvironment,
+} from "./harnesses/models/environment.ts";
+export { probeAuthSource } from "./harnesses/models/models.ts";
 export {
   login,
   loginOptions,
@@ -71,13 +44,10 @@ export {
   type LoginOption,
   type LoginRequest,
   type LoginResult,
-} from "./harnesses/pi/login.ts";
+} from "./harnesses/models/login.ts";
 /** pi-ai's sign-in types, and the `CredentialStore` a caller supplies as `credentialStore` (with what it holds). */
 export type { AuthEvent, AuthInteraction, AuthPrompt, Credential, CredentialStore } from "@earendil-works/pi-ai";
 export type { Models } from "@earendil-works/pi-ai";
 // Types only: they appear in our signatures, so a caller must be able to name them.
 export type { Provider, ProviderAuth } from "@earendil-works/pi-ai";
 export type { Model } from "@earendil-works/pi-ai";
-
-// The product's one-call assembly: a directory becomes a live service.
-export { createAgentService, type CreateAgentServiceOptions } from "./harnesses/pi/service.ts";

@@ -62,27 +62,46 @@ it("retries interrupted installs, opens the deployed agent's runtime and preserv
       JSON.stringify({ name: "@fastagent-sh/fastagent", version: "0.0.0", type: "module", exports: "./dist/index.js" }),
     );
     await mkdir(join(agent, "node_modules/.bin"));
+    // The packages the agent's own code imports, as its install would bring them.
+    await symlink(join(repo, "node_modules/@earendil-works"), join(agent, "node_modules/@earendil-works"), "dir");
     await writeFile(join(agent, "package.json"), '{"type":"module"}');
-    await writeFile(join(agent, "fastagent.config.ts"), 'export default { model: "local/test" };');
-    await writeFile(join(agent, "SYSTEM.md"), "Use the context tool.");
+    const baseUrl = `http://127.0.0.1:${port}/v1`;
     await writeFile(
-      join(agent, "models.json"),
-      JSON.stringify({
-        providers: {
-          local: {
-            baseUrl: `http://127.0.0.1:${port}/v1`,
-            api: "openai-completions",
-            apiKey: "test",
-            models: [{ id: "test", contextWindow: 32768 }],
-          },
-        },
-      }),
+      join(agent, "fastagent.config.ts"),
+      `import { createProvider } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+const model = {
+  id: "test", name: "Test", api: "openai-completions", provider: "local", baseUrl: ${JSON.stringify(baseUrl)},
+  reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 32768, maxTokens: 1024,
+};
+export default {
+  model: "local/test",
+  providers: [
+    createProvider({
+      id: "local", name: "Local", baseUrl: ${JSON.stringify(baseUrl)},
+      auth: { apiKey: { name: "Local", resolve: async () => ({ auth: { apiKey: "test" } }) } },
+      models: [model], api: openAICompletionsApi(),
+    }),
+  ],
+};
+`,
     );
-    await mkdir(join(agent, "tools"));
+    await writeFile(join(agent, "SYSTEM.md"), "Use the context tool.");
+    await mkdir(join(agent, "src/tools"), { recursive: true });
     await writeFile(
-      join(agent, "tools/context.mjs"),
-      `import { defineTool, z } from "@fastagent-sh/fastagent";
-export default defineTool({ name: "context", description: "Read invocation context", input: z.object({}), execute: (_, ctx) => ({ session: ctx.sessionManager?.getSessionId() ?? "missing", cwd: ctx.cwd }) });`,
+      join(agent, "src/tools/context.mjs"),
+      `import { Type } from "@earendil-works/pi-ai";
+import { defineTool } from "@earendil-works/pi-durable";
+import { sessionIdOf } from "@fastagent-sh/fastagent";
+export default defineTool({
+  name: "context",
+  description: "Read invocation context",
+  parameters: Type.Object({}),
+  execute: async (_args, api, context) => ({
+    output: [{ type: "text", text: JSON.stringify({ session: await sessionIdOf(api, context), cwd: api.env?.cwd }) }],
+  }),
+});`,
     );
     const manifest = join(dir, "release.json");
     await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "reviewer" }));
@@ -138,13 +157,16 @@ if (process.argv[1] === "fail") {
 } else {
 const service = await openStartService(${JSON.stringify(agent)}, { input: false });
 try {
-  const events = [];
-  for await (const event of service.agent.invoke({ sessionId: "deployed-conversation", prompt: { text: "Read my context" } })) events.push(event);
+  const created = await service.agent.createSession();
+  const sent = await service.agent.invoke({ sessionId: created.sessionId, content: [{ type: "text", text: "Read my context" }] });
+  const end = await sent.wait();
+  const page = await service.agent.read(created.sessionId);
   // Where \`prepareStartWorkspace\` pointed the machinery: the storage, beside the replaced definition.
   const { realpathSync } = await import("node:fs");
-  console.log(JSON.stringify({ events, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR, content: realpathSync("content") }));
+  console.log(JSON.stringify({ sessionId: created.sessionId, end, entries: page.entries, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR, content: realpathSync("content") }));
 } finally {
   await service.close();
+  await service.agent.close();
 }
 }
 `;
@@ -158,12 +180,13 @@ try {
       { env, timeout: CHILD_TIMEOUT_MS },
     );
     const reported = JSON.parse(out.stdout.trim().split("\n").at(-1)!) as {
-      events: { type: string; entry?: { kind: string; data: { text?: string; outcome?: unknown } } }[];
+      sessionId: string;
+      end: { ok: boolean; message?: { outcome: unknown } };
+      entries: { kind: string; data: unknown }[];
       state: string;
       mise: string;
       content: string;
     };
-    const { events } = reported;
     // Every machinery dir lands on the storage, never in `definition/`, which each release replaces: a clone there
     // would take the agent's unpushed work with it. content/ is the storage's, through the link the release carries.
     expect(reported).toMatchObject({
@@ -172,11 +195,12 @@ try {
       mise: join(root, ".state", "mise"),
       content: join(await realpath(root), "content"),
     });
-    expect(events.at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
-    const result = events.find((event) => event.entry?.kind === "tool_result")?.entry?.data.text ?? "";
-    expect(result).toContain("deployed-conversation");
+    expect(reported.end).toMatchObject({ ok: true, message: { outcome: { status: "completed" } } });
+    const result = JSON.stringify(reported.entries.find((entry) => entry.kind === "tool_result")?.data ?? "");
+    // The tool knows the session it runs in.
+    expect(result).toContain(reported.sessionId);
     // The tool's working directory is the deployed definition on the storage, not the image's copy.
-    expect(result).toContain(`"cwd":"${join(root, "definition")}"`);
+    expect(result).toContain(`\\"cwd\\":\\"${join(root, "definition")}\\"`);
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe(rotated);
     expect(requests).toBe(2);
     expect(await readFile(attempts, "utf8")).toBe("failed\nretry\n");

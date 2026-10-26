@@ -6,10 +6,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { createRoomThreads, registerRoomThreads } from "../src/channels/kit/room-threads.ts";
-import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 import { resolveStateRoot } from "../src/paths.ts";
-import type { FastagentTool } from "../src/pi.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -23,7 +22,7 @@ const scaffold = (kind: string) =>
 describe.each(["feishu", "lark", "slack"])("scaffold %s-threads", (kind) => {
   it("lists without a thread id and reads with one, in the room its turn was asked in", async () => {
     // Scaffold files import the published package; Vitest aliases it to the current source.
-    const tool = ((await import(scaffold(kind))) as { default: FastagentTool }).default;
+    const tool = ((await import(scaffold(kind))) as { default: ToolRegistration }).default;
     vi.stubEnv("FASTAGENT_STATE_DIR", "");
     const cwd = await mkdtemp(join(tmpdir(), `fa-${kind}-threads-`));
     dirs.push(cwd);
@@ -33,16 +32,20 @@ describe.each(["feishu", "lark", "slack"])("scaffold %s-threads", (kind) => {
     };
     const rooms = createRoomThreads(reader);
     registerRoomThreads(kind, resolveStateRoot(cwd), rooms);
-    const leave = rooms.enter("session-1", "room-1");
-    const sessionManager = {
-      getSessionId: () => "session-1",
-      getHeader: async () => ({ id: "session-1", timestamp: "" }),
-      getBranch: async () => [],
+    // The tool runs in conversation 1 of storage "inc": session "inc.1".
+    const leave = rooms.enter("inc.1", "room-1");
+    const api = {
+      conversationId: 1,
+      snapshot: async () => ({ incarnation: "inc" }),
+      commit: async (change: (tx: unknown) => unknown) => change({ conversation: async (id: number) => ({ id }) }),
     };
-    const run = (params: unknown) => turnContext.run({ cwd, sessionManager }, () => tool.execute("call-1", params));
+    const run = async (params: unknown) => {
+      const result = await tool.execute(params as never, api as never, {} as never);
+      return (result.output?.[0] as { text: string } | undefined)?.text;
+    };
 
-    expect((await run({})).details).toBe("threads of room-1");
-    expect((await run({ threadId: "t-9" })).details).toBe("thread t-9 of room-1");
+    expect(await run({})).toBe("threads of room-1");
+    expect(await run({ threadId: "t-9" })).toBe("thread t-9 of room-1");
     expect(tool.description).toMatch(/Only this (chat|channel)'s threads can be read/);
     leave();
     await expect(run({})).rejects.toThrow(`this turn was not asked in a ${kind} group chat`);
@@ -52,6 +55,7 @@ describe.each(["feishu", "lark", "slack"])("scaffold %s-threads", (kind) => {
 it("the lark tool is the feishu one bound to lark", async () => {
   const swapped = (await readFile(scaffold("feishu"), "utf8"))
     .replaceAll("feishuThreads", "larkThreads")
+    .replaceAll('"feishu_threads"', '"lark_threads"')
     .replaceAll("@fastagent-sh/fastagent/feishu", "@fastagent-sh/fastagent/lark")
     .replaceAll("Feishu group chat", "Lark group chat");
   expect(await readFile(scaffold("lark"), "utf8")).toBe(swapped);

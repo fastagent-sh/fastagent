@@ -5,91 +5,38 @@ import * as Deferred from "effect/Deferred";
 import * as Result from "effect/Result";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
-import type { Agent, InvokeEvent, InvokeRequest, Outcome } from "../protocol.ts";
+import { join } from "node:path";
+import type { Agent, InvokeRequest, Outcome } from "../agent-api.ts";
+import { conversationSessions } from "../conversation-sessions.ts";
 import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
-import { capSchedules, MAX_SCHEDULES } from "./discover.ts";
-import { basename } from "node:path";
-import type { ModuleLoadFailure } from "../loader.ts";
-import { type Schedule, scheduleSession } from "./schedule.ts";
+import type { Schedule } from "./schedule.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
 import { requeueWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
-
-/**
- * Account for a claim whose turn never reported. The slot is claimed BEFORE the turn runs and shutdown does not wait
- * for that turn (see `AgentService.close`), so a restart landing mid-fire leaves a claim that the next boot skips —
- * the exact silence the history exists to prevent. Settled once, at the next boot, which also makes it idempotent.
- *
- * The claim is the ONE record here: it IS the decision, and the outcome is written back into it.
- *
- * NOT re-fired: a turn that kills its own process would then replay on every boot. Cron only: a killed wake-up
- * leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
- *
- * THE NEWEST CLAIM ONLY. A schedule's loop runs one turn at a time, so a killed process leaves exactly one claim
- * unsettled — the one it was in. Walking the whole retained window would add nothing a resident process can
- * produce, and would instead rewrite every claim an OLDER FORMAT left without an outcome, turning a window of runs
- * that actually succeeded into `interrupted`.
- *
- * KNOWN FALSE POSITIVE: a second scheduler booting while the first is mid-turn sees a claim nothing accounts for
- * YET, and reports it; the first process then overwrites the outcome when its turn settles. Telling them apart needs
- * the claimer's liveness, which is a lease, not a claim — and the whole point of the claim is that it needs none.
- */
-function markInterruptedFire(stateRoot: string, name: string, fire: Fire | undefined): void {
-  if (fire === undefined || fire.outcome !== undefined) return;
-  log.warn(
-    `[schedule] ${name}: the fire claimed at ${fire.firedAt} never finished — the process stopped mid-turn ` +
-      `and that slot stays skipped (see \`fastagent schedules list\`)`,
-  );
-  // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
-  // conversion — so the Date is valid and `settleClaim` writes back the file it was read from. No duration: this
-  // turn was never timed, and the process that could have timed it is gone.
-  settleClaim(stateRoot, name, new Date(fire.slot), "interrupted");
-}
 
 export interface Scheduler {
   /** Arm schedules, account for a fire the previous run was killed in, and catch up overdue work once. */
   start(): void;
   /** Cancel pending waits. */
   stop(): void;
-  /** The schedules armed now: the loaded set, as each re-read of `schedules/` left it. */
-  current(): readonly Schedule[];
-}
-
-/** What a re-read of `schedules/` found: the valid files, and the ones that are not. */
-export interface ScheduleLoad {
-  schedules: readonly Schedule[];
-  failures: readonly ModuleLoadFailure[];
 }
 
 /** All the scheduler asks of the agent. */
-export type ScheduledAgent = Pick<Agent, "invoke">;
+export type ScheduledAgent = Pick<Agent, "invoke" | "createSession" | "getMessage" | "read">;
 
 export interface SchedulerOptions {
   agent: ScheduledAgent;
   stateRoot: string;
-  /** Every valid schedule this serve loaded at start. */
+  /** The definition's schedules. */
   schedules: readonly Schedule[];
-  /**
-   * The files under `schedules/` that were not valid at start: said once here, then again only when what is wrong
-   * with them changes. Not a refusal: the agent writes these files too, and one it got wrong must not stop the next
-   * start (the deploy pre-flight holds the author's to the stricter rule).
-   */
-  failures?: readonly ModuleLoadFailure[];
   /**
    * Run a resident timer per schedule (default). Off where something outside the process delivers each instant as
    * its own fire (AgentCore's recurring EventBridge schedules): one path per instant, so its delivery's reply says
    * whether it ran.
    */
   localClock?: boolean;
-  /**
-   * Re-read `schedules/`, every {@link RELOAD_MS}: a schedule added, changed or removed while the process runs is
-   * armed, re-armed or disarmed without a restart. Absent, the start's set is fixed.
-   */
-  reload?: () => Promise<ScheduleLoad>;
-  /** Told when a re-read changed the armed set (AgentCore mirrors it into EventBridge). */
-  onChange?: () => void;
   /** Override wall-clock dates; elapsed time and waits use the Effect clock. */
   now?: () => Date;
 }
@@ -109,15 +56,6 @@ export interface SchedulerOptions {
  */
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 const WAKEUP_POLL_MS = 30_000;
-/** How often `schedules/` is re-read: an edit is armed within this. */
-const RELOAD_MS = 30_000;
-
-/** Whether two loads of one schedule would fire the same turns at the same instants. */
-const sameSchedule = (a: Schedule, b: Schedule): boolean => a.cron === b.cron && a.tz === b.tz && a.prompt === b.prompt;
-
-/** The schedule a `schedules/<name>.md` failure label names. */
-const scheduleNameOf = (label: string): string => basename(label, ".md");
-
 /**
  * ONE LINE, ALWAYS: the tail a failure contributes to its log line, as `: <text>`, or nothing when there is none.
  *
@@ -132,14 +70,14 @@ function oneLine(text: string): string {
 }
 
 /**
- * How one invoke went: refused before it ran, the message's outcome, or a stream that stopped before its message ended,
- * with the serving error that said why when there was one.
+ * How one invoke went: refused before it ran (or not known to be taken), the message's outcome, or a wait that ended
+ * before its message did, with why.
  */
 type InvokeEnd = { refused: string; busy: boolean } | { outcome: Outcome } | { unfinished: string };
 
 /**
- * Read an invoke's stream to its message's end, and close it; `onAccepted` hears the receipt. Interrupted, it closes
- * the stream, and the agent goes on: a caller that stops reading only detaches (SPEC v1 §3.1).
+ * Send one message and wait for its end; `onAccepted` hears the receipt. Interrupted, it stops waiting, and the agent
+ * goes on: a Caller that stops waiting only detaches (agent-api.md §3.1).
  */
 async function readInvoke(
   agent: ScheduledAgent,
@@ -147,38 +85,23 @@ async function readInvoke(
   onAccepted: () => void,
   signal: AbortSignal,
 ): Promise<InvokeEnd> {
-  const iterator = agent.invoke(request)[Symbol.asyncIterator]();
-  const close = () => void iterator.return?.();
-  signal.addEventListener("abort", close, { once: true });
-  try {
-    let messageId: string | undefined;
-    let servingError: string | undefined;
-    for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
-      const event: InvokeEvent = next.value;
-      if (event.type === "rejected") return { refused: event.error.message, busy: event.error.code === "busy" };
-      if (event.type === "serving_error") servingError = event.message;
-      if (event.type === "accepted") {
-        messageId = event.message.messageId;
-        onAccepted();
-      }
-      if (event.type === "done" && event.message.messageId === messageId) return { outcome: event.message.outcome };
-    }
-    return { unfinished: servingError ?? "the stream ended before the message did" };
-  } finally {
-    signal.removeEventListener("abort", close);
-    await iterator.return?.();
+  const receipt = await agent.invoke(request);
+  if (!receipt.ok) {
+    return "error" in receipt
+      ? { refused: receipt.error.message, busy: receipt.error.code === "busy" }
+      : { unfinished: `whether the message was taken is not known: ${receipt.unknown.reason}` };
   }
+  onAccepted();
+  const end = await receipt.wait({ signal });
+  return end.ok ? { outcome: end.message.outcome } : { unfinished: end.unfinished.reason };
 }
 
 /** A message's outcome as the one word a claim keeps, and the detail worth a log line. */
-function settled(outcome: Outcome): { fire: "completed" | "failed" | "interrupted"; detail?: string } {
+function settled(outcome: Outcome): { fire: "completed" | "failed"; detail?: string } {
   switch (outcome.status) {
     case "completed":
     case "max_tokens":
-    case "intercepted":
       return { fire: "completed" };
-    case "interrupted":
-      return { fire: "interrupted", detail: "the process stopped before the message ended" };
     case "canceled":
       return { fire: "failed", detail: "canceled" };
     case "failed":
@@ -190,9 +113,9 @@ function settled(outcome: Outcome): { fire: "completed" | "failed" | "interrupte
  * One invoke, read to its message's end, with what became of it said in the log.
  *
  * WHAT THE AGENT SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
- * (`schedule:<name>` for a schedule, the asking conversation for a wake-up), and a session is persisted under
- * `<stateRoot>/sessions/` like any other. Copying the reply into the log would be a second store of the same text,
- * unstructured, in a stream with a wider audience and a bound that differs per host.
+ * (the schedule's own, the asking conversation's for a wake-up), kept in the instance's storage like any other.
+ * Copying the reply into the log would be a second store of the same text, unstructured, in a stream with a wider
+ * audience and a bound that differs per host.
  */
 function runTurn(agent: ScheduledAgent, label: string, request: InvokeRequest, onAccepted: () => void = () => {}) {
   return Effect.gen(function* () {
@@ -206,7 +129,7 @@ function runTurn(agent: ScheduledAgent, label: string, request: InvokeRequest, o
     }).pipe(Effect.result);
     const ms = elapsed();
     if (Result.isFailure(read)) {
-      // A stream that throws breaks the protocol (failures are values), so it is this fire's failure, never a refusal.
+      // A call that throws breaks the API (failures are values), so it is this fire's failure, never a refusal.
       const failed = String(read.failure.cause);
       log.error(`[schedule] ${label} errored (${ms}ms)${oneLine(failed)}`);
       return { fire: "failed" as const, busy: false, failed, ms };
@@ -280,16 +203,29 @@ export function fireScheduleOnce(opts: {
       catch: (cause) => new PortFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
+    // Before anything is sent: the session it continues (created and recorded the first time), and its prompt.
+    const prepared = yield* Effect.tryPromise({
+      try: async () => ({
+        sessionId: await scheduleSessions(stateRoot).of(s.name, agent),
+        text: typeof s.prompt === "string" ? s.prompt : await s.prompt({ at: slot }),
+      }),
+      catch: (cause) => new PortFailure(cause),
+    }).pipe(Effect.result);
+    if (Result.isFailure(prepared)) {
+      const failed = `could not prepare the fire: ${String(prepared.failure.cause)}`;
+      log.error(`[schedule] ${s.name} failed${oneLine(failed)}`);
+      settleClaim(stateRoot, s.name, slot, "failed", 0);
+      return { fired: true, failed, ms: 0 };
+    }
     // An occurrence on a busy session is refused, and so skipped; its key is the instant, so one occurrence is one run.
     const r = yield* runTurn(agent, s.name, {
-      sessionId: scheduleSession(s.name),
-      prompt: { text: s.prompt },
+      sessionId: prepared.success.sessionId,
+      content: [{ type: "text", text: prepared.success.text }],
       whenBusy: "reject",
       idempotencyKey: slot.toISOString(),
-      source: { kind: "schedule", name: s.name },
     });
     // OVERLAP IS NOT FAILURE. The claim still stands — this occurrence is decided and will not be retried — but
-    // what decided it was the previous turn still holding `schedule:<name>`, which is the policy every scheduler
+    // what decided it was the previous turn still holding the schedule's session, which is the policy every scheduler
     // names (k8s `concurrencyPolicy: Forbid`, Temporal's `Skip`) and none of them reports as an error.
     if (r.busy) {
       settleClaim(stateRoot, s.name, slot, "skipped", r.ms);
@@ -303,6 +239,79 @@ export function fireScheduleOnce(opts: {
     settleClaim(stateRoot, s.name, slot, r.fire, r.ms);
     return { fired: true, ...(r.failed === undefined ? {} : { failed: r.failed }), ms: r.ms };
   }).pipe(Effect.uninterruptible);
+}
+
+/**
+ * Account for a claim whose fire never reported: the slot is claimed BEFORE its message is sent, and shutdown does not
+ * wait for the message (see `AgentService.close`), so a restart landing mid-fire leaves a claim nothing settled — the
+ * exact silence the history exists to prevent. Read once, at the next boot. The claim is the ONE record here: it IS
+ * the decision, and the outcome is written back into it.
+ *
+ * WHAT BECAME OF ITS MESSAGE decides the outcome. One the agent took is durable: it is answered after the restart
+ * (or already was), so its end is read through its key and written back, as the fire that ran would have. One that was
+ * never taken is `interrupted`, and NOT re-fired: a fire that kills its own process would then replay on every boot.
+ * Cron only: a killed wake-up leaves no claim behind (`takeFirstDueWakeup` removes it before its message is sent).
+ *
+ * THE NEWEST CLAIM ONLY. A schedule's loop runs one fire at a time, so a killed process leaves exactly one claim
+ * unsettled — the one it was in. Walking the whole retained window would add nothing a resident process can produce.
+ */
+function accountForUnreportedFire(
+  agent: ScheduledAgent,
+  stateRoot: string,
+  name: string,
+  fire: Fire,
+): Effect.Effect<void, PortFailure> {
+  return Effect.gen(function* () {
+    // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
+    // conversion — so the Date is valid and `settleClaim` writes back the file it was read from.
+    const slot = new Date(fire.slot);
+    const key = slot.toISOString();
+    const sessionId = scheduleSessions(stateRoot).get(name);
+    const taken =
+      sessionId === undefined
+        ? undefined
+        : yield* Effect.tryPromise({
+            try: () => agent.getMessage(sessionId, { idempotencyKey: key }),
+            catch: (cause) => new PortFailure(cause),
+          });
+    if (sessionId === undefined || taken === undefined) {
+      log.warn(
+        `[schedule] ${name}: the fire claimed at ${fire.firedAt} never sent its message — the process stopped ` +
+          `before it, and that slot stays skipped (see \`fastagent schedules list\`)`,
+      );
+      // No duration: this fire was never timed, and the process that could have timed it is gone.
+      settleClaim(stateRoot, name, slot, "interrupted");
+      return;
+    }
+    log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} was taken before a restart — reading its end`);
+    // The key alone names the message, so this sends nothing: its receipt is the one the fire had (agent-api.md §3.3).
+    const request: InvokeRequest = {
+      sessionId,
+      content: [{ type: "text", text: "(the scheduled message this key names)" }],
+      idempotencyKey: key,
+    };
+    const end = yield* Effect.tryPromise({
+      try: (signal) => readInvoke(agent, request, () => {}, signal),
+      catch: (cause) => new PortFailure(cause),
+    });
+    if (!("outcome" in end)) {
+      // Unsettled still, so the next boot reads it again.
+      log.warn(
+        `[schedule] ${name}: the end of the fire claimed at ${fire.firedAt} is not known yet${oneLine("refused" in end ? end.refused : end.unfinished)}`,
+      );
+      return;
+    }
+    const { fire: outcome, detail } = settled(end.outcome);
+    if (outcome === "completed") log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} completed`);
+    else log.error(`[schedule] ${name}: the fire claimed at ${fire.firedAt} ${outcome}${oneLine(detail ?? "")}`);
+    // No duration either: only its end was seen here.
+    settleClaim(stateRoot, name, slot, outcome);
+  });
+}
+
+/** Which session each schedule continues: one per schedule, so the agent sees what its earlier runs did. */
+export function scheduleSessions(stateRoot: string) {
+  return conversationSessions(join(stateRoot, "schedule", "sessions.json"));
 }
 
 /** Wakes re-enter a chat session; identify the agent's own instruction and its cancellation handle. */
@@ -321,21 +330,16 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       agent,
       stateRoot,
       schedules,
-      failures = [],
       localClock = true,
-      reload,
-      onChange,
       now = () => new Date(clock.currentTimeMillisUnsafe()),
     } = options;
     const loops = new Set<Fiber.Fiber<unknown, unknown>>();
     let stopped = false;
-    /** The armed set, by name, with the loop that fires each. */
-    const armed = new Map<string, { schedule: Schedule; loop?: Fiber.Fiber<unknown, unknown> }>();
 
     const launch = (label: string, work: Effect.Effect<void>): Fiber.Fiber<unknown, unknown> =>
       fork(
         Effect.withFiber((fiber) => {
-          // Publish ownership before a synchronous invoke callback can re-enter stop().
+          // Publish ownership before a synchronous agent callback can re-enter stop().
           loops.add(fiber);
           return work.pipe(
             Effect.catchCause((cause) =>
@@ -395,10 +399,9 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       const label = `wake ${w.id.slice(0, 8)}`;
       const request: InvokeRequest = {
         sessionId: w.session,
-        prompt: { text: wakeEnvelope(w) },
+        content: [{ type: "text", text: wakeEnvelope(w) }],
         whenBusy: "queue",
         idempotencyKey: `wake:${w.id}@${w.fireAt}`,
-        source: { kind: "wake" },
       };
       // Counted until the message is accepted: from then on the message itself is the work in flight.
       yield* Effect.acquireUseRelease(
@@ -456,93 +459,15 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       }
     });
 
-    /** Arm `s` to fire next at `due` (or say it never will), replacing whatever loop armed it before. */
+    /** Arm `s` to fire next at `due`, or say it never will. */
     const arm = (s: Schedule, due: Date | undefined): void => {
-      armed.get(s.name)?.loop?.interruptUnsafe();
-      if (!localClock) {
-        armed.set(s.name, { schedule: s });
-        return;
-      }
+      if (!localClock) return;
       if (!due) {
         log.warn(`[schedule] ${s.name}: cron "${s.cron}" will never fire again — not armed`);
-        armed.set(s.name, { schedule: s });
         return;
       }
-      armed.set(s.name, { schedule: s, loop: launch(s.name, cronLoop(s, due)) });
+      launch(s.name, cronLoop(s, due));
     };
-
-    /** The problems last said, so a broken file is said when it breaks, not on every re-read. */
-    let reported = new Set<string>();
-    /**
-     * What should be armed, from what loaded: the valid schedules, plus the definition each broken file last had (a
-     * file that stops being valid keeps it), capped as ONE set (`capSchedules`). Says each problem not already said.
-     */
-    const settle = (valid: readonly Schedule[], failures: readonly ModuleLoadFailure[]): Schedule[] => {
-      const candidates = new Map(valid.map((s) => [s.name, s] as const));
-      for (const f of failures) {
-        const before = armed.get(scheduleNameOf(f.label))?.schedule;
-        if (before) candidates.set(before.name, before);
-      }
-      const { within, over } = capSchedules([...candidates.values()]);
-      const armedNames = new Set(within.map((s) => s.name));
-      const said = new Set<string>();
-      const say = (line: string) => {
-        said.add(line);
-        if (!reported.has(line)) log.error(`[schedule] ${line}`);
-      };
-      for (const f of failures) {
-        const keeps = armedNames.has(scheduleNameOf(f.label));
-        say(
-          `${f.label} is not a valid schedule (${f.message}) — ${keeps ? "it keeps its previous definition" : "not armed"}`,
-        );
-      }
-      for (const s of over) {
-        say(`schedules/${s.name}.md is not armed — at most ${MAX_SCHEDULES} schedules are, the first by name`);
-      }
-      reported = said;
-      return within;
-    };
-    /**
-     * One re-read of `schedules/`. An edit takes effect from the NEXT instant after now: catching up is for what was
-     * missed while the process was down, not for a cron that was just written. A file that stops being valid keeps
-     * the definition it last had, and says so; one that was never valid is not armed.
-     */
-    const reloadOnce = (load: () => Promise<ScheduleLoad>) =>
-      Effect.gen(function* () {
-        const loaded = yield* Effect.tryPromise({ try: load, catch: (cause) => new PortFailure(cause) });
-        const next = new Map(settle(loaded.schedules, loaded.failures).map((s) => [s.name, s] as const));
-        let changed = false;
-        for (const [name, { loop }] of armed) {
-          if (next.has(name)) continue;
-          loop?.interruptUnsafe();
-          armed.delete(name);
-          log.info(`[schedule] ${name}: removed`);
-          changed = true;
-        }
-        const current = now();
-        for (const s of next.values()) {
-          const before = armed.get(s.name)?.schedule;
-          if (before && sameSchedule(before, s)) continue;
-          log.info(`[schedule] ${s.name}: ${before ? "changed" : "added"} (cron "${s.cron}"${s.tz ? ` ${s.tz}` : ""})`);
-          arm(s, nextRun(s.cron, s.tz, current));
-          changed = true;
-        }
-        if (changed) onChange?.();
-      }).pipe(
-        Effect.catchTag("PortFailure", (error) =>
-          Effect.sync(() => {
-            // The armed set stands: a directory that cannot be read now is not a reason to disarm what was.
-            log.error(`[schedule] re-reading schedules/ failed (keeping what is armed): ${String(error.cause)}`);
-          }),
-        ),
-      );
-    const reloadLoop = (load: () => Promise<ScheduleLoad>) =>
-      Effect.gen(function* () {
-        for (;;) {
-          yield* Effect.sleep(RELOAD_MS);
-          yield* reloadOnce(load);
-        }
-      });
 
     return {
       start() {
@@ -555,11 +480,23 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         const lastFires = new Map<string, string>();
         for (const s of schedules) {
           const fire = latestFire(stateRoot, s.name);
-          if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
-          markInterruptedFire(stateRoot, s.name, fire);
+          if (fire === undefined) continue;
+          lastFires.set(s.name, fire.firedAt);
+          if (fire.outcome !== undefined) continue;
+          const accounted = accountForUnreportedFire(agent, stateRoot, s.name, fire).pipe(
+            Effect.catchTag("PortFailure", (error) =>
+              Effect.sync(() =>
+                // Unsettled still, so the next boot reads it again.
+                log.error(
+                  `[schedule] ${s.name}: could not account for the fire claimed at ${fire.firedAt}: ${String(error.cause)}`,
+                ),
+              ),
+            ),
+          );
+          launch(s.name, accounted);
         }
         const current = now();
-        for (const s of settle(schedules, failures)) {
+        for (const s of schedules) {
           if (stopped) break;
           // FROM THE LAST FIRE, or from now when there was none. A schedule that has never fired does not catch
           // up the occurrence it missed while the process was down: nothing recorded that it was ever armed then,
@@ -572,10 +509,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           arm(s, due);
         }
         if (!stopped) launch("wake-up poll", wakeLoop);
-        if (!stopped && reload) launch("schedules/ re-read", reloadLoop(reload));
-      },
-      current() {
-        return [...armed.values()].map((a) => a.schedule);
       },
       stop() {
         stopped = true;

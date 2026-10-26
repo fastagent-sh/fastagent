@@ -5,7 +5,9 @@
 # DIRECTORY, so a symlinked one (pnpm, a shared store) would show up as untracked.
 node_modules
 
-# machine state: sessions, channel state, schedule state
+# generated from src/ every time the agent opens
+.fastagent
+# machine state: the agent's storage, channel state, schedule state
 .state
 # where fastagent clones the agent's content (each clone is its repository's, not this one's). No trailing
 # slash: on a deployed host it is a link itself.

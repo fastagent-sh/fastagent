@@ -3,35 +3,34 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { InvokeEvent, InvokeRequest } from "../src/protocol.ts";
+import type { InvokeRequest } from "../src/agent-api.ts";
 import { type RunScript, failed, refused, scriptedRun } from "./scripted-run.ts";
+import { promptOf, scriptedAgent } from "./scripted-agent.ts";
 import type { Schedule } from "../src/schedule/schedule.ts";
 import * as Effect from "effect/Effect";
-import {
-  type ScheduleLoad,
-  createScheduler as scheduler,
-  fireScheduleOnce as fire,
-} from "../src/schedule/scheduler.ts";
-import { scheduleSession } from "../src/schedule/schedule.ts";
+import { createScheduler as scheduler, fireScheduleOnce as fire, scheduleSessions } from "../src/schedule/scheduler.ts";
 
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxDurableAgent } from "./faux.ts";
 import { readFires, settleClaim } from "../src/schedule/state.ts";
 
 /** A fake agent that records each invoke's session + text (and the whole request) and answers with the script. */
 function recordingAgent(script: RunScript = {}) {
   const calls: { session: string; text: string }[] = [];
   const requests: InvokeRequest[] = [];
-  const agent = {
-    async *invoke(request: InvokeRequest) {
-      calls.push({ session: request.sessionId ?? "", text: request.prompt.text });
-      requests.push(request);
-      yield* scriptedRun(request, script);
-    },
-  };
+  const agent = scriptedAgent((request) => {
+    calls.push({ session: request.sessionId, text: promptOf(request).text });
+    requests.push(request);
+    return scriptedRun(request, script);
+  });
   return { agent, calls, requests };
 }
+
+/** The session a schedule continues, as the scheduler recorded it in `root`. */
+const scheduleSession = (root: string, name: string): string | undefined => scheduleSessions(root).get(name);
 
 const hourly = (over: Partial<Schedule> = {}): Schedule => ({
   name: "job",
@@ -108,7 +107,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(readFires(root, "job")).toMatchObject([{ outcome: "interrupted", firedAt: "2026-07-07T10:00:00.000Z" }]);
     // No duration at all: nobody timed this turn, and `0ms` in the history would read as one that took no time.
     expect(readFires(root, "job")[0]).not.toHaveProperty("ms");
-    expect(warns.some((w) => /never finished/.test(w))).toBe(true);
+    expect(warns.some((w) => /never sent its message/.test(w))).toBe(true);
     await new Promise((r) => setTimeout(r, 30));
     expect(calls).toHaveLength(0); // accounted for, not replayed
     s.stop();
@@ -118,8 +117,33 @@ describe("schedule/scheduler: fire algorithm", () => {
     const again = createScheduler(options);
     again.start();
     expect(outcomes(root, "job")).toEqual(["interrupted"]); // still one fire, still one outcome
-    expect(warns.some((w) => /never finished/.test(w))).toBe(false);
+    expect(warns.some((w) => /never sent its message/.test(w))).toBe(false);
     again.stop();
+  });
+
+  it("a claim whose message was taken before the restart is settled with that message's end, not interrupted", async () => {
+    // The agent took the message, then the process stopped before the fire wrote its outcome back. The message is
+    // durable, so the restarted agent answers it (here it already had): calling that `interrupted` would report a run
+    // whose effects happened as one that did not.
+    const root = await freshRoot();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const slot = "2026-07-07T10:00:00.000Z";
+    const agent = await fauxDurableAgent([fauxAssistantMessage("done")]);
+    const sessionId = await scheduleSessions(root).of("job", agent);
+    const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: "go" }], idempotencyKey: slot });
+    if (!sent.ok) throw new Error("not sent");
+    await sent.wait();
+    seedClaim(root, "job", slot, undefined, false);
+    const s = createScheduler({
+      agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      now: () => new Date("2026-07-07T10:30:00Z"),
+    });
+    s.start();
+    await vi.waitFor(() => expect(outcomes(root, "job")).toEqual(["completed"]));
+    s.stop();
+    await agent.close();
   });
 
   it("only the NEWEST unsettled claim is settled interrupted", async () => {
@@ -302,7 +326,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("catches up an overdue run ONCE, claims the slot, session = schedule:<name>", async () => {
+  it("catches up an overdue run ONCE, claims the slot, in the schedule's own session", async () => {
     const root = await freshRoot();
     seedClaim(root, "job", "2026-07-07T08:00:00Z"); // last fired 08:00; now is past several hourly slots
     const { agent, calls } = recordingAgent();
@@ -314,10 +338,21 @@ describe("schedule/scheduler: fire algorithm", () => {
     });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1)); // exactly ONE catch-up, not one per missed slot
-    expect(calls[0]).toEqual({ session: scheduleSession("job"), text: "go" });
+    expect(calls[0]).toEqual({ session: scheduleSession(root, "job"), text: "go" });
     expect(lastFire(root, "job")).toBe("2026-07-07T12:30:00.000Z"); // the claim records when it fired
     // The same claim records how it ended — no second file, nothing appended anywhere.
     await vi.waitFor(() => expect(outcomes(root, "job")).toEqual(["completed", "completed"]));
+    s.stop();
+  });
+
+  it("without a local clock (AgentCore's alarms deliver each instant) it arms no timer", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-07T10:59:30Z"));
+    const { agent, calls } = recordingAgent();
+    const s = createScheduler({ agent, stateRoot: await freshRoot(), schedules: [hourly()], localClock: false });
+    s.start();
+    await vi.advanceTimersByTimeAsync(2 * 60_000); // past 11:00
+    expect(calls).toEqual([]);
     s.stop();
   });
 
@@ -421,7 +456,6 @@ describe("schedule/scheduler: fire algorithm", () => {
       sessionId: "busy",
       whenBusy: "queue",
       idempotencyKey: `wake:${stored?.id}@2026-07-07T11:00:00.000Z`,
-      source: { kind: "wake" },
     });
     expect(listWakeups(root)).toHaveLength(0);
     s.stop();
@@ -438,15 +472,13 @@ describe("schedule/scheduler: fire algorithm", () => {
     }
     const finish = Promise.withResolvers<void>();
     const sessions: string[] = [];
-    const agent = {
-      async *invoke(request: InvokeRequest) {
-        sessions.push(request.sessionId ?? "");
-        const [accepted, ...rest] = scriptedRun(request);
-        yield accepted as InvokeEvent;
-        if (request.sessionId === "slow") await finish.promise;
-        yield* rest;
-      },
-    };
+    const agent = scriptedAgent(async function* (request) {
+      sessions.push(request.sessionId);
+      const [accepted, ...rest] = scriptedRun(request);
+      if (accepted) yield accepted;
+      if (request.sessionId === "slow") await finish.promise;
+      yield* rest;
+    });
     const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start();
     await vi.waitFor(() => expect(sessions).toEqual(["slow", "fast"]));
@@ -582,7 +614,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
     expect(outcome.fired).toBe(true);
     expect(outcome.failed).toBeUndefined();
-    expect(calls).toEqual([{ session: scheduleSession("job"), text: "go" }]);
+    expect(calls).toEqual([{ session: scheduleSession(root, "job"), text: "go" }]);
     // ONE file answers both planes: WHEN it fired (where catch-up resumes) and HOW it ended. Its NAME is the slot.
     expect(lastFire(root, "job")).toBe("2026-07-07T10:00:03.000Z");
     expect(claimed(root, "job")).toEqual(["2026-07-07T10-00-00-000Z"]);
@@ -626,20 +658,25 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(lines.join("\n")).not.toMatch(/failed/);
   });
 
-  it("a run whose stream ended on a serving error is `failed` with that error, said in the log", async () => {
-    // The storage refused to record the run's end, or a missed event could not be read back: the stream ends on a
-    // `serving_error` instead of `run_ended`, and that message is the only account of why.
+  it("a message whose wait ends before it does is `failed` with why, said in the log", async () => {
+    // The storage could not say how the message ended: that reason is the only account of why.
     const root = await freshRoot();
     const lines: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void lines.push(a.join(" ")));
+    const scripted = scriptedAgent((request) => scriptedRun(request));
     const agent = {
-      async *invoke(request: InvokeRequest) {
-        yield scriptedRun(request)[0] as InvokeEvent;
-        yield { type: "serving_error", message: "the run's end could not be recorded: ENOSPC" } as InvokeEvent;
+      ...scripted,
+      invoke: async (request: InvokeRequest) => {
+        const receipt = await scripted.invoke(request);
+        if (!receipt.ok) return receipt;
+        return {
+          ...receipt,
+          wait: async () => ({ ok: false as const, unfinished: { reason: "the storage failed: ENOSPC" } }),
+        };
       },
     };
     const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
-    expect(outcome).toMatchObject({ fired: true, failed: "the run's end could not be recorded: ENOSPC" });
+    expect(outcome).toMatchObject({ fired: true, failed: "the storage failed: ENOSPC" });
     expect(readFires(root, "job")).toMatchObject([{ outcome: "failed" }]);
     expect(lines.join("\n")).toMatch(/ERROR.*job failed .*ENOSPC/);
   });
@@ -769,156 +806,5 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(outcome.failed).toBe("model exploded");
     expect(readFires(root, "job")[0]).toMatchObject({ outcome: "failed" });
     expect(logs.some((l) => /model exploded/.test(l))).toBe(true); // WHY is a log line, not a stored field
-  });
-});
-
-describe("schedule/scheduler: schedules/ re-read while running", () => {
-  it("arms an added schedule, re-arms a changed one, disarms a removed one, and keeps a broken one's last definition", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
-    const root = await freshRoot();
-    const { agent, calls } = recordingAgent();
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    let loaded: ScheduleLoad = { schedules: [hourly()], failures: [] };
-    const changes = vi.fn();
-    const s = createScheduler({
-      agent,
-      stateRoot: root,
-      schedules: [hourly()],
-      reload: async () => loaded,
-      onChange: changes,
-    });
-    s.start();
-    const names = () => s.current().map((x) => `${x.name} ${x.cron}`);
-    expect(names()).toEqual(["job 0 * * * *"]);
-
-    // Added and changed: armed from the NEXT instant after now — an edit is not a missed run to catch up.
-    loaded = { schedules: [hourly({ cron: "*/5 * * * *" }), hourly({ name: "other", prompt: "o" })], failures: [] };
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(names()).toEqual(["job */5 * * * *", "other 0 * * * *"]);
-    expect(changes).toHaveBeenCalledTimes(1);
-    expect(calls).toEqual([]);
-    // The changed cron fires on its new grid (10:05), the old one (11:00) is gone.
-    await vi.advanceTimersByTimeAsync(4 * 60_000);
-    expect(calls).toEqual([{ session: scheduleSession("job"), text: "go" }]);
-    expect(changes).toHaveBeenCalledTimes(1); // a fire changes no schedule: EventBridge's recurring one stands
-
-    // A file that breaks keeps what it last was, said once — not on every re-read.
-    loaded = {
-      schedules: [hourly({ name: "other", prompt: "o" })],
-      failures: [{ label: "schedules/job.md", file: "/x/schedules/job.md", message: "invalid cron/tz — nope" }],
-    };
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(names()).toEqual(["job */5 * * * *", "other 0 * * * *"]);
-    expect(logs.filter((l) => /schedules\/job\.md is not a valid schedule/.test(l))).toHaveLength(1);
-    expect(logs.join("\n")).toMatch(/it keeps its previous definition/);
-
-    // Removed: no longer armed, and its next instant does not fire.
-    loaded = { schedules: [hourly({ name: "other", prompt: "o" })], failures: [] };
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(names()).toEqual(["other 0 * * * *"]);
-    const before = calls.length;
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(calls.filter((c) => c.session === scheduleSession("job"))).toHaveLength(before);
-    s.stop();
-  });
-
-  it("a file not valid at start is said once, at start, and not again by a re-read", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const failure = { label: "schedules/bad.md", file: "/x/schedules/bad.md", message: "no closing ---" };
-    const s = createScheduler({
-      agent: recordingAgent().agent,
-      stateRoot: await freshRoot(),
-      schedules: [hourly()],
-      failures: [failure],
-      reload: async () => ({ schedules: [hourly()], failures: [failure] }),
-    });
-    s.start();
-    const said = () => logs.filter((l) => /schedules\/bad\.md is not a valid schedule .* — not armed/.test(l));
-    expect(said()).toHaveLength(1); // at start, before any re-read
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(said()).toHaveLength(1);
-    s.stop();
-  });
-
-  it("caps the armed SET at 20: an old definition kept for a broken file counts, so breaking files adds nothing", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const named = (n: number) => hourly({ name: `s${String(n).padStart(2, "0")}` });
-    const broken = (n: number) => ({
-      label: `schedules/s${String(n).padStart(2, "0")}.md`,
-      file: "/x",
-      message: "no closing ---",
-    });
-    const first20 = Array.from({ length: 20 }, (_, i) => named(i));
-    let loaded: ScheduleLoad = { schedules: [...first20, named(20)], failures: [] };
-    const s = createScheduler({
-      agent: recordingAgent().agent,
-      stateRoot: await freshRoot(),
-      schedules: loaded.schedules,
-      localClock: false,
-      reload: async () => loaded,
-    });
-    s.start();
-    const names = () => s.current().map((x) => x.name);
-    expect(names()).toEqual(first20.map((x) => x.name)); // at start, too
-    expect(logs.join("\n")).toMatch(/schedules\/s20\.md is not armed — at most 20 schedules are/);
-    // Break five armed files (each keeps its old definition) and add five valid ones: still 20, the first by name.
-    loaded = {
-      schedules: [...first20.slice(5), ...Array.from({ length: 5 }, (_, i) => named(30 + i))],
-      failures: [0, 1, 2, 3, 4].map(broken),
-    };
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(names()).toHaveLength(20);
-    expect(names()).toEqual(first20.map((x) => x.name));
-    s.stop();
-  });
-
-  it("without a local clock (AgentCore's alarms deliver each instant) it arms no timer, and still re-reads", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    vi.setSystemTime(new Date("2026-07-07T10:59:30Z"));
-    const { agent, calls } = recordingAgent();
-    let loaded: ScheduleLoad = { schedules: [hourly()], failures: [] };
-    const s = createScheduler({
-      agent,
-      stateRoot: await freshRoot(),
-      schedules: [hourly()],
-      localClock: false,
-      reload: async () => loaded,
-    });
-    s.start();
-    await vi.advanceTimersByTimeAsync(2 * 60_000); // past 11:00
-    expect(calls).toEqual([]);
-    loaded = { schedules: [hourly({ name: "other" })], failures: [] };
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(s.current().map((x) => x.name)).toEqual(["other"]);
-    s.stop();
-  });
-
-  it("a re-read that fails keeps everything armed, and says so", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
-    const root = await freshRoot();
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const s = createScheduler({
-      agent: recordingAgent().agent,
-      stateRoot: root,
-      schedules: [hourly()],
-      reload: async () => {
-        throw new Error("EACCES");
-      },
-    });
-    s.start();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(s.current().map((x) => x.name)).toEqual(["job"]);
-    expect(logs.join("\n")).toMatch(/re-reading schedules\/ failed \(keeping what is armed\): .*EACCES/);
-    s.stop();
   });
 });

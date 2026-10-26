@@ -1,17 +1,13 @@
-/** Channel discovery (the N axis, filesystem form). */
-import { isAbsolute, join } from "node:path";
+/**
+ * A definition's channels, mounted: each route channel's routes, and each long connection bound to its context. The
+ * modules are what the definition built (`BuiltDefinition.channels`); a channel's shape is checked there, by
+ * {@link channelModuleProblem}, and its routes here, where it is first called.
+ */
+import { isAbsolute } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
 import { assertRouteKey, routeKeysConflict } from "./router.ts";
-import { type ModuleLoadFailure, loadModuleDir } from "../loader.ts";
-import { type DeclaredSecret, readSecretDeclaration } from "../declared-secrets.ts";
-import { gateSecrets } from "../secrets-gate.ts";
-import { assertInsideAgentDir } from "../paths.ts";
 
-/** A dropped route: two channels claim the same key. */
-export interface ChannelCollision {
-  route: string;
-  source: string;
-}
+export type AnyChannelModule = ChannelModule | LongConnectionChannelModule;
 
 /** A long-connection module bound to the same context route factories receive. */
 export interface LoadedLongConnectionChannel {
@@ -32,11 +28,6 @@ export function channelModuleProblem(value: unknown): string | undefined {
     : "long-connection channel name must be a non-empty string";
 }
 
-function assertChannelModule(value: unknown, label: string): void {
-  const problem = channelModuleProblem(value);
-  if (problem !== undefined) throw new Error(`${label}: ${problem}`);
-}
-
 /** HOW A CHANNEL IS REACHED — the authored structural fact, and the ONE shape it travels in. */
 export type ChannelIngress = "webhook" | "long-connection";
 
@@ -51,30 +42,9 @@ export function declaredChannels(names: readonly string[], ingress: ChannelIngre
   return names.map((name) => ({ name, ingress }));
 }
 
-/** Import channel files without mounting route factories or opening connections. */
-export async function inspectChannels(dir: string): Promise<{
-  channels: DeclaredChannel[];
-  /** What each channel declared through {@link defineChannel}, BY CHANNEL NAME — the only way a
-   *  CUSTOM channel's credentials can reach a deploy, since nothing else here can name them. */
-  secrets: Map<string, DeclaredSecret[]>;
-  failures: ModuleLoadFailure[];
-}> {
-  await assertInsideAgentDir(dir, "channels");
-  const { modules, failures } = await loadModuleDir(join(dir, "channels"));
-  const channels: DeclaredChannel[] = [];
-  const secrets = new Map<string, DeclaredSecret[]>();
-  for (const { name, label, file, mod } of modules) {
-    try {
-      const declaration = readSecretDeclaration(mod.default, label);
-      if (declaration.error !== undefined) throw new Error(declaration.error);
-      assertChannelModule(mod.default, label);
-      channels.push({ name, ingress: typeof mod.default === "function" ? "webhook" : "long-connection" });
-      secrets.set(name, declaration.secrets);
-    } catch (error) {
-      failures.push({ label, file, message: (error as Error).message });
-    }
-  }
-  return { channels, secrets, failures };
+/** How a channel module is reached: its routes, or the connection it opens. */
+export function channelIngress(module: AnyChannelModule): ChannelIngress {
+  return typeof module === "function" ? "webhook" : "long-connection";
 }
 
 function validateRoutes(value: unknown, label: string): [string, (req: Request) => Response | Promise<Response>][] {
@@ -94,79 +64,42 @@ function validateRoutes(value: unknown, label: string): [string, (req: Request) 
   return routes;
 }
 
-export async function loadChannels(
-  dir: string,
+/** Mount the channels: every route of every route channel (two claiming one route is refused), and the connections. */
+export function mountChannels(
+  modules: ReadonlyMap<string, AnyChannelModule>,
   ctx: ChannelContext,
-): Promise<{
-  routes: Routes;
-  longConnections: LoadedLongConnectionChannel[];
-  routeChannels: string[];
-  collisions: ChannelCollision[];
-  failures: ModuleLoadFailure[];
-}> {
+): { routes: Routes; longConnections: LoadedLongConnectionChannel[]; routeChannels: string[] } {
   if (!isAbsolute(ctx.stateRoot)) {
     throw new Error(`ChannelContext.stateRoot must be absolute, got "${ctx.stateRoot}"`);
   }
-  await assertInsideAgentDir(dir, "channels");
-  const { modules, failures } = await loadModuleDir(join(dir, "channels"));
   const routes: Routes = {};
+  const owners = new Map<string, string>();
   const longConnections: LoadedLongConnectionChannel[] = [];
   const routeChannels: string[] = [];
-  const collisions: ChannelCollision[] = [];
-  // Collected from the channels that actually MOUNTED, GATED at the end of the function: this is a
-  // serving path, so an unset declared value must stop it (a channel built from an empty credential
-  // is the failure the declaration exists to prevent — a webhook that accepts forged updates, a bot
-  // that cannot reply), while `inspectChannels` — the reporting reader — only collects. A channel
-  // that failed to mount does not gate: its own failure is the report the author needs.
-  const declaredSecrets = new Map<string, DeclaredSecret[]>();
-  const declaring = modules.flatMap((entry) => {
-    const declaration = readSecretDeclaration(entry.mod.default, entry.label);
-    if (declaration.error !== undefined) {
-      failures.push({ label: entry.label, file: entry.file, message: declaration.error });
-      return [];
+  for (const [name, module] of modules) {
+    const label = `src/channels/${name}`;
+    if (typeof module !== "function") {
+      longConnections.push({ name: module.name, connect: (signal) => module.connect(ctx, signal) });
+      continue;
     }
-    return [{ ...entry, secrets: declaration.secrets }];
-  });
-
-  for (const { name, label, file, mod, secrets } of declaring) {
-    try {
-      assertChannelModule(mod.default, label);
-      if (longConnectionModule(mod.default)) {
-        const channel = mod.default;
-        longConnections.push({
-          name: channel.name,
-          connect: (signal) => channel.connect(ctx, signal),
-        });
-        declaredSecrets.set(name, secrets);
-        continue;
-      }
-      const declared = (mod.default as ChannelModule)(ctx) as unknown;
-      if (
-        declared !== null &&
-        typeof declared === "object" &&
-        typeof (declared as { then?: unknown }).then === "function"
-      ) {
-        (declared as Promise<unknown>).catch(() => {});
-        throw new Error(`${label} must return Routes synchronously, not a Promise`);
-      }
-      const declaredRoutes = validateRoutes(declared, label);
-      for (const [route, handler] of declaredRoutes) {
-        const clash = Object.keys(routes).some((key) => routeKeysConflict(key, route));
-        if (clash) {
-          collisions.push({ route, source: label });
-          continue;
-        }
-        routes[route] = handler;
-      }
-      routeChannels.push(name);
-      declaredSecrets.set(name, secrets);
-    } catch (error) {
-      failures.push({ label, file, message: (error as Error).message });
+    const declared = module(ctx) as unknown;
+    if (
+      declared !== null &&
+      typeof declared === "object" &&
+      typeof (declared as { then?: unknown }).then === "function"
+    ) {
+      (declared as Promise<unknown>).catch(() => {});
+      throw new Error(`${label} must return Routes synchronously, not a Promise`);
     }
+    for (const [route, handler] of validateRoutes(declared, label)) {
+      const taken = [...owners.keys()].find((key) => routeKeysConflict(key, route));
+      if (taken !== undefined) {
+        throw new Error(`${label} serves "${route}", which ${owners.get(taken)} already serves as "${taken}"`);
+      }
+      owners.set(route, label);
+      routes[route] = handler;
+    }
+    routeChannels.push(name);
   }
-  // Gated LAST, after the loop has said what it found (the gate reports those failures before it
-  // refuses — src/secrets-gate.ts, decision 2). Binding a module ahead of the gate costs nothing: a
-  // route factory builds handlers; nothing listens or dials until the caller mounts what this returns.
-  gateSecrets({ declared: declaredSecrets, failures });
-  return { routes, longConnections, routeChannels, collisions, failures };
+  return { routes, longConnections, routeChannels };
 }

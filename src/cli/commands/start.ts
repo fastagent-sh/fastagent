@@ -3,7 +3,6 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
-import { existsSync, realpathSync } from "node:fs";
 import { applyCarriedEnv } from "../../deploy/secrets.ts";
 import {
   applyReleaseEnv,
@@ -11,30 +10,14 @@ import {
   parseDeploymentRelease,
   prepareDeployment,
 } from "../../deploy/workspace.ts";
-import {
-  selectAgentEnvironment,
-  CONTENT_DIRNAME,
-  resolveSecretsDir,
-  isAgentcoreRuntime,
-  isUnderDir,
-  exists,
-} from "../../paths.ts";
+import { selectAgentEnvironment, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
-import { createPiAgentFromDir } from "../../harnesses/pi/open.ts";
+import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";
-import { logAgentLoop } from "../../observe.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
 import { failStartup } from "../fail.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
-import {
-  announceControl,
-  assertTunnelBindable,
-  bindLine,
-  cliMountOptions,
-  serveService,
-  serve,
-  withRunOverrides,
-} from "../serve.ts";
+import { assertTunnelBindable, bindLine, cliMountOptions, serveService, serve } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
@@ -42,8 +25,6 @@ export interface StartOptions {
   bind?: string;
   model?: string;
   tunnel?: boolean;
-  /** false ⇔ `--no-api`: withhold the agent's API for THIS run (`http.api` is the persistent form). */
-  api?: boolean;
   input?: boolean;
 }
 
@@ -69,7 +50,6 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
       assemble: async (prepared) => {
         const service = await openPreparedWorkspace(prepared, opts);
         await service.ready;
-        announceControl(service, { host: bindFlag, tunnel: false });
         return service;
       },
     });
@@ -80,7 +60,6 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
         // The assembly report waits for the first envelope, so this line is the only sign of life a booted container
         // gives.
         onListening: (port) => {
-          // NOT `readyAddressLines`: this posture serves the Runtime's `/invocations` contract, not our `/invoke`.
           log.info(bindLine(bindFlag, port));
           log.info("[fastagent] agentcore: the definition opens on the first invocation");
         },
@@ -171,20 +150,13 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 /** Internal entry loaded from the agent's installed package after storage initialization. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
-  const opened = await createPiAgentFromDir(agentDir, {
+  const opened = await openServing(agentDir, {
     model: modelSpec,
-    serving: true,
+    // AgentCore's session storage refuses SQLite's own locks; the deployment's lease makes the dotfile lock safe.
+    locking: isAgentcoreRuntime() ? "leased-dotfile" : "posix",
   });
-  const { agent, config, stateRoot, sessionsDir, content } = opened;
-  await reportAssembly(
-    { ...opened, modelSpec },
-    {
-      afterTools: [
-        ["state", stateRoot],
-        ["sessions", sessionsDir],
-      ],
-    },
-  );
+  const { stateRoot } = opened;
+  await reportAssembly(opened, modelSpec);
   if (isUnderDir(stateRoot, agentDir)) {
     log.info(
       "[fastagent] note: state lives under the definition; use FASTAGENT_STATE_DIR on persistent storage for deployment.",
@@ -195,22 +167,9 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
       "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
     );
   }
-  // Only when something is cloned: a clone holds what the agent changed and has not pushed. A deployment links
-  // content/ into its storage (workspace.ts), so this speaks to a `start` someone set up by hand.
-  const contentDir = join(agentDir, CONTENT_DIRNAME);
-  const clones = content.some((c) => c.kind === "github" && c.clone);
-  if (clones && existsSync(contentDir) && isUnderDir(realpathSync(contentDir), realpathSync(agentDir))) {
-    log.info(
-      "[fastagent] note: github content clones live under the definition; link content/ to persistent storage for deployment.",
-    );
-  }
-  const traced = logAgentLoop(agent);
-  const mountable = withRunOverrides(opened, opts);
+  const mountable = { ...opened, channels: opened.code.channels, schedules: opened.code.schedules };
   const service = await (isAgentcoreRuntime()
-    ? mountAgentcoreService(mountable, { wrapAgent: () => traced })
-    : mountAgentService(
-        mountable,
-        cliMountOptions(() => traced),
-      ));
-  return { ...service, stateRoot, port: config.http?.port ?? DEFAULT_HTTP_PORT };
+    ? mountAgentcoreService(mountable)
+    : mountAgentService(mountable, cliMountOptions()));
+  return { ...service, stateRoot, port: opened.definition.config.http?.port ?? DEFAULT_HTTP_PORT };
 }

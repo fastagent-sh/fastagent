@@ -1,6 +1,7 @@
-/** Render an invoke stream to two sinks plus an exit code: 0 only for a message that ended `completed`. */
+/** Render one message's answer, as `stream()` reads it, to two sinks plus an exit code: 0 only for `completed`. */
+import type { Outcome } from "../agent-api.ts";
+import type { StreamResult } from "../agent-api-stream.ts";
 import { answerText } from "../answer-text.ts";
-import type { InvokeEvent, Outcome } from "../protocol.ts";
 
 function failure(outcome: Outcome): string | undefined {
   switch (outcome.status) {
@@ -14,23 +15,21 @@ function failure(outcome: Outcome): string | undefined {
 }
 
 export async function runInvokeStream(
-  events: AsyncIterable<InvokeEvent>,
+  result: StreamResult,
   out: (text: string) => void,
   err: (line: string) => void,
 ): Promise<number> {
+  if (!result.ok) {
+    if ("error" in result) err(`[fastagent] rejected: ${result.error.code}: ${result.error.message}`);
+    else err(`[fastagent] whether the message was taken is not known: ${result.unknown.reason}`);
+    return 1;
+  }
   const toolName = new Map<string, string>(); // a tool result carries the id; its name came with tool_started
-  let messageId: string | undefined;
   const textOf = answerText();
-  for await (const event of events) {
+  for await (const event of result.events) {
     const text = event.type === "message_delta" || event.type === "entry" ? textOf(event) : "";
     if (text !== "") out(text);
     switch (event.type) {
-      case "accepted":
-        messageId = event.message.messageId;
-        break;
-      case "rejected":
-        err(`[fastagent] rejected: ${event.error.code}: ${event.error.message}`);
-        return 1;
       case "tool_started":
         toolName.set(event.toolCallId, event.name);
         err(`[tool] ${event.name}`);
@@ -45,8 +44,8 @@ export async function runInvokeStream(
         );
         break;
       case "serving_error":
-        err(`[fastagent] ${event.message}`);
-        break;
+        err(`[fastagent] ${event.error.message}`);
+        return 1;
       case "entry": {
         const data = event.entry.data as { toolCallId?: string; isError?: boolean };
         if (event.entry.kind === "tool_result" && data.isError) {
@@ -55,7 +54,6 @@ export async function runInvokeStream(
         break;
       }
       case "done": {
-        if (event.message.messageId !== messageId) break;
         const failed = failure(event.message.outcome);
         if (failed === undefined) return 0;
         err(`[fastagent] failed: ${failed}`);

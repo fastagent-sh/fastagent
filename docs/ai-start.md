@@ -34,13 +34,12 @@ Preserve existing code, context, credentials, and deployment ownership.
 
 | Responsibility | Put it in | Decision rule |
 |---|---|---|
-| Ongoing goal, standing instructions, approval policy | `APPEND_SYSTEM.md` | Describe what the agent is responsible for and when it must ask. It is added to pi's default prompt, which already says who the agent is. |
-| An identity other than pi's coding assistant | `SYSTEM.md` | Replaces pi's default prompt. Write it only when the agent should be someone else; an identity in `APPEND_SYSTEM.md` gives the model two. |
+| Ongoing goal, standing instructions, approval policy | `SYSTEM.md` | Describe what the agent is responsible for and when it must ask. It is the agent's system prompt, read for every message. |
 | Project facts and conventions | The project's own files, its `AGENTS.md` among them, with the project declared as [content](configuration.md#content) | The agent reads them when it works in the project; nothing of the project is added to its prompt. To have it read the project's `AGENTS.md` before it changes anything, say so in the entry's `description`. |
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
-| Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
-| Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. |
-| Clock triggers and follow-ups | `schedules/` and the `wake` tool (mounted on every serve) | State the work and its recipient. A timer triggers a turn; it does not deliver the reply. |
+| Deterministic operations and external-system access | `src/tools/<name>.ts` | Expose a small typed capability with validated input, useful results, and visible failures. |
+| Event ingress and conversational replies | `src/channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. |
+| Clock triggers and follow-ups | `src/schedules/` and the `wake` tool (mounted on every serve) | State the work and its recipient. A timer triggers a turn; it does not deliver the reply. |
 | Model, serving, and deployment choices | `fastagent.config.ts` | Keep configuration declarative. Use [supported keys](configuration.md#config-file). |
 | Credentials and machine state | `.secrets/`, `.state/`, or their configured roots | Let FastAgent manage auth, journals, channel state, and scheduling records. Preserve them according to the host. |
 | Business notes and decisions | Existing working files or an explicitly chosen durable store | Record sources, approval decisions, outcomes, and pending work. A session journal is not a business database. |
@@ -53,8 +52,8 @@ the product actually requires predetermined ordering, transactions, or other det
 Enforce authorization, destination restrictions, spending limits, and approval requirements in the
 appropriate application, tool, or external-system boundary. **A prompt or typed tool is not a sandbox.**
 Directory agents have coding tools, including a shell; authored code can access the process's files,
-network, and credentials. Constrain the whole process when isolation is required. The default
-`POST /invoke` route has no authentication; protect it before exposing it beyond a trusted environment.
+network, and credentials. Constrain the whole process when isolation is required. A served agent is reached only
+through its channels, and each channel verifies the platform calling it.
 
 ## 2. Create the agent beside what it works on
 
@@ -84,14 +83,17 @@ cd my-agent
 
 ```text
 my-agent/                         # the agent directory; run FastAgent commands here
-├── APPEND_SYSTEM.md
+├── SYSTEM.md
 ├── skills/writing-great-skills/
-├── extensions/web-access.ts      # web search + page fetching (@fastagent-sh/pi-web-access)
 ├── fastagent.config.ts
-├── package.json                  # type: module; FastAgent is a local dependency
+├── package.json                  # type: module; FastAgent and the packages its code is written against
 ├── .secrets/.env.example
 └── .gitignore
 ```
+
+Code goes in `src/`: `src/tools/`, `src/extensions/`, `src/channels/` and `src/schedules/`, one module per file, each
+default-exporting what its directory holds. FastAgent generates `.fastagent/registry.ts` from them each time the agent
+opens.
 
 `init` installs dependencies in the agent directory. If installation fails, run `npm install` there before
 continuing. `--no-install` defers that install.
@@ -101,9 +103,8 @@ A global CLI installation alone does not make package imports available to autho
 
 ## 3. Use TypeScript for new authored code
 
-Prefer **TypeScript for tools, channels, schedules, library helpers, and tests**. Runtime discovery of
-*your* code also supports JavaScript (`.js` and `.mjs`); existing JavaScript remains valid. The config
-file is always `fastagent.config.ts`.
+Prefer **TypeScript for tools, channels, schedules, library helpers, and tests**. A module in `src/` may also be
+JavaScript (`.js` and `.mjs`). The config file is always `fastagent.config.ts`.
 Keep the generated Dockerfile, YAML/JSON host configuration, and generated deployment JavaScript in their
 generated formats. Those artifacts do not set the language for business code.
 
@@ -125,7 +126,7 @@ Install compatible development dependencies and add scripts to the **agent packa
 ```bash
 npm install --save-dev typescript@^7.0.2 @types/node@22
 npm pkg set 'scripts.typecheck=tsc --noEmit' 'scripts.test=node --test test/*.test.ts'
-mkdir -p lib test skills/review-batches
+mkdir -p lib test skills/review-batches src/tools src/schedules
 ```
 
 For an existing package, merge with its current scripts and TypeScript configuration instead of
@@ -147,7 +148,7 @@ Extend `include` when adding other source directories.
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["tools/**/*.ts", "channels/**/*.ts", "lib/**/*.ts", "test/**/*.ts", "fastagent.config.ts"]
+  "include": ["src/**/*.ts", "lib/**/*.ts", "test/**/*.ts", "fastagent.config.ts"]
 }
 ```
 
@@ -159,7 +160,7 @@ checking; successfully executing a `.ts` file proves neither type safety nor inp
 This offline example is an agent that prepares review batches. Adapt the freshly scaffolded instructions;
 preserve an existing agent's responsibilities when applying the example elsewhere.
 
-**`APPEND_SYSTEM.md`**
+**`SYSTEM.md`**
 
 ```markdown
 # Review assistant
@@ -191,32 +192,32 @@ export function batchCount(items: number, size: number): number {
 }
 ```
 
-**`tools/plan-batches.ts`**
+**`src/tools/plan-batches.ts`**
 
 ```ts
-import { defineTool, z } from "@fastagent-sh/fastagent";
-import { batchCount } from "../lib/batches.ts";
+import { Type } from "@earendil-works/pi-ai";
+import { defineTool } from "@earendil-works/pi-durable";
+import { batchCount } from "../../lib/batches.ts";
 
 export default defineTool({
+  name: "plan-batches",
   description: "Count review batches for a non-negative item count and a positive batch size.",
-  input: z.object({
-    items: z.number().int().nonnegative(),
-    size: z.number().int().positive(),
+  parameters: Type.Object({
+    items: Type.Integer({ minimum: 0 }),
+    size: Type.Integer({ minimum: 1 }),
   }),
-  execute({ items, size }) {
-    return { batches: batchCount(items, size) };
-  },
+  execute: async ({ items, size }) => ({
+    output: [{ type: "text", text: JSON.stringify({ batches: batchCount(items, size) }) }],
+  }),
 });
 ```
 
-The tool takes its file's name, `plan-batches`, because it declares none and its module sits directly in `tools/`
-and exports only it; a tool below a folder, or one of several in a module, names itself with
-`defineTool({ name })`. `defineTool` infers `items` and `size` from the Zod schema and
-validates incoming arguments before calling the body. TypeScript annotations alone do not validate
-external JSON. Import `z` from FastAgent so schema construction and conversion use the same Zod copy.
-A module below `tools/` that exports no tool is a helper, so helpers may sit beside the tools that use them. Add IO
-and authorization checks
-at the boundary that performs the real operation; keep imports free of network calls and side effects.
+A tool is pi-durable's `defineTool`: `parameters` is a TypeBox schema, from which `items` and `size` are typed, and the
+harness validates a call's arguments against it before calling `execute`. TypeScript annotations alone do not
+validate external JSON. A tool that reads a secret declares it: wrap it in `needs(["NAME"], (secrets) => defineTool(…))`
+from `@fastagent-sh/fastagent`, and the agent refuses to start while the value is missing. A module directly in
+`src/tools/` is a tool; a helper lives outside `src/`, as `lib/` does here. Add IO and authorization checks at the
+boundary that performs the real operation; keep imports free of network calls and side effects.
 
 **`test/batches.test.ts`**
 
@@ -224,14 +225,13 @@ at the boundary that performs the real operation; keep imports free of network c
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { batchCount } from "../lib/batches.ts";
-import planBatches from "../tools/plan-batches.ts";
+import planBatches from "../src/tools/plan-batches.ts";
 
-test("batch planning calculates counts and validates external arguments", async () => {
+test("batch planning calculates counts, and the tool answers with them", async () => {
   assert.equal(batchCount(5, 2), 3);
-  const result = await planBatches.execute("test", { items: 5, size: 2 });
-  assert.deepEqual(result.details, { batches: 3 });
-  const invalid = await planBatches.execute("invalid", { items: 5, size: 0 });
-  assert.match(JSON.stringify(invalid.content), /Invalid arguments:/);
+  // This tool uses neither the harness's api nor its context.
+  const result = await planBatches.execute({ items: 5, size: 2 }, {} as never, {} as never);
+  assert.deepEqual(result.output, [{ type: "text", text: '{"batches":3}' }]);
 });
 ```
 
@@ -240,19 +240,14 @@ Run from the agent directory, without a model or credentials:
 ```bash
 npm run typecheck
 npm test
-fastagent tool plan-batches '{"items":5,"size":2}'
 fastagent info --json
 ```
 
-The tool prints `{"batches":3}`. Inspection should show `APPEND_SYSTEM.md` as the prompt, the `review-batches` skill, and
-`plan-batches` tool, with no load failures. Check diagnostics as well as the exit code: `info` loads what it can and
-reports the rest, so a broken file shows up there rather than as a non-zero exit — `dev` / `start` is
-what refuses to run on one.
+Inspection should show the `plan-batches` tool and the `/skill:review-batches` command. A module that does not
+load, or is not what its directory holds, is reported there; `dev` / `start` refuse to run on one.
 
 To confirm static checking is active, temporarily change `batchCount(5, 2)` in the test to
 `batchCount("5", 2)`. `npm run typecheck` must fail; restore the valid call afterward.
-Validation failures return tool error content, so a direct tool test checks that content rather than
-expecting a thrown exception.
 
 To reuse an existing Agent Skill, run `fastagent add skill <source>` with a git source such as
 `owner/repo/path`, a local path, or a name from your global skill directories. Review its contents and
@@ -344,24 +339,24 @@ track it upstream and state the limitation instead of silently building a replac
 
 ## 7. Add clock triggers deliberately
 
-After adding Telegram and selecting an approved recipient, this is a schedule file: the cron in the frontmatter,
-the prompt under it. Name the recipient in the prompt (a chat id is not a secret); no destination is inferred from
-a previous chat.
+After adding Telegram and selecting an approved recipient, this is a schedule: its cron, and the prompt each fire
+sends. Name the recipient in the prompt (a chat id is not a secret); no destination is inferred from a previous chat.
 
-**`schedules/daily-review.md`**
+**`src/schedules/daily-review.ts`**
 
-```md
----
-cron: "0 9 * * *"
-tz: America/New_York
----
+```ts
+import { defineSchedule } from "@fastagent-sh/fastagent";
 
-Review pending proposals and use telegram-send to send a short digest to Telegram chat 123456789.
-Leave unapproved actions pending.
+export default defineSchedule({
+  cron: "0 9 * * *",
+  tz: "America/New_York",
+  prompt:
+    "Review pending proposals and use telegram_send to send a short digest to Telegram chat 123456789. " +
+    "Leave unapproved actions pending.",
+});
 ```
 
-Create `schedules/` only when needed. Each fire continues one conversation, `schedule:<name>`. Inspect from the
-agent directory:
+Each fire continues the schedule's own session, which the first one creates. Inspect from the agent directory:
 
 ```bash
 fastagent schedules list

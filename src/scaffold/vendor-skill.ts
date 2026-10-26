@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
-import { type LoadedDefinition, loadAgentDefinition } from "../harnesses/pi/definition.ts";
+import { readSkills } from "../harnesses/pi-durable/text.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 
 /** Derive the destination skill name from a source ref: the last path segment, sans `#ref`. */
@@ -58,8 +58,6 @@ export interface VendoredSkill {
   dest: string;
   /** The skill ships a `scripts/` dir (executable code) — a trust signal for the caller. */
   hasScripts: boolean;
-  /** Spec diagnostics for THIS skill from the runtime loader (e.g. name ≠ dir). */
-  diagnostics: LoadedDefinition["diagnostics"];
   /** True when an existing skill was overwritten (--update); false for a fresh vendor. */
   overwritten: boolean;
 }
@@ -154,17 +152,16 @@ export async function vendorSkill(
   }
   if (overwritten) await rm(previous, { recursive: true, force: true });
 
-  // Report via the runtime loader, matching THIS skill by EXACT directory (a substring match would prefix-pollute a
-  // sibling `<name>-x` and break on Windows path separators).
-  const def = await loadAgentDefinition(agentDir);
+  // Report via the loader the agent reads skills with, matching THIS skill by EXACT directory (a substring match
+  // would prefix-pollute a sibling `<name>-x` and break on Windows path separators). A skill it refuses is said by
+  // that loader, and is missing here.
   const rel = join("skills", name);
-  const skill = def.skills.find((sk) => relative(agentDir, dirname(sk.filePath)) === rel);
+  const skill = readSkills(agentDir).find((sk) => relative(agentDir, dirname(sk.filePath)) === rel);
   return {
     name: skill?.name ?? name,
     description: skill?.description,
     dest: rel,
     hasScripts: existsSync(join(dest, "scripts")),
-    diagnostics: def.diagnostics.filter((d) => d.path !== undefined && relative(agentDir, dirname(d.path)) === rel),
     overwritten,
   };
 }

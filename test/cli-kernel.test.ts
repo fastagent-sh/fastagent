@@ -74,10 +74,9 @@ describe("cli kernel: spec conformance", () => {
       [["dev"], "work product never trigger a restart"],
       [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
       [["init"], "must be new or empty"],
-      [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
+      [["invoke"], "For CI smoke and quick checks"],
       [["start"], "--port > PORT env > fastagent.config.ts http.port > 8787"],
       [["start"], "share one credential across projects"],
-      [["start"], "frozen by git"],
       [["add", "feishu"], "any your tenant withholds are named"],
       [["add", "lark"], "config-route 404"],
       [["add", "skill"], "review with git diff"],
@@ -181,8 +180,8 @@ describe("cli kernel: help", () => {
   });
 
   it("`help <cmd>` is equivalent to `<cmd> --help`", async () => {
-    const direct = await parse(["tool", "--help"]);
-    const viaHelp = await parse(["help", "tool"]);
+    const direct = await parse(["invoke", "--help"]);
+    const viaHelp = await parse(["help", "invoke"]);
     expect(viaHelp.code).toBe(0);
     // help subcommand writes to stdout too; same body
     expect(viaHelp.out).toBe(direct.out);
@@ -197,7 +196,7 @@ describe("cli kernel: the top-level surface", () => {
     expect(r.out).not.toMatch(/Author|Verify|Serve & ship|Operate:/);
     // …one flat section, in the original synopsis order.
     expect(r.out).toMatch(/^Commands:$/m);
-    const order = ["init", "models", "info", "tool", "invoke", "schedules", "dev", "chat", "start"];
+    const order = ["init", "models", "info", "content", "env", "invoke", "schedules", "dev", "start"];
     const at = (name: string) => r.out.search(new RegExp(`^  ${name}`, "m"));
     for (let i = 1; i < order.length; i++) {
       expect(at(order[i - 1] as string), `${order[i - 1]} before ${order[i]}`).toBeLessThan(at(order[i] as string));
@@ -252,7 +251,6 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     const cases = [
       ["invoke", ""],
       ["content", "add", ""],
-      ["tool", ""],
       ["content", "remove", ""],
       // Each value of a variadic argument.
       ["env", "add", "gh", ""],
@@ -311,10 +309,10 @@ describe("cli end to end: the thin entry", () => {
     expect(stderr).toMatch(/nothing scheduled/);
   });
 
-  it("tool with no args is a usage error from the kernel: exit 2", async () => {
-    const { code, stderr } = await run(["tool"]);
+  it("invoke with no message is a usage error from the kernel: exit 2", async () => {
+    const { code, stderr } = await run(["invoke"]);
     expect(code).toBe(2);
-    expect(stderr).toMatch(/missing required argument 'name'/);
+    expect(stderr).toMatch(/missing required argument 'message'/);
   });
 
   it("exit codes follow responsibility: bad --port flag → 2 (usage), bad PORT env → 1 (config)", async () => {
@@ -329,16 +327,5 @@ describe("cli end to end: the thin entry", () => {
     });
     expect(env.code).toBe(1);
     expect(env.stderr).toMatch(/invalid PORT env/);
-  });
-
-  it("tool with malformed JSON args exits 2 (usage class); an unknown tool stays a runtime miss (1)", async () => {
-    const dir = await agentWorkspace("fa-kernel-tool-");
-    // "read" is a pi default tool — present in any agent, so the failure is the JSON, not the name.
-    const bad = await run(["tool", "read", "{not json", dir]);
-    expect(bad.code).toBe(2);
-    expect(bad.stderr).toMatch(/invalid JSON args/);
-    const missing = await run(["tool", "nope", "{}", dir]);
-    expect(missing.code).toBe(1);
-    expect(missing.stderr).toMatch(/unknown tool "nope"/);
   });
 });

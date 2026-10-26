@@ -56,7 +56,8 @@ export interface SlackEventEnvelope {
 }
 
 export interface SlackRoute {
-  session?: string;
+  /** Which conversation it belongs to, the one its session is kept by (default: the thread). */
+  conversation?: string;
   channelId?: string;
   threadTs?: string | null;
   text?: string;

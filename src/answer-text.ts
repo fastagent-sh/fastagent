@@ -1,9 +1,9 @@
 /**
  * The text of the agent's messages in one message's stream, as a renderer shows it: the live deltas, and what an
- * `assistant_message` entry says that no delta did. Deltas are live only (SPEC v1 §6), so work that ended before its
+ * `assistant_message` entry says that no delta did. Deltas are live only (agent-api.md §6), so work that ended before its
  * stream subscribed, or that the stream fell behind on, has its text in the entry alone.
  */
-import type { SessionEvent } from "./protocol.ts";
+import type { SessionEvent } from "./agent-api.ts";
 
 /** Feed it a message's stream; it answers the text each event adds. */
 export function answerText(): (event: SessionEvent) => string {

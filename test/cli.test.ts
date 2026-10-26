@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { agentWorkspace, run } from "./cli-run.ts";
 
 describe("cli: process contracts", () => {
-  it("a command ENTERS the agent's environment: a proxy declared only in .env carries a tool's fetch", async () => {
+  it("a command ENTERS the agent's environment: a proxy declared only in .env carries the definition's fetch", async () => {
     // The WIRING half of #474 (the policy itself is test/proxy.test.ts): a real CLI process, a proxy that exists
-    // nowhere but the agent's `.env`, and an authored tool that fetches. `enterAgentEnv` is what makes the two
+    // nowhere but the agent's `.env`, and authored code that fetches as it loads. `enterAgentEnv` is what makes the two
     // steps inseparable — the bug was commands that did only the first. The reserved .invalid host resolves
     // nowhere, so a direct connection cannot pass.
     const requests: string[] = [];
@@ -28,18 +28,17 @@ describe("cli: process contracts", () => {
       const proxyUrl = `http://127.0.0.1:${address.port}`;
       const dir = await agentWorkspace("fa-tool-proxy-", {
         ".secrets/.env": `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`,
-        "tools/probe.mjs":
-          `export default { description: "Probe", parameters: { type: "object" }, async execute() {\n` +
-          `  const res = await fetch("http://tool-proxy.invalid/probe");\n` +
-          `  return await res.text();\n` +
-          `} };\n`,
+        "fastagent.config.ts":
+          `const res = await fetch("http://tool-proxy.invalid/probe");\n` +
+          `if ((await res.text()) !== "proxied") throw new Error("not proxied");\n` +
+          `export default {};\n`,
       });
       const env = { ...process.env };
       for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) {
         delete env[key]; // the proxy must come from the agent's .env, read inside the command
       }
 
-      const { code, stderr } = await run(["tool", "probe", "{}", dir], undefined, env);
+      const { code, stderr } = await run(["info", dir], undefined, env);
       expect(code, stderr).toBe(0);
       expect(requests).toContain("http://tool-proxy.invalid/probe");
     } finally {
@@ -86,18 +85,16 @@ describe("cli: process contracts", () => {
     expect(stdout).toBe(""); // a failure never pollutes stdout
   });
 
-  it("start fails when a declared channel cannot load instead of exposing the default /invoke route", async () => {
+  it("start fails when a declared channel cannot mount, instead of serving without it", async () => {
     const dir = await agentWorkspace("fa-cli-channel-fail-", {
       "fastagent.config.ts": `export default { model: "openai/gpt-5.5" };\n`,
-      "channels/telegram.mjs": `export default () => { throw new Error("TELEGRAM_SECRET_TOKEN required"); };\n`,
+      "src/channels/telegram.mjs": `export default () => { throw new Error("TELEGRAM_SECRET_TOKEN required"); };\n`,
     });
 
     const { code, stderr } = await run(["start", dir, "--port", "0"]);
     expect(code).toBe(1);
-    expect(stderr).toMatch(/telegram\.mjs failed to load/); // the warning names the file…
-    expect(stderr).toMatch(/failed to load: channels\/telegram\.mjs \(TELEGRAM_SECRET_TOKEN required\)/); // …and so does the refusal
-    expect(stderr).toMatch(/\*\.disabled/);
-    expect(stderr).not.toMatch(/routes:.*\/invoke/);
+    expect(stderr).toMatch(/TELEGRAM_SECRET_TOKEN required/);
+    expect(stderr).not.toMatch(/routes:/);
   });
 
   it("a directory that is not an agent fails as a one-line startup error, not a raw stack", async () => {

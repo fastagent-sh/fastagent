@@ -4,7 +4,7 @@
  * Split from parse.ts because this half touches the Bot API + disk; split from telegram.ts so the
  * factory keeps only wiring and the per-turn lifecycle.
  */
-import type { Agent, ImageRef, InvokeEvent } from "../../protocol.ts";
+import type { Agent, Attachment as ImageRef } from "../../agent-api.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import {
@@ -13,6 +13,8 @@ import {
   loadBackground,
   missingAttachmentsNote,
   turnStream,
+  type TurnEvent,
+  promptContent,
 } from "../kit/invoke-turn-kit.ts";
 import type { BufferedRef } from "./context-buffer.ts";
 import { type DownloadedFile, resolveFiles, resolveImages } from "./telegram-api.ts";
@@ -94,23 +96,19 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
  * failure surfaces as a `rejected` event, never a silent drop). `key` is the turn's: the update it answers.
  */
 export function telegramTurnStream(
-  agent: Pick<Agent, "invoke">,
-  turn: { session: string; key: string; text: string },
+  agent: Agent,
+  turn: { session: () => Promise<string>; key: string; text: string },
   transport: TurnTransport,
   attachments: TurnAttachments,
-): Stream.Stream<InvokeEvent, PortFailure> {
+): Stream.Stream<TurnEvent, PortFailure> {
   return turnStream({
     agent,
     label: "[telegram]",
-    source: { kind: "channel", name: "telegram" },
+    session: turn.session,
     resolve: () => resolveTurnAttachments(transport, attachments),
     turn: (resolved) => ({
-      sessionId: turn.session,
       idempotencyKey: turn.key,
-      prompt: {
-        text: `${turn.text}${resolved.promptSuffix}${HTML_INSTRUCTION}`,
-        ...(resolved.images ? { images: resolved.images } : {}),
-      },
+      content: promptContent(`${turn.text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, resolved.images),
     }),
     // A Bot API download that failed may simply succeed on the redelivery.
     retryableLoadFailure: () => true,

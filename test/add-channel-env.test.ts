@@ -35,12 +35,14 @@ describe("channel setup guidance", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-slack-scaffold-"));
     await scaffoldChannel(dir, "slack");
     // A companion tool from an earlier package version is replaced on re-add; the channel file is not.
-    await mkdir(join(dir, "tools"));
-    await writeFile(join(dir, "tools", "slack-send.ts"), "// 0.20.0: process.env.SLACK_BOT_TOKEN");
+    await mkdir(join(dir, "src", "tools"));
+    await writeFile(join(dir, "src", "tools", "slack-send.ts"), "// 0.20.0: process.env.SLACK_BOT_TOKEN");
     await scaffoldCompanionTools(dir, "slack");
-    const source = await readFile(join(dir, "channels", "slack.ts"), "utf8");
+    const source = await readFile(join(dir, "src", "channels", "slack.ts"), "utf8");
     expect(source).toContain('rendering: "native"');
-    expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("slackTransport(ctx.cwd)");
+    expect(await readFile(join(dir, "src", "tools", "slack-send.ts"), "utf8")).toContain(
+      "slackTransport(SLACK_BOT_TOKEN)",
+    );
   });
 
   it("a dev WebSocket app needs only App ID/Secret and leaves production on its own app", async () => {
@@ -55,7 +57,7 @@ describe("channel setup guidance", () => {
     // One channel file, whichever way it receives: the setting picks the factory when the file is imported.
     const dir = await mkdtemp(join(tmpdir(), "fa-feishu-scaffold-"));
     await scaffoldChannel(dir, "feishu");
-    const source = await readFile(join(dir, "channels", "feishu.ts"), "utf8");
+    const source = await readFile(join(dir, "src", "channels", "feishu.ts"), "utf8");
     expect(source).toContain('feishuIngress() === "webhook"');
     expect(source).toContain("feishuWebSocketChannel(");
     expect(source).toContain("feishuChannel(");

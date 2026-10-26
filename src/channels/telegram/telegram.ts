@@ -30,8 +30,10 @@ import {
 import { registerTelegramTransport } from "./shared-api.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
-import { ensureStateHome } from "../kit/state.ts";
+import { ensureStateHome } from "../../state-file.ts";
+import { conversationSessions } from "../../conversation-sessions.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
+import { createTaskTracker } from "../kit/tasks.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -126,7 +128,7 @@ export function telegramChannel({
     ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     const buffer = createContextBuffer(join(stateHome, "buffers.json"));
     // The send tool rides this channel's token, and what it sends lands in this buffer (shared-api.ts says why).
-    registerTelegramTransport(stateRoot, {
+    registerTelegramTransport({
       apiBaseUrl,
       botToken,
       record: (placeKey, entry) => buffer.push(placeKey, entry),
@@ -134,6 +136,8 @@ export function telegramChannel({
     // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
     // replay on the next start.
     const store = createTurnStore(join(stateHome, "turns.json"));
+    const sessions = conversationSessions(join(stateRoot, "channels", "telegram", "sessions.json"));
+    const sideTasks = createTaskTracker("[telegram]");
     const targetOf = (r: PendingTurn): Target => ({ chatId: r.chatId, threadId: r.threadId, replyTo: r.replyTo });
 
     // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
@@ -145,7 +149,7 @@ export function telegramChannel({
           ? editMessageText(apiBaseUrl, botToken, targetOf(r), r.previewId, body, { html: false })
           : sendMessage(apiBaseUrl, botToken, targetOf(r), body, { html: false }).then(() => {});
       void sent.catch((e) =>
-        log.warn(`[telegram] could not notify a dropped turn (session=${r.session}): ${String(e)}`),
+        log.warn(`[telegram] could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
       );
     };
 
@@ -192,7 +196,11 @@ export function telegramChannel({
         telegramReply(
           telegramTurnStream(
             agent,
-            { session: rec.session, key: rec.id, text: `${discussionBlock(discussion.text)}${rec.baseText}` },
+            {
+              session: () => sessions.of(rec.conversation, agent),
+              key: rec.id,
+              text: `${discussionBlock(discussion.text)}${rec.baseText}`,
+            },
             { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: attachmentsDir(stateHome) },
             {
               primary: { imageFileIds: rec.imageFileIds, fileIds: rec.fileIds },
@@ -256,18 +264,21 @@ export function telegramChannel({
         }
         return new Response(null, { status: 200 });
       }
-      // Branded with the channel kind: session ids share one namespace across every channel of a deployment.
-      const session = r.session ?? `telegram:${placeKey}`;
+      const conversation = r.conversation ?? placeKey;
       const chatId = r.chatId ?? m.chat.id;
       // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no reply-quote.
       const threadId = r.threadId ?? m.message_thread_id;
       const sameTarget = String(chatId) === String(m.chat.id) && threadId === m.message_thread_id;
       const replyTo = m.chat.type !== "private" && sameTarget ? m.message_id : undefined;
       // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the run it stops.
+      // `abort` waits until what it stopped has ended, so the update is acknowledged first.
       if (telegramStop(update, { botUsername: mentionName, botId })) {
-        const feedback = await dispatchStop(agent, session, "[telegram]");
-        await sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }).catch((e) =>
-          log.warn(`[telegram] stop feedback failed: ${String(e)}`),
+        sideTasks.track(
+          dispatchStop(agent, sessions.get(conversation), "[telegram]")
+            .then((feedback) =>
+              sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }),
+            )
+            .catch((e) => log.warn(`[telegram] stop feedback failed: ${String(e)}`)),
         );
         return new Response(null, { status: 200 });
       }
@@ -279,7 +290,7 @@ export function telegramChannel({
         runner.submit(
           {
             id: `${update.update_id}`,
-            session,
+            conversation,
             placeKey,
             baseText,
             chatId,

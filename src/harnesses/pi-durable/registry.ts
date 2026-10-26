@@ -4,7 +4,8 @@
  * follow it. Each module default-exports one thing; a file directly in the directory is a module, and anything else a
  * module imports (a helper) lives outside these directories. Generated from the files, never edited.
  */
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
+import { writeFileAtomic } from "../../atomic-write.ts";
 import { join } from "node:path";
 
 export const REGISTRY_KINDS = ["tools", "extensions", "channels", "schedules"] as const;
@@ -64,7 +65,8 @@ export async function registrySource(dir: string): Promise<string> {
 /** Write `.fastagent/registry.ts` for the agent in `dir`, and return its path. */
 export async function generateRegistry(dir: string): Promise<string> {
   const path = join(dir, GENERATED_DIR, REGISTRY_FILE);
-  await mkdir(join(dir, GENERATED_DIR), { recursive: true });
-  await writeFile(path, await registrySource(dir));
+  // Every command that reads the definition writes it, `dev`'s worker importing it meanwhile: a reader must see a whole
+  // file, and two writers write the same bytes.
+  writeFileAtomic(path, await registrySource(dir), undefined, true);
   return path;
 }

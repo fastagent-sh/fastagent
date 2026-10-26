@@ -1,24 +1,24 @@
 /**
- * WHICH ENV VARS THIS AGENT NEEDS, in ONE shape, wherever it was declared: `defineTool` and `defineChannel`, each next
- * to the code that reads the value, and the `variables` of `context.json`, for the commands the agent runs.
+ * WHICH ENV VARS THIS AGENT NEEDS, in ONE shape, wherever it was declared: `needs(...)`, next to the code that reads
+ * the value, and the `variables` of `context.json`, for the commands the agent runs.
  *
  * One list, two consequences:
- *  - a serving path ASSERTS the values before it runs, so a missing one is a startup failure naming the file, not a
- *    401 three days later;
+ *  - opening the agent ASSERTS the values first, so a missing one is a startup failure naming the file, not a 401
+ *    three days later;
  *  - `deploy --run` refuses a value file that does not supply one.
  *
- * Agent code does not read `process.env`: each authoring surface hands back exactly the values it declared, so the
- * declaration cannot drift from the read, and a typo is a type error. A command the agent runs (`gh`) reads its own
- * variable from the process env, so a `context.json` declaration hands nothing back. The values travel through the
- * process env, and `deploy` carries the whole value file (deploy/secrets.ts) — a declaration makes a value REQUIRED,
- * it does not decide what travels.
+ * Agent code does not read `process.env`: `needs` hands back exactly the values it declared, so the declaration cannot
+ * drift from the read, and a typo is a type error. A command the agent runs (`gh`) reads its own variable from the
+ * process env, so a `context.json` declaration hands nothing back. The values travel through the process env, and
+ * `deploy` carries the whole value file (deploy/secrets.ts) — a declaration makes a value REQUIRED, it does not decide
+ * what travels.
  */
 
 /** One env var some part of the definition declared, and where that declaration is. */
 export interface DeclaredSecret {
   /** The env-var name. */
   name: string;
-  /** Where it was declared: "tools/x-post.ts", "channels/slack.ts", "config.tools", "context.json" — printed in
+  /** Where it was declared: "src/tools/x-post.ts", "fastagent.config.ts providers[0]", "context.json" — printed in
    *  runbooks and failures, so it must name a place the author can open. */
   source: string;
   /** What it is for, when the declaration says (`context.json`'s variables do): printed beside it in runbooks. */
@@ -41,64 +41,10 @@ export function isEnvName(name: string): boolean {
   return ENV_NAME.test(name);
 }
 
-/** Why an authored `secrets:` is unusable, or undefined when it is fine. A `.js` tool or a wrong type
- *  never met TypeScript, and a malformed declaration must fail as a load error rather than be
- *  silently dropped — the whole value of the field is that its absence is meaningful. */
-function secretNamesProblem(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) return "secrets must be an array of env-var names";
-  for (const name of value) {
-    if (typeof name !== "string" || !ENV_NAME.test(name)) {
-      return `secrets must be an array of env-var names — ${JSON.stringify(name)} is not one`;
-    }
-  }
-  return undefined;
-}
-
-/**
- * THE READ: what a code-input module declared, attributed to its file — the one implementation for
- * `tools/` and `channels/`.
- *
- * One function, so every code input gets the same shape check: a `secrets: "FOO"` is that file's load
- * failure, wherever it is. What a caller DOES with a bad declaration differs (push a failure and skip, or throw
- * inside its own per-file try), so the verdict travels back as data rather than as an exception.
- */
-export function readSecretDeclaration(
-  moduleDefault: unknown,
-  label: string,
-): { secrets: DeclaredSecret[]; error?: undefined } | { secrets?: undefined; error: string } {
-  const declared = (moduleDefault as { secrets?: unknown } | undefined)?.secrets;
-  const problem = secretNamesProblem(declared);
-  if (problem !== undefined) return { error: `${label}: ${problem}` };
-  return { secrets: ((declared as readonly string[] | undefined) ?? []).map((name) => ({ name, source: label })) };
-}
-
-/** Every owner's declarations as one list — what a path that runs ALL of them (a serve, a deploy)
- *  asserts or carries. A path that runs ONE reads that owner's entry instead. */
-export function allSecrets(byOwner: ReadonlyMap<string, readonly DeclaredSecret[]>): DeclaredSecret[] {
-  return [...byOwner.values()].flat();
-}
-
 /** Declared names as a stable list, first declaration winning — the form a carrier iterates. */
 export function dedupeSecrets(declared: readonly DeclaredSecret[]): DeclaredSecret[] {
   const seen = new Set<string>();
   return declared.filter((s) => !seen.has(s.name) && seen.add(s.name));
-}
-
-/**
- * The values for a declared list, as the authoring surfaces hand them to author code. A name with no
- * value reads as `""` rather than throwing: the deploy pre-flight IMPORTS these modules on a machine
- * that legitimately holds no secrets, and a throwing accessor would make the channel whose secrets we
- * came to collect unloadable. Presence is guaranteed by the gate (src/secrets-gate.ts) on the paths
- * that run the code, which is the one place that can tell "not set" from "not needed here".
- */
-export function secretValues<const S extends readonly string[]>(
-  names: S | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): Record<S[number], string> {
-  const values = {} as Record<S[number], string>;
-  for (const name of names ?? []) values[name as S[number]] = env[name] ?? "";
-  return values;
 }
 
 /** Required names with no value in `env` — empty string counts as missing (an unset `.env` line). A name some
@@ -110,7 +56,7 @@ export function missingSecrets(
   return dedupeSecrets(declared.filter((s) => s.optional !== true)).filter((s) => !env[s.name]);
 }
 
-/** "X_API_KEY, X_API_SECRET (tools/x-post.ts); SLACK_TOKEN (channels/slack.ts)" — grouped by the
+/** "X_API_KEY, X_API_SECRET (src/tools/x-post.ts); SLACK_TOKEN (src/channels/slack.ts)" — grouped by the
  *  file to open, since that is the unit the author fixes. */
 export function describeSecrets(declared: readonly DeclaredSecret[]): string {
   const bySource = new Map<string, string[]>();

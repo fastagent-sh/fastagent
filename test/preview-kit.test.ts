@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { InvokeEvent } from "../src/protocol.ts";
+import type { TurnEvent as InvokeEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { ev } from "./scripted-run.ts";
 import {
   applyTurnEvent,

@@ -2,20 +2,25 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
+import type { Needs } from "../src/harnesses/pi-durable/define.ts";
 
 // The scaffolded send tool is real shipped code — its mode switch is the delivery path for
 // scheduled/woken turns, so the branches get real executions here. The template stays DATA to tsc
 // (excluded from the program — it imports the published "@fastagent-sh/fastagent", unresolvable in-repo), so
 // it is loaded via a non-literal dynamic import; vitest's alias resolves that name to today's source.
 
-type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
+/** What the tool said, read back as the details these assertions were written against. */
 let execute: (params: unknown) => Promise<{ details: unknown }>;
 let description: string;
 beforeAll(async () => {
   const templatePath = new URL("../src/channels/telegram/scaffold/telegram-send.ts", import.meta.url).pathname;
-  const mod = (await import(templatePath)) as { default: unknown };
-  const tool = mod.default as { execute: RawExecute; description: string };
-  execute = (params) => tool.execute("call-1", params);
+  const mod = (await import(templatePath)) as { default: Needs<ToolRegistration> };
+  const tool = mod.default.build({ TELEGRAM_BOT_TOKEN: "tok" });
+  execute = async (params) => {
+    const result = await tool.execute(params as never, {} as never, {} as never);
+    return { details: (result.output?.[0] as { text: string } | undefined)?.text };
+  };
   description = tool.description;
 });
 
@@ -48,7 +53,6 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
   });
 
   it("text → sendMessage with the text in the form", async () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
     const { calls } = stubBotApi();
     const r = await execute({ chatId: 42, text: "digest ready" });
     expect(calls[0]?.url).toContain("/bottok/sendMessage");
@@ -60,7 +64,6 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
   });
 
   it("path → sendDocument with the file attached (caption rides along)", async () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
     const { calls } = stubBotApi();
     const dir = await mkdtemp(join(tmpdir(), "fa-send-"));
     await writeFile(join(dir, "report.txt"), "hi");
@@ -72,7 +75,6 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
   });
 
   it("text AND path — or neither — is rejected before any network call", async () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
     const { calls } = stubBotApi();
     await expect(execute({ chatId: 1, text: "x", path: "/tmp/y" })).rejects.toThrow(/exactly one/);
     await expect(execute({ chatId: 1 })).rejects.toThrow(/exactly one/);
@@ -80,7 +82,6 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
   });
 
   it("file-only params alongside text are a corrective error, not a silent drop", async () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
     const { calls } = stubBotApi();
     await expect(execute({ chatId: 1, text: "x", caption: "lost?" })).rejects.toThrow(/file-mode only/);
     await expect(execute({ chatId: 1, text: "x", asPhoto: true })).rejects.toThrow(/file-mode only/);
@@ -88,7 +89,6 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
   });
 
   it("long text is split by the TOOL (newlines first, then a hard cut) — counting chars is not the model's job", async () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
     const { calls } = stubBotApi();
     const line = `${"a".repeat(999)}\n`; // 1000 chars per line → 5000 chars total, newline-splittable
     const r = await execute({ chatId: 9, text: line.repeat(5).trimEnd() });
@@ -107,7 +107,6 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
   });
 
   it("a Bot API error surfaces as a named tool error (fail-fast, no silent ok)", async () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
     vi.stubGlobal(
       "fetch",
       async () => new Response(JSON.stringify({ ok: false, description: "message is too long" }), { status: 400 }),

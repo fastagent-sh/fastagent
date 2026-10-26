@@ -1,13 +1,13 @@
 /** The AgentCore serving assembly — the same product as `mountAgentService`, built differently because the host is. */
-import type { Agent } from "../protocol.ts";
+import type { Agent } from "../agent-api.ts";
 import { fromForwarder } from "./agentcore-protocol.ts";
 import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
 import type { Schedule } from "../schedule/schedule.ts";
-import { type AgentService, loadServingSchedules, type MountableAgent, routesFor, startSchedules } from "../service.ts";
+import { type AgentService, type MountableAgent, routesFor, startSchedules } from "../service.ts";
 import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./agentcore.ts";
 import * as Effect from "effect/Effect";
-import { type Scheduler, fireScheduleOnce } from "../schedule/scheduler.ts";
+import { fireScheduleOnce } from "../schedule/scheduler.ts";
 import { nextRun } from "../schedule/cron.ts";
 import { createWakeAlarmSink } from "../schedule/wake-alarm.ts";
 import { setWakeupsSink } from "../schedule/wakeups.ts";
@@ -94,78 +94,38 @@ export function deferAgentcoreService<T>(stages: {
   };
 }
 
-export interface MountAgentcoreServiceOptions {
-  /** Wrap the opened agent before anything binds to it (the CLI's turn trace). */
-  wrapAgent?: (agent: Agent) => Agent;
-}
+export async function mountAgentcoreService(opened: MountableAgent): Promise<AgentService> {
+  const { agent, agentDir, stateRoot, schedules } = opened;
 
-export async function mountAgentcoreService(
-  opened: MountableAgent,
-  options: MountAgentcoreServiceOptions = {},
-): Promise<AgentService> {
-  const { agentDir, stateRoot } = opened;
-  const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
-
-  // The agent's API is NOT on the public relay. The only public way in is the forwarder's Function URL, which relays
-  // an arbitrary `rawPath` verbatim as a webhook envelope and attaches the ingress secret ITSELF
-  // (deploy/agentcore/forwarder.js), so every anonymous caller arrives as trusted ingress. A channel route survives
-  // that because it checks its platform's signature; the API has no such check. It is reached through `kind: "api"`
-  // envelopes on the IAM-gated `InvokeAgentRuntime` instead, both planes, IAM being the gateway.
+  // The only public way in is the forwarder's Function URL, which relays an arbitrary `rawPath` verbatim as a webhook
+  // envelope and attaches the ingress secret ITSELF (deploy/agentcore/forwarder.js), so every anonymous caller arrives
+  // as trusted ingress. A channel route survives that because it checks its platform's signature.
   //
-  // Every config key that cannot mean anything on this host says so: silence is how an operator concludes a setting
-  // took effect.
-  if (opened.http?.cors) {
-    log.warn(
-      "[fastagent] agentcore: http.cors has no effect here — no browser reaches this container. Its ingress is the " +
-        "forwarder's Function URL (webhooks) and the Runtime's IAM-gated API, neither of which is a page.",
-    );
-  }
-  for (const key of ["api", "control"] as const) {
-    if (opened.http?.[key] !== undefined) {
-      log.warn(
-        `[fastagent] agentcore: http.${key} has no effect here — both planes are reached through "api" envelopes on ` +
-          "the Runtime's IAM-gated InvokeAgentRuntime, and IAM decides who may call them.",
-      );
-    }
-  }
-
   // Started here, not deferred to an envelope. No resident timers: each instant arrives as its own fire from the
   // recurring schedule the container sets (`armAlarms`), ONE path per instant, so the reply to that delivery says
-  // whether it ran.
-  // The clock still re-reads schedules/ and pumps wake-ups; a redelivered fire claims its slot once.
-  const loaded = await loadServingSchedules(agentDir);
-  let scheduled: Pick<Scheduler, "current" | "stop"> | undefined;
-  const mirror = armAlarms(stateRoot, () => scheduled?.current() ?? loaded.schedules);
-  scheduled = startSchedules(agent, stateRoot, agentDir, loaded, {
-    localClock: false,
-    ...(mirror ? { onChange: mirror } : {}),
-  });
-  const armed = scheduled;
+  // whether it ran. The clock still pumps wake-ups; a redelivered fire claims its slot once.
+  const mirror = armAlarms(stateRoot, () => schedules);
+  const scheduled = startSchedules(agent, stateRoot, schedules, { localClock: false });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
-    const lazy = await routesFor(agentDir, agent, stateRoot, { planes: { api: false, control: false } });
+    const lazy = routesFor(agent, stateRoot, opened.channels);
     if (lazy.longConnections.length > 0) {
       throw new Error(
         `long-connection channel(s) ${lazy.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +
           `AgentCore (scale-to-zero severs resident connections) — use the channel's webhook form`,
       );
     }
-    // CHANNELS ONLY — nothing unverified rides the public relay. `lazy.unverified` (here just `GET /health`) is dropped
-    // for that reason: what arrives through that URL is anonymous.
-    return { routes: lazy.selfVerifying };
+    return { routes: lazy.routes };
   };
 
   const adapterRoutes = mountAgentcore({
     agent,
     stateRoot,
-    schedules: () => armed.current(),
+    schedules: () => schedules,
     ...(mirror ? { onStateReady: mirror } : {}),
     channels: lazyChannels,
   });
-  // SELF-VERIFYING, not unverified: both paths are reached only through `InvokeAgentRuntime`, which AWS gates with
-  // IAM. Putting them in the other table applied our JSON body gate to `POST /invocations` (whose content type is
-  // AWS's to set) and reported two IAM-protected paths as authenticating nobody.
-  const handler = router({ selfVerifying: adapterRoutes });
+  const handler = router(adapterRoutes);
   log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
 
   return {
@@ -176,14 +136,10 @@ export async function mountAgentcoreService(
     agentDir,
     // Channels remain lazy until the adapter receives trusted ingress.
     channels: { routes: [], longConnections: [] },
-    // NONE: the adapter's two paths are IAM-gated and the channels behind them verify their own platform.
-    unverifiedRoutes: [],
-    // Neither plane answers anonymously here: both ride IAM-gated envelopes.
-    planes: { api: false, control: false },
-    schedules: () => armed.current(),
+    schedules,
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
     async close() {
-      armed.stop();
+      scheduled.stop();
     },
   };
 }
@@ -195,7 +151,6 @@ export async function mountAgentcoreService(
 export function mountAgentcore(options: {
   agent: Agent;
   stateRoot: string;
-  /** The schedules armed now (they follow edits to `schedules/`). */
   schedules: () => readonly Schedule[];
   onStateReady?: () => void;
   /** The channel surface, initialized once by the adapter on trusted ingress. */
@@ -207,8 +162,8 @@ export function mountAgentcore(options: {
   // EventBridge's redeliveries, a fire history, the overlap policy).
   const fireSchedule = async (name: string, occurrence: Date): Promise<Response> => {
     const schedule = schedules().find((s) => s.name === name);
-    // EventBridge can fire what an edit has not reached yet (a mirror still in flight, or one that failed): a fire for
-    // a schedule since removed, or for an instant its cron no longer has, is answered as skipped, not run — and not
+    // EventBridge can fire what a release has not reached yet (a mirror still in flight, or one that failed): a fire
+    // for a schedule since removed, or for an instant its cron no longer has, is answered as skipped, not run — and not
     // as an error the forwarder would make EventBridge retry.
     const skip = (why: string) => {
       log.info(`[schedule] ${name}: alarm for ${occurrence.toISOString()} skipped — ${why}`);
@@ -233,7 +188,6 @@ export function mountAgentcore(options: {
   };
   return agentcoreRoutes({
     channels,
-    agent,
     stateRoot,
     isBusy: () => activeWork() > 0,
     // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call.

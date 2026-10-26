@@ -1,14 +1,7 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
-import { INVOKE_EXAMPLE_BODY } from "../channels/protocol-http.ts";
-import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
-import type { Agent } from "../protocol.ts";
+import { answersLocalhost, bindLabel, classifyBind } from "../bind.ts";
 import type { ChannelHandler } from "../channel.ts";
-import {
-  type AgentService,
-  describeAnonymousSurface,
-  type MountableAgent,
-  type MountAgentServiceOptions,
-} from "../service.ts";
+import type { AgentService, MountAgentServiceOptions } from "../service.ts";
 import { serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -24,23 +17,9 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean):
   );
 }
 
-/**
- * Apply the flags that override what the definition said, for THIS run only.
- *
- * ONE place, because `dev` and `start` both do it and a mapping two call sites must each remember is one a third
- * will not.
- *
- * `--no-api` outranks `http.api`: a config value travels into a deployed image, so "do not publish the agent's API
- * on this tunnel" has to be sayable without editing the definition.
- */
-export function withRunOverrides<T extends MountableAgent>(opened: T, run: { api?: boolean }): T {
-  return run.api === false ? { ...opened, http: { ...opened.http, api: false } } : opened;
-}
-
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
-export function cliMountOptions(wrapAgent: (agent: Agent) => Agent): MountAgentServiceOptions {
+export function cliMountOptions(): MountAgentServiceOptions {
   return {
-    wrapAgent,
     closeTimeoutMs: SHUTDOWN_GRACE_MS,
     onChannelClosed: (name, error) =>
       failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
@@ -48,8 +27,8 @@ export function cliMountOptions(wrapAgent: (agent: Agent) => Agent): MountAgentS
 }
 
 /**
- * Bind, report, announce the control plane, open the tunnel, and close in order on a signal — the tail dev's worker
- * and start share once the service is assembled.
+ * Bind, report, warn about reach, open the tunnel, and close in order on a signal — the tail dev's worker and start
+ * share once the service is assembled.
  */
 export function serveService(
   service: AgentService,
@@ -62,7 +41,6 @@ export function serveService(
     ready: service.ready,
     onListening: (p) => {
       reportServing(service, host, p);
-      announceControl(service, { host, tunnel });
       maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
     },
     onShutdown: () => service.close(),
@@ -72,9 +50,7 @@ export function serveService(
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
 export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
-  for (const line of readyAddressLines(host, boundPort, service.unverifiedRoutes.includes("POST /invoke"))) {
-    log.info(line);
-  }
+  log.info(bindLine(host, boundPort));
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
   if (service.channels.longConnections.length > 0) {
     log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);
@@ -84,77 +60,6 @@ export function reportServing(service: AgentService, host: string | undefined, b
 /** The line that names WHERE the serve is — every posture reports it, including AgentCore's own surface. */
 export function bindLine(host: string | undefined, boundPort: number): string {
   return `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`;
-}
-
-/**
- * The startup lines for a serve of OUR surface: the bind report, and the curl the reader copies.
- *
- * `servesInvoke` is `AgentService.unverifiedRoutes`, never a guess from the route table: `http.api: false` leaves no
- * `/invoke` to curl, and a channel may serve that path with a protocol of its own — both would turn this line into
- * a copyable request that fails.
- */
-function readyAddressLines(host: string | undefined, boundPort: number, servesInvoke: boolean): string[] {
-  const dial = `${clientHost(host)}:${boundPort}`;
-  return [
-    bindLine(host, boundPort),
-    ...(servesInvoke
-      ? [
-          `[fastagent] try it: curl -s ${dial}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
-        ]
-      : []),
-  ];
-}
-
-/**
- * Say what this port exposes and how far it reaches.
- *
- * NOTHING fastagent serves is authenticated — authentication belongs to the deployment (a gateway, a private
- * network, AgentCore's IAM, an embedder's middleware). Two of the three warnings fire at a REACH the operator did
- * not get by default: a bind off this machine, and `--tunnel`'s public URL.
- *
- * The cross-origin one is UNCONDITIONAL, including on a loopback `dev`, because the grant is. `*` is the default
- * (`channels/router.ts`), so a page the developer merely visits can drive this port from their browser and read the
- * reply, loopback bind or not. Nobody opts into a default, so the one posture the decision costs is the one that
- * has to hear about it.
- *
- * WHAT IS EXPOSED is read off `AgentService.unverifiedRoutes`, never assumed and never guessed from the route table.
- * The agent's API is on most serves but not all: AgentCore answers the Runtime's `/invocations` behind IAM, and
- * `http.api: false` withholds it. A warning naming an endpoint this process
- * does not serve is how an operator learns to skim past all of them — the same reason `preflightDeploy` takes
- * `publicUrl`.
- */
-export function announceControl(
-  service: Pick<AgentService, "planes" | "corsOrigins">,
-  bind: { host?: string; tunnel: boolean },
-): void {
-  const { planes, corsOrigins } = service;
-  if (planes.api) log.info("[fastagent] agent API on /invoke, /sessions/*, /agent");
-  if (planes.control) log.info("[fastagent] control plane on /control/*");
-  // What an unauthenticated caller of this port can do, worst first.
-  const exposed = describeAnonymousSurface(planes);
-  if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)
-  const what = `${exposed.join(" and ")} ${exposed.length > 1 ? "answer" : "answers"}`;
-  if (corsOrigins === undefined || corsOrigins.includes("*")) {
-    log.warn(
-      `[fastagent] any web page your browser visits can call this serve cross-origin and read the reply: ${what} ` +
-        "with no credential. That is the default (`*`); pin the origins you actually use with http.cors " +
-        "(docs/design/security-boundary.md)",
-    );
-  }
-  const reach = classifyBind(bind.host);
-  if (reach !== "loopback") {
-    log.warn(
-      `[fastagent] the port binds ${reach === "wildcard" ? "all interfaces" : `${bind.host} (off this machine)`}: ` +
-        `${what} UNAUTHENTICATED to anyone who can reach it — bind loopback (--bind 127.0.0.1), ` +
-        "firewall the port, or front it with a gateway (docs/design/security-boundary.md)",
-    );
-  }
-  if (bind.tunnel) {
-    log.warn(
-      `[fastagent] --tunnel publishes this port at a public URL with NO authentication: ${what} to anyone with ` +
-        "that URL — put real auth in front before sharing it (docs/design/security-boundary.md)",
-    );
-  }
 }
 
 /** What the CLI gives a service to stop in, and the hard exit that follows it. */

@@ -26,14 +26,6 @@ const BIND: FlagSpec = {
   flags: "--bind <addr>",
   description: "bind address (dev defaults to 127.0.0.1; start defaults to all interfaces, which containers need)",
 };
-const NO_API: FlagSpec = {
-  flags: "--no-api",
-  description:
-    "do not serve the agent's API (POST /invoke, /sessions, /agent) on this run — it is unauthenticated, runs the " +
-    "agent with its full tools and reads every session, so a serve meant to be reached only through its channels' " +
-    "signed webhooks should withhold it (fastagent.config.ts http.api: false is the same choice, but it travels into " +
-    "a deployed image)",
-};
 const TUNNEL: FlagSpec = {
   flags: "--tunnel",
   description:
@@ -47,8 +39,8 @@ const init: CommandSpec = {
   summary: "create an agent in a directory of its own and install its dependencies",
   description:
     "Create an agent in dir, which must be new or empty, then run npm install there. Content is a " +
-    "self-iterating agent: APPEND_SYSTEM.md (its standing instructions), a writing-great-skills " +
-    "example skill, web access (@fastagent-sh/pi-web-access), config, package.json, .gitignore.",
+    "self-iterating agent: SYSTEM.md (its standing instructions), a writing-great-skills " +
+    "example skill, config, package.json, .gitignore.",
   args: [{ name: "<dir>", description: "the new agent's directory (created when missing)" }],
   flags: [
     {
@@ -80,22 +72,12 @@ const dev: CommandSpec = {
   name: "dev",
   summary: "serve the agent locally, restarting on code edits",
   description:
-    "Assemble the agent (default .) and serve a local HTTP channel. SYSTEM.md/APPEND_SYSTEM.md/" +
-    "skills/prompts " +
-    "are re-read every turn (edits go live next turn); edits to code inputs — tools/, channels/, " +
-    "fastagent.config.ts, package.json, .secrets/.env — restart the worker once its running turns finish. " +
-    "Files the agent writes as " +
-    "work product never trigger a restart.",
+    "Open the agent (default .) and serve its channels, schedules and wake-ups. SYSTEM.md, AGENTS.md, " +
+    "skills/ and prompts/ are re-read for every message (edits go live with the next one); edits to code inputs " +
+    "(src/, fastagent.config.ts, package.json, .secrets/.env) restart the worker once its running messages finish. " +
+    "Files the agent writes as work product never trigger a restart.",
   args: [AGENT_ARG],
-  flags: [
-    PORT,
-    BIND,
-    MODEL,
-    { flags: "--no-watch", description: "serve once, no file-watching" },
-    TUNNEL,
-    NO_API,
-    NO_INPUT,
-  ],
+  flags: [PORT, BIND, MODEL, { flags: "--no-watch", description: "serve once, no file-watching" }, TUNNEL, NO_INPUT],
   examples: [
     { cmd: "fastagent dev" },
     { cmd: "fastagent dev --tunnel", note: "public URL + registered/guided webhooks" },
@@ -107,32 +89,16 @@ const dev: CommandSpec = {
       model: f.model as string | undefined,
       watch: f.watch !== false,
       tunnel: f.tunnel === true,
-      ...(f.api === false ? { api: false as const } : {}),
       input: f.input !== false,
     }),
 };
 
-const chat: CommandSpec = {
-  name: "chat",
-  summary: "open the SAME assembled agent in pi's interactive TUI",
-  description:
-    "Open the SAME assembled agent in pi's interactive TUI (the real harness, not a crude REPL) — to " +
-    "try it locally before serving. Same model/tool/skill/auth resolution as dev; pi handles " +
-    "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file).",
-  args: [AGENT_ARG],
-  flags: [MODEL],
-  examples: [{ cmd: "fastagent chat" }],
-  run: async (args, f) =>
-    (await import("./commands/chat.ts")).runChat(args[0] as string, { model: f.model as string | undefined }),
-};
-
 const info: CommandSpec = {
   name: "info",
-  summary: "print what the directory assembles into, without serving",
+  summary: "print what the directory builds into, without serving",
   description:
-    "Print what the agent (default .) ASSEMBLES into — model, prompt, skills, " +
-    "tools (+ collisions), channels, schedules, sessions, load diagnostics — WITHOUT serving. " +
-    "Read-only (never creates sessions / writes .gitignore); an unset model is reported, not fatal. " +
+    "Print what the agent (default .) builds into — model, tools, extensions, channels, schedules, commands, " +
+    "secrets, content — WITHOUT opening or serving it. An unset model or secret is reported, not fatal. " +
     "Run it first when something looks off.",
   args: [AGENT_ARG],
   flags: [JSON_FLAG, MODEL],
@@ -144,33 +110,14 @@ const info: CommandSpec = {
     }),
 };
 
-const tool: CommandSpec = {
-  name: "tool",
-  summary: "run one tool directly with JSON args — no model, no server, no tokens",
-  description:
-    "Run one tool (from tools/ or config.tools) directly with JSON args — no model, no server, no " +
-    "tokens. Fast feedback while authoring a tool.",
-  args: [
-    { name: "<name>", description: "the tool name as served (see `fastagent info`)" },
-    { name: "[json-args]", description: "the tool's arguments as a JSON object", default: "{}" },
-    AGENT_ARG,
-  ],
-  examples: [{ cmd: `fastagent tool add '{"a":2,"b":3}'` }],
-  notes:
-    "Mounts the same tool set dev/start serve (all coding tools + config.tools + discovered tools/, " +
-    "deduped), so a shadowed or broken tool is surfaced here exactly as it would be when serving.",
-  run: async (args) =>
-    (await import("./commands/tool.ts")).runTool(args[0] as string, args[1] as string, args[2] as string),
-};
-
 const invoke: CommandSpec = {
   name: "invoke",
-  summary: "run ONE turn against the assembled agent and exit",
+  summary: "send ONE message to the agent and exit",
   description:
-    "Run ONE turn against the assembled agent and exit — no server, no TUI. The reply streams to " +
-    "stdout, tool/diagnostics to stderr, a failed turn exits non-zero. The all-agent counterpart of " +
-    "`tool`, for CI smoke and quick checks. Same model resolution as dev.",
-  args: [{ name: "<message>", description: "the user message for the turn" }, AGENT_ARG],
+    "Send ONE message to the agent, in a new conversation, and exit — no server. The answer streams to " +
+    "stdout, tool/diagnostics to stderr, a message that does not complete exits non-zero. For CI smoke and " +
+    "quick checks. Same model resolution as dev.",
+  args: [{ name: "<message>", description: "the message to send" }, AGENT_ARG],
   flags: [MODEL, NO_INPUT],
   examples: [{ cmd: `fastagent invoke "summarize today's inbox"` }],
   run: async (args, f) =>
@@ -184,43 +131,29 @@ const models: CommandSpec = {
   name: "models",
   summary: 'list the available "provider/modelId" model specs',
   description:
-    'List every "provider/modelId" spec the agent in this directory can name (pi\'s built-ins, the model ' +
-    "catalogs and models.json files, its own over the machine's) — use one with --model or as `model` in " +
-    "fastagent.config.ts. Outside an agent, or with -g, list the machine's.",
+    'List every "provider/modelId" spec the agent in this directory can name (pi-ai\'s built-ins, and the ' +
+    "providers its fastagent.config.ts declares) — use one with --model or as `model` in fastagent.config.ts. " +
+    "Outside an agent, or with -g, list pi-ai's built-ins.",
   args: [{ name: "[search]", description: "case-insensitive substring filter" }],
-  flags: [
-    {
-      flags: "--refresh",
-      description: "fetch the model catalog first, into the agent's models-store.json (with -g, the machine's)",
-    },
-    { flags: "-g, --global", description: "the machine's catalog, ~/.fastagent/models-store.json" },
-  ],
+  flags: [{ flags: "-g, --global", description: "pi-ai's built-ins alone" }],
   examples: [
     { cmd: "fastagent models", note: "all specs" },
     { cmd: "fastagent models claude", note: "filter; provider-name matches rank first" },
-    { cmd: "fastagent models --refresh", note: "models newer than the installed pi" },
   ],
-  notes:
-    "A refresh asks pi.dev for the providers the scope's credentials authenticate (the agent's, or with -g the " +
-    "global auth.json and environment) and writes the answer to models-store.json. The agent's is part of the " +
-    "definition: commit it, and it ships with a deploy. The machine's (-g) is read by every agent here and does " +
-    "not ship. Nothing refreshes on its own.",
   run: async (args, f) =>
     (await import("./commands/models.ts")).runModels(args[0] as string | undefined, {
-      refresh: f.refresh === true,
       global: f.global === true,
     }),
 };
 
 const start: CommandSpec = {
   name: "start",
-  summary: "run the agent in production posture (same assembly as dev, no watching)",
+  summary: "run the agent in production posture (opened as dev opens it, no watching)",
   description:
-    "Run the agent (default .) in production posture — the SAME assembly as dev (your directory " +
-    "is the agent), just no file-watching. No build step: start reads the definition directly; " +
-    "model/http come from fastagent.config.ts (frozen by git).",
+    "Run the agent (default .) in production posture — opened as dev opens it (your directory " +
+    "is the agent), just no file-watching. model and http.port come from fastagent.config.ts.",
   args: [AGENT_ARG],
-  flags: [PORT, BIND, MODEL, TUNNEL, NO_API, NO_INPUT],
+  flags: [PORT, BIND, MODEL, TUNNEL, NO_INPUT],
   examples: [
     { cmd: "fastagent start" },
     { cmd: "fastagent start --tunnel", note: "host a bot from your own box, no deploy" },
@@ -229,27 +162,22 @@ const start: CommandSpec = {
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
     "  bind:     --bind > all interfaces (dev: 127.0.0.1)\n" +
-    "  API:      --no-api > fastagent.config.ts http.api > served\n" +
     "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state/production\n" +
-    "            mutable state (sessions, channels, schedules); use a mounted\n" +
-    "            volume so a redeploy never wipes it\n" +
+    "            the agent's storage (agent.sqlite), channels, schedules; use a\n" +
+    "            mounted volume so a redeploy never wipes it\n" +
     "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production\n" +
     "            .env + auth.json\n" +
     "  content:  <agent dir>/content/<name> — a clone of github content; a\n" +
     "            deployment links content/ to its volume\n" +
-    "  sessions: <state>/sessions — no separate knob; move the state root\n" +
     "  auth:     FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
     "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +
-    "            share one credential across projects)\n" +
-    "  endpoints: FASTAGENT_MODELS_PATH > ~/.fastagent/models.json, under the agent's\n" +
-    "            own models.json (the machine's; it does not ship with a deploy)",
+    "            share one credential across projects)",
   run: async (args, f) =>
     (await import("./commands/start.ts")).runStart(args[0] as string, {
       port: f.port as string | undefined,
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
       tunnel: f.tunnel === true,
-      ...(f.api === false ? { api: false as const } : {}),
       input: f.input !== false,
     }),
 };
@@ -496,7 +424,7 @@ const env: CommandSpec = {
     },
   ],
   notes:
-    "`dev`, `start`, `chat`, `invoke` and `tool` install the declared packages that have no install here yet, and " +
+    "`dev`, `start` and `invoke` install the declared packages that have no install here yet, and " +
     "put them first on the PATH of what the agent runs; one already installed is kept, so a start needs no network. " +
     "`dev` restarts when context.json changes. Apt packages are installed in the image; on Debian or Ubuntu a start " +
     "here names the missing ones.",
@@ -566,12 +494,13 @@ const schedules: CommandSpec = {
   subcommands: [
     {
       name: "list",
-      summary: "every schedule (schedules/<name>.md) and wake-up, with when it runs next",
+      summary: "every schedule (src/schedules/<name>.ts) and wake-up, with when it runs next",
       description:
-        "List the schedules this definition declares (schedules/<name>.md): the next cron instant, how the last " +
-        "run ended and the session its turns run in. The agent's own pending wake-ups are listed too, prefixed " +
+        "List the schedules this definition declares (defineSchedule in src/schedules/<name>.ts): the next cron " +
+        "instant, how the last run ended and the session its runs continue. The agent's own pending wake-ups are listed too, prefixed " +
         "`wake`: a different owner (the STATE, not the definition), and only the agent cancels them (the `unwake` " +
-        "tool). --json adds each schedule's retained fire history. Read-only.",
+        "tool). --json adds each schedule's retained fire history. It changes no state; like every command that reads " +
+        "the definition, it regenerates .fastagent/.",
       args: [AGENT_ARG],
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent schedules list" }],
@@ -653,7 +582,8 @@ const login: CommandSpec = {
     "(subscription/OAuth or API " +
     "key), then a provider that offers it (configured status shown). [provider] takes the method from " +
     "what that provider supports, asked only when both. An agent READS the global store for a provider it has " +
-    "no other credential for (its own file, a models.json key, an env variable), so `-g` logs in once for every " +
+    "no other credential for (its own file, a provider in its config that authenticates itself, an env variable), so " +
+    "`-g` logs in once for every " +
     "agent on this machine; it warns when an env variable already authenticates the provider.",
   args: [{ name: "[provider]", description: "provider id (skip the provider menu)" }],
   flags: [
@@ -702,11 +632,9 @@ export const specs: readonly CommandSpec[] = [
   info,
   content,
   env,
-  tool,
   invoke,
   schedules,
   dev,
-  chat,
   start,
   add,
   deploy,

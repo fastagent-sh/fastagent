@@ -1,20 +1,14 @@
 /**
  * A definition directory served by a REAL provider, opened the way the product opens one.
  *
- * The probe drives `createPiAgentFromDir` — the same opener `dev`, `start` and `invoke` drive — and
- * observes only from outside: what the turn answers, and what a failing one reports. It deliberately
- * does NOT reach for the `AgentSession` L0 underneath, even though that layer offers observation
- * points this file cannot have (intercepting `session.abort`, for one). Rebuilding the opener to get
- * at them means re-doing everything it does — proxy install, credential resolution, pinning pi's own
- * agent dir away from `~/.pi/agent` — and every one of those was missed at least once here. A probe
- * that rebuilds the assembly measures the rebuild's fidelity, not the product.
+ * The probe drives `openServing` — the same opener `dev`, `start` and `invoke` drive — and observes only from
+ * outside: what a message answers, and what a failing one reports. A probe that rebuilds the assembly measures the
+ * rebuild's fidelity, not the product.
  *
- * SPEC conformance therefore stays where it can be asserted honestly: test/pi-loop-harness.test.ts runs
- * the full SPEC v1 suite against pi on a faux model. Cancellation in particular gains nothing from a live
- * provider — the assertion is that the harness's abort ran, which is identical in both worlds. What only
- * a real provider can settle is here: a real stream completes, a real HTTP error becomes a failed run
- * with the right `retryable`, a real record carries a conversation
- * across two independent instances, and a real model CALLS a tool this repo described to it.
+ * Agent API conformance stays where it can be asserted honestly: test/durable-agent.test.ts runs the suite against
+ * pi-durable on a faux model. What only a real provider can settle is here: a real stream completes, a real HTTP
+ * error becomes a failed message with the right `retryable`, the storage carries a conversation across two
+ * processes, and a real model CALLS a tool this repo described to it.
  *
  * `FASTAGENT_LIVE_MODEL` selects the model ("provider/modelId"); credentials resolve as the product
  * resolves them — `FASTAGENT_AUTH_PATH`, else the agent's own `.secrets/auth.json`, else the
@@ -26,17 +20,14 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { collect, MessageNotCompleted } from "../../src/protocol-collect.ts";
-import type { InvokeEvent, Entry } from "../../src/protocol.ts";
-import { createPiAgentFromDir } from "../../src/harnesses/pi/open.ts";
+import type { Agent, DoneMessage } from "../../src/agent-api.ts";
+import { type OpenServingOptions, openServing } from "../../src/harnesses/pi-durable/serve.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { requireEnv } from "./env.ts";
 
 // Node's own fetch ignores HTTPS_PROXY, so a correctly configured machine still needs this call to
 // honour it. Every CLI entry makes it and the LIBRARY opener deliberately does not — proxy wiring
 // belongs to the process, not to the assembly — so an embedder owes it, and this probe is one.
-// Nothing beyond this line is the probe's business: whether a given host bypasses the proxy is the
-// runner's environment to get right, and a probe that edited NO_PROXY would be hiding that.
 installProxyFetch();
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
@@ -46,30 +37,46 @@ afterAll(async () => {
   for (const cleanup of cleanups) await cleanup();
 });
 
+/** The repository's packages, for a fixture's own imports: a fixture directory has no node_modules of its own. */
+const linkPackages = (dir: string) =>
+  symlink(new URL("../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
+
 /**
- * An agent directory as an author would write one: a system prompt and a config naming the model. The
+ * An agent directory as an author would write one: a system prompt and a configuration naming the model. The
  * directory IS the agent, and its working directory.
  */
-async function agentDirectory(model: string, files: Record<string, string> = {}): Promise<string> {
+async function agentDirectory(config: string, files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-live-model-"));
   await writeFile(join(dir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
-  await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(model)} };\n`);
+  await writeFile(join(dir, "fastagent.config.ts"), config);
   for (const [name, content] of Object.entries(files)) {
     await mkdir(join(dir, name, ".."), { recursive: true });
     await writeFile(join(dir, name), content);
   }
   return dir;
 }
+const modelConfig = (model: string) => `export default { model: ${JSON.stringify(model)} };\n`;
 
-/** The run's durable entries, in order: what a probe asserts on (live deltas are best-effort). */
-async function entries(events: AsyncIterable<InvokeEvent>): Promise<Entry[]> {
-  const out: Entry[] = [];
-  for await (const event of events) if (event.type === "entry") out.push(event.entry);
-  return out;
+/** The directory opened the product's way; closed when the file is done. */
+async function open(dir: string, options: OpenServingOptions = { locking: "memory" }) {
+  const opened = await openServing(dir, options);
+  cleanups.push(() => opened.agent.close());
+  return opened;
 }
 
-/** A definition whose models.json points at a local endpoint that answers 400 to every request.
- *  models.json is definition data, so this failure arrives through the product's own path. */
+/** Send one message in `sessionId` (a new session without one) and wait for how it ended. */
+async function ask(agent: Agent, text: string, sessionId?: string): Promise<DoneMessage & { sessionId: string }> {
+  const session = sessionId ?? (await agent.createSession());
+  const id = typeof session === "string" ? session : session.ok ? session.sessionId : undefined;
+  if (id === undefined) throw new Error(`no session: ${JSON.stringify(session)}`);
+  const sent = await agent.invoke({ sessionId: id, content: [{ type: "text", text }] });
+  if (!sent.ok) throw new Error(`not sent: ${JSON.stringify(sent)}`);
+  const end = await sent.wait();
+  if (!end.ok) throw new Error(`the wait ended first: ${end.unfinished.reason}`);
+  return { ...end.message, sessionId: id };
+}
+
+/** A definition whose provider points at a local endpoint that answers 400 to every request. */
 async function refusingDefinition(): Promise<string> {
   const server = createServer((_req, res) => {
     res.writeHead(400, { "content-type": "application/json" });
@@ -78,198 +85,98 @@ async function refusingDefinition(): Promise<string> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const { port } = server.address() as { port: number };
-  return agentDirectory("refusing/refuses", {
-    "models.json": JSON.stringify({
-      providers: {
-        refusing: {
-          baseUrl: `http://127.0.0.1:${port}/v1`,
-          api: "openai-completions",
-          apiKey: "live-probe",
-          models: [{ id: "refuses" }],
-        },
-      },
+  const baseUrl = `http://127.0.0.1:${port}/v1`;
+  const dir = await agentDirectory(`import { createProvider } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+
+const model = {
+  id: "refuses", name: "Refuses", api: "openai-completions", provider: "refusing", baseUrl: ${JSON.stringify(baseUrl)},
+  reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8192, maxTokens: 1024,
+};
+export default {
+  model: "refusing/refuses",
+  providers: [
+    createProvider({
+      id: "refusing", name: "Refusing", baseUrl: ${JSON.stringify(baseUrl)},
+      auth: { apiKey: { name: "Refusing", resolve: async () => ({ auth: { apiKey: "live-probe" } }) } },
+      models: [model], api: openAICompletionsApi(),
     }),
-  });
+  ],
+};
+`);
+  await linkPackages(dir);
+  return dir;
 }
 
 describe(`live model: ${MODEL}`, () => {
-  it("a real stream reaches a completed terminal with an answer", async () => {
-    const { agent } = await createPiAgentFromDir(await agentDirectory(MODEL));
-    const { text } = await collect(agent.invoke({ sessionId: "live-answer", prompt: { text: "Reply with just: ok" } }));
-    expect(text.trim()).not.toBe("");
+  it("a real stream reaches a completed message with an answer", async () => {
+    const { agent } = await open(await agentDirectory(modelConfig(MODEL)));
+    const end = await ask(agent, "Reply with just: ok");
+    expect(end.outcome, JSON.stringify(end.outcome)).toEqual({ status: "completed" });
+    expect(end.answer?.text.trim()).not.toBe("");
   });
 
-  it("a real model calls a tool defined by defineTool, and uses what it returned", async () => {
-    // The offline suite drives tools with `fauxToolCall`: it answers "given a call, do we run the tool
-    // and feed the result back". It cannot answer the half that faces outward — whether a real model,
-    // handed the schema `defineTool` derives from Zod, issues a call this shape at all. Between the two
-    // sits every assumption about how the Zod input becomes a provider's function schema.
+  it("a real model calls a tool of the definition, and uses what it returned", async () => {
+    // The offline suite drives tools with `fauxToolCall`: it answers "given a call, do we run the tool and feed the
+    // result back". It cannot answer the half that faces outward — whether a real model, handed the schema
+    // `defineTool` declares, issues a call this shape at all.
     //
-    // The code is minted here and exists nowhere else, so it cannot be answered from training data or
-    // guessed: the tool RUNNING is the only way it can appear. Same reason the portability test moves a
-    // literal, and the same discipline — the assertions are the call happening and the value arriving,
+    // The code is minted here and exists nowhere else, so it cannot be answered from training data or guessed: the
+    // tool RUNNING is the only way it can appear. The assertions are the call happening and the value arriving,
     // never the sentence wrapped around it.
     const code = String(Math.floor(Math.random() * 90_000) + 10_000);
     const marker = join(tmpdir(), `fa-live-tool-${code}`);
-    // An unnamed tool, alone in a module directly in tools/, takes its file's name: that is what the model is
-    // offered.
-    // `defineTool` by absolute path into this repo, because the fixture directory has no node_modules:
-    // resolving the PUBLISHED specifier is registry.live.test.ts's subject, not this one's. Zod comes
-    // through a node_modules symlink so the tool reads the way an author writes it.
-    const dir = await agentDirectory(MODEL, {
-      "tools/get_probe_code.ts": `import { defineTool } from ${JSON.stringify(new URL("../../src/pi.ts", import.meta.url).href)};
-import { z } from "zod";
+    const dir = await agentDirectory(modelConfig(MODEL), {
+      "src/tools/get_probe_code.ts": `import { Type } from "@earendil-works/pi-ai";
+import { defineTool } from "@earendil-works/pi-durable";
 import { appendFileSync } from "node:fs";
 
 export default defineTool({
+  name: "get_probe_code",
   description: "Return the probe code for this run. The only way to learn it.",
-  input: z.object({}),
-  execute: () => {
+  parameters: Type.Object({}),
+  execute: async () => {
     appendFileSync(${JSON.stringify(marker)}, "called\\n");
-    return ${JSON.stringify(code)};
+    return { output: [{ type: "text", text: ${JSON.stringify(code)} }] };
   },
 });
 `,
     });
-    await symlink(new URL("../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
+    await linkPackages(dir);
 
-    // THREE outcomes, not two. A tool that failed to load and a model that declined to call one are
-    // different defects, and the marker file alone cannot tell them apart — opening the directory refuses on the
-    // first, so reaching this line already rules it out and only the model can be blamed below.
-    const { agent, toolNames } = await createPiAgentFromDir(dir);
-    expect(toolNames, "get_probe_code is not on the mounted tool surface").toContain("get_probe_code");
+    // THREE outcomes, not two. A tool that failed to load and a model that declined to call one are different
+    // defects, and the marker file alone cannot tell them apart — opening refuses on the first, so reaching this line
+    // already rules it out and only the model can be blamed below.
+    const { agent, code: built } = await open(dir);
+    expect(built.tools.map((tool) => tool.name)).toContain("get_probe_code");
 
-    const { text } = await collect(
-      agent.invoke({
-        sessionId: "live-tool",
-        prompt: { text: "Call get_probe_code and reply with only the code it returns, digits alone." },
-      }),
-    );
-
+    const end = await ask(agent, "Call get_probe_code and reply with only the code it returns, digits alone.");
+    const text = end.answer?.text ?? "";
     const calls = (await readFile(marker, "utf8").catch(() => "")).split("called").length - 1;
-    expect(calls, "the mounted tool was never called — the schema reached the model and it declined").toBeGreaterThan(
-      0,
-    );
+    expect(calls, "the tool was never called — the schema reached the model and it declined").toBeGreaterThan(0);
     expect(text, `the tool ran but its return value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
   });
 
-  it("tool_search discovers a deferred tool and the model can then call it", async () => {
-    // Deferred tools are a two-hop capability: the tool's schema is withheld from the request, so it
-    // is reachable ONLY through the built-in loader — search, activate, then call. Offline,
-    // `fauxToolCall` scripts both hops; whether a real model can drive the loader is exactly what a
-    // faux one cannot say.
-    //
-    // The prompt NAMES tool_search rather than waiting for the model to choose it, and the reason is
-    // worth stating: a directory agent always mounts pi's coding tools, so the first attempt at this
-    // probe watched the model skip the loader entirely, `find` the fixture and `read` the tool's
-    // source for its return value. That is not a defect — deferred means "not in the request", not
-    // "secret", and a bash-holding model will always have a shortcut — but it makes self-selection
-    // unobservable here. What remains observable, and is what the feature rests on, is that the chain
-    // WORKS when taken.
-    const code = String(Math.floor(Math.random() * 90_000) + 10_000);
-    const dir = await agentDirectory(MODEL, {
-      "tools/get_vault_code.ts": `import { defineTool } from ${JSON.stringify(new URL("../../src/pi.ts", import.meta.url).href)};
-import { z } from "zod";
+  it("the storage carries a conversation from one process to the next", async () => {
+    // One directory, opened twice, one after the other: two processes sharing nothing but the disk.
+    const dir = await agentDirectory(modelConfig(MODEL));
+    const first = await openServing(dir);
+    const { sessionId } = await ask(first.agent, "Remember this number: 47. Reply with just: ok");
+    await first.agent.close();
 
-export default defineTool({
-  description: "Read the vault code. The only way to learn this deployment's vault code.",
-  exposure: "deferred",
-  input: z.object({}),
-  execute: () => ${JSON.stringify(code)},
-});
-`,
-    });
-    await symlink(new URL("../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
-
-    const { agent, toolNames, indirectTools } = await createPiAgentFromDir(dir); // refuses if the fixture broke
-    // Each name lives in exactly ONE report slot (create.ts): a deferred tool is in indirectTools
-    // and deliberately NOT in toolNames, the author's active-by-default surface. Asserting the wrong
-    // slot would pass on a tool that had quietly stopped being deferred — which is the whole premise.
-    expect(indirectTools, "the fixture tool is not registered as deferred").toContainEqual({
-      name: "get_vault_code",
-      reach: "tool_search",
-    });
-    expect(toolNames, "a deferred tool must not be on the active-by-default surface").not.toContain("get_vault_code");
-
-    const log = await entries(
-      agent.invoke({
-        sessionId: "live-deferred",
-        prompt: {
-          text: "Use tool_search to find the tool that reads the vault code, then call it and reply with only the code, digits alone.",
-        },
-      }),
-    );
-    type Data = { text?: string; toolCalls?: { id: string; name: string }[]; toolCallId?: string };
-    const answers = log.filter((e) => e.kind === "assistant_message").map((e) => e.data as Data);
-    const calls = answers.flatMap((d) => d.toolCalls ?? []);
-    const called = calls.map((c) => c.name);
-    const text = answers.at(-1)?.text ?? "";
-
-    // The two hops, asserted separately: "the loader was never reached" and "the loader ran but
-    // activation did not take" are different defects, and a single end-to-end check reports the wrong
-    // one half the time.
-    expect(called, `tool_search was never called (tools called: ${called.join(", ") || "none"})`).toContain(
-      "tool_search",
-    );
-    // What the loader ANSWERED, carried into the failure: this probe cannot see activation directly, so without it a
-    // red nightly cannot be told apart into "the loader did not list the tool" (ours) and "it did, and the model
-    // declined the second hop" (the model's). The second has already happened on a green build, and re-running to
-    // find out which one it was means paying for another real turn on a provider that has since moved on.
-    //
-    // Capture every search answer, so a miss followed by a hit is diagnosable.
-    const searchIds = new Set(calls.flatMap((c) => (c.name === "tool_search" ? [c.id] : [])));
-    //
-    // Bound each answer separately; one large miss must not hide a later hit.
-    const answered = log.flatMap((e) =>
-      e.kind === "tool_result" && searchIds.has((e.data as Data).toolCallId ?? "")
-        ? [String((e.data as Data).text).slice(0, 600)]
-        : [],
-    );
-    expect(
-      called,
-      `tool_search ran but get_vault_code was never called (tools called: ${called.join(", ")}). ` +
-        `tool_search returned: ${answered.join(" | ") || "[]"} — the answer was: ${text.slice(0, 200)}`,
-    ).toContain("get_vault_code");
-    expect(text, `the deferred tool ran but its value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
+    const { agent: second } = await open(dir, {});
+    const end = await ask(second, "What number did I ask you to remember? Reply with digits only.", sessionId);
+    // The witness is a literal crossing the process boundary, never the model's phrasing.
+    expect(end.answer?.text).toContain("47");
   });
 
-  it("MUST 6 portable — a second instance over the same record continues the conversation", async () => {
-    // One directory, opened twice: two agent instances sharing nothing in process but the disk, which
-    // is what a horizontally-scaled deployment is.
-    const dir = await agentDirectory(MODEL);
-    const session = "-1001234567890"; // a telegram group id: pi refuses it verbatim
-    const { agent: first } = await createPiAgentFromDir(dir);
-    await collect(
-      first.invoke({ sessionId: session, prompt: { text: "Remember this number: 47. Reply with just: ok" } }),
-    );
-
-    const { agent: second } = await createPiAgentFromDir(dir);
-    const { text } = await collect(
-      second.invoke({
-        sessionId: session,
-        prompt: { text: "What number did I ask you to remember? Reply with digits only." },
-      }),
-    );
-    // The witness is a literal crossing the instance boundary, never the model's phrasing.
-    expect(text).toContain("47");
-  });
-
-  it("a real HTTP error becomes a failed terminal, classified non-retryable", async () => {
-    const { agent } = await createPiAgentFromDir(await refusingDefinition());
-    // A failed run is an outcome, never a thrown iteration error: `collect` turns it into MessageNotCompleted.
-    const failure = await collect(agent.invoke({ sessionId: "live-refused", prompt: { text: "go" } })).catch((e) => e);
-    // 400 is decisive: re-sending it would fail identically, and `retryable` is what a caller branches on. This is the
-    // half a faux provider cannot settle: the shape of a real provider error as it travels through pi's stack into
-    // our classifier. The outcome travels IN the message, because a matcher's diff prints only the keys it named.
-    expect(failure, `the refused run did not fail non-retryably: ${JSON.stringify(failure)}`).toBeInstanceOf(
-      MessageNotCompleted,
-    );
-    expect(
-      (failure as MessageNotCompleted).outcome,
-      JSON.stringify((failure as MessageNotCompleted).outcome),
-    ).toMatchObject({
-      status: "failed",
-      error: { retryable: false },
-    });
+  it("a real HTTP error becomes a failed message, classified non-retryable", async () => {
+    const { agent } = await open(await refusingDefinition());
+    // A failed message is an outcome, never a thrown error. 400 is decisive: re-sending it would fail identically, and
+    // `retryable` is what a caller branches on. This is the half a faux provider cannot settle: the shape of a real
+    // provider error as it travels through pi's stack into our classifier.
+    const end = await ask(agent, "go");
+    expect(end.outcome, JSON.stringify(end.outcome)).toMatchObject({ status: "failed", error: { retryable: false } });
   });
 });

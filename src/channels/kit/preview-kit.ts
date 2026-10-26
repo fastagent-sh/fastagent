@@ -2,7 +2,8 @@
  * Channel-neutral live-preview pieces shared by every messaging channel's preview renderer (telegram/preview.ts,
  * feishu/preview.ts, slack/preview.ts).
  */
-import type { InvokeEvent, Json, SessionEvent } from "../../protocol.ts";
+import type { Json, SessionEvent } from "../../agent-api.ts";
+import type { TurnEvent } from "./invoke-turn-kit.ts";
 import { answerText } from "../../answer-text.ts";
 import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
 
@@ -66,7 +67,7 @@ export function createTurnView(): TurnView {
 }
 
 /** Fold one event of a turn's invoke into its view; true when what a renderer shows changed. */
-export function applyTurnEvent(view: TurnView, e: InvokeEvent, now = Date.now()): boolean {
+export function applyTurnEvent(view: TurnView, e: TurnEvent, now = Date.now()): boolean {
   const closedRetry = view.retrying && e.type !== "retry_scheduled";
   if (closedRetry) view.retrying = false;
   const appended = (text: string): boolean => {

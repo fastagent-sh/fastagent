@@ -1,14 +1,15 @@
 /**
- * `fastagent add <channel>|skill` — scaffold channel glue (`channels/<kind>.ts`) or vendor an Agent Skills skill.
+ * `fastagent add <channel>|skill` — scaffold channel glue (`src/channels/<kind>.ts`) or vendor an Agent Skills skill.
  * slack/feishu/lark additionally CREATE OR RESUME the platform app.
  */
 import { randomBytes } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import { assertIndependentFeishuApps, onboardFeishuCloudApp } from "../add-feishu.ts";
-import { inspectChannels } from "../../channels/discover.ts";
 import { cloudFor } from "../../channels/feishu/cloud.ts";
 import { type FeishuSubscriptionMode, feishuIngressFor } from "../../channels/feishu/setup-mode.ts";
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
+import { channelIngress } from "../../channels/discover.ts";
+import { buildDefinitionShape, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
 import { dotEnvPath, enterAgentEnv, loadEnvValues } from "../../env.ts";
 import { selectAgentEnvironment, resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
@@ -25,14 +26,13 @@ import {
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
 import { failStartup, failUsage, agentDirOrExit } from "../fail.ts";
 
-/** `fastagent add <kind> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
+/** `fastagent add <kind> [dir]`: scaffold `src/channels/<kind>.ts`, the adapter configured with a starter policy. */
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
   opts: { ingress?: string; onboard?: boolean; replaceConfig?: boolean; environment?: string },
 ): Promise<void> {
-  // The channel (glue + companion tool + secrets) is agent surface — everything lands in the AGENT DIR
-  // (`fastagent/`), the same place dev/start discover channels/.
+  // The channel (glue + companion tools + secrets) is agent surface: everything lands in the AGENT DIR.
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
@@ -59,7 +59,7 @@ export async function runAddChannel(
   const envPath = dotEnvPath(target);
   const envLabel = isUnderDir(envPath, target) ? inAgent(relative(target, envPath)) : envPath;
   // An existing channel file is authored glue: kept, never rewritten.
-  const file = join(target, "channels", `${channelKind}.ts`);
+  const file = join(target, "src", "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const { ingress, pinned, setting } = resolveIngress(channelKind, opts.ingress);
   if (
@@ -71,19 +71,19 @@ export async function runAddChannel(
       target,
       channelKind,
       setting ?? { [`${cloudFor(channelKind).envPrefix}_INGRESS`]: ingress },
-      file,
+      inAgent(relative(target, file)),
     );
   }
   if (existsAlready) {
-    console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
+    console.error(`[fastagent] ${inAgent(relative(target, file))} already exists — keeping it`);
   } else {
     await assertChannelReady(target).catch(failStartup);
     await scaffoldChannel(target, channelKind).catch(failStartup);
-    console.error(`[fastagent] created ${relative(target, file)}`);
+    console.error(`[fastagent] created ${inAgent(relative(target, file))}`);
   }
   // Companion tools are the package's, not authored glue.
   for (const tool of await scaffoldCompanionTools(target, channelKind).catch(failStartup)) {
-    console.error(`[fastagent] wrote ${relative(target, tool)}`);
+    console.error(`[fastagent] wrote ${inAgent(relative(target, tool))}`);
   }
   if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
@@ -160,7 +160,7 @@ export async function runAddChannel(
     console.error(
       `    ${s
         .replace("{channel}", inAgent(relative(target, file)))
-        .replace("{tools}", inAgent("tools"))
+        .replace("{tools}", inAgent(join("src", "tools")))
         .replaceAll("{serve}", serveCommand)}`,
     );
   }
@@ -206,30 +206,31 @@ function resolveIngress(
 }
 
 /**
- * A setting only takes effect in a channel file that reads it: one scaffolded before it, or written by hand, names its
- * factory. Writing the setting there, and preparing the app for it, would leave the channel receiving the other way
- * with nothing failing, so the existing file is imported under the requested setting first, the way `deploy` reads
- * a channel's shape, and must take the shape the setting names.
+ * A setting only takes effect in a channel file that reads it: one that names its factory receives the same way
+ * whatever the setting says, so writing the setting (and configuring the app for it) would change nothing but the app.
+ * Asked of the channel as the agent builds it, under the value this command is about to write.
  */
 async function assertChannelReadsSetting(
   target: string,
   kind: ChannelKind,
   setting: Record<string, string>,
-  file: string,
+  shown: string,
 ): Promise<void> {
   Object.assign(process.env, setting); // the value this command writes anyway
-  const inspected = await inspectChannels(target).catch(failStartup);
-  const failure = inspected.failures.find((entry) => entry.file === file);
-  if (failure) failStartup(new Error(`${failure.label} failed to load (${failure.message}) — fix it and re-run`));
+  const channel = await prepareDefinition(target)
+    .then((definition) => buildDefinitionShape(definition, process.env).channels.get(kind))
+    .catch((error: unknown) =>
+      failStartup(new Error(`the agent does not build (${(error as Error).message}) — fix it and re-run`)),
+    );
   const [[name, value]] = Object.entries(setting) as [[string, string]];
   const wanted = value === "webhook" ? "webhook" : "long-connection";
-  const shape = inspected.channels.find((channel) => channel.name === kind)?.ingress;
+  const shape = channel === undefined ? undefined : channelIngress(channel);
   if (shape !== wanted) {
     failStartup(
       new Error(
-        `${relative(target, file)} receives by ${shape === "webhook" ? "webhook" : "WebSocket"} whatever ${name} ` +
-          `says — it names its factory instead of reading the setting, so ${name}=${value} would change nothing ` +
-          `but the app. Move the file aside and re-run to scaffold one that reads it, or edit its factory yourself`,
+        `${shown} receives by ${shape === "webhook" ? "webhook" : "WebSocket"} whatever ${name} says — it names ` +
+          `its factory instead of reading the setting, so ${name}=${value} would change nothing but the app. Move ` +
+          `the file aside and re-run to scaffold one that reads it, or edit its factory yourself`,
       ),
     );
   }
@@ -257,19 +258,16 @@ export async function runAddSkill(
   }
   // Skills are agent surface — vendored into the agent dir's `skills/`.
   enterAgentEnv(target); // a git-ref source is a network fetch (giget uses global fetch)
-  const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
+  const { name, description, dest, hasScripts, overwritten } = await vendorSkill(target, source, {
     update: opts.update ?? false,
   }).catch(failStartup);
   console.error(`[fastagent] ${overwritten ? "updated" : "vendored"} skill "${name}" → ${dest}/`);
   if (overwritten) console.error(`  overwrote it — \`git diff ${dest}\` to review, \`git checkout ${dest}\` to revert`);
   if (description) console.error(`  ${description.length > 100 ? `${description.slice(0, 100)}…` : description}`);
-  for (const d of diagnostics) console.error(`  warn: ${d.message}`);
   if (hasScripts) {
     console.error(
       `  warn: this skill ships scripts/ (executable code that runs in your agent) — review it before deploying`,
     );
   }
-  console.error(
-    `  next: mention "${name}" in APPEND_SYSTEM.md so the model knows when to use it; then \`fastagent dev\``,
-  );
+  console.error(`  next: mention "${name}" in SYSTEM.md so the model knows when to use it; then \`fastagent dev\``);
 }

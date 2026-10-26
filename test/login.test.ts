@@ -14,8 +14,8 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
-import * as models from "../src/harnesses/pi/models.ts";
-import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../src/harnesses/pi/auth.ts";
+import * as models from "../src/harnesses/models/models.ts";
+import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../src/harnesses/models/credentials.ts";
 import {
   type IoOption,
   LoginCancelled,
@@ -26,7 +26,7 @@ import {
   loginOptions,
   loginOptionsOver,
   loginOver,
-} from "../src/harnesses/pi/login.ts";
+} from "../src/harnesses/models/login.ts";
 
 // The store is the REAL fastagentCredentialStore over a temp file — the same writer the runtime uses,
 // so these tests exercise the actual persist/corruption semantics. Only the providers' login flow
@@ -130,29 +130,9 @@ describe("loginFlow", () => {
     expect(existsSync(join(dirname(GLOBAL_AUTH_PATH), "settings.json"))).toBe(false);
     expect(await credentialStore.read("device")).toMatchObject({ type: "oauth" });
   });
-  it("a broken project .pi/settings.json in the cwd does not block the device ID", async () => {
-    const project = await mkdtemp(join(tmpdir(), "fa-login-cwd-"));
-    await mkdir(join(project, ".pi"));
-    await writeFile(join(project, ".pi", "settings.json"), "{ not json");
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue(project);
-    try {
-      const provider = fakeProvider("device", { oauth: true });
-      await loginOver(
-        {
-          provider: "device",
-          method: "oauth",
-          authPath: await tmpAuth(),
-          interaction: { prompt: async () => "", notify: () => {} },
-        },
-        { providers: [provider] },
-      );
-    } finally {
-      cwd.mockRestore();
-    }
-  });
   it("refuses OAuth when the device ID cannot be persisted", async () => {
     const authPath = await tmpAuth();
-    await mkdir(join(dirname(authPath), "settings.json"));
+    await mkdir(join(dirname(authPath), "device.json"));
     const flow = vi.fn(async () => OAUTH_CRED);
     const provider = fakeProvider("device", { oauth: true, onOauthLogin: flow });
     await expect(
@@ -428,64 +408,6 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     await login({ provider: "google", method: "api_key", authPath: await tmpAuth(), interaction });
     expect(probe.mock.calls[0]?.[1]).toMatchObject({ provider: "google", id: PI_DEFAULT_MODELS.google });
     expect(events.find((e) => e.type === "progress")?.message).toContain(`google/${PI_DEFAULT_MODELS.google}`);
-  });
-
-  it("for an agent, the key is checked where its turns will go: a models.json gateway, not the provider's endpoint", async () => {
-    // The agent points built-in openai at a company gateway and declares a model only the gateway serves. Checked at
-    // api.openai.com, the gateway's key was refused (401) and the person was asked for it again, forever.
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-login-agent-"));
-    await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};");
-    await writeFile(
-      join(agentDir, "models.json"),
-      JSON.stringify({
-        providers: {
-          openai: {
-            baseUrl: "https://gateway.example/v1",
-            models: [{ id: "gateway-only", api: "openai-completions", contextWindow: 8192, maxTokens: 1024 }],
-          },
-        },
-      }),
-    );
-    const probe = vi.spyOn(models, "probeApiKey").mockResolvedValue({ state: "ok" });
-    const probed = async (internals: { verifyWith?: string }) => {
-      const { interaction } = client(["sk-gateway"]);
-      await loginOver(
-        { provider: "openai", method: "api_key", authPath: await tmpAuth(), interaction },
-        { agentDir, ...internals },
-      );
-      return probe.mock.calls.at(-1)?.[1];
-    };
-
-    // The first-run picker's choice, which only this agent's registry knows.
-    expect(await probed({ verifyWith: "openai/gateway-only" })).toMatchObject({
-      id: "gateway-only",
-      baseUrl: "https://gateway.example/v1",
-    });
-    // `fastagent login openai` inside the agent: pi's default model, routed through the same gateway.
-    expect(await probed({})).toMatchObject({ id: PI_DEFAULT_MODELS.openai, baseUrl: "https://gateway.example/v1" });
-  });
-
-  it("a broken agent models.json stops a key sign-in before the key is asked for, and not an OAuth one", async () => {
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-login-broken-"));
-    await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};");
-    await writeFile(join(agentDir, "models.json"), "{ not json");
-
-    const oauth = client([]);
-    await expect(
-      loginOver(
-        { provider: "codex", method: "oauth", authPath: await tmpAuth(), interaction: oauth.interaction },
-        { agentDir, providers: PROVIDERS },
-      ),
-    ).resolves.toMatchObject({ provider: "codex", verified: "n/a" }); // OAuth needs no registry
-
-    const key = client(["sk"]);
-    await expect(
-      loginOver(
-        { provider: "openai", method: "api_key", authPath: await tmpAuth(), interaction: key.interaction },
-        { agentDir, providers: PROVIDERS },
-      ),
-    ).rejects.toThrow(/models\.json/);
-    expect(key.prompts).toHaveLength(0); // said before the person typed a key
   });
 
   it("the key is verified with the model the picker chose, when login's registry has it; else the first", async () => {

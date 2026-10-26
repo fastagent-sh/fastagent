@@ -1,6 +1,6 @@
 /** Best-effort bounded durable dedup ring, recorded only after the caller's pre-ACK side effect is durable. */
 import { log } from "../../log.ts";
-import { loadStateFile, saveStateFile } from "./state.ts";
+import { loadStateFile, saveStateFile } from "../../state-file.ts";
 
 export interface SeenRing {
   has(id: string): boolean;

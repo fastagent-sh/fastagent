@@ -1,338 +1,97 @@
-import { describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { Agent } from "../src/protocol.ts";
-import { loadChannels, inspectChannels } from "../src/channels/discover.ts";
-import { log } from "../src/log.ts";
+/** A definition's channels, mounted: their routes merged, their connections bound, a bad shape refused by name. */
+import { describe, expect, it } from "vitest";
+import type { Agent } from "../src/agent-api.ts";
+import type { ChannelModule } from "../src/channel.ts";
+import {
+  type AnyChannelModule,
+  channelIngress,
+  channelModuleProblem,
+  mountChannels,
+} from "../src/channels/discover.ts";
 
-// loadChannels only forwards the ctx to the factory; these factories ignore it.
-const fakeCtx = { agent: {} as Agent, stateRoot: "/unused-in-tests" };
-const freshDir = () => mkdtemp(join(tmpdir(), "fa-chan-"));
+const ctx = { agent: {} as Agent, stateRoot: "/unused-in-tests" };
+const accepted = () => new Response(null, { status: 202 });
+const mount = (modules: Record<string, unknown>) =>
+  mountChannels(new Map(Object.entries(modules) as [string, AnyChannelModule][]), ctx);
 
-describe("loadChannels (filesystem discovery)", () => {
-  it("discovers channels/* and merges their routes; missing channels/ is empty", async () => {
-    const dir = await freshDir();
-    expect(await loadChannels(dir, fakeCtx)).toEqual({
-      routes: {},
-      longConnections: [],
-      routeChannels: [],
-      collisions: [],
-      failures: [],
-    }); // no channels/ yet
-
-    await mkdir(join(dir, "channels"));
-    await writeFile(
-      join(dir, "channels", "github.mjs"),
-      `export default (agent) => ({ "POST /webhook": () => new Response(null, { status: 202 }) });`,
-    );
-    await writeFile(
-      join(dir, "channels", "stripe.mjs"),
-      `export default (agent) => ({ "POST /stripe": () => new Response(null, { status: 202 }) });`,
-    );
-    await writeFile(join(dir, "channels", "disabled.mjs.disabled"), `throw new Error("must not import");`);
-    const { routes, collisions, failures } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes).sort()).toEqual(["POST /stripe", "POST /webhook"]);
-    expect(collisions).toEqual([]);
-    expect(failures).toEqual([]);
+describe("mountChannels", () => {
+  it("merges every route channel's routes and binds each long connection; none mounts nothing", () => {
+    expect(mount({})).toEqual({ routes: {}, longConnections: [], routeChannels: [] });
+    const socket = { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };
+    const mounted = mount({
+      github: (() => ({ "POST /webhook": accepted })) satisfies ChannelModule,
+      stripe: (() => ({ "POST /stripe": accepted })) satisfies ChannelModule,
+      socket,
+    });
+    expect(Object.keys(mounted.routes).sort()).toEqual(["POST /stripe", "POST /webhook"]);
+    expect(mounted.routeChannels).toEqual(["github", "stripe"]);
+    expect(mounted.longConnections.map((connection) => connection.name)).toEqual(["socket"]);
   });
 
-  it("ISOLATES a channel that throws on import — reports it in failures, still mounts the others (G2)", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(
-      join(dir, "channels", "boom.mjs"),
-      `throw new Error("bad top-level init");\nexport default () => ({});`,
+  it("refuses a route another channel already serves, naming both", () => {
+    expect(() => mount({ a: () => ({ "POST /hook": accepted }), b: () => ({ "/hook": accepted }) })).toThrow(
+      'src/channels/b serves "/hook", which src/channels/a already serves as "POST /hook"',
     );
-    await writeFile(
-      join(dir, "channels", "ok.mjs"),
-      `export default () => ({ "POST /ok": () => new Response(null, { status: 202 }) });`,
-    );
-    const { routes, failures } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes)).toEqual(["POST /ok"]); // collect sibling results for one complete report
-    expect(failures).toHaveLength(1);
-    expect(failures[0]!.label).toBe("channels/boom.mjs");
-    expect(failures[0]!.message).toMatch(/bad top-level init/);
   });
 
-  it("collects a channel factory failure (missing env) while validating siblings", async () => {
-    // The loader returns every per-file result; the serving composition reports them and fails startup.
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(
-      join(dir, "channels", "needsenv.mjs"),
-      `export default () => { throw new Error("TELEGRAM_SECRET_TOKEN required"); };`,
-    );
-    await writeFile(
-      join(dir, "channels", "ok.mjs"),
-      `export default () => ({ "POST /ok": () => new Response(null, { status: 202 }) });`,
-    );
-    const { routes, failures } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes)).toEqual(["POST /ok"]); // the healthy channel still mounts
-    expect(failures.map((f) => f.label)).toEqual(["channels/needsenv.mjs"]);
-    expect(failures[0]!.message).toMatch(/TELEGRAM_SECRET_TOKEN/);
-  });
-
-  it("refuses a route key another channel would pay for", async () => {
-    // Only that: a key a URL rewrites is one route spelled two ways, so the conflict check compares
-    // it as distinct and whatever it collides with goes dark. A `:id` key merely never matches,
-    // which costs its own author and nobody else — allowed.
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(
-      join(dir, "channels", "p.mjs"),
-      `export default () => ({ "GET /f/:id": () => new Response("x") });`,
-    );
-    await writeFile(
-      join(dir, "channels", "w.mjs"),
-      `export default () => ({ "GET /a/../f": () => new Response("x") });`,
-    );
-    const { routes, failures } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes)).toEqual(["GET /f/:id"]);
-    expect(failures.map((f) => f.message).join("\n")).toMatch(/arrives as/);
-    expect(failures).toHaveLength(1);
-  });
-
-  it("surfaces every route collision (first file wins; the duplicate is dropped, never silent)", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    // a.mjs sorts before b.mjs → a wins "POST /webhook"; b's duplicate is dropped + surfaced.
-    await writeFile(
-      join(dir, "channels", "a.mjs"),
-      `export default () => ({ "POST /webhook": () => new Response("a") });`,
-    );
-    await writeFile(
-      join(dir, "channels", "b.mjs"),
-      `export default () => ({ "POST /webhook": () => new Response("b") });`,
-    );
-    const { routes, collisions } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes)).toEqual(["POST /webhook"]);
-    const res = await routes["POST /webhook"]!(new Request("http://x/webhook"));
-    expect(await res.text()).toBe("a");
-    expect(collisions).toEqual([{ route: "POST /webhook", source: "channels/b.mjs" }]);
-
-    // An any-method key SHADOWS a specific one on the same path, so that is a collision too…
-    const overlap = await freshDir();
-    await mkdir(join(overlap, "channels"));
-    await writeFile(
-      join(overlap, "channels", "a.mjs"),
-      `export default () => ({ "/webhook": () => new Response("a") });`,
-    );
-    await writeFile(
-      join(overlap, "channels", "b.mjs"),
-      `export default () => ({ "POST /webhook": () => new Response("b") });`,
-    );
-    const shadowed = await loadChannels(overlap, fakeCtx);
-    expect(Object.keys(shadowed.routes)).toEqual(["/webhook"]); // a wins; b dropped, not silently shadowed
-    expect(shadowed.collisions).toEqual([{ route: "POST /webhook", source: "channels/b.mjs" }]);
-
-    // …while two DISTINCT methods on one path are both reachable, and no collision at all.
-    const distinct = await freshDir();
-    await mkdir(join(distinct, "channels"));
-    await writeFile(
-      join(distinct, "channels", "get.mjs"),
-      `export default () => ({ "GET /x": () => new Response("g") });`,
-    );
-    await writeFile(
-      join(distinct, "channels", "post.mjs"),
-      `export default () => ({ "POST /x": () => new Response("p") });`,
-    );
-    const both = await loadChannels(distinct, fakeCtx);
-    expect(Object.keys(both.routes).sort()).toEqual(["GET /x", "POST /x"]);
-    expect(both.collisions).toEqual([]);
-  });
-
-  it("follows an IN-workspace symlinked channels/, but rejects one that ESCAPES the workspace", async () => {
-    // in-workspace symlink (channels → ./real-channels): self-contained → followed
-    const dir = await freshDir();
-    await mkdir(join(dir, "real-channels"));
-    await writeFile(
-      join(dir, "real-channels", "github.mjs"),
-      `export default () => ({ "POST /webhook": () => new Response("x") });`,
-    );
-    await symlink(join(dir, "real-channels"), join(dir, "channels"));
-    const { routes } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes)).toEqual(["POST /webhook"]); // followed
-
-    // escaping symlink (channels → an external dir): channels would live outside the agent and a deploy
-    // copying the dir would not include them (dev/deployed diverge) → rejected.
-    const esc = await freshDir();
-    const ext = await freshDir();
-    await mkdir(join(ext, "ch"));
-    await symlink(join(ext, "ch"), join(esc, "channels"));
-    await expect(loadChannels(esc, fakeCtx)).rejects.toThrow(/outside the agent dir/);
-  });
-
-  it("loads an explicit long-connection module without manufacturing route/mount metadata", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(
-      join(dir, "channels", "socket.mjs"),
-      `export default { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };`,
-    );
-    const loaded = await loadChannels(dir, fakeCtx);
-    expect(loaded.routes).toEqual({});
-    expect(loaded.longConnections.map((connection) => connection.name)).toEqual(["socket"]);
-    expect(loaded.routeChannels).toEqual([]);
-    expect(loaded.failures).toEqual([]);
-
-    const inspected = await inspectChannels(dir);
-    expect(inspected.channels).toEqual([{ name: "socket", ingress: "long-connection" }]);
-  });
-
-  it("rejects an object export that is not an explicit long-connection module", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(join(dir, "channels", "bad.mjs"), `export default { name: "socket", start() {} };`);
-    const loaded = await loadChannels(dir, fakeCtx);
-    expect(loaded.longConnections).toEqual([]);
-    expect(loaded.failures[0]!.message).toMatch(/connect\(ctx, signal\)/);
-  });
-
-  it("rejects a relative stateRoot at the mount boundary (the contract says absolute — fail visibly)", async () => {
-    const dir = await freshDir();
-    await expect(loadChannels(dir, { agent: {} as Agent, stateRoot: "rel/state" })).rejects.toThrow(
+  it("refuses a relative stateRoot (the contract says absolute)", () => {
+    expect(() => mountChannels(new Map(), { agent: {} as Agent, stateRoot: "rel/state" })).toThrow(
       /stateRoot must be absolute/,
     );
   });
 
-  it("isolates (surfaces, not fatal) a channel file that does not default-export a function", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(join(dir, "channels", "bad.mjs"), `export const notDefault = 1;`);
-    const { routes, failures } = await loadChannels(dir, fakeCtx);
-    expect(routes).toEqual({}); // not mounted…
-    expect(failures[0]!.message).toMatch(/must default-export.*Routes.*connect/); // …but surfaced, never silent
+  it("a factory's own failure is the mount's", () => {
+    expect(() =>
+      mount({
+        boom: () => {
+          throw new Error("TELEGRAM_BOT_TOKEN is not set");
+        },
+      }),
+    ).toThrow("TELEGRAM_BOT_TOKEN is not set");
   });
 
-  it("surfaces an async factory with a Promise-specific message (and no unhandled rejection)", async () => {
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    // Rejects after the (microtask) tick — the guard must mark it handled, not leave it unhandled.
-    await writeFile(
-      join(dir, "channels", "async.mjs"),
-      `export default async () => { throw new Error("setup boom"); };`,
-    );
-    const { failures } = await loadChannels(dir, fakeCtx); // isolated; the Promise is marked handled — no unhandled rejection
-    expect(failures[0]!.message).toMatch(/must return Routes synchronously/);
+  it("refuses an async factory with a Promise-specific message, and leaves no unhandled rejection", () => {
+    expect(() =>
+      mount({
+        async: async () => {
+          throw new Error("setup boom");
+        },
+      }),
+    ).toThrow(/must return Routes synchronously/);
   });
 
-  it("rejects any non-async return that yields no routes (null, primitive, array, Map, {})", async () => {
-    // The invariant is 'an enabled channel file contributes >=1 route'. Each invalid shape is reported;
-    // the serving composition treats the resulting failure as fatal.
-    for (const [name, body] of [
-      ["nullish", `export default () => null;`],
-      ["number", `export default () => 42;`],
-      ["array", `export default () => [];`],
-      ["map", `export default () => new Map([["POST /webhook", () => new Response("x")]]);`],
-      ["empty", `export default () => ({});`],
-    ] as const) {
-      const dir = await freshDir();
-      await mkdir(join(dir, "channels"));
-      await writeFile(join(dir, "channels", `${name}.mjs`), body);
-      const { routes, failures } = await loadChannels(dir, fakeCtx);
-      expect(routes).toEqual({}); // nothing mounted
-      expect(failures[0]!.message).toMatch(/must return a Routes object|declared no routes/);
+  it("refuses a factory that yields no routes (null, a number, an array, a Map, {})", () => {
+    for (const routes of [null, 42, [], new Map([["POST /webhook", accepted]]), {}]) {
+      expect(() => mount({ bad: () => routes })).toThrow(/must return a Routes object|declared no routes/);
     }
   });
 
-  it("rejects a malformed route table: a bad key, or a value that is not a handler", async () => {
-    // A key that mounts at an unreachable path, and a value that could never answer. Both pass the
-    // >=1-entry check, so each needs its own refusal — and neither may leave a partial mount.
-    for (const [body, message] of [
-      [`export default () => [() => new Response("x")];`, /is not a valid route key/], // array → key "0"
-      [`export default () => ({ "webhook": () => new Response("x") });`, /is not a valid route key/], // no leading /
-      [`export default () => ({ "POST /webhook": 42 });`, /must map to a handler function/],
+  it("refuses a malformed route table: a bad key, or a value that is not a handler", () => {
+    for (const [routes, message] of [
+      [[accepted], /is not a valid route key/], // an array's key is "0"
+      [{ webhook: accepted }, /is not a valid route key/], // no leading /
+      [{ "POST /webhook": 42 }, /must map to a handler function/],
     ] as const) {
-      const dir = await freshDir();
-      await mkdir(join(dir, "channels"));
-      await writeFile(join(dir, "channels", "bad.mjs"), body);
-      const { routes, failures } = await loadChannels(dir, fakeCtx);
-      expect(routes).toEqual({}); // no partial mount
-      expect(failures[0]!.message).toMatch(message);
+      expect(() => mount({ bad: () => routes })).toThrow(message);
     }
   });
 });
 
-/** The names `info` prints: what inspectChannels imported and accepted, in inventory order. */
-const channelNames = async (dir: string): Promise<string[]> =>
-  (await inspectChannels(dir)).channels.map((channel) => channel.name);
+describe("channelModuleProblem: what a channel file default-exports", () => {
+  it("accepts a route factory and a named long connection, by shape", () => {
+    expect(channelModuleProblem(() => ({}))).toBeUndefined();
+    const socket = { name: "socket", connect: () => ({}) };
+    expect(channelModuleProblem(socket)).toBeUndefined();
+    expect(channelIngress(() => ({}))).toBe("webhook");
+    expect(channelIngress(socket as never)).toBe("long-connection");
+  });
 
-describe("inspectChannels (the `fastagent info` / deploy pre-flight reading view)", () => {
-  it("lists channel basenames (sorted, by import); empty when there is no channels/", async () => {
-    const dir = await freshDir();
-    expect(await channelNames(dir)).toEqual([]);
-    await mkdir(join(dir, "channels"));
-    await writeFile(join(dir, "channels", "telegram.ts"), "export default () => ({});\n");
-    await writeFile(join(dir, "channels", "github.ts"), "export default () => ({});\n");
-    await writeFile(join(dir, "channels", "slack.ts.disabled"), "not imported\n");
-    // A DIRECTORY passes the name test on its own. Every reader of channels/ has to answer this the
-    // same way loadModuleDir does, or `info` lists a channel the serve never mounts.
-    await mkdir(join(dir, "channels", "feishu.ts"));
-    const said: string[] = [];
-    const warn = vi.spyOn(log, "warn").mockImplementation((message: string) => void said.push(message));
-    try {
-      expect(await channelNames(dir)).toEqual(["github", "telegram"]);
-    } finally {
-      warn.mockRestore();
+  it("refuses anything else, saying what it must be", () => {
+    for (const value of [undefined, 1, { name: "socket", start() {} }]) {
+      expect(channelModuleProblem(value)).toMatch(/must default-export \(ctx\) => Routes or \{ name, connect/);
     }
-    expect(said.filter((m) => m.includes("feishu.ts") && m.includes("a directory"))).toHaveLength(1);
-  });
-
-  it("orders by the NAME a consumer sees, not by filename", async () => {
-    // `-` sorts before `.`, so filename order gives ["a-b", "a"] while name order gives ["a", "a-b"].
-    // The inventory sorts by name so no consumer re-sorts; a github/telegram pair cannot tell the
-    // two apart, which is why this pair exists.
-    const dir = await freshDir();
-    await mkdir(join(dir, "channels"));
-    await writeFile(join(dir, "channels", "a.ts"), "export default () => ({});\n");
-    await writeFile(join(dir, "channels", "a-b.ts"), "export default () => ({});\n");
-    expect(await channelNames(dir)).toEqual(["a", "a-b"]);
-  });
-
-  it("a SYMLINKED channel file is skipped, and says why", async () => {
-    // Not a gap to close: assertInsideAgentDir guards the channels DIRECTORY, nothing guards the
-    // entries in it, so following a link would import code from anywhere on the box past the very
-    // check that exists to stop that. Skipping is the boundary — the warning is what keeps an
-    // author from staring at a channel that silently does not exist.
-    const dir = await freshDir();
-    const outside = await freshDir();
-    await writeFile(join(outside, "telegram.ts"), "export default () => ({});\n");
-    await mkdir(join(dir, "channels"));
-    await symlink(join(outside, "telegram.ts"), join(dir, "channels", "telegram.ts"));
-    const said: string[] = [];
-    const warn = vi.spyOn(log, "warn").mockImplementation((message: string) => void said.push(message));
-    try {
-      const loaded = await loadChannels(dir, { agent: {} as never, stateRoot: dir });
-      expect(loaded.routeChannels).toEqual([]);
-      // Once per read of the directory: the inventory is the only place that says it.
-      expect(said.filter((m) => m.includes("symlink"))).toHaveLength(1);
-
-      // The LISTING path says it too: `fastagent info` only lists names, so a silent skip there
-      // reads as "I never created it" rather than "this one cannot be loaded".
-      said.length = 0;
-      expect(await channelNames(dir)).toEqual([]);
-      expect(said.filter((m) => m.includes("symlink"))).toHaveLength(1);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it("a channels/ that is a FILE is a mistake, not an agent without channels", async () => {
-    // ENOENT means "this agent declares no channels". ENOTDIR means the author put a FILE where the
-    // directory goes — reading that as "no channels" serves a deployment that silently ignores what
-    // they wrote. service.test.ts pins the same verdict for `schedules`.
-    const dir = await freshDir();
-    await writeFile(join(dir, "channels"), "not a directory\n");
-    await expect(inspectChannels(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
-  });
-
-  it("enforces containment on its OWN path: rejects a channels/ symlink escaping the workspace", async () => {
-    // info goes through this, not loadChannels — the boundary guard must hold here independently.
-    const dir = await freshDir();
-    const ext = await freshDir();
-    await mkdir(join(ext, "ch"));
-    await symlink(join(ext, "ch"), join(dir, "channels"));
-    await expect(inspectChannels(dir)).rejects.toThrow(/outside the agent dir/);
+    expect(channelModuleProblem({ name: " ", connect: () => ({}) })).toBe(
+      "long-connection channel name must be a non-empty string",
+    );
   });
 });

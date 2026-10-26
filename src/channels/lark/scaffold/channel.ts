@@ -1,10 +1,10 @@
+import { needs } from "@fastagent-sh/fastagent";
 import {
   type LarkChannelOptions,
   larkChannel,
   larkIngress,
   larkWebSocketChannel,
 } from "@fastagent-sh/fastagent/lark";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
 // The branded Lark adapter over fastagent's canonical Feishu engine (verify + run + reply), configured
 // with YOUR policy. Lark international (open.larksuite.com) only; a Feishu tenant uses `fastagent add
@@ -31,8 +31,8 @@ import { defineChannel } from "@fastagent-sh/fastagent";
 
 // Your policy, the same whichever way the channel receives.
 const policy: Pick<LarkChannelOptions, "onError" | "route"> = {
-  // No session modes: a chat is one session and a thread is another, and where the answer goes follows
-  // from that (docs/design/participant-model.md).
+  // A chat is one conversation and a thread is another, each with a session of its own, and where the
+  // answer goes follows from that (docs/design/participant-model.md).
   // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
   // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
   // full details always go to the server log regardless.
@@ -43,26 +43,29 @@ const policy: Pick<LarkChannelOptions, "onError" | "route"> = {
   // Agent takes part and exactly ONE human does. Other group/thread discussion is read from the
   // platform by that place's next answered turn; @other-only messages are discussion, not asks.
   // Override to customise explicit routing, reusing the export:
-  //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
+  //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { conversation: `user:${e.sender?.sender_id?.open_id}` },
   //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { text: `${larkEnvelope(e)}\n[extra]` },
 };
 
-// `secrets`: the env vars this channel needs. fastagent carries them to a deployed box and refuses to
-// serve while one is unset. LARK_ENCRYPT_KEY is optional, so it is read, not declared.
+// `needs` declares the env vars this channel reads: fastagent carries them to a deployed box and
+// refuses to serve while a required one is unset. LARK_ENCRYPT_KEY is optional.
 export default larkIngress() === "webhook"
-  ? defineChannel({
-      secrets: ["LARK_APP_ID", "LARK_APP_SECRET", "LARK_VERIFICATION_TOKEN"],
-      channel: (secrets) =>
+  ? needs(
+      [
+        "LARK_APP_ID",
+        "LARK_APP_SECRET",
+        "LARK_VERIFICATION_TOKEN",
+        { name: "LARK_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
+      ],
+      (secrets) =>
         larkChannel({
           appId: secrets.LARK_APP_ID,
           appSecret: secrets.LARK_APP_SECRET,
           verificationToken: secrets.LARK_VERIFICATION_TOKEN, // authenticates inbound events
-          encryptKey: process.env.LARK_ENCRYPT_KEY || undefined, // when set, plaintext events are refused
+          encryptKey: secrets.LARK_ENCRYPT_KEY,
           ...policy,
         }),
-    })
-  : defineChannel({
-      secrets: ["LARK_APP_ID", "LARK_APP_SECRET"],
-      channel: (secrets) =>
-        larkWebSocketChannel({ appId: secrets.LARK_APP_ID, appSecret: secrets.LARK_APP_SECRET, ...policy }),
-    });
+    )
+  : needs(["LARK_APP_ID", "LARK_APP_SECRET"], (secrets) =>
+      larkWebSocketChannel({ appId: secrets.LARK_APP_ID, appSecret: secrets.LARK_APP_SECRET, ...policy }),
+    );

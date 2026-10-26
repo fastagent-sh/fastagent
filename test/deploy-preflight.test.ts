@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
-import type { FastagentConfig } from "../src/harnesses/pi/config.ts";
-import { globalCatalogPath } from "../src/harnesses/pi/models.ts";
-import { createPiModels } from "../src/harnesses/pi/agent-models.ts";
+import { createPiModels } from "../src/harnesses/models/environment.ts";
+import type { AgentConfig as FastagentConfig } from "../src/harnesses/pi-durable/define.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 
 /** An agent directory, as `init` produces one; `files` land in it. Named `agent`: a deployed agent's name is its
@@ -467,17 +466,18 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("loads the definition the box will load: a refusal in it gates --run instead of shipping a crash-loop", async () => {
-    const dir = await agent({ "persona.md": "You are terse.\n" });
+    const dir = await agent({ "src/tools/x.ts": "export default { name: 'x' };\n" });
     const config = { model: "openai-codex/gpt-5.5" };
     const gated = await call(dir, config, { run: true });
     expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/definition does not load.*persona\.md is no longer read/);
+    if (!gated.ok)
+      expect(gated.gate).toMatch(/definition does not build.*src\/tools\/x\.ts: must default-export a tool/);
     const warned = await call(dir, config, { run: false });
     expect(warned.ok).toBe(true);
     if (warned.ok)
       expect(warned.messages).toContainEqual({
         level: "warn",
-        text: expect.stringMatching(/definition does not load/),
+        text: expect.stringMatching(/definition does not build/),
       });
   });
 
@@ -500,9 +500,9 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("recognizes Slack as a first-party route channel for secrets/deploy guidance", async () => {
-    const dir = await agent();
-    await mkdir(join(dir, "channels"), { recursive: true });
-    await writeFile(join(dir, "channels", "slack.mjs"), "export default () => ({ '/slack': () => new Response() });\n");
+    const dir = await agent({
+      "src/channels/slack.ts": "export default () => ({ '/slack': () => new Response() });\n",
+    });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
@@ -512,10 +512,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("notes a custom channel (its webhook is the author's to wire; its variables travel like every other)", async () => {
-    const dir = await agent();
-    const { mkdir } = await import("node:fs/promises");
-    await mkdir(join(dir, "channels"), { recursive: true });
-    await writeFile(join(dir, "channels", "discord.ts"), "export default () => ({});\n");
+    const dir = await agent({ "src/channels/discord.ts": "export default () => ({});\n" });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
@@ -529,26 +526,30 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("a custom channel's declared secrets join the required list", async () => {
-    const dir = await agent();
-    await mkdir(join(dir, "channels"), { recursive: true });
-    await writeFile(
-      join(dir, "channels", "discord.mjs"),
-      `export default Object.assign(() => ({}), { secrets: ["DISCORD_TOKEN"] });\n`,
-    );
+  it("a custom channel's declared secrets join the required list, and its shape is read without their values", async () => {
+    const dir = await agent({
+      "src/channels/discord.ts": `import { needs } from "@fastagent-sh/fastagent";
+export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
+  if (DISCORD_TOKEN === "") throw new Error("no token");
+  return { name: "discord gateway", connect() {} };
+});\n`,
+    });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
-    expect(pre.declaredSecrets).toContainEqual({ name: "DISCORD_TOKEN", source: "channels/discord.mjs" });
+    expect(pre.declaredSecrets).toContainEqual({
+      name: "DISCORD_TOKEN",
+      source: "src/channels/discord.ts",
+      optional: false,
+    });
+    // The value file holds no DISCORD_TOKEN, and its ingress is still known.
+    expect(pre.channels).toEqual([{ name: "discord", ingress: "long-connection" }]);
   });
 
   it("recognizes a long-connection module structurally and reports its always-on requirement", async () => {
-    const dir = await agent();
-    await mkdir(join(dir, "channels"), { recursive: true });
-    await writeFile(
-      join(dir, "channels", "feishu.mjs"),
-      `export default { name: "feishu websocket", connect() {} };\n`,
-    );
+    const dir = await agent({
+      "src/channels/feishu.ts": `export default { name: "feishu websocket", connect() {} };\n`,
+    });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
@@ -561,9 +562,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("keeps a custom long-connection channel always-on without pretending it has a webhook", async () => {
-    const dir = await agent();
-    await mkdir(join(dir, "channels"), { recursive: true });
-    await writeFile(join(dir, "channels", "socket.mjs"), `export default { name: "custom socket", connect() {} };\n`);
+    const dir = await agent({ "src/channels/socket.ts": `export default { name: "custom socket", connect() {} };\n` });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
@@ -573,13 +572,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         text: expect.stringMatching(/long-connection channel "socket".*keep the process running.*skip webhook/),
       });
     }
-  });
-
-  it("fails visibly when an enabled channel throws during deployment inspection", async () => {
-    const dir = await agent();
-    await mkdir(join(dir, "channels"), { recursive: true });
-    await writeFile(join(dir, "channels", "broken.mjs"), `throw new Error("import exploded");\n`);
-    await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/cannot inspect.*import exploded/);
   });
 
   it("warns a KEPT hand-written Dockerfile that the environment won't reach, --force included", async () => {
@@ -701,33 +693,25 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(none.ok && !none.hasCron).toBe(true);
     if (none.ok) expect(none.messages.find((m) => /keeps one machine running/.test(m.text))).toBeUndefined();
 
-    // A schedules/ file → hasCron: the schedule is the agent's own clock, so nothing wakes a sleeping box for it.
-    const { mkdir, writeFile: wf } = await import("node:fs/promises");
-    const dir = await agent();
-    await mkdir(join(dir, "schedules"), { recursive: true });
-    // A file that fails to LOAD still counts, conservatively: it may well be a schedule tomorrow, and scaling to
-    // zero because it did not parse would hide that behind silence.
-    await wf(join(dir, "schedules", "broken.md"), "no frontmatter\n");
-    const broken = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(broken.ok && broken.hasCron).toBe(true);
-    if (broken.ok) {
-      expect(broken.messages.map((m) => m.text).join("\n")).toMatch(/schedules\/broken\.md is not a valid schedule/);
-    }
-    await wf(join(dir, "schedules", "broken.md"), `---\ncron: "0 9 * * *"\n---\ngo\n`);
-    const withCron = await call(dir, { model: "openai/gpt-4o-mini" });
+    // A schedule → hasCron: the schedule is the agent's own clock, so nothing wakes a sleeping box for it.
+    const schedule = (cron: string) =>
+      `import { defineSchedule } from "@fastagent-sh/fastagent";\nexport default defineSchedule({ cron: "${cron}", prompt: "go" });\n`;
+    const withCron = await call(await agent({ "src/schedules/daily.ts": schedule("0 9 * * *") }), {
+      model: "openai/gpt-4o-mini",
+    });
     expect(withCron.ok && withCron.hasCron).toBe(true);
     if (withCron.ok) {
       const note = withCron.messages.find((m) => /keeps one machine running/.test(m.text));
       expect(note?.level).toBe("note");
     }
-    // Past the cap, a valid file would never fire on the box: refused here like a broken one.
-    for (let i = 0; i < 20; i++)
-      await wf(join(dir, "schedules", `s${String(i).padStart(2, "0")}.md`), `---\ncron: "0 9 * * *"\n---\ngo\n`);
-    const over = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(over.ok).toBe(true);
-    if (over.ok) {
-      const issues = over.messages.filter((m) => /past the first 20 schedules/.test(m.text)).map((m) => m.text);
-      expect(issues).toEqual([expect.stringMatching(/^schedules\/s19\.md is past the first 20/)]);
+    // One that does not build still counts, conservatively: it may well be a schedule tomorrow, and scaling to zero
+    // because it did not build would hide that behind silence.
+    const broken = await call(await agent({ "src/schedules/broken.ts": schedule("not a cron") }), {
+      model: "openai/gpt-4o-mini",
+    });
+    expect(broken.ok && broken.hasCron).toBe(true);
+    if (broken.ok) {
+      expect(broken.messages.map((m) => m.text).join("\n")).toMatch(/does not build.*src\/schedules\/broken\.ts/);
     }
   });
 
@@ -770,20 +754,26 @@ describe("preflight: a model credential that does not travel", () => {
     }
   });
 
-  it("a model only the definition's extensions declare is not gated: its credentials are that code's, on the box", async () => {
-    const dir = await agent({
-      "extensions/router.ts": `export default (pi) => pi.registerVirtualModel({
-  provider: "router", id: "auto", name: "Automatic",
-  route: (_request, ctx) => ({ model: ctx.modelRegistry.find("anthropic", "claude-sonnet-4-5"), thinkingLevel: "off" }),
-});\n`,
-    });
-    const pre = await call(dir, { model: "router/auto" }, { run: true });
-    if (!pre.ok) throw new Error(`preflight gated: ${pre.gate}`);
-    expect(pre.boxLogin).toBeUndefined();
-    expect(pre.messages).toContainEqual({
-      level: "note",
-      text: expect.stringMatching(/router\/auto is declared by the definition's extensions/),
-    });
+  it("a model a provider of the definition offers is checked against it, and authenticated by that code", async () => {
+    // Under test/fixtures, so the configuration's import of pi-ai resolves this repository's.
+    const host = join(import.meta.dirname, "fixtures", `.tmp-preflight-${process.pid}`);
+    const dir = join(host, "agent");
+    await mkdir(dir, { recursive: true });
+    try {
+      await writeFile(
+        join(dir, "fastagent.config.ts"),
+        `import { fauxProvider } from "@earendil-works/pi-ai";
+export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" }] }).provider] };\n`,
+      );
+      const pre = await call(dir, { model: "gw/m1" }, { run: true });
+      if (!pre.ok) throw new Error(`preflight gated: ${pre.gate}`);
+      expect(pre.boxLogin).toBeUndefined();
+      const unknown = await call(dir, { model: "gw/nope" }, { run: true });
+      expect(unknown.ok).toBe(false);
+      if (!unknown.ok) expect(unknown.gate).toMatch(/no provider of the deployed agent offers "gw\/nope"/);
+    } finally {
+      await rm(host, { recursive: true, force: true });
+    }
   });
 
   it("with nothing stored here either: the box still logs in, since this machine's login was never the source", async () => {
@@ -809,33 +799,6 @@ describe("preflight: a model credential that does not travel", () => {
     if (!pre.ok) throw new Error(pre.gate);
     expect(pre.boxLogin).toBe("anthropic");
     expect(pre.secrets.map((s) => s.name)).not.toContain("ANTHROPIC_API_KEY");
-  });
-
-  it('a built-in provider the definition keys by its own "$NAME" carries that variable, even over a local login', async () => {
-    // environmentAuthSource knows only the built-in variable (ANTHROPIC_API_KEY); the deployed registry reads the
-    // definition's reference instead, so that is what the value file must hold and what travels.
-    noAnthropicEnv();
-    const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
-    const keyedBy = (env: string) =>
-      agent({
-        "models.json": JSON.stringify({ providers: { anthropic: { apiKey: "$MY_ANT_KEY" } } }),
-        ".secrets/auth.json": JSON.stringify({ anthropic: oauth }),
-        ".secrets/.env": env,
-      });
-    const held = await call(
-      await keyedBy("MY_ANT_KEY=sk-ant\n"),
-      { model: "anthropic/claude-sonnet-4-5" },
-      { run: true },
-    );
-    if (!held.ok) throw new Error(held.gate);
-    expect(held.boxLogin).toBeUndefined();
-    expect(held.modelAuth).toBe("MY_ANT_KEY");
-
-    // Declared but not set yet: still that variable, which the values gate then asks for by name.
-    const unset = await call(await keyedBy(""), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
-    if (!unset.ok) throw new Error(unset.gate);
-    expect(unset.boxLogin).toBeUndefined();
-    expect(unset.secrets.map((s) => s.name)).toContain("MY_ANT_KEY");
   });
 
   it("a credential that points at a FILE on this machine does not travel: the box is asked", async () => {
@@ -887,194 +850,16 @@ describe("preflight: a model credential that does not travel", () => {
   });
 });
 
-describe("preflight: how a models.json endpoint's credential reaches the host", () => {
+describe("preflight: what the definition declares", () => {
   afterEach(() => vi.unstubAllEnvs());
-  const GATEWAY = (apiKey: string, baseUrl = "https://gw.example.com/v1") =>
-    JSON.stringify({
-      providers: { mygw: { baseUrl, api: "openai-completions", apiKey, models: [{ id: "m1" }] } },
-    });
-
-  it("an env-keyed endpoint reports the VARIABLE NAME, so the value carries like any provider key", async () => {
-    // What made this wrong: probeAuthSource answers "is it authenticated here" ("configured API key"),
-    // not "how does the credential reach the host". Reporting the display label left `--run` seeing no
-    // credential at all, and it stopped a correctly configured agent with two impossible remedies.
-    const dir = await agent({ "models.json": GATEWAY("$FA_PREFLIGHT_GW_KEY") });
-    process.env.FA_PREFLIGHT_GW_KEY = "sk-x";
-    try {
-      const pre = await call(dir, { model: "mygw/m1" });
-      expect(pre.ok).toBe(true);
-      if (pre.ok) {
-        expect(pre.modelAuth).toBe("FA_PREFLIGHT_GW_KEY"); // the name, not "configured API key"
-        expect(pre.boxLogin).toBeUndefined();
-      }
-    } finally {
-      delete process.env.FA_PREFLIGHT_GW_KEY;
-    }
-  });
-
-  it("a literal key WARNS, whatever it points at — the framework does not decide what is a credential", () => {
-    // FastAgent gates what IT causes (a packing rule that would put `.secrets/auth.json` in the image); this is the
-    // author's own committed file, and no static rule separates a leaked key from the placeholder pi's docs
-    // prescribe for a keyless local server (`"apiKey": "ollama"`). So: report, never refuse.
-    return (async () => {
-      for (const baseUrl of ["https://gw.example.com/v1", "http://localhost:11434/v1"]) {
-        const dir = await agent({ "models.json": GATEWAY("sk-literal-in-file", baseUrl) });
-        const pre = await call(dir, { model: "mygw/m1" }, { run: true });
-        expect(pre.ok).toBe(true);
-        if (pre.ok) {
-          expect(pre.boxLogin).toBeUndefined(); // the definition carries it: nothing to carry, nothing to log in
-          expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/literal apiKey/) });
-        }
-      }
-    })();
-  });
-
-  it("every provider is reported, not just the selected model's — the file ships whole", async () => {
-    const dir = await agent({
-      "models.json": JSON.stringify({
-        providers: {
-          mygw: {
-            baseUrl: "https://a.example.com/v1",
-            api: "openai-completions",
-            apiKey: "$K",
-            models: [{ id: "m1" }],
-          },
-          unused: {
-            baseUrl: "https://b.example.com/v1",
-            api: "openai-completions",
-            apiKey: "sk-u",
-            models: [{ id: "m2" }],
-          },
-        },
-      }),
-    });
-    vi.stubEnv("K", "sk-k"); // the selected model resolves its key, so the run is not refused for that
-    const pre = await call(dir, { model: "mygw/m1" }, { run: true });
-    expect(pre.ok).toBe(true);
-    if (pre.ok) expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/"unused"/) });
-  });
-
-  it("a !command key is not reported — it runs on the box and the credential never travels", async () => {
-    const dir = await agent({ "models.json": GATEWAY("!printf sk-from-a-command") });
-    const pre = await call(dir, { model: "mygw/m1" }, { run: true });
-    expect(pre.ok).toBe(true);
-    if (pre.ok) {
-      expect(pre.boxLogin).toBeUndefined();
-      expect(pre.messages.some((m) => /literal apiKey/.test(m.text))).toBe(false);
-    }
-  });
-
-  it("a model whose endpoint comes only from the machine's models.json is warned about: that file does not ship", async () => {
-    const machine = join(await mkdtemp(join(tmpdir(), "fa-machine-models-")), "models.json");
-    await writeFile(
-      machine,
-      JSON.stringify({
-        providers: {
-          localgw: {
-            baseUrl: "http://127.0.0.1:8000/v1",
-            api: "openai-completions",
-            apiKey: "x",
-            models: [{ id: "m" }],
-          },
-        },
-      }),
-    );
-    vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
-    const pre = await call(await agent(), { model: "localgw/m" });
-    expect(pre.ok).toBe(true);
-    if (pre.ok) {
-      expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/localgw.*does not ship/) });
-    }
-    // No built-in "localgw" to fall back on, so running the deployment is refused, not warned about.
-    const running = await call(await agent(), { model: "localgw/m" }, { run: true });
-    expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/unknown model/) });
-
-    // The agent's own entry for the provider is what ships, so nothing is said.
-    const own = await agent({
-      "models.json": JSON.stringify({
-        providers: {
-          localgw: {
-            baseUrl: "https://gw.example.com/v1",
-            api: "openai-completions",
-            apiKey: "$K",
-            models: [{ id: "m" }],
-          },
-        },
-      }),
-    });
-    const shipped = await call(own, { model: "localgw/m" });
-    expect(shipped.ok).toBe(true);
-    if (shipped.ok) expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
-  });
-
-  it("a model known only from the machine's model catalog is refused under --run; the agent's own catalog ships", async () => {
-    // As `fastagent models --refresh` leaves it: one anthropic model newer than the bundled catalog.
-    const [bundled] = createPiModels().getProvider("anthropic")?.getModels() ?? [];
-    const entry = { models: [{ ...bundled, id: "claude-newer" }], lastModified: Date.now() + 86_400_000 };
-    await mkdir(dirname(globalCatalogPath()), { recursive: true });
-    await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: entry }));
-    try {
-      const running = await call(await agent(), { model: "anthropic/claude-newer" }, { run: true });
-      expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/does not ship.*models --refresh/) });
-
-      // An entry pi ignores (dated no later than its bundled catalog, as pi writes a 404) supplies nothing here either,
-      // so it is no reason to send anyone to refresh the agent.
-      await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: { ...entry, lastModified: 0 } }));
-      const ignored = await call(await agent(), { model: "anthropic/claude-newer" });
-      expect(ignored.ok && ignored.messages.some((m) => /machine's model catalog/.test(m.text))).toBe(false);
-      await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: entry }));
-
-      // The same entry in the agent's own models-store.json travels with the definition: nothing to say.
-      const own = await agent({ "models-store.json": JSON.stringify({ anthropic: entry }) });
-      const shipped = await call(own, { model: "anthropic/claude-newer" }, { run: true });
-      if (!shipped.ok) throw new Error(shipped.gate);
-      expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
-    } finally {
-      await rm(globalCatalogPath(), { force: true });
-    }
-  });
-
-  it("a machine entry that only overrides a built-in provider is warned about, and its key does not count", async () => {
-    const anthropic = createPiModels().getProvider("anthropic")?.getModels()[0]?.id as string;
-    const machine = join(await mkdtemp(join(tmpdir(), "fa-machine-models-")), "models.json");
-    // The company-gateway shape: the machine routes built-in anthropic through a proxy with its own key.
-    await writeFile(
-      machine,
-      JSON.stringify({
-        providers: { anthropic: { baseUrl: "https://llm-proxy.internal/v1", apiKey: "$CORP_PROXY_KEY" } },
-      }),
-    );
-    vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
-    vi.stubEnv("CORP_PROXY_KEY", "proxy");
-
-    // The deployment's key, where a deployment's key lives: the value file.
-    const pre = await call(
-      await agent({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" }),
-      { model: `anthropic/${anthropic}` },
-      { run: true },
-    );
-
-    expect(pre.ok).toBe(true); // the deployed agent still resolves pi's built-in anthropic
-    if (pre.ok) {
-      expect(pre.messages).toContainEqual({
-        level: "warn",
-        text: expect.stringMatching(/built-in "anthropic" without it/),
-      });
-      // Judged on the deployed registry: the host needs ANTHROPIC_API_KEY, not the machine's proxy key.
-      expect(pre.modelAuth).toBe("ANTHROPIC_API_KEY");
-      expect(pre.boxLogin).toBeUndefined();
-      expect(pre.secrets.map((secret) => secret.name)).toContain("ANTHROPIC_API_KEY");
-    }
-  });
 
   it("requires what tools DECLARED, and lists the rest of the value file after them", async () => {
-    const dir = await agent();
-    await mkdir(join(dir, "tools"), { recursive: true });
-    await writeFile(
-      join(dir, "tools", "x-post.mjs"),
-      `export default { name: "x-post", description: "post", parameters: {},
-         secrets: ["X_API_KEY", "X_API_SECRET"], execute: async () => ({ content: [] }) };\n`,
-    );
+    const dir = await agent({
+      "src/tools/x-post.ts": `import { needs } from "@fastagent-sh/fastagent";
+export default needs(["X_API_KEY", "X_API_SECRET"], () => ({
+  name: "x-post", description: "post", parameters: {}, execute: async () => ({}),
+}));\n`,
+    });
     // The variables context.json declares for the agent's commands are required the same way, with what they are for.
     await writeFile(
       join(dir, "context.json"),
@@ -1086,75 +871,32 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
     expect(pre.declaredSecrets).toEqual([
-      { name: "X_API_KEY", source: "tools/x-post.mjs" },
-      { name: "X_API_SECRET", source: "tools/x-post.mjs" },
+      { name: "X_API_KEY", source: "src/tools/x-post.ts", optional: false },
+      { name: "X_API_SECRET", source: "src/tools/x-post.ts", optional: false },
       { name: "GH_HOST", source: "context.json", description: "the GitHub host gh talks to" },
     ]);
     // The runbook names the file to open for a required one, and the value file for the rest.
     expect(pre.secrets).toEqual([
-      { name: "X_API_KEY", hint: "required by tools/x-post.mjs" },
-      { name: "X_API_SECRET", hint: "required by tools/x-post.mjs" },
+      { name: "X_API_KEY", hint: "required by src/tools/x-post.ts" },
+      { name: "X_API_SECRET", hint: "required by src/tools/x-post.ts" },
       { name: "GH_HOST", hint: "required by context.json: the GitHub host gh talks to" },
       { name: "GH_TOKEN", hint: "from .secrets/.env" },
     ]);
   });
 
-  it("warns when a code input cannot be loaded, and GATES --run on it", async () => {
+  it("warns when the definition does not load, and GATES --run on it", async () => {
     // Generate-only warns: the operator may be producing artifacts on a machine that never installed
-    // the agent's deps. `--run` gates, because the BOX will load that file successfully and refuse to
-    // start on a declaration this deploy could not read — a crash loop after a "successful" deploy.
-    const dir = await agent();
-    await mkdir(join(dir, "tools"), { recursive: true });
-    await writeFile(join(dir, "tools", "broken.mjs"), `throw new Error("boom");\n`);
+    // the agent's deps. `--run` gates, because the box would refuse to start on it: a crash loop after a
+    // "successful" deploy.
+    const dir = await agent({ "src/tools/broken.ts": `throw new Error("boom");\n` });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
-      expect(pre.messages.some((m) => m.level === "warn" && /tools\/broken\.mjs failed to load/.test(m.text))).toBe(
-        true,
-      );
+      expect(pre.messages.some((m) => m.level === "warn" && /does not load.*boom/.test(m.text))).toBe(true);
     }
     const run = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(run.ok).toBe(false);
-    if (!run.ok) expect(run.gate).toMatch(/tools\/broken\.mjs failed to load.*would refuse to start/);
-  });
-
-  it("sessionControl needs no secret of ours — it warns that the deployed plane is unauthenticated", async () => {
-    const dir = await agent();
-    const off = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(off.ok && off.declaredSecrets).toEqual([]);
-    // WITHOUT the control plane the warning still fires, naming `POST /invoke`: it is on every
-    // deployment whatever channels are declared, and conditioning this on `sessionControl` left a
-    // telegram-only agent publishing "run a turn with my tools" on a public URL in silence.
-    const unauthenticated = (pre: Awaited<ReturnType<typeof call>>) =>
-      pre.ok ? pre.messages.filter((m) => m.level === "warn" && /UNAUTHENTICATED/.test(m.text)) : [];
-    const anonymous = unauthenticated(off);
-    expect(anonymous).toHaveLength(1);
-    expect(anonymous[0]?.text).toContain("POST /invoke");
-    expect(anonymous[0]?.text).not.toContain("/control/*");
-    // …and NOT on a host that publishes no URL at all: the AgentCore container is reachable only
-    // through the Runtime's IAM and the forwarder's shared secret. A warning about a public endpoint
-    // that does not exist is how an operator learns to skim past every deploy warning.
-    expect(unauthenticated(await call(dir, { model: "openai/gpt-4o-mini" }, { publicUrl: false }))).toEqual([]);
-
-    // The same rule applied to the definition, not just the host: `http.api: false` withholds the
-    // API this warning would otherwise name, so with no control plane either there is nothing left to warn about.
-    const withheld = await call(dir, { model: "openai/gpt-4o-mini", http: { api: false } });
-    expect(unauthenticated(withheld)).toEqual([]);
-    // With the control plane on, the warning stands — naming only what is actually served.
-    const controlOnly = unauthenticated(
-      await call(dir, { model: "openai/gpt-4o-mini", http: { api: false, control: true } }),
-    );
-    expect(controlOnly).toHaveLength(1);
-    expect(controlOnly[0]?.text).toContain("/control/*");
-    expect(controlOnly[0]?.text).not.toContain("POST /invoke");
-
-    const on = await call(dir, { model: "openai/gpt-4o-mini", http: { control: true } });
-    expect(on.ok).toBe(true);
-    if (on.ok) {
-      // Only what the DEFINITION declared: fastagent mints no credential of its own any more.
-      expect(on.declaredSecrets).toEqual([]);
-      // The operator still has to hear it, because the plane rides the PUBLIC host URL.
-      expect(on.messages.some((m) => m.level === "warn" && /UNAUTHENTICATED/.test(m.text))).toBe(true);
-    }
+    if (!run.ok)
+      expect(run.gate).toMatch(/the definition does not load, so the deployed agent would not start: .*boom/);
   });
 });

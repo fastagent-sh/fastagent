@@ -33,12 +33,13 @@ import {
   CLI,
   RAILWAY_PROBE_PROJECT,
   answerOf,
+  ask,
   expectCompleted,
-  invoke,
   installSpec,
   requireEnv,
   run,
   stageModelKey,
+  stageProbeChannel,
 } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
@@ -50,6 +51,7 @@ requireEnv("RAILWAY_API_TOKEN", "an ACCOUNT-scoped Railway token — this probe 
 const SERVICE = toRailwayName(`fastagent-live-${randomUUID().slice(0, 8)}`);
 
 let agentDir = "";
+let secret = "";
 /** Gates teardown: a `service delete` for a service that was never added reports a confusing failure
  *  and hides whichever real error stopped the run before it. */
 let serviceCreated = false;
@@ -60,6 +62,7 @@ beforeAll(async () => {
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await stageModelKey(agentDir, MODEL);
+  secret = await stageProbeChannel(agentDir);
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(
@@ -152,19 +155,17 @@ describe("deploy railway --run: a real project, provisioned and destroyed", () =
     const why = healthy ? "" : await deploymentLog(SERVICE, agentDir);
     expect(healthy, `${url}/health never came up. The deployment's log (last 200 lines):\n${why}`).toBe(true);
 
-    const session = "live-railway";
-    expectCompleted(
-      await invoke(url as string, session, "Remember this number: 47. Reply with just: ok"),
-      "the first turn",
-    );
+    const first = await ask(url as string, secret, "Remember this number: 47. Reply with just: ok");
+    expectCompleted(first, "the first turn");
 
     // Session continuity on the deployed service. Unlike the fly probe this does NOT restart first:
     // `railway redeploy` replaces the machine but the CLI offers no wait-for-ready, so a restart
     // here would race the next request rather than prove anything about the volume.
-    const second = await invoke(
+    const second = await ask(
       url as string,
-      session,
+      secret,
       "What number did I ask you to remember? Reply with digits only.",
+      first.sessionId,
     );
     expectCompleted(second, "the second turn");
     expect(answerOf(second)).toContain("47");

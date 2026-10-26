@@ -1,52 +1,57 @@
 import { describe, expect, it } from "vitest";
-import { stat, writeFile } from "node:fs/promises";
+import { stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentWorkspace, run } from "./cli-run.ts";
 
+/** What `info` runs with: no model from this machine's shell. */
+const withoutModel = (): NodeJS.ProcessEnv => {
+  const env = { ...process.env };
+  delete env.FASTAGENT_MODEL;
+  return env;
+};
+
 describe("cli: info", () => {
-  it("info reports the assembled surface as JSON (incl. load diagnostics), read-only (no sessions dir)", async () => {
+  it("info reports what the directory builds into as JSON, read-only (no state root)", async () => {
     const dir = await agentWorkspace("fa-info-", {
-      "fastagent.config.ts": "export default {};\n",
       "skills/greet/SKILL.md": "---\nname: greet\ndescription: Greet warmly.\n---\nHi.\n",
-      "skills/bad/SKILL.md": "---\nname: bad\n---\nno description.\n", // malformed
-      "tools/lookup.mjs":
-        'export default { description: "Lookup", parameters: { type: "object" }, async execute() { return "ok"; } };\n',
-      "channels/github.ts": 'export default () => ({ "POST /x": () => new Response("ok") });\n',
+      "skills/bad/SKILL.md": "---\nname: bad\n---\nno description.\n", // malformed: skipped
+      "src/tools/lookup.mjs":
+        'export default { name: "lookup", description: "Lookup", parameters: { type: "object" }, async execute() { return {}; } };\n',
+      "src/channels/github.ts": 'export default () => ({ "POST /x": () => new Response("ok") });\n',
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
-    const env = { ...process.env };
-    delete env.FASTAGENT_MODEL;
-    const { code, stdout } = await run(["info", dir, "--json"], undefined, env);
+    const { code, stdout } = await run(["info", dir, "--json"], undefined, withoutModel());
     expect(code).toBe(0); // an unset model is reported, not fatal
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
-    expect(info.codingTools).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
     expect(info.tools).toEqual(["lookup"]);
-    expect(info.skills.map((s: { name: string }) => s.name)).toEqual(["greet"]); // the malformed skill is skipped
-    expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // info SURFACES loader diagnostics
-    expect(info.channels).toEqual(["github"]);
+    expect(info.channels).toEqual([{ name: "github", ingress: "webhook" }]);
+    expect(info.commands.map((command: { name: string }) => command.name)).toEqual(["skill:greet"]);
     await expect(stat(join(dir, ".state"))).rejects.toThrow(); // read-only: never creates the state root
   });
 
-  it("info reports the declared environment without installing it, and a refused one without failing", async () => {
+  it("info reports the declared environment without installing it, and says why a refused one stops the agent", async () => {
     // No mise is installed in this agent: `info` must not need one (it only reads the declaration).
     const environment = {
       packages: { jq: "1.8.1" },
       aptPackages: ["chromium"],
       variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } },
     };
-    const dir = await agentWorkspace("fa-info-env-", {
-      "fastagent.config.ts": "export default {};\n",
-      "context.json": JSON.stringify({ environment }),
-    });
+    const dir = await agentWorkspace("fa-info-env-", { "context.json": JSON.stringify({ environment }) });
     const ok = await run(["info", dir, "--json"]);
     expect(ok.code, ok.stderr).toBe(0);
     expect(JSON.parse(ok.stdout)).toMatchObject({
       environment,
-      environmentError: null,
       // Required like a tool's secret, attributed to the file that declares it.
-      declaredSecrets: [{ name: "FA_TEST_HOST", source: "context.json", description: "the GitHub host gh talks to" }],
-      unsetSecrets: [expect.objectContaining({ name: "FA_TEST_HOST" })],
+      secrets: [
+        {
+          name: "FA_TEST_HOST",
+          optional: false,
+          declaredIn: ["context.json"],
+          description: "the GitHub host gh talks to",
+        },
+      ],
+      unsetSecrets: ["FA_TEST_HOST"],
     });
     expect((await run(["info", dir])).stdout).toMatch(/^secrets: +FA_TEST_HOST \(context\.json\)$/m);
     expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq 1\.8\.1, apt:chromium$/m);
@@ -54,127 +59,64 @@ describe("cli: info", () => {
       join(dir, "context.json"),
       JSON.stringify({ content: { notes: { github: "acme/notes" } }, environment: { packages: { "cargo:x": "1" } } }),
     );
+    // The environment's variables are part of what the agent declares, so a refused environment is a definition that
+    // does not open: said as the refusal dev and start stop on, never a fall back to the machine's commands.
     const refused = await run(["info", dir, "--json"]);
-    expect(refused.code).toBe(0);
-    // Reported where it is: the content is the content, and the refusal is the environment's alone.
-    expect(JSON.parse(refused.stdout)).toMatchObject({
-      content: [expect.objectContaining({ name: "notes" })],
-      contentError: null,
-      environment: null,
-      environmentError: expect.stringMatching(/package "cargo:x" installs with cargo:/),
-    });
-    // Said as what it is: dev and start stop on it, they do not fall back to the machine's commands.
-    expect((await run(["info", dir])).stdout).toMatch(
-      /^environment: +\(refused: dev and start stop on it\)\n +⚠ .*package "cargo:x" installs with cargo:/m,
-    );
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/package "cargo:x" installs with cargo:/);
   });
 
-  it("info RESOLVES the model spec against the agent's own models.json, and says so when it does not", async () => {
-    // The docs point at `info` to confirm what an agent resolved, so it must not merely echo the spec:
-    // a custom endpoint changes which specs exist, and reporting a healthy-looking one that `dev`/`start`
-    // then reject is the failure this pre-empts. Read-only and non-fatal — diagnosing a broken agent is
-    // the job, so the verdict is DATA (exit 0), not a throw.
+  it("info RESOLVES the model spec against the definition's providers, and says so when it does not", async () => {
+    // The docs point at `info` to confirm what an agent resolved, so it must not merely echo the spec: a provider in
+    // code changes which specs exist, and reporting a healthy-looking one that `dev`/`start` then reject is the
+    // failure this pre-empts. Non-fatal: diagnosing a broken agent is the job, so the verdict is DATA (exit 0).
     const dir = await agentWorkspace("fa-info-models-", {
-      "models.json": JSON.stringify({
-        providers: {
-          mygw: {
-            baseUrl: "http://vllm.internal:8000/v1",
-            api: "openai-completions",
-            apiKey: "$FA_TEST_KEY",
-            models: [{ id: "deepseek-v3" }],
-          },
-        },
-      }),
+      "fastagent.config.ts":
+        'import { fauxProvider } from "@earendil-works/pi-ai";\n' +
+        'export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" }] }).provider] };\n',
     });
-    const env = { ...process.env };
-    delete env.FASTAGENT_MODEL;
+    await symlink(new URL("../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
 
-    const ok = JSON.parse((await run(["info", dir, "--json", "--model", "mygw/deepseek-v3"], undefined, env)).stdout);
-    expect(ok.model).toBe("mygw/deepseek-v3");
-    expect(ok.modelError).toBeNull(); // declared in models.json — it resolves
+    const ok = JSON.parse((await run(["info", dir, "--json", "--model", "gw/m1"], undefined, withoutModel())).stdout);
+    expect(ok.model).toBe("gw/m1");
+    expect(ok.modelError).toBeNull(); // the definition's provider offers it
 
-    const bad = await run(["info", dir, "--json", "--model", "mygw/not-declared"], undefined, env);
+    const bad = await run(["info", dir, "--json", "--model", "gw/not-declared"], undefined, withoutModel());
     expect(bad.code).toBe(0);
-    expect(JSON.parse(bad.stdout).modelError).toMatch(/not in registry/);
+    expect(JSON.parse(bad.stdout).modelError).toBe('no provider "gw" offers "not-declared"');
   });
 
-  it("info names the machine's models.json and says when the model's endpoint comes from it", async () => {
-    const dir = await agentWorkspace("fa-info-machine-models-");
-    const machine = join(dir, "machine-models.json");
-    await writeFile(
-      machine,
-      JSON.stringify({
-        providers: {
-          localgw: {
-            baseUrl: "http://127.0.0.1:8000/v1",
-            api: "openai-completions",
-            apiKey: "x",
-            models: [{ id: "m" }],
-          },
-        },
-      }),
-    );
-    const env: NodeJS.ProcessEnv = { ...process.env, FASTAGENT_MODELS_PATH: machine };
-    delete env.FASTAGENT_MODEL;
-
-    const report = JSON.parse((await run(["info", dir, "--json", "--model", "localgw/m"], undefined, env)).stdout);
-    expect(report.modelError).toBeNull();
-    expect(report.modelFromMachine).toBe(true);
-    expect(report.machineModels).toEqual({ path: machine, inherited: ["localgw"], overridden: [] });
-  });
-
-  it("info degrades when a tool can't load (missing dep) — reports it, still shows the surface, exits 0", async () => {
-    // The scaffold ships tools/ that import @fastagent-sh/fastagent; before `npm install` the import fails.
-    // A broken tool file is ISOLATED (skipped + reported, not thrown) so it can't crash the load — info
-    // reports it, and dev/start degrade the SAME way (G2): the agent keeps serving without that one tool.
-    const dir = await agentWorkspace("fa-info-toolfail-", {
-      "tools/broken.ts": 'import "totally-not-a-real-package-xyz";\nexport default {};\n',
+  it("info says why the definition does not open, naming the module, as dev and start would refuse it", async () => {
+    // One module's import failing is the registry's, so the agent does not open: said in one line, with the reason.
+    const missing = await agentWorkspace("fa-info-toolfail-", {
+      "src/tools/broken.ts": 'import "totally-not-a-real-package-xyz";\nexport default {};\n',
     });
-    await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
-    const env = { ...process.env };
-    delete env.FASTAGENT_MODEL;
+    const failed = await run(["info", missing], undefined, withoutModel());
+    expect(failed.code).toBe(1);
+    expect(failed.stderr).toMatch(/totally-not-a-real-package-xyz/);
+    expect(failed.stderr).not.toMatch(/\n\s+at /); // a refusal, not a stack
 
-    const { code, stdout } = await run(["info", dir, "--json"], undefined, env);
-    expect(code).toBe(0); // reported, not fatal
-    const info = JSON.parse(stdout);
-    expect(info.tools).toEqual([]); // the broken tool isn't loaded…
-    expect(JSON.stringify(info.toolFailures)).toMatch(/broken\.ts/); // …it's surfaced as a per-file load failure
-    expect(info.toolError).toBeNull(); // isolated, so NOT a whole-load abort
-    expect(info.skills).toEqual([]); // the rest of the surface still shows
-    await expect(stat(join(dir, ".state"))).rejects.toThrow(); // still read-only
-
-    // text mode: the tools line degrades and the reason goes to stderr as a warning
-    const text = await run(["info", dir], undefined, env);
-    expect(text.code).toBe(0);
-    expect(text.stdout).toMatch(/tools:\s+\(none\)/); // the broken tool was skipped, nothing else to show
-    expect(text.stderr).toMatch(/broken\.ts/); // the reason is a warning on stderr
+    // A schedule its cron refuses is the same: the agent would not start on it.
+    const badCron = await agentWorkspace("fa-info-schedfail-", {
+      "src/schedules/bad.ts": 'export default { kind: "fastagent.schedule", cron: "not a cron", prompt: "x" };\n',
+    });
+    const refused = await run(["info", badCron], undefined, withoutModel());
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/src\/schedules\/bad\.ts/);
   });
 
-  it("info loads schedules — a broken one is reported (exit 0), a good one carries its next instant", async () => {
-    // Same G2 isolation as tools: a broken schedule file (bad cron) is skipped + reported at info time,
-    // not first at `dev`; the good schedule still shows, with its next fire instant.
-    const dir = await agentWorkspace("fa-info-schedfail-", {
-      "schedules/good.md": '---\ncron: "0 9 * * *"\ntz: UTC\n---\ndigest\n',
-      "schedules/bad.md": "---\ncron: not a cron\n---\nx\n",
+  it("info carries each schedule's next instant", async () => {
+    const dir = await agentWorkspace("fa-info-sched-", {
+      "src/schedules/good.ts":
+        'export default { kind: "fastagent.schedule", cron: "0 9 * * *", tz: "UTC", prompt: "digest" };\n',
     });
-    await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
-    const env = { ...process.env };
-    delete env.FASTAGENT_MODEL;
-
-    const { code, stdout } = await run(["info", dir, "--json"], undefined, env);
-    expect(code).toBe(0); // reported, not fatal
+    const { code, stdout } = await run(["info", dir, "--json"], undefined, withoutModel());
+    expect(code).toBe(0);
     const info = JSON.parse(stdout);
-    expect(info.schedules).toHaveLength(1);
-    expect(info.schedules[0]).toMatchObject({ name: "good", cron: "0 9 * * *" });
-    expect(info.schedules[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
-    expect(JSON.stringify(info.scheduleFailures)).toMatch(/bad\.md/); // the broken one is surfaced per-file
-    expect(info).not.toHaveProperty("selfSchedule"); // not a switch: every serve mounts the wake tool
-    expect(info.codingTools).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]); // omitted = everything
-
-    // text mode: next instant on the schedules line, the failure as a stderr warning
-    const text = await run(["info", dir], undefined, env);
-    expect(text.code).toBe(0);
+    expect(info.schedules).toEqual([
+      { name: "good", cron: "0 9 * * *", tz: "UTC", next: expect.stringMatching(/T09:00:00\.000Z$/) },
+    ]);
+    const text = await run(["info", dir], undefined, withoutModel());
     expect(text.stdout).toMatch(/schedules:\s+good \(next .*T09:00:00\.000Z\)/);
-    expect(text.stderr).toMatch(/bad\.md/);
   });
 });

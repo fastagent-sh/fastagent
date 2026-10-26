@@ -193,7 +193,7 @@ function readClaim(dir: string, name: string): Fire | undefined {
  * One definition, two enforcers: `discover.ts` refuses an illegal one where the author can see which file is wrong,
  * and `claimDir` asserts it again for a programmatic caller.
  */
-export function isSafeScheduleName(name: string): boolean {
+function isSafeScheduleName(name: string): boolean {
   return name !== "" && !/[/\\]/.test(name) && !name.includes("\u0000") && name !== "." && name !== "..";
 }
 

@@ -4,7 +4,7 @@
  * that session's memory, so the two cannot be keyed independently.
  */
 import { log } from "../../log.ts";
-import { loadStateFile, saveStateFile } from "./state.ts";
+import { loadStateFile, saveStateFile } from "../../state-file.ts";
 
 const MAX_THREADS = 1000;
 

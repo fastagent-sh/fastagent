@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
 import {
   MAX_PENDING_WAKEUPS,
   MIN_WAKE_MS,
@@ -12,25 +12,26 @@ import {
   takeFirstDueWakeup,
   parseDelayMs,
 } from "../src/schedule/wakeups.ts";
-import { makeWakeTool, withWakeTool } from "../src/harnesses/pi/wake-tool.ts";
+import { wakeExtension } from "../src/harnesses/pi-durable/wake.ts";
 import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
-import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 
 const root = (): Promise<string> => mkdtemp(join(tmpdir(), "fa-wake-"));
 const NOW = new Date("2026-07-07T12:00:00Z");
 const at = (ms: number): Date => new Date(NOW.getTime() + ms);
-const contextFor = (session: string) => ({
-  cwd: process.cwd(),
-  sessionManager: {
-    getSessionId: () => session,
-    getHeader: async () => ({ id: session, timestamp: NOW.toISOString() }),
-    getBranch: async () => [],
-  },
-});
-
-type RawExecute = (id: string, params: unknown, signal?: AbortSignal) => Promise<unknown>;
-const exec = (tool: { execute?: unknown }, params: unknown): Promise<unknown> =>
-  (tool as unknown as { execute: RawExecute }).execute("c", params);
+/**
+ * The wake tool over `stateRoot`, run as in conversation 1 of storage "inc" (session "inc.1"), or in a conversation a
+ * task owns (a subagent's), which is no session.
+ */
+const wake = (stateRoot: string, params: unknown, owned = false) => {
+  const tool = wakeExtension(stateRoot, () => NOW).tools?.find(({ name }) => name === "wake") as ToolRegistration;
+  const api = {
+    conversationId: 1,
+    snapshot: async () => ({ incarnation: "inc" }),
+    commit: async (change: (tx: unknown) => unknown) =>
+      change({ conversation: async (id: number) => ({ id, ...(owned ? { owner: { taskId: 5 } } : {}) }) }),
+  };
+  return tool.execute(params as never, api as never, {} as never);
+};
 
 describe("schedule/wakeups store + guardrails", () => {
   it("addWakeup persists a wake-up; listWakeups returns it", async () => {
@@ -145,37 +146,22 @@ describe("schedule/wake-tool", () => {
     expect(parseDelayMs(-5)).toBeUndefined();
   });
 
-  it("withWakeTool: wake+unwake mount as a PAIR; an author's either-name tool suppresses BOTH built-ins", () => {
-    const base = [{ name: "read" }] as AgentTool[];
-    expect(withWakeTool(base, "/r", false).map((t) => t.name)).toEqual(["read"]); // disabled (invoke/fire) → none
-    expect(withWakeTool(base, "/r", true).map((t) => t.name)).toEqual(["read", "wake", "unwake"]); // serving
-    // The pair is ONE concept over one store: an author's wake doesn't write our store, so our unwake
-    // could never cancel what it returns — mixing halves would mislead. Either name → neither built-in.
-    const own = [{ name: "read" }, { name: "wake" }] as AgentTool[];
-    expect(withWakeTool(own, "/r", true).map((t) => t.name)).toEqual(["read", "wake"]);
-  });
-
   it("the wake tool records a wake-up into the CURRENT session", async () => {
     const r = await root();
-    const tool = makeWakeTool(r, () => NOW);
-    await turnContext.run(contextFor("conv-1"), () => exec(tool, { in: "30m", prompt: "resume the check" }));
+    await wake(r, { in: "30m", prompt: "resume the check" });
     expect(listWakeups(r)).toHaveLength(1);
-    expect(listWakeups(r)[0]).toMatchObject({ session: "conv-1", prompt: "resume the check" });
+    expect(listWakeups(r)[0]).toMatchObject({ session: "inc.1", prompt: "resume the check" });
   });
 
-  it("wake outside a session records nothing (returns a message)", async () => {
+  it("wake in a conversation that is no session (a subagent's) records nothing, and says why", async () => {
     const r = await root();
-    await exec(
-      makeWakeTool(r, () => NOW),
-      { in: "30m", prompt: "x" },
-    ); // no turnContext
+    expect(await wake(r, { in: "30m", prompt: "x" }, true)).toMatchObject({ isError: true });
     expect(listWakeups(r)).toHaveLength(0);
   });
 
   it("a below-minimum delay is a guardrail message, records nothing", async () => {
     const r = await root();
-    const tool = makeWakeTool(r, () => NOW);
-    await turnContext.run(contextFor("s"), () => exec(tool, { in: "1s", prompt: "x" }));
+    expect(await wake(r, { in: "1s", prompt: "x" })).toMatchObject({ isError: true });
     expect(listWakeups(r)).toHaveLength(0);
   });
 });

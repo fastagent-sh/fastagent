@@ -1,7 +1,8 @@
 /**
- * The process's work in flight: every message not yet done and every compaction (counted by the agent's LoopPort),
- * and the channel, schedule and AgentCore work that has not reached an accepted message yet. Webhooks ACK before their turns finish, so open
- * requests cannot tell whether the process is idle; this can. Read by AgentCore's `/ping` and by `dev`'s restart.
+ * The process's work in flight: every message not yet settled (counted by the Agent, pi-durable/agent.ts), and the
+ * channel, schedule and AgentCore work that has not reached an accepted message yet. Webhooks ACK before their turns
+ * finish, so open requests cannot tell whether the process is idle; this can. Read by AgentCore's `/ping` and by
+ * `dev`'s restart.
  */
 let inFlight = 0;
 

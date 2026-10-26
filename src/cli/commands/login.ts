@@ -4,12 +4,13 @@
  * agent's deployed box instead (box-login.ts); `--stdio` is the box's half of that.
  */
 import { enterAgentEnv } from "../../env.ts";
-import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../harnesses/pi/auth.ts";
-import { agentModels } from "../../harnesses/pi/agent-models.ts";
+import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../harnesses/models/credentials.ts";
+import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { findAgentDir, globalHome, selectAgentEnvironment } from "../../paths.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../../harnesses/pi/login.ts";
-import { environmentAuthSource } from "../../harnesses/pi/models.ts";
+import { LoginCancelled, type LoginIO, loginFlow } from "../../harnesses/models/login.ts";
+import { environmentAuth } from "../../harnesses/models/models.ts";
+import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
 import { loginOnBox } from "../box-login.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";
@@ -54,8 +55,8 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     console.error(
       `[fastagent] no agent here (no fastagent.config.ts) — ` +
         `logging in GLOBALLY (${authPath}). An agent on this machine uses this file for a provider it has no ` +
-        `credential of its own for (no entry in its .secrets/auth.json, no apiKey in its models.json, no env ` +
-        `variable), so this is usually what you want; \`cd\` into an agent to give that one its own account instead.`,
+        `credential of its own for (no entry in its .secrets/auth.json, no env variable), so this is usually what ` +
+        `you want; \`cd\` into an agent to give that one its own account instead.`,
     );
   }
   // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or prompts for a
@@ -65,13 +66,14 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
       new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
     );
   }
+  // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint. Not for
+  // `-g`: the global file serves every agent on this machine, so no one agent's providers decide what it holds.
+  const providers = agentDir && !opts.global ? await definitionProviders(agentDir).catch(failStartup) : [];
   // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
-  // Inside an agent, the key is checked on that agent's registry: its models.json may point a provider at a gateway.
-  // Not with `-g`: the global file serves every agent on the machine, so no one agent's routing may judge its key.
   const result = await loginFlow(terminalLoginIO(), {
     authPath,
+    providers,
     ...(provider ? { provider } : {}),
-    ...(agentDir && !opts.global ? { agentDir } : {}),
   }).catch((error: unknown) => {
     if (error instanceof LoginCancelled) {
       // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
@@ -83,7 +85,8 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
   // The environment outranks the global file for every agent, so a global login it shadows would sit unused while
   // agents run on, say, an API key billed per request, with only a startup line to show it.
-  const shadowedBy = authPath === GLOBAL_AUTH_PATH ? await environmentAuthSource(result.provider, shellEnv) : undefined;
+  const shadowedBy =
+    authPath === GLOBAL_AUTH_PATH ? (await environmentAuth(result.provider, shellEnv))?.source : undefined;
   if (shadowedBy !== undefined) {
     console.error(
       `[fastagent] warning: ${result.provider} is also authenticated by ${shadowedBy} in your shell environment, which ` +
@@ -152,10 +155,11 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   // proxy they name. AgentCore's command shell hands down none of the runtime's, so a proxy carried there in
   // FASTAGENT_ENV does not reach the login (docs/deploy.md).
   enterAgentEnv(agentDir);
-  // The model environment the serving runtime reads (createPiAgentFromDir), so "logged in" means what the server will
-  // use.
-  const models = agentModels(agentDir);
-  const { auth } = models;
+  // The model environment the serving Agent reads (openServing), its definition's providers included, so "logged in"
+  // means what the server will use, and a provider only the definition declares can be signed in to.
+  const providers = await definitionProviders(agentDir);
+  const models = modelEnvironment(agentDir, {}, providers);
+  const auth = models.auth as NonNullable<typeof models.auth>;
   if (opts.ifMissing && provider) {
     // The server's own answer (`authStatus`), the one its startup report prints. Known ceiling: nothing is asked of
     // the provider beyond a due refresh, so a revoked grant whose access token has not expired yet, or a revoked API
@@ -174,6 +178,6 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   if (opts.input === false) {
     return { ok: false, reason: "missing", message: `no ${provider ?? "model"} credential in ${auth.path}` };
   }
-  const result = await loginFlow(io, { authPath: auth.path, ...(provider ? { provider } : {}), agentDir });
+  const result = await loginFlow(io, { authPath: auth.path, providers, ...(provider ? { provider } : {}) });
   return { ok: true, provider: result.provider, method: result.method, path: auth.path };
 }

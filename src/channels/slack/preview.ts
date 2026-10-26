@@ -1,5 +1,6 @@
 /** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
-import type { InvokeEvent, Json } from "../../protocol.ts";
+import type { Json } from "../../agent-api.ts";
+import type { TurnEvent } from "../kit/invoke-turn-kit.ts";
 import { answerText } from "../../answer-text.ts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
@@ -162,12 +163,12 @@ export async function settleSlackPreview(
 }
 
 /** Whether an event carries answer text: a text delta, or the settled message it adds up to. */
-const isAnswerText = (event: InvokeEvent): boolean =>
+const isAnswerText = (event: TurnEvent): boolean =>
   (event.type === "message_delta" && event.channel === "text") ||
   (event.type === "entry" && event.entry.kind === "assistant_message");
 
 function streamClassicSlackReply(
-  events: Stream.Stream<InvokeEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PortFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
@@ -258,7 +259,7 @@ function streamClassicSlackReply(
  * Sharing the loop would mean injecting all three, which is more shape than the two lines it saves.
  */
 function streamNativeSlackReply(
-  events: Stream.Stream<InvokeEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PortFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
@@ -496,7 +497,7 @@ function streamNativeSlackReply(
           setStatus(WORKING_STATUS);
         }
         if (event.type === "accepted") messageId = event.message.messageId;
-        if (event.type === "serving_error") servingError = event.message;
+        if (event.type === "serving_error") servingError = event.error.message;
         const end = turnEnd(event, messageId);
         if (end === undefined) {
           // Slack's native loading status represents private reasoning (`thinking` deltas) without exposing it.
@@ -547,7 +548,7 @@ function streamNativeSlackReply(
 }
 
 export function slackReply(
-  events: Stream.Stream<InvokeEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PortFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,

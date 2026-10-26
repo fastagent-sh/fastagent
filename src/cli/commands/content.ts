@@ -3,7 +3,7 @@
  * `context.local.json` binds it on this machine.
  */
 import { resolve } from "node:path";
-import { ContentNameError, addContent, listContent, removeContent } from "../../harnesses/pi/authoring.ts";
+import { ContentNameError, addContent, listContent, removeContent } from "../../authoring.ts";
 import { type SourceOptions, readContentSource } from "../../content/source.ts";
 import { contentLines } from "../content-view.ts";
 import { failStartup, failUsage } from "../fail.ts";

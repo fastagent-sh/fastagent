@@ -3,15 +3,14 @@
  * the message the thread's reply chain names, or at the room's present when nothing in it names one. A thread that
  * already exists is left alone.
  *
- * A user's chat message names the protocol message it became by its key: a channel invokes with the platform's message
- * id as the `idempotencyKey`, so `messages.get({ idempotencyKey })` finds it. The thread forks at that message's
+ * A user's chat message names the message it became by its key: a channel invokes with the platform's message id as
+ * the `idempotencyKey`, so `getMessage(room, { idempotencyKey })` finds it. The thread forks at that message's
  * answer; at its own entry when it has none (still taken, or done without one); at the room's present when it is still
  * queued, or was never taken, since it is not in the history.
  */
-import { log } from "../../log.ts";
-import type { Agent, MessageStatus } from "../../protocol.ts";
+import { type Agent, AgentRejection, type MessageStatus } from "../../agent-api.ts";
 
-/** A reply chain is ids walked from the platform, each one a `messages.get`: bounded like ids, not payloads. */
+/** A reply chain is ids walked from the platform, each one a `getMessage`: bounded like ids, not payloads. */
 const MAX_CHAIN = 16;
 const MAX_ID_CHARS = 128;
 
@@ -26,41 +25,31 @@ function forkPoint(message: MessageStatus): string | undefined {
 async function branchPoint(agent: Agent, room: string, chain: readonly string[]): Promise<string | undefined> {
   const usable = chain.filter((id) => id.length > 0 && id.length <= MAX_ID_CHARS).slice(0, MAX_CHAIN);
   for (const idempotencyKey of usable) {
-    const message = await agent.sessions.get(room).messages.get({ idempotencyKey });
+    const message = await agent.getMessage(room, { idempotencyKey });
     if (message) return forkPoint(message);
   }
   return undefined;
 }
 
 /**
- * Create `sessionId` as a fork of `room` when it does not exist yet, with the recent part of the room's history as its
- * model context (`context: "recent"`). A room with no session leaves the thread to start empty, as its first invoke
- * creates it, and says so. A read that fails is thrown: taking it for "the thread exists" would start it empty for
- * good.
+ * A new thread's session: a fork of its room's session at the message the thread's reply chain names, or at the room's
+ * present when nothing in it names one; an empty session when the room has none, since nothing was said there yet.
  */
 export async function forkThread(
   agent: Agent,
-  thread: { sessionId: string; room: string; chain: readonly string[] },
-  label: string,
-): Promise<void> {
-  const { sessionId, room, chain } = thread;
-  const own = await agent.sessions.get(sessionId).read({ limit: 0 });
-  if (own.ok) return;
-  if (own.error.code !== "not_found") throw new Error(`reading session ${sessionId} failed: ${own.error.message}`);
-  const state = await agent.sessions.get(room).read({ limit: 0 });
-  if (!state.ok) {
-    if (state.error.code !== "not_found") throw new Error(`reading session ${room} failed: ${state.error.message}`);
-    log.warn(`${label} thread ${sessionId} names ${room}, which has no session: the thread starts empty`);
-    return;
+  thread: { room: string | undefined; chain: readonly string[] },
+): Promise<string> {
+  const { room, chain } = thread;
+  const at = room === undefined ? undefined : await branchPoint(agent, room, chain);
+  const created = await agent.createSession(
+    room === undefined ? {} : { from: { sessionId: room, ...(at === undefined ? {} : { entryId: at }) } },
+  );
+  if (!created.ok) {
+    const from = room === undefined ? "" : ` from ${room}`;
+    throw new AgentRejection({
+      ...created.error,
+      message: `starting a thread${from} failed: ${created.error.message}`,
+    });
   }
-  if (state.state.leafEntryId === undefined) return;
-  const at = await branchPoint(agent, room, chain);
-  const created = await agent.sessions.create({
-    sessionId,
-    fork: { sessionId: room, ...(at === undefined ? {} : { entryId: at }), context: "recent" },
-  });
-  // Another delivery of the thread's first message created it meanwhile: it exists, which is all this asks.
-  if (!created.ok && created.error.code !== "conflict") {
-    throw new Error(`forking thread ${sessionId} from ${room} failed: ${created.error.message}`);
-  }
+  return created.sessionId;
 }

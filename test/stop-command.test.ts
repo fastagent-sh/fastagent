@@ -1,22 +1,22 @@
 /** A chat's stop command over the agent's `abort`: what it stopped, said in the chat. */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { dispatchStop } from "../src/channels/kit/stop-command.ts";
-import { loopPort } from "../src/loop-port.ts";
-import { servingAgent } from "../src/serving-layer.ts";
-import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
+import { newSession } from "../src/conversation-sessions.ts";
+import { durableSubject } from "./durable-subject.ts";
+
+const subject = durableSubject();
+afterEach(() => subject.stop());
 
 describe("dispatchStop", () => {
-  it("stops the running run and says so; then says nothing is running", async () => {
-    const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
-    const first = agent.invoke({ sessionId: "s", prompt: { text: "hold" } })[Symbol.asyncIterator]();
-    await first.next();
-    await vi.waitFor(async () => {
-      const state = await agent.sessions.get("s").read({ limit: 0 });
-      expect(state.ok && state.state.status).toBe("running");
-    });
-    expect(await dispatchStop(agent, "s", "[test]")).toBe("⏹ Stopped.");
-    await vi.waitFor(async () => expect(await dispatchStop(agent, "s", "[test]")).toBe("Nothing is running."));
-    expect(await dispatchStop(agent, "never-used", "[test]")).toBe("Nothing is running.");
-    await first.return?.();
+  it("stops the running message and says so; then says nothing is running", async () => {
+    const agent = await subject.start();
+    const sessionId = await newSession(agent);
+    const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: "hold" }] });
+    expect(sent.ok).toBe(true);
+    await vi.waitFor(() => expect(subject.held()).toBe(1));
+    expect(await dispatchStop(agent, sessionId, "[test]")).toBe("⏹ Stopped.");
+    expect(await dispatchStop(agent, sessionId, "[test]")).toBe("Nothing is running.");
+    // A place nothing was said in has no session.
+    expect(await dispatchStop(agent, undefined, "[test]")).toBe("Nothing is running.");
   });
 });

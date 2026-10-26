@@ -7,14 +7,33 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, type Provider, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { MemoryStorage } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import { collect, createPiAgentFromDefinition, createPiAgentFromDir, defineTool } from "../src/index.ts";
-import { piAllCodingTools } from "../src/harnesses/pi/create.ts";
 import { type ResolvedContent, resolveContent } from "../src/content/resolve.ts";
 import { type ContentBinding, declareBindings } from "../src/content/declare.ts";
+import { buildDefinition, openAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
+
+/** Send one message to the agent in `agentDir`, opened on `provider` with `content`. */
+async function askOnce(agentDir: string, provider: Provider, content?: readonly ResolvedContent[]): Promise<void> {
+  const definition = await prepareDefinition(agentDir);
+  const agent = await openAgent(definition, {
+    storage: new MemoryStorage(),
+    code: { ...buildDefinition(definition, {}), providers: [provider] },
+    credentials: new InMemoryCredentialStore(),
+    model: "faux/faux-1",
+    ...(content === undefined ? {} : { content }),
+  });
+  try {
+    const sent = await agent.invoke({ content: [{ type: "text", text: "hi" }] });
+    if (!sent.ok) throw new Error("not sent");
+    await sent.wait();
+  } finally {
+    await agent.close();
+  }
+}
 
 async function skill(dir: string, name: string, description: string): Promise<void> {
   await mkdir(dir, { recursive: true });
@@ -44,7 +63,7 @@ async function layout() {
 }
 
 describe("an agent with content", () => {
-  it("is told where it is and what it works on, and its tools see it; what a project holds stays in the project", async () => {
+  it("is told where it is and what it works on; what a project holds stays in the project", async () => {
     const { agentDir, app, handbook } = await layout();
     const content = resolveContent(agentDir, {
       declared: [],
@@ -56,40 +75,19 @@ describe("an agent with content", () => {
     });
     const { faux } = makeFaux();
     let prompt = "";
-    let seen: readonly ResolvedContent[] | undefined;
     faux.setResponses([
       (context) => {
         prompt = sentPrompt(context);
-        return {
-          ...fauxAssistantMessage(""),
-          content: [{ type: "toolCall", id: "c1", name: "where", arguments: {} }],
-        } as ReturnType<typeof fauxAssistantMessage>;
+        return fauxAssistantMessage("done");
       },
-      fauxAssistantMessage("done"),
     ]);
-    const where = defineTool({
-      name: "where",
-      description: "Report the content.",
-      input: z.object({}),
-      execute: (_input, ctx) => {
-        seen = ctx.content;
-        return "ok";
-      },
-    });
-    const { agent } = await createPiAgentFromDefinition(agentDir, {
-      model: "faux/faux-1",
-      providers: [faux.provider],
-      content,
-      tools: [...piAllCodingTools(agentDir), where],
-    });
-    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
+    await askOnce(agentDir, faux.provider, content);
 
     expect(prompt).toContain(`Your working directory, ${agentDir}, is your own directory`);
     expect(prompt).toContain(`You work on:\n- app: ${app} (a directory on this machine)`);
     expect(prompt).toContain(
       `You know, and do not write:\n- handbook: ${handbook} (a directory on this machine) The team's style rules.`,
     );
-    expect(seen).toEqual(content);
     // The definition is the agent's own: its AGENTS.md and skills are in the prompt, and a project's AGENTS.md and
     // skills are files in the project, read when the agent works there.
     expect(prompt).toContain("OWN-AGENTS");
@@ -113,12 +111,7 @@ describe("an agent with content", () => {
       declared: [],
       bound: declareBindings({ handbook: { path: handbook, readonly: true } }, [], agentDir),
     });
-    const { agent } = await createPiAgentFromDefinition(agentDir, {
-      model: "faux/faux-1",
-      providers: [faux.provider],
-      content,
-    });
-    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
+    await askOnce(agentDir, faux.provider, content);
     expect(prompt).toContain("You write only in your own directory: the directories above are for reading.");
     expect(prompt).not.toContain("You work on:");
     expect(prompt).not.toContain("belongs in a directory you work on");
@@ -134,8 +127,7 @@ describe("an agent with content", () => {
         return fauxAssistantMessage("ok");
       },
     ]);
-    const { agent } = await createPiAgentFromDefinition(agentDir, { model: "faux/faux-1", providers: [faux.provider] });
-    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
+    await askOnce(agentDir, faux.provider);
     expect(prompt).toContain("Nothing else is declared for you: you work only in your own directory.");
     expect(prompt).toContain("OWN-AGENTS"); // its own AGENTS.md is its project context still
   });
@@ -162,7 +154,8 @@ describe("one resolution", () => {
     await writeFile(join(agentDir, "fastagent.config.ts"), `export default {\n  model: "openai-codex/gpt-5.5",\n};\n`);
     await bind(agentDir, { app: { path: "../app" } });
     const readers = async () => {
-      const opened = await createPiAgentFromDir(agentDir);
+      const opened = await openServing(agentDir, { locking: "memory" });
+      await opened.agent.close();
       const info = JSON.parse((await cli(["info", "--json"], agentDir)).stdout);
       const list = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);
       return [opened.content, info.content, list.content];

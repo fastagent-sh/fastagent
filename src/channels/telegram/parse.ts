@@ -48,8 +48,8 @@ export interface TelegramUpdate {
  * ignore.
  */
 export interface TelegramRoute {
-  /** Conversation identity (default: `chat` or `chat:thread`). */
-  session?: string;
+  /** Which conversation it belongs to, the one its session is kept by (default: `chat` or `chat:thread`). */
+  conversation?: string;
   /** Reply target chat (default: the message's chat). */
   chatId?: number | string;
   /** Reply thread (default: the message's thread). */
@@ -87,7 +87,7 @@ export function ownFiles(m: TelegramMessage): string[] {
 
 /**
  * The place a message lives in: a chat, or a forum topic within it. The context buffer's bucket and the default
- * session's suffix, for an update and for a message the agent sends itself alike.
+ * conversation, for an update and for a message the agent sends itself alike.
  */
 export function telegramPlaceKey(chatId: number | string, threadId?: number): string {
   return threadId ? `${chatId}:${threadId}` : `${chatId}`;

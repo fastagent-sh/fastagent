@@ -8,10 +8,12 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { type PromptSection, section } from "@earendil-works/pi-durable";
 import { parse as parseYaml } from "yaml";
+import type { ResolvedContent } from "../../content/resolve.ts";
 import { log } from "../../log.ts";
+import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import type { AgentCommand } from "./agent.ts";
 
-interface Skill {
+export interface Skill {
   name: string;
   description: string;
   /** Absolute: what the model's `read` opens. */
@@ -66,7 +68,7 @@ function directories(dir: string): string[] {
 }
 
 /** The agent's skills: `skills/<name>/SKILL.md`. One that breaks the specification is reported and skipped. */
-function readSkills(agentDir: string): Skill[] {
+export function readSkills(agentDir: string): Skill[] {
   const root = join(agentDir, "skills");
   const skills: Skill[] = [];
   for (const entry of directories(root)) {
@@ -236,11 +238,84 @@ const fileText = (path: string): string | undefined => {
   return text === "" ? undefined : text;
 };
 
-/** The prompt the definition contributes: `SYSTEM.md` as written, `AGENTS.md` as project context, then the skills. */
-export function definitionSections(agentDir: string): PromptSection[] {
+/**
+ * The prompt the definition contributes: `SYSTEM.md` as written, `AGENTS.md` as project context, the skills, where it
+ * works, and, deployed, what of a change it makes to itself lasts. `wake`: the agent has the wake tool.
+ */
+export function definitionSections(
+  agentDir: string,
+  content: readonly ResolvedContent[],
+  options: { wake: boolean },
+): PromptSection[] {
   return [
     section("system", () => fileText(join(agentDir, "SYSTEM.md")), { tag: false }),
     section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
     section("skills", () => skillsPrompt(readSkills(agentDir))),
+    section("content", () => contentSection({ agentDir, content })),
+    section("self_change", () => (isDeployedWorkspace() ? selfChangeSection(options.wake) : undefined)),
   ];
+}
+
+/**
+ * What takes effect when, and the agent's own path to a new capability, are the same on every host; how long the
+ * storage lives is the host's answer: AgentCore's managed mount is reset by every deploy, so telling that agent to keep
+ * work "outside the definition" would name a location its next deploy erases. The skill it writes lives in the
+ * definition directory, which the next deployment replaces (or, on AgentCore, erases with everything else), so the
+ * sentence says so, and where a skill that should outlast it has to go.
+ */
+function selfChangeSection(wake: boolean): string {
+  const deployment = isAgentcoreRuntime()
+    ? "Every deployment of a new version resets this host's storage entirely"
+    : "Each deployment replaces your directory with the author's release";
+  return (
+    `Your directory survives restarts, including uncommitted work; /tmp does not. ${deployment}, so anything that ` +
+    `must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). ` +
+    `SYSTEM.md, AGENTS.md, skills/ and prompts/ are read for every message; changes to code in src/ (tools, ` +
+    `extensions, channels, schedules) or to configuration (fastagent.config.ts, context.json, package.json) take ` +
+    `effect when the service restarts. A tool you install yourself (apt-get, npm install -g) belongs to this machine ` +
+    `and is gone when its container is replaced. To give yourself a new capability now, write a skill — a SKILL.md in ` +
+    `your definition's skills/ directory, with any script it needs run through bash. It lasts until the next ` +
+    `deployment replaces that directory, so a capability that should outlast it belongs in the author's release: ` +
+    `propose it to them.` +
+    // Named only when it has the tool: naming a tool the model does not have invites calls to it.
+    (wake ? " To schedule your own follow-up work, use the wake tool." : "")
+  );
+}
+
+/** What a content entry of this kind is, said to the agent: where it is, and whether another instance shares it. */
+function contentKind(c: ResolvedContent): string {
+  if (c.kind !== "github") return "a directory on this machine";
+  if (!c.clone) return `a checkout of github ${c.repo} on this machine`;
+  // Brought up to date in place at each start where git can do so without touching the agent's work; what the agent
+  // changes stays, and reaches anyone else only when pushed. The declared ref is what it follows, not a claim about
+  // where it is: a clone the agent moved elsewhere is left there.
+  const clone = `a shallow clone of github ${c.repo}${c.ref ? ` (declared ${c.ref})` : ""} in your own storage`;
+  return c.readonly
+    ? `${clone}, brought up to date each time you start`
+    : `${clone}: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change`;
+}
+
+/**
+ * Where the agent is and what it works on (agent-model.md §4): its own directory is itself, and each content entry is named
+ * with its location, whether it is the agent's to change, and where a change there goes. A result written where it
+ * does not last is how knowledge gets lost, so the agent is told which is which.
+ */
+function contentSection({ agentDir, content }: { agentDir: string; content: readonly ResolvedContent[] }): string {
+  const own =
+    `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
+    `land there unless you put them elsewhere.`;
+  if (content.length === 0) return `${own} Nothing else is declared for you: you work only in your own directory.`;
+  const line = (c: ResolvedContent) =>
+    `- ${c.name}: ${c.location} (${contentKind(c)})${c.description !== undefined ? ` ${c.description}` : ""}`;
+  const worksOn = content.filter((c) => !c.readonly);
+  const knows = content.filter((c) => c.readonly);
+  return [
+    own,
+    ...(worksOn.length > 0 ? ["You work on:", ...worksOn.map(line)] : []),
+    ...(knows.length > 0 ? ["You know, and do not write:", ...knows.map(line)] : []),
+    `Run a command in one of these directories with \`cd <its location> && …\`; file tools take the location directly.` +
+      (worksOn.length > 0
+        ? " A result worth keeping belongs in a directory you work on, not in your own directory."
+        : " You write only in your own directory: the directories above are for reading."),
+  ].join("\n");
 }
