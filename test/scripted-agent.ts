@@ -131,6 +131,21 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
     setStatus(kept, { messageId, ...key, status: "taken", entryId: own.id });
     publish(kept, { type: "entry", entry: own });
     let answer: { entryId: string; text: string } | undefined;
+    let written = "";
+    /** The answer as the harness settles it: an entry for what was written, when the script yielded none. */
+    const settleAnswer = () => {
+      if (answer !== undefined || written === "") return;
+      const entry: Entry = {
+        id: `e${++entries}`,
+        sessionId,
+        timestamp: Date.now(),
+        kind: "assistant_message",
+        data: { text: written },
+      };
+      kept.entries.push(entry);
+      answer = { entryId: entry.id, text: written };
+      publish(kept, { type: "entry", entry });
+    };
     try {
       for (let next = await rest.next(); !next.done; next = await rest.next()) {
         const event = next.value;
@@ -144,7 +159,9 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
           publish(kept, { type: "entry", entry });
           continue;
         }
+        if (event.type === "message_delta" && event.channel === "text") written += event.delta;
         if (event.type === "done" && event.message.messageId === messageId) {
+          settleAnswer();
           // The answer is the entry kept here, by the id this session gave it.
           const done: DoneMessage = { ...event.message, ...key, entryId: own.id, ...(answer ? { answer } : {}) };
           setStatus(kept, done);

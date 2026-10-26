@@ -65,7 +65,7 @@ const agentOver = (source: AsyncIterator<ResumeEvent>) =>
 it("asks once, queued behind whatever runs in the session, under the turn's key", async () => {
   const agent = scriptedAgent(() => ok);
   const events = await read(turn(agent));
-  expect(events.map((event) => event.type)).toEqual(["accepted", "message_delta", "done"]);
+  expect(events.map((event) => event.type)).toEqual(["accepted", "message_delta", "entry", "done"]);
   expect(events[0]).toMatchObject(ok[0] as object);
   expect(agent.sent).toEqual([
     { sessionId: "s", idempotencyKey: "msg-1", content: [{ type: "text", text: "hi" }], whenBusy: "queue" },
