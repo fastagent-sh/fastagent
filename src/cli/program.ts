@@ -77,14 +77,7 @@ const dev: CommandSpec = {
     "(src/, fastagent.config.ts, package.json, .secrets/.env) restart the worker once its running messages finish. " +
     "Files the agent writes as work product never trigger a restart.",
   args: [AGENT_ARG],
-  flags: [
-    PORT,
-    BIND,
-    MODEL,
-    { flags: "--no-watch", description: "serve once, no file-watching" },
-    TUNNEL,
-    NO_INPUT,
-  ],
+  flags: [PORT, BIND, MODEL, { flags: "--no-watch", description: "serve once, no file-watching" }, TUNNEL, NO_INPUT],
   examples: [
     { cmd: "fastagent dev" },
     { cmd: "fastagent dev --tunnel", note: "public URL + registered/guided webhooks" },
@@ -158,7 +151,7 @@ const start: CommandSpec = {
   summary: "run the agent in production posture (opened as dev opens it, no watching)",
   description:
     "Run the agent (default .) in production posture — opened as dev opens it (your directory " +
-    "is the agent), just no file-watching. model and http.port come from fastagent.config.ts.
+    "is the agent), just no file-watching. model and http.port come from fastagent.config.ts.",
   args: [AGENT_ARG],
   flags: [PORT, BIND, MODEL, TUNNEL, NO_INPUT],
   examples: [

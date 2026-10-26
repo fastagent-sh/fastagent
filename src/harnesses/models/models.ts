@@ -52,6 +52,7 @@ export async function environmentAuthSource(
   providerId: string,
   env: NodeJS.ProcessEnv,
   fileExists: (path: string) => Promise<boolean> = defaultProviderAuthContext().fileExists,
+  providers: readonly Provider[] = [],
 ): Promise<string | undefined> {
   const models = builtinModels({
     credentials: new InMemoryCredentialStore(),
@@ -61,6 +62,7 @@ export async function environmentAuthSource(
       fileExists,
     },
   });
+  for (const provider of providers) models.setProvider(provider);
   return (await models.checkAuth(providerId))?.source;
 }
 

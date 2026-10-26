@@ -21,7 +21,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { loadEnvironment } from "../../content/file.ts";
 import type { ResolvedContent } from "../../content/resolve.ts";
-import { type DeclaredSecret, describeSecrets, missingSecrets, readSecretDeclaration } from "../../declared-secrets.ts";
+import { type DeclaredSecret, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { declaredVariables } from "../../environment/declare.ts";
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { channelModuleProblem } from "../../channels/discover.ts";
@@ -124,7 +124,7 @@ function declarers(definition: AgentDefinition): { source: string; value: unknow
 }
 
 /** The secrets the definition declares, wherever: its code's `needs`, and `context.json`'s command variables. */
-function definitionSecrets(definition: AgentDefinition): DeclaredSecret[] {
+export function definitionSecrets(definition: AgentDefinition): DeclaredSecret[] {
   return [
     ...declarers(definition).flatMap(({ source, value }) =>
       isNeeds(value) ? value.secrets.map((secret) => ({ ...secret, source })) : [],
@@ -188,15 +188,7 @@ const extensionProblem = (value: unknown): string | undefined =>
     : "must be an extension (defineExtension from @earendil-works/pi-durable), or needs(...) around one";
 const providerProblem = (value: unknown): string | undefined =>
   typeof (value as Partial<Provider> | null)?.id === "string" ? undefined : "must be a pi-ai provider (createProvider)";
-/** A channel's secrets are `needs(...)`'s here: `defineChannel` reads them at import, past the manifest and the gate. */
-const channelProblem = (value: unknown): string | undefined => {
-  const shape = channelModuleProblem(value);
-  if (shape !== undefined) return shape;
-  const declared = readSecretDeclaration(value, "");
-  return declared.error === undefined && declared.secrets.length === 0
-    ? undefined
-    : "declares its secrets with defineChannel, which a package does not read: wrap the channel in needs([...], (secrets) => ...)";
-};
+const channelProblem = channelModuleProblem;
 const scheduleProblem = (value: unknown): string | undefined =>
   (value as Partial<DefinedSchedule> | null)?.kind !== "fastagent.schedule"
     ? "must default-export defineSchedule({ ... }), or needs(...) around one"

@@ -6,31 +6,28 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
-import { type FastagentConfig, providerOf } from "../harnesses/pi/config.ts";
+import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, LOCAL_CONTEXT_FILE, exists } from "../paths.ts";
-import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
-import { capSchedules, loadSchedules, MAX_SCHEDULES } from "../schedule/discover.ts";
-import { resolveAgentTools } from "../harnesses/pi/create.ts";
-import { loadAgentDefinition } from "../harnesses/pi/definition.ts";
-import type { ContentDeclaration } from "../content/declare.ts";
-import { loadContent, loadEnvironment } from "../content/file.ts";
-import { agentModels } from "../harnesses/pi/agent-models.ts";
-import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
-  createPiModelRuntime,
-  definitionKeyOf,
   environmentAuthSource,
-  literalKeyProviders,
-  isBuiltinProvider,
-  machineModels,
-  globalCatalogPath,
-  inGlobalCatalog,
   interactiveLoginKind,
   loginProviders,
-} from "../harnesses/pi/models.ts";
+  modelsOver,
+  providerOf,
+} from "../harnesses/models/models.ts";
+import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
+import {
+  type AgentDefinition,
+  type BuiltDefinition,
+  buildDefinition,
+  definitionSecrets,
+  prepareDefinition,
+} from "../harnesses/pi-durable/open.ts";
+import { LOCAL_CONTEXT_FILE, exists } from "../paths.ts";
+import { type DeclaredChannel, channelIngress } from "../channels/discover.ts";
+import type { ContentDeclaration } from "../content/declare.ts";
+import { loadContent, loadEnvironment } from "../content/file.ts";
+import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
@@ -38,7 +35,7 @@ import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
-import { DEFAULT_HTTP_PORT, describeAnonymousSurface, planesOf } from "../service.ts";
+import { DEFAULT_HTTP_PORT } from "../service.ts";
 import { declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";
 import { checkPackages, MISE_PACKAGE_NAMES, miseBinary, packageSpecs } from "../environment/mise.ts";
 
@@ -53,10 +50,7 @@ interface DeployFacts {
   messages: DeployMessage[];
   /** Every declared channel with the ingress its module shape says it has, custom ones included. */
   channels: DeclaredChannel[];
-  /**
-   * `schedules/` declares at least one schedule — the one residency reason with an external substitute: someone
-   * else's clock calling `POST /invoke`, so an operator who wants scale-to-zero has an option here.
-   */
+  /** `src/schedules/` declares at least one schedule. */
   hasCron: boolean;
   /**
    * The deployed environment's declaration, read ONCE here so the plan side and the run side cannot disagree about
@@ -66,18 +60,17 @@ interface DeployFacts {
   /** That file, agent-dir-relative — the name every "set it here" message must use. */
   valueFile: string;
   /**
-   * The variable the value file carries the model's key in (the provider's own, or a models.json `"$NAME"`), or
-   * undefined when no key travels that way ({@link credentialRoute}).
+   * The variable the value file carries the model's key in, or undefined when no key travels that way
+   * ({@link credentialRoute}).
    */
   modelAuth: string | undefined;
   /**
    * The provider the deployment must log in to itself (`fastagent login --deployment`): the model's credential does
-   * not travel, because it is neither a variable in the value file nor carried by the definition (a models.json
-   * literal `apiKey` or `!command`). Nothing from this machine's credentials file is ever copied, so a login on the
-   * box is its only holder.
+   * not travel, because it is neither a variable in the value file nor resolved by the definition's own provider code.
+   * Nothing from this machine's credentials file is ever copied, so a login on the box is its only holder.
    */
   boxLogin: string | undefined;
-  /** Every tool/channel declaration — the names the value file must supply, by declaring file. */
+  /** Every declaration the definition makes — the names the value file must supply, by declaring file. */
   declaredSecrets: DeclaredSecret[];
   /** The runbook's variable list: the declared names, then everything else the value file carries. */
   secrets: DeploymentSecret[];
@@ -180,7 +173,7 @@ class DeployGate {
 
 interface PreflightInput {
   agentDir: string;
-  config: FastagentConfig;
+  config: AgentConfig;
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
   /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
@@ -190,13 +183,6 @@ interface PreflightInput {
    * about keeping one machine running do not apply.
    */
   noResidentProcess?: boolean;
-  /**
-   * Does this target publish the serve at a URL anyone can dial? True for every host that mints one (Fly, Railway,
-   * a Docker box); false for AgentCore, where the container is reachable only through the Runtime's IAM and the
-   * forwarder's shared secret. Kept apart from {@link noResidentProcess} on purpose — they happen to agree on AgentCore
-   * today, and answering two questions with one boolean is how the answer to one of them goes wrong later.
-   */
-  publicUrl?: boolean;
   /**
    * Does every deployment start this host's storage over (AgentCore)? Then a clone the instance made, and anything the
    * agent did in it, does not outlive a release. Its own question, apart from {@link noResidentProcess}.
@@ -224,7 +210,7 @@ export async function preflightDeploy(input: PreflightInput): Promise<DeployPref
 }
 
 async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
-  const { agentDir, config, force, noResidentProcess, publicUrl = true, storageResets = false } = input;
+  const { agentDir, config, force, noResidentProcess, storageResets = false } = input;
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
   if (!isReleaseAgentName(basename(agentDir))) {
@@ -238,14 +224,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const content = loadContent(agentDir);
   checkContent(content, storageResets, report);
 
-  // The definition the box will load on every start, loaded here first: a refusal in it (a leftover persona.md, a
-  // skill named with a slash) builds a perfectly good image that crash-loops on fly/railway/docker and fails every
+  // The definition the box will load on every start, read here first: a refusal in it (a module that fails to import,
+  // two tools under one name) builds a perfectly good image that crash-loops on fly/railway/docker and fails every
   // invocation on AgentCore. This is the boundary that turns that refusal into a deploy finding, so the error is
   // carried whole into the issue rather than rethrown.
-  await loadAgentDefinition(agentDir).catch((error: unknown) => {
-    report.issue(
-      `the definition does not load, so the deployed agent would not start: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  const definition = await prepareDefinition(agentDir).catch((error: unknown) => {
+    report.issue(`the definition does not load, so the deployed agent would not start: ${messageOf(error)}`);
+    return undefined;
   });
 
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
@@ -286,32 +271,14 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   const modelSpec = model.spec;
 
-  // Time triggers (schedules or self-scheduling) need a machine kept running. A file that FAILED to load still counts
-  // as a trigger — the author will fix it, and a plan that scaled to zero because a cron was broken on deploy day
-  // would sleep through it afterwards.
-  const loadedSchedules = await loadSchedules(agentDir);
-
-  // What the PUBLIC host URL answers with no authentication of ours, NAMED FROM WHAT WILL ACTUALLY MOUNT, never from
-  // the host alone: listing an endpoint this deployment does not
-  // serve is how an operator learns to skim past every deploy warning — the same reason `publicUrl` exists.
-  const unauthenticated = describeAnonymousSurface(planesOf(config.http));
-  if (publicUrl && unauthenticated.length > 0) {
-    report.warn(
-      `the deployed box answers ${unauthenticated.join(" and ")} at its public URL, UNAUTHENTICATED — ` +
-        `fastagent authenticates nothing. Put a gateway, an IdP-backed proxy or a private network in front of that ` +
-        `URL (docs/design/security-boundary.md)`,
-    );
-  }
-
-  // Known channel kinds only — a custom channel's webhook (and, unless it declared them, its secrets) are unknown to
-  // us; note and let the author wire them.
-  const inspected = await inspectChannels(agentDir);
-  if (inspected.failures.length > 0) {
-    throw new Error(
-      `cannot inspect channel modules: ${inspected.failures.map((failure) => `${failure.label}: ${failure.message}`).join("; ")}`,
-    );
-  }
-  const channels = inspected.channels;
+  const declaredSecrets = definition ? definitionSecrets(definition) : declaredVariables(loadEnvironment(agentDir));
+  const code = definition ? buildShapes(definition, declaredSecrets, values, report) : undefined;
+  const channels = [...(code?.channels ?? [])].map(
+    ([name, module]): DeclaredChannel => ({
+      name,
+      ingress: channelIngress(module),
+    }),
+  );
   for (const { name, ingress } of channels) {
     if ((CHANNEL_KINDS as string[]).includes(name)) continue;
     const secretsPart = `its variables travel from ${valueFile} like every other`;
@@ -322,10 +289,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
   const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
-
-  // A FAILED file still counts, on the conservative side: it may well be a valid schedule tomorrow, and a plan that
-  // scaled to zero because the file did not parse would hide that behind silence.
-  const hasCron = loadedSchedules.schedules.length > 0 || loadedSchedules.failures.length > 0;
+  // Counted from the registry when the code did not build: a plan that scaled to zero because a schedule failed to
+  // build on deploy day would sleep through it once it is fixed.
+  const hasCron = (code?.schedules.length ?? definition?.registry.schedules.length ?? 0) > 0;
   if (longConnectionChannels.length > 0 && !noResidentProcess) {
     report.note(
       `long-connection channel present (${longConnectionChannels.join(", ")}) — a GENERATED plan keeps one machine running ` +
@@ -334,37 +300,18 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   if (hasCron && !noResidentProcess) {
     report.note(
-      `schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron instant).`,
+      `src/schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron instant).`,
     );
   }
 
-  await checkMachineModels(agentDir, modelSpec, report);
-
-  // The registry the DEPLOYED agent has (its own models.json and model catalog, nothing of the machine's), built first
-  // so a malformed file stops the deploy with pi's own reason before anything below reads the file raw. No credential
-  // is read for that.
-  const deployed = await createPiModelRuntime({
-    agentDir,
-    credentials: new InMemoryCredentialStore(),
-    machineLayer: false,
-  });
-  if (modelSpec) await checkGlobalCatalogModel(modelSpec, deployed, report);
+  const providers = code?.providers ?? [];
+  if (modelSpec && code) checkModelExists(modelSpec, providers, report);
   const authPath = resolveAuthPath(agentDir);
-  // A model only the definition's extensions declare (a virtual model, or a provider one registers) is authenticated
-  // by that code on the box, per request: a virtual model's credential is whichever physical model it routes to.
-  // Asked of the catalog the box builds, extensions included, so deploy judges the model the box will run.
-  const fromExtension = modelSpec ? await extensionDeclared(agentDir, modelSpec, deployed) : false;
-  if (fromExtension && modelSpec) {
-    report.note(
-      `${modelSpec} is declared by the definition's extensions, which resolve its credentials on the box — deploy ` +
-        `cannot check them. Set the keys the models it uses need in ${valueFile}`,
-    );
-  }
-  const route = modelSpec && !fromExtension ? await credentialRoute(agentDir, modelSpec, values) : {};
+  const route = modelSpec ? await credentialRoute(modelSpec, values, providers) : {};
   const modelAuth = route.envVar;
   const boxLogin = route.boxLogin;
   if (boxLogin !== undefined) {
-    if (!hasLogin(boxLogin)) {
+    if (!hasLogin(boxLogin, providers)) {
       report.issue(
         `no credential for ${modelSpec} reaches the deployment, and "${boxLogin}" has no login to run there — set ` +
           `its API key in ${valueFile}`,
@@ -376,21 +323,6 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
           `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key in ${valueFile}`,
       );
     }
-  }
-
-  // Reported, not refused. Whether a string is a credential is the AUTHOR's knowledge: pi's docs prescribe
-  // `"apiKey": "ollama"` for a keyless local server, and no static rule separates that from a leaked key. The
-  // `.dockerignore` check next to this one IS a gate because it catches a packing rule putting FastAgent's OWN
-  // `.secrets/auth.json` into the image — the framework's doing. This is the author's own committed file.
-  // Asked of EVERY provider, not just the selected model's: the file ships whole.
-  const literalKeys = await literalKeyProviders(agentDir);
-  if (literalKeys.length > 0) {
-    report.warn(
-      `${AGENT_MODELS_FILE} carries a literal apiKey for ${literalKeys.map((id) => `"${id}"`).join(", ")} — that ` +
-        `file ships inside the image, where anyone who can pull it reads the layer. If it is a credential, use ` +
-        `"$YOUR_ENV_VAR" (deploy carries it like any provider key) or "!command" (it runs on the box and never ` +
-        `travels); a placeholder for a keyless local server is fine as it is.`,
-    );
   }
 
   // Container facts (shared by every host) + the warnings that follow.
@@ -469,38 +401,6 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     shipsGit,
   };
   const port = config.http?.port ?? DEFAULT_HTTP_PORT;
-  // EVERYTHING the definition declared it needs, from wherever it was declared. Read through the SAME resolver
-  // dev/start mount with, so "which tool declarations count" has one answer (config.tools declare too; a shadowed
-  // file's declaration is dropped in both places).
-  const resolvedTools = await resolveAgentTools(config, agentDir);
-  // A code input we could not READ is a code input whose declarations we cannot carry — and the box
-  // WILL read it (its deps are installed there), so its gate fires after the deploy reported success:
-  // a crash loop, which is the failure mode this whole mechanism exists to move to build time. Under
-  // `--run` that is a gate, like a channel that fails to inspect; generate-only warns, since the
-  // operator may be producing artifacts from a machine that never installed the agent's deps.
-  for (const failure of resolvedTools.toolFailures) {
-    const issue =
-      `${failure.label} failed to load (${failure.message}) — any secrets it declares cannot be carried ` +
-      `to the host, so the deployed box would refuse to start`;
-    report.issue(issue);
-  }
-  for (const failure of loadedSchedules.failures) {
-    report.issue(
-      `${failure.label} is not a valid schedule (${failure.message}) — the deployed box would leave it unarmed, so ` +
-        `it would never fire there`,
-    );
-  }
-  for (const over of capSchedules(loadedSchedules.schedules).over) {
-    report.issue(
-      `schedules/${over.name}.md is past the first ${MAX_SCHEDULES} schedules by name — the deployed box would leave ` +
-        `it unarmed, so it would never fire there`,
-    );
-  }
-  const declaredSecrets: DeclaredSecret[] = [
-    ...allSecrets(resolvedTools.toolSecrets),
-    ...allSecrets(inspected.secrets),
-    ...declaredVariables(environment),
-  ];
   await checkKeptDockerfile(agentDir, model.envValue, valueFile, report);
 
   return {
@@ -518,95 +418,70 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 }
 
 /**
+ * The definition's code built for its SHAPE (which channels, which ingress, which schedules, which providers), with
+ * the value file's values and a stand-in for each declared name it lacks: a generate-only deploy runs on a machine
+ * that may hold none of them, and whether the value file supplies them is the values gate's question, asked by name.
+ * A build that fails is an issue, as a module that fails to load is.
+ */
+function buildShapes(
+  definition: AgentDefinition,
+  declared: readonly DeclaredSecret[],
+  values: ReadonlyMap<string, string>,
+  report: DeployReport,
+): BuiltDefinition | undefined {
+  const env: NodeJS.ProcessEnv = Object.fromEntries(declared.map(({ name }) => [name, "(not in the value file)"]));
+  for (const [name, value] of values) if (value) env[name] = value;
+  try {
+    return buildDefinition(definition, env);
+  } catch (error) {
+    report.issue(`the definition does not build, so the deployed agent would not start: ${messageOf(error)}`);
+    return undefined;
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** A model no provider of the deployed agent offers fails every message there. */
+function checkModelExists(spec: string, providers: readonly Provider[], report: DeployReport): void {
+  const provider = providerOf(spec);
+  if (modelsOver(new InMemoryCredentialStore(), providers).getModel(provider, spec.slice(provider.length + 1))) return;
+  report.issue(
+    `no provider of the deployed agent offers "${spec}" — pi-ai's built-ins and the providers fastagent.config.ts ` +
+      `declares are all it has`,
+  );
+}
+
+/**
  * HOW THE MODEL'S CREDENTIAL REACHES THE BOX, from what the deploy ships and nothing else. The box is the one authority
  * on what it authenticates with (pi ranks a stored login above the environment, and only the box knows what it has
  * stored, which platform variables it was given, or what role it runs as), so this never asks what authenticates the
  * model on THIS machine: its stored logins and the shell running deploy do not travel. In order:
  *
- * 1. the definition's own models.json: a `"$NAME"` reference is a variable the value file must hold (the values gate
- *    asks for it by name), and a literal or `"!command"` travels in the image;
- * 2. a credential pi reads for the provider from the value file alone: its key variable (which the values gate then
- *    requires, as it does every declared name), or a keyless one such as `AWS_ACCESS_KEY_ID` — never one that needs a
- *    file, which would be this machine's;
- * 3. otherwise the box answers — `boxLogin`: after readiness, `--run` asks it, and it logs in only if it cannot
+ * 1. a credential the provider reads from the value file alone (a definition's provider included, which may resolve
+ *    its key from a secret it declared): its key variable (which the values gate then requires, as it does every
+ *    declared name), or a keyless one such as `AWS_ACCESS_KEY_ID` — never one that needs a file, which would be this
+ *    machine's;
+ * 2. otherwise the box answers — `boxLogin`: after readiness, `--run` asks it, and it logs in only if it cannot
  *    already authenticate the provider.
  */
 async function credentialRoute(
-  agentDir: string,
   spec: string,
   values: ReadonlyMap<string, string>,
+  providers: readonly Provider[],
 ): Promise<{ envVar?: string; boxLogin?: string }> {
   const provider = providerOf(spec);
-  const declared = await definitionKeyOf(agentDir, provider);
-  if (declared) return "reference" in declared ? { envVar: declared.reference } : {};
   // No file of this machine's travels, so a source that needs one (Google ADC, an AWS profile) is the box's to find.
-  const fromValues = await environmentAuthSource(provider, Object.fromEntries(values), async () => false);
+  const fromValues = await environmentAuthSource(provider, Object.fromEntries(values), async () => false, providers);
   if (fromValues !== undefined) return isEnvKey(fromValues) ? { envVar: fromValues } : {};
   return { boxLogin: provider };
 }
 
-/** Whether `spec` exists only once the definition's extensions have registered their models. */
-async function extensionDeclared(agentDir: string, spec: string, deployed: ModelRuntime): Promise<boolean> {
-  const provider = providerOf(spec);
-  const id = spec.slice(provider.length + 1);
-  if (deployed.getModel(provider, id)) return false;
-  const catalog = await agentModels(
-    agentDir,
-    { credentialStore: new InMemoryCredentialStore() },
-    { machineLayer: false },
-  ).runtime();
-  return catalog.getModel(provider, id) !== undefined;
-}
-
 /** Does `provider` offer an interactive login, i.e. can `fastagent login --deployment` authenticate it on the box? */
-function hasLogin(providerId: string): boolean {
-  const provider = loginProviders().find((p) => p.id === providerId);
+function hasLogin(providerId: string, providers: readonly Provider[]): boolean {
+  const provider = loginProviders(providers).find((p) => p.id === providerId);
   return provider !== undefined && interactiveLoginKind(provider) !== "none";
-}
-
-/**
- * The machine's models.json is this box's environment, not the artifact: whatever the model takes from it is
- * absent wherever the agent is deployed. Said in so many words here; the credential probe already reads the deployed
- * registry.
- */
-async function checkMachineModels(
-  agentDir: string,
-  modelSpec: string | undefined,
-  report: DeployReport,
-): Promise<void> {
-  const machine = await machineModels(agentDir);
-  const provider = modelSpec ? providerOf(modelSpec) : undefined;
-  if (provider === undefined || !machine?.inherited.includes(provider)) return;
-  if (isBuiltinProvider(provider)) {
-    report.warn(
-      `model "${modelSpec}" takes its "${provider}" entry from ${machine.path}, the machine's models.json, which ` +
-        `does not ship — the deployed agent runs pi's built-in "${provider}" without it. Declare the entry in the ` +
-        `agent's own ${AGENT_MODELS_FILE} to deploy it.`,
-    );
-  } else {
-    // No built-in to fall back on: the deployed agent cannot resolve the model at all.
-    const issue =
-      `model "${modelSpec}" exists only in ${machine.path}, the machine's models.json, which does not ship — the ` +
-      `deployed agent would fail with an unknown model. Declare "${provider}" in the agent's own ` +
-      `${AGENT_MODELS_FILE} to deploy it.`;
-    report.issue(issue);
-  }
-}
-
-/**
- * The machine's model catalog is this box's environment, like its models.json: a model only it knows (newer than the
- * catalog bundled with pi) is unknown wherever the agent is deployed. The agent's own catalog ships, so the remedy is
- * one refresh in the agent.
- */
-async function checkGlobalCatalogModel(modelSpec: string, deployed: ModelRuntime, report: DeployReport): Promise<void> {
-  const provider = providerOf(modelSpec);
-  const id = modelSpec.slice(provider.length + 1);
-  if (deployed.getModel(provider, id) || !(await inGlobalCatalog(provider, id))) return;
-  report.issue(
-    `model "${modelSpec}" is known only from ${globalCatalogPath()}, the machine's model catalog, which does not ` +
-      "ship — the deployed agent would fail with an unknown model. Run `fastagent models --refresh` in the agent " +
-      `to record it in its own ${AGENT_MODEL_CATALOG_FILE}, which ships.`,
-  );
 }
 
 /**
@@ -669,7 +544,7 @@ async function checkKeptDockerfile(
  * baked rather than delivered as one more platform variable that nothing would ever clear.
  */
 function resolveDeployModel(
-  config: FastagentConfig,
+  config: AgentConfig,
   values: ReadonlyMap<string, string>,
   /** The value file AS READ (it follows `FASTAGENT_SECRETS_DIR`), so the reported source is the real one. */
   valueFile: string,

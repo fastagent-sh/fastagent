@@ -23,7 +23,7 @@ import { WebSocket, ping } from "undici";
 import type { BoxChannel, BoxShell } from "../box-shell.ts";
 import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson } from "./aws-cli.ts";
-import { MOUNT } from "./plan.ts";
+import { MOUNT, PROBE_PAYLOAD } from "./plan.ts";
 
 const STDIN = 0x00;
 const STDOUT = 0x01;
@@ -205,7 +205,7 @@ export function agentcoreShell(runtimeArn: string, sessionId: string, aws: CliRu
       try {
         const reply = join(dir, "reply.json");
         const args = ["bedrock-agentcore", "invoke-agent-runtime", "--agent-runtime-arn", runtimeArn];
-        args.push("--runtime-session-id", sessionId, "--payload", '{"kind":"probe"}');
+        args.push("--runtime-session-id", sessionId, "--payload", PROBE_PAYLOAD);
         args.push("--cli-binary-format", "raw-in-base64-out", reply);
         const sent = await awsCli(aws).present(args);
         if (!("ok" in sent)) {

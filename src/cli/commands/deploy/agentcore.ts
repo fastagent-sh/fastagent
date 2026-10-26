@@ -13,7 +13,7 @@ import {
   agentcoreName,
   agentcoreStackName,
   forwarderLogGroup,
-  INVOKE_PAYLOAD,
+  PROBE_PAYLOAD,
   ingressSessionId,
   isGeneratedAgentcoreTemplate,
   planAgentcoreDeploy,
@@ -82,17 +82,9 @@ export const agentcoreHost: HostDeploy = {
           `so). For an agent that must keep answering unattended, set ${boxLogin}'s API key in ${valueFile}.`,
       );
     }
-    // Host capability limit, stated before the image is built rather than left to a line in CloudWatch.
-    if (config.http?.api !== undefined || config.http?.control !== undefined) {
-      console.error(
-        "[fastagent] warn: http.api and http.control have no effect on AgentCore — the agent's API is reached through " +
-          '"api" envelopes on the Runtime\'s IAM-gated InvokeAgentRuntime, both planes, and IAM decides who may call ' +
-          "them. The public ingress relays only to the channels.",
-      );
-    }
     // Schedules and wake-ups need nothing from the template beyond the forwarder every stack has: the container
-    // mirrors them into EventBridge schedules itself (schedule/wake-alarm.ts). A file that is not a valid
-    // schedule is the pre-flight's to report.
+    // mirrors them into EventBridge schedules itself (schedule/wake-alarm.ts). A schedule that does not build is the
+    // pre-flight's to report.
     const acName = agentcoreName(basename(agentDir));
     const plan = planAgentcoreDeploy({
       name: acName,
@@ -236,9 +228,9 @@ async function runDeployAgentcore(params: {
         `--log-group-name ${forwarderLogGroup(name)} --retention-in-days 14`,
     );
     console.error(
-      `[fastagent] invoke: aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn ${outcome.runtimeArn} \\\n` +
+      `[fastagent] probe: aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn ${outcome.runtimeArn} \\\n` +
         `  --runtime-session-id "${ingressSessionId(name)}" \\\n` +
-        `  --payload '${INVOKE_PAYLOAD}' --cli-binary-format raw-in-base64-out /dev/stdout`,
+        `  --payload '${PROBE_PAYLOAD}' --cli-binary-format raw-in-base64-out /dev/stdout`,
     );
   } finally {
     await rm(paramsDir, { recursive: true, force: true });

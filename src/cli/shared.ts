@@ -42,7 +42,7 @@ export async function enterAgentDirectory(
 }
 
 /**
- * How every command that RUNS the agent on this machine enters it (dev, start, invoke, chat):
+ * How every command that RUNS the agent on this machine enters it (dev, start, invoke):
  * {@link enterAgentDirectory}, plus a default model. The agent opens without one, but a process here would then fail
  * every new conversation, so it stops at startup with {@link missingDefaultModel} instead.
  */

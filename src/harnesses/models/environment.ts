@@ -18,7 +18,7 @@ import {
 import { environmentAuthSource, modelsOver, probeAuthSource } from "./models.ts";
 
 /** What authenticates one provider for an agent ({@link ModelEnvironment.authStatus}). */
-export interface AuthStatus {
+interface AuthStatus {
   /** What satisfies it now (`OAuth`, `stored credential`, an env variable's name), after a due refresh. */
   source?: string;
   /** Why resolving it failed (a corrupt entry, a refresh the provider refused), when it did. */

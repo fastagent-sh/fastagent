@@ -40,7 +40,7 @@ export interface OpenedServing {
 }
 
 /** The instance's database, under its state root. */
-export const STORAGE_FILE = "agent.sqlite";
+const STORAGE_FILE = "agent.sqlite";
 
 export async function openServing(dir: string, options: OpenServingOptions = {}): Promise<OpenedServing> {
   const definition = await prepareDefinition(dir);

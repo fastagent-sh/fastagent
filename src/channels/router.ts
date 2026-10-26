@@ -34,7 +34,7 @@ export function routeKeysConflict(a: string, b: string): boolean {
 }
 
 /** Same status and headers, no content (RFC 9110's HEAD). */
-export function withoutBody(res: Response): Response {
+function withoutBody(res: Response): Response {
   void res.body?.cancel().catch(() => {});
   return new Response(null, { status: res.status, statusText: res.statusText, headers: res.headers });
 }

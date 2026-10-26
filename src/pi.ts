@@ -24,7 +24,11 @@ export type { DurableAgent } from "./harnesses/pi-durable/agent.ts";
 // A tool's own session id, as the Agent hands it out: what a channel's thread-reading tool asks with.
 export { sessionIdOf } from "./harnesses/pi-durable/ids.ts";
 
-export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./harnesses/models/credentials.ts";
+export {
+  GLOBAL_AUTH_PATH,
+  fastagentCredentialStore,
+  type FastagentAuthOptions,
+} from "./harnesses/models/credentials.ts";
 export {
   createPiModels,
   modelEnvironment,
