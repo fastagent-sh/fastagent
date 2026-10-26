@@ -1,93 +1,42 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { Agent } from "../src/protocol.ts";
-import { loopPort } from "../src/loop-port.ts";
-import { servingAgent } from "../src/serving-layer.ts";
-import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
-import { announceControl, reportServing, withRunOverrides } from "../src/cli/serve.ts";
+import type { AnyChannelModule } from "../src/channels/discover.ts";
+import { reportServing } from "../src/cli/serve.ts";
 import { mountAgentcore } from "../src/channels/agentcore-service.ts";
-import { type MountableAgent, routesFor } from "../src/service.ts";
-import { log } from "../src/log.ts";
-import { router } from "../src/channels/router.ts";
+import { routesFor } from "../src/service.ts";
 import { text } from "../src/channels/respond.ts";
 import type { Schedule } from "../src/schedule/schedule.ts";
+import { scriptedAgent } from "./scripted-agent.ts";
+import { scriptedRun } from "./scripted-run.ts";
 
-const agent: Agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
-const served = { api: true, control: false };
-const none = { api: false, control: false };
+const agent = scriptedAgent((request) => scriptedRun(request));
+const channels = (modules: Record<string, unknown>) => new Map(Object.entries(modules) as [string, AnyChannelModule][]);
 
 describe("serving surface", () => {
-  it("can suppress the data plane for AgentCore's publicly forwarded surface", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-surface-"));
-    const ordinary = await routesFor(dir, agent, join(dir, ".state"), { planes: served });
-    expect(Object.keys(ordinary.unverified)).toContain("POST /invoke");
-    expect(ordinary.mounts.map((m) => m.prefix)).toEqual(["/sessions", "/agent"]);
-
-    // The ONE posture that opts out: AgentCore serves the Runtime's `/invocations` contract instead.
-    const agentcore = await routesFor(dir, agent, join(dir, ".state"), { planes: none });
-    expect(Object.keys(agentcore.unverified)).toEqual(["GET /health"]);
-    expect(agentcore.mounts).toEqual([]);
+  it("serves the channels' routes, with health beside them unless a channel serves it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-surface-"));
+    const beside = routesFor(agent, dir, channels({ hook: () => ({ "POST /hook": () => new Response("x") }) }));
+    expect(Object.keys(beside.routes).sort()).toEqual(["GET /health", "POST /hook"]);
+    const own = routesFor(agent, dir, channels({ probe: () => ({ "/health": () => new Response("mine") }) }));
+    expect(await (await own.routes["/health"]!(new Request("http://x/health"))).text()).toBe("mine");
+    expect(Object.keys(own.routes)).toEqual(["/health"]);
   });
 
-  it("serves the data plane beside a channel, and RESERVES its path against one", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-invoke-surface-"));
-    await mkdir(join(dir, "channels"));
-    await writeFile(
-      join(dir, "channels", "hook.mjs"),
-      `export default () => ({ "POST /hook": () => new Response("x") });\n`,
-    );
-    const beside = await routesFor(dir, agent, join(dir, ".state"), { planes: served });
-    // Two tables, never one table plus a list of which keys are ours: that list was a second answer
-    // to the same question, and the two answers drifted apart twice.
-    expect(Object.keys(beside.unverified).sort()).toEqual(["GET /health", "POST /invoke"]);
-    expect(Object.keys(beside.selfVerifying)).toEqual(["POST /hook"]);
-
-    // Reserved like /control/*: silently replacing the one route every client, every doc and the
-    // startup line all name is worse than refusing to start. (A fresh dir: an ESM module already
-    // imported from a path is cached under it, so rewriting hook.mjs would re-load the old one.)
-    const taken = await mkdtemp(join(tmpdir(), "fa-invoke-taken-"));
-    await mkdir(join(taken, "channels"));
-    await writeFile(
-      join(taken, "channels", "mine.mjs"),
-      `export default () => ({ "POST /invoke": () => new Response("mine") });\n`,
-    );
-    await expect(routesFor(taken, agent, join(taken, ".state"), { planes: served })).rejects.toThrow(
-      /channel route\(s\) "POST \/invoke" take a path this serve answers on itself \("POST \/invoke"\)/,
-    );
-
-    // The message names the CHANNEL's spelling. A channel may write the method-less "/invoke", and an
-    // error naming "POST /invoke" sends its author grepping their own file for a string not in it.
-    const anyMethod = await mkdtemp(join(tmpdir(), "fa-invoke-anymethod-"));
-    await mkdir(join(anyMethod, "channels"));
-    await writeFile(
-      join(anyMethod, "channels", "any.mjs"),
-      `export default () => ({ "/invoke": () => new Response("mine") });\n`,
-    );
-    await expect(routesFor(anyMethod, agent, join(anyMethod, ".state"), { planes: served })).rejects.toThrow(
-      /channel route\(s\) "\/invoke" take a path this serve answers on itself \("POST \/invoke"\)/,
-    );
-    // …but ONLY where this serve actually answers there: AgentCore serves the Runtime's `/invocations`
-    // contract instead, so the same channel is legal on that posture and the refusal would be a lie.
-    const onAgentcore = await routesFor(taken, agent, join(taken, ".state"), { planes: none });
-    expect(await (await onAgentcore.selfVerifying["POST /invoke"]!(new Request("http://x/invoke"))).text()).toBe(
-      "mine",
-    );
-  });
-
-  it("keeps health and the data plane for a long-connection channel", async () => {
+  it("keeps health for a long-connection channel, 503 until it is ready", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-long-connection-surface-"));
-    await mkdir(join(dir, "channels"));
-    await writeFile(
-      join(dir, "channels", "socket.mjs"),
-      `export default { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };\n`,
+    const surface = routesFor(
+      agent,
+      dir,
+      channels({
+        socket: { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) },
+      }),
     );
-    const surface = await routesFor(dir, agent, join(dir, ".state"), { planes: served });
-    expect(Object.keys(surface.unverified).sort()).toEqual(["GET /health", "POST /invoke"]);
+    expect(Object.keys(surface.routes)).toEqual(["GET /health"]);
     expect(surface.longConnections.map((connection) => connection.name)).toEqual(["socket"]);
     expect(surface.routeChannels).toEqual([]);
-    const health = surface.unverified["GET /health"]!;
+    const health = surface.routes["GET /health"]!;
     expect((await health(new Request("http://x/health"))).status).toBe(503);
     surface.setReady(true);
     expect((await health(new Request("http://x/health"))).status).toBe(200);
@@ -186,7 +135,6 @@ describe("cli: the serving report", () => {
         {
           routes: { "POST /telegram": () => new Response("x") },
           channels: { routes: ["telegram"], longConnections: ["feishu-ws"] },
-          unverifiedRoutes: ["POST /invoke", "GET /health"],
         } as never,
         "127.0.0.1",
         8787,
@@ -195,114 +143,6 @@ describe("cli: the serving report", () => {
       (process as { send?: unknown }).send = original;
     }
     expect(sent).toEqual([{ type: "ready", port: 8787, routeChannels: ["telegram"] }]);
-  });
-});
-
-describe("cli: the assembled serving surface", () => {
-  it("a channel route inside a plane's prefix is refused, unless that plane is off", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-plane-taken-"));
-    await mkdir(join(dir, "channels"));
-    await writeFile(
-      join(dir, "channels", "mine.mjs"),
-      `export default () => ({ "POST /sessions/x": () => new Response("x") });\n`,
-    );
-    await expect(routesFor(dir, agent, join(dir, ".state"), { planes: served })).rejects.toThrow(
-      /inside a path the agent's own API serves/,
-    );
-    const off = await routesFor(dir, agent, join(dir, ".state"), { planes: none });
-    expect(Object.keys(off.selfVerifying)).toEqual(["POST /sessions/x"]);
-  });
-
-  it("the planes answer in the surface dev/start hand to serve", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-planes-"));
-    const surface = await routesFor(dir, agent, join(dir, ".state"), { planes: { api: true, control: true } });
-    const handle = router({
-      unverified: surface.unverified,
-      selfVerifying: surface.selfVerifying,
-      mounts: surface.mounts,
-    });
-    expect((await handle(new Request("http://h/agent"))).status).toBe(200);
-    expect((await handle(new Request("http://h/sessions"))).status).toBe(200);
-    expect((await handle(new Request("http://h/control/sessions/x", { method: "DELETE" }))).status).toBe(404);
-    expect((await handle(new Request("http://h/health"))).status).toBe(200);
-  });
-
-  const api = { planes: { api: true, control: false } };
-  const both = { planes: { api: true, control: true } };
-
-  it("--no-api withholds the agent's API for ONE run, without touching the definition", async () => {
-    // `http.api: false` is the persistent form and travels into a deployed image. The case this flag exists for is
-    // `dev --tunnel`: registering a chat channel's webhook publishes the port at a public URL, and would publish an
-    // anonymous, fully-tooled API alongside it.
-    const opened = { agentDir: "/x" } as unknown as MountableAgent;
-    expect(withRunOverrides(opened, {})).toBe(opened); // no flag, nothing changed
-    expect(withRunOverrides(opened, { api: false }).http?.api).toBe(false);
-    // Only `false` overrides: an absent flag must not beat a definition that said `http.api: false`.
-    const configuredOff = { ...opened, http: { api: false } } as MountableAgent;
-    expect(withRunOverrides(configuredOff, {}).http?.api).toBe(false);
-    expect(withRunOverrides(configuredOff, { api: true }).http?.api).toBe(false);
-    const withCors = { ...opened, http: { cors: ["https://app.example.com"] } } as MountableAgent;
-    expect(withRunOverrides(withCors, { api: false }).http).toEqual({ api: false, cors: ["https://app.example.com"] });
-  });
-
-  it("the cross-origin grant is said at EVERY boot, loopback included", async () => {
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      announceControl(both, { host: "127.0.0.1", tunnel: false });
-      const said = warn.mock.calls.flat().join(" ");
-      expect(warn).toHaveBeenCalledTimes(1); // the grant, and nothing about reach
-      expect(said).toMatch(/any web page your browser visits can call this serve cross-origin/);
-      expect(said).toContain("POST /invoke");
-      expect(said).toContain("http.cors");
-
-      warn.mockClear();
-      announceControl({ ...both, corsOrigins: ["https://app.example.com"] }, { tunnel: false });
-      expect(warn.mock.calls.flat().join(" ")).not.toMatch(/any web page/);
-      warn.mockClear();
-      announceControl({ ...both, corsOrigins: ["*"] }, { host: "127.0.0.1", tunnel: false });
-      expect(warn.mock.calls.flat().join(" ")).toMatch(/any web page/);
-
-      // Nothing of ours answers here (the AgentCore adapter's surface): no grant to describe.
-      warn.mockClear();
-      announceControl({ planes: none }, { host: "127.0.0.1", tunnel: false });
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it("announceControl names the reach and what answers: LAN and tunnel are warnings, loopback is not", async () => {
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const reachLines = () => warn.mock.calls.flat().filter((line) => !String(line).includes("any web page"));
-    try {
-      announceControl(both, { host: "127.0.0.1", tunnel: false });
-      expect(reachLines()).toEqual([]);
-      announceControl(both, { host: "192.168.1.5", tunnel: false });
-      expect(reachLines().join(" ")).toContain("192.168.1.5 (off this machine)");
-      announceControl(both, { tunnel: false });
-      expect(reachLines().join(" ")).toContain("binds all interfaces");
-      expect(reachLines()).toHaveLength(2);
-      announceControl(both, { host: "127.0.0.1", tunnel: true });
-      expect(reachLines().join(" ")).toMatch(/--tunnel publishes this port.*NO authentication/s);
-
-      // The user plane alone: every session readable, a channel's direct messages included.
-      warn.mockClear();
-      announceControl(api, { tunnel: true });
-      const apiOnly = reachLines().join(" ");
-      expect(apiOnly).toContain("POST /invoke");
-      expect(apiOnly).toContain("a channel's direct messages included");
-      expect(apiOnly).not.toContain("/control/*");
-
-      warn.mockClear();
-      announceControl({ planes: none }, { tunnel: true });
-      expect(warn).not.toHaveBeenCalled();
-      announceControl({ planes: { api: false, control: true } }, { tunnel: true });
-      const controlOnly = reachLines().join(" ");
-      expect(controlOnly).toContain("/control/* (rename, reconfigure or delete any session) answers");
-      expect(controlOnly).not.toContain("POST /invoke");
-    } finally {
-      warn.mockRestore();
-    }
   });
 });
 
@@ -345,50 +185,18 @@ describe("cli: bind address policy", () => {
     expect(exits(() => assertTunnelBindable(undefined, true))).toBeUndefined(); // start's wildcard
   });
 
-  it("the ready lines all name the SAME dialable address", async () => {
-    // They are one message: the first says where it bound, the second is the command a reader copies.
-    // Only the first was updated when --bind landed, so `--bind 192.168.1.5` printed a curl to
-    // localhost — the very address that bind stops answering. They come from one function now; this
-    // pins the property that made splitting them a bug.
+  it("the bind line names a dialable address, never a name the bind may not answer", async () => {
     const { bindLine } = await import("../src/cli/serve.ts");
     const { bindAddress } = await import("../src/bind.ts");
-    /** The two ready lines `reportServing` logs: where it bound, and the try-it curl when it serves `/invoke`. */
-    const readyLines = (host: string | undefined, port: number, servesInvoke: boolean): string[] => {
-      const info = vi.spyOn(log, "info").mockImplementation(() => {});
-      try {
-        reportServing(
-          {
-            routes: {},
-            channels: { routes: [], longConnections: [] },
-            unverifiedRoutes: servesInvoke ? ["POST /invoke", "GET /health"] : ["GET /health"],
-          } as never,
-          host,
-          port,
-        );
-        return info.mock.calls.map(([line]) => String(line)).filter((line) => !line.includes("routes:"));
-      } finally {
-        info.mockRestore();
-      }
-    };
-    // `localhost` is IN the list on purpose: it is the only accepted input that could put a NAME in
-    // these lines, so leaving it out would make the `not.toContain("localhost")` below pass for the
-    // reason that it was never tried. It cannot get here — `parseBind` resolves it to an
-    // address first (bind.ts `bindAddress`) — and this is what says so.
+    // `localhost` is IN the list on purpose: it is the only accepted input that could put a NAME in this line. It
+    // cannot get here — `parseBind` resolves it to an address first (bind.ts `bindAddress`) — and this says so.
     for (const host of [undefined, "0.0.0.0", "127.0.0.1", "192.168.1.5", "::1", bindAddress("localhost")]) {
-      const [bound, tryLine] = readyLines(host, 8899, true);
-      const dial = tryLine!.match(/curl -s (\S+?)\/invoke/)![1]!;
-      expect(dial, String(host)).toContain(":8899");
-      expect(dial, String(host)).not.toContain("localhost"); // never a name the bind may not answer
-      // A wildcard bind IS every interface, so the report says so rather than understating it as one
-      // address — but the curl still has to dial something, and loopback is what a wildcard answers.
-      expect(bound, String(host)).toContain(host === undefined || host === "0.0.0.0" ? ":8899 (all interfaces)" : dial);
-      if (host === "::1") expect(dial).toBe("[::1]:8899"); // URL form, brackets and all
+      const line = bindLine(host, 8899);
+      expect(line, String(host)).toContain(":8899");
+      expect(line, String(host)).not.toContain("localhost");
+      // A wildcard bind IS every interface, so the report says so rather than understating it as one address.
+      if (host === undefined || host === "0.0.0.0") expect(line).toContain(":8899 (all interfaces)");
     }
-    // Bind line + try-it, nothing else…
-    expect(readyLines("127.0.0.1", 1, true)).toHaveLength(2);
-    // …and NO try-it when this serve has no `/invoke` of its own (`http.api: false`, or a channel
-    // holding that path with a protocol of its own). A copyable request that 404s, or that pushes the
-    // built-in body at a handler which does not accept it, is worse than no line.
-    expect(readyLines("127.0.0.1", 1, false)).toEqual([bindLine("127.0.0.1", 1)]);
+    expect(bindLine("::1", 8899)).toContain("[::1]:8899"); // URL form, brackets and all
   });
 });
