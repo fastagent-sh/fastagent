@@ -26,6 +26,7 @@ import {
   secretsManifest,
 } from "../src/harnesses/pi-durable/open.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
+import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 import { registrySource } from "../src/harnesses/pi-durable/registry.ts";
 import { expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
 
@@ -279,6 +280,21 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       ]);
       const end = await ask(agent, "where is order 7?");
       expect(end.answer?.text).toContain("Ask for the order number, then read references/codes.md.");
+    });
+
+    it("what it runs from a dev process is not dev: the bash tool's children do not inherit the mark", async () => {
+      const { agent, faux } = await open();
+      process.env[DEV_SERVE_ENV] = "1";
+      try {
+        faux.setResponses([
+          () => toolCall("bash", { command: `printf "[%s]" "$${DEV_SERVE_ENV}"` }),
+          (context) => fauxAssistantMessage(lastToolResult(context)),
+        ]);
+        expect((await ask(agent, "run it")).answer?.text).toContain("[]");
+        expect(process.env[DEV_SERVE_ENV]).toBe("1"); // the serving process itself keeps it
+      } finally {
+        delete process.env[DEV_SERVE_ENV];
+      }
     });
 
     it("runs its tool with the secret it declared, an unset optional one absent", async () => {

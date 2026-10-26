@@ -27,6 +27,7 @@ import type { ChannelModule, LongConnectionChannelModule } from "../../channel.t
 import { channelModuleProblem } from "../../channels/discover.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
+import { DEV_SERVE_ENV } from "../../serving-command.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { modelsOver } from "../models/models.ts";
 import { type DurableAgent, openDurableAgent } from "./agent.ts";
@@ -312,20 +313,20 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
   if (model !== undefined && models.getModel(model.provider, model.modelId) === undefined) {
     throw new Error(`unknown model "${spec}": no provider "${model.provider}" offers "${model.modelId}"`);
   }
+  const ownWake = [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].some(({ name }) =>
+    WAKE_TOOLS.includes(name),
+  );
   const registry = createRegistry();
   registry.install(CodingTools);
   // After the coding tools, so a tool of the definition's own with one of their names replaces it.
   registry.install(
     defineExtension({
       name: DEFINITION_EXTENSION,
-      sections: definitionSections(dir, options.content ?? []),
+      sections: definitionSections(dir, options.content ?? [], { wake: ownWake || options.stateRoot !== undefined }),
       tools: code.tools,
     }),
   );
   for (const extension of code.extensions) registry.install(extension);
-  const ownWake = [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].some(({ name }) =>
-    WAKE_TOOLS.includes(name),
-  );
   if (options.stateRoot !== undefined && !ownWake) registry.install(wakeExtension(options.stateRoot));
   const thinkingLevel = options.thinkingLevel ?? config.thinkingLevel;
   return openDurableAgent({
@@ -337,7 +338,8 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     ...(model === undefined ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
-    env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? dir }),
+    // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
+    env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? dir, shellEnv: { [DEV_SERVE_ENV]: undefined } }),
     commands: () => readCommands(dir),
   });
 }

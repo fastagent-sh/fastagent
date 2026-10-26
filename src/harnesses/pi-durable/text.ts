@@ -10,6 +10,7 @@ import { type PromptSection, section } from "@earendil-works/pi-durable";
 import { parse as parseYaml } from "yaml";
 import type { ResolvedContent } from "../../content/resolve.ts";
 import { log } from "../../log.ts";
+import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import type { AgentCommand } from "./agent.ts";
 
 export interface Skill {
@@ -237,14 +238,48 @@ const fileText = (path: string): string | undefined => {
   return text === "" ? undefined : text;
 };
 
-/** The prompt the definition contributes: `SYSTEM.md` as written, `AGENTS.md` as project context, then the skills. */
-export function definitionSections(agentDir: string, content: readonly ResolvedContent[]): PromptSection[] {
+/**
+ * The prompt the definition contributes: `SYSTEM.md` as written, `AGENTS.md` as project context, the skills, where it
+ * works, and, deployed, what of a change it makes to itself lasts. `wake`: the agent has the wake tool.
+ */
+export function definitionSections(
+  agentDir: string,
+  content: readonly ResolvedContent[],
+  options: { wake: boolean },
+): PromptSection[] {
   return [
     section("system", () => fileText(join(agentDir, "SYSTEM.md")), { tag: false }),
     section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
     section("skills", () => skillsPrompt(readSkills(agentDir))),
     section("content", () => contentSection({ agentDir, content })),
+    section("self_change", () => (isDeployedWorkspace() ? selfChangeSection(options.wake) : undefined)),
   ];
+}
+
+/**
+ * What takes effect when, and the agent's own path to a new capability, are the same on every host; how long the
+ * storage lives is the host's answer: AgentCore's managed mount is reset by every deploy, so telling that agent to keep
+ * work "outside the definition" would name a location its next deploy erases. The skill it writes lives in the
+ * definition directory, which the next deployment replaces (or, on AgentCore, erases with everything else), so the
+ * sentence says so, and where a skill that should outlast it has to go.
+ */
+function selfChangeSection(wake: boolean): string {
+  const deployment = isAgentcoreRuntime()
+    ? "Every deployment of a new version resets this host's storage entirely"
+    : "Each deployment replaces your directory with the author's release";
+  return (
+    `Your directory survives restarts, including uncommitted work; /tmp does not. ${deployment}, so anything that ` +
+    `must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). ` +
+    `SYSTEM.md, AGENTS.md, skills/ and prompts/ are read for every message; changes to code in src/ (tools, ` +
+    `extensions, channels, schedules) or to configuration (fastagent.config.ts, context.json, package.json) take ` +
+    `effect when the service restarts. A tool you install yourself (apt-get, npm install -g) belongs to this machine ` +
+    `and is gone when its container is replaced. To give yourself a new capability now, write a skill — a SKILL.md in ` +
+    `your definition's skills/ directory, with any script it needs run through bash. It lasts until the next ` +
+    `deployment replaces that directory, so a capability that should outlast it belongs in the author's release: ` +
+    `propose it to them.` +
+    // Named only when it has the tool: naming a tool the model does not have invites calls to it.
+    (wake ? " To schedule your own follow-up work, use the wake tool." : "")
+  );
 }
 
 /** What a content entry of this kind is, said to the agent: where it is, and whether another instance shares it. */
