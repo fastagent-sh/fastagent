@@ -66,8 +66,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
       new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
     );
   }
-  // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint.
-  const providers = agentDir ? await definitionProviders(agentDir).catch(failStartup) : [];
+  // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint. Not for
+  // `-g`: the global file serves every agent on this machine, so no one agent's providers decide what it holds.
+  const providers = agentDir && !opts.global ? await definitionProviders(agentDir).catch(failStartup) : [];
   // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
   const result = await loginFlow(terminalLoginIO(), {
     authPath,

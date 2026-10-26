@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { expect, it } from "vitest";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { openInstanceStorage } from "../src/harnesses/pi-durable/storage.ts";
 
 const STORAGE = pathToFileURL(new URL("../src/harnesses/pi-durable/storage.ts", import.meta.url).pathname).href;
@@ -31,4 +32,13 @@ it("a second process cannot open the storage one process holds, and can once it 
   expect(await openElsewhere(path)).toMatch(/^the storage .*agent\.sqlite is held by another process/);
   await held.close(BACKGROUND_CONTEXT);
   expect(await openElsewhere(path)).toBe("opened");
+});
+
+it("an agent that fails to open lets go of the storage, so the same process can open it once fixed", async () => {
+  // An embedder that corrects its configuration retries in the process it runs in, which still holds the lock.
+  const dir = await mkdtemp(join(tmpdir(), "fa-storage-retry-"));
+  await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
+  await expect(openServing(dir, { model: "nope/missing" })).rejects.toThrow(/unknown model "nope\/missing"/);
+  const opened = await openServing(dir, { model: "anthropic/claude-sonnet-4-5" });
+  await opened.agent.close();
 });

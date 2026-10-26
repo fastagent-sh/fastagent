@@ -5,6 +5,7 @@
  */
 import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
@@ -98,6 +99,10 @@ export async function openServing(dir: string, options: OpenServingOptions = {})
     ...(locking === "memory" ? {} : { stateRoot }),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
+  }).catch(async (error: unknown) => {
+    // An Agent that did not open does not own the storage, and its lock would refuse this process's next attempt.
+    await storage.close(BACKGROUND_CONTEXT);
+    throw error;
   });
   return { agent, definition, code, models, content, agentDir: dir, stateRoot };
 }

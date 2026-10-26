@@ -4,7 +4,7 @@
  * text, tools and extensions installed. `dev`, `start` and an embedder call the same function.
  */
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { writeFileAtomic } from "../../atomic-write.ts";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CredentialStore, ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
@@ -189,9 +189,11 @@ export function secretsManifest(definition: AgentDefinition) {
 export async function prepareDefinition(dir: string): Promise<AgentDefinition> {
   await generateRegistry(dir);
   const definition = await loadDefinition(dir);
-  await writeFile(
+  writeFileAtomic(
     join(dir, GENERATED_DIR, SECRETS_MANIFEST_FILE),
     `${JSON.stringify(secretsManifest(definition), null, 2)}\n`,
+    undefined,
+    true,
   );
   return definition;
 }
