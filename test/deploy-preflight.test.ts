@@ -740,6 +740,11 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     if (!old.ok) expect(old.gate).toMatch(/pins bun@1\.3\.13.*Bun ships from 1\.4\.0.*fail at start/);
     const current = await call(await pinned("1.4.0"), { model: "openai/gpt-4o-mini" });
     expect(current.ok && current.messages.some((m) => /node:sqlite/.test(m.text))).toBe(false);
+    // A hand-written Dockerfile names its own base, so the pin says nothing about the image.
+    const ownImage = await pinned("1.3.13");
+    await writeFile(join(ownImage, "Dockerfile"), "FROM oven/bun:1.4\nENV FASTAGENT_RELEASE_FILE=/app/x\n");
+    const kept = await call(ownImage, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(kept.ok ? kept.messages.filter((m) => /node:sqlite/.test(m.text)) : kept.gate).toEqual([]);
   });
 
   it("warns a code agent with no lockfile and no @fastagent-sh/fastagent dep", async () => {

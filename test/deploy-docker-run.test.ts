@@ -56,7 +56,9 @@ describe("deploy/docker/run: local Compose journey", () => {
       "compose version",
       "info",
       "compose -f fastagent.compose.yml config --services",
-      "compose -f fastagent.compose.yml up -d --build",
+      // The base image is a floating tag: a copy cached here may predate the runtime floor.
+      "compose -f fastagent.compose.yml build --pull",
+      "compose -f fastagent.compose.yml up -d",
       "compose -f fastagent.compose.yml ps --status running --services",
       "compose -f fastagent.compose.yml port agent 8787",
     ]);
@@ -115,7 +117,7 @@ describe("deploy/docker/run: local Compose journey", () => {
     const gated = await deployDockerRun(plan({ requireTunnel: true }), withoutTunnel.docker, () => {}, healthy);
     expect(gated.ok).toBe(false);
     if (!gated.ok) expect(gated.gate).toMatch(/--tunnel.*no "tunnel" service.*--force/);
-    expect(withoutTunnel.commands()).not.toContain("compose -f fastagent.compose.yml up -d --build");
+    expect(withoutTunnel.commands()).not.toContain("compose -f fastagent.compose.yml up -d");
   });
 
   it("the box logs in once healthy and before the tunnel is announced; a failed login still says where Compose is", async () => {
@@ -376,6 +378,14 @@ describe("deploy/docker/run: local Compose journey", () => {
         name: "unsupported Compose file",
         script: (args) => (args.includes("config") ? { code: 1 } : {}),
         gate: /generated files require Docker Compose >= 2\.3\.3/,
+      },
+      {
+        name: "build",
+        script: (args) => {
+          if (args.includes("--services")) return { stdout: "agent\n" };
+          return args.includes("build") ? { code: 1 } : {};
+        },
+        gate: /compose build.*failed/i,
       },
       {
         name: "up",

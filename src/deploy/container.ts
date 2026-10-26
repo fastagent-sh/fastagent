@@ -1,5 +1,6 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
 import { CONTENT_DIRNAME, LOCAL_CONTEXT_FILE, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { RUNTIME_FLOOR } from "../runtime.ts";
 import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 import { MISE_ENVIRONMENT } from "../environment/mise.ts";
 
@@ -159,8 +160,11 @@ RUN ${steps.join(" \\\n && ")}
 `;
 }
 
-/** The Node image an npm-based agent runs on: the newest of the line `RUNTIME_FLOOR.node` (runtime.ts) is in. */
-export const NODE_IMAGE = "node:24-slim";
+/**
+ * The Node image an npm-based agent runs on: the newest of the floor's line. A floating tag, so every build pulls it
+ * (docker/run.ts, agentcore/run.ts): a copy cached before the floor's release would start a Node the CLI refuses.
+ */
+export const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
 
 function dockerfile(input: ContainerInput): string {
   // The build context is the agent directory, baked at IMAGE_DEFINITION_DIR; deps install (and the local bin lives)

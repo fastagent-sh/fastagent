@@ -336,7 +336,14 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const hasPackageJson = await exists(join(agentDir, "package.json"));
   const pkg = await readPackageJson(agentDir);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
-  if (runtime === "bun" && bunVersion !== undefined && belowFloor(bunVersion, RUNTIME_FLOOR.bun)) {
+  const kept = await keptDockerfile(agentDir);
+  // Only the generated image runs the pinned Bun: a hand-written Dockerfile names its own base.
+  if (
+    kept === undefined &&
+    runtime === "bun" &&
+    bunVersion !== undefined &&
+    belowFloor(bunVersion, RUNTIME_FLOOR.bun)
+  ) {
     report.issue(
       `package.json pins bun@${bunVersion}, which the image runs (oven/bun:${bunVersion}), and the agent's storage is ` +
         `node:sqlite, which Bun ships from ${RUNTIME_FLOOR.bun}: the container would fail at start. Pin ` +
@@ -415,7 +422,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     shipsGit,
   };
   const port = config.http?.port ?? DEFAULT_HTTP_PORT;
-  await checkKeptDockerfile(agentDir, model.envValue, valueFile, report);
+  if (kept !== undefined) checkKeptDockerfile(kept, agentDir, model.envValue, valueFile, report);
 
   return {
     channels,
@@ -496,6 +503,13 @@ function hasLogin(providerId: string, providers: readonly Provider[]): boolean {
   return provider !== undefined && interactiveLoginKind(provider) !== "none";
 }
 
+/** The agent's hand-written Dockerfile, which the deploy keeps; undefined when there is none, or it is the generated one. */
+async function keptDockerfile(agentDir: string): Promise<string | undefined> {
+  const path = join(agentDir, "Dockerfile");
+  const text = (await exists(path)) ? await readFile(path, "utf8") : undefined;
+  return text === undefined || isGeneratedDockerfile(text) ? undefined : text;
+}
+
 /**
  * What a KEPT hand-written Dockerfile drops. The environment (context.json's) is the obvious one; the resolved model is the one that
  * looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
@@ -506,16 +520,14 @@ function hasLogin(providerId: string, providers: readonly Provider[]): boolean {
  * hand-written Dockerfile survives `--force` and drops exactly the same things. Short-circuiting here let
  * `--run --force` ship the crash-loop this gate exists to stop.
  */
-async function checkKeptDockerfile(
+function checkKeptDockerfile(
+  dockerfileText: string,
   agentDir: string,
   /** The model the release manifest carries (set only when the value file named it). */
   modelFromValueFile: string | undefined,
   valueFile: string,
   report: DeployReport,
-): Promise<void> {
-  const dockerfileHome = join(agentDir, "Dockerfile");
-  const dockerfileText = (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
-  if (dockerfileText === undefined || isGeneratedDockerfile(dockerfileText)) return;
+): void {
   // What the image installs: the packages and apt packages. Variables travel with the value file, whatever the image.
   const environment = loadEnvironment(agentDir);
   if (Object.keys(environment?.packages ?? {}).length > 0 || (environment?.aptPackages.length ?? 0) > 0) {
