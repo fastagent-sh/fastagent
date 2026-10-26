@@ -10,6 +10,7 @@ import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { findAgentDir, globalHome, selectAgentEnvironment } from "../../paths.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../../harnesses/models/login.ts";
 import { environmentAuth } from "../../harnesses/models/models.ts";
+import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
 import { loginOnBox } from "../box-login.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";
@@ -65,9 +66,12 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
       new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
     );
   }
+  // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint.
+  const providers = agentDir ? await definitionProviders(agentDir).catch(failStartup) : [];
   // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
   const result = await loginFlow(terminalLoginIO(), {
     authPath,
+    providers,
     ...(provider ? { provider } : {}),
   }).catch((error: unknown) => {
     if (error instanceof LoginCancelled) {
@@ -150,8 +154,10 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   // proxy they name. AgentCore's command shell hands down none of the runtime's, so a proxy carried there in
   // FASTAGENT_ENV does not reach the login (docs/deploy.md).
   enterAgentEnv(agentDir);
-  // The model environment the serving Agent reads (openServing), so "logged in" means what the server will use.
-  const models = modelEnvironment(agentDir);
+  // The model environment the serving Agent reads (openServing), its definition's providers included, so "logged in"
+  // means what the server will use, and a provider only the definition declares can be signed in to.
+  const providers = await definitionProviders(agentDir);
+  const models = modelEnvironment(agentDir, {}, providers);
   const auth = models.auth as NonNullable<typeof models.auth>;
   if (opts.ifMissing && provider) {
     // The server's own answer (`authStatus`), the one its startup report prints. Known ceiling: nothing is asked of
@@ -171,6 +177,6 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   if (opts.input === false) {
     return { ok: false, reason: "missing", message: `no ${provider ?? "model"} credential in ${auth.path}` };
   }
-  const result = await loginFlow(io, { authPath: auth.path, ...(provider ? { provider } : {}) });
+  const result = await loginFlow(io, { authPath: auth.path, providers, ...(provider ? { provider } : {}) });
   return { ok: true, provider: result.provider, method: result.method, path: auth.path };
 }

@@ -419,7 +419,7 @@ export async function loginFlow(
     authPath: string;
     provider?: string;
     method?: LoginMethod;
-    providers?: Provider[];
+    providers?: readonly Provider[];
     signal?: AbortSignal;
     /** {@link LoginInternals.verifyWith}. */
     verifyWith?: string;

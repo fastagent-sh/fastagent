@@ -4,13 +4,13 @@
  */
 import { resolve } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
-import type { Models } from "@earendil-works/pi-ai";
+import type { Models, Provider } from "@earendil-works/pi-ai";
 import { buildModelPickerOptions } from "./models-view.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../harnesses/models/login.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
-import { loadConfig, modelSpecFor } from "../harnesses/pi-durable/open.ts";
+import { definitionProviders, loadConfig, modelSpecFor } from "../harnesses/pi-durable/open.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { contentLines } from "./content-view.ts";
 import { deployedHost, isDeployedWorkspace } from "../paths.ts";
@@ -161,8 +161,9 @@ async function resolveFirstRunModel(
   if (configured) return configured;
   if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
   if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
-  const environment = modelEnvironment(agentDir);
-  const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string);
+  const providers = await definitionProviders(agentDir).catch(failStartup);
+  const environment = modelEnvironment(agentDir, {}, providers);
+  const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
   console.error(
@@ -172,7 +173,11 @@ async function resolveFirstRunModel(
 }
 
 /** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */
-async function pickWithCredentials(models: Models, authPath: string): Promise<string | undefined> {
+async function pickWithCredentials(
+  models: Models,
+  authPath: string,
+  providers: readonly Provider[],
+): Promise<string | undefined> {
   let statuses: Awaited<ReturnType<typeof providerAuthStatuses>>;
   try {
     statuses = await providerAuthStatuses(models);
@@ -205,7 +210,7 @@ async function pickWithCredentials(models: Models, authPath: string): Promise<st
 
   try {
     // Verified on this agent's registry, against the chosen model: the request the agent is about to make.
-    await loginFlow(terminalLoginIO(), { provider, authPath, verifyWith: chosen });
+    await loginFlow(terminalLoginIO(), { provider, authPath, providers, verifyWith: chosen });
     console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
   } catch (error) {
     if (error instanceof LoginCancelled) return undefined; // user backed out — discard the choice, like a picker cancel

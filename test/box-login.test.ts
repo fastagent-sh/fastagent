@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { relayLogin } from "../src/cli/login-relay.ts";
 import { catchingRedirect, loginOnBox } from "../src/cli/box-login.ts";
 import { processShell } from "../src/deploy/box-shell.ts";
 import type { LoginIO } from "../src/harnesses/models/login.ts";
+import { UNNAMED_AUTH_SOURCE } from "../src/harnesses/models/models.ts";
 import { createServer as createNetServer } from "node:net";
 import type { AddressInfo } from "node:net";
 
@@ -69,25 +70,55 @@ describe("the box half of `login --deployment`", () => {
     expect(() => boxLoginCommand(["codex'; rm -rf /"])).toThrow(/cannot pass/);
   });
 
+  /** The box's half run for real: `fastagent` on its PATH is this checkout's CLI. */
+  async function relayOn(root: string, bin: string, args: string[]) {
+    await executable(join(bin, "fastagent"), `exec "${process.execPath}" "${CLI}" "$@"`);
+    const { child, stderr } = onBox(boxLoginCommand(args), envFor(root, bin));
+    const noQuestions = {
+      select: async () => {
+        throw new Error("asked");
+      },
+      prompt: async () => {
+        throw new Error("asked");
+      },
+      note: () => {},
+      openUrl: () => {},
+    };
+    const result = await relayLogin(child.stdout, child.stdin, noQuestions, () => {});
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    return { result, code, stderr: stderr() };
+  }
+
+  it("answers for a provider only the definition declares, as the server it logs in would", async () => {
+    // pi-ai's built-ins alone do not know "gw", so the box would report it missing and try to log in to a provider it
+    // cannot name, after the deploy that promised the login had already shipped.
+    const { root, agentDir, bin } = await box();
+    await symlink(fileURLToPath(new URL("../node_modules", import.meta.url)), join(agentDir, "node_modules"), "dir");
+    await writeFile(
+      join(agentDir, "fastagent.config.ts"),
+      `import { createProvider } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+const baseUrl = "http://127.0.0.1:9/v1";
+export default {
+  providers: [
+    createProvider({
+      id: "gw", name: "Gateway", baseUrl,
+      auth: { apiKey: { name: "Gateway", resolve: async () => ({ auth: { apiKey: "k" } }) } },
+      models: [{ id: "m", name: "M", api: "openai-completions", provider: "gw", baseUrl, reasoning: false, input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 1024 }],
+      api: openAICompletionsApi(),
+    }),
+  ],
+};
+`,
+    );
+    const held = await relayOn(root, bin, ["gw", "--if-missing", "--no-input"]);
+    expect(held.result, held.stderr).toEqual({ ok: true, provider: "gw", kept: UNNAMED_AUTH_SOURCE });
+  });
+
   it("reports a credential the box already holds, and a missing one without asking, as one result line", async () => {
     const { root, bin } = await box();
-    await executable(join(bin, "fastagent"), `exec "${process.execPath}" "${CLI}" "$@"`);
-    const relay = async (args: string[]) => {
-      const { child, stderr } = onBox(boxLoginCommand(args), envFor(root, bin));
-      const noQuestions = {
-        select: async () => {
-          throw new Error("asked");
-        },
-        prompt: async () => {
-          throw new Error("asked");
-        },
-        note: () => {},
-        openUrl: () => {},
-      };
-      const result = await relayLogin(child.stdout, child.stdin, noQuestions, () => {});
-      const code = await new Promise((resolve) => child.on("close", resolve));
-      return { result, code, stderr: stderr() };
-    };
+    const relay = (args: string[]) => relayOn(root, bin, args);
 
     const missing = await relay(["openai-codex", "--if-missing", "--no-input"]);
     expect(missing.result, missing.stderr).toMatchObject({ ok: false, reason: "missing" });

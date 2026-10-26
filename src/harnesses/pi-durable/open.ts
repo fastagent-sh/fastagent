@@ -314,6 +314,16 @@ export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.Pr
   return buildDefinition(definition, values);
 }
 
+/**
+ * The providers of the definition in `agentDir`, for a command that reads models without serving (`models`, `login`,
+ * the first-run picker): with the values `env` holds and stand-ins for the rest, so listing a model or signing in to
+ * it needs no secret the serve would. Without these a provider in code, or one replacing a built-in's id, would be
+ * unknown there, or verified against the built-in's endpoint.
+ */
+export async function definitionProviders(agentDir: string, env: NodeJS.ProcessEnv = process.env): Promise<Provider[]> {
+  return buildDefinitionShape(await prepareDefinition(agentDir), env).providers;
+}
+
 const named = <T extends { name: string }>(value: T) => ({ name: value.name, value });
 
 /** Refuse two of a kind under one name: whichever is installed or kept last would silently stand in for the other. */

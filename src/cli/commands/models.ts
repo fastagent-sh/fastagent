@@ -4,7 +4,7 @@
  */
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { listModels, modelsOver } from "../../harnesses/models/models.ts";
-import { buildDefinition, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
+import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { formatModelsCommand } from "../models-view.ts";
 import { failStartup, optionalAgentDirOrExit } from "../fail.ts";
@@ -15,10 +15,8 @@ export async function runModels(search: string | undefined, opts: { global?: boo
   const agentDir = opts.global ? undefined : optionalAgentDirOrExit(process.cwd());
   let providers: Parameters<typeof modelsOver>[1] = [];
   if (agentDir) {
-    enterAgentEnv(agentDir); // a provider in code may need its secrets to be built
-    providers = await prepareDefinition(agentDir)
-      .then((definition) => buildDefinition(definition).providers)
-      .catch(failStartup);
+    enterAgentEnv(agentDir); // a provider in code may read its secrets when it is built
+    providers = await definitionProviders(agentDir).catch(failStartup);
   }
   const { lines, error } = formatModelsCommand(
     listModels(modelsOver(new InMemoryCredentialStore(), providers)),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentWorkspace, run } from "./cli-run.ts";
@@ -58,6 +58,23 @@ describe("cli: login and models", () => {
     const listed = await run(["models", "claude"], inside, { ...process.env, HOME: home });
     expect(listed.code).toBe(1);
     expect(listed.stderr).toMatch(/is inside the agent .* — run from/);
+  });
+
+  it("models in an agent lists its definition's providers, without the secrets a serve needs", async () => {
+    // A secret not filled in yet (`add telegram --no-onboard`) stops dev and start; listing models must not need it.
+    const dir = await agentWorkspace("fa-models-shape-", {
+      "fastagent.config.ts":
+        'import { fauxProvider } from "@earendil-works/pi-ai";\n' +
+        "export default { providers: [{\n" +
+        '  kind: "fastagent.needs", secrets: [{ name: "FA_TEST_GATEWAY_KEY", optional: false }],\n' +
+        '  build: () => fauxProvider({ provider: "gw", models: [{ id: "m1" }] }).provider,\n' +
+        "}] };\n",
+    });
+    await symlink(new URL("../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.FA_TEST_GATEWAY_KEY;
+    const listed = await run(["models", "gw/"], dir, env);
+    expect([listed.code, listed.stdout.trim()], listed.stderr).toEqual([0, "gw/m1"]);
   });
 
   it("FASTAGENT_AUTH_PATH at the user-global credential is the documented sharing path, not a leak", async () => {
