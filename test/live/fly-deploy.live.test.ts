@@ -23,7 +23,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { toFlyAppName } from "../../src/deploy/fly/plan.ts";
 import { listHasName } from "../../src/deploy/fly/run.ts";
-import { CLI, answerOf, expectCompleted, invoke, installSpec, requireEnv, run, stageModelKey } from "./env.ts";
+import {
+  CLI,
+  answerOf,
+  ask,
+  expectCompleted,
+  installSpec,
+  requireEnv,
+  run,
+  stageModelKey,
+  stageProbeChannel,
+} from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("FLY_API_TOKEN", "a Fly API token WITH write scope — this probe creates and destroys an app");
@@ -35,6 +45,7 @@ const APP = toFlyAppName(`fastagent-live-${randomUUID().slice(0, 8)}`);
 const URL_BASE = `https://${APP}.fly.dev`;
 
 let agentDir = "";
+let secret = "";
 
 beforeAll(async () => {
   // basename(agentDir) IS the app name (deploy.ts: toFlyAppName(basename(agentDir))), so the
@@ -44,6 +55,7 @@ beforeAll(async () => {
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await stageModelKey(agentDir, MODEL);
+  secret = await stageProbeChannel(agentDir);
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(
@@ -85,7 +97,7 @@ afterAll(async () => {
     // `listHasName` THROWS on output it cannot read, which is what makes asking safe here: the answer
     // "not listed" now only ever means the host said so. Were it to answer `false` for an unreadable
     // list, a flyctl that renamed a field would skip the destroy, report nothing, and leak a running
-    // app holding the model credential and serving `/invoke` unauthenticated.
+    // app holding the model credential.
     if (listHasName(stdout, APP)) await flyctlForTeardown(["apps", "destroy", APP, "--yes"]);
   } catch (error) {
     errors.push(error);
@@ -110,8 +122,7 @@ describe("deploy fly --run: a real app, provisioned and destroyed", () => {
     // is up under the name the driver provisioned — not merely that some deploy succeeded.
     expect(await waitForHealth(`${URL_BASE}/health`, 180_000, 3_000), `${URL_BASE}/health never came up`).toBe(true);
 
-    const session = "live-fly";
-    const first = await invoke(URL_BASE, session, "Remember this number: 47. Reply with just: ok");
+    const first = await ask(URL_BASE, secret, "Remember this number: 47. Reply with just: ok");
     expectCompleted(first, "the first turn");
 
     // Restart BETWEEN the turns, which is what makes the next answer evidence about the VOLUME rather
@@ -122,7 +133,12 @@ describe("deploy fly --run: a real app, provisioned and destroyed", () => {
     await run("flyctl", ["apps", "restart", APP]);
     expect(await waitForHealth(`${URL_BASE}/health`, 180_000, 3_000), `${URL_BASE}/health never came back`).toBe(true);
 
-    const second = await invoke(URL_BASE, session, "What number did I ask you to remember? Reply with digits only.");
+    const second = await ask(
+      URL_BASE,
+      secret,
+      "What number did I ask you to remember? Reply with digits only.",
+      first.sessionId,
+    );
     expectCompleted(second, "the turn after the restart");
     expect(answerOf(second)).toContain("47");
   }, 900_000);

@@ -3,7 +3,7 @@
  * that no fake can stand in for, because Telegram itself decides it: `setWebhook` VERIFIES the URL
  * (DNS, TLS, reachability) before it stores it. A mocked Bot API always says yes.
  *
- * The chain, all product entries: `createAgentService` composes the surface → `serveNode` binds it →
+ * The chain, all product entries: `openServing` + `mountAgentService` compose the surface → `serveNode` binds it →
  * `startCloudflareTunnel` publishes it → `registerTelegramWebhook` calls `setWebhook`, retrying while
  * Telegram reports it cannot reach the URL → Telegram's own `getWebhookInfo` is asked whether it kept
  * what we sent.
@@ -23,10 +23,9 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { serveNode } from "../../src/channels/serve.ts";
 import { registerTelegramWebhook } from "../../src/channels/telegram/register-webhook.ts";
-import { createAgentService } from "../../src/harnesses/pi/service.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { startCloudflareTunnel } from "../../src/tunnel.ts";
-import { requireEnv } from "./env.ts";
+import { requireEnv, serveDirectory } from "./env.ts";
 
 // Node's fetch ignores HTTPS_PROXY; the Bot API calls below and the registrar's own both need this.
 installProxyFetch();
@@ -79,7 +78,8 @@ describe("telegram: registering a webhook against a live tunnel", () => {
     await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
 
-    const service = await createAgentService(dir);
+    const { service, close } = await serveDirectory(dir);
+    cleanups.push(close);
     const server = serveNode(service.handler, { port: 0, host: "127.0.0.1" });
     cleanups.push(() => server.close());
     const port = await server.listening;

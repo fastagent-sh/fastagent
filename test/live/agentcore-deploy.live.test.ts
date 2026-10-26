@@ -11,8 +11,9 @@
  * name is deterministic and a topology change here must not start leaking one.
  *
  * This host shares nothing with the fly/railway probes but the intent. There is NO public URL to curl:
- * AgentCore exposes `POST /invocations` behind `InvokeAgentRuntime`, an IAM-signed AWS API. So the
- * check goes through the public `invoke` envelope and exercises a real model turn.
+ * AgentCore exposes `POST /invocations` behind `InvokeAgentRuntime`, an IAM-signed AWS API, whose one kind is the
+ * probe: it opens the deployed agent and says whether it opened. A model turn needs a channel, so it is the wake
+ * probe's, whose fixture has one.
  *
  * TEARDOWN, which the product offers none of, is {@link destroyAgentcoreDeployment} — shared with the
  * wake probe, and shared deliberately: it is cleanup code, so a second copy drifts unnoticed until it
@@ -44,10 +45,8 @@ import {
   aws,
   deployAgentcore,
   destroyAgentcoreDeployment,
-  expectCompleted,
-  invokeAgentcore,
-  sseEvents,
   installSpec,
+  probeAgentcore,
   requireAwsAccount,
   requireEnv,
   stageModelKey,
@@ -101,7 +100,7 @@ afterAll(async () => {
 }, 900_000);
 
 describe("deploy agentcore --run: a real stack, provisioned and destroyed", () => {
-  it("converges the stack and completes a model turn", async () => {
+  it("converges the stack, and the deployed agent opens", async () => {
     await deployAgentcore(agentDir, STACK);
 
     // The stack's own Outputs, read through the driver's parser: RuntimeArn is what every later call
@@ -120,18 +119,8 @@ describe("deploy agentcore --run: a real stack, provisioned and destroyed", () =
     const runtimeArn = pickStackOutputs(JSON.parse(outputs.stdout))?.RuntimeArn;
     expect(runtimeArn, `the converged stack has no RuntimeArn output:\n${outputs.stdout.slice(0, 500)}`).toBeTruthy();
 
-    // A completed model turn proves the serving path, beyond CloudFormation convergence.
-    const body = await invokeAgentcore({
-      runtimeArn: runtimeArn as string,
-      name: NAME,
-      session: "live-agentcore",
-      text: "Reply with just: ok",
-      dir: agentDir,
-      label: "invoke",
-    });
-
-    // The reply is the invoke stream in AgentCore's streaming form: the HTTP binding's SSE, carried by the `api`
-    // envelope (agentcore.ts). A run that completed is what proves the container served.
-    expectCompleted(sseEvents(body), "the runtime's run");
+    // The definition opened in the container, on its storage, beyond CloudFormation convergence.
+    const probe = await probeAgentcore({ runtimeArn: runtimeArn as string, name: NAME, dir: agentDir, label: "probe" });
+    expect(probe, `the deployed agent did not open: ${JSON.stringify(probe)}`).toEqual({ ok: true });
   }, 1_800_000);
 });

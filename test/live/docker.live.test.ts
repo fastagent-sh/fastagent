@@ -14,7 +14,17 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { exists } from "../../src/paths.ts";
-import { CLI, answerOf, expectCompleted, installSpec, invoke, requireEnv, run, stageModelKey } from "./env.ts";
+import {
+  CLI,
+  answerOf,
+  ask,
+  expectCompleted,
+  installSpec,
+  requireEnv,
+  run,
+  stageModelKey,
+  stageProbeChannel,
+} from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 const COMPOSE = "fastagent.compose.yml";
@@ -22,6 +32,7 @@ const COMPOSE = "fastagent.compose.yml";
 let agentDir = "";
 let port = 0;
 let baseUrl = "";
+let secret = "";
 
 /** An ephemeral port for the container to publish on 127.0.0.1: taken to learn a free number, then
  *  released — nothing holds it until the container binds it. What keeps concurrent runs apart is
@@ -47,6 +58,7 @@ beforeAll(async () => {
     `export default { model: ${JSON.stringify(MODEL)}, http: { port: ${port} } };\n`,
   );
   await stageModelKey(agentDir, MODEL);
+  secret = await stageProbeChannel(agentDir);
   // The agent declares the fastagent it runs, which is what puts the CHECKOUT in the image. Without a
   // package.json the generated Dockerfile takes the markdown-agent path and bakes
   // `npm i -g @fastagent-sh/fastagent@<this version>` (src/deploy/container.ts) — a registry install,
@@ -86,19 +98,24 @@ describe("deploy docker --run: a definition serving real turns in a container", 
 
     expect(await fetch(`${baseUrl}/health`).then((r) => r.text())).toBe("ok\n");
 
-    const session = "live-docker";
-    // Nobody is watching a nightly run, so the terminal event travels IN the failure message (see
-    // expectCompleted): a `failed` terminal carries the `details` that say why, and losing them costs a full re-run.
-    expectCompleted(await invoke(baseUrl, session, "Remember this number: 47. Reply with just: ok"), "the first turn");
+    // Nobody is watching a nightly run, so how the message ended travels IN the failure message (see
+    // expectCompleted): a failed one carries the error that says why, and losing it costs a full re-run.
+    const first = await ask(baseUrl, secret, "Remember this number: 47. Reply with just: ok");
+    expectCompleted(first, "the first turn");
 
     // The state volume is the deployment's continuity. Restarting the container drops every bit of
     // in-process state, so what answers afterwards can only have come off the volume.
     await compose(["restart", "agent"]);
     expect(await waitForHealth(`${baseUrl}/health`, 60_000, 500)).toBe(true);
-    const listed = await compose(["exec", "-T", "agent", "ls", "/data/.state/sessions"]);
+    const listed = await compose(["exec", "-T", "agent", "ls", "/data/.state/agent.sqlite"]);
     expect(listed.stdout.trim()).not.toBe("");
 
-    const second = await invoke(baseUrl, session, "What number did I ask you to remember? Reply with digits only.");
+    const second = await ask(
+      baseUrl,
+      secret,
+      "What number did I ask you to remember? Reply with digits only.",
+      first.sessionId,
+    );
     expectCompleted(second, "the turn after the restart");
     expect(answerOf(second)).toContain("47");
   });

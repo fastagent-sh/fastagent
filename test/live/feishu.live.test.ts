@@ -4,7 +4,7 @@
  * back. That is a real inbound round trip — platform → our route → platform — which is one step past
  * what the telegram probe can reach (Telegram only checks that the URL answers).
  *
- * The chain is all product entries: `createAgentService` mounts `channels/feishu.ts` at `POST /feishu`
+ * The chain is all product entries: `openServing` + `mountAgentService` mount `src/channels/feishu.ts` at `POST /feishu`
  * → `serveNode` binds it → `startCloudflareTunnel` publishes it → `registerFeishuWebhook` PATCHes the
  * subscription, retrying while the platform reports it could not verify the URL, and reports what it
  * answered. A `registered` outcome IS the platform's verdict on that round trip.
@@ -26,10 +26,9 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { serveNode } from "../../src/channels/serve.ts";
 import { registerFeishuWebhook } from "../../src/channels/feishu/register-webhook.ts";
-import { createAgentService } from "../../src/harnesses/pi/service.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { startCloudflareTunnel } from "../../src/tunnel.ts";
-import { requireEnv } from "./env.ts";
+import { requireEnv, serveDirectory } from "./env.ts";
 
 // Node's fetch ignores HTTPS_PROXY; the registrar's PATCH and the readiness poll both need this.
 installProxyFetch();
@@ -59,14 +58,14 @@ describe("feishu: registering an event URL the platform verifies by calling it",
     const dir = await mkdtemp(join(tmpdir(), "fa-live-feishu-"));
     await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
-    await mkdir(join(dir, "channels"), { recursive: true });
+    await mkdir(join(dir, "src", "channels"), { recursive: true });
     // The scaffold's own import is the package name, which resolves through the agent dir's
     // node_modules; a throwaway directory has none. Importing this checkout by path loads the same
     // `feishuChannel` the scaffold would, which is what mounts POST /feishu — the route the platform
     // is about to call.
     const feishuModule = fileURLToPath(new URL("../../src/feishu.ts", import.meta.url));
     await writeFile(
-      join(dir, "channels", "feishu.ts"),
+      join(dir, "src", "channels", "feishu.ts"),
       `import { feishuChannel } from ${JSON.stringify(feishuModule)};\n` +
         `export default feishuChannel({\n` +
         `  appId: process.env.FEISHU_APP_ID ?? "",\n` +
@@ -80,10 +79,11 @@ describe("feishu: registering an event URL the platform verifies by calling it",
         `});\n`,
     );
 
-    const service = await createAgentService(dir);
+    const { service, close } = await serveDirectory(dir);
+    cleanups.push(close);
     // `service.routes` is the literal route table; `channels.routes` next to it is the channel FILE
     // names. The platform is about to call this path, so assert the path.
-    expect(Object.keys(service.routes), "channels/feishu.ts did not mount POST /feishu").toContain("POST /feishu");
+    expect(Object.keys(service.routes), "src/channels/feishu.ts did not mount POST /feishu").toContain("POST /feishu");
 
     const server = serveNode(service.handler, { port: 0, host: "127.0.0.1" });
     cleanups.push(() => server.close());

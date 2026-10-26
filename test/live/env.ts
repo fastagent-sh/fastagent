@@ -1,6 +1,7 @@
 /**
  * What every live probe shares: the configuration rule, the platform-neutral moves a deploy probe
- * makes (drive the CLI, POST a turn, read the answer out of the stream), and the moves that only ONE
+ * makes (drive the CLI, ask the deployed agent through its probe channel, read how the message ended), and the moves
+ * that only ONE
  * platform has but SEVERAL probes make — an `aws` call, AgentCore's teardown, the standing Railway
  * project. Those belong here for the reason the duplicated teardown proved: a second copy drifts, and
  * it drifts in cleanup code nobody reads until it has been leaking for weeks.
@@ -10,18 +11,38 @@
  * is genuinely DOWN is a different case — that belongs in the probe that talks to it.)
  */
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { appendFile, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect } from "vitest";
 import { destroyAgentcoreDeployment as destroyDeployment } from "../../src/deploy/agentcore/destroy.ts";
-import { ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
+import { PROBE_PAYLOAD, ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
 import type { CliRunner } from "../../src/deploy/runner.ts";
-import { environmentAuthSource } from "../../src/harnesses/pi/models.ts";
-import type { InvokeEvent, Outcome } from "../../src/protocol.ts";
+import type { WaitResult } from "../../src/agent-api.ts";
+import { environmentAuth } from "../../src/harnesses/models/models.ts";
+import { openServing } from "../../src/harnesses/pi-durable/serve.ts";
+import { type AgentService, mountAgentService } from "../../src/service.ts";
 import { fastagentVersion } from "../../src/version.ts";
 import { TARBALL_ENV } from "./pack.ts";
+/** The agent in `dir`, opened and mounted as `start` does it (with no storage of its own): what a probe binds. */
+export async function serveDirectory(dir: string): Promise<{ service: AgentService; close(): Promise<void> }> {
+  const opened = await openServing(dir, { locking: "memory" });
+  const service = await mountAgentService({
+    ...opened,
+    channels: opened.code.channels,
+    schedules: opened.code.schedules,
+  });
+  return {
+    service,
+    close: async () => {
+      await service.close();
+      await opened.agent.close();
+    },
+  };
+}
+
 export function requireEnv(name: string, hint: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`live probes need ${name} (${hint})`);
@@ -36,7 +57,7 @@ export function requireEnv(name: string, hint: string): string {
  */
 export async function stageModelKey(agentDir: string, model: string): Promise<void> {
   const provider = model.slice(0, model.indexOf("/"));
-  const name = await environmentAuthSource(provider, process.env);
+  const name = (await environmentAuth(provider, process.env))?.source;
   const value = name === undefined ? undefined : process.env[name];
   if (name === undefined || !/^[A-Z][A-Z0-9_]*$/.test(name) || !value) {
     throw new Error(
@@ -206,57 +227,82 @@ export const awsAsRunner: CliRunner = async (args, opts) => {
   return { code, stdout, stderr: opts?.captureStderr ? stderr : undefined };
 };
 
-/** POST one turn to a deployed agent and return its SSE events (the built-in `/invoke`, mounted
- *  because no channel is declared). `JSON.parse` is deliberately unguarded, since a payload that is not
- *  an event is a broken wire format, not a case to absorb. */
-export async function invoke(baseUrl: string, session: string, text: string): Promise<InvokeEvent[]> {
-  const response = await fetch(`${baseUrl}/invoke`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sessionId: session, prompt: { text } }),
-  });
-  expect(response.status).toBe(200);
-  return sseEvents(await response.text());
-}
-
-/** The events of an invoke's SSE body: its own over HTTP, and AgentCore's streaming reply, which is the same stream. */
-export function sseEvents(body: string): InvokeEvent[] {
-  return body
-    .split("\n\n")
-    .flatMap((block) => block.split("\n").filter((line) => line.startsWith("data: ")))
-    .map((line) => JSON.parse(line.slice("data: ".length)) as InvokeEvent);
-}
-
-/** How the stream's message ended, as its `done` says. */
-const outcomeOf = (events: InvokeEvent[]): Outcome | undefined =>
-  events.flatMap((event) => (event.type === "done" ? [event.message.outcome] : []))[0];
+/** The variable the probe channel checks its caller against; it travels to the host in the value file. */
+const PROBE_SECRET = "FASTAGENT_PROBE_SECRET";
 
 /**
- * One invoke's outcome, asserted with the outcome itself (or the stream's last event) in the message.
+ * The channel a deploy probe adds to its fixture, because a deployed agent is reached only through its channels:
+ * `POST /probe/ask` with the probe's secret sends one message, in the session the body names or a new one, and
+ * answers with the session and how the message ended. A fixture's channel, so it verifies its caller as every
+ * channel must.
+ */
+const PROBE_CHANNEL = `import { needs } from "@fastagent-sh/fastagent";
+
+export default needs(["${PROBE_SECRET}"], (secrets) => ({ agent }) => ({
+  "POST /probe/ask": async (request) => {
+    if (request.headers.get("authorization") !== \`Bearer \${secrets.${PROBE_SECRET}}\`) {
+      return new Response("", { status: 401 });
+    }
+    const asked = await request.json();
+    let sessionId = asked.sessionId;
+    if (sessionId === undefined) {
+      const created = await agent.createSession();
+      if (!created.ok) return Response.json(created, { status: 500 });
+      sessionId = created.sessionId;
+    }
+    const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: asked.text }] });
+    if (!sent.ok) return Response.json(sent, { status: 502 });
+    return Response.json({ sessionId, end: await sent.wait() });
+  },
+}));
+`;
+
+/** Add the probe channel to `agentDir` and its secret to the value file (after {@link stageModelKey}); returns it. */
+export async function stageProbeChannel(agentDir: string): Promise<string> {
+  const secret = randomBytes(24).toString("hex");
+  await mkdir(join(agentDir, "src", "channels"), { recursive: true });
+  await writeFile(join(agentDir, "src", "channels", "probe.ts"), PROBE_CHANNEL);
+  await mkdir(join(agentDir, ".secrets"), { recursive: true });
+  await appendFile(join(agentDir, ".secrets", ".env"), `${PROBE_SECRET}=${secret}\n`, { mode: 0o600 });
+  return secret;
+}
+
+/** One message to a deployed agent through its probe channel: the session it went to, and how it ended. */
+export interface Asked {
+  sessionId: string;
+  end: WaitResult;
+}
+
+/** Ask the agent served at `baseUrl` (or relayed to it) one thing, in `sessionId` or a new session. */
+export async function ask(baseUrl: string, secret: string, text: string, sessionId?: string): Promise<Asked> {
+  const response = await fetch(`${baseUrl}/probe/ask`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+    body: JSON.stringify({ text, ...(sessionId === undefined ? {} : { sessionId }) }),
+  });
+  const body = await response.text();
+  expect(response.status, `the probe channel answered ${response.status}: ${body.slice(0, 2000)}`).toBe(200);
+  return JSON.parse(body) as Asked;
+}
+
+/**
+ * One message's end, asserted with the end itself in the message.
  *
  * A partial matcher was believed to print a failure's details; it does not. vitest diffs only the keys the matcher
  * named, so three nightlies went red with nothing in the log but the status, and the reason each run died was
  * discoverable only by re-running a 20-minute probe against a platform that had already moved on.
  */
-export function expectCompleted(events: InvokeEvent[], what: string): void {
-  const outcome = outcomeOf(events);
-  expect(outcome?.status, `${what} did not complete: ${JSON.stringify(outcome ?? events.at(-1))}`).toBe("completed");
+export function expectCompleted(asked: Asked, what: string): void {
+  const status = asked.end.ok ? asked.end.message.outcome.status : undefined;
+  expect(status, `${what} did not complete: ${JSON.stringify(asked.end)}`).toBe("completed");
 }
 
 /**
- * The ANSWER, and only it. Asserting on the raw SSE text would be wrong in both directions: a
- * provider that splits `47` into two tokens never spells it literally, and a `thinking` delta that
- * reasoned about the number would satisfy the assertion even when the answer got it wrong.
+ * The ANSWER, and only it. Asserting on anything wider would be wrong in both directions: a provider that splits
+ * `47` into two tokens never spells it literally, and a `thinking` delta that reasoned about the number would satisfy
+ * the assertion even when the answer got it wrong.
  */
-export const answerOf = (events: InvokeEvent[]): string => {
-  let answer = "";
-  for (const event of events) {
-    if (event.type === "entry" && event.entry.kind === "assistant_message") {
-      answer = String((event.entry.data as { text?: unknown }).text ?? "");
-    }
-  }
-  return answer;
-};
+export const answerOf = (asked: Asked): string => (asked.end.ok ? (asked.end.message.answer?.text ?? "") : "");
 
 /**
  * Everything one AgentCore probe created, torn down BY THE PRODUCT — `fastagent destroy agentcore --run`,
@@ -277,33 +323,18 @@ export async function destroyAgentcoreDeployment(name: string): Promise<void> {
 }
 
 /**
- * One `invoke` envelope through a deployed AgentCore runtime, returning the raw stream body. There is
- * no public URL on this host — `POST /invocations` sits behind `InvokeAgentRuntime`, an IAM-signed AWS
- * API — so this is how every AgentCore probe asks the deployment to do something.
+ * The probe envelope through a deployed AgentCore runtime: the IAM door's one kind, which opens the agent and says
+ * whether it opened. There is no public URL on this host for it — `POST /invocations` sits behind
+ * `InvokeAgentRuntime`, an IAM-signed AWS API.
  *
- * `label` names two REAL FILES under `dir`, and the output one is why: this CLI writes the response
- * body to its positional argument, and on a runner whose stdout is a pipe Actions owns, `/dev/stdout`
- * answers "No such device or address".
+ * `label` names two REAL FILES under `dir`, and the output one is why: this CLI writes the response body to its
+ * positional argument, and on a runner whose stdout is a pipe Actions owns, `/dev/stdout` answers "No such device or
+ * address".
  */
-export async function invokeAgentcore(args: {
-  runtimeArn: string;
-  name: string;
-  session: string;
-  text: string;
-  dir: string;
-  label: string;
-}): Promise<string> {
+export async function probeAgentcore(args: { runtimeArn: string; name: string; dir: string; label: string }) {
   const payload = join(args.dir, `${args.label}.json`);
   const out = join(args.dir, `${args.label}-reply.json`);
-  const request = { sessionId: args.session, prompt: { text: args.text } };
-  const envelope = {
-    kind: "api",
-    method: "POST",
-    path: "/invoke",
-    headers: { "content-type": "application/json" },
-    bodyB64: Buffer.from(JSON.stringify(request)).toString("base64"),
-  };
-  await writeFile(payload, `${JSON.stringify(envelope)}\n`);
+  await writeFile(payload, `${PROBE_PAYLOAD}\n`);
   const reply = await aws([
     "bedrock-agentcore",
     "invoke-agent-runtime",
@@ -318,7 +349,7 @@ export async function invokeAgentcore(args: {
     out,
   ]);
   expect(reply.code, `invoke-agent-runtime (${args.label}) failed:\n${reply.stderr.slice(-2000)}`).toBe(0);
-  return await readFile(out, "utf8");
+  return JSON.parse(await readFile(out, "utf8")) as { ok: boolean; error?: string };
 }
 
 /**

@@ -54,13 +54,13 @@ import {
   aws,
   deployAgentcore,
   destroyAgentcoreDeployment,
+  ask,
   expectCompleted,
-  invokeAgentcore,
-  sseEvents,
   installSpec,
   requireAwsAccount,
   requireEnv,
   stageModelKey,
+  stageProbeChannel,
 } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
@@ -80,6 +80,7 @@ const ALARM_PREFIX = `fa-${NAME}-wk-`;
 const WAKE_MS = MIN_WAKE_MS + 30_000;
 
 let agentDir = "";
+let secret = "";
 /** Read off the converged stack by the probe below, consumed by the ingress assertions after it. */
 let forwarderUrl = "";
 
@@ -94,9 +95,11 @@ beforeAll(async () => {
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   // Every serve mounts the `wake` tool (open.ts), and every stack carries the forwarder, its Function URL and the
-  // wake/scheduler IAM — so a plain config is the whole chain.
+  // wake/scheduler IAM — so a plain config is the whole chain. The probe channel is how the message asking for the
+  // wake-up reaches the agent: through the forwarder's webhook relay, the only way into a deployed agent's turns.
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await stageModelKey(agentDir, MODEL);
+  secret = await stageProbeChannel(agentDir);
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(
@@ -178,17 +181,13 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
     // arms a SECOND wake-up when the first fires. That one is created after teardown has listed the
     // alarms, so it outlives the forwarder it points at — the orphan this suite already grew once.
     const seconds = Math.round(WAKE_MS / 1000);
-    const body = await invokeAgentcore({
-      runtimeArn: runtimeArn as string,
-      name: NAME,
-      session: "live-wake",
-      text:
-        `Call the wake tool exactly once, with in: ${seconds} and prompt: "Reply with just: awake". ` +
+    const asked = await ask(
+      forwarderUrl,
+      secret,
+      `Call the wake tool exactly once, with in: ${seconds} and prompt: "Reply with just: awake". ` +
         "Then reply with just: scheduled",
-      dir: agentDir,
-      label: "wake",
-    });
-    expectCompleted(sseEvents(body), "the wake run");
+    );
+    expectCompleted(asked, "the wake run");
 
     // THE assertion. Everything between the tool call and this line is the chain that has no other
     // test: the store write, the sink, the authenticated POST to the forwarder's reserved path, and
@@ -196,9 +195,8 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
     // silent failure the mechanism exists to prevent.
     //
     // POLLED, not read once. The alarm trails the reply: the sink is fire-and-forget (`void
-    // reconcile(…)` in wake-alarm.ts, retrying at 2s/4s/6s) and the SSE stream this invoke consumes
-    // does not wait for in-flight work, so `invoke-agent-runtime` can return before a cold forwarder
-    // Lambda has created anything. A single read would report that race in the words below — sending
+    // reconcile(…)` in wake-alarm.ts, retrying at 2s/4s/6s) and the message's end does not wait for
+    // in-flight work, so the answer can arrive before a cold forwarder Lambda has created anything. A single read would report that race in the words below — sending
     // whoever reads it after the IAM and the wake secret, neither of which was wrong.
     const appearBy = Date.now() + 60_000;
     let alarms = await listAlarms();
@@ -244,10 +242,10 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
 });
 
 /**
- * The public half of the same deployment. This fixture declares NO webhook channel, so its Function URL
- * exists only for the container's own callbacks — every ordinary request must be refused, and WHICH
- * refusal comes first is the assertion: an oversized body is rejected by the forwarder BEFORE the
- * webhooks gate, i.e. before anything can spend an AgentCore wake-up on it (the cost/DoS path).
+ * The public half of the same deployment. Its Function URL relays webhooks to the probe channel, so an ordinary
+ * request reaches the container and is answered there — and WHICH refusal comes first is the assertion: an
+ * oversized body is rejected by the forwarder BEFORE it is relayed, i.e. before anything can spend an AgentCore
+ * wake-up on it (the cost/DoS path).
  *
  * Offline, `agentcore-forwarder.test.ts` executes the same source under a fake `require` and pins both
  * answers. What only a real Function URL can say is that the ceiling ARRIVED: it rides in as the
@@ -258,11 +256,11 @@ describe("agentcore ingress: the forwarder's Function URL refuses what it must",
   const post = (body: string) =>
     fetch(`${forwarderUrl}/telegram`, { method: "POST", headers: { "content-type": "text/plain" }, body });
 
-  it("refuses ordinary traffic on a schedule-only URL, and an oversized body before that", async () => {
+  it("answers a path no channel serves 404, and refuses an oversized body before relaying it", async () => {
     expect(forwarderUrl, "the deploy above did not converge — nothing to probe").toBeTruthy();
 
     const ordinary = await post("x");
-    expect(ordinary.status, "a URL with no webhook channel behind it served ordinary traffic").toBe(404);
+    expect(ordinary.status, "a path no channel serves was answered").toBe(404);
 
     // Under Lambda's own 6 MB request cap, so what answers is the forwarder and not the platform. The
     // BODY is asserted for exactly that reason: AWS refuses an over-cap request with the same status.
