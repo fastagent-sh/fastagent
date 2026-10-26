@@ -42,7 +42,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
 | `resume` | 接上一个会话：按 `replayFrom` 重放、发当前状态快照、再接实时事件（见第 3 节） |
 | `abort` | 停止当前回答，并撤回所有排队中的消息；等被停下的消息都结束后返回，和 pi-durable 的 `conversation.abort()` 一样；没拿到答复时返回 `unknown` |
 | `attachment` | 读历史里图片的内容：base64 数据和声明的类型 |
-| `listSessions` | 列出 Agent 持有的所有会话，最近有活动的排在前面，不管是谁建的（channel、定时任务、REPL、嵌入的应用）。会话的活动指它的创建、它接收的消息和它写下的 entry 中最新的一个；用 `before` 加不透明的游标翻页；每个会话的状态和最新内容用 `read` 读。harness 为自己的工作建的对话（比如子 agent 的）不算会话，不列出 |
+| `listSessions` | 列出 Agent 持有的所有会话，最近有活动的排在前面，不管是谁建的（channel、定时任务、`invoke`、嵌入的应用）。会话的活动指它的创建、它接收的消息和它写下的 entry 中最新的一个；用 `before` 加不透明的游标翻页；每个会话的状态和最新内容用 `read` 读。harness 为自己的工作建的对话（比如子 agent 的）不算会话，不列出 |
 
 创建会话时，`model` 用 `{ provider, modelId }`，`thinkingLevel` 用 pi-durable 原生支持的 `off`、`minimal`、`low`、`medium`、
 `high`、`xhigh`、`max`。它们和会话在同一次提交里保存，重启后保留。fork 继承分叉 entry 当时的设置（空会话继承当前设置），
@@ -112,7 +112,7 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
 ## 4. 几个关键决定
 
 - **会话 id 由服务端生成，调用方自己记住。** pi-durable 生成 conversation id，不接受调用方指定。channel 和定时任务在自己的
-  状态里记“哪个聊天或 thread 对应哪个会话”。服务端按最近活动列出所有会话（`listSessions`），这样 duang 的侧栏能显示 channel、定时任务、REPL 发起的对话；但不提供删除，
+  状态里记“哪个聊天或 thread 对应哪个会话”。服务端按最近活动列出所有会话（`listSessions`），这样 duang 的侧栏能显示 channel、定时任务发起的对话；但不提供删除，
   因为 pi-durable 没有删除。同一个存储里，pi-durable 给会话、消息、entry 分配 id 用的是同一个递增计数器，所以一个会话最新的那个
   id 就代表它最近的活动，排序不需要时钟；一个实例跨多个存储时按时间比较，和横向扩展一起设计。
 - **映射按固定顺序、在固定的地方建立**（architecture.md §2）：只在 channel 已经按“位置”（一个聊天、一个 thread）串行处理的地方
@@ -131,7 +131,7 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
 - **开 thread**：分叉点仍然按 key 找（`getMessage` 带平台消息 id）；thread 对应的会话按上面的顺序建立和记录。
 - **一个实例就是一个信任域，Agent API 不上网络**（agent-api.md §8、§10；architecture.md §2）。Agent 不认证任何人；拿到它的
   代码能做它能做的一切：对每个会话发消息、读取、接上、改设置、停止、分叉，agent 的工具也带着进程的全部权限。它的调用方都在运行
-  agent 的那个进程里：我们自己的 channels、定时任务、wake、REPL，以及嵌入 agent 的应用。谁把 agent 放到网络上，谁决定谁能访问：
+  agent 的那个进程里：我们自己的 channels、定时任务、wake、`invoke` 命令，以及嵌入 agent 的应用。谁把 agent 放到网络上，谁决定谁能访问：
   channel 必须（MUST）校验请求确实来自它的平台（平台的签名或 token），嵌入方用自己应用的认证保护自己写的路由。FastAgent 的部署
   只暴露会校验调用方的入口（channel 的 webhook，宿主自己的入口，比如 AgentCore 的 IAM）。FastAgent 自己的调用方都不需要通过网络
   访问 Agent API；今天通过网络调用它的用法（外部时钟代替 schedule、部署后的冒烟测试、`curl`、`connectAgent`）在 architecture.md

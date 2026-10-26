@@ -152,8 +152,8 @@ export function addWakeup(
  * SESSION-SCOPED WITH NO WAY AROUND IT, because `unwake` is the only caller: an agent cancels its own alarm, and
  * cancelling another conversation's silently is a cost with no matching benefit. There is no operator command, so a
  * wake-up is cancelled by asking the agent in the session that set it. KNOWN GAP: a wake-up set in a session nobody
- * can message (a schedule's own session; the REPL that reaches any session is #788's step 3) can only be removed by
- * editing `<stateRoot>/schedule/wakeups.json` while the serve is stopped.
+ * can message (a schedule's own session) can only be removed by editing `<stateRoot>/schedule/wakeups.json` while the
+ * serve is stopped.
  */
 export function removeWakeup(stateRoot: string, id: string, session: string): boolean {
   const all = load(stateRoot);
