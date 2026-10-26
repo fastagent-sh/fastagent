@@ -38,7 +38,7 @@ describe(`published ${PACKAGE}@${VERSION}`, () => {
     const agent = join(dir, "demo");
     // Files every published version writes. What else `init` adds changes between versions (tools/fetch-url.ts became
     // extensions/web-access.ts), and the probe runs against `latest`, so that is asserted offline in init.test.ts.
-    for (const file of ["APPEND_SYSTEM.md", "package.json"]) {
+    for (const file of ["SYSTEM.md", "package.json"]) {
       expect(await exists(join(agent, file)), `init did not produce ${file}`).toBe(true);
     }
     // The config's EXTENSION belongs to the probed version (0.21.1 wrote .mjs, later ones .ts) — this probe is about
@@ -50,7 +50,7 @@ describe(`published ${PACKAGE}@${VERSION}`, () => {
     ).toBe(true);
     // The skill is a DIRECTORY in the payload — the shape most likely to be lost by a copy step.
     expect(await exists(join(agent, "skills", "writing-great-skills", "SKILL.md"))).toBe(true);
-    expect(await readFile(join(agent, "APPEND_SYSTEM.md"), "utf8")).not.toBe("");
+    expect(await readFile(join(agent, "SYSTEM.md"), "utf8")).not.toBe("");
 
     // Channel bundles are copied by the same postbuild step, from a different source root
     // (src/channels/<kind>/scaffold). `add <kind>` for slack/feishu/lark talks to the platform, so
