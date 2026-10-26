@@ -3,10 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentService } from "../src/service.ts";
-import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
 import { openPreparedStartService } from "../src/cli/commands/start.ts";
-import { log } from "../src/log.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
@@ -19,7 +18,14 @@ async function agentDir(files: Record<string, string> = {}, config = `{ model: "
   return dir;
 }
 
-const open = async (dir: string) => createPiAgentFromDir(dir, { serving: true });
+/** The directory opened as a serve opens it, with no storage of its own, as the mount takes it. */
+const open = async (dir: string) => {
+  const opened = await openServing(dir, { locking: "memory" });
+  return { ...opened, channels: opened.code.channels, schedules: opened.code.schedules };
+};
+
+const DIGEST = `import { defineSchedule } from "@fastagent-sh/fastagent";
+export default defineSchedule({ cron: "0 9 * * *", prompt: "hi" });\n`;
 
 /** A deferred service whose stages are scripted: `prepare` takes the workspace, `assemble` runs in it. */
 const deferred = (assemble: () => Promise<AgentService>, prepare: () => Promise<void> = async () => {}) =>
@@ -31,12 +37,12 @@ describe("deferred AgentCore initialization", () => {
     // On this host `openPreparedStartService` runs inside an envelope, so a `failStartup` there would
     // kill the container mid-request and the deploy driver would gate on a generic timeout instead of
     // the runtime's own error text.
-    const dir = await agentDir({ "channels/bad.mjs": "throw new Error('broken channel');\n" });
+    const dir = await agentDir({ "src/channels/bad.mjs": "throw new Error('broken channel');\n" });
     const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
       throw new Error("process.exit called");
     }) as never);
     try {
-      await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/failed to load/);
+      await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/broken channel/);
       expect(exit).not.toHaveBeenCalled();
     } finally {
       exit.mockRestore();
@@ -148,7 +154,7 @@ describe("mountAgentcoreService", () => {
     // The channel exists, but on this host it is reachable only THROUGH an envelope — the platform
     // invokes POST /invocations and nothing else.
     const dir = await agentDir({
-      "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("direct") });`,
+      "src/channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("direct") });`,
     });
     const service = await mountAgentcoreService(await open(dir));
     try {
@@ -163,7 +169,7 @@ describe("mountAgentcoreService", () => {
 
   it("reports only the adapter's boot surface", async () => {
     const dir = await agentDir({
-      "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("x") });`,
+      "src/channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("x") });`,
     });
     const service = await mountAgentcoreService(await open(dir));
     try {
@@ -175,64 +181,16 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("the adapter's own paths are IAM-gated, not unverified — no JSON gate, nothing reported as open", async () => {
-    // `POST /invocations` and `GET /ping` are reached only through `InvokeAgentRuntime`, which AWS gates
-    // with IAM. Filing them as "authenticates nobody" did two things: it applied our JSON body gate to a
-    // request whose content type is AWS's to set (the runbook's copyable `invoke-agent-runtime` command
-    // passes no `--content-type`), and it reported two IAM-protected paths as open in `unverifiedRoutes`.
-    const service = await mountAgentcoreService(await open(await agentDir()));
-    try {
-      expect(service.unverifiedRoutes).toEqual([]);
-      const res = await service.handler(
-        new Request("http://h/invocations", { method: "POST", body: JSON.stringify({ kind: "probe" }) }),
-      );
-      expect(res.status).not.toBe(415);
-    } finally {
-      await service.close();
-    }
-  });
-
-  it("names every config key that cannot mean anything here", async () => {
-    // Silence is how an operator concludes a setting took effect. `http.cors` has no browser to serve
-    // (the ingress is the forwarder's URL and the Runtime's IAM API, neither is a page); `http.api`
-    // has no `/invoke` to withhold (this host carries the API in "api" envelopes).
-    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], api: false } }`);
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const service = await mountAgentcoreService(await open(dir));
-    try {
-      const said = warn.mock.calls.flat().join(" ");
-      expect(said).toMatch(/http\.cors has no effect here/);
-      expect(said).toMatch(/http\.api has no effect here/);
-    } finally {
-      warn.mockRestore();
-      await service.close();
-    }
-  });
-
-  it("does NOT serve /control/* here, whatever sessionControl says, and says so out loud", async () => {
-    // The hole this closes: the forwarder relays an arbitrary `rawPath` as a webhook envelope AND
-    // attaches the ingress secret itself, so an anonymous caller of the public Function URL arrives as
-    // trusted ingress. A channel route survives that (it verifies the platform's signature inside);
-    // `/control/*` does not, so mounting it here answered `GET /control/sessions` — and
-    // `DELETE /control/sessions/{id}` — to anyone holding the URL.
-    //
-    // Scoping the PUBLIC door is the fix; it is not a claim that the two callers cannot be told apart.
-    // `InvokeAgentRuntime` is IAM-gated and the forwarder emits only four kinds, which is how
-    // `kind: "invoke"` runs a turn here with no secret — see agentcore-service.ts for why the plane
-    // does not get the same treatment (nobody asks, and a buffered envelope cannot carry its SSE).
-    const dir = await agentDir(
-      { "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("channel") });` },
-      `{ model: "openai-codex/gpt-5.5", http: { control: true } }`,
-    );
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+  it("relays a webhook envelope to the channel routes, and to nothing else", async () => {
+    // The forwarder relays an arbitrary `rawPath` as a webhook envelope AND attaches the ingress secret itself, so an
+    // anonymous caller of the public Function URL arrives as trusted ingress: what answers there must verify its own
+    // caller, which a channel route does (its platform's signature) and nothing else is mounted to.
+    const dir = await agentDir({
+      "src/channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("channel") });`,
+    });
     process.env.FASTAGENT_INGRESS_SECRET = "s3cret";
     const service = await mountAgentcoreService(await open(dir));
     try {
-      // Nothing of ours on the outer surface: the planes are reached through "api" envelopes, behind IAM.
-      expect(service.planes).toEqual({ api: false, control: false });
-      expect(service.unverifiedRoutes).not.toContain("POST /invoke");
-      expect(warn.mock.calls.flat().join(" ")).toMatch(/http\.control has no effect here/);
-
       /** What the forwarder sends for ANY public request to the Function URL. */
       const relay = (path: string, method = "GET") =>
         service.handler(
@@ -245,8 +203,8 @@ describe("mountAgentcoreService", () => {
       // The channel is reachable — that is what the relay is FOR.
       const hook = (await (await relay("/hook", "POST")).json()) as { status: number };
       expect(hook.status).toBe(200);
-      // The control plane is not, at any path under the prefix.
-      for (const path of ["/control/sessions", "/control/capabilities", "/control/sessions/s1"]) {
+      // Nothing else is, at any path.
+      for (const path of ["/invoke", "/control/sessions", "/sessions/s1"]) {
         const relayed = (await (await relay(path)).json()) as { status: number; bodyB64: string };
         expect({ path, status: relayed.status }).toEqual({ path, status: 404 });
       }
@@ -254,21 +212,6 @@ describe("mountAgentcoreService", () => {
       expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(404);
     } finally {
       delete process.env.FASTAGENT_INGRESS_SECRET;
-      warn.mockRestore();
-      await service.close();
-    }
-  });
-
-  it("by default there is no plane on the outer surface either", async () => {
-    const service = await mountAgentcoreService(await open(await agentDir()));
-    try {
-      expect(service.planes).toEqual({ api: false, control: false });
-      // …so the startup report has nothing of ours to warn about here either. The advice it would
-      // otherwise print ("--bind 127.0.0.1", "firewall the port") names a port nobody dials on this
-      // host: the real ingress is the forwarder's Function URL.
-      expect(service.unverifiedRoutes).not.toContain("POST /invoke");
-      expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(404);
-    } finally {
       await service.close();
     }
   });
@@ -276,7 +219,7 @@ describe("mountAgentcoreService", () => {
   it("OCCURRENCE SEMANTICS live here, on the authenticated envelope — a redelivery claims nothing twice", async () => {
     // A slot, a claim, a fire history and the overlap policy live here: the container set the alarm for this instant
     // and the forwarder relays it behind the ingress secret, so the claim means something.
-    const dir = await agentDir({ "schedules/digest.md": `---\ncron: "0 9 * * *"\n---\nhi\n` });
+    const dir = await agentDir({ "src/schedules/digest.ts": DIGEST });
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
     const service = await mountAgentcoreService(await open(dir));
     const occurrence = "2026-07-07T09:00:00.000Z";
@@ -318,12 +261,9 @@ describe("mountAgentcoreService", () => {
   });
 
   it("reports loaded schedules, and close() is safe to call twice", async () => {
-    const dir = await agentDir(
-      { "schedules/digest.md": `---\ncron: "0 9 * * *"\n---\nhi\n` },
-      `{ model: "openai-codex/gpt-5.5" }`,
-    );
+    const dir = await agentDir({ "src/schedules/digest.ts": DIGEST }, `{ model: "openai-codex/gpt-5.5" }`);
     const service = await mountAgentcoreService(await open(dir));
-    expect(service.schedules().map((s) => s.name)).toEqual(["digest"]);
+    expect(service.schedules.map((s) => s.name)).toEqual(["digest"]);
 
     await service.close();
     // Both the shutdown hook and an explicit close can run.

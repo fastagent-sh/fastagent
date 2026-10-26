@@ -57,16 +57,41 @@ async function importDefault(path: string, what: string): Promise<unknown> {
   }
 }
 
+/** An object whose keys are among `keys`, or the refusal naming the one that is not and the ones there are. */
+function checkKeys(value: unknown, keys: readonly string[], where: string): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${where} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!keys.includes(key)) throw new Error(`${where}: unknown key "${key}" (keys: ${keys.join(", ")})`);
+  }
+}
+
 /** Refuse what a type check would have: Node strips types without checking them, so a typo reaches here. */
 function checkConfig(config: unknown, file: string): AgentConfig {
   if (config === undefined) return {};
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
     throw new Error(`${file} must default-export defineAgent({ ... })`);
   }
-  for (const key of Object.keys(config)) {
-    if (!CONFIG_KEYS.includes(key)) throw new Error(`${file}: unknown key "${key}" (keys: ${CONFIG_KEYS.join(", ")})`);
+  checkKeys(config, CONFIG_KEYS, file);
+  const { model, thinkingLevel, extensions, providers, http, deploy } = config as AgentConfig;
+  if (http !== undefined) {
+    checkKeys(http, ["port"], `${file}: "http"`);
+    const port = http.port;
+    if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) {
+      throw new Error(`${file}: "http.port" must be an integer 0-65535`);
+    }
   }
-  const { model, thinkingLevel, extensions, providers } = config as AgentConfig;
+  if (deploy !== undefined) {
+    checkKeys(deploy, ["agentcore"], `${file}: "deploy"`);
+    if (deploy.agentcore !== undefined) {
+      checkKeys(deploy.agentcore, ["idleTimeoutSeconds"], `${file}: "deploy.agentcore"`);
+      // AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is refused by CloudFormation minutes
+      // into `deploy agentcore --run`, after the image build.
+      const idle = deploy.agentcore.idleTimeoutSeconds;
+      if (idle !== undefined && (!Number.isInteger(idle) || idle < 60 || idle > 1209600)) {
+        throw new Error(`${file}: "deploy.agentcore.idleTimeoutSeconds" must be an integer 60-1209600 (seconds)`);
+      }
+    }
+  }
   if (model !== undefined) modelRefOf(model, `${file}: "model"`);
   if (thinkingLevel !== undefined && !THINKING_LEVELS.includes(thinkingLevel)) {
     throw new Error(`${file}: "thinkingLevel" must be one of ${THINKING_LEVELS.join(", ")}`);
