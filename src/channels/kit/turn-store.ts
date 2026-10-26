@@ -8,7 +8,7 @@
  */
 import { log } from "../../log.ts";
 import type { DiscussionSource } from "./place-history.ts";
-import { loadStateFile, saveStateFile } from "./state.ts";
+import { loadStateFile, saveStateFile } from "../../state-file.ts";
 
 /** How many times a turn may START without finishing before it is dropped rather than run again. */
 const MAX_TURN_ATTEMPTS = 3;

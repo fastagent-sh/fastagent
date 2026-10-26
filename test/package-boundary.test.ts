@@ -90,11 +90,9 @@ describe("harness neutrality: the core subpath + channel spine import no harness
   // `@earendil-works/*` — that coupling belongs only in the pi reference implementation.
   const neutral = [
     "core.ts",
-    "protocol.ts",
-    "protocol-remote.ts",
-    "channels/protocol-http.ts",
+    "agent-api.ts",
+    "agent-api-stream.ts",
     "channels/router.ts",
-    "protocol-collect.ts",
     "cli/invoke-stream.ts",
     "channels/body.ts",
     "channels/respond.ts",
@@ -214,14 +212,12 @@ describe("the assembly's parts stay out of the public surface", () => {
   const ENTRIES = ["core.ts", "pi.ts", "index.ts"];
 
   it("every failure a caller must tell apart is exported as a VALUE", async () => {
-    // `collect` throws one of three, and a caller branches on which: refused before anything ran, ended without an
-    // answer, or a stream that stopped before its run did. A type-only export would leave nothing to `instanceof`.
+    // `getMessage` and `attachment` reject with it when the storage cannot answer, and a caller branches on it with
+    // `instanceof`: a type-only export would leave nothing to test against.
     const core = (await import(resolve(srcDir, "core.ts"))) as Record<string, unknown>;
-    for (const name of ["AgentRejection", "MessageNotCompleted", "MessageUnfinished"]) {
-      expect(typeof core[name], name).toBe("function");
-    }
+    expect(typeof core.AgentRejection).toBe("function");
     const index = (await import(resolve(srcDir, "index.ts"))) as Record<string, unknown>;
-    expect(index.MessageNotCompleted).toBe(core.MessageNotCompleted);
+    expect(index.AgentRejection).toBe(core.AgentRejection);
   });
 
   it("no entry exports an assembly part", async () => {
@@ -289,7 +285,7 @@ describe("channels/kit is defined by who imports it", () => {
   });
 
   it("...and the serving mechanism beside it stays out of the kit", () => {
-    for (const file of ["serve.ts", "protocol-http.ts", "discover.ts"]) {
+    for (const file of ["serve.ts", "router.ts", "discover.ts"]) {
       const src = readFileSync(resolve(srcDir, "channels", file), "utf8");
       expect(src.includes("./kit/"), `${file} reaches into the kit`).toBe(false);
     }
@@ -297,13 +293,13 @@ describe("channels/kit is defined by who imports it", () => {
 });
 
 describe("the contracts depend on nothing", () => {
-  // protocol.ts (what every caller speaks), agent-api.ts (the API that replaces it) and channel.ts (what
-  // a trigger implements) are the product contracts — pure types, zero packages. The bar is
+  // agent-api.ts (what every caller speaks) and channel.ts (what a trigger implements) are the product contracts —
+  // pure types, zero packages. The bar is
   // ZERO rather than "no harness": an agent directory's hand-written channel imports ChannelModule,
   // and the day that type drags in an HTTP framework, every such file inherits it. This is the check
   // that keeps the split honest, and it is why serving lives in channels/serve.ts instead.
   it("each of them pulls no package at all", () => {
-    const offenders = ["protocol.ts", "agent-api.ts", "channel.ts"].flatMap((contract) =>
+    const offenders = ["agent-api.ts", "channel.ts"].flatMap((contract) =>
       [...staticPackageGraph(contract)].map((p) => `${contract} → ${p}`),
     );
     expect(offenders).toEqual([]);
@@ -312,13 +308,13 @@ describe("the contracts depend on nothing", () => {
   it("the three neutral layers each cost exactly what their name promises", () => {
     // Harness-neutral and runtime-neutral are DIFFERENT properties, and the entries are layered by
     // them: /core has both, /node drops the second (a filesystem, a clock, an environment), /pi
-    // drops both. Each layer's package list is that statement, checkable. /core may use Effect (the
-    // HTTP binding decodes with Schema), and nothing else: no other package, and no Node built-in.
+    // drops both. Each layer's package list is that statement, checkable. /core may use Effect, and nothing else: no
+    // other package, and no Node built-in.
     expect([...staticPackageGraph("core.ts")].filter((p) => !p.startsWith("effect/"))).toEqual([]);
     expect([...staticPackageGraph("core.ts", true)]).toEqual([]);
-    // A remote client imports nothing at all: it is what a browser bundle pulls in.
-    expect([...staticPackageGraph("protocol-remote.ts")]).toEqual([]);
-    expect([...staticPackageGraph("protocol-remote.ts", true)]).toEqual([]);
+    // Reading a message's answer as it is written imports nothing at all: any Caller may pull it in.
+    expect([...staticPackageGraph("agent-api-stream.ts")]).toEqual([]);
+    expect([...staticPackageGraph("agent-api-stream.ts", true)]).toEqual([]);
     // Service lifecycle management uses Effect; channel and agent contracts remain dependency-free.
     expect([...staticPackageGraph("node.ts")].sort()).toEqual([
       "@hono/node-server",
@@ -330,8 +326,8 @@ describe("the contracts depend on nothing", () => {
       "effect/Exit",
       "effect/Fiber",
       "effect/Result",
-      "effect/Schema",
       "effect/Scope",
+      "proper-lockfile",
     ]);
     // ...and neither neutral layer names a harness (the harness-neutrality suite above covers this
     // for core; node now carries the assembly, so it needs the same bar).

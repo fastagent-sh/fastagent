@@ -30,7 +30,7 @@ import {
 import { registerTelegramTransport } from "./shared-api.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
-import { ensureStateHome } from "../kit/state.ts";
+import { ensureStateHome } from "../../state-file.ts";
 import { conversationSessions, newSession } from "../../conversation-sessions.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { createTaskTracker } from "../kit/tasks.ts";

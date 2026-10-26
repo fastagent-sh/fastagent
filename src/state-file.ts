@@ -1,12 +1,12 @@
 /**
- * Durable channel state, with no cross-instance locking: every file here is keyed by CHANNEL KIND
- * (`<stateRoot>/channels/<kind>/`), so what must not happen is two processes serving the SAME channel — which also
- * means one ingress credential in two places, and no local guard can see that. Two processes serving different
- * channels of one agent never touch the same file (docs/design/core.md, "the shipped file-backed implementations").
+ * A Caller's durable state under the state root, with no cross-instance locking: a channel's files are keyed by
+ * CHANNEL KIND (`<stateRoot>/channels/<kind>/`) and the schedules' by `schedule/`, so what must not happen is two
+ * processes serving the SAME channel — which also means one ingress credential in two places, and no local guard can
+ * see that (docs/design/core.md, "the shipped file-backed implementations").
  */
 import { mkdirSync, readFileSync } from "node:fs";
-import { writeFileAtomic } from "../../atomic-write.ts";
-import { log } from "../../log.ts";
+import { writeFileAtomic } from "./atomic-write.ts";
+import { log } from "./log.ts";
 
 /** Create the channel's state home — the one shared spelling of it, so no channel invents its own. */
 export function ensureStateHome(dir: string): void {

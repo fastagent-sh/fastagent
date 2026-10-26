@@ -12,7 +12,7 @@ import { secretEquals } from "../secret.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
-import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
+import { ensureStateHome, loadStateFile, saveStateFile } from "../../state-file.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";

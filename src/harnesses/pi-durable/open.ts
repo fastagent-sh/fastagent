@@ -59,7 +59,8 @@ async function importDefault(path: string, what: string): Promise<unknown> {
 
 /** An object whose keys are among `keys`, or the refusal naming the one that is not and the ones there are. */
 function checkKeys(value: unknown, keys: readonly string[], where: string): void {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${where} must be an object`);
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error(`${where} must be an object`);
   for (const key of Object.keys(value)) {
     if (!keys.includes(key)) throw new Error(`${where}: unknown key "${key}" (keys: ${keys.join(", ")})`);
   }

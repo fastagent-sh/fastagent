@@ -15,7 +15,7 @@
  */
 import { log } from "../../log.ts";
 import type { DiscussionSource } from "./place-history.ts";
-import { loadStateFile, saveStateFile } from "./state.ts";
+import { loadStateFile, saveStateFile } from "../../state-file.ts";
 
 /**
  * Char budget for the per-place buffer — bounds the cost of folding it into a prompt; when exceeded the OLDEST

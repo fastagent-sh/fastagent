@@ -10,7 +10,7 @@
  */
 import { dirname } from "node:path";
 import type { Agent } from "./agent-api.ts";
-import { ensureStateHome, loadStateFile, saveStateFile } from "./channels/kit/state.ts";
+import { ensureStateHome, loadStateFile, saveStateFile } from "./state-file.ts";
 
 /** A new, empty session: what a conversation the agent has not talked in starts with. */
 export async function newSession(agent: Pick<Agent, "createSession">): Promise<string> {

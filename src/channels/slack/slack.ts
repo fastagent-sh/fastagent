@@ -14,7 +14,7 @@ import * as Exit from "effect/Exit";
 import { portJoin } from "../../effect-port.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
-import { ensureStateHome } from "../kit/state.ts";
+import { ensureStateHome } from "../../state-file.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";

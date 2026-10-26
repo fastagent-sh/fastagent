@@ -8,7 +8,7 @@
  */
 import { log } from "../../log.ts";
 import { BUFFER_LINE_MAX_CHARS, BUFFER_MAX_CHARS } from "./context-buffer.ts";
-import { loadStateFile, saveStateFile } from "./state.ts";
+import { loadStateFile, saveStateFile } from "../../state-file.ts";
 import { truncateCodePointPrefix } from "./text.ts";
 
 /**
