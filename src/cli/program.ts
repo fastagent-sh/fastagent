@@ -581,7 +581,8 @@ const login: CommandSpec = {
     "(subscription/OAuth or API " +
     "key), then a provider that offers it (configured status shown). [provider] takes the method from " +
     "what that provider supports, asked only when both. An agent READS the global store for a provider it has " +
-    "no other credential for (its own file, a models.json key, an env variable), so `-g` logs in once for every " +
+    "no other credential for (its own file, a provider in its config that authenticates itself, an env variable), so " +
+    "`-g` logs in once for every " +
     "agent on this machine; it warns when an env variable already authenticates the provider.",
   args: [{ name: "[provider]", description: "provider id (skip the provider menu)" }],
   flags: [

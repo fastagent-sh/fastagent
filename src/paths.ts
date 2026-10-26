@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { DeployHost } from "./deploy/hosts.ts";
 
-/** The user-global machinery home, `~/.fastagent`: the machine's credentials, models.json and model catalog. */
+/** The user-global machinery home, `~/.fastagent`: the machine's model credentials. */
 export function globalHome(): string {
   return join(homedir(), ".fastagent");
 }
