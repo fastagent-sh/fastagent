@@ -10,7 +10,7 @@ export const RESERVED_PATHS = {
 } as const;
 
 /** Every kind the container's `POST /invocations` dispatches on. */
-export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "api", "wake-poke", "probe"] as const;
+export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "wake-poke", "probe"] as const;
 
 /**
  * Did this envelope come from the FORWARDER, rather than from some other principal holding
@@ -60,11 +60,6 @@ export type AgentcoreEnvelope = {
        */
       occurrence: string;
     }
-  /**
-   * A request to the agent's own API (SPEC v1 §9, both planes), from an IAM principal: IAM is this host's gateway
-   * (agent-service.md §7.7). The forwarder never emits it.
-   */
-  | ({ kind: "api" } & CarriedRequest)
   /**
    * An EventBridge wake-up poke: the invocation ITSELF is the payload — it wakes the container, whose boot drain / 30s
    * wake pump then fires whatever is due.

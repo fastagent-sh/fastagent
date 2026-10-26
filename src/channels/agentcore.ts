@@ -1,8 +1,7 @@
-/** AWS AgentCore Runtime adapter: serve fastagent's whole HTTP surface through the Runtime's service contract. */
+/** AWS AgentCore Runtime adapter: serve the channels, the schedules' fires and the wake pokes through the Runtime's service contract. */
 import { Buffer } from "node:buffer";
 import * as Effect from "effect/Effect";
 import { PortFailure, portJoin } from "../effect-port.ts";
-import type { Agent } from "../protocol.ts";
 import {
   type AgentcoreEnvelope,
   type CarriedRequest,
@@ -17,7 +16,6 @@ import { log } from "../log.ts";
 import { once } from "../once.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
 import { readBodyCapped } from "./body.ts";
-import { protocolHttp } from "./protocol-http.ts";
 import { text } from "./respond.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
 
@@ -29,9 +27,8 @@ import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.t
  * so behind THIS door an anonymous caller and an IAM one are the same thing. A channel route survives that because
  * it verifies the platform's signature inside itself; nothing fastagent serves does.
  *
- * The other door is the Runtime's own, IAM-gated: the forwarder emits only `webhook`, `schedule-fire`, `wake-poke`
- * and `probe`, so any other KIND can only come from a direct `InvokeAgentRuntime` call. That is what lets
- * `kind: "api"` reach the agent's API here with no ingress secret: IAM is this host's gateway.
+ * The other door is the Runtime's own, IAM-gated: a direct `InvokeAgentRuntime` call, which carries no ingress
+ * secret, and which this container answers only with a `probe`.
  */
 export interface RouteSurface {
   routes: Routes;
@@ -40,7 +37,6 @@ export interface RouteSurface {
 export interface AgentcoreAdapterOptions {
   /** The channel surface. */
   channels: () => Promise<RouteSurface> | RouteSurface;
-  agent: Agent;
   /** Where the forwarder URL from envelopes is persisted for the wake-alarm sink (the state root). */
   stateRoot: string;
   /** Process-wide background-work signal (busy.ts `activeWork() > 0`) — injected for tests. */
@@ -85,7 +81,7 @@ function createActivation(deps: {
   const channels = once(
     portJoin(async () => {
       const surface = await deps.channels();
-      return router({ selfVerifying: surface.routes });
+      return router(surface.routes);
     }),
   );
   return {
@@ -106,11 +102,8 @@ function createActivation(deps: {
 }
 
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { channels, agent, stateRoot, isBusy, fireSchedule, ingressSecret, onStateReady } = options;
+  const { channels, stateRoot, isBusy, fireSchedule, ingressSecret, onStateReady } = options;
   const activation = createActivation({ stateRoot, onStateReady, channels });
-  // Both planes: IAM, which decided this caller may invoke the runtime at all, is the gateway (agent-service.md §7.7).
-  const planes = protocolHttp(agent);
-  const api = router({ unverified: planes.user.routes, mounts: [...planes.user.mounts, planes.control] });
   const carried = (request: CarriedRequest): Request => {
     const { method, path, query, headers, bodyB64 } = request;
     return new Request(`http://agentcore.local${path}${typeof query === "string" && query !== "" ? `?${query}` : ""}`, {
@@ -140,10 +133,10 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     // The forwarder, or another IAM principal? See `fromForwarder` for what that actually decides.
     const trusted = fromForwarder(envelope, ingressSecret);
     if (!trusted) {
-      // The IAM door's kinds: AWS authenticated this caller, so no ingress secret is expected or wanted. A `probe`
+      // The IAM door's one kind: AWS authenticated this caller, so no ingress secret is expected or wanted. A `probe`
       // here only opens the deployed definition (the deferred wrapper did that before this line) and says so: it is
       // how `login --deployment` gets a definition to log in, after a reset, on a runtime nothing has invoked yet.
-      if (envelope.kind !== "api" && envelope.kind !== "probe") {
+      if (envelope.kind !== "probe") {
         log.warn(`[agentcore] rejected an unauthenticated "${envelope.kind}" envelope`);
         return text("forbidden\n", 403);
       }
@@ -158,10 +151,9 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       if (envelope.kind === "probe") return json({ ok: false, error: `activation failed: ${String(e)}` }, 200);
       return text(`activation failed: ${String(e)}\n`, 503);
     }
-    // A call to the agent's API does not activate channels.
     let constructionError: string | undefined;
     let dispatch: ChannelHandler | undefined;
-    if (trusted && envelope.kind !== "api") {
+    if (trusted) {
       try {
         dispatch = await Effect.runPromise(activation.channels.pipe(Effect.mapError((error) => error.cause)));
       } catch (e) {
@@ -232,11 +224,6 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
             : { ok: false, error: `channel construction failed: ${constructionError}` },
           200,
         );
-      }
-      case "api": {
-        // The agent's API answers as itself, its event streams included: one binding, carried two ways.
-        if (malformed(envelope)) return text('api envelope needs { "method": string, "path": "/..." }\n', 400);
-        return api(carried(envelope));
       }
       default:
         return text(`unknown envelope kind "${(envelope as { kind: string }).kind}"\n`, 400);

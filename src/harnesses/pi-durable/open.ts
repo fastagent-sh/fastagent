@@ -284,13 +284,14 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
 
 export interface OpenAgentOptions {
   storage: Storage;
+  /** The definition's code, built once with its secrets (`buildDefinition`). */
+  code: BuiltDefinition;
   /** Where `login` keeps provider credentials: the machine's in development, the instance's when deployed. */
   credentials: CredentialStore;
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   settings?: HarnessSettings;
-  env?: NodeJS.ProcessEnv;
   /** Where the instance's state is: given by a serve, whose scheduler fires the wake-ups `wake` keeps there. */
   stateRoot?: string;
 }
@@ -298,7 +299,7 @@ export interface OpenAgentOptions {
 /** Open the definition as an Agent: pi-ai's built-in models and the definition's providers, the coding tools, then its own. */
 export async function openAgent(definition: AgentDefinition, options: OpenAgentOptions): Promise<DurableAgent> {
   const { dir, config } = definition;
-  const code = buildDefinition(definition, options.env);
+  const { code } = options;
   const models = modelsOver(options.credentials, code.providers);
   const spec = options.model ?? config.model;
   const model = spec === undefined ? undefined : modelRefOf(spec, "the default model");

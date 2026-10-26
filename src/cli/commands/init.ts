@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { displayPath } from "../../paths.ts";
-import { createAgent } from "../../harnesses/pi/authoring.ts";
+import { createAgent } from "../../authoring.ts";
 import { readContentSource } from "../../content/source.ts";
 import { failEdit } from "./content.ts";
 import { contentLines } from "../content-view.ts";

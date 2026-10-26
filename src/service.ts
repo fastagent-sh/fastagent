@@ -1,20 +1,17 @@
-/** The product, as one call: an agent directory becomes a live service. */
+/** The product, as one call: an opened agent becomes a live service, its channels, schedules and wake-ups. */
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
-import { protocolHttp } from "./channels/protocol-http.ts";
-import { text } from "./channels/respond.ts";
-import type { Agent } from "./protocol.ts";
-import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/router.ts";
-import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
-import { loadSchedules } from "./schedule/discover.ts";
-import { type ScheduleLoad, type Scheduler, createScheduler } from "./schedule/scheduler.ts";
+import type { Agent } from "./agent-api.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
+import { type AnyChannelModule, type LoadedLongConnectionChannel, mountChannels } from "./channels/discover.ts";
+import { text } from "./channels/respond.ts";
+import { parseRouteKey, router } from "./channels/router.ts";
 import { log } from "./log.ts";
 import { once } from "./once.ts";
-import { refuseBrokenDeclarations } from "./loader.ts";
+import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
 import type { Schedule } from "./schedule/schedule.ts";
 
 /** Default wait for a channel's `closed` before reporting it stuck. */
@@ -59,164 +56,35 @@ function closeWithin(
   });
 }
 
-export interface ServingSurface {
-  /**
-   * The routes that AUTHENTICATE NOBODY — `GET /health` and `POST /invoke`, minus what a channel took over or
-   * `http.api: false` withheld. Kept APART from the
-   * channels' table rather than derived from it, because three decisions read it (browser reachability, the JSON
-   * body gate, what the startup line calls unauthenticated) and must give the same answer.
-   */
-  unverified: Routes;
-  /**
-   * What the `channels/` files serve. Exempt from both guards because a channel checks its platform's signature
-   * inside itself — an assumption about the author for a CUSTOM channel, not a property we enforce (§14).
-   */
-  selfVerifying: Routes;
-  /** The protocol's planes that own a prefix (`/sessions`, `/agent`, `/control`): unverified too. */
-  mounts: readonly PrefixMount[];
+/** The port a serve binds when neither a flag, `PORT` (start only) nor `http.port` names one. */
+export const DEFAULT_HTTP_PORT = 8787;
+
+/** What a serve answers: its channels' routes, and `GET /health` unless a channel serves it. */
+interface ServingSurface {
+  routes: Routes;
   longConnections: LoadedLongConnectionChannel[];
-  /** Route-channel basenames; the tunnel registers only this subset. */
+  /** Route-channel names; the tunnel registers only this subset. */
   routeChannels: string[];
   /** Flip health between 200 and 503. */
   setReady(value: boolean): void;
 }
 
-/** The port a serve binds when neither a flag, `PORT` (start only) nor `http.port` names one. */
-export const DEFAULT_HTTP_PORT = 8787;
-
-/**
- * What a serve publishes on its port, and to which browsers — the config file's `http` block minus `port`, carried
- * as-is into the assembly so every reader (the routes, the startup report, deploy's pre-flight, AgentCore's inert-key
- * warnings) reads ONE value. The port is not here: the assembly binds nothing, so only the CLI reads it.
- */
-export interface HttpSurface {
-  /**
-   * The origins a BROWSER may call this serve from. The default, with this unset, answers EVERY origin: any page your
-   * users visit can call this port and read the reply, and every route here is unauthenticated. Set it to your front
-   * end's real domain to take that back (`["*"]` is the default said out loud; an empty list is refused, because it
-   * reads as "nobody" and would mean the opposite).
-   */
-  cors?: readonly string[];
-  /**
-   * Serve the user plane (SPEC v1 §9): `POST /invoke`, `/sessions` and `/agent`. On by default: it is the agent's
-   * interface. Unauthenticated, like everything served here, so whoever reaches the port can run the agent with its
-   * full tool authority, and list, read, follow, abort and rewind every session, a channel's direct messages
-   * included. Set it `false` when the port is public and the channels' own signature checks are meant to be the only
-   * way in (they call the agent in process, so they need nothing served).
-   */
-  api?: boolean;
-  /**
-   * Serve the control plane, `/control`: set a session's name, model and thinking level, and delete it. Off by
-   * default: it is the operator's, and as unauthenticated as the rest.
-   */
-  control?: boolean;
-}
-
-/** Which of the protocol's planes a port serves. */
-export interface Planes {
-  api: boolean;
-  control: boolean;
-}
-
-/** The planes a serve publishes: the user plane unless `http.api: false`, the control plane only with `http.control`. */
-export function planesOf(http: HttpSurface | undefined): Planes {
-  return { api: http?.api !== false, control: http?.control === true };
-}
-
-/**
- * What an anonymous caller of a port can do, worst first — the ONE wording the startup report and deploy's pre-flight
- * both print, each from its own facts (what mounted vs what will mount).
- */
-export function describeAnonymousSurface(open: Planes): string[] {
-  return [
-    ...(open.api
-      ? [
-          "POST /invoke (run the agent with its tools)",
-          "/sessions/* (list, read, follow, abort and rewind any session, a channel's direct messages included)",
-        ]
-      : []),
-    ...(open.control ? ["/control/* (rename, reconfigure or delete any session)"] : []),
-  ];
-}
-
-/**
- * The surface this deployment serves: the protocol's planes (SPEC v1 §9), `GET /health`, and the discovered channels.
- *
- * The protocol's paths are RESERVED: a channel taking one would silently replace the routes every client, every doc
- * and the startup line all name. `/health` stays overridable — a probe is the deployment's to shape.
- */
-export async function routesFor(
-  agentDir: string,
+/** Mount the channels and the health check. */
+export function routesFor(
   agent: Agent,
   stateRoot: string,
-  /**
-   * Which planes to serve. Two callers withhold them, for two reasons: the AgentCore adapter serves the Runtime's
-   * `/invocations` contract instead, and an author sets `http.api: false` to leave the channels' signature checks as
-   * the only way into a public port.
-   */
-  options: { planes: Planes },
-): Promise<ServingSurface> {
-  const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
-    agent,
-    stateRoot,
-  });
-  for (const c of collisions) {
-    log.warn(`[fastagent] channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`);
-  }
-  refuseBrokenDeclarations(failures);
-  if (collisions.length > 0) {
-    throw new Error(`${collisions.length} channel route collision(s) — two channels cannot serve one route`);
-  }
-  /**
-   * Which channel key already serves this path for the method a built-in would answer — the CHANNEL's spelling, not
-   * ours. A channel may write the method-less `"/invoke"`, and an error naming `"POST /invoke"` sends its author
-   * grepping their own file for a string that is not in it.
-   */
-  const covered = (path: string, method: string): string | undefined =>
-    Object.keys(routes).find((key) => {
-      const entry = parseRouteKey(key);
-      return entry.path === path && (entry.method === undefined || entry.method === method);
-    });
+  channels: ReadonlyMap<string, AnyChannelModule>,
+): ServingSurface {
+  const { routes, longConnections, routeChannels } = mountChannels(channels, { agent, stateRoot });
   let ready = longConnections.length === 0;
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
-  // AgentCore serves the data plane through the Runtime's own `/invocations` contract, so the adapter opts out — and
-  // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
-  const unverified: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
-  const planes = protocolHttp(agent);
-  const mounts: PrefixMount[] = [];
-  if (options.planes.api) {
-    Object.assign(unverified, planes.user.routes);
-    mounts.push(...planes.user.mounts);
-  }
-  if (options.planes.control) mounts.push(planes.control);
-  const swallowed = Object.keys(routes).filter((key) =>
-    mounts.some((mount) => pathUnderPrefix(parseRouteKey(key).path, mount.prefix)),
-  );
-  if (swallowed.length > 0) {
-    throw new Error(
-      `channel route(s) ${swallowed.map((key) => `"${key}"`).join(", ")} are inside a path the agent's own API ` +
-        `serves (${mounts.map((m) => m.prefix).join(", ")}) — rename the channel route, or turn that plane off ` +
-        "(http.api, http.control)",
-    );
-  }
-  // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
-  // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
-  // channel already serves it, because a probe is the deployment's to shape.
-  const taken = Object.keys(unverified).flatMap((key) => {
+  const probed = Object.keys(routes).some((key) => {
     const entry = parseRouteKey(key);
-    const channelKey = covered(entry.path, entry.method ?? "");
-    return channelKey === undefined ? [] : [{ channelKey, key }];
+    return entry.path === "/health" && (entry.method === undefined || entry.method === "GET");
   });
-  if (taken.length > 0) {
-    throw new Error(
-      `channel route(s) ${taken.map((t) => `"${t.channelKey}"`).join(", ")} take a path this serve answers on ` +
-        `itself (${taken.map((t) => `"${t.key}"`).join(", ")}) — rename the channel route`,
-    );
-  }
   return {
-    unverified,
-    selfVerifying: routes,
-    mounts,
+    // A probe is the deployment's to shape, so a channel may serve `/health` itself.
+    routes: probed ? routes : { ...routes, "GET /health": health },
     longConnections,
     routeChannels,
     setReady(value: boolean) {
@@ -225,38 +93,19 @@ export async function routesFor(
   };
 }
 
-/**
- * Load the agent's `schedules/` for the clock. A file that is not a valid schedule does NOT refuse the serve, unlike a
- * broken tool or channel: the agent writes these files too (they are armed while it runs), and one it got wrong must
- * not stop the next start, when nobody is talking to it to fix it. The clock says what is wrong with it and leaves it
- * unarmed; `fastagent info` reports it, and `deploy --run` refuses the author's own.
- */
-export async function loadServingSchedules(agentDir: string): Promise<ScheduleLoad> {
-  return loadSchedules(agentDir);
-}
-
-/**
- * Start the clock over the schedules {@link loadServingSchedules} loaded — on every serve, schedules or not: the
- * agent's own wake-ups are a default capability, and this is what fires them. It re-reads `<agentDir>/schedules/`
- * while it runs, so a schedule written or edited then is armed without a restart; `onChange` hears each change.
- */
+/** Start the clock: the definition's schedules, and the wake-ups the agent sets for itself, on every serve. */
 export function startSchedules(
   agent: Agent,
   stateRoot: string,
-  agentDir: string,
-  loaded: ScheduleLoad,
-  options: { onChange?: () => void; localClock?: boolean } = {},
-): Pick<Scheduler, "current" | "stop"> {
-  const { schedules, failures } = loaded;
+  schedules: readonly Schedule[],
+  options: { localClock?: boolean } = {},
+): Pick<Scheduler, "stop"> {
   const scheduler = Effect.runSync(
     createScheduler({
       agent,
       stateRoot,
       schedules,
-      failures,
       ...(options.localClock === false ? { localClock: false } : {}),
-      reload: () => loadSchedules(agentDir),
-      ...(options.onChange ? { onChange: options.onChange } : {}),
     }),
   );
   scheduler.start();
@@ -265,49 +114,30 @@ export function startSchedules(
 }
 
 export interface AgentService {
-  /** The assembled Fetch handler: channel routes, the protocol's planes, and health. */
+  /** The assembled Fetch handler: channel routes and health. */
   handler: ChannelHandler;
-  /** The agent behind it — invoke it directly when you also want a programmatic path. */
+  /** The agent behind it, in process. */
   agent: Agent;
   /** The literal routes `handler` was composed from — for a startup line naming what is served. */
   routes: Routes;
   agentDir: string;
-  /**
-   * What actually mounted, for a startup line: channel files serving routes, and long connections.
-   */
+  /** What actually mounted, for a startup line: channels serving routes, and long connections. */
   channels: { routes: string[]; longConnections: string[] };
-  /**
-   * The keys of {@link ServingSurface.unverified}: what a caller reads to describe this surface. Not derivable from
-   * `routes`, where a channel may serve one of those paths behind its own signature check.
-   */
-  unverifiedRoutes: readonly string[];
-  /**
-   * The cross-origin allow-list this service was assembled with (`http.cors`), or `undefined` for the `*` default.
-   * Read by the startup report for the same reason as {@link AgentService.unverifiedRoutes}: what a caller says
-   * about this surface must come from what was actually assembled, not from re-deriving it.
-   */
-  corsOrigins?: readonly string[];
-  /** The schedules armed now: `schedules/` is re-read while the service runs, so this follows its edits. */
-  schedules: () => readonly Schedule[];
+  schedules: readonly Schedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
-  /** Which of the protocol's planes the handler serves. */
-  planes: Planes;
   /**
-   * Stop long connections and schedules. It does NOT drain agent turns: a turn takes seconds to minutes, and the
-   * deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What makes
-   * that safe is replay, not waiting — a chat turn's intent is durable before it is accepted and its channel
-   * replays it on the next boot (`channels/kit/turn-store.ts`), and an in-flight HTTP/SSE caller sees the stream
-   * drop and retries. The one path with neither is a schedule fire, whose claim is written before the turn: it
-   * stays skipped, and the next boot records it as `interrupted` rather than losing it silently.
+   * Stop long connections and schedules. It does NOT drain the agent's messages: one takes seconds to minutes, and
+   * the deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What
+   * makes that safe is that they are durable: an accepted message is answered after the restart, and a chat turn's
+   * intent is durable before it is accepted (`channels/kit/turn-store.ts`). The one path with neither is a schedule
+   * fire, whose claim is written before the message: it stays skipped, and the next boot records it as `interrupted`.
    */
   close(): Promise<void>;
 }
 
-/** What {@link mountAgentService} needs beyond an opened directory. */
+/** What {@link mountAgentService} needs beyond an opened agent. */
 export interface MountAgentServiceOptions {
-  /** Wrap the agent before anything consumes it. */
-  wrapAgent?: (agent: Agent) => Agent;
   /** Aborting this closes the service, exactly like calling {@link AgentService.close}. */
   signal?: AbortSignal;
   /** Called when a long connection ends on its own — a dropped socket-mode channel, say. */
@@ -316,46 +146,27 @@ export interface MountAgentServiceOptions {
   closeTimeoutMs?: number;
 }
 
-/** What the assembly needs from an opened agent directory — the whole of it. */
+/** What the assembly serves. */
 export interface MountableAgent {
   agent: Agent;
-  /** The definition dir: where channels/, tools/ and schedules/ are read from, and the agent's working directory. */
+  /** The definition's directory: the agent's working directory. */
   agentDir: string;
-  /** Where durable state lives (channel state, sessions, schedule fires). */
+  /** Where durable state lives (channel state, schedule fires, wake-ups). */
   stateRoot: string;
-  /** What the port publishes, and to which browsers — the config's `http` block ({@link HttpSurface}). */
-  http?: HttpSurface;
+  channels: ReadonlyMap<string, AnyChannelModule>;
+  schedules: readonly Schedule[];
 }
 
-/**
- * The assembly itself, over an already-opened directory: channels, the control plane, schedules and long connections,
- * composed into one handler.
- */
+/** The assembly itself: channels, schedules and long connections, composed into one handler. */
 export async function mountAgentService(
   opened: MountableAgent,
   options: MountAgentServiceOptions = {},
 ): Promise<AgentService> {
-  const { agentDir, stateRoot } = opened;
-  // Wrapped BEFORE anything consumes it: routes, the planes and schedules must all drive the same agent, so this is a
-  // hook rather than something a caller applies afterwards.
-  const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
+  const { agent, agentDir, stateRoot, schedules } = opened;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
-  // The embedder's way in, checked like the config file's: `allowedOrigin` compares exact strings, so a stray
-  // trailing slash would refuse the front end with nothing naming the rule.
-  const corsOrigins = opened.http?.cors;
-  if (corsOrigins) assertCorsOrigins(corsOrigins, "mountAgentService: http.cors");
-
-  // A schedule that is not valid is the clock's to report (it never refuses the serve: see loadServingSchedules).
-  const schedules = await loadServingSchedules(agentDir);
-  const planes = planesOf(opened.http);
-  const routed = await routesFor(agentDir, agent, stateRoot, { planes });
+  const routed = routesFor(agent, stateRoot, opened.channels);
   // Composed BEFORE anything starts.
-  const handler = router({
-    unverified: routed.unverified,
-    selfVerifying: routed.selfVerifying,
-    mounts: routed.mounts,
-    ...(corsOrigins ? { corsOrigins } : {}),
-  });
+  const handler = router(routed.routes);
   return Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Scope.make();
@@ -400,9 +211,9 @@ export async function mountAgentService(
       return yield* Effect.gen(function* () {
         // Registered first, so subscriptions and schedule timers stop before waiting for transports.
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
-        const scheduled = yield* Effect.acquireRelease(
+        yield* Effect.acquireRelease(
           Effect.try({
-            try: () => startSchedules(agent, stateRoot, agentDir, schedules),
+            try: () => startSchedules(agent, stateRoot, schedules),
             catch: (error) => error,
           }),
           (scheduled) => Effect.sync(scheduled.stop),
@@ -482,17 +293,14 @@ export async function mountAgentService(
         return {
           handler,
           agent,
-          routes: { ...routed.unverified, ...routed.selfVerifying },
+          routes: routed.routes,
           agentDir,
           channels: {
             routes: routed.routeChannels,
             longConnections: names,
           },
-          unverifiedRoutes: Object.keys(routed.unverified),
-          ...(corsOrigins ? { corsOrigins } : {}),
-          schedules: () => scheduled.current(),
+          schedules,
           ready,
-          planes,
           close,
         };
       }).pipe(

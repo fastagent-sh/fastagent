@@ -14,7 +14,7 @@ import {
   runtimeAdvice,
 } from "../../environment/declare.ts";
 import { checkPackages, ensureMise, enterEnvironment, installPackages, miseBinary } from "../../environment/mise.ts";
-import { writeEnvironment } from "../../harnesses/pi/authoring.ts";
+import { writeEnvironment } from "../../authoring.ts";
 import { log } from "../../log.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 import { dotEnvPath, enterAgentEnv } from "../../env.ts";

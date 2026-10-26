@@ -30,7 +30,7 @@ import {
   MISE_PACKAGE_NAMES,
   miseBinary,
 } from "../src/environment/mise.ts";
-import { addContent, writeEnvironment } from "../src/harnesses/pi/authoring.ts";
+import { addContent, writeEnvironment } from "../src/authoring.ts";
 import { resolveAgentAssembly } from "../src/harnesses/pi/open.ts";
 import { log } from "../src/log.ts";
 

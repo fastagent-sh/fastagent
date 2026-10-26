@@ -7,10 +7,10 @@
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { writeFileAtomic } from "../../atomic-write.ts";
-import { GitNotInstalled, gitFor } from "../../git.ts";
-import { CONTEXT_FILE, LOCAL_CONTEXT_FILE, contentEntryPath, resolveAgentDir } from "../../paths.ts";
-import { type ScaffoldOptions, initRepository, scaffoldAgent } from "../../scaffold/init.ts";
+import { writeFileAtomic } from "./atomic-write.ts";
+import { GitNotInstalled, gitFor } from "./git.ts";
+import { CONTEXT_FILE, LOCAL_CONTEXT_FILE, contentEntryPath, resolveAgentDir } from "./paths.ts";
+import { type ScaffoldOptions, initRepository, scaffoldAgent } from "./scaffold/init.ts";
 import {
   type BoundContent,
   type ContentBinding,
@@ -21,7 +21,7 @@ import {
   declareBindings,
   declareContent,
   isContentName,
-} from "../../content/declare.ts";
+} from "./content/declare.ts";
 import {
   type ContextFile,
   type LocalContextFile,
@@ -30,11 +30,11 @@ import {
   localContextFileText,
   parseContextFile,
   parseLocalContextFile,
-} from "../../content/file.ts";
-import type { DeclaredEnvironment } from "../../environment/declare.ts";
-import { type ResolvedContent, checkBinding, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
-import type { ContentAddition } from "../../content/source.ts";
-import { type LockResult, withLockedFile } from "../models/locked-file.ts";
+} from "./content/file.ts";
+import type { DeclaredEnvironment } from "./environment/declare.ts";
+import { type ResolvedContent, checkBinding, contentAbsentHere, resolveContent } from "./content/resolve.ts";
+import type { ContentAddition } from "./content/source.ts";
+import { type LockResult, withLockedFile } from "./harnesses/models/locked-file.ts";
 
 /** `context.json` is part of the definition, read by whoever reads the agent. */
 const CONTEXT_FILE_MODE = 0o644;

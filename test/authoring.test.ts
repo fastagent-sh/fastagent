@@ -18,7 +18,7 @@ import {
   createAgent,
   listContent,
   removeContent,
-} from "../src/harnesses/pi/authoring.ts";
+} from "../src/authoring.ts";
 import { type SourceOptions, readContentSource } from "../src/content/source.ts";
 
 /** What `content add <dir>` adds. */
