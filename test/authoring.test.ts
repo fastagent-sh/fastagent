@@ -25,12 +25,18 @@ const SRC = fileURLToPath(new URL("../src/", import.meta.url));
  * source, which would make every import resolve; a child process run from a temp directory resolves it the way an
  * app that never ran `npm install` there does: not at all.
  */
-function createAndOpen(dir: string, webAccess: boolean): Promise<string> {
+function createAndOpen(dir: string): Promise<string> {
   const script = `
-    import { createAgent } from ${JSON.stringify(join(SRC, "harnesses/pi/authoring.ts"))};
-    import { createPiAgentFromDir } from ${JSON.stringify(join(SRC, "index.ts"))};
-    await createAgent(${JSON.stringify(dir)}, { webAccess: ${webAccess} });
-    await createPiAgentFromDir(${JSON.stringify(dir)}).then(() => console.log("opened"), (e) => console.log(e.message));
+    import { createAgent } from ${JSON.stringify(join(SRC, "authoring.ts"))};
+    import { openServing } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/serve.ts"))};
+    await createAgent(${JSON.stringify(dir)});
+    await openServing(${JSON.stringify(dir)}, { locking: "memory" }).then(
+      async (opened) => {
+        await opened.agent.close();
+        console.log("opened");
+      },
+      (e) => console.log(e.message),
+    );
   `;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
@@ -56,12 +62,10 @@ describe("authoring API", () => {
     return () => vi.unstubAllEnvs();
   });
 
-  it("an agent createAgent makes opens without npm install, web access or not", async () => {
-    // An extension loads when a session starts, so an uninstalled @fastagent-sh/pi-web-access costs the web tools on the first
-    // turn (warned, left out: extensions' own tests), never the open.
+  it("an agent createAgent makes opens without npm install", async () => {
+    // Its configuration imports only a type, which Node strips: nothing of the package is loaded until code needs it.
     const base = await mkdtemp(join(tmpdir(), "fa-authoring-"));
-    expect(await createAndOpen(join(base, "plain"), false)).toBe("opened");
-    expect(await createAndOpen(join(base, "web"), true)).toBe("opened");
+    expect(await createAndOpen(join(base, "plain"))).toBe("opened");
   });
 
   it("install runs before the first commit; a rejected install removes the scaffold", async () => {
