@@ -19,7 +19,7 @@ import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
 import {
   type AgentDefinition,
   type BuiltDefinition,
-  buildDefinition,
+  buildDefinitionShape,
   definitionSecrets,
   prepareDefinition,
 } from "../harnesses/pi-durable/open.ts";
@@ -272,7 +272,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const modelSpec = model.spec;
 
   const declaredSecrets = definition ? definitionSecrets(definition) : declaredVariables(loadEnvironment(agentDir));
-  const code = definition ? buildShapes(definition, declaredSecrets, values, report) : undefined;
+  const code = definition ? buildShapes(definition, values, report) : undefined;
   const channels = [...(code?.channels ?? [])].map(
     ([name, module]): DeclaredChannel => ({
       name,
@@ -418,21 +418,17 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 }
 
 /**
- * The definition's code built for its SHAPE (which channels, which ingress, which schedules, which providers), with
- * the value file's values and a stand-in for each declared name it lacks: a generate-only deploy runs on a machine
- * that may hold none of them, and whether the value file supplies them is the values gate's question, asked by name.
- * A build that fails is an issue, as a module that fails to load is.
+ * The definition's code built for its SHAPE with the value file's values (`buildDefinitionShape`): a generate-only
+ * deploy runs on a machine that may hold none of them, and whether the value file supplies them is the values gate's
+ * question, asked by name. A build that fails is an issue, as a module that fails to load is.
  */
 function buildShapes(
   definition: AgentDefinition,
-  declared: readonly DeclaredSecret[],
   values: ReadonlyMap<string, string>,
   report: DeployReport,
 ): BuiltDefinition | undefined {
-  const env: NodeJS.ProcessEnv = Object.fromEntries(declared.map(({ name }) => [name, "(not in the value file)"]));
-  for (const [name, value] of values) if (value) env[name] = value;
   try {
-    return buildDefinition(definition, env);
+    return buildDefinitionShape(definition, Object.fromEntries(values));
   } catch (error) {
     report.issue(`the definition does not build, so the deployed agent would not start: ${messageOf(error)}`);
     return undefined;

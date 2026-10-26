@@ -300,6 +300,19 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   };
 }
 
+/**
+ * The definition's code built only to read its shape (which channels, with which ingress, which schedules, which
+ * providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
+ * this machine holds the values. Whatever a build refuses, this refuses too.
+ */
+export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {
+  const values: NodeJS.ProcessEnv = Object.fromEntries(
+    definitionSecrets(definition).map(({ name }) => [name, "(no value here)"]),
+  );
+  for (const [name, value] of Object.entries(env)) if (value) values[name] = value;
+  return buildDefinition(definition, values);
+}
+
 const named = <T extends { name: string }>(value: T) => ({ name: value.name, value });
 
 /** Refuse two of a kind under one name: whichever is installed or kept last would silently stand in for the other. */

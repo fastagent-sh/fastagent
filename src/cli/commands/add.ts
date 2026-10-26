@@ -8,6 +8,8 @@ import { assertIndependentFeishuApps, onboardFeishuCloudApp } from "../add-feish
 import { cloudFor } from "../../channels/feishu/cloud.ts";
 import { type FeishuSubscriptionMode, feishuIngressFor } from "../../channels/feishu/setup-mode.ts";
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
+import { channelIngress } from "../../channels/discover.ts";
+import { buildDefinitionShape, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
 import { dotEnvPath, enterAgentEnv, loadEnvValues } from "../../env.ts";
 import { selectAgentEnvironment, resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
@@ -60,6 +62,18 @@ export async function runAddChannel(
   const file = join(target, "src", "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const { ingress, pinned, setting } = resolveIngress(channelKind, opts.ingress);
+  if (
+    existsAlready &&
+    (setting || (environment === "production" && opts.onboard !== false)) &&
+    (channelKind === "feishu" || channelKind === "lark")
+  ) {
+    await assertChannelReadsSetting(
+      target,
+      channelKind,
+      setting ?? { [`${cloudFor(channelKind).envPrefix}_INGRESS`]: ingress },
+      inAgent(relative(target, file)),
+    );
+  }
   if (existsAlready) {
     console.error(`[fastagent] ${inAgent(relative(target, file))} already exists — keeping it`);
   } else {
@@ -188,6 +202,37 @@ function resolveIngress(
   } catch (error) {
     // A malformed value in the environment: the author's to fix, said as the rule says it.
     return failUsage((error as Error).message);
+  }
+}
+
+/**
+ * A setting only takes effect in a channel file that reads it: one that names its factory receives the same way
+ * whatever the setting says, so writing the setting (and configuring the app for it) would change nothing but the app.
+ * Asked of the channel as the agent builds it, under the value this command is about to write.
+ */
+async function assertChannelReadsSetting(
+  target: string,
+  kind: ChannelKind,
+  setting: Record<string, string>,
+  shown: string,
+): Promise<void> {
+  Object.assign(process.env, setting); // the value this command writes anyway
+  const channel = await prepareDefinition(target)
+    .then((definition) => buildDefinitionShape(definition, process.env).channels.get(kind))
+    .catch((error: unknown) =>
+      failStartup(new Error(`the agent does not build (${(error as Error).message}) — fix it and re-run`)),
+    );
+  const [[name, value]] = Object.entries(setting) as [[string, string]];
+  const wanted = value === "webhook" ? "webhook" : "long-connection";
+  const shape = channel === undefined ? undefined : channelIngress(channel);
+  if (shape !== wanted) {
+    failStartup(
+      new Error(
+        `${shown} receives by ${shape === "webhook" ? "webhook" : "WebSocket"} whatever ${name} says — it names ` +
+          `its factory instead of reading the setting, so ${name}=${value} would change nothing but the app. Move ` +
+          `the file aside and re-run to scaffold one that reads it, or edit its factory yourself`,
+      ),
+    );
   }
 }
 
