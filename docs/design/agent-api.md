@@ -22,7 +22,7 @@ There are three roles:
 
 - **Agent**: one served agent, the way a bot is one, and one trust domain: whoever holds it can do everything it can
   (§8).
-- **Caller**: code in the process that runs it: the implementation's own channels, schedules, wake-ups and REPL, and an
+- **Caller**: code in the process that runs it: the implementation's own channels, schedules, wake-ups and `invoke` command, and an
   app that embeds the agent. A front end, a client or another agent reaches it through one of these.
 - **Middleware**: both a Caller and an Agent. It wraps an Agent while exposing the same API, for budgets, logging and
   the like. The operations carry no caller's identity, so authentication belongs to whatever puts the agent on a
@@ -365,7 +365,7 @@ a storage that is gone answers `not_found` (or `undefined`), never another sessi
   (`getMessage`), and aborts again only if it still wants everything stopped.
 - **`attachment`** returns the bytes behind a ref an entry of this session published, or `undefined`.
 - **`listSessions`** lists the sessions the Agent holds, most recently active first, whoever created them: a channel,
-  a schedule, the REPL or an app. A session's activity is the newest of its creation, the messages it accepted and the
+  a schedule, `invoke` or an app. A session's activity is the newest of its creation, the messages it accepted and the
   entries it wrote, so one just created or written to leads. A page holds up to `limit` sessions, from 1 (§7.2);
   `next` is an opaque cursor that `before` takes for the page after it, and a `before` the Agent cannot read as one of
   its cursors is `invalid_request`. A session that becomes active while a Caller pages moves to the front, so a later

@@ -398,7 +398,8 @@ export async function deployAgentcoreRun(
 
   // 6. Build (linux/arm64) + push in one step.
   log(`building + pushing ${image} (linux/arm64)…`);
-  const buildArgs = ["buildx", "build", "--platform", "linux/arm64", "-t", image, "--push"];
+  // `--pull`: the base image is a floating tag, and a copy cached here may be older than the runtime floor.
+  const buildArgs = ["buildx", "build", "--pull", "--platform", "linux/arm64", "-t", image, "--push"];
   buildArgs.push("-f", plan.dockerfilePath);
   buildArgs.push(".");
   if ((await docker(buildArgs)).code !== 0) {

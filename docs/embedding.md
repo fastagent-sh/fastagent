@@ -11,7 +11,7 @@ Use FastAgent as a **library** — the agent is one capability inside a product 
 
 ## Prerequisites
 
-- **Node ≥ 22.19.** Ships compiled JS + types; no build step for FastAgent itself.
+- **Node ≥ 24.15.** Ships compiled JS + types; no build step for FastAgent itself.
 - **Install as a dependency:** `npm i @fastagent-sh/fastagent`.
 - **Model credentials** — `fastagent login` (OAuth, writes the project-level `<agent dir>/.secrets/auth.json`) or a provider API key in the environment (e.g. `OPENAI_API_KEY`). Auth is invisible to your code; see [Auth](#4-auth) below.
 

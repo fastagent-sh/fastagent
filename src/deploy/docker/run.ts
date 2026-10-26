@@ -194,7 +194,11 @@ export async function deployDockerRun(
   }
 
   log(`building and reconciling ${plan.composeFile}…`);
-  if ((await docker([...compose, "up", "-d", "--build"])).code !== 0) {
+  // `--pull`: the base image is a floating tag, and a copy cached here may be older than the runtime floor.
+  if ((await docker([...compose, "build", "--pull"])).code !== 0) {
+    return gate(`\`docker compose build\` failed — see the Docker output above; fix it and re-run`);
+  }
+  if ((await docker([...compose, "up", "-d"])).code !== 0) {
     return gate(`\`docker compose up\` failed — see the Docker output above; fix ${plan.composeFile} and re-run`);
   }
 

@@ -35,6 +35,29 @@ export function detectRuntime(dir: string, pkg: { packageManager?: unknown }): A
 }
 
 /**
+ * The oldest runtimes that run an agent, both set by the instance's storage, `node:sqlite`: Bun ships it from 1.4.0,
+ * and Node stops calling it experimental, and printing so on every start, from 24.15.0.
+ */
+export const RUNTIME_FLOOR = { node: "24.15.0", bun: "1.4.0" } as const;
+
+/** Whether `version` (`1.3.13`, `24.4`) is older than `floor`; false for one that names no version (`canary`). */
+export function belowFloor(version: string, floor: string): boolean {
+  const match = /^v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(version);
+  if (match === null) return false;
+  const given = [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
+  const least = floor.split(".").map(Number);
+  const differs = given.findIndex((part, i) => part !== least[i]);
+  return differs !== -1 && (given[differs] as number) < (least[differs] as number);
+}
+
+/** Why this process's runtime cannot run fastagent, or undefined when it can. Bun reports a Node version too. */
+export function unsupportedRuntime(versions: { node: string; bun?: string } = process.versions): string | undefined {
+  const [name, version, floor] =
+    versions.bun === undefined ? ["Node", versions.node, RUNTIME_FLOOR.node] : ["Bun", versions.bun, RUNTIME_FLOOR.bun];
+  return belowFloor(version, floor) ? `fastagent needs ${name} ${floor} or later; this is ${version}` : undefined;
+}
+
+/**
  * Whether a manifest lists FastAgent, which the image of an agent with a `package.json` runs from its own
  * `node_modules`: without it, the container cannot start.
  */

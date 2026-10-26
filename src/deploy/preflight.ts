@@ -29,7 +29,7 @@ import type { ContentDeclaration } from "../content/declare.ts";
 import { loadContent, loadEnvironment } from "../content/file.ts";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
-import { detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
+import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
@@ -303,6 +303,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       `src/schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron instant).`,
     );
   }
+  if (code !== undefined && channels.length === 0 && !hasCron) {
+    report.warn(
+      `no channel in src/channels/ and no schedule in src/schedules/: nothing reaches the deployed agent but its ` +
+        `health check. Add a channel (\`fastagent add telegram|slack|feishu|lark\`, or your own) or a schedule; an ` +
+        `agent used only from an app is embedded in it (openServing), not deployed`,
+    );
+  }
 
   const providers = code?.providers ?? [];
   if (modelSpec && code) checkModelExists(modelSpec, providers, report);
@@ -329,6 +336,20 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const hasPackageJson = await exists(join(agentDir, "package.json"));
   const pkg = await readPackageJson(agentDir);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
+  const kept = await keptDockerfile(agentDir);
+  // Only the generated image runs the pinned Bun: a hand-written Dockerfile names its own base.
+  if (
+    kept === undefined &&
+    runtime === "bun" &&
+    bunVersion !== undefined &&
+    belowFloor(bunVersion, RUNTIME_FLOOR.bun)
+  ) {
+    report.issue(
+      `package.json pins bun@${bunVersion}, which the image runs (oven/bun:${bunVersion}), and the agent's storage is ` +
+        `node:sqlite, which Bun ships from ${RUNTIME_FLOOR.bun}: the container would fail at start. Pin ` +
+        `bun@${RUNTIME_FLOOR.bun} or later`,
+    );
+  }
   const install = runtime === "bun" ? "bun install" : "npm install";
   const runner = runtime === "bun" ? "bun run fastagent" : "./node_modules/.bin/fastagent";
   const hasOtherLock =
@@ -401,7 +422,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     shipsGit,
   };
   const port = config.http?.port ?? DEFAULT_HTTP_PORT;
-  await checkKeptDockerfile(agentDir, model.envValue, valueFile, report);
+  if (kept !== undefined) checkKeptDockerfile(kept, agentDir, model.envValue, valueFile, report);
 
   return {
     channels,
@@ -482,6 +503,13 @@ function hasLogin(providerId: string, providers: readonly Provider[]): boolean {
   return provider !== undefined && interactiveLoginKind(provider) !== "none";
 }
 
+/** The agent's hand-written Dockerfile, which the deploy keeps; undefined when there is none, or it is the generated one. */
+async function keptDockerfile(agentDir: string): Promise<string | undefined> {
+  const path = join(agentDir, "Dockerfile");
+  const text = (await exists(path)) ? await readFile(path, "utf8") : undefined;
+  return text === undefined || isGeneratedDockerfile(text) ? undefined : text;
+}
+
 /**
  * What a KEPT hand-written Dockerfile drops. The environment (context.json's) is the obvious one; the resolved model is the one that
  * looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
@@ -492,16 +520,14 @@ function hasLogin(providerId: string, providers: readonly Provider[]): boolean {
  * hand-written Dockerfile survives `--force` and drops exactly the same things. Short-circuiting here let
  * `--run --force` ship the crash-loop this gate exists to stop.
  */
-async function checkKeptDockerfile(
+function checkKeptDockerfile(
+  dockerfileText: string,
   agentDir: string,
   /** The model the release manifest carries (set only when the value file named it). */
   modelFromValueFile: string | undefined,
   valueFile: string,
   report: DeployReport,
-): Promise<void> {
-  const dockerfileHome = join(agentDir, "Dockerfile");
-  const dockerfileText = (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
-  if (dockerfileText === undefined || isGeneratedDockerfile(dockerfileText)) return;
+): void {
   // What the image installs: the packages and apt packages. Variables travel with the value file, whatever the image.
   const environment = loadEnvironment(agentDir);
   if (Object.keys(environment?.packages ?? {}).length > 0 || (environment?.aptPackages.length ?? 0) > 0) {

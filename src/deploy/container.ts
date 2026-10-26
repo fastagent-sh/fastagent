@@ -1,5 +1,6 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
 import { CONTENT_DIRNAME, LOCAL_CONTEXT_FILE, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { RUNTIME_FLOOR } from "../runtime.ts";
 import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 import { MISE_ENVIRONMENT } from "../environment/mise.ts";
 
@@ -159,21 +160,27 @@ RUN ${steps.join(" \\\n && ")}
 `;
 }
 
+/**
+ * The Node image an npm-based agent runs on: the newest of the floor's line. A floating tag, so every build pulls it
+ * (docker/run.ts, agentcore/run.ts): a copy cached before the floor's release would start a Node the CLI refuses.
+ */
+export const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
+
 function dockerfile(input: ContainerInput): string {
   // The build context is the agent directory, baked at IMAGE_DEFINITION_DIR; deps install (and the local bin lives)
   // there.
   const dir = IMAGE_DEFINITION_DIR;
   const layoutNote = `The agent directory is baked at ${dir}`;
-  // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc., which
-  // node:22-slim lacks.
+  // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc., which the
+  // slim image lacks.
   const apt = aptLayer(input.apt);
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
   const deployment = `ENV FASTAGENT_RELEASE_FILE=${dir}/${RELEASE_FILE}\nENV FASTAGENT_STORAGE_DIR=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent` from PATH.
   if (!input.hasPackageJson) {
     return `${GENERATED_DOCKERFILE_MARKER}. ${layoutNote}
-# npm-based (a markdown/skills agent installs the pinned CLI globally; node:22-slim has npm).
-FROM node:22-slim
+# npm-based (a markdown/skills agent installs the pinned CLI globally; ${NODE_IMAGE} has npm).
+FROM ${NODE_IMAGE}
 ${apt}WORKDIR ${dir}
 ${deployment}RUN npm i -g @fastagent-sh/fastagent@${input.version}
 COPY . .
@@ -182,7 +189,7 @@ CMD ["fastagent", "start", "${dir}"]
   }
   const environment = input.packages && input.packages.length > 0 ? environmentLayer(dir) : "";
   const isBun = input.runtime === "bun";
-  const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : "node:22-slim";
+  const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : NODE_IMAGE;
   const note = isBun
     ? "# Bun-based (packageManager: bun / a bun lockfile detected). fastagent runs under Bun (bun run)."
     : "# npm-based — for pnpm/yarn, adapt the install line + the lockfile COPY (corepack enable, etc.).";

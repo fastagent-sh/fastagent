@@ -5,6 +5,8 @@
 import { fastagentVersion } from "../version.ts";
 import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } from "./kernel.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
+import { unsupportedRuntime } from "../runtime.ts";
+import { failStartup } from "./fail.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 const AGENT_ARG = {
@@ -658,5 +660,8 @@ export function buildCliProgram(overrides: ProgramOptions = {}) {
 
 /** Parse and run one CLI invocation (`argv` = process.argv). */
 export async function runCli(argv: readonly string[]): Promise<void> {
+  // Before any command loads the storage: an older Bun fails that import with a message that says nothing of Bun.
+  const unsupported = unsupportedRuntime();
+  if (unsupported !== undefined) failStartup(new Error(unsupported));
   await buildCliProgram({ version: await fastagentVersion() }).parseAsync([...argv]);
 }

@@ -78,7 +78,7 @@ npm i -g @fastagent-sh/fastagent   # CLI: fastagent init/dev/start/...
 npm i @fastagent-sh/fastagent      # library API for embedding or code tools
 ```
 
-Requires **Node >= 22.19** (the floor is inherited from the pi harness and `undici`), and also runs under **Bun >= 1.4** (the first with `node:sqlite`, which the agent's storage uses; smoke-tested in CI on 1.4.0; its native fetch replaces the undici path). The npm package ships compiled JavaScript and type declarations.
+Requires **Node >= 24.15** or **Bun >= 1.4**, both set by the agent's storage, `node:sqlite`: Node stops calling it experimental in 24.15, and Bun ships it from 1.4 (smoke-tested in CI on 1.4.0; its native fetch replaces the undici path). The npm package ships compiled JavaScript and type declarations.
 
 ## Quickstart
 

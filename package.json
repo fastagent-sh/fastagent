@@ -29,7 +29,7 @@
   "type": "module",
   "sideEffects": false,
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.15.0"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
