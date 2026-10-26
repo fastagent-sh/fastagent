@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { GitNotInstalled, gitFor } from "./git.ts";
 import { CONTEXT_FILE, LOCAL_CONTEXT_FILE, contentEntryPath, resolveAgentDir } from "./paths.ts";
-import { type ScaffoldOptions, initRepository, scaffoldAgent } from "./scaffold/init.ts";
+import { initRepository, scaffoldAgent } from "./scaffold/init.ts";
 import {
   type BoundContent,
   type ContentBinding,
@@ -47,16 +47,15 @@ export class ContentNameError extends Error {
   override name = "ContentNameError";
 }
 
-export interface CreateAgentOptions extends ScaffoldOptions {
+export interface CreateAgentOptions {
   /** What the agent works on and knows: repositories into `context.json`, this machine's directories into
    *  `context.local.json`. */
   content?: ContentAddition[];
   /**
    * Install the agent's dependencies, after the scaffold and before its first commit, so the lockfile is in that
-   * commit. The CLI passes `npm install` (its scaffold carries web access); without `webAccess` nothing needs
-   * installing. A rejection is a failed create: the scaffold is removed again and the error thrown, as when writing
-   * the content fails, so the directory is empty for a retry. One that reports its failure some other way (the CLI's
-   * resolves, and says the install failed) leaves the agent created.
+   * commit; the agent's code imports them. A rejection is a failed create: the scaffold is removed again and the error
+   * thrown, as when writing the content fails, so the directory is empty for a retry. One that reports its failure
+   * some other way (the CLI's resolves, and says the install failed) leaves the agent created.
    */
   install?: (dir: string) => Promise<void>;
 }
@@ -83,9 +82,8 @@ interface ContentMaps {
 
 /**
  * Create an agent in `dir`, which must be new or empty. Every content entry is checked before anything is written, and
- * the scaffold is removed again when writing the content fails. It runs without `npm install`; with `webAccess`, its
- * web tools load only once `npm install` has installed `@fastagent-sh/pi-web-access`, and until then are left out with
- * a warning. The agent is then a git repository whose first commit is what was written:
+ * the scaffold is removed again when writing the content fails. The agent is then a git repository whose first commit
+ * is what was written:
  * it changes itself, and version control is how its author goes back to a version that worked.
  */
 export async function createAgent(dir: string, options: CreateAgentOptions = {}): Promise<CreatedAgent> {
@@ -93,7 +91,7 @@ export async function createAgent(dir: string, options: CreateAgentOptions = {})
   const additions = options.content ?? [];
   let maps: ContentMaps = { content: {}, bindings: {} };
   for (const addition of additions) maps = withAddition(agentDir, maps, addition).maps;
-  const { created, undo } = await scaffoldAgent(agentDir, { webAccess: options.webAccess });
+  const { created, undo } = await scaffoldAgent(agentDir);
   const removeAll = async (error: unknown): Promise<never> => {
     await rm(join(agentDir, CONTEXT_FILE), { force: true });
     await rm(join(agentDir, LOCAL_CONTEXT_FILE), { force: true });

@@ -61,15 +61,15 @@ export async function runAddChannel(
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const { ingress, pinned, setting } = resolveIngress(channelKind, opts.ingress);
   if (existsAlready) {
-    console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
+    console.error(`[fastagent] ${inAgent(relative(target, file))} already exists — keeping it`);
   } else {
     await assertChannelReady(target).catch(failStartup);
     await scaffoldChannel(target, channelKind).catch(failStartup);
-    console.error(`[fastagent] created ${relative(target, file)}`);
+    console.error(`[fastagent] created ${inAgent(relative(target, file))}`);
   }
   // Companion tools are the package's, not authored glue.
   for (const tool of await scaffoldCompanionTools(target, channelKind).catch(failStartup)) {
-    console.error(`[fastagent] wrote ${relative(target, tool)}`);
+    console.error(`[fastagent] wrote ${inAgent(relative(target, tool))}`);
   }
   if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
@@ -146,7 +146,7 @@ export async function runAddChannel(
     console.error(
       `    ${s
         .replace("{channel}", inAgent(relative(target, file)))
-        .replace("{tools}", inAgent("tools"))
+        .replace("{tools}", inAgent(join("src", "tools")))
         .replaceAll("{serve}", serveCommand)}`,
     );
   }
@@ -225,6 +225,6 @@ export async function runAddSkill(
     );
   }
   console.error(
-    `  next: mention "${name}" in APPEND_SYSTEM.md so the model knows when to use it; then \`fastagent dev\``,
+    `  next: mention "${name}" in SYSTEM.md so the model knows when to use it; then \`fastagent dev\``,
   );
 }
