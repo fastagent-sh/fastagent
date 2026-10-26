@@ -88,7 +88,7 @@ A PR is mergeable only when:
 - `npm run lint` is clean (Biome format/lint plus local Markdown links; run `npm run format` to auto-fix code),
 - `npm run typecheck` is clean (TypeScript with `noUnusedLocals`/`noUnusedParameters`),
 - `npm test` passes,
-- CI (`Core checks` across Node 22.19 / 24 / 26, and `CodeQL`) is green. The merge queue enforces this: it reruns both on top of the latest `main` and merges only if they pass.
+- CI (`Core checks` across Node 24.15 / 24 / 26, and `CodeQL`) is green. The merge queue enforces this: it reruns both on top of the latest `main` and merges only if they pass.
 
 Add or update the smallest relevant tests that prove the change. Reusable SPEC conformance lives in `test/protocol-conformance.ts`; one-off product-scenario scripts should be run and then deleted, not committed.
 

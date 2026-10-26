@@ -488,7 +488,7 @@ Return what the model needs, not what the API sent:
 ```
 
 Tools are plain ES modules, so they can be imported and tested without fastagent: `node --test
-test/my-tool.test.ts` on Node 22+ needs no framework and no test script.
+test/my-tool.test.ts` on Node 24.15+ needs no framework and no test script.
 
 ### Native exposure, discovery, and codemode
 

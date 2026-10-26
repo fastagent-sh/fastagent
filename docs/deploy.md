@@ -7,7 +7,7 @@ status: current
 # Deploy
 
 FastAgent has no application build step: the directory is the deployable unit. Deploying means copying the agent to
-a host with Node >= 22.19 (or Bun), installing dependencies, and running `fastagent start`. `fastagent deploy`
+a host with Node >= 24.15 (or Bun >= 1.4), installing dependencies, and running `fastagent start`. `fastagent deploy`
 generates a container recipe and target config and prints an ordered runbook; `--run` executes it with the host's
 CLI.
 

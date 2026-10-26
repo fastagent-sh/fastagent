@@ -159,7 +159,7 @@ RUN ${steps.join(" \\\n && ")}
 `;
 }
 
-/** The Node image an npm-based agent runs on: from 24 on, `node:sqlite` (the agent's storage) is no longer experimental. */
+/** The Node image an npm-based agent runs on: the newest of the line `RUNTIME_FLOOR.node` (runtime.ts) is in. */
 export const NODE_IMAGE = "node:24-slim";
 
 function dockerfile(input: ContainerInput): string {

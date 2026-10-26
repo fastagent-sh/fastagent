@@ -10,7 +10,7 @@ This guide takes you from an installed CLI to a live local agent service.
 
 ## Prerequisites
 
-- Node >= 22.19 (`node --version`).
+- Node >= 24.15 (`node --version`).
 - FastAgent CLI: `npm i -g @fastagent-sh/fastagent`.
 
 Model credentials come in step 2, after the agent exists. `fastagent models` lists model specs.
@@ -164,7 +164,7 @@ fastagent start
 ```
 
 `start` serves like `dev` without watching files. There is no build step: copy the agent to a host with
-Node >= 22.19, install dependencies, and run `fastagent start`.
+Node >= 24.15, install dependencies, and run `fastagent start`.
 
 For deployments, point the state root (sessions and channel state) and the secrets dir (`.env` and `auth.json`) at
 durable storage:

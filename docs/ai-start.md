@@ -108,7 +108,7 @@ JavaScript (`.js` and `.mjs`). The config file is always `fastagent.config.ts`.
 Keep the generated Dockerfile, YAML/JSON host configuration, and generated deployment JavaScript in their
 generated formats. Those artifacts do not set the language for business code.
 
-Use **Node >= 22.19** (`node --version`) and ESM (`"type": "module"` in the agent's `package.json`, already
+Use **Node >= 24.15** (`node --version`) and ESM (`"type": "module"` in the agent's `package.json`, already
 set by the default scaffold). Node runs erasable TypeScript directly. It removes types without checking
 them and does not read `tsconfig.json` to transform code or resolve aliases.
 
@@ -119,7 +119,7 @@ them and does not read `tsconfig.json` to transform code or resolve aliases.
 - Keep an existing application's bundler when it needs one. A bundler or `tsx` is not required for this
   example. Published packages should ship JavaScript and declarations, as FastAgent does.
 
-See [Node 22.19's TypeScript support](https://nodejs.org/download/release/v22.19.0/docs/api/typescript.html).
+See [Node 24.15's TypeScript support](https://nodejs.org/download/release/v24.15.0/docs/api/typescript.html).
 
 Install compatible development dependencies and add scripts to the **agent package**:
 
