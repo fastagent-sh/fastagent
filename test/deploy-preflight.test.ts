@@ -715,6 +715,33 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     }
   });
 
+  it("warns that a deployment with no channel and no schedule is reached by nothing but its health check", async () => {
+    const reachedBy = /nothing reaches the deployed agent but its health check/;
+    const none = await call(await agent(), { model: "openai/gpt-4o-mini" });
+    expect(none.ok && none.messages.find((m) => reachedBy.test(m.text))?.level).toBe("warn");
+    const schedule = `export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: "go" };\n`;
+    const scheduled = await call(await agent({ "src/schedules/daily.ts": schedule }), { model: "openai/gpt-4o-mini" });
+    expect(scheduled.ok && scheduled.messages.some((m) => reachedBy.test(m.text))).toBe(false);
+    const channel = `export default () => ({ "POST /hook": () => new Response("ok") });\n`;
+    const served = await call(await agent({ "src/channels/hook.ts": channel }), { model: "openai/gpt-4o-mini" });
+    expect(served.ok && served.messages.some((m) => reachedBy.test(m.text))).toBe(false);
+  });
+
+  it("a Bun pinned below the floor stops --run: the image would run a Bun without node:sqlite", async () => {
+    const pinned = (version: string) =>
+      agent({
+        "package.json": JSON.stringify({
+          packageManager: `bun@${version}`,
+          dependencies: { "@fastagent-sh/fastagent": "*" },
+        }),
+      });
+    const old = await call(await pinned("1.3.13+sha256.deadbeef"), { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(old.ok).toBe(false);
+    if (!old.ok) expect(old.gate).toMatch(/pins bun@1\.3\.13.*Bun ships from 1\.4\.0.*fail at start/);
+    const current = await call(await pinned("1.4.0"), { model: "openai/gpt-4o-mini" });
+    expect(current.ok && current.messages.some((m) => /node:sqlite/.test(m.text))).toBe(false);
+  });
+
   it("warns a code agent with no lockfile and no @fastagent-sh/fastagent dep", async () => {
     const dir = await agent({ "package.json": JSON.stringify({ name: "a", type: "module" }) });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });

@@ -2,6 +2,7 @@ import { posix } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseFlyAppName, parseFlyMinMachines, planFlyDeploy, toFlyAppName } from "../src/deploy/fly/plan.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
+import { NODE_IMAGE } from "../src/deploy/container.ts";
 
 const flyToml = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "fly.toml")!.content;
 const dockerfile = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "Dockerfile")!.content;
@@ -124,14 +125,14 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(runbook(p)).not.toContain("fly volumes create");
   });
 
-  it("the markdown path pins the global install and ALWAYS uses node:22-slim, whatever the runtime says", () => {
+  it("the markdown path pins the global install and ALWAYS uses the Node image, whatever the runtime says", () => {
     const md = { ...base, channels: [], hasPackageJson: false } as const;
     const docker = dockerfile(planFlyDeploy(md));
     expect(docker).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned to the current version
     expect(docker).not.toContain("npm ci");
     // Even a bun agent: oven/bun has no npm, so the global install needs the node base.
-    const asBun = dockerfile(planFlyDeploy({ ...md, runtime: "bun", bunVersion: "1.3.13" }));
-    expect(asBun).toContain("FROM node:22-slim");
+    const asBun = dockerfile(planFlyDeploy({ ...md, runtime: "bun", bunVersion: "1.4.2" }));
+    expect(asBun).toContain(`FROM ${NODE_IMAGE}\n`);
     expect(asBun).not.toContain("oven/bun");
     expect(asBun).toContain("npm i -g @fastagent-sh/fastagent");
   });
@@ -180,8 +181,8 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("a bun agent uses the bun base + bun install + bun run; markdown-only uses the pinned global CLI", () => {
-    const bunDf = dockerfile(planFlyDeploy({ ...base, runtime: "bun", bunVersion: "1.3.13", channels: [] }));
-    expect(bunDf).toContain("FROM oven/bun:1.3.13");
+    const bunDf = dockerfile(planFlyDeploy({ ...base, runtime: "bun", bunVersion: "1.4.2", channels: [] }));
+    expect(bunDf).toContain("FROM oven/bun:1.4.2");
     expect(bunDf).toContain("COPY package.json bun.lock* *.tgz ./");
     expect(bunDf).toContain("RUN bun install --frozen-lockfile");
     // Bun resolves the script from the package.json in its cwd, which WORKDIR already is: exec form, no shell.
@@ -190,7 +191,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(bunDf).not.toContain("FASTAGENT_AGENT");
 
     const mdDf = dockerfile(planFlyDeploy({ ...base, hasPackageJson: false, channels: [] }));
-    expect(mdDf).toContain("FROM node:22-slim");
+    expect(mdDf).toContain(`FROM ${NODE_IMAGE}\n`);
     expect(mdDf).not.toContain("FASTAGENT_AGENT");
     expect(mdDf).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned global — no deps to install
     expect(mdDf).not.toContain("npm ci");
@@ -211,10 +212,10 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("generates a Bun Dockerfile for a bun agent (oven/bun base, bun install, bun run)", () => {
-    const bun = dockerfile(planFlyDeploy({ ...base, channels: [], runtime: "bun", bunVersion: "1.3.13" }));
-    expect(bun).toContain("FROM oven/bun:1.3.13");
+    const bun = dockerfile(planFlyDeploy({ ...base, channels: [], runtime: "bun", bunVersion: "1.4.2" }));
+    expect(bun).toContain("FROM oven/bun:1.4.2");
     expect(bun).toContain("bun install --frozen-lockfile"); // base.hasLockfile: true → frozen
-    expect(bun).not.toContain("node:22-slim");
+    expect(bun).not.toContain(NODE_IMAGE);
     // Unpinned bun (a bun lockfile but no packageManager version) → oven/bun:1; no lockfile → plain install.
     const unpinned = dockerfile(planFlyDeploy({ ...base, channels: [], runtime: "bun", hasLockfile: false }));
     expect(unpinned).toContain("FROM oven/bun:1\n");

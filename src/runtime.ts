@@ -34,6 +34,19 @@ export function detectRuntime(dir: string, pkg: { packageManager?: unknown }): A
   return { runtime: "node", hasLockfile: existsSync(join(dir, "package-lock.json")) };
 }
 
+/** The oldest Bun that runs an agent: the instance's storage is `node:sqlite`, which Bun ships from 1.4.0. */
+export const BUN_FLOOR = "1.4.0";
+
+/** Whether a Bun version (`1.3.13`, `1.4`) is older than {@link BUN_FLOOR}; false for one that names no version. */
+export function bunBelowFloor(version: string): boolean {
+  const match = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(version);
+  if (match === null) return false;
+  const given = [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
+  const floor = BUN_FLOOR.split(".").map(Number);
+  const differs = given.findIndex((part, i) => part !== floor[i]);
+  return differs !== -1 && (given[differs] as number) < (floor[differs] as number);
+}
+
 /**
  * Whether a manifest lists FastAgent, which the image of an agent with a `package.json` runs from its own
  * `node_modules`: without it, the container cannot start.

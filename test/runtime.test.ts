@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectRuntime } from "../src/runtime.ts";
+import { bunBelowFloor, detectRuntime } from "../src/runtime.ts";
+
+it("a Bun below 1.4.0 is below the floor; one that names no version is not judged", () => {
+  const verdicts = ["0.9", "1.3.14", "1.4", "1.4.0", "1.4.2", "1.10.0", "2.0.0", "canary"].map(bunBelowFloor);
+  expect(verdicts).toEqual([true, true, false, false, false, false, false, false]);
+});
 
 describe("detectRuntime", () => {
   const freshDir = () => mkdtemp(join(tmpdir(), "fa-rt-"));

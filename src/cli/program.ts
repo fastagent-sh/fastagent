@@ -5,6 +5,7 @@
 import { fastagentVersion } from "../version.ts";
 import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } from "./kernel.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
+import { BUN_FLOOR, bunBelowFloor } from "../runtime.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 const AGENT_ARG = {
@@ -658,5 +659,13 @@ export function buildCliProgram(overrides: ProgramOptions = {}) {
 
 /** Parse and run one CLI invocation (`argv` = process.argv). */
 export async function runCli(argv: readonly string[]): Promise<void> {
+  // Before any command loads the storage: an older Bun fails that import with a message that says nothing of Bun.
+  const bun = process.versions.bun;
+  if (bun !== undefined && bunBelowFloor(bun)) {
+    console.error(
+      `Error: fastagent needs Bun ${BUN_FLOOR} or later (this is ${bun}): an agent's storage is node:sqlite`,
+    );
+    process.exit(1);
+  }
   await buildCliProgram({ version: await fastagentVersion() }).parseAsync([...argv]);
 }

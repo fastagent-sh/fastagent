@@ -29,7 +29,7 @@ import type { ContentDeclaration } from "../content/declare.ts";
 import { loadContent, loadEnvironment } from "../content/file.ts";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
-import { detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
+import { BUN_FLOOR, bunBelowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
@@ -303,6 +303,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       `src/schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron instant).`,
     );
   }
+  if (code !== undefined && channels.length === 0 && !hasCron) {
+    report.warn(
+      `no channel in src/channels/ and no schedule in src/schedules/: nothing reaches the deployed agent but its ` +
+        `health check. Add a channel (\`fastagent add telegram|slack|feishu|lark\`, or your own) or a schedule; an ` +
+        `agent used only from an app is embedded in it (openServing), not deployed`,
+    );
+  }
 
   const providers = code?.providers ?? [];
   if (modelSpec && code) checkModelExists(modelSpec, providers, report);
@@ -329,6 +336,12 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const hasPackageJson = await exists(join(agentDir, "package.json"));
   const pkg = await readPackageJson(agentDir);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
+  if (runtime === "bun" && bunVersion !== undefined && bunBelowFloor(bunVersion)) {
+    report.issue(
+      `package.json pins bun@${bunVersion}, which the image runs (oven/bun:${bunVersion}), and the agent's storage is ` +
+        `node:sqlite, which Bun ships from ${BUN_FLOOR}: the container would fail at start. Pin bun@${BUN_FLOOR} or later`,
+    );
+  }
   const install = runtime === "bun" ? "bun install" : "npm install";
   const runner = runtime === "bun" ? "bun run fastagent" : "./node_modules/.bin/fastagent";
   const hasOtherLock =
