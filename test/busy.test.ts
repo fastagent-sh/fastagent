@@ -1,11 +1,7 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
-import { collect } from "../src/protocol-collect.ts";
 import { activeWork, beginWork } from "../src/channels/busy.ts";
+import { newSession } from "../src/conversation-sessions.ts";
+import { durableSubject } from "./durable-subject.ts";
 import { portJoin } from "../src/effect-port.ts";
 import { createTaskTracker } from "../src/channels/kit/tasks.ts";
 import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
@@ -32,8 +28,8 @@ describe("channels/busy: the process-wide in-flight signal", () => {
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    const queue = createTurnQueue<{ session: string }>({ label: "[test]", run: () => portJoin(() => gate) });
-    queue.accept({ session: "s" });
+    const queue = createTurnQueue<{ conversation: string }>({ label: "[test]", run: () => portJoin(() => gate) });
+    queue.accept({ conversation: "s" });
     expect(activeWork()).toBe(base + 1); // queued/running both count — the process must not idle
     release();
     await queue.idle();
@@ -47,9 +43,9 @@ describe("channels/busy: the process-wide in-flight signal", () => {
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    const queue = createTurnQueue<{ session: string }>({ label: "[test]", run: () => portJoin(() => gate) });
-    queue.accept({ session: "s" });
-    queue.accept({ session: "s" });
+    const queue = createTurnQueue<{ conversation: string }>({ label: "[test]", run: () => portJoin(() => gate) });
+    queue.accept({ conversation: "s" });
+    queue.accept({ conversation: "s" });
     expect(activeWork()).toBe(base + 2);
     release();
     await queue.idle();
@@ -73,46 +69,26 @@ describe("channels/busy: the process-wide in-flight signal", () => {
   });
 });
 
-describe("an opened agent's runs", () => {
-  it("count as work in flight from the moment a run starts until it ends", async () => {
+describe("an opened agent's messages", () => {
+  it("count as work in flight from acceptance until they settle, whichever process accepted them", async () => {
     // Without it, /ping says Healthy and `dev` restarts mid-run: the host reclaims a container that is still working.
-    const held: ServerResponse[] = [];
-    const server = createServer((_req, res) => {
-      held.push(res);
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const subject = durableSubject();
     try {
-      const { port } = server.address() as { port: number };
-      const dir = await mkdtemp(join(tmpdir(), "fa-open-busy-"));
-      await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "held/held" };\n`);
-      await writeFile(
-        join(dir, "models.json"),
-        JSON.stringify({
-          providers: {
-            held: {
-              baseUrl: `http://127.0.0.1:${port}/v1`,
-              api: "openai-completions",
-              apiKey: "test",
-              models: [{ id: "held" }],
-            },
-          },
-        }),
-      );
-      const { agent } = await createPiAgentFromDir(dir);
       const base = activeWork();
-      const run = collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } })).catch((e: unknown) => e);
-      await until(() => held.length > 0);
-      expect(activeWork()).toBeGreaterThan(base);
-      for (const res of held) {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: "refused", type: "bad_request" } }));
-      }
-      await run;
+      const agent = await subject.start();
+      const sessionId = await newSession(agent);
+      const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: "hold" }] });
+      expect(sent.ok).toBe(true);
+      expect(activeWork()).toBe(base + 1);
+      // A restart mid-message: the next process runs it on, and counts it.
+      await subject.restart();
+      await until(() => subject.held() === 1);
+      expect(activeWork()).toBe(base + 1);
+      subject.release();
       await until(() => activeWork() === base);
       expect(activeWork()).toBe(base);
     } finally {
-      for (const res of held) res.destroy();
-      server.close();
+      await subject.stop();
     }
   });
 });

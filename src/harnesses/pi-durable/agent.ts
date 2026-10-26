@@ -18,6 +18,7 @@ import {
   type ModelRef,
   type RegistryReader,
   type Storage,
+  type Submission,
   type SubmissionId,
 } from "@earendil-works/pi-durable";
 import * as Effect from "effect/Effect";
@@ -48,6 +49,7 @@ import {
   agentError,
   failure,
 } from "../../agent-api.ts";
+import { beginWork } from "../../channels/busy.ts";
 import { type PortFailure, port, portError } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, parseImageRef } from "./entries.ts";
@@ -111,6 +113,12 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
   try {
     const ids = await storageIds(harness, context);
     const sessions = await Effect.runPromise(Scope.provide(trackSessions(harness, options.storage, context), lifetime));
+    // What an earlier process accepted and did not settle runs on in this one: it is this process's work now.
+    for (const record of (await harness.inspect(context)).submissions) {
+      if (!isInput(record)) continue;
+      const submission = await harness.submission(record.id, context);
+      if (submission !== undefined) countUntilSettled(submission);
+    }
     harness.resume();
     await Effect.runPromise(Scope.provide(releaseWaitingQueues(harness, context), lifetime));
     return durableAgent(harness, ids, sessions, lifetime, options);
@@ -119,6 +127,15 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
     await harness.close(context);
     throw error;
   }
+}
+
+/**
+ * A message not yet settled is the process's work in flight (busy.ts): what AgentCore's ping and `dev`'s restart wait
+ * for. Whatever ends the wait, settling or the harness closing, ends the count.
+ */
+function countUntilSettled(submission: Submission): void {
+  const done = beginWork();
+  submission.wait(BACKGROUND_CONTEXT).then(done, done);
 }
 
 function durableAgent(
@@ -274,6 +291,7 @@ function durableAgent(
           ),
         );
         messageId = submission.id;
+        countUntilSettled(submission);
         const record = yield* port(() => submission.status(context));
         if (!isInput(record)) throw new Error(`submission ${record.id} was admitted as a write`);
         return yield* receipt(target, record, false);
