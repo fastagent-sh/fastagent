@@ -9,7 +9,7 @@ import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import {
-  environmentAuthSource,
+  environmentAuth,
   interactiveLoginKind,
   loginProviders,
   modelsOver,
@@ -473,8 +473,10 @@ async function credentialRoute(
 ): Promise<{ envVar?: string; boxLogin?: string }> {
   const provider = providerOf(spec);
   // No file of this machine's travels, so a source that needs one (Google ADC, an AWS profile) is the box's to find.
-  const fromValues = await environmentAuthSource(provider, Object.fromEntries(values), async () => false, providers);
-  if (fromValues !== undefined) return isEnvKey(fromValues) ? { envVar: fromValues } : {};
+  const fromValues = await environmentAuth(provider, Object.fromEntries(values), async () => false, providers);
+  if (fromValues !== undefined) {
+    return fromValues.source !== undefined && isEnvKey(fromValues.source) ? { envVar: fromValues.source } : {};
+  }
   return { boxLogin: provider };
 }
 

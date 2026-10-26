@@ -9,7 +9,7 @@ import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { findAgentDir, globalHome, selectAgentEnvironment } from "../../paths.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../../harnesses/models/login.ts";
-import { environmentAuthSource } from "../../harnesses/models/models.ts";
+import { environmentAuth } from "../../harnesses/models/models.ts";
 import { loginOnBox } from "../box-login.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";
@@ -80,7 +80,8 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
   // The environment outranks the global file for every agent, so a global login it shadows would sit unused while
   // agents run on, say, an API key billed per request, with only a startup line to show it.
-  const shadowedBy = authPath === GLOBAL_AUTH_PATH ? await environmentAuthSource(result.provider, shellEnv) : undefined;
+  const shadowedBy =
+    authPath === GLOBAL_AUTH_PATH ? (await environmentAuth(result.provider, shellEnv))?.source : undefined;
   if (shadowedBy !== undefined) {
     console.error(
       `[fastagent] warning: ${result.provider} is also authenticated by ${shadowedBy} in your shell environment, which ` +

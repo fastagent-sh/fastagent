@@ -38,22 +38,23 @@ export function modelsOver(credentials: CredentialStore, providers: readonly Pro
 }
 
 /**
- * What satisfies a provider from `env` alone (its API-key variable, or an ambient source such as an AWS profile), by
- * pi's own check, or undefined. Passed explicitly rather than read from `process.env`: only the environment a SHELL
- * hands down is shared by every agent on the machine, and a process that has loaded an agent's `.secrets/.env` holds
- * that agent's variables too. What the shell shares outranks the global credentials file (agent-models.ts),
- * so a global login for such a provider is not used.
+ * Whether `env` alone satisfies a provider, by pi's own check, and with what when the provider says (its API-key
+ * variable, or an ambient source such as an AWS profile); undefined when it does not. A provider in code may
+ * authenticate without naming a source. Passed explicitly rather than read from `process.env`: only the environment a
+ * SHELL hands down is shared by every agent on the machine, and a process that has loaded an agent's `.secrets/.env`
+ * holds that agent's variables too. What the shell shares outranks the global credentials file (environment.ts), so a
+ * global login for such a provider is not used.
  *
  * `fileExists` answers for the files a source points at (an AWS profile, Google ADC): this machine's by default, which
  * is right wherever the answer is about THIS machine. A deployment passes one that finds nothing, because no file of
  * the builder's travels with it.
  */
-export async function environmentAuthSource(
+export async function environmentAuth(
   providerId: string,
   env: NodeJS.ProcessEnv,
   fileExists: (path: string) => Promise<boolean> = defaultProviderAuthContext().fileExists,
   providers: readonly Provider[] = [],
-): Promise<string | undefined> {
+): Promise<{ source?: string } | undefined> {
   const models = builtinModels({
     credentials: new InMemoryCredentialStore(),
     authContext: {
@@ -63,7 +64,7 @@ export async function environmentAuthSource(
     },
   });
   for (const provider of providers) models.setProvider(provider);
-  return (await models.checkAuth(providerId))?.source;
+  return models.checkAuth(providerId);
 }
 
 /**

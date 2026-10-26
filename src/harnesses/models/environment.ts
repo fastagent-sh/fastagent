@@ -15,7 +15,7 @@ import {
   fastagentCredentialStore,
   resolveAuthLayers,
 } from "./credentials.ts";
-import { environmentAuthSource, modelsOver, probeAuthSource } from "./models.ts";
+import { environmentAuth, modelsOver, probeAuthSource } from "./models.ts";
 
 /** What authenticates one provider for an agent ({@link ModelEnvironment.authStatus}). */
 interface AuthStatus {
@@ -85,7 +85,8 @@ export function modelEnvironment(
       }
       // `read` never refreshes: this is the kind on file, whatever became of it.
       const stored = (await credentials.read(provider))?.type;
-      const fromEnvironment = stored === undefined ? undefined : await environmentAuthSource(provider, process.env);
+      const fromEnvironment =
+        stored === undefined ? undefined : (await environmentAuth(provider, process.env, undefined, providers))?.source;
       const shadowed =
         resolved.source !== undefined && fromEnvironment !== resolved.source ? fromEnvironment : undefined;
       return {
