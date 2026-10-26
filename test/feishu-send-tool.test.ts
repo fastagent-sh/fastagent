@@ -1,21 +1,17 @@
 /**
  * The `{feishu,lark}-send` scaffold tool. The two files are the same tool bound to a different cloud,
- * so what differs per cloud (gateway, env prefix, credential isolation) runs for BOTH, and what does
- * not (the description contract, input validation, card/text encoding, transport reuse) runs once.
+ * so what differs per cloud (gateway, credential isolation) runs for BOTH, and what does not (the
+ * description contract, input validation, card/text encoding, transport reuse) runs once.
  */
-import { scriptedAgent } from "./scripted-agent.ts";
-import { ev } from "./scripted-run.ts";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import type { InvokeEvent } from "../src/protocol.ts";
-import { turnContext } from "../src/harnesses/pi/tool-context.ts";
-import { createPiAgentFromDefinition, type FastagentTool } from "../src/pi.ts";
 import { feishuChannel } from "../src/feishu.ts";
+import type { Needs } from "../src/harnesses/pi-durable/define.ts";
 import { larkChannel } from "../src/lark.ts";
-import { makeFaux } from "./faux.ts";
+import { scriptedAgent } from "./scripted-agent.ts";
 
 function stubOpenApi() {
   const calls: { url: string; body: Record<string, unknown>; authorization: string | null }[] = [];
@@ -43,44 +39,40 @@ function stubOpenApi() {
   return calls;
 }
 
-const agent = scriptedAgent(async function* (_request) {
-  yield ev.accepted();
-  yield ev.ended();
-});
+const agent = scriptedAgent(() => []);
 
-/** Loads one cloud's scaffold tool and gives every test a fresh workspace + credential stubs. */
+/** Loads one cloud's scaffold tool, built with app credentials, and gives every test a fresh state root. */
 function cloudFixture(kind: "feishu" | "lark", prefix: "FEISHU" | "LARK") {
-  const state = { tool: undefined as unknown as FastagentTool, cwd: "" };
+  const state = { declared: undefined as unknown as Needs<ToolRegistration>, cwd: "", appId: "" };
   beforeAll(async () => {
     // Scaffold files import the published package; Vitest aliases it to the current source.
     const path = new URL(`../src/channels/${kind}/scaffold/${kind}-send.ts`, import.meta.url).pathname;
-    state.tool = ((await import(path)) as { default: FastagentTool }).default;
+    state.declared = ((await import(path)) as { default: Needs<ToolRegistration> }).default;
   });
+  let apps = 0;
   beforeEach(async () => {
     state.cwd = await mkdtemp(join(tmpdir(), `fa-${kind}-send-`));
-    await writeFile(join(state.cwd, "fastagent.config.ts"), "export default {};\n");
-    vi.stubEnv("FASTAGENT_STATE_DIR", "");
-    vi.stubEnv("FASTAGENT_AGENT", "");
-    vi.stubEnv(`${prefix}_APP_ID`, "");
-    vi.stubEnv(`${prefix}_APP_SECRET`, "");
+    // A process keeps one transport per app: a fresh app per test starts with no token cached.
+    state.appId = `cli_env_${++apps}`;
   });
   afterEach(async () => {
     vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
     vi.useRealTimers();
     await rm(state.cwd, { recursive: true, force: true });
   });
+  const tool = (appId = state.appId) =>
+    state.declared.build({ [`${prefix}_APP_ID`]: appId, [`${prefix}_APP_SECRET`]: "env-secret" });
   return {
-    get tool() {
-      return state.tool;
-    },
+    tool,
     get cwd() {
       return state.cwd;
     },
-    execute: (params: unknown) => turnContext.run({ cwd: state.cwd }, () => state.tool.execute("call-1", params)),
-    credentials: () => {
-      vi.stubEnv(`${prefix}_APP_ID`, "cli_env");
-      vi.stubEnv(`${prefix}_APP_SECRET`, "env-secret");
+    get appId() {
+      return state.appId;
+    },
+    execute: async (params: unknown, appId?: string) => {
+      const result = await tool(appId).execute(params as never, {} as never, {} as never);
+      return { details: (result.output?.[0] as { text: string }).text };
     },
   };
 }
@@ -91,26 +83,19 @@ describe.each([
 ] as const)("scaffold $kind-send: the cloud it is bound to", ({ kind, prefix, base, channel, other }) => {
   const fx = cloudFixture(kind, prefix);
 
-  it("sends plain text through the correct cloud and env credentials", async () => {
-    fx.credentials();
+  it("sends plain text through the correct cloud with the app it was built with", async () => {
     const calls = stubOpenApi();
     expect((await fx.execute({ chatId: "oc_42", text: "digest ready" })).details).toBe("sent message to chat oc_42");
-    expect(calls[0]?.body).toEqual({ app_id: "cli_env", app_secret: "env-secret" });
+    expect(calls[0]?.body).toEqual({ app_id: fx.appId, app_secret: "env-secret" });
     expect(calls[1]).toEqual({
       url: `${base}/open-apis/im/v1/messages?receive_id_type=chat_id`,
-      authorization: "Bearer cli_env",
+      authorization: `Bearer ${fx.appId}`,
       body: { receive_id: "oc_42", msg_type: "text", content: JSON.stringify({ text: "digest ready" }) },
     });
     expect(calls.every((call) => call.url.startsWith(`${base}/`))).toBe(true);
   });
 
-  it("names its own env prefix when credentials are missing, before any network IO", async () => {
-    const calls = stubOpenApi();
-    await expect(fx.execute({ chatId: "oc_1", text: "x" })).rejects.toThrow(`${prefix}_APP_ID`);
-    expect(calls).toHaveLength(0);
-  });
-
-  it("uses the mounted channel's credentials and gateway, keeping both clouds isolated", async () => {
+  it("sends through the mounted channel of its app, at that channel's gateway, keeping both clouds isolated", async () => {
     const calls = stubOpenApi();
     const ctx = { stateRoot: join(fx.cwd, ".state"), agent: agent };
     channel({
@@ -124,7 +109,7 @@ describe.each([
     );
     // Wait for the channel's startup identity/scope requests before checking the tool's send.
     await vi.waitFor(() => expect(calls.filter((call) => call.url.endsWith("/application/v6/scopes"))).toHaveLength(2));
-    await fx.execute({ chatId: "oc_1", text: "scheduled update" });
+    await fx.execute({ chatId: "oc_1", text: "scheduled update" }, "cli_channel");
     expect(calls.at(-1)).toMatchObject({
       url: `https://${kind}.test/open-apis/im/v1/messages?receive_id_type=chat_id`,
       authorization: "Bearer cli_channel",
@@ -138,52 +123,14 @@ describe("scaffold feishu-send: the tool itself", () => {
   const fx = cloudFixture("feishu", "FEISHU");
 
   it("states the destination rule and avoids duplicating a normal chat reply", () => {
-    expect(fx.tool.description).toMatch(/do not call this to answer/i);
-    expect(fx.tool.description).toMatch(/post the message twice/i);
-    expect(fx.tool.description).toMatch(/OUTSIDE the normal reply path/);
-    expect(fx.tool.description).toMatch(/must come from your instructions/i);
-    expect(fx.tool.description).toMatch(/only identifies the chat you are answering/i);
-  });
-
-  it.each([false, true])("sends from a config-free definition (independent cwd: %s)", async (independentCwd) => {
-    const definitionDir = join(fx.cwd, "definition");
-    const workspace = join(fx.cwd, "workspace");
-    await mkdir(definitionDir);
-    await mkdir(workspace);
-    await writeFile(join(definitionDir, "SYSTEM.md"), "Send scheduled updates.\n");
-    fx.credentials();
-    const calls = stubOpenApi();
-    const { faux } = makeFaux();
-    faux.setResponses([
-      fauxAssistantMessage(fauxToolCall("feishu-send", { chatId: "oc_embed", text: "embedded update" })),
-      fauxAssistantMessage("sent"),
-    ]);
-    const { agent: embedded } = await createPiAgentFromDefinition(definitionDir, {
-      model: "faux/faux-1",
-      providers: [faux.provider],
-      tools: [{ ...fx.tool, name: "feishu-send" }],
-      ...(independentCwd ? { cwd: workspace } : {}),
-    });
-    const events: InvokeEvent[] = [];
-    for await (const event of embedded.invoke({ sessionId: "embedded", prompt: { text: "Send the update." } })) {
-      events.push(event);
-    }
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "entry",
-        entry: expect.objectContaining({ kind: "tool_result", data: expect.objectContaining({ isError: false }) }),
-      }),
-    );
-    expect(calls).toHaveLength(2);
-    expect(calls.at(-1)).toMatchObject({
-      url: "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
-      authorization: "Bearer cli_env",
-      body: { receive_id: "oc_embed", content: JSON.stringify({ text: "embedded update" }) },
-    });
+    expect(fx.tool().description).toMatch(/do not call this to answer/i);
+    expect(fx.tool().description).toMatch(/post the message twice/i);
+    expect(fx.tool().description).toMatch(/OUTSIDE the normal reply path/);
+    expect(fx.tool().description).toMatch(/must come from your instructions/i);
+    expect(fx.tool().description).toMatch(/only identifies the chat you are answering/i);
   });
 
   it("sends Markdown as an inline static card", async () => {
-    fx.credentials();
     const calls = stubOpenApi();
     expect((await fx.execute({ chatId: "oc_7", markdown: "# Report\n**done**" })).details).toBe(
       "sent card to chat oc_7",
@@ -204,7 +151,6 @@ describe("scaffold feishu-send: the tool itself", () => {
   });
 
   it("surfaces a platform rejection as a named tool error", async () => {
-    fx.credentials();
     vi.stubGlobal("fetch", async (url: string | URL) =>
       String(url).includes("tenant_access_token")
         ? Response.json({ code: 0, tenant_access_token: "T", expire: 7200 })
@@ -214,7 +160,6 @@ describe("scaffold feishu-send: the tool itself", () => {
   });
 
   it("reuses the token and splits long text with the channel's byte limit", async () => {
-    fx.credentials();
     const calls = stubOpenApi();
     const text = "🙂".repeat(30_000);
     await fx.execute({ chatId: "oc_1", text });

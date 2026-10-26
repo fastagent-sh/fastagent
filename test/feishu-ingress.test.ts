@@ -2,8 +2,9 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { inspectChannels } from "../src/channels/discover.ts";
+import { channelIngress } from "../src/channels/discover.ts";
 import { feishuIngressFor } from "../src/channels/feishu/setup-mode.ts";
+import { buildDefinition, prepareDefinition, secretsManifest } from "../src/harnesses/pi-durable/open.ts";
 import { scaffoldChannel } from "../src/scaffold/add-channel.ts";
 import { DEV_SERVE_ENV, markDevServe, servedByDev } from "../src/serving-command.ts";
 
@@ -34,7 +35,7 @@ describe("Feishu/Lark ingress: one rule, read by the channel and by everything t
   });
 
   it.each(["feishu", "lark"] as const)(
-    "the %s scaffold takes the shape the rule names, so deploy's inspection sees what start will serve",
+    "the %s scaffold takes the shape the rule names, so deploy's reading sees what start will serve",
     async (kind) => {
       const prefix = kind.toUpperCase();
       const shapeUnder = async (env: Record<string, string>) => {
@@ -45,11 +46,12 @@ describe("Feishu/Lark ingress: one rule, read by the channel and by everything t
         await scaffoldChannel(dir, kind);
         vi.stubEnv(DEV_SERVE_ENV, env[DEV_SERVE_ENV] ?? "");
         vi.stubEnv(`${prefix}_INGRESS`, env[`${prefix}_INGRESS`] ?? "");
-        const inspected = await inspectChannels(dir);
-        expect(inspected.failures).toEqual([]);
+        const definition = await prepareDefinition(dir);
+        const secrets = secretsManifest(definition);
+        const code = buildDefinition(definition, Object.fromEntries(secrets.map(({ name }) => [name, "set"])));
         return {
-          ingress: inspected.channels.map((channel) => channel.ingress),
-          secrets: inspected.secrets.get(kind)?.map((secret) => secret.name),
+          ingress: [...code.channels.values()].map(channelIngress),
+          secrets: secrets.filter((secret) => !secret.optional).map((secret) => secret.name),
         };
       };
       expect(await shapeUnder({})).toEqual({

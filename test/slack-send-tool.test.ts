@@ -1,28 +1,26 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { turnContext } from "../src/harnesses/pi/tool-context.ts";
+import type { Needs } from "../src/harnesses/pi-durable/define.ts";
 
-type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
-let tool: { execute: RawExecute; description: string };
+let tool: ToolRegistration;
 
 beforeAll(async () => {
   const path = new URL("../src/channels/slack/scaffold/slack-send.ts", import.meta.url).pathname;
-  tool = ((await import(path)) as { default: typeof tool }).default;
+  const declared = ((await import(path)) as { default: Needs<ToolRegistration> }).default;
+  tool = declared.build({ SLACK_BOT_TOKEN: "xoxb-test" });
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
 });
 
-/** Run the tool the way a served turn does: bound to an agent's workspace, credentials in env. */
+/** Run the tool as the agent does, and read what it said. */
 async function execute(params: unknown): Promise<{ details: unknown }> {
-  const cwd = await mkdtemp(join(tmpdir(), "fa-slack-send-"));
-  await writeFile(join(cwd, "fastagent.config.ts"), "");
-  vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
-  return turnContext.run({ cwd }, () => tool.execute("call-1", params));
+  const result = await tool.execute(params as never, {} as never, {} as never);
+  return { details: (result.output?.[0] as { text: string }).text };
 }
 
 describe("scaffold slack-send", () => {
