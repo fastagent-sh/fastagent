@@ -10,11 +10,12 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, expectTypeOf, it, vi } from "vitest";
-import type { InvokeEvent, InvokeRequest } from "../src/protocol.ts";
+import type { InvokeRequest } from "../src/agent-api.ts";
+import type { TurnEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { scriptedRun } from "./scripted-run.ts";
-import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
-import { loopPort } from "../src/loop-port.ts";
-import { servingAgent } from "../src/serving-layer.ts";
+import { scriptedAgent } from "./scripted-agent.ts";
+import { durableSubject } from "./durable-subject.ts";
+import { newSession } from "../src/conversation-sessions.ts";
 import { activeWork } from "../src/channels/busy.ts";
 import type { PortFailure } from "../src/effect-port.ts";
 import {
@@ -22,10 +23,10 @@ import {
   fireScheduleOnce,
   type ScheduleFireOutcome,
   type Scheduler,
+  scheduleSessions,
 } from "../src/schedule/scheduler.ts";
 import { readFires, scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
-import { MIN_WAKE_MS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
-import { startSchedules } from "../src/service.ts";
+import { listWakeups } from "../src/schedule/wakeups.ts";
 import { log } from "../src/log.ts";
 
 const NOW = new Date("2026-07-07T10:30:00Z");
@@ -53,6 +54,14 @@ const lastFire = (stateRoot: string, name: string): string | undefined => readFi
 
 afterEach(() => vi.restoreAllMocks());
 
+/** An agent that runs `script` for each message it is sent; `sent` lists each message's session. */
+const agentRunning = (script: (request: InvokeRequest & { sessionId: string }) => AsyncIterable<TurnEvent>) => {
+  const agent = scriptedAgent(script);
+  return { agent, sent: () => agent.sent.map((request) => request.sessionId) };
+};
+/** The session the scheduler gave schedule `name`. */
+const sessionOf = (stateRoot: string, name: string) => scheduleSessions(stateRoot).get(name);
+
 it("two SCHEDULERS over one state root fire a cron slot exactly once", async () => {
   // The reason this claim is atomic: `fires.json` was a read-modify-write, which two processes both won. Two
   // schedulers exist whenever a restart overlaps its predecessor, someone runs a second `start` on one directory, or
@@ -70,11 +79,14 @@ it("two SCHEDULERS over one state root fire a cron slot exactly once", async () 
           `
           import * as Effect from "effect/Effect";
           const { fireScheduleOnce } = await import(${JSON.stringify(source)});
-          const agent = { async *invoke() {
-            await new Promise((r) => setTimeout(r, 150));
-            yield { type: "accepted", sessionId: "s", message: { messageId: "m", status: "queued", position: 0 }, duplicate: false };
-            yield { type: "done", message: { messageId: "m", status: "done", endedAt: 0, outcome: { status: "completed" } } };
-          } };
+          const agent = {
+            async createSession() { return { ok: true, sessionId: "s" }; },
+            async invoke() {
+              await new Promise((r) => setTimeout(r, 150));
+              const message = { messageId: "m", status: "done", outcome: { status: "completed" } };
+              return { ok: true, sessionId: "s", message, duplicate: false, wait: async () => ({ ok: true, message }) };
+            },
+          };
           const outcome = await Effect.runPromise(fireScheduleOnce({
             agent,
             stateRoot: ${JSON.stringify(stateRoot)},
@@ -123,7 +135,10 @@ it.each(["cron", "one-shot", "recurring"] as const)(
     const { createScheduler } = await import(process.argv[1]);
     const { stateRoot, schedules, now } = JSON.parse(process.argv[2]);
     process.on("message", () => {});
-    const agent = { async *invoke() { process.send("running"); await new Promise(() => {}); } };
+    const agent = {
+      async createSession() { return { ok: true, sessionId: "s" }; },
+      async invoke() { process.send("running"); await new Promise(() => {}); },
+    };
     Effect.runSync(createScheduler({ agent, stateRoot, schedules, now: () => new Date(now) })).start();
   `,
         new URL("../src/schedule/scheduler.ts", import.meta.url).href,
@@ -156,24 +171,13 @@ it.each(["cron", "one-shot", "recurring"] as const)(
       expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(kind === "recurring" ? ["first", "next"] : ["next"]);
       if (kind === "recurring") expect(listWakeups(stateRoot)[0]?.fireAt).toBe("2026-07-07T11:00:00.000Z");
     }
-    const calls: string[] = [];
-    const s = Effect.runSync(
-      createScheduler({
-        agent: {
-          async *invoke(request: InvokeRequest) {
-            calls.push(request.sessionId ?? "");
-            yield* scriptedRun(request);
-          },
-        },
-        stateRoot,
-        schedules,
-        now: () => NOW,
-      }),
-    );
+    const { agent, sent } = agentRunning(async function* (request) {
+      yield* scriptedRun(request);
+    });
+    const s = Effect.runSync(createScheduler({ agent, stateRoot, schedules, now: () => NOW }));
     try {
       s.start();
-      await tick();
-      expect(calls).toEqual(kind === "cron" ? [] : ["next"]);
+      await vi.waitFor(() => expect(sent()).toEqual(kind === "cron" ? [] : ["next"]));
       // The claim the killed process left is not replayed, and this boot puts it on the record. A wake-up has no
       // such claim to reconcile — it leaves the store before its turn starts, so the killed occurrence is simply
       // gone (`next` above is the SECOND wake-up, not a replay of the killed one).
@@ -192,13 +196,9 @@ it.each(["cron", "one-shot", "recurring"] as const)(
 
 it("uses the provided clock across start and stop, without counting idle timers as work", async () => {
   const stateRoot = await freshRoot();
-  const calls: string[] = [];
-  const agent = {
-    async *invoke(request: InvokeRequest) {
-      calls.push(request.sessionId ?? "");
-      yield* scriptedRun(request);
-    },
-  };
+  const { agent, sent } = agentRunning(async function* (request) {
+    yield* scriptedRun(request);
+  });
   const base = activeWork();
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -207,10 +207,11 @@ it("uses the provided clock across start and stop, without counting idle timers 
       try {
         s.start();
         yield* TestClock.adjust(29 * 60_000);
-        expect(calls).toEqual([]);
+        expect(sent()).toEqual([]);
         expect(activeWork()).toBe(base);
         yield* TestClock.adjust(60_000);
-        expect(calls).toEqual(["schedule:job"]);
+        yield* Effect.promise(tick);
+        expect(sent()).toEqual([sessionOf(stateRoot, "job")]);
         expect(readFires(stateRoot, "job")[0]).toMatchObject({
           firedAt: "2026-07-07T11:00:00.000Z",
           outcome: "completed",
@@ -218,7 +219,7 @@ it("uses the provided clock across start and stop, without counting idle timers 
         });
         s.stop();
         yield* TestClock.adjust(2 * 60 * 60_000);
-        expect(calls).toHaveLength(1);
+        expect(sent()).toHaveLength(1);
         expect(activeWork()).toBe(base);
       } finally {
         s.stop();
@@ -230,14 +231,13 @@ it("uses the provided clock across start and stop, without counting idle timers 
 it("keeps schedules concurrent, serializes each schedule, and skips slots missed by a slow turn", async () => {
   const stateRoot = await freshRoot();
   const finish = Promise.withResolvers<void>();
-  const calls: string[] = [];
-  const agent = {
-    async *invoke(request: InvokeRequest) {
-      calls.push(request.sessionId ?? "");
-      await finish.promise;
-      yield* scriptedRun(request);
-    },
-  };
+  const { agent, sent } = agentRunning(async function* (request) {
+    const [accepted, ...rest] = scriptedRun(request);
+    if (accepted) yield accepted;
+    await finish.promise;
+    yield* rest;
+  });
+  const names = () => sent().map((session) => (session === sessionOf(stateRoot, "a") ? "a" : "b"));
   await Effect.runPromise(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW.getTime());
@@ -245,13 +245,15 @@ it("keeps schedules concurrent, serializes each schedule, and skips slots missed
       try {
         s.start();
         yield* TestClock.adjust(2 * 60 * 60_000);
-        expect(calls).toEqual(["schedule:a", "schedule:b"]);
+        yield* Effect.promise(tick);
+        expect(names().sort()).toEqual(["a", "b"]);
         finish.resolve();
         yield* Effect.promise(tick);
         yield* TestClock.adjust(29 * 60_000);
-        expect(calls).toHaveLength(2);
+        expect(sent()).toHaveLength(2);
         yield* TestClock.adjust(60_000);
-        expect(calls).toEqual(["schedule:a", "schedule:b", "schedule:a", "schedule:b"]);
+        yield* Effect.promise(tick);
+        expect(names().sort()).toEqual(["a", "a", "b", "b"]);
       } finally {
         s.stop();
         finish.resolve();
@@ -263,13 +265,13 @@ it("keeps schedules concurrent, serializes each schedule, and skips slots missed
 it("rechecks capped waits against wall-clock jumps and never fires early", async () => {
   const stateRoot = await freshRoot();
   let wall = new Date("2026-07-07T10:30:00Z");
-  const invoke = vi.fn(async function* (request: InvokeRequest): AsyncIterable<InvokeEvent> {
+  const { agent, sent } = agentRunning(async function* (request) {
     yield* scriptedRun(request);
   });
   await Effect.runPromise(
     Effect.gen(function* () {
       const s = yield* createScheduler({
-        agent: { invoke },
+        agent,
         stateRoot,
         schedules: [{ ...hourly(), cron: "0 9 * * *" }],
         now: () => wall,
@@ -278,10 +280,11 @@ it("rechecks capped waits against wall-clock jumps and never fires early", async
         s.start();
         wall = new Date("2026-07-06T10:30:00Z");
         yield* TestClock.adjust(6 * 60 * 60_000);
-        expect(invoke).not.toHaveBeenCalled();
+        expect(sent()).toEqual([]);
         wall = new Date("2026-07-09T10:30:00Z");
         yield* TestClock.adjust(6 * 60 * 60_000);
-        expect(invoke).toHaveBeenCalledOnce();
+        yield* Effect.promise(tick);
+        expect(sent()).toHaveLength(1);
         expect(lastFire(stateRoot, "job")).toBe(wall.toISOString());
       } finally {
         s.stop();
@@ -290,24 +293,30 @@ it("rechecks capped waits against wall-clock jumps and never fires early", async
   );
 });
 
-it("publishes the running loop before an invoke callback re-enters stop", async () => {
+it("publishes the running loop before an agent callback re-enters stop", async () => {
   const stateRoot = await freshRoot();
   seedFiredSlots(stateRoot, ["a", "b"], "2026-07-07T08:00:00Z");
   let s: Scheduler;
-  const invoke = vi.fn((request: InvokeRequest) => {
+  const scripted = scriptedAgent((request) => scriptedRun(request));
+  // The first thing a fire asks of the agent, synchronously: its schedule's session.
+  const createSession = vi.fn((options?: Parameters<typeof scripted.createSession>[0]) => {
     s.stop();
-    return (async function* (): AsyncIterable<InvokeEvent> {
-      yield* scriptedRun(request);
-    })();
+    return scripted.createSession(options);
   });
+  const invoke = vi.fn(scripted.invoke);
   await Effect.runPromise(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW.getTime());
-      s = yield* createScheduler({ agent: { invoke }, stateRoot, schedules: [hourly("a"), hourly("b")] });
+      s = yield* createScheduler({
+        agent: { ...scripted, createSession, invoke },
+        stateRoot,
+        schedules: [hourly("a"), hourly("b")],
+      });
       try {
         s.start();
         yield* Effect.promise(tick);
         yield* TestClock.adjust(2 * 60 * 60_000);
+        yield* Effect.promise(tick);
         expect(invoke).toHaveBeenCalledOnce();
         expect(outcomes(stateRoot, "a")).toEqual(["completed", "completed"]); // the seeded prior fire, then this one
         expect(lastFire(stateRoot, "b")).toBe("2026-07-07T08:00:00Z");
@@ -326,7 +335,7 @@ it("reports a defective wake clock instead of silently losing its polling loop",
     Effect.gen(function* () {
       const clock = yield* Clock.Clock;
       vi.spyOn(clock, "sleep").mockReturnValue(Effect.die(error));
-      const s = yield* createScheduler({ agent: { invoke: vi.fn() }, stateRoot, schedules: [] });
+      const s = yield* createScheduler({ agent: scriptedAgent(() => []), stateRoot, schedules: [] });
       s.start();
       expect(logged).toHaveBeenCalledWith(
         expect.stringContaining("wake-up poll: stopped unexpectedly: Error: clock failed"),
@@ -336,26 +345,26 @@ it("reports a defective wake clock instead of silently losing its polling loop",
   );
 });
 
-it("an iterator throw is the fire's failure, before or after its receipt", async () => {
+it("a failing send or a failing wait is the fire's failure, before or after its receipt", async () => {
   for (const accepted of [false, true]) {
     const stateRoot = await freshRoot();
     const error = new Error("iterator failed", { cause: { payload: "private-provider-data" } });
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
-    const invoke = vi.fn(async function* (request: InvokeRequest): AsyncIterable<InvokeEvent> {
-      if (accepted) yield scriptedRun(request)[0] as InvokeEvent;
+    const { agent, sent } = agentRunning(async function* (request) {
+      if (accepted) yield scriptedRun(request)[0] as TurnEvent;
       throw error;
     });
     writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
       { id: "w", session: "s", prompt: "go", fireAt: "2026-07-07T09:00:00Z" },
     ]);
-    const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, schedules: [], now: () => NOW }));
+    const s = Effect.runSync(createScheduler({ agent, stateRoot, schedules: [], now: () => NOW }));
     try {
       s.start();
       const label = `accepted=${accepted}`;
       // A wake-up has no claim to settle, so the log line IS the record of the failure.
       await vi.waitFor(() => expect(logged.mock.calls.flat().join(" "), label).toContain("Error: iterator failed"));
       expect(listWakeups(stateRoot), label).toEqual([]);
-      expect(invoke, label).toHaveBeenCalledOnce();
+      expect(sent(), label).toEqual(["s"]);
       expect(logged.mock.calls.flat().join(" "), label).not.toContain("private-provider-data");
     } finally {
       s.stop();
@@ -369,8 +378,10 @@ it("keeps claim IO failures typed and never invokes, and never burns the slot", 
   // slot is still there to run once the fault is fixed, which is the whole reason the claim is the only state write.
   await mkdir(join(stateRoot, "schedule", "claims"), { recursive: true });
   await writeFile(join(stateRoot, "schedule", "claims", "job"), "");
-  const invoke = vi.fn();
-  const work = fireScheduleOnce({ agent: { invoke }, stateRoot, schedule: hourly(), slot: NOW });
+  const { agent, sent } = agentRunning(async function* (request) {
+    yield* scriptedRun(request);
+  });
+  const work = fireScheduleOnce({ agent, stateRoot, schedule: hourly(), slot: NOW });
   expectTypeOf(work).toEqualTypeOf<Effect.Effect<ScheduleFireOutcome, PortFailure>>();
   // @ts-expect-error -- a failed durable claim still needs a failure policy
   const infallible: Effect.Effect<ScheduleFireOutcome> = work;
@@ -379,22 +390,11 @@ it("keeps claim IO failures typed and never invokes, and never burns the slot", 
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isFailure(exit))
     expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "PortFailure", cause: expect.any(Error) });
-  expect(invoke).not.toHaveBeenCalled();
+  expect(sent()).toEqual([]);
 
   // The fault is fixed and the SAME slot still fires: a failed state write must not consume it.
   await rm(join(stateRoot, "schedule", "claims", "job"));
-  const retry = await Effect.runPromise(
-    fireScheduleOnce({
-      agent: {
-        async *invoke(request: InvokeRequest) {
-          yield* scriptedRun(request);
-        },
-      },
-      stateRoot,
-      schedule: hourly(),
-      slot: NOW,
-    }),
-  );
+  const retry = await Effect.runPromise(fireScheduleOnce({ agent, stateRoot, schedule: hourly(), slot: NOW }));
   expect(retry).toMatchObject({ fired: true });
   expect(outcomes(stateRoot)).toEqual(["completed"]); // the recovered slot is the only fire on record
 });
@@ -403,12 +403,14 @@ it("a boot-time cron-state fault fails start synchronously before any loop runs"
   const stateRoot = await freshRoot();
   await mkdir(join(stateRoot, "schedule", "claims"), { recursive: true });
   await writeFile(join(stateRoot, "schedule", "claims", "job"), "");
-  const invoke = vi.fn();
-  const s = Effect.runSync(createScheduler({ agent: { invoke }, stateRoot, schedules: [hourly()] }));
+  const { agent, sent } = agentRunning(async function* (request) {
+    yield* scriptedRun(request);
+  });
+  const s = Effect.runSync(createScheduler({ agent, stateRoot, schedules: [hourly()] }));
   expect(() => s.start()).toThrow(/ENOTDIR|not a directory/);
   s.stop();
   await tick();
-  expect(invoke).not.toHaveBeenCalled();
+  expect(sent()).toEqual([]);
 });
 
 it("an interrupted external fire joins its claimed turn and its settlement", async () => {
@@ -416,13 +418,11 @@ it("an interrupted external fire joins its claimed turn and its settlement", asy
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
   const abort = new AbortController();
-  const agent = {
-    async *invoke(request: InvokeRequest) {
-      entered.resolve();
-      await finish.promise;
-      yield* scriptedRun(request);
-    },
-  };
+  const { agent } = agentRunning(async function* (request) {
+    entered.resolve();
+    await finish.promise;
+    yield* scriptedRun(request);
+  });
   const done = Effect.runPromiseExit(fireScheduleOnce({ agent, stateRoot, schedule: hourly(), slot: NOW }), {
     signal: abort.signal,
   });
@@ -439,11 +439,11 @@ it("claims an external slot synchronously before a concurrent duplicate can invo
   // The claim is what makes a duplicate delivery a no-op, and it must land BEFORE the model call, not after it.
   const stateRoot = await freshRoot();
   const finish = Promise.withResolvers<void>();
-  const invoke = vi.fn(async function* (request: InvokeRequest): AsyncIterable<InvokeEvent> {
+  const { agent, sent } = agentRunning(async function* (request) {
     await finish.promise;
     yield* scriptedRun(request);
   });
-  const options = { agent: { invoke }, stateRoot, schedule: hourly(), slot: NOW };
+  const options = { agent, stateRoot, schedule: hourly(), slot: NOW };
   const first = Effect.runPromise(fireScheduleOnce(options));
   try {
     expect(existsSync(join(stateRoot, "schedule", "claims", "job", NOW.toISOString().replace(/[:.]/g, "-")))).toBe(
@@ -451,7 +451,7 @@ it("claims an external slot synchronously before a concurrent duplicate can invo
     );
     const second = await Effect.runPromise(fireScheduleOnce(options));
     expect(second).toMatchObject({ fired: false, skippedReason: expect.stringContaining("is already claimed") });
-    expect(invoke).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(sent()).toHaveLength(1));
   } finally {
     finish.resolve();
     await first;
@@ -459,81 +459,53 @@ it("claims an external slot synchronously before a concurrent duplicate can invo
   expect(outcomes(stateRoot)).toEqual(["completed"]);
 });
 
-it("stopping the scheduler detaches from a running fire, and the run goes on to its end", async () => {
-  // A stop interrupts the scheduler's loops, and so the reads of the runs they fired; a reader leaving is a detach
-  // (SPEC v1 §3.1), so the run still finishes, and what it did is in its session.
-  const store = new FakeStore();
-  const agent = servingAgent(loopPort(fakeLoopHarness(store)));
-  const stateRoot = await freshRoot();
-  seedFiredSlots(stateRoot, ["job"], "2026-07-07T09:00:00Z");
-  const s = Effect.runSync(
-    createScheduler({ agent, stateRoot, schedules: [{ ...hourly(), prompt: "hold" }], now: () => NOW }),
-  );
-  s.start();
-  const running = async () => {
-    const read = await agent.sessions.get("schedule:job").read({ limit: 0 });
-    return read.ok ? read.state.status : undefined;
-  };
-  await vi.waitFor(async () => expect(await running()).toBe("running"));
-  s.stop();
-  await tick();
-  expect(await running()).toBe("running");
-  store.release();
-  await vi.waitFor(async () => expect(await running()).toBe("idle"));
-  const page = await agent.sessions.get("schedule:job").read();
-  const taken = page.ok ? page.entries.find((e) => e.kind === "user_message") : undefined;
-  const messageId = (taken?.data as { messageId?: string } | undefined)?.messageId as string;
-  expect(await agent.sessions.get("schedule:job").messages.get({ messageId })).toMatchObject({
-    outcome: { status: "completed" },
-  });
-});
-
-it("a schedule's occurrence on a busy session is skipped, not queued behind the running run", async () => {
-  const store = new FakeStore();
-  const agent = servingAgent(loopPort(fakeLoopHarness(store)));
-  const running = agent.invoke({ sessionId: "schedule:job", prompt: { text: "hold" } })[Symbol.asyncIterator]();
-  await running.next();
-  const outcome = await Effect.runPromise(
-    fireScheduleOnce({ agent, stateRoot: await freshRoot(), schedule: hourly(), slot: NOW, now: () => NOW }),
-  );
-  expect(outcome).toMatchObject({ fired: false, skipped: true });
-  const state = await agent.sessions.get("schedule:job").read({ limit: 0 });
-  expect(state.ok && state.state.queued).toEqual([]);
-  store.release();
-  await running.return?.();
-});
-
-it("startSchedules records a schedule's run as a schedule and a wake-up's as a wake", async () => {
-  const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
-  const stateRoot = await freshRoot();
-  const agentDir = await freshRoot();
-  const added = addWakeup(
-    stateRoot,
-    { session: "chat", prompt: "check back", fireAt: new Date(Date.now() - 1_000) },
-    new Date(Date.now() - 2 * MIN_WAKE_MS),
-  );
-  expect(added.ok).toBe(true);
-  const scheduler = startSchedules(agent, stateRoot, agentDir, { schedules: [], failures: [] });
+it("stopping the scheduler detaches from a running fire, and the message goes on to its end", async () => {
+  // A stop interrupts the scheduler's loops, and so their waits for the messages they sent; a Caller that stops
+  // waiting only detaches (agent-api.md §3.1), so the message still finishes, and what it did is in its session.
+  const subject = durableSubject();
   try {
-    const messageId = await vi.waitFor(async () => {
-      const page = await agent.sessions.get("chat").read();
-      const taken = page.ok ? page.entries.find((e) => e.kind === "user_message") : undefined;
-      const id = (taken?.data as { messageId?: string } | undefined)?.messageId;
-      if (!id) throw new Error("the wake-up has not been taken yet");
-      return id;
+    const agent = await subject.start();
+    const stateRoot = await freshRoot();
+    seedFiredSlots(stateRoot, ["job"], "2026-07-07T09:00:00Z");
+    const s = Effect.runSync(
+      createScheduler({ agent, stateRoot, schedules: [{ ...hourly(), prompt: "hold" }], now: () => NOW }),
+    );
+    s.start();
+    await vi.waitFor(() => expect(subject.held()).toBe(1));
+    s.stop();
+    await tick();
+    expect(subject.held()).toBe(1);
+    subject.release();
+    const sessionId = sessionOf(stateRoot, "job") as string;
+    await vi.waitFor(async () => {
+      const read = await agent.read(sessionId, { limit: 1 });
+      expect(read.ok && read.state.status).toBe("idle");
     });
-    expect(await agent.sessions.get("chat").messages.get({ messageId })).toMatchObject({ source: { kind: "wake" } });
+    expect(await agent.getMessage(sessionId, { idempotencyKey: "2026-07-07T10:00:00.000Z" })).toMatchObject({
+      status: "done",
+      outcome: { status: "completed" },
+    });
   } finally {
-    scheduler.stop();
+    await subject.stop();
   }
-  const fired = await Effect.runPromise(
-    fireScheduleOnce({ agent, stateRoot, schedule: hourly(), slot: NOW, now: () => NOW }),
-  );
-  expect(fired).toMatchObject({ fired: true });
-  const page = await agent.sessions.get("schedule:job").read();
-  const taken = page.ok ? page.entries.find((e) => e.kind === "user_message") : undefined;
-  const messageId = (taken?.data as { messageId?: string } | undefined)?.messageId as string;
-  expect(await agent.sessions.get("schedule:job").messages.get({ messageId })).toMatchObject({
-    source: { kind: "schedule", name: "job" },
-  });
+});
+
+it("a schedule's occurrence on a busy session is skipped, not queued behind the running message", async () => {
+  const subject = durableSubject();
+  try {
+    const agent = await subject.start();
+    const stateRoot = await freshRoot();
+    const sessionId = await scheduleSessions(stateRoot).of("job", () => newSession(agent));
+    const running = await agent.invoke({ sessionId, content: [{ type: "text", text: "hold" }] });
+    expect(running.ok).toBe(true);
+    await vi.waitFor(() => expect(subject.held()).toBe(1));
+    const outcome = await Effect.runPromise(
+      fireScheduleOnce({ agent, stateRoot, schedule: hourly(), slot: NOW, now: () => NOW }),
+    );
+    expect(outcome).toMatchObject({ fired: false, skipped: true });
+    const state = await agent.read(sessionId, { limit: 1 });
+    expect(state.ok && state.state.queued).toEqual([]);
+  } finally {
+    await subject.stop();
+  }
 });

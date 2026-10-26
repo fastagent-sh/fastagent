@@ -20,6 +20,7 @@ import type {
   ResumeEvent,
   SessionEvent,
   SessionState,
+  WaitResult,
 } from "../src/agent-api.ts";
 import { failure } from "../src/agent-api.ts";
 import type { TurnEvent } from "../src/channels/kit/invoke-turn-kit.ts";
@@ -117,7 +118,7 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
     request: InvokeRequest,
     messageId: string,
     rest: AsyncIterator<TurnEvent> | Iterator<TurnEvent>,
-    settled: (message: DoneMessage) => void,
+    settled: (end: WaitResult) => void,
   ) => {
     const key = request.idempotencyKey === undefined ? {} : { idempotencyKey: request.idempotencyKey };
     const own: Entry = {
@@ -166,13 +167,15 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
           const done: DoneMessage = { ...event.message, ...key, entryId: own.id, ...(answer ? { answer } : {}) };
           setStatus(kept, done);
           publish(kept, { type: "done", message: done });
-          settled(done);
+          settled({ ok: true, message: done });
           continue;
         }
         publish(kept, event);
       }
     } catch (error) {
+      // The session's events fail, and a wait for the message ends unfinished, saying why.
       for (const reader of kept.readers) reader.fail(error);
+      settled({ ok: false, unfinished: { reason: String(error) } });
     }
   };
 
@@ -209,8 +212,8 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
       const message: MessageStatus = accepted?.message ?? { messageId, status: "queued", position: 0 };
       const key = request.idempotencyKey === undefined ? {} : { idempotencyKey: request.idempotencyKey };
       setStatus(kept, { ...message, ...key });
-      let settle: (message: DoneMessage) => void = () => {};
-      const done = new Promise<DoneMessage>((resolve) => {
+      let settle: (end: WaitResult) => void = () => {};
+      const done = new Promise<WaitResult>((resolve) => {
         settle = resolve;
       });
       void Promise.resolve().then(() => run(kept, asked.sessionId, request, messageId, rest, settle));
@@ -219,7 +222,7 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
         sessionId,
         message: { ...message, ...key },
         duplicate: accepted?.duplicate ?? false,
-        wait: async () => ({ ok: true, message: await done }),
+        wait: () => done,
       };
     },
     getMessage: async (sessionId, key) =>

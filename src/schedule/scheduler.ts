@@ -302,7 +302,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     const launch = (label: string, work: Effect.Effect<void>): Fiber.Fiber<unknown, unknown> =>
       fork(
         Effect.withFiber((fiber) => {
-          // Publish ownership before a synchronous invoke callback can re-enter stop().
+          // Publish ownership before a synchronous agent callback can re-enter stop().
           loops.add(fiber);
           return work.pipe(
             Effect.catchCause((cause) =>
