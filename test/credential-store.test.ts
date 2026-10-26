@@ -16,15 +16,14 @@ import {
   type Provider,
   fauxAssistantMessage,
 } from "@earendil-works/pi-ai";
+import { MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collect } from "../src/protocol-collect.ts";
 import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
-import { createPiAgent } from "../src/harnesses/pi/create.ts";
-import { createAgentService } from "../src/harnesses/pi/service.ts";
+import { createPiModels, modelEnvironment } from "../src/harnesses/models/environment.ts";
 import { login, loginOptions } from "../src/harnesses/models/login.ts";
-import { probeAuthSource } from "../src/harnesses/pi/models.ts";
-import { createPiModels } from "../src/harnesses/pi/agent-models.ts";
-import { availableModelsFromDir, createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
+import { modelsOver, probeAuthSource } from "../src/harnesses/models/models.ts";
+import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { makeFaux } from "./faux.ts";
 
 /** pi's in-memory store, with every call recorded. */
@@ -81,19 +80,20 @@ afterEach(() => {
 });
 
 describe("a caller's credential store replaces the credentials file", () => {
-  it("the directory opener and the model list run on the store, and no file is read or written", async () => {
+  it("the opened agent authenticates from the store, and no file is read or written", async () => {
     noAnthropicEnv();
     const { agent } = await agentWorkspace();
     const store = await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } });
 
-    const opened = await createPiAgentFromDir(agent, { credentialStore: store });
-    expect(opened.models.auth).toBeUndefined(); // no file is in use, so none is reported
-    expect(store.calls).toContain("list"); // the runtime was built over the store
-
-    const anthropic = (models: { spec: string }[]) => models.some((model) => model.spec.startsWith("anthropic/"));
-    expect(anthropic(await availableModelsFromDir(agent, { credentialStore: store }))).toBe(true);
-    expect(anthropic(await availableModelsFromDir(agent))).toBe(false); // the files hold nothing
-    noCredentialFiles(agent);
+    const opened = await openServing(agent, { credentialStore: store, locking: "memory" });
+    try {
+      expect(opened.models.auth).toBeUndefined(); // no file is in use, so none is reported
+      expect((await opened.models.authStatus("anthropic")).source).toBe("stored credential");
+      expect((await modelEnvironment(agent).authStatus("anthropic")).source).toBeUndefined(); // the files hold nothing
+      noCredentialFiles(agent);
+    } finally {
+      await opened.agent.close();
+    }
   });
 
   it("the store replaces the files, not the environment: an env key still authenticates, below a stored one", async () => {
@@ -108,20 +108,7 @@ describe("a caller's credential store replaces the credentials file", () => {
     expect((await stored.getAuth("anthropic"))?.auth.apiKey).toBe("sk-from-store");
   });
 
-  it("createAgentService hands the store to the opener", async () => {
-    noAnthropicEnv();
-    const { agent } = await agentWorkspace();
-    const store = await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } });
-    const service = await createAgentService(agent, { credentialStore: store });
-    try {
-      expect(store.calls).toContain("list");
-      noCredentialFiles(agent);
-    } finally {
-      await service.close();
-    }
-  });
-
-  it("a turn authenticates from the store (L1)", async () => {
+  it("a message authenticates from the store", async () => {
     const { faux } = makeFaux();
     faux.setResponses([fauxAssistantMessage("ok")]);
     // Authenticated ONLY by a stored key, so a turn that completes read it from the store.
@@ -138,9 +125,21 @@ describe("a caller's credential store replaces the credentials file", () => {
       },
     };
     const store = await recordingStore({ faux: { type: "api_key", key: "sk-from-store" } });
-    const agent = createPiAgent({ model: "faux/faux-1", providers: [gated], credentialStore: store });
-    expect((await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }))).text).toBe("ok");
-    expect(store.calls).toContain("read faux");
+    const agent = await openDurableAgent({
+      storage: new MemoryStorage(),
+      models: modelsOver(store, [gated]),
+      registry: createRegistry(),
+      name: "faux",
+      model: { provider: "faux", modelId: "faux-1" },
+    });
+    try {
+      const sent = await agent.invoke({ content: [{ type: "text", text: "hi" }] });
+      if (!sent.ok) throw new Error("not sent");
+      expect(await sent.wait()).toMatchObject({ ok: true, message: { answer: { text: "ok" } } });
+      expect(store.calls).toContain("read faux");
+    } finally {
+      await agent.close();
+    }
   });
 
   it("an OAuth refresh is written back to the store", async () => {
@@ -185,8 +184,7 @@ describe("a caller's credential store replaces the credentials file", () => {
   it("refuses both sources, and a login with neither", async () => {
     const { host, agent } = await agentWorkspace();
     const both = { authPath: join(host, "auth.json"), credentialStore: await recordingStore() };
-    await expect(createPiAgentFromDir(agent, both)).rejects.toThrow(/not both/);
-    await expect(availableModelsFromDir(agent, both)).rejects.toThrow(/not both/);
+    await expect(openServing(agent, { ...both, locking: "memory" })).rejects.toThrow(/not both/);
     expect(() => createPiModels(both)).toThrow(/not both/);
     const interaction = { signal: new AbortController().signal, notify: () => {}, prompt: async () => "" };
     // A JavaScript caller can pass either shape the types forbid.

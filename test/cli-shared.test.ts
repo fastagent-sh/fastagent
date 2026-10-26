@@ -4,9 +4,10 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { enterAgentDirectory, reportAssembly, reportAuth } from "../src/cli/shared.ts";
 import { setLogLevel } from "../src/log.ts";
-import * as models from "../src/harnesses/pi/models.ts";
-import { agentModels } from "../src/harnesses/pi/agent-models.ts";
+import * as environment from "../src/harnesses/models/environment.ts";
 import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
+
+const { modelEnvironment } = environment;
 
 // enterAgentDirectory installs the proxy fetch, and undici.install() swaps this process's fetch/Response/
 // Headers/FormData/WebSocket with no way back. Keep the side effect out of the test process.
@@ -15,30 +16,21 @@ vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 describe("reportAssembly (the startup report dev and start share)", () => {
   const opened = {
     agentDir: "/w/agent",
+    stateRoot: "/w/agent/.state",
     content: [{ name: "app", kind: "local", readonly: false, location: "/w/app", notices: [] }],
-    modelSpec: "p/m",
-    models: agentModels("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
-    config: {},
-    definition: {
-      dir: "/w/agent",
-      skills: [{ name: "release" }],
-      collisions: [],
-      diagnostics: [],
-    },
-    toolNames: ["fetch-url"],
-    toolSources: new Map([["fetch-url", "tools/web/fetch-url.ts"]]),
-    indirectTools: [],
-    toolCollisions: [],
-    toolFailures: [],
+    models: modelEnvironment("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
+    definition: { name: "agent", config: {} },
+    code: { tools: [{ name: "fetch-url" }], extensions: [] },
+    agent: { info: () => ({ commands: [{ name: "skill:release" }] }) },
   } as unknown as Parameters<typeof reportAssembly>[0];
 
   /** The report writes through the leveled logger; `info` is the posture both commands report at. */
-  const lines = async (extras?: Parameters<typeof reportAssembly>[1]): Promise<string[]> => {
+  const lines = async (extras?: Parameters<typeof reportAssembly>[2]): Promise<string[]> => {
     const out: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
     setLogLevel("info");
     try {
-      await reportAssembly(opened, extras);
+      await reportAssembly(opened, "p/m", extras);
     } finally {
       spy.mockRestore();
       setLogLevel("info"); // restore the default the other suites rely on — the level is a module singleton
@@ -53,31 +45,11 @@ describe("reportAssembly (the startup report dev and start share)", () => {
     );
   };
 
-  it("prints ONE spine, in order — the thing the two commands each used to write out by hand", async () => {
-    // `auth` is reportAuth's line; it reads real credentials, so only its position is pinned here.
-    const spine = await lines();
-    expect(spine.slice(0, 4)).toEqual(["agent", "works on", "model", "auth"]);
-    expect(spine).toContain("prompt");
-    expect(spine).toContain("skills");
-    expect(spine).toContain("codingTools");
-    expect(spine).toContain("tools");
-    expect(spine).not.toContain("deferred"); // omitted when there are none
-  });
-
-  it("places each command's extras where that command puts them", async () => {
-    const dev = await lines({ beforeModel: [["config", "/w/agent/fastagent.config.ts"]] });
-    expect(dev.indexOf("config")).toBe(2); // after agent and its content, before model
-    expect(dev.indexOf("config")).toBeLessThan(dev.indexOf("model"));
-
-    const start = await lines({
-      afterTools: [
-        ["state", "/w/agent/.state"],
-        ["sessions", "/w/s"],
-      ],
-    });
-    expect(start.indexOf("state")).toBeGreaterThan(start.indexOf("codingTools"));
-    expect(start.slice(-2)).toEqual(["state", "sessions"]);
-    expect(start).not.toContain("config"); // start's report has never named it
+  it("prints ONE spine, in order, with each command's extras after it", async () => {
+    // `auth` is reportAuth's line (with its warning when nothing authenticates); only its position is pinned here.
+    const spine = (await lines()).filter((label) => !label.startsWith("no credentials"));
+    expect(spine).toEqual(["agent", "works on", "model", "auth", "tools", "commands", "state"]);
+    expect((await lines([["sessions", "/w/s"]])).at(-1)).toBe("sessions");
   });
 });
 
@@ -102,11 +74,11 @@ describe("enterAgentDirectory: --no-input never reaches the picker", () => {
   // `dev`'s worker passes input:false so the supervisor's pick is not re-asked in a child process.
   // The guard is resolveFirstRunModel returning BEFORE isInteractive(), so a worker that inherits a
   // terminal still stays silent — which is exactly the case a TTY-less test would pass either way.
-  it("returns without building a model runtime, even when stdin and stdout are terminals", async () => {
+  it("returns without reading the model environment, even when stdin and stdout are terminals", async () => {
     // A model from the environment satisfies resolveFirstRunModel before it reads `input`, so leaving
     // FASTAGENT_MODEL set would pass this test without ever running the guard.
     vi.stubEnv("FASTAGENT_MODEL", undefined);
-    const runtime = vi.spyOn(models, "createPiModelRuntime");
+    const runtime = vi.spyOn(environment, "modelEnvironment");
     process.stdin.isTTY = true;
     process.stdout.isTTY = true;
 
@@ -154,7 +126,7 @@ describe("reportAuth (which layer the line names)", () => {
     const out: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
     try {
-      await reportAuth(agentModels(agentDir), "p/m", agentDir);
+      await reportAuth(modelEnvironment(agentDir), "p/m", agentDir);
     } finally {
       spy.mockRestore();
     }
@@ -171,13 +143,13 @@ describe("reportAuth (which layer the line names)", () => {
       if (override) vi.stubEnv("FASTAGENT_AUTH_PATH", authPath);
       const out: string[] = [];
       vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
-      await reportAuth(agentModels(held.dir), "p/m", held.dir);
+      await reportAuth(modelEnvironment(held.dir), "p/m", held.dir);
       expect(out.join("\n")).toContain(`FASTAGENT_AUTH_PATH='${authPath}' fastagent login`);
       if (!override) expect(out.join("\n")).toContain(held.fallback);
 
       rmSync(GLOBAL_AUTH_PATH);
       out.length = 0;
-      await reportAuth(agentModels(held.dir), "p/m", held.dir);
+      await reportAuth(modelEnvironment(held.dir), "p/m", held.dir);
       expect(out.join("\n")).toContain(join(held.dir, ".secrets/production/.env"));
       expect(out.join("\n")).toContain(`FASTAGENT_AUTH_PATH='${authPath}' fastagent login`);
     },
@@ -201,17 +173,14 @@ describe("reportAuth (which layer the line names)", () => {
 
   it("does not name the fallback for a provider the project authenticates itself", async () => {
     // The runtime never reads the global file for it, so the line must not point there either.
-    const held = layers("fallback");
-    writeFileSync(
-      join(held.dir, "models.json"),
-      JSON.stringify({
-        providers: {
-          p: { baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", apiKey: "k", models: [{ id: "m" }] },
-        },
-      }),
-    );
-    const line = await authLine(held.dir);
+    const held = layers();
+    writeFileSync(held.fallback, `${JSON.stringify({ anthropic: { type: "api_key", key: "global" } })}\n`);
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-project");
+    const out: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
+    await reportAuth(modelEnvironment(held.dir), "anthropic/claude-sonnet-4-5", held.dir);
+    const line = out.find((l) => l.includes("auth:")) ?? "";
     expect(line).not.toContain(held.fallback);
-    expect(line).toContain(held.primary);
+    expect(line).toContain("ANTHROPIC_API_KEY");
   });
 });

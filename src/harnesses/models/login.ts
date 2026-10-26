@@ -18,7 +18,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
-import { fastagentCredentialStore } from "./credentials.ts";
+import { assertOneCredentialSource, fastagentCredentialStore } from "./credentials.ts";
 import { interactiveAuth, loginProviders, modelsOver, probeApiKey } from "./models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
@@ -154,6 +154,7 @@ export interface LoginInternals {
 export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<LoginResult> {
   const { providers, verifyWith } = internals;
   const { method, interaction } = request;
+  assertOneCredentialSource(request);
   if (request.credentialStore === undefined && typeof request.authPath !== "string") {
     throw new Error("login needs authPath or credentialStore: where the sign-in is written");
   }
@@ -191,9 +192,20 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   }
 }
 
-/** The installation's identity, kept beside the credentials file it signs in to: created once, then read. */
+/**
+ * The installation's identity, kept beside the credentials file it signs in to: created once, then read. Settled before
+ * the flow runs, so a sign-in never completes with an identity that was not kept.
+ */
 async function deviceIdBeside(authPath: string): Promise<string> {
   const path = join(dirname(authPath), "device.json");
+  try {
+    return await readOrCreateDeviceId(path);
+  } catch (error) {
+    throw new Error(`could not persist login device ID in ${path}: ${(error as Error).message}`, { cause: error });
+  }
+}
+
+async function readOrCreateDeviceId(path: string): Promise<string> {
   let text: string | undefined;
   try {
     text = await readFile(path, "utf8");
@@ -202,7 +214,7 @@ async function deviceIdBeside(authPath: string): Promise<string> {
   }
   if (text !== undefined) {
     const stored = (JSON.parse(text) as { deviceId?: unknown }).deviceId;
-    if (typeof stored !== "string" || stored === "") throw new Error(`${path} holds no deviceId`);
+    if (typeof stored !== "string" || stored === "") throw new Error("it holds no deviceId");
     return stored;
   }
   const deviceId = randomUUID();

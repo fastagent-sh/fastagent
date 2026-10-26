@@ -15,7 +15,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { type AbortResult, type Agent, type ErrorCode, failure } from "../src/agent-api.ts";
-import type { TurnEvent as InvokeEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";
 import { feishuThreads, feishuTransport } from "../src/feishu.ts";

@@ -132,7 +132,7 @@ describe("an agent definition on pi-durable", () => {
     const built = buildDefinition(definition, ENV);
     expect(built.tools.map((tool) => tool.name)).toEqual(["weather"]);
     expect(built.extensions.map((extension) => extension.name)).toEqual(["audit"]);
-    expect([...built.schedules.keys()]).toEqual(["daily"]);
+    expect(built.schedules.map((schedule) => schedule.name)).toEqual(["daily"]);
   });
 
   it("builds its channels, a route channel and a long connection, each with the secrets it declared", async () => {
@@ -208,14 +208,6 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       agentPackage({ "src/channels/x.ts": "export default { name: ' ', connect() {} };\n" }),
     );
     expect(() => buildDefinition(unnamed, {})).toThrow("src/channels/x.ts: long-connection channel name");
-    const declaring = await prepareDefinition(
-      agentPackage({
-        "src/channels/x.ts": "const channel = () => ({});\nchannel.secrets = ['X_TOKEN'];\nexport default channel;\n",
-      }),
-    );
-    expect(() => buildDefinition(declaring, {})).toThrow(
-      "src/channels/x.ts: declares its secrets with defineChannel, which a package does not read",
-    );
     const badCron = await prepareDefinition(
       agentPackage({
         "src/schedules/often.ts": `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "not a cron", prompt: "x" });\n`,
@@ -241,7 +233,7 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       const agent = await openAgent(definition, {
         storage: new MemoryStorage(),
         credentials: new InMemoryCredentialStore(),
-        env: ENV,
+        code: buildDefinition(definition, ENV),
         ...options,
       });
       opened.push(agent);

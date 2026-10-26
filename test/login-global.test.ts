@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { environmentAuthSource } from "../src/harnesses/pi/models.ts";
+import { environmentAuthSource } from "../src/harnesses/models/models.ts";
 
 vi.mock("../src/harnesses/models/login.ts", async (original) => ({
   ...(await original<typeof import("../src/harnesses/models/login.ts")>()),

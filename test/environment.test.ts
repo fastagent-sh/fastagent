@@ -31,7 +31,7 @@ import {
   miseBinary,
 } from "../src/environment/mise.ts";
 import { addContent, writeEnvironment } from "../src/authoring.ts";
-import { resolveAgentAssembly } from "../src/harnesses/pi/open.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { log } from "../src/log.ts";
 
 const savedEnv = { ...process.env };
@@ -416,19 +416,20 @@ describe("environment: entered by a process that runs the agent", () => {
 
   it("requires the variables context.json declares before the agent runs, naming the file", async () => {
     const dir = await agentDir({ variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } } });
-    await expect(resolveAgentAssembly(dir)).rejects.toThrow(/missing required secrets: FA_TEST_HOST \(context\.json\)/);
+    const open = () => openServing(dir, { locking: "memory" });
+    await expect(open()).rejects.toThrow(/missing required secrets: FA_TEST_HOST \(context\.json\)/);
     process.env.FA_TEST_HOST = "github.example.com";
-    await resolveAgentAssembly(dir);
+    await (await open()).agent.close();
   });
 
-  it("is entered by the assembly, so every process that opens the agent has it: createAgentService and chat too", async () => {
-    await expect(resolveAgentAssembly(await agentDir({ packages: { gh: "2" } }))).rejects.toThrow(
+  it("is entered as the agent opens, so every process that opens it has it", async () => {
+    await expect(openServing(await agentDir({ packages: { gh: "2" } }), { locking: "memory" })).rejects.toThrow(
       /the agent has no mise installed/,
     );
     const dir = await agentDir({ packages: { gh: "2" } });
     await fakeMise(dir);
     vi.spyOn(log, "info").mockImplementation(() => {});
-    await resolveAgentAssembly(dir);
+    await (await openServing(dir, { locking: "memory" })).agent.close();
     expect((process.env.PATH ?? "").split(delimiter)[0]).toBe("/fake/tools");
   });
 });
