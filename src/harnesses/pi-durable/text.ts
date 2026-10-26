@@ -12,7 +12,7 @@ import type { ResolvedContent } from "../../content/resolve.ts";
 import { log } from "../../log.ts";
 import type { AgentCommand } from "./agent.ts";
 
-interface Skill {
+export interface Skill {
   name: string;
   description: string;
   /** Absolute: what the model's `read` opens. */
@@ -67,7 +67,7 @@ function directories(dir: string): string[] {
 }
 
 /** The agent's skills: `skills/<name>/SKILL.md`. One that breaks the specification is reported and skipped. */
-function readSkills(agentDir: string): Skill[] {
+export function readSkills(agentDir: string): Skill[] {
   const root = join(agentDir, "skills");
   const skills: Skill[] = [];
   for (const entry of directories(root)) {
