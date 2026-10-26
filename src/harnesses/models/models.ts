@@ -111,6 +111,9 @@ export async function providerAuthStatuses(models: Models): Promise<Map<string, 
   return statuses;
 }
 
+/** The source of a provider that authenticates without naming one: a definition's provider resolving its own key. */
+export const UNNAMED_AUTH_SOURCE = "the provider's own auth";
+
 /**
  * Which source currently satisfies auth for `spec`, or undefined when none does (or the spec is not in `models`).
  * Rejects when resolving fails — a corrupt entry, a refresh the provider refused — which is a different answer from
@@ -123,7 +126,8 @@ export async function probeAuthSource(models: Models, spec: string): Promise<str
   if (!model) return undefined;
   // A virtual selection authenticates the physical model after routing, not its catalog entry.
   if (model.api === "pi-virtual") return "virtual";
-  return (await models.getAuth(model))?.source;
+  const auth = await models.getAuth(model);
+  return auth === undefined ? undefined : (auth.source ?? UNNAMED_AUTH_SOURCE);
 }
 
 /**

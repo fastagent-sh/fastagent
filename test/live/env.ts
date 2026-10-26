@@ -13,7 +13,7 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { appendFile, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect } from "vitest";
@@ -21,6 +21,7 @@ import { destroyAgentcoreDeployment as destroyDeployment } from "../../src/deplo
 import { PROBE_PAYLOAD, ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
 import type { CliRunner } from "../../src/deploy/runner.ts";
 import type { WaitResult } from "../../src/agent-api.ts";
+import { dotEnvPath } from "../../src/env.ts";
 import { environmentAuth } from "../../src/harnesses/models/models.ts";
 import { openServing } from "../../src/harnesses/pi-durable/serve.ts";
 import { type AgentService, mountAgentService } from "../../src/service.ts";
@@ -43,6 +44,9 @@ export async function serveDirectory(dir: string): Promise<{ service: AgentServi
   };
 }
 
+/** The value file a deploy reads: the deployed environment (src/deploy/secrets.ts). */
+const productionEnv = (agentDir: string) => dotEnvPath(agentDir, { FASTAGENT_ENVIRONMENT: "production" });
+
 export function requireEnv(name: string, hint: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`live probes need ${name} (${hint})`);
@@ -51,7 +55,7 @@ export function requireEnv(name: string, hint: string): string {
 
 /**
  * A deploy probe's model credential, carried the way a deployment carries one: the provider's API key, from THIS
- * environment into the agent's `.secrets/.env`, which `deploy --run` sends to the host. A stored login does not
+ * environment into the agent's production value file, which `deploy --run` sends to the host. A stored login does not
  * travel (the box logs in itself, which needs a person at a browser), so an unattended probe can only deploy a model
  * that authenticates with a key. Which variable is the provider's own is pi's answer, the one the box will ask.
  */
@@ -62,11 +66,11 @@ export async function stageModelKey(agentDir: string, model: string): Promise<vo
   if (name === undefined || !/^[A-Z][A-Z0-9_]*$/.test(name) || !value) {
     throw new Error(
       `deploy probes need ${model}'s API key in the environment (its provider's own variable, e.g. OPENAI_API_KEY): ` +
-        `it travels through .secrets/.env, and a login on the box would need a person`,
+        `it travels through .secrets/production/.env, and a login on the box would need a person`,
     );
   }
-  await mkdir(join(agentDir, ".secrets"), { recursive: true });
-  await writeFile(join(agentDir, ".secrets", ".env"), `${name}=${value}\n`, { mode: 0o600 });
+  await mkdir(dirname(productionEnv(agentDir)), { recursive: true });
+  await writeFile(productionEnv(agentDir), `${name}=${value}\n`, { mode: 0o600 });
 }
 
 /**
@@ -262,8 +266,8 @@ export async function stageProbeChannel(agentDir: string): Promise<string> {
   const secret = randomBytes(24).toString("hex");
   await mkdir(join(agentDir, "src", "channels"), { recursive: true });
   await writeFile(join(agentDir, "src", "channels", "probe.ts"), PROBE_CHANNEL);
-  await mkdir(join(agentDir, ".secrets"), { recursive: true });
-  await appendFile(join(agentDir, ".secrets", ".env"), `${PROBE_SECRET}=${secret}\n`, { mode: 0o600 });
+  await mkdir(dirname(productionEnv(agentDir)), { recursive: true });
+  await appendFile(productionEnv(agentDir), `${PROBE_SECRET}=${secret}\n`, { mode: 0o600 });
   return secret;
 }
 

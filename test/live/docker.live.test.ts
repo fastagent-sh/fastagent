@@ -5,7 +5,7 @@
  * `POST /invoke` answer, and the state volume outlives the container.
  *
  * Needs the model's API key in the environment, under its provider's own variable: `stageModelKey`
- * writes it into the agent's `.secrets/.env`, the one way a deployment carries a model credential.
+ * writes it into the agent's `.secrets/production/.env`, the one way a deployment carries a model credential.
  */
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";

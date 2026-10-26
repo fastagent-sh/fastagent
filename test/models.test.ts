@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Api, Model, Models } from "@earendil-works/pi-ai";
+import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { modelEnvironment } from "../src/harnesses/models/environment.ts";
-import { probeApiKey, providerAuthStatuses } from "../src/harnesses/models/models.ts";
+import { UNNAMED_AUTH_SOURCE, probeApiKey, providerAuthStatuses } from "../src/harnesses/models/models.ts";
 
 type FakeProvider = {
   id: string;
@@ -125,6 +126,36 @@ describe("authStatus: the one answer to what authenticates a provider for an age
       source: "OAuth",
       stored: "oauth",
     });
+  });
+
+  it("a definition's provider that resolves its own key authenticates, though it names no source", async () => {
+    // Nothing on file and no variable: the provider's resolver is the credential, so a report of "none found" (and a
+    // box's `login --if-missing` acting on it) would be wrong.
+    const baseUrl = "http://127.0.0.1:9/v1";
+    const local = createProvider({
+      id: "local",
+      name: "Local",
+      baseUrl,
+      auth: { apiKey: { name: "Local", resolve: async () => ({ auth: { apiKey: "k" } }) } },
+      models: [
+        {
+          id: "m",
+          name: "M",
+          api: "openai-completions",
+          provider: "local",
+          baseUrl,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 1024,
+        },
+      ],
+      api: openAICompletionsApi(),
+    });
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-auth-own-"));
+    const status = await modelEnvironment(agentDir, {}, [local]).authStatus("local");
+    expect(status.source).toBe(UNNAMED_AUTH_SOURCE);
   });
 
   it("an expired login whose refresh the provider refuses is on file but authenticates nothing", async () => {
