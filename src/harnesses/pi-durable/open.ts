@@ -86,13 +86,15 @@ function modelRefOf(spec: string, where: string): ModelRef {
   return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) };
 }
 
+/** The agent package's `fastagent.config.ts`, checked; `{}` without one. */
+export async function loadConfig(dir: string): Promise<AgentConfig> {
+  const configPath = join(dir, CONFIG_FILE);
+  return checkConfig(existsSync(configPath) ? await importDefault(configPath, CONFIG_FILE) : undefined, CONFIG_FILE);
+}
+
 /** Read the agent package in `dir`: `fastagent.config.ts` (optional) and `.fastagent/registry.ts`, generated first. */
 export async function loadDefinition(dir: string): Promise<AgentDefinition> {
-  const configPath = join(dir, CONFIG_FILE);
-  const config = checkConfig(
-    existsSync(configPath) ? await importDefault(configPath, CONFIG_FILE) : undefined,
-    CONFIG_FILE,
-  );
+  const config = await loadConfig(dir);
   const registryPath = join(dir, GENERATED_DIR, REGISTRY_FILE);
   if (!existsSync(registryPath)) {
     throw new Error(`${GENERATED_DIR}/${REGISTRY_FILE} is missing: generate it from src/ before opening the agent`);

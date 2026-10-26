@@ -5,6 +5,7 @@
  */
 import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { MemoryStorage } from "@earendil-works/pi-durable";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
 import { resolveStateRoot } from "../../paths.ts";
@@ -16,8 +17,11 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
-  /** How the storage keeps a second opener out (storage.ts). Default: SQLite's own locks. */
-  locking?: StorageLocking;
+  /**
+   * How the storage keeps a second opener out (storage.ts). Default: SQLite's own locks. `"memory"`: no storage of the
+   * instance's at all, for a one-shot message that must not meet the storage a serve of the same directory holds.
+   */
+  locking?: StorageLocking | "memory";
 }
 
 export interface OpenedServing {
@@ -45,12 +49,15 @@ export async function openServing(dir: string, options: OpenServingOptions = {})
     code.providers,
   );
   const stateRoot = resolveStateRoot(dir);
-  const storage = await openInstanceStorage(join(stateRoot, STORAGE_FILE), options.locking ?? "posix");
+  const locking = options.locking ?? "posix";
+  const storage =
+    locking === "memory" ? new MemoryStorage() : await openInstanceStorage(join(stateRoot, STORAGE_FILE), locking);
   const agent = await openAgent(definition, {
     storage,
     code,
     credentials: models.credentials,
-    stateRoot,
+    // A serve's clock fires the wake-ups `wake` keeps; a one-shot message has none.
+    ...(locking === "memory" ? {} : { stateRoot }),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
   });

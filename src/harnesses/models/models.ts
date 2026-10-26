@@ -15,6 +15,21 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
+/** The provider of a `"provider/modelId"` spec. */
+export function providerOf(spec: string): string {
+  const slash = spec.indexOf("/");
+  return slash > 0 ? spec.slice(0, slash) : spec;
+}
+
+/** Every chat model `models` offers, as `"provider/modelId"`, sorted. */
+export function listModels(models: Models): string[] {
+  const specs: string[] = [];
+  for (const provider of models.getProviders()) {
+    for (const model of provider.getModels()) specs.push(`${provider.id}/${model.id}`);
+  }
+  return specs.sort();
+}
+
 /** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */
 export function modelsOver(credentials: CredentialStore, providers: readonly Provider[] = []): Models {
   const models = builtinModels({ credentials, authContext: defaultProviderAuthContext() });
