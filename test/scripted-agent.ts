@@ -265,7 +265,11 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
             };
             let given = false;
             return {
-              next: async () => (given ? { done: true, value: undefined } : ((given = true), refused)),
+              next: async () => {
+                if (given) return { done: true, value: undefined };
+                given = true;
+                return refused;
+              },
               return: async () => ({ done: true, value: undefined }),
             };
           }

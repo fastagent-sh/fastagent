@@ -41,7 +41,7 @@ describe.each(["feishu", "lark", "slack"])("scaffold %s-threads", (kind) => {
     };
     const run = async (params: unknown) => {
       const result = await tool.execute(params as never, api as never, {} as never);
-      return (result.output?.[0] as { text: string }).text;
+      return (result.output?.[0] as { text: string } | undefined)?.text;
     };
 
     expect(await run({})).toBe("threads of room-1");

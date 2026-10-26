@@ -9,17 +9,12 @@ import {
   createModels,
   fauxProvider,
   getCurrentSystemPrompt,
-  getCurrentTools,
 } from "@earendil-works/pi-ai";
 import { MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import { type DurableAgent, openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 
-/**
- * What the model was actually sent. pi 0.86 normalized provider stream input to `TranscriptContext`:
- * the system prompt and tool set live in `messages`, replayed through these two readers.
- */
+/** The system prompt the model was actually sent: it lives in the transcript's `messages`. */
 export const sentPrompt = (context: TranscriptContext): string => getCurrentSystemPrompt(context.messages);
-export const sentTools = (context: TranscriptContext): string[] => getCurrentTools(context.messages).map((t) => t.name);
 
 export function makeFaux(options?: RegisterFauxProviderOptions): {
   faux: ReturnType<typeof fauxProvider>;

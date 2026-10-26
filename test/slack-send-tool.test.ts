@@ -20,7 +20,7 @@ afterEach(() => {
 /** Run the tool as the agent does, and read what it said. */
 async function execute(params: unknown): Promise<{ details: unknown }> {
   const result = await tool.execute(params as never, {} as never, {} as never);
-  return { details: (result.output?.[0] as { text: string }).text };
+  return { details: (result.output?.[0] as { text: string } | undefined)?.text };
 }
 
 describe("scaffold slack-send", () => {

@@ -72,7 +72,7 @@ function cloudFixture(kind: "feishu" | "lark", prefix: "FEISHU" | "LARK") {
     },
     execute: async (params: unknown, appId?: string) => {
       const result = await tool(appId).execute(params as never, {} as never, {} as never);
-      return { details: (result.output?.[0] as { text: string }).text };
+      return { details: (result.output?.[0] as { text: string } | undefined)?.text };
     },
   };
 }

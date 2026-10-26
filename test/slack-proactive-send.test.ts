@@ -46,7 +46,7 @@ function fakeSlack() {
 const send = async (token: string) => {
   const tool = sender.build({ SLACK_BOT_TOKEN: token });
   const result = await tool.execute({ channelId: "C1", text: "scheduled update" } as never, {} as never, {} as never);
-  return (result.output?.[0] as { text: string }).text;
+  return (result.output?.[0] as { text: string } | undefined)?.text;
 };
 
 describe("Slack proactive delivery rides the channel's transport", () => {
