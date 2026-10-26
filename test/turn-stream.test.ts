@@ -66,7 +66,7 @@ it("asks once, queued behind whatever runs in the session, under the turn's key"
   const agent = scriptedAgent(() => ok);
   const events = await read(turn(agent));
   expect(events.map((event) => event.type)).toEqual(["accepted", "message_delta", "done"]);
-  expect(events[0]).toMatchObject(ok[0]);
+  expect(events[0]).toMatchObject(ok[0] as object);
   expect(agent.sent).toEqual([
     { sessionId: "s", idempotencyKey: "msg-1", content: [{ type: "text", text: "hi" }], whenBusy: "queue" },
   ]);
@@ -93,6 +93,33 @@ it("a preparation that fails is the turn's refusal, carrying the channel's verdi
   // Nothing was asked, and no session was made for it.
   expect(session).not.toHaveBeenCalled();
   expect(agent.sent).toEqual([]);
+});
+
+it("enters its session while the turn runs and leaves it after, whether the turn succeeds or fails", async () => {
+  const entered: string[] = [];
+  const left: string[] = [];
+  const turnIn = (agent: Agent) =>
+    turnStream({
+      agent,
+      label: "[test]",
+      session: async () => "s",
+      enter: (sessionId) => {
+        entered.push(sessionId);
+        return () => left.push(sessionId);
+      },
+      resolve: async () => {},
+      turn: () => ({ idempotencyKey: "msg-1", content: [{ type: "text", text: "hi" }] }),
+      retryableLoadFailure: () => false,
+    });
+  const during = (events: Stream.Stream<TurnEvent, PortFailure>) =>
+    events.pipe(Stream.tap(() => Effect.sync(() => expect(left).toEqual([]))));
+  await read(during(turnIn(scriptedAgent(() => ok))));
+  expect([entered, left]).toEqual([["s"], ["s"]]);
+  await expect(read(failOnEnd(turnIn(scriptedAgent(() => ok)), new Error("broke")))).rejects.toThrow("broke");
+  expect([entered, left]).toEqual([
+    ["s", "s"],
+    ["s", "s"],
+  ]);
 });
 
 it("a refusal and an unknown receipt are each the turn's one event", async () => {

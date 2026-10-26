@@ -5,13 +5,13 @@ import { type TurnQueue, createTurnQueue } from "../src/channels/kit/turn-queue.
 import { log } from "../src/log.ts";
 import { portJoin } from "../src/effect-port.ts";
 
-/** The consumer-side record for these tests: a `session` key plus caller-domain fields. */
+/** The consumer-side record for these tests: a `conversation` key plus caller-domain fields. */
 interface Rec {
   id: string;
-  session: string;
+  conversation: string;
   payload: string;
 }
-const rec = (id: string, session = "s", payload = `p${id}`): Rec => ({ id, session, payload });
+const rec = (id: string, conversation = "s", payload = `p${id}`): Rec => ({ id, conversation, payload });
 
 afterEach(() => vi.restoreAllMocks());
 

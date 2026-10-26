@@ -15,6 +15,7 @@ import type {
   DoneMessage,
   Entry,
   InvokeRequest,
+  Json,
   MessageStatus,
   ResumeEvent,
   SessionEvent,
@@ -119,13 +120,12 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
     settled: (message: DoneMessage) => void,
   ) => {
     const key = request.idempotencyKey === undefined ? {} : { idempotencyKey: request.idempotencyKey };
-    const text = request.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
     const own: Entry = {
       id: `e${++entries}`,
       sessionId,
       timestamp: Date.now(),
       kind: "user_message",
-      data: { text, messageId },
+      data: { content: request.content as Json, messageId, ...key } as Json,
     };
     kept.entries.push(own);
     setStatus(kept, { messageId, ...key, status: "taken", entryId: own.id });

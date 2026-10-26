@@ -1,101 +1,80 @@
 /** Where a new thread starts from: a fork of its room at the message its reply chain names. */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import type { Agent, MessageStatus } from "../src/agent-api.ts";
 import { forkThread } from "../src/channels/kit/thread-fork.ts";
-import { log } from "../src/log.ts";
-import { loopPort } from "../src/loop-port.ts";
-import { type Agent, type MessageStatus, failure } from "../src/protocol.ts";
-import { servingAgent } from "../src/serving-layer.ts";
-import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
+import { newSession } from "../src/conversation-sessions.ts";
+import { durableSubject } from "./durable-subject.ts";
+import { scriptedAgent } from "./scripted-agent.ts";
 
+const subject = durableSubject();
+afterEach(() => subject.stop());
+
+/** A room where each ask was sent under its key and answered. */
 const roomWith = async (asks: [key: string, text: string][]) => {
-  const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
+  const agent = await subject.start();
+  const room = await newSession(agent);
   for (const [idempotencyKey, text] of asks) {
-    for await (const _ of agent.invoke({ sessionId: "room", idempotencyKey, prompt: { text } })) {
-    }
+    const sent = await agent.invoke({ sessionId: room, idempotencyKey, content: [{ type: "text", text }] });
+    if (!sent.ok) throw new Error("not sent");
+    await sent.wait();
   }
-  return agent;
+  return { agent, room };
 };
 
 const said = async (agent: Agent, sessionId: string) => {
-  const page = await agent.sessions.get(sessionId).read();
-  return page.ok
-    ? page.entries.filter((e) => e.kind === "user_message").map((e) => (e.data as { text: string }).text)
-    : [];
+  const page = await agent.read(sessionId);
+  if (!page.ok) throw new Error(page.error.message);
+  return page.entries
+    .filter((e) => e.kind === "user_message")
+    .map((e) => (e.data as { content: { text: string }[] }).content[0]?.text);
 };
 
 describe("forkThread", () => {
   it("forks at the answer of the first message its chain names, nearest first", async () => {
-    const agent = await roomWith([
+    const { agent, room } = await roomWith([
       ["m1", "first"],
       ["m2", "second"],
       ["m3", "third"],
     ]);
-    // "card" is no message the channel invoked with (the agent posted it), so the next one up names one.
-    await forkThread(agent, { sessionId: "thread", room: "room", chain: ["card", "m2", "m1"] }, "[test]");
-    expect(await said(agent, "thread")).toEqual(["first", "second"]);
+    // "card" is no message the channel sent with (the agent posted it), so the next one up names one.
+    const thread = await forkThread(agent, { room, chain: ["card", "m2", "m1"] });
+    expect(await said(agent, thread)).toEqual(["first", "second"]);
   });
 
   it("forks at the room's present when nothing in its chain names a message", async () => {
-    const agent = await roomWith([
+    const { agent, room } = await roomWith([
       ["m1", "first"],
       ["m2", "second"],
     ]);
-    await forkThread(agent, { sessionId: "thread", room: "room", chain: ["someone-else"] }, "[test]");
-    expect(await said(agent, "thread")).toEqual(["first", "second"]);
+    const thread = await forkThread(agent, { room, chain: ["someone-else"] });
+    expect(await said(agent, thread)).toEqual(["first", "second"]);
   });
 
-  it("leaves a thread that exists alone", async () => {
-    const agent = await roomWith([["m1", "first"]]);
-    await agent.sessions.create({ sessionId: "thread" });
-    await forkThread(agent, { sessionId: "thread", room: "room", chain: ["m1"] }, "[test]");
-    expect(await said(agent, "thread")).toEqual([]);
-  });
-
-  it("a room with no session leaves the thread empty, and says so", async () => {
-    const agent = await roomWith([]);
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      await forkThread(agent, { sessionId: "thread", room: "room", chain: [] }, "[test]");
-      expect(warn.mock.calls.flat().join(" ")).toContain("names room, which has no session");
-      expect((await agent.sessions.get("thread").read({ limit: 0 })).ok).toBe(false);
-    } finally {
-      warn.mockRestore();
-    }
+  it("starts empty when its room has no session, since nothing was said there yet", async () => {
+    const { agent } = await roomWith([]);
+    const thread = await forkThread(agent, { room: undefined, chain: ["m1"] });
+    expect(await said(agent, thread)).toEqual([]);
   });
 
   it("a message without an answer forks at its own entry; a queued one at the present", async () => {
-    const forks: unknown[] = [];
-    const stub = (message: MessageStatus) =>
-      ({
-        sessions: {
-          get: (sessionId: string) => ({
-            read: async () =>
-              sessionId === "room"
-                ? { ok: true, state: { status: "idle", taken: [], queued: [], leafEntryId: "leaf" }, entries: [] }
-                : failure("not_found", "no session"),
-            messages: { get: async () => message },
-          }),
-          create: async (options: unknown) => {
-            forks.push(options);
-            return { ok: true, sessionId: "thread" };
-          },
-        },
-      }) as unknown as Agent;
-    const thread = { sessionId: "thread", room: "room", chain: ["m1"] };
-    await forkThread(stub({ messageId: "m", entryId: "asked", status: "taken", takenAt: 0 }), thread, "");
-    await forkThread(stub({ messageId: "m", status: "queued", position: 0 }), thread, "");
-    expect(forks).toEqual([
-      { sessionId: "thread", fork: { sessionId: "room", entryId: "asked", context: "recent" } },
-      { sessionId: "thread", fork: { sessionId: "room", context: "recent" } },
-    ]);
+    const forked = async (message: MessageStatus) => {
+      const agent = scriptedAgent(() => []);
+      const room = await newSession(agent);
+      await forkThread({ ...agent, getMessage: async () => message }, { room, chain: ["m1"] });
+      return agent.forks.at(-1);
+    };
+    expect(await forked({ messageId: "m", entryId: "asked", status: "taken" })).toEqual({
+      from: { sessionId: "session-1", entryId: "asked" },
+    });
+    expect(await forked({ messageId: "m", status: "queued", position: 0 })).toEqual({
+      from: { sessionId: "session-1" },
+    });
   });
 
-  it("a thread whose own read fails is an error, never taken for one that exists", async () => {
-    const down = {
-      sessions: { get: () => ({ read: async () => failure("unavailable", "the store is down") }) },
-    } as unknown as Agent;
-    await expect(forkThread(down, { sessionId: "thread", room: "room", chain: [] }, "[test]")).rejects.toThrow(
-      "reading session thread failed: the store is down",
+  it("a fork the agent refuses is an error naming the room", async () => {
+    const agent = scriptedAgent(() => []);
+    await expect(forkThread(agent, { room: "gone", chain: [] })).rejects.toThrow(
+      "starting a thread from gone failed: No session gone",
     );
   });
 });

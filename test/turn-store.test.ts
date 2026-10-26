@@ -18,7 +18,7 @@ afterEach(() => {
 
 const turn = (id: string, extra: Partial<StoredTurn> = {}): StoredTurn => ({
   id,
-  session: "s1",
+  conversation: "s1",
   placeKey: "p1",
   baseText: "hi",
   chatId: 42,
@@ -131,8 +131,8 @@ describe("turn-store", () => {
     // process before B is dequeued). B's count must stay 0 so it gets its full budget once A is gone.
     const path = freshPath();
     const store = createTurnStore(path);
-    store.add(turn("A", { session: "s", attempts: 3 }));
-    store.add(turn("B", { session: "s", attempts: 0 }));
+    store.add(turn("A", { conversation: "s", attempts: 3 }));
+    store.add(turn("B", { conversation: "s", attempts: 0 }));
     vi.spyOn(console, "error").mockImplementation(() => {});
     // recover re-enqueues both, untouched; A is dropped when IT runs, B is not.
     expect(
@@ -208,7 +208,7 @@ describe("turn-store", () => {
 
   it("degrades a wrong-shape state file to empty (IO boundary), with a warning", () => {
     const path = freshPath();
-    writeFileSync(path, JSON.stringify({ t1: { id: "t1", session: 5 } })); // attempts/strings missing
+    writeFileSync(path, JSON.stringify({ t1: { id: "t1", conversation: 5 } })); // attempts/strings missing
     const err = vi.spyOn(console, "error").mockImplementation(() => {}); // log.warn/error both → console.error
     expect(createTurnStore(path).recover()).toHaveLength(0);
     expect(err).toHaveBeenCalledWith(expect.stringContaining("unexpected shape"));
