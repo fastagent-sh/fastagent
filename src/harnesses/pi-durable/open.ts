@@ -25,10 +25,10 @@ import { declaredVariables } from "../../environment/declare.ts";
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { channelModuleProblem } from "../../channels/discover.ts";
 import { readPackageJson } from "../../runtime.ts";
-import { cronError } from "../../schedule/cron.ts";
+import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { modelsOver } from "../models/models.ts";
 import { type DurableAgent, openDurableAgent } from "./agent.ts";
-import { type AgentConfig, type Needs, type Schedule, isNeeds } from "./define.ts";
+import { type AgentConfig, type DefinedSchedule, type Needs, isNeeds } from "./define.ts";
 import { GENERATED_DIR, REGISTRY_FILE, REGISTRY_KINDS, type Registry, generateRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
 import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
@@ -194,14 +194,10 @@ const channelProblem = (value: unknown): string | undefined => {
     ? undefined
     : "declares its secrets with defineChannel, which a package does not read: wrap the channel in needs([...], (secrets) => ...)";
 };
-const scheduleProblem = (value: unknown): string | undefined => {
-  const schedule = value as Partial<Schedule> | null;
-  if (schedule?.kind !== "fastagent.schedule")
-    return "must default-export defineSchedule({ ... }), or needs(...) around one";
-  if (typeof schedule.prompt !== "string" && typeof schedule.prompt !== "function")
-    return "its prompt is a text or a function";
-  return typeof schedule.cron === "string" ? cronError(schedule.cron, schedule.tz) : "its cron is a text";
-};
+const scheduleProblem = (value: unknown): string | undefined =>
+  (value as Partial<DefinedSchedule> | null)?.kind !== "fastagent.schedule"
+    ? "must default-export defineSchedule({ ... }), or needs(...) around one"
+    : scheduleConfigProblem(value as DefinedSchedule);
 
 /** The definition's code, built with the values of the secrets it declares. */
 export interface BuiltDefinition {
@@ -210,8 +206,8 @@ export interface BuiltDefinition {
   providers: Provider[];
   /** By name, the file's: what a serve mounts or connects. */
   channels: Map<string, ChannelModule | LongConnectionChannelModule>;
-  /** By name, the file's: what D's scheduler fires. */
-  schedules: Map<string, Schedule>;
+  /** What the scheduler fires, each named by its file. */
+  schedules: Schedule[];
 }
 
 /**
@@ -248,7 +244,7 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   const schedules = registry.schedules.map(({ file, name, value }) => ({
     source: file,
     name,
-    value: built<Schedule>(file, value, values(value), scheduleProblem),
+    value: built<DefinedSchedule>(file, value, values(value), scheduleProblem),
   }));
   refuseTwins("tool", tools);
   // pi-durable replaces an extension installed under a name already taken, its tools and sections with it.
@@ -260,6 +256,9 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   ]);
   refuseTwins("channel", channels);
   refuseTwins("schedule", schedules);
+  if (schedules.length > MAX_SCHEDULES) {
+    throw new Error(`${schedules.length} schedules in src/schedules/: an agent runs at most ${MAX_SCHEDULES}`);
+  }
   return {
     tools: tools.map(({ value }) => value),
     extensions: extensions.map(({ value }) => value),
@@ -267,7 +266,7 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
       built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
     ),
     channels: new Map(channels.map(({ name, value }) => [name, value])),
-    schedules: new Map(schedules.map(({ name, value }) => [name, value])),
+    schedules: schedules.map(({ name, value: { kind: _kind, ...config } }) => ({ name, ...config })),
   };
 }
 

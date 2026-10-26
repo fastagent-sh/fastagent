@@ -1,15 +1,16 @@
 /**
- * Which Agent session each of a channel's conversations (a chat, a thread, what a route names) talks in. The Agent
- * names sessions, so a channel keeps this map, in its own state (`<stateRoot>/channels/<kind>/sessions.json`), and
- * creates a conversation's session in one order (architecture.md §2): the session, then the record, then the message.
- * It is called inside the conversation's turn queue, so two messages for one new conversation meet the map one after
- * the other. A crash between the session and the record
+ * Which Agent session each of a Caller's conversations talks in: a channel's chats and threads, a schedule's runs. The
+ * Agent names sessions, so a Caller keeps this map, in its own state (a channel's `channels/<kind>/sessions.json`,
+ * the schedules' `schedule/sessions.json`), and creates a conversation's session in one order (architecture.md §2):
+ * the session, then the record, then the message. It is called where the Caller already serializes the conversation
+ * (a channel's turn queue, a schedule's one loop), so two messages for one new conversation meet the map one after the
+ * other. A crash between the session and the record
  * leaves a session nothing refers to, which the retry does not reuse; no message is answered twice, since a message is
  * sent only once its session is recorded.
  */
-import { join } from "node:path";
-import type { Agent } from "../../agent-api.ts";
-import { ensureStateHome, loadStateFile, saveStateFile } from "./state.ts";
+import { dirname } from "node:path";
+import type { Agent } from "./agent-api.ts";
+import { ensureStateHome, loadStateFile, saveStateFile } from "./channels/kit/state.ts";
 
 /** A new, empty session: what a conversation the agent has not talked in starts with. */
 export async function newSession(agent: Pick<Agent, "createSession">): Promise<string> {
@@ -25,10 +26,9 @@ export interface ConversationSessions {
   of(conversation: string, create: () => Promise<string>): Promise<string>;
 }
 
-export function conversationSessions(stateRoot: string, kind: string): ConversationSessions {
-  const dir = join(stateRoot, "channels", kind);
-  const file = join(dir, "sessions.json");
-  // Read and written whole, synchronously: one process serves a channel kind, so nothing writes between them.
+/** The map kept in `file`. */
+export function conversationSessions(file: string): ConversationSessions {
+  // Read and written whole, synchronously: one process owns an instance's state, so nothing writes between them.
   const read = (): Record<string, string> => {
     const stored = loadStateFile(file);
     return stored !== null && typeof stored === "object" ? (stored as Record<string, string>) : {};
@@ -39,7 +39,7 @@ export function conversationSessions(stateRoot: string, kind: string): Conversat
       const known = read()[conversation];
       if (known !== undefined) return known;
       const sessionId = await create();
-      ensureStateHome(dir);
+      ensureStateHome(dirname(file));
       saveStateFile(file, { ...read(), [conversation]: sessionId });
       return sessionId;
     },

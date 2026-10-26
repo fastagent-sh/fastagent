@@ -5,6 +5,7 @@
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
 import type { Extension } from "@earendil-works/pi-durable";
+import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
 export interface AgentConfig {
   /** Default: `package.json`'s name. */
@@ -77,21 +78,12 @@ export function isNeeds(value: unknown): value is Needs<unknown> {
   return (value as { kind?: unknown } | null)?.kind === "fastagent.needs";
 }
 
-/** @public */
-export interface ScheduleConfig {
-  /** Five fields, minute first; checked when the definition loads. */
-  cron: string;
-  /** IANA timezone. Default: UTC. */
-  tz?: string;
-  /** What the agent is told when it fires: a text, or one made for the time it fires. */
-  prompt: string | ((fire: { at: Date }) => string | Promise<string>);
-}
-
-export interface Schedule extends ScheduleConfig {
+/** What `src/schedules/<name>.ts` default-exports. */
+export interface DefinedSchedule extends ScheduleConfig {
   readonly kind: "fastagent.schedule";
 }
 
 /** @public */
-export function defineSchedule(config: ScheduleConfig): Schedule {
+export function defineSchedule(config: ScheduleConfig): DefinedSchedule {
   return { kind: "fastagent.schedule", ...config };
 }

@@ -16,7 +16,7 @@ import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
-import { conversationSessions, newSession } from "../kit/sessions.ts";
+import { conversationSessions, newSession } from "../../conversation-sessions.ts";
 import { forkThread } from "../kit/thread-fork.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { portJoin } from "../../effect-port.ts";
@@ -302,7 +302,7 @@ function createFeishuRuntimeFactory(
     // The SAME identity the session uses (`placeKey`) — a thread's place.
     const threadKey = (chatId: string, threadId: string): string =>
       placeKey(kind, { chat_id: chatId, thread_id: threadId });
-    const sessions = conversationSessions(stateRoot, kind);
+    const sessions = conversationSessions(join(stateRoot, "channels", kind, "sessions.json"));
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
       isRecord: isStoredFeishuTurn,

@@ -18,7 +18,7 @@ import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
-import { conversationSessions, newSession } from "../kit/sessions.ts";
+import { conversationSessions, newSession } from "../../conversation-sessions.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -324,7 +324,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       order: (a, b) => a.seq - b.seq,
     });
     const decide = route ?? defaultSlackRoute;
-    const sessions = conversationSessions(stateRoot, "slack");
+    const sessions = conversationSessions(join(stateRoot, "channels", "slack", "sessions.json"));
     /** A channel turn under the default routing reads its channel's threads; a DM has none to read. */
     const enterRoom = (turn: PendingSlackTurn): { enter?: (sessionId: string) => () => void } => {
       if (!turn.group || turn.historyKey === undefined) return {};
