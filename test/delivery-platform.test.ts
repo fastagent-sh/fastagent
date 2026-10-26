@@ -5,7 +5,9 @@ import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, expect, it, vi } from "vitest";
-import type { InvokeEvent, InvokeRequest } from "../src/protocol.ts";
+import type { Agent } from "../src/agent-api.ts";
+import type { TurnEvent as InvokeEvent } from "../src/channels/kit/invoke-turn-kit.ts";
+import { scriptedAgent } from "./scripted-agent.ts";
 import { ev } from "./scripted-run.ts";
 import type { FeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import { feishuReply } from "../src/channels/feishu/preview.ts";
@@ -144,15 +146,21 @@ it.each(platforms)(
     const releaseFinal = Promise.withResolvers<void>();
     const committed = vi.fn();
     let sourceClosed = false;
-    const agent = {
-      async *invoke(_request: InvokeRequest) {
-        try {
-          yield ev.accepted();
-          yield ev.text("answer");
-          yield ev.ended();
-        } finally {
-          sourceClosed = true;
-        }
+    const scripted = scriptedAgent(() => [ev.accepted(), ev.text("answer"), ev.ended()]);
+    // The turn's source is its session's events: closed when the turn lets go of them.
+    const agent: Agent = {
+      ...scripted,
+      resume: (sessionId, options) => {
+        const events = scripted.resume(sessionId, options)[Symbol.asyncIterator]();
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () => events.next(),
+            return: async () => {
+              sourceClosed = true;
+              return (await events.return?.()) ?? { done: true, value: undefined };
+            },
+          }),
+        };
       },
     };
     const render = renderer(
@@ -175,9 +183,9 @@ it.each(platforms)(
               turnStream({
                 agent,
                 label: "[test]",
-                source: { kind: "channel", name: "test" },
+                session: async () => "s",
                 resolve: async () => undefined,
-                turn: () => ({ sessionId: "s", idempotencyKey: "k", prompt: { text: "go" } }),
+                turn: () => ({ idempotencyKey: "k", content: [{ type: "text", text: "go" }] }),
                 retryableLoadFailure: () => true,
               }),
             ),

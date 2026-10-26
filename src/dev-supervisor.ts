@@ -5,15 +5,7 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import {
-  AGENT_CONFIG_FILE,
-  CONTEXT_FILE,
-  LOCAL_CONTEXT_FILE,
-  AGENT_MODEL_CATALOG_FILE,
-  AGENT_MODELS_FILE,
-  resolveStateRoot,
-  isUnderDir,
-} from "./paths.ts";
+import { AGENT_CONFIG_FILE, CONTEXT_FILE, LOCAL_CONTEXT_FILE, resolveStateRoot, isUnderDir } from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
 import { openExternalUrl } from "./open-url.ts";
@@ -21,21 +13,10 @@ import { declaredChannels } from "./channels/discover.ts";
 import { activeWork } from "./channels/busy.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
-/** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. (`extensions/` is reloaded by the
- *  next session after an edit, and `schedules/` is re-read by the running clock itself.) */
-const CODE_INPUT_DIRS = ["tools", "channels"] as const;
+/** The agent's code (its tools, extensions, channels and schedules), loaded ONCE per worker: a restart is its only re-read. */
+const CODE_DIR = "src";
 
-const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, context.json, context.local.json, .secrets/.env`;
-
-/**
- * Files a serving worker reads LIVE (agent-models.ts keeps the last ones that loaded) but a worker cannot START
- * without: an edit restarts nothing while a worker serves, and starts (or restarts) one that is down or starting. Unwatched, the edit that repairs
- * a stopped worker's model file would not be the edit that brings it back.
- */
-export function revivesOnly(root: string, path: string): boolean {
-  const rel = relative(root, path);
-  return rel === AGENT_MODELS_FILE || rel === AGENT_MODEL_CATALOG_FILE;
-}
+const WATCHED_HINT = `${CODE_DIR}/, package.json, fastagent.config.ts, context.json, context.local.json, .secrets/.env`;
 
 /** chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. */
 export function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
@@ -44,14 +25,12 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
   return (path: string): boolean => {
     if (path === root) return false; // the root itself must not be pruned
     const rel = relative(root, path);
-    // Code inputs at the agent dir root: config, package.json, and the dirs loaded once per worker (a restart is
+    // Code inputs at the agent dir root: config, package.json, and the code loaded once per worker (a restart is
     // their only re-read).
     if (rel === AGENT_CONFIG_FILE || rel === CONTEXT_FILE || rel === LOCAL_CONTEXT_FILE) return false;
     if (rel === "package.json") return false;
-    // Watched for a worker that is down ({@link revivesOnly}).
-    if (revivesOnly(root, path)) return false;
     const segments = rel.split(sep);
-    if (CODE_INPUT_DIRS.includes(segments[0] as (typeof CODE_INPUT_DIRS)[number])) return false;
+    if (segments[0] === CODE_DIR) return false;
     // The `.env` restarts too (credentials are process-bound).
     if (segments.length <= envRel.length && segments.every((seg, i) => seg === envRel[i])) return false;
     return true;
@@ -94,8 +73,6 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
-  // Has THIS worker bound? One still starting has not read the model files yet, so an edit to them must restart it.
-  let serving = false;
   let timer: NodeJS.Timeout | undefined;
   // The supervisor owns the tunnel so the public URL survives worker reloads (a fresh tunnel per save would mean a
   // new URL + re-registering the webhook on every edit).
@@ -109,11 +86,9 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
       env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
     });
     worker = w;
-    serving = false;
     w.on("message", (m: { type?: string; port?: number; routeChannels?: string[] }) => {
       if (m?.type !== "ready") return;
       everServed = true;
-      if (worker === w) serving = true;
       // Start the tunnel once, on the first worker that binds; reuse it across reloads.
       if (options.tunnel && !tunnel && typeof m.port === "number") {
         void startCloudflareTunnel(m.port).then((t) => {
@@ -130,7 +105,6 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
     w.on("exit", (code, signal) => {
       if (worker !== w) return; // already superseded
       worker = undefined;
-      serving = false;
       if (reloadPending) {
         reloadPending = false;
         spawnWorker(); // restart requested: the old worker has exited, so the port is free
@@ -163,9 +137,7 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
     ignoreInitial: true, // the startup scan is not a change
     ignored: devWatchIgnored(agentDir, dotEnvPath(agentDir)),
   });
-  watcher.on("all", (_event, path) => {
-    // A serving worker reads it itself; one still starting may be about to fail on the very file being fixed.
-    if (serving && revivesOnly(agentDir, path)) return;
+  watcher.on("all", () => {
     clearTimeout(timer);
     timer = setTimeout(triggerReload, 200);
   });
@@ -173,7 +145,7 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
     log.warn(`[fastagent] file watching error (${(error as Error).message}); some edits may need a manual restart`),
   );
   log.info(
-    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); SYSTEM.md/APPEND_SYSTEM.md/AGENTS.md/skills/prompts/extensions/schedules/models.json go live without a restart`,
+    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); SYSTEM.md, AGENTS.md, skills/ and prompts/ go live without a restart`,
   );
   // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely.
   if (!isUnderDir(dotEnvPath(agentDir), agentDir)) {

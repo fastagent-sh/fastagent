@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
-import { devWatchIgnored, listenForRestart, revivesOnly } from "../src/dev-supervisor.ts";
+import { devWatchIgnored, listenForRestart } from "../src/dev-supervisor.ts";
 import { log } from "../src/log.ts";
 
 describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
@@ -9,32 +9,21 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
 
   it("watches exactly the process-bound code inputs", () => {
     expect(ignored(root)).toBe(false); // the root itself must not be pruned
-    expect(ignored(join(root, "tools"))).toBe(false);
-    expect(ignored(join(root, "tools", "word-count.ts"))).toBe(false);
-    expect(ignored(join(root, "tools", "lib", "helper.ts"))).toBe(false); // nested under tools/
-    expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
-    // The running clock re-reads schedules/ itself, so an edit there restarts nothing (and cuts off no turn).
-    expect(ignored(join(root, "schedules", "daily.md"))).toBe(true);
-    // The next session lists extensions/ again and reloads changed code, so an edit there restarts nothing.
-    expect(ignored(join(root, "extensions", "notify.ts"))).toBe(true);
-    expect(ignored(join(root, "extensions", "notify", "index.ts"))).toBe(true);
+    expect(ignored(join(root, "src"))).toBe(false);
+    for (const file of ["tools/word-count.ts", "tools/lib/helper.ts", "channels/telegram.ts", "schedules/daily.ts"]) {
+      expect(ignored(join(root, "src", file))).toBe(false);
+    }
+    expect(ignored(join(root, "src", "extensions", "notify", "index.ts"))).toBe(false);
+    // Generated from src/ by the worker as it starts: an edit there is the worker's own.
+    expect(ignored(join(root, ".fastagent", "registry.ts"))).toBe(true);
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
     // Content is resolved, and the environment entered, once per process.
     expect(ignored(join(root, "context.json"))).toBe(false);
     expect(ignored(join(root, "context.local.json"))).toBe(false);
     expect(ignored(join(root, "mise.toml"))).toBe(true); // an author's own: the environment is not read from it
-    // The model files are read live by a running worker, but a malformed one fails a START: watched so the edit that
-    // repairs a stopped worker brings it back, and only that (revivesOnly). The catalog's lock is not watched.
-    for (const file of ["models.json", "models-store.json"]) {
-      expect(ignored(join(root, file))).toBe(false);
-      expect(revivesOnly(root, join(root, file))).toBe(true);
-    }
-    expect(ignored(join(root, "models-store.json.lock"))).toBe(true);
     // The environment is declared in context.json alone: a directory of that name is the author's.
     expect(ignored(join(root, "environment", "mise.lock"))).toBe(true);
-    expect(revivesOnly(root, join(root, "fastagent.config.ts"))).toBe(false);
-    expect(revivesOnly(root, join(root, "tools", "models.json"))).toBe(false);
   });
 
   it(".secrets/.env is a code input (credentials are process-bound); the rest of .secrets is not", () => {
@@ -72,7 +61,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     const nestedRoot = join("/repo", "fastagent");
     const ig = devWatchIgnored(nestedRoot, join(nestedRoot, ".secrets", ".env"));
     expect(ig(nestedRoot)).toBe(false);
-    expect(ig(join(nestedRoot, "tools", "foo.ts"))).toBe(false);
+    expect(ig(join(nestedRoot, "src", "tools", "foo.ts"))).toBe(false);
     expect(ig(join(nestedRoot, "SYSTEM.md"))).toBe(true); // live-read, no restart
     expect(ig(join(nestedRoot, ".secrets", ".env"))).toBe(false);
   });
@@ -91,7 +80,7 @@ describe("dev-supervisor: the watched .env follows FASTAGENT_SECRETS_DIR", () =>
   it("prunes everything when the .env resolves outside the agent (the supervisor warns instead)", () => {
     const ig = devWatchIgnored(root, "/data/.secrets/.env");
     expect(ig("/agent/.secrets/.env")).toBe(true);
-    expect(ig("/agent/tools/x.ts")).toBe(false); // code inputs unaffected
+    expect(ig("/agent/src/tools/x.ts")).toBe(false); // code inputs unaffected
   });
 });
 

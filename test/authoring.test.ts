@@ -12,13 +12,7 @@ import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useGitIdentity, withGitIdentity } from "./git-env.ts";
 import { git, githubStandIn } from "./github-standin.ts";
-import {
-  ContentNameError,
-  addContent,
-  createAgent,
-  listContent,
-  removeContent,
-} from "../src/authoring.ts";
+import { ContentNameError, addContent, createAgent, listContent, removeContent } from "../src/authoring.ts";
 import { type SourceOptions, readContentSource } from "../src/content/source.ts";
 
 /** What `content add <dir>` adds. */

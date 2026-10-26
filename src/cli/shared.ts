@@ -10,7 +10,7 @@ import { LoginCancelled, type LoginIO, loginFlow } from "../harnesses/models/log
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
-import { loadConfig } from "../harnesses/pi-durable/open.ts";
+import { loadConfig, modelSpecFor } from "../harnesses/pi-durable/open.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { contentLines } from "./content-view.ts";
 import { deployedHost, isDeployedWorkspace } from "../paths.ts";
@@ -157,7 +157,7 @@ async function resolveFirstRunModel(
   options: { model?: string; input?: boolean } = {},
 ): Promise<string | undefined> {
   const config = await loadConfig(agentDir).catch(failStartup);
-  const configured = options.model ?? (process.env.FASTAGENT_MODEL || config.model);
+  const configured = modelSpecFor(config, options.model);
   if (configured) return configured;
   if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
   if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error

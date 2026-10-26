@@ -1,5 +1,5 @@
 /** Render one message's answer, as `stream()` reads it, to two sinks plus an exit code: 0 only for `completed`. */
-import type { Outcome, SessionEvent } from "../agent-api.ts";
+import type { Outcome } from "../agent-api.ts";
 import type { StreamResult } from "../agent-api-stream.ts";
 import { answerText } from "../answer-text.ts";
 
@@ -26,7 +26,7 @@ export async function runInvokeStream(
   }
   const toolName = new Map<string, string>(); // a tool result carries the id; its name came with tool_started
   const textOf = answerText();
-  for await (const event of result.events as AsyncIterable<SessionEvent>) {
+  for await (const event of result.events) {
     const text = event.type === "message_delta" || event.type === "entry" ? textOf(event) : "";
     if (text !== "") out(text);
     switch (event.type) {

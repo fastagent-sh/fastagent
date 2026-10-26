@@ -55,11 +55,6 @@ export const LOCAL_CONTEXT_FILE = "context.local.json";
  */
 export const AGENT_CONFIG_FILE = "fastagent.config.ts";
 
-/** The optional custom-model-endpoint file inside an agent dir (pi's models.json schema). */
-export const AGENT_MODELS_FILE = "models.json";
-/** The agent's model catalog: pi.dev's models newer than pi's bundled catalog, fetched by `models --refresh`. */
-export const AGENT_MODEL_CATALOG_FILE = "models-store.json";
-
 /**
  * "Not there" and "could not look" are different answers, and only the first may read as an absence: an agent
  * directory the caller cannot enter (EACCES) reported as no-agent-here ends in `run \`fastagent init\`` — over a
@@ -164,17 +159,6 @@ export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.e
 /** Where fastagent clones the content entry `name` of the agent in `dir`. */
 export function contentEntryPath(dir: string, name: string): string {
   return join(resolve(dir), CONTENT_DIRNAME, name);
-}
-
-/**
- * WHERE an agent's session records live: `<state root>/sessions`, always. Records are machine state like channel
- * state and schedule claims, so they move with the ONE knob that moves all of it rather than with a second one that
- * moves only them — a split every reader would then have to agree about, and which left channel state behind anyway.
- * An embedder that really wants the records elsewhere passes `sessionsDir` to `createAgentService`; there is no env
- * or flag spelling of it, for the reason `resolveAuthPathOverride` states.
- */
-export function resolveSessionsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveStateRoot(dir, env), "sessions");
 }
 
 /**

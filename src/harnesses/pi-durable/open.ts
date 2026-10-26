@@ -25,6 +25,7 @@ import { type DeclaredSecret, describeSecrets, missingSecrets } from "../../decl
 import { declaredVariables } from "../../environment/declare.ts";
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { channelModuleProblem } from "../../channels/discover.ts";
+import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { modelsOver } from "../models/models.ts";
@@ -34,7 +35,6 @@ import { GENERATED_DIR, REGISTRY_FILE, REGISTRY_KINDS, type Registry, generateRe
 import { definitionSections, readCommands } from "./text.ts";
 import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
 
-const CONFIG_FILE = "fastagent.config.ts";
 const SECRETS_MANIFEST_FILE = "secrets.json";
 const CONFIG_KEYS = ["name", "description", "model", "thinkingLevel", "extensions", "providers", "http", "deploy"];
 const DEFINITION_EXTENSION = "fastagent.definition";
@@ -91,6 +91,15 @@ function modelRefOf(spec: string, where: string): ModelRef {
 export async function loadConfig(dir: string): Promise<AgentConfig> {
   const configPath = join(dir, CONFIG_FILE);
   return checkConfig(existsSync(configPath) ? await importDefault(configPath, CONFIG_FILE) : undefined, CONFIG_FILE);
+}
+
+/** The default model a process here runs with: `--model` > `FASTAGENT_MODEL` > the configuration's `model`. */
+export function modelSpecFor(
+  config: AgentConfig,
+  flag: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return flag ?? (env.FASTAGENT_MODEL || config.model);
 }
 
 /** Read the agent package in `dir`: `fastagent.config.ts` (optional) and `.fastagent/registry.ts`, generated first. */

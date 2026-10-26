@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { InvokeEvent } from "../src/protocol.ts";
+import type { TurnEvent as InvokeEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { ev } from "./scripted-run.ts";
 import { sanitizeSlackMarkdown, slackReply } from "../src/channels/slack/preview.ts";
 import { run, stream } from "./channel-effects.ts";
@@ -114,7 +114,10 @@ describe("Slack reply rendering", () => {
     const events = (async function* (): AsyncIterable<InvokeEvent> {
       yield ev.accepted();
       yield ev.text("part");
-      yield { type: "serving_error", message: "missed events could not be read back" } as InvokeEvent;
+      yield {
+        type: "serving_error",
+        error: { code: "internal", message: "missed events could not be read back", retryable: true },
+      } as InvokeEvent;
     })();
     await expect(
       run(

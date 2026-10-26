@@ -8,7 +8,7 @@ import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enterAgentEnv } from "../../env.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import { buildDefinition, prepareDefinition, secretsManifest } from "../../harnesses/pi-durable/open.ts";
+import { buildDefinition, modelSpecFor, prepareDefinition, secretsManifest } from "../../harnesses/pi-durable/open.ts";
 import { readCommands } from "../../harnesses/pi-durable/text.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
@@ -25,7 +25,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   enterAgentEnv(agentDir); // code may read its secrets, and fetch, when it is built
   const definition = await prepareDefinition(agentDir).catch(failStartup);
   const { config } = definition;
-  const modelSpec = opts.model ?? (process.env.FASTAGENT_MODEL || config.model);
+  const modelSpec = modelSpecFor(config, opts.model);
   const manifest = secretsManifest(definition);
   const declared = manifest.flatMap(({ name, optional, declaredIn }) =>
     declaredIn.map((source) => ({ name, optional, source })),
