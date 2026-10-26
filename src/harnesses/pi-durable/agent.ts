@@ -291,8 +291,11 @@ function durableAgent(
           ),
         );
         messageId = submission.id;
-        countUntilSettled(submission);
-        const record = yield* port(() => submission.status(context));
+        // Counted once its receipt is read, whether or not that read succeeds: the wait must not be what reads the
+        // storage first, or a failing read would fail it instead of answering this call.
+        const record = yield* port(() => submission.status(context)).pipe(
+          Effect.ensuring(Effect.sync(() => countUntilSettled(submission))),
+        );
         if (!isInput(record)) throw new Error(`submission ${record.id} was admitted as a write`);
         return yield* receipt(target, record, false);
       }).pipe(
