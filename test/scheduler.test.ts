@@ -13,6 +13,8 @@ import { createScheduler as scheduler, fireScheduleOnce as fire, scheduleSession
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxDurableAgent } from "./faux.ts";
 import { readFires, settleClaim } from "../src/schedule/state.ts";
 
 /** A fake agent that records each invoke's session + text (and the whole request) and answers with the script. */
@@ -105,7 +107,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(readFires(root, "job")).toMatchObject([{ outcome: "interrupted", firedAt: "2026-07-07T10:00:00.000Z" }]);
     // No duration at all: nobody timed this turn, and `0ms` in the history would read as one that took no time.
     expect(readFires(root, "job")[0]).not.toHaveProperty("ms");
-    expect(warns.some((w) => /never finished/.test(w))).toBe(true);
+    expect(warns.some((w) => /never sent its message/.test(w))).toBe(true);
     await new Promise((r) => setTimeout(r, 30));
     expect(calls).toHaveLength(0); // accounted for, not replayed
     s.stop();
@@ -115,8 +117,37 @@ describe("schedule/scheduler: fire algorithm", () => {
     const again = createScheduler(options);
     again.start();
     expect(outcomes(root, "job")).toEqual(["interrupted"]); // still one fire, still one outcome
-    expect(warns.some((w) => /never finished/.test(w))).toBe(false);
+    expect(warns.some((w) => /never sent its message/.test(w))).toBe(false);
     again.stop();
+  });
+
+  it("a claim whose message was taken before the restart is settled with that message's end, not interrupted", async () => {
+    // The agent took the message, then the process stopped before the fire wrote its outcome back. The message is
+    // durable, so the restarted agent answers it (here it already had): calling that `interrupted` would report a run
+    // whose effects happened as one that did not.
+    const root = await freshRoot();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const slot = "2026-07-07T10:00:00.000Z";
+    const agent = await fauxDurableAgent([fauxAssistantMessage("done")]);
+    const sessionId = await scheduleSessions(root).of("job", async () => {
+      const created = await agent.createSession();
+      if (!created.ok) throw new Error(created.error.message);
+      return created.sessionId;
+    });
+    const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: "go" }], idempotencyKey: slot });
+    if (!sent.ok) throw new Error("not sent");
+    await sent.wait();
+    seedClaim(root, "job", slot, undefined, false);
+    const s = createScheduler({
+      agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      now: () => new Date("2026-07-07T10:30:00Z"),
+    });
+    s.start();
+    await vi.waitFor(() => expect(outcomes(root, "job")).toEqual(["completed"]));
+    s.stop();
+    await agent.close();
   });
 
   it("only the NEWEST unsettled claim is settled interrupted", async () => {

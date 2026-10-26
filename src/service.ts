@@ -130,8 +130,9 @@ export interface AgentService {
    * Stop long connections and schedules. It does NOT drain the agent's messages: one takes seconds to minutes, and
    * the deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What
    * makes that safe is that they are durable: an accepted message is answered after the restart, and a chat turn's
-   * intent is durable before it is accepted (`channels/kit/turn-store.ts`). The one path with neither is a schedule
-   * fire, whose claim is written before the message: it stays skipped, and the next boot records it as `interrupted`.
+   * intent is durable before it is accepted (`channels/kit/turn-store.ts`). A schedule fire's claim is written before
+   * its message: the next boot writes back the end of a message the agent took, and records one it never took as
+   * `interrupted`.
    */
   close(): Promise<void>;
 }

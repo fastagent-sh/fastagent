@@ -494,10 +494,10 @@ const schedules: CommandSpec = {
   subcommands: [
     {
       name: "list",
-      summary: "every schedule (schedules/<name>.md) and wake-up, with when it runs next",
+      summary: "every schedule (src/schedules/<name>.ts) and wake-up, with when it runs next",
       description:
-        "List the schedules this definition declares (schedules/<name>.md): the next cron instant, how the last " +
-        "run ended and the session its turns run in. The agent's own pending wake-ups are listed too, prefixed " +
+        "List the schedules this definition declares (defineSchedule in src/schedules/<name>.ts): the next cron " +
+        "instant, how the last run ended and the session its runs continue. The agent's own pending wake-ups are listed too, prefixed " +
         "`wake`: a different owner (the STATE, not the definition), and only the agent cancels them (the `unwake` " +
         "tool). --json adds each schedule's retained fire history. Read-only.",
       args: [AGENT_ARG],

@@ -16,37 +16,6 @@ import type { Schedule } from "./schedule.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
 import { requeueWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
-/**
- * Account for a claim whose turn never reported. The slot is claimed BEFORE the turn runs and shutdown does not wait
- * for that turn (see `AgentService.close`), so a restart landing mid-fire leaves a claim that the next boot skips —
- * the exact silence the history exists to prevent. Settled once, at the next boot, which also makes it idempotent.
- *
- * The claim is the ONE record here: it IS the decision, and the outcome is written back into it.
- *
- * NOT re-fired: a turn that kills its own process would then replay on every boot. Cron only: a killed wake-up
- * leaves no claim behind to reconcile (`takeFirstDueWakeup` removes it before the turn starts).
- *
- * THE NEWEST CLAIM ONLY. A schedule's loop runs one turn at a time, so a killed process leaves exactly one claim
- * unsettled — the one it was in. Walking the whole retained window would add nothing a resident process can
- * produce, and would instead rewrite every claim an OLDER FORMAT left without an outcome, turning a window of runs
- * that actually succeeded into `interrupted`.
- *
- * KNOWN FALSE POSITIVE: a second scheduler booting while the first is mid-turn sees a claim nothing accounts for
- * YET, and reports it; the first process then overwrites the outcome when its turn settles. Telling them apart needs
- * the claimer's liveness, which is a lease, not a claim — and the whole point of the claim is that it needs none.
- */
-function markInterruptedFire(stateRoot: string, name: string, fire: Fire | undefined): void {
-  if (fire === undefined || fire.outcome !== undefined) return;
-  log.warn(
-    `[schedule] ${name}: the fire claimed at ${fire.firedAt} never finished — the process stopped mid-turn ` +
-      `and that slot stays skipped (see \`fastagent schedules list\`)`,
-  );
-  // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
-  // conversion — so the Date is valid and `settleClaim` writes back the file it was read from. No duration: this
-  // turn was never timed, and the process that could have timed it is gone.
-  settleClaim(stateRoot, name, new Date(fire.slot), "interrupted");
-}
-
 export interface Scheduler {
   /** Arm schedules, account for a fire the previous run was killed in, and catch up overdue work once. */
   start(): void;
@@ -55,7 +24,7 @@ export interface Scheduler {
 }
 
 /** All the scheduler asks of the agent. */
-export type ScheduledAgent = Pick<Agent, "invoke" | "createSession">;
+export type ScheduledAgent = Pick<Agent, "invoke" | "createSession" | "getMessage">;
 
 export interface SchedulerOptions {
   agent: ScheduledAgent;
@@ -272,6 +241,74 @@ export function fireScheduleOnce(opts: {
   }).pipe(Effect.uninterruptible);
 }
 
+/**
+ * Account for a claim whose fire never reported: the slot is claimed BEFORE its message is sent, and shutdown does not
+ * wait for the message (see `AgentService.close`), so a restart landing mid-fire leaves a claim nothing settled — the
+ * exact silence the history exists to prevent. Read once, at the next boot. The claim is the ONE record here: it IS
+ * the decision, and the outcome is written back into it.
+ *
+ * WHAT BECAME OF ITS MESSAGE decides the outcome. One the agent took is durable: it is answered after the restart
+ * (or already was), so its end is read through its key and written back, as the fire that ran would have. One that was
+ * never taken is `interrupted`, and NOT re-fired: a fire that kills its own process would then replay on every boot.
+ * Cron only: a killed wake-up leaves no claim behind (`takeFirstDueWakeup` removes it before its message is sent).
+ *
+ * THE NEWEST CLAIM ONLY. A schedule's loop runs one fire at a time, so a killed process leaves exactly one claim
+ * unsettled — the one it was in. Walking the whole retained window would add nothing a resident process can produce.
+ */
+function accountForUnreportedFire(
+  agent: ScheduledAgent,
+  stateRoot: string,
+  name: string,
+  fire: Fire,
+): Effect.Effect<void, PortFailure> {
+  return Effect.gen(function* () {
+    // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
+    // conversion — so the Date is valid and `settleClaim` writes back the file it was read from.
+    const slot = new Date(fire.slot);
+    const key = slot.toISOString();
+    const sessionId = scheduleSessions(stateRoot).get(name);
+    const taken =
+      sessionId === undefined
+        ? undefined
+        : yield* Effect.tryPromise({
+            try: () => agent.getMessage(sessionId, { idempotencyKey: key }),
+            catch: (cause) => new PortFailure(cause),
+          });
+    if (sessionId === undefined || taken === undefined) {
+      log.warn(
+        `[schedule] ${name}: the fire claimed at ${fire.firedAt} never sent its message — the process stopped ` +
+          `before it, and that slot stays skipped (see \`fastagent schedules list\`)`,
+      );
+      // No duration: this fire was never timed, and the process that could have timed it is gone.
+      settleClaim(stateRoot, name, slot, "interrupted");
+      return;
+    }
+    log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} was taken before a restart — reading its end`);
+    // The key alone names the message, so this sends nothing: its receipt is the one the fire had (agent-api.md §3.3).
+    const request: InvokeRequest = {
+      sessionId,
+      content: [{ type: "text", text: "(the scheduled message this key names)" }],
+      idempotencyKey: key,
+    };
+    const end = yield* Effect.tryPromise({
+      try: (signal) => readInvoke(agent, request, () => {}, signal),
+      catch: (cause) => new PortFailure(cause),
+    });
+    if (!("outcome" in end)) {
+      // Unsettled still, so the next boot reads it again.
+      log.warn(
+        `[schedule] ${name}: the end of the fire claimed at ${fire.firedAt} is not known yet${oneLine("refused" in end ? end.refused : end.unfinished)}`,
+      );
+      return;
+    }
+    const { fire: outcome, detail } = settled(end.outcome);
+    if (outcome === "completed") log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} completed`);
+    else log.error(`[schedule] ${name}: the fire claimed at ${fire.firedAt} ${outcome}${oneLine(detail ?? "")}`);
+    // No duration either: only its end was seen here.
+    settleClaim(stateRoot, name, slot, outcome);
+  });
+}
+
 /** Which session each schedule continues: one per schedule, so the agent sees what its earlier runs did. */
 export function scheduleSessions(stateRoot: string) {
   return conversationSessions(join(stateRoot, "schedule", "sessions.json"));
@@ -443,8 +480,20 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         const lastFires = new Map<string, string>();
         for (const s of schedules) {
           const fire = latestFire(stateRoot, s.name);
-          if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
-          markInterruptedFire(stateRoot, s.name, fire);
+          if (fire === undefined) continue;
+          lastFires.set(s.name, fire.firedAt);
+          if (fire.outcome !== undefined) continue;
+          const accounted = accountForUnreportedFire(agent, stateRoot, s.name, fire).pipe(
+            Effect.catchTag("PortFailure", (error) =>
+              Effect.sync(() =>
+                // Unsettled still, so the next boot reads it again.
+                log.error(
+                  `[schedule] ${s.name}: could not account for the fire claimed at ${fire.firedAt}: ${String(error.cause)}`,
+                ),
+              ),
+            ),
+          );
+          launch(s.name, accounted);
         }
         const current = now();
         for (const s of schedules) {
