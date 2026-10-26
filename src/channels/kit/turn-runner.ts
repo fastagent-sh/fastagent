@@ -51,7 +51,7 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
    * preview — the one the answer was written for died with its process.
    *
    * A notice THIS process put up is a different thing and must still be settled: a record recovered behind another
-   * turn in the same place goes through `onQueuedBehind` like any other, so it can hold a fresh "queued" message
+   * turn in the same conversation goes through `onQueuedBehind` like any other, so it can hold a fresh "queued" message
    * or status that only this call can take over or clear.
    */
   deliverAnswer(rec: R, answer: string): Effect.Effect<void, PortFailure, Scope.Scope>;
@@ -94,14 +94,14 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
             Effect.sync(() =>
               log.info(
                 `${label} turn ${rec.id} hit the execution ceiling, but the answer it had already recorded was ` +
-                  `delivered (place=${rec.place})`,
+                  `delivered (conversation=${rec.conversation})`,
               ),
             ),
           onFailure: (error) =>
             Effect.sync(() => {
               log.error(
                 `${label} turn ${rec.id} hit the execution ceiling and its recorded answer could not be delivered ` +
-                  `either (place=${rec.place}) — the answer is gone: ${String(error.cause)}`,
+                  `either (conversation=${rec.conversation}) — the answer is gone: ${String(error.cause)}`,
               );
               // The record is off disk, so nothing will retry this. The asker is owed an ending — without one, a
               // queue notice this turn put up stays in the chat forever reading "Queued".
@@ -122,7 +122,7 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
     // One stable prefix, so every `turn done:`/`turn failed:` has a `turn start:` to grep back to; what kind of work
     // it is rides along as a field.
     log.info(
-      `${label} turn start: turn=${rec.id} place=${rec.place} ${options.where(rec)}` +
+      `${label} turn start: turn=${rec.id} conversation=${rec.conversation} ${options.where(rec)}` +
         `${recovered === undefined ? "" : " mode=re-delivery (answer recovered from a prior run)"}`,
     );
     const work =
@@ -149,13 +149,15 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
       Effect.matchEffect({
         onSuccess: () =>
           Effect.sync(() => {
-            log.info(`${label} turn done: turn=${rec.id} place=${rec.place} (${Date.now() - startedAt}ms)`);
+            log.info(
+              `${label} turn done: turn=${rec.id} conversation=${rec.conversation} (${Date.now() - startedAt}ms)`,
+            );
             return true;
           }),
         onFailure: (error) =>
           Effect.sync(() => {
             log.error(
-              `${label} turn failed: turn=${rec.id} place=${rec.place} (${Date.now() - startedAt}ms): ${String(error.cause)}`,
+              `${label} turn failed: turn=${rec.id} conversation=${rec.conversation} (${Date.now() - startedAt}ms): ${String(error.cause)}`,
             );
             return false;
           }),
@@ -169,14 +171,14 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
       return;
     }
     log.warn(
-      `${label} turn ${rec.id} produced an answer that was not delivered (place=${rec.place}) — ` +
+      `${label} turn ${rec.id} produced an answer that was not delivered (conversation=${rec.conversation}) — ` +
         `keeping it to re-deliver on the next start`,
     );
   });
 }
 
 export function createTurnRunner<
-  R extends PendingBase<S> & { id: string; place: string },
+  R extends PendingBase<S> & { id: string; conversation: string },
   S extends TurnRecordBase,
   E,
   P = string,
@@ -195,7 +197,7 @@ export function createTurnRunner<
             Effect.catchCause((cause) =>
               Effect.sync(() =>
                 log.warn(
-                  `${label} queue notice failed: turn=${rec.id} place=${rec.place}: ${String(portError(cause))}`,
+                  `${label} queue notice failed: turn=${rec.id} conversation=${rec.conversation}: ${String(portError(cause))}`,
                 ),
               ),
             ),

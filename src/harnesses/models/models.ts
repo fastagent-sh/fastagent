@@ -1,7 +1,8 @@
 /**
- * pi-ai's model collection as FastAgent composes it: the built-in providers over a credential store, Sign in with
- * ChatGPT's account catalog on `openai`, and the definition's own providers; and the reads a report, a login or a
- * picker make of it. Custom models are providers in code (`defineAgent({ providers })`), never a models file.
+ * pi-ai's model collection as FastAgent composes it: the built-in providers over a credential store, and the
+ * definition's own providers; and the reads a report, a login or a picker make of it. Model selection is pi-ai's
+ * alone (architecture.md §3): a custom model is a provider in code (`defineAgent({ providers })`), never a models file,
+ * a catalog cache or a per-account list.
  */
 import {
   type Api,
@@ -13,13 +14,10 @@ import {
   defaultProviderAuthContext,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { OPENAI_PROVIDER, withAccountModels } from "./account-models.ts";
 
 /** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */
 export function modelsOver(credentials: CredentialStore, providers: readonly Provider[] = []): Models {
   const models = builtinModels({ credentials, authContext: defaultProviderAuthContext() });
-  const openai = models.getProvider(OPENAI_PROVIDER);
-  if (openai) models.setProvider(withAccountModels(openai));
   for (const provider of providers) models.setProvider(provider);
   return models;
 }

@@ -1,4 +1,4 @@
-/** Per-place FIFO execution. */
+/** Per-conversation FIFO execution. */
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
@@ -12,7 +12,7 @@ export interface TurnQueue<T> {
   idle(): Promise<void>;
 }
 
-export function createTurnQueue<T extends { place: string }>(opts: {
+export function createTurnQueue<T extends { conversation: string }>(opts: {
   label: string;
   /** The queue diagnoses escaped failures and closes this turn's resources before its successor runs. */
   run: (rec: T) => Effect.Effect<void, unknown, Scope.Scope>;
@@ -23,8 +23,8 @@ export function createTurnQueue<T extends { place: string }>(opts: {
   const chains = new Map<string, Fiber.Fiber<void>>();
   return {
     accept(rec) {
-      if (chains.has(rec.place)) onQueuedBehind?.(rec);
-      const prev = chains.get(rec.place);
+      if (chains.has(rec.conversation)) onQueuedBehind?.(rec);
+      const prev = chains.get(rec.conversation);
       // Admission counts immediately, including while waiting behind another turn.
       const workDone = beginWork();
       const fiber = Effect.runFork(
@@ -39,19 +39,19 @@ export function createTurnQueue<T extends { place: string }>(opts: {
           Effect.catchCause((cause) =>
             Effect.sync(() =>
               log.error(
-                `${label} turn runner rejected (place=${rec.place}; own your error surface in run()): ${String(portError(cause))}`,
+                `${label} turn runner rejected (conversation=${rec.conversation}; own your error surface in run()): ${String(portError(cause))}`,
               ),
             ),
           ),
           Effect.ensuring(
             Effect.sync(() => {
               workDone();
-              if (chains.get(rec.place) === fiber) chains.delete(rec.place);
+              if (chains.get(rec.conversation) === fiber) chains.delete(rec.conversation);
             }),
           ),
         ),
       );
-      chains.set(rec.place, fiber);
+      chains.set(rec.conversation, fiber);
     },
     idle: () =>
       Effect.runPromise(

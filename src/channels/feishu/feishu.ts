@@ -16,6 +16,8 @@ import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
+import { conversationSessions, newSession } from "../kit/sessions.ts";
+import { forkThread } from "../kit/thread-fork.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { portJoin } from "../../effect-port.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
@@ -96,8 +98,8 @@ interface StoredFeishuTurn extends TurnRecordBase {
   queueReplyTo?: string;
   replyInThread?: boolean;
   parentId?: string;
-  /** The place this thread branched from (§5 lineage). */
-  parentSession?: string;
+  /** The conversation of the room this thread branched from (§5 lineage): a new thread's session forks the room's. */
+  parentConversation?: string;
   /** The ROOM whose history this thread's first turn reads, read-only (§8). */
   roomKey?: string;
   images: { msg: string; key: string }[];
@@ -115,7 +117,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
   return (
     typeof r?.id === "string" &&
     typeof r.seq === "number" &&
-    typeof r.session === "string" &&
+    typeof r.conversation === "string" &&
     typeof r.baseText === "string" &&
     (r.historyKey === undefined || typeof r.historyKey === "string") &&
     typeof r.group === "boolean" &&
@@ -125,7 +127,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     (r.queueReplyTo === undefined || typeof r.queueReplyTo === "string") &&
     (r.replyInThread === undefined || typeof r.replyInThread === "boolean") &&
     (r.parentId === undefined || typeof r.parentId === "string") &&
-    (r.parentSession === undefined || typeof r.parentSession === "string") &&
+    (r.parentConversation === undefined || typeof r.parentConversation === "string") &&
     (r.roomKey === undefined || typeof r.roomKey === "string") &&
     refs(r.images) &&
     refs(r.files) &&
@@ -300,6 +302,7 @@ function createFeishuRuntimeFactory(
     // The SAME identity the session uses (`placeKey`) — a thread's place.
     const threadKey = (chatId: string, threadId: string): string =>
       placeKey(kind, { chat_id: chatId, thread_id: threadId });
+    const sessions = conversationSessions(stateRoot, kind);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
       isRecord: isStoredFeishuTurn,
@@ -348,7 +351,7 @@ function createFeishuRuntimeFactory(
     const notifyDropped = (r: PendingFeishuTurn): void => {
       const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
       void settleFeishuPreview(placeApi(r.historyKey), targetOf(r), r.preview, body).catch((e) =>
-        log.warn(`${label} could not notify a dropped turn (session=${r.session}): ${String(e)}`),
+        log.warn(`${label} could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
       );
     };
 
@@ -356,11 +359,6 @@ function createFeishuRuntimeFactory(
       label,
       store,
       discussion: history,
-      // A group turn under the default routing reads its chat's threads; a DM has none to read.
-      room: {
-        threads: rooms,
-        of: (rec) => (rec.group && rec.historyKey !== undefined ? feishuPlaceOf(rec.historyKey).chatId : undefined),
-      },
       seen,
       toStored: ({ preview: _live, ...intent }) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, preview: undefined }),
@@ -430,21 +428,35 @@ function createFeishuRuntimeFactory(
                 files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key })),
               },
             );
-            // Recorded at ingress (see submit) — never re-derived from the session key, which may be a routed OPAQUE id
-            // that only looks like a place key.
-            const parentSession = rec.parentSession;
+            // Recorded at ingress (see submit), never re-derived from the conversation key, which may be a routed
+            // OPAQUE id that only looks like a place key.
+            const parent = rec.parentConversation;
+            // A group turn under the default routing reads its chat's threads; a DM has none to read.
+            const threadsRoom =
+              rec.group && rec.historyKey !== undefined ? feishuPlaceOf(rec.historyKey).chatId : undefined;
             const turnApi = placeApi(rec.historyKey);
             return feishuReply(
               feishuTurnStream(
                 agent,
-                { session: rec.session, key: rec.id, text: prompt, source: kind },
+                {
+                  session: (chain) =>
+                    sessions.of(rec.conversation, () =>
+                      parent === undefined
+                        ? newSession(agent)
+                        : forkThread(agent, { room: sessions.get(parent), chain }),
+                    ),
+                  ...(threadsRoom === undefined
+                    ? {}
+                    : { enter: (sessionId: string) => rooms.enter(sessionId, threadsRoom) }),
+                  key: rec.id,
+                  text: prompt,
+                },
                 {
                   api: turnApi,
                   chatId: rec.chatId,
                   filesDir: attachmentsDir(stateHome),
                   label,
                   appId,
-                  ...(parentSession !== undefined ? { parentSession } : {}),
                 },
                 { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
               ),
@@ -458,7 +470,7 @@ function createFeishuRuntimeFactory(
           }),
         ),
     });
-    registerFeishuApi(stateRoot, kind, api);
+    registerFeishuApi(appId, kind, api);
     let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
 
     // Who the agent has heard in a thread decides whether a bare message addresses it (participant model §3), and it
@@ -517,15 +529,15 @@ function createFeishuRuntimeFactory(
         return;
       }
 
-      // Memory follows the place (participant model §5): one session per chat, and one per thread.
-      const routed = r.session;
-      const session = routed ?? placeKey(kind, m);
-      // Lineage is recorded ONLY for the default place-derived session.
-      const parentSession =
+      // Memory follows the place (participant model §5): one conversation per chat, and one per thread.
+      const routed = r.conversation;
+      const conversation = routed ?? placeKey(kind, m);
+      // Lineage is recorded ONLY for the default place-derived conversation.
+      const parentConversation =
         routed === undefined && m.thread_id !== undefined ? placeKey(kind, { chat_id: m.chat_id }) : undefined;
       // Read BEFORE this turn records its own participation below, or it is always true.
       const roomKey =
-        parentSession !== undefined && !threadParticipants.agentSpokeIn(session)
+        parentConversation !== undefined && !threadParticipants.agentSpokeIn(conversation)
           ? feishuHistoryKey({ chatId: m.chat_id })
           : undefined;
       // Every place's discussion under the default routing, a DM's too (what a send tool posted there is in no session);
@@ -547,7 +559,7 @@ function createFeishuRuntimeFactory(
       if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
         seen.add(m.message_id);
         sideTasks.track(
-          dispatchStop(agent, session, label)
+          dispatchStop(agent, sessions.get(conversation), label)
             .then((feedback) =>
               placeApi(historyKey)
                 .sendText({ chatId, replyTo, replyInThread }, feedback)
@@ -571,7 +583,7 @@ function createFeishuRuntimeFactory(
         {
           id: m.message_id,
           seq: ++seqCounter, // arrival order; the turn store replays by it
-          session,
+          conversation,
           baseText,
           ...(historyKey !== undefined ? { historyKey } : {}),
           group: m.chat_type === "group",
@@ -583,7 +595,7 @@ function createFeishuRuntimeFactory(
           // A quote is the user explicitly pointing at something that may predate this session (§8 rung 2), so it is
           // always loaded.
           parentId: m.parent_id,
-          ...(parentSession !== undefined ? { parentSession } : {}),
+          ...(parentConversation !== undefined ? { parentConversation } : {}),
           ...(roomKey !== undefined && historyKey !== undefined ? { roomKey } : {}),
           images,
           files,
@@ -593,7 +605,7 @@ function createFeishuRuntimeFactory(
 
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT bare message
       // address it without a mention (§3).
-      if (heard && replyInThread === true && sameTarget && r.session === undefined) {
+      if (heard && replyInThread === true && sameTarget && r.conversation === undefined) {
         // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive could otherwise
         // say "answered here, heard nobody".
         threadParticipants.merge(heard.key, { agentSpoke: true, humans: [heard.speaker] });

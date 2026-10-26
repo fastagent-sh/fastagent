@@ -30,7 +30,7 @@ function isStoredTurn(t: unknown): t is StoredTurn {
   const strings = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === "string");
   return (
     typeof r?.id === "string" &&
-    typeof r.session === "string" &&
+    typeof r.conversation === "string" &&
     typeof r.placeKey === "string" &&
     typeof r.baseText === "string" &&
     (typeof r.chatId === "string" || typeof r.chatId === "number") &&

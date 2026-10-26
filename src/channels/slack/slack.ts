@@ -18,6 +18,7 @@ import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
+import { conversationSessions, newSession } from "../kit/sessions.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -93,7 +94,7 @@ function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
   return (
     typeof turn?.id === "string" &&
     typeof turn.seq === "number" &&
-    typeof turn.session === "string" &&
+    typeof turn.conversation === "string" &&
     typeof turn.baseText === "string" &&
     (turn.historyKey === undefined || typeof turn.historyKey === "string") &&
     typeof turn.group === "boolean" &&
@@ -266,7 +267,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     const stateHome = join(stateRoot, "channels", "slack");
     ensureStateHome(stateHome);
     const api = createSlackApi({ botToken, baseUrl: apiBaseUrl });
-    registerSlackApi(stateRoot, api); // the send tool delivers through this one (shared-api.ts)
+    registerSlackApi(botToken, api); // the send tool delivers through this one (shared-api.ts)
     const auth = createSlackAuthentication(api, label);
 
     // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle.
@@ -274,11 +275,11 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
     /**
-     * A thread's participation is keyed by the SESSION it describes — "the agent answered here" is a claim about a
-     * memory, so the two must not be re-keyable independently.
+     * A thread's participation is keyed by the CONVERSATION it describes — "the agent answered here" is a claim about
+     * a memory, so the two must not be re-keyable independently.
      */
     const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
-      `slack:${teamId}:${channelId}:${threadTs}`;
+      `${teamId}:${channelId}:${threadTs}`;
     const welcomed = createWelcomedUsers(join(stateHome, "welcomed.json"), label);
     // Every message this channel took as input (a turn, a /stop) is in `seen`. A history read also leaves these out,
     // to shape the prompt only — what keeps a queued ask out of an earlier turn is the read's bound, not this ring.
@@ -323,6 +324,14 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       order: (a, b) => a.seq - b.seq,
     });
     const decide = route ?? defaultSlackRoute;
+    const sessions = conversationSessions(stateRoot, "slack");
+    /** A channel turn under the default routing reads its channel's threads; a DM has none to read. */
+    const enterRoom = (turn: PendingSlackTurn): { enter?: (sessionId: string) => () => void } => {
+      if (!turn.group || turn.historyKey === undefined) return {};
+      const { teamId, channelId } = slackPlaceOf(turn.historyKey);
+      const room = slackHistoryKey(teamId, { channelId });
+      return { enter: (sessionId) => rooms.enter(sessionId, room) };
+    };
     const targetOf = (turn: PendingSlackTurn): SlackTarget => ({
       channelId: turn.channelId,
       threadTs: turn.threadTs,
@@ -345,15 +354,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       label,
       store,
       discussion: history,
-      // A channel turn under the default routing reads its channel's threads; a DM has none to read.
-      room: {
-        threads: rooms,
-        of: (turn) => {
-          if (!turn.group || turn.historyKey === undefined) return undefined;
-          const { teamId, channelId } = slackPlaceOf(turn.historyKey);
-          return slackHistoryKey(teamId, { channelId });
-        },
-      },
       seen,
       toStored: ({ previewTs: _preview, nativeQueueStatus: _status, ...intent }) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _attempts, ...intent }) => ({ ...intent }),
@@ -444,7 +444,12 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
               slackReply(
                 slackTurnStream(
                   agent,
-                  { session: turn.session, key: turn.id, text: `${discussionBlock(discussion.text)}${turn.baseText}` },
+                  {
+                    session: () => sessions.of(turn.conversation, () => newSession(agent)),
+                    ...enterRoom(turn),
+                    key: turn.id,
+                    text: `${discussionBlock(discussion.text)}${turn.baseText}`,
+                  },
                   { api, channelId: turn.channelId, filesDir: attachmentsDir(stateHome), label },
                   {
                     primaryFileIds: turn.fileIds,
@@ -536,7 +541,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       const defaultThread = event.thread_ts ?? event.ts;
       const threadTs =
         routed.threadTs === null ? undefined : (routed.threadTs ?? (sameChannel ? defaultThread : undefined));
-      const defaultSession = threadKey(teamId, event.channel, rootTs);
+      const defaultConversation = threadKey(teamId, event.channel, rootTs);
       // Every place's discussion under the default routing, a DM's too (what a send tool posted there is in no session);
       // a routed session's place is the router's to decide.
       const historyKey =
@@ -548,7 +553,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         seen.add(logicalId);
         const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
         sideTasks.track(
-          dispatchStop(agent, routed.session ?? defaultSession, label)
+          dispatchStop(agent, sessions.get(routed.conversation ?? defaultConversation), label)
             .then((feedback) =>
               placeApi({ historyKey, teamId })
                 .postMessage(target, feedback)
@@ -570,7 +575,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         {
           id: logicalId,
           seq: ++seq,
-          session: routed.session ?? defaultSession,
+          conversation: routed.conversation ?? defaultConversation,
           baseText,
           ...(historyKey !== undefined ? { historyKey } : {}),
           group,
@@ -590,7 +595,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         group &&
         threadTs !== undefined &&
         sameChannel &&
-        routed.session === undefined &&
+        routed.conversation === undefined &&
         routed.threadTs === undefined
       ) {
         // The ASKER counts as heard in this thread too, and both halves are written together so the record can never

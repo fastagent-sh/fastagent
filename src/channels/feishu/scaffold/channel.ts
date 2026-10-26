@@ -1,10 +1,10 @@
+import { needs } from "@fastagent-sh/fastagent";
 import {
   type FeishuChannelOptions,
   feishuChannel,
   feishuIngress,
   feishuWebSocketChannel,
 } from "@fastagent-sh/fastagent/feishu";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
 // fastagent's canonical Feishu adapter (verify + run + reply), configured with YOUR policy. Feishu
 // (open.feishu.cn) only; a Lark-international tenant uses `fastagent add lark` instead.
@@ -29,8 +29,8 @@ import { defineChannel } from "@fastagent-sh/fastagent";
 
 // Your policy, the same whichever way the channel receives.
 const policy: Pick<FeishuChannelOptions, "onError" | "route"> = {
-  // No session modes: a chat is one session and a thread is another, and where the answer goes follows
-  // from that (docs/design/participant-model.md).
+  // A chat is one conversation and a thread is another, each with a session of its own, and where the
+  // answer goes follows from that (docs/design/participant-model.md).
   // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
   // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
   // full details always go to the server log regardless.
@@ -41,26 +41,29 @@ const policy: Pick<FeishuChannelOptions, "onError" | "route"> = {
   // Agent takes part and exactly ONE human does. Other group/thread discussion is read from the
   // platform by that place's next answered turn; @other-only messages are discussion, not asks.
   // Override to customise explicit routing, reusing the export:
-  //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
+  //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { conversation: `user:${e.sender?.sender_id?.open_id}` },
   //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { text: `${feishuEnvelope(e)}\n[extra]` },
 };
 
-// `secrets`: the env vars this channel needs. fastagent carries them to a deployed box and refuses to
-// serve while one is unset. FEISHU_ENCRYPT_KEY is optional, so it is read, not declared.
+// `needs` declares the env vars this channel reads: fastagent carries them to a deployed box and
+// refuses to serve while a required one is unset. FEISHU_ENCRYPT_KEY is optional.
 export default feishuIngress() === "webhook"
-  ? defineChannel({
-      secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
-      channel: (secrets) =>
+  ? needs(
+      [
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "FEISHU_VERIFICATION_TOKEN",
+        { name: "FEISHU_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
+      ],
+      (secrets) =>
         feishuChannel({
           appId: secrets.FEISHU_APP_ID,
           appSecret: secrets.FEISHU_APP_SECRET,
           verificationToken: secrets.FEISHU_VERIFICATION_TOKEN, // authenticates inbound events
-          encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined, // when set, plaintext events are refused
+          encryptKey: secrets.FEISHU_ENCRYPT_KEY,
           ...policy,
         }),
-    })
-  : defineChannel({
-      secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
-      channel: (secrets) =>
-        feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
-    });
+    )
+  : needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
+      feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
+    );

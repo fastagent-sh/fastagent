@@ -1,13 +1,12 @@
 /**
- * The ONE Telegram transport per state root a process holds: the mounted channel's, shared with the scaffolded send
- * tool, and the reason it is shared. A message the agent sends itself (a schedule's digest, a post into another chat)
+ * The ONE Telegram transport per bot a process holds: the mounted channel's, shared with the scaffolded send tool,
+ * found by the bot token both hold, and the reason it is shared. A message the agent sends itself (a schedule's digest, a post into another chat)
  * never comes back as an update, so it is recorded into the target place's discussion here, where the channel's
  * context buffer lives, and the chat's next turn knows it was said.
  */
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { log } from "../../log.ts";
-import { resolveStateRoot } from "../../paths.ts";
 import { type BufferEntry, ownPostEntry } from "./context-buffer.ts";
 import { telegramPlaceKey } from "./parse.ts";
 import { callApi, chunkText } from "./telegram-api.ts";
@@ -43,11 +42,11 @@ interface Mounted {
   record?: (placeKey: string, entry: BufferEntry) => void;
 }
 
-const byStateRoot = new Map<string, Mounted>();
+const byToken = new Map<string, Mounted>();
 
-/** The channel's transport is the authoritative one for its root; a re-mount replaces it. */
-export function registerTelegramTransport(stateRoot: string, mounted: Required<Mounted>): void {
-  byStateRoot.set(stateRoot, mounted);
+/** The channel's transport is the authoritative one for its bot; a re-mount replaces it. */
+export function registerTelegramTransport(mounted: Required<Mounted>): void {
+  byToken.set(mounted.botToken, mounted);
 }
 
 const NOT_MOUNTED = "no telegram channel is mounted in this process, so the chat's next turn will not see it";
@@ -64,17 +63,9 @@ function landedPlace(sent: { chat?: { id?: number }; message_thread_id?: number 
     : telegramPlaceKey(target.chatId, target.threadId);
 }
 
-/** The transport of the agent whose directory is `cwd` (a tool's `ctx.cwd`). */
-export function telegramTransport(cwd: string): TelegramTransport {
-  const stateRoot = resolveStateRoot(cwd);
-  let mounted = byStateRoot.get(stateRoot);
-  if (!mounted) {
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
-    if (!botToken) throw new Error("TELEGRAM_BOT_TOKEN is not set and no Telegram channel is mounted");
-    mounted = { apiBaseUrl: "https://api.telegram.org", botToken };
-    byStateRoot.set(stateRoot, mounted);
-  }
-  const { apiBaseUrl, botToken, record } = mounted;
+/** The transport of the bot `botToken` signs in as: its mounted channel's, or the token's own when none is mounted. */
+export function telegramTransport(botToken: string): TelegramTransport {
+  const { apiBaseUrl, record } = byToken.get(botToken) ?? { apiBaseUrl: "https://api.telegram.org" };
 
   /** Record what was delivered. It is already in the chat, so a failure here is reported, never thrown: a thrown send
    *  would read as "not sent" and invite a duplicate. */

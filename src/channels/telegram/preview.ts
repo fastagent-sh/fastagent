@@ -5,7 +5,7 @@
  * carry unbalanced HTML); on completion the same message is edited into the final answer as HTML. One
  * message, works in groups and private (unlike sendMessageDraft, which is private/forum-topic only).
  */
-import type { InvokeEvent } from "../../protocol.ts";
+import type { TurnEvent } from "../kit/invoke-turn-kit.ts";
 import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
@@ -103,7 +103,7 @@ export function deliverTelegramAnswer(
  * and surfaces a real failure (bad token, etc.).
  */
 export function telegramReply(
-  events: Stream.Stream<InvokeEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PortFailure>,
   api: string,
   botToken: string,
   target: Target,

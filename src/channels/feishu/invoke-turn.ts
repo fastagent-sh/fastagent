@@ -12,7 +12,7 @@
  * ancestors, and degrade per attachment: one expired background file must not block the current ask
  * or hide its still-readable siblings.
  */
-import type { Agent, ImageRef, InvokeEvent } from "../../protocol.ts";
+import type { Agent, Attachment as ImageRef } from "../../agent-api.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import { log } from "../../log.ts";
@@ -23,9 +23,10 @@ import {
   loadBackground,
   missingAttachmentsNote,
   turnStream,
+  type TurnEvent,
+  promptContent,
 } from "../kit/invoke-turn-kit.ts";
 import { BUFFER_ATTACH_MAX } from "../kit/context-buffer.ts";
-import { forkThread } from "../kit/thread-fork.ts";
 import type { FeishuBufferedRef } from "./history.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
@@ -51,9 +52,6 @@ export interface FeishuTurnTransport {
    *  sender is an app. Needed to tell the agent's OWN messages from any other bot's in the same chat:
    *  `sender_type` alone says "some app", which is not the question the referent path asks. */
   appId: string;
-  /** The place this thread branched from (the chat's main place), when the turn runs in a thread: a NEW thread
-   *  session starts as a fork of it (participant-model.md §5); one that exists is left alone. */
-  parentSession?: string;
 }
 
 /** An attachment reference: the resource key inside its CARRYING message (the resource API addresses
@@ -328,35 +326,31 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
 }
 
 /**
- * Run one turn: resolve its inputs, start a new thread from its room, then ask the agent (invoke-turn-kit — a
- * preparation failure surfaces as a `rejected` event, never a silent drop). `key` is the turn's: the message it
- * answers, which is also how a later thread finds the run this one becomes.
+ * Run one turn: resolve its inputs, then ask the agent (invoke-turn-kit — a preparation failure surfaces as a
+ * `rejected` event, never a silent drop). `key` is the turn's: the message it answers, which is also how a later
+ * thread finds the message this one becomes. `session` gets the reply chain's ids, where a new thread forks from.
  */
 export function feishuTurnStream(
   agent: Agent,
-  turn: { session: string; key: string; text: string; source: string },
+  turn: {
+    session: (referentIds: readonly string[]) => Promise<string>;
+    /** While it runs, the room its thread-reading tool reads (a group turn's chat). */
+    enter?: (sessionId: string) => () => void;
+    key: string;
+    text: string;
+  },
   transport: FeishuTurnTransport,
   attachments: FeishuTurnAttachments,
-): Stream.Stream<InvokeEvent, PortFailure> {
-  const room = transport.parentSession;
+): Stream.Stream<TurnEvent, PortFailure> {
   return turnStream({
     agent,
     label: transport.label,
-    source: { kind: "channel", name: turn.source },
-    resolve: async () => {
-      const resolved = await resolveTurnInputs(transport, attachments);
-      if (room !== undefined) {
-        await forkThread(agent, { sessionId: turn.session, room, chain: resolved.referentIds }, transport.label);
-      }
-      return resolved;
-    },
+    session: (resolved) => turn.session(resolved.referentIds),
+    ...(turn.enter === undefined ? {} : { enter: turn.enter }),
+    resolve: () => resolveTurnInputs(transport, attachments),
     turn: (resolved) => ({
-      sessionId: turn.session,
       idempotencyKey: turn.key,
-      prompt: {
-        text: `${turn.text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`,
-        ...(resolved.images ? { images: resolved.images } : {}),
-      },
+      content: promptContent(`${turn.text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, resolved.images),
     }),
     // A resource fetch that failed may simply succeed on the redelivery.
     retryableLoadFailure: () => true,

@@ -39,11 +39,12 @@ export function promptContent(text: string, images: readonly Attachment[] | unde
 }
 
 /**
- * One turn, end to end: the session the turn's place talks in (created and recorded first, place-sessions.ts), the
- * platform inputs prepared, then the message sent and its answer read as it is written (`stream`).
+ * One turn, end to end: the platform inputs prepared, the session the turn's conversation talks in (created and
+ * recorded before anything is sent, kit/sessions.ts), then the message sent and its answer read as it is written
+ * (`stream`).
  *
  * The message queues behind whatever runs in the session (a wake-up, a schedule): the channel's own turns never
- * collide, its queue serializes them per place. Its key is the turn's, so a turn run again after a restart is the
+ * collide, its queue serializes them per conversation. Its key is the turn's, so a turn run again after a restart is the
  * message it already sent: one that ended is read back, answer included.
  *
  * A failure to prepare is the turn's `rejected` event: nothing was sent. It must never throw out of the stream, since
@@ -52,8 +53,11 @@ export function promptContent(text: string, images: readonly Attachment[] | unde
 export function turnStream<R>(opts: {
   agent: Agent;
   label: string;
-  /** The session the turn's place talks in: the one it has, or one created and recorded before anything is sent. */
-  session: () => Promise<string>;
+  /**
+   * The session the turn's conversation talks in: the one it has, or one created and recorded before anything is
+   * sent. It gets the prepared inputs, since where a new thread forks from is what its reply chain names.
+   */
+  session: (resolved: R) => Promise<string>;
   /** While the turn runs, what its session reaches by its id (a thread-reading tool's room); released when it ends. */
   enter?: (sessionId: string) => () => void;
   /** Prepare this turn's inputs (download attachments, walk a reply chain). */
@@ -67,8 +71,8 @@ export function turnStream<R>(opts: {
 }): Stream.Stream<TurnEvent, PortFailure> {
   return Stream.unwrap(
     portJoin(async () => {
-      const sessionId = await opts.session();
-      return { sessionId, resolved: await opts.resolve() };
+      const resolved = await opts.resolve();
+      return { sessionId: await opts.session(resolved), resolved };
     }).pipe(
       Effect.flatMap(({ sessionId, resolved }) =>
         Effect.gen(function* () {
