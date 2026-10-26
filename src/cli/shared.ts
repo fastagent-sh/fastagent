@@ -12,6 +12,7 @@ import { listModels, providerAuthStatuses, providerOf } from "../harnesses/model
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
 import { loadConfig } from "../harnesses/pi-durable/open.ts";
 import { formatAuthReport } from "./auth-view.ts";
+import { contentLines } from "./content-view.ts";
 import { deployedHost, isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { dotEnvPath, enterAgentEnv } from "../env.ts";
@@ -74,6 +75,7 @@ export async function reportAssembly(
 ): Promise<void> {
   const { definition, code, models, agentDir, stateRoot } = opened;
   reportLine("agent", `${definition.name} — ${agentDir}`);
+  for (const [label, value] of contentLines(opened.content)) reportLine(label, value);
   reportLine(
     "model",
     `${modelSpec}${definition.config.thinkingLevel ? ` (thinking: ${definition.config.thinkingLevel})` : ""}`,

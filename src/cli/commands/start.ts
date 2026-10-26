@@ -10,13 +10,7 @@ import {
   parseDeploymentRelease,
   prepareDeployment,
 } from "../../deploy/workspace.ts";
-import {
-  selectAgentEnvironment,
-  resolveSecretsDir,
-  isAgentcoreRuntime,
-  isUnderDir,
-  exists,
-} from "../../paths.ts";
+import { selectAgentEnvironment, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";

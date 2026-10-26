@@ -8,6 +8,9 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
+import { loadContent } from "../../content/file.ts";
+import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
+import { enterEnvironment } from "../../environment/mise.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import type { DurableAgent } from "./agent.ts";
 import { type AgentDefinition, type BuiltDefinition, buildDefinition, openAgent, prepareDefinition } from "./open.ts";
@@ -29,6 +32,8 @@ export interface OpenedServing {
   definition: AgentDefinition;
   code: BuiltDefinition;
   models: ModelEnvironment;
+  /** What the agent works on and knows, resolved for this instance. */
+  content: readonly ResolvedContent[];
   agentDir: string;
   /** Where the instance's state is: its storage, its channels' and schedules' state, its wake-ups. */
   stateRoot: string;
@@ -40,6 +45,9 @@ export const STORAGE_FILE = "agent.sqlite";
 export async function openServing(dir: string, options: OpenServingOptions = {}): Promise<OpenedServing> {
   const definition = await prepareDefinition(dir);
   const code = buildDefinition(definition);
+  // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
+  await enterEnvironment(dir);
+  const content = resolveContent(dir, loadContent(dir));
   const models = modelEnvironment(
     dir,
     {
@@ -55,11 +63,12 @@ export async function openServing(dir: string, options: OpenServingOptions = {})
   const agent = await openAgent(definition, {
     storage,
     code,
+    content,
     credentials: models.credentials,
     // A serve's clock fires the wake-ups `wake` keeps; a one-shot message has none.
     ...(locking === "memory" ? {} : { stateRoot }),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
   });
-  return { agent, definition, code, models, agentDir: dir, stateRoot };
+  return { agent, definition, code, models, content, agentDir: dir, stateRoot };
 }

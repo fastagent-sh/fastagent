@@ -20,6 +20,7 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { loadEnvironment } from "../../content/file.ts";
+import type { ResolvedContent } from "../../content/resolve.ts";
 import { type DeclaredSecret, describeSecrets, missingSecrets, readSecretDeclaration } from "../../declared-secrets.ts";
 import { declaredVariables } from "../../environment/declare.ts";
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
@@ -286,6 +287,8 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
 
 export interface OpenAgentOptions {
   storage: Storage;
+  /** What the agent works on and knows (`context.json`'s content), resolved for this instance. */
+  content?: readonly ResolvedContent[];
   /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;
   /** Where `login` keeps provider credentials: the machine's in development, the instance's when deployed. */
@@ -312,7 +315,11 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
   registry.install(CodingTools);
   // After the coding tools, so a tool of the definition's own with one of their names replaces it.
   registry.install(
-    defineExtension({ name: DEFINITION_EXTENSION, sections: definitionSections(dir), tools: code.tools }),
+    defineExtension({
+      name: DEFINITION_EXTENSION,
+      sections: definitionSections(dir, options.content ?? []),
+      tools: code.tools,
+    }),
   );
   for (const extension of code.extensions) registry.install(extension);
   const ownWake = [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].some(({ name }) =>

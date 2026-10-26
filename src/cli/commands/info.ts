@@ -1,32 +1,19 @@
-/** `fastagent info [agent] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. */
+/** `fastagent info [agent] [--json]`: print what the directory builds into, WITHOUT opening or serving the agent. */
 import { resolve } from "node:path";
-import { enterAgentEnv } from "../../env.ts";
-import { inspectChannels } from "../../channels/discover.ts";
-import { loadConfig, providerOf, resolveModel, resolveModelSpec } from "../../harnesses/pi/config.ts";
-import { machineModels } from "../../harnesses/pi/models.ts";
-import { agentModels } from "../../harnesses/pi/agent-models.ts";
-import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
-import { CODING_TOOL_NAMES, type IndirectTool, resolveAgentTools } from "../../harnesses/pi/create.ts";
-import { loadAgentDefinition } from "../../harnesses/pi/definition.ts";
-import {
-  describeIndirectTools,
-  describeTools,
-  describePrompt,
-  reportFindingsIfChanged,
-  reportToolCollisions,
-} from "../../harnesses/pi/report.ts";
-import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
-import { log } from "../../log.ts";
-import { reportModuleLoadFailures } from "../../loader.ts";
-import { readMachine, withMachine } from "../../harnesses/pi/machine.ts";
-import { nextRun } from "../../schedule/cron.ts";
-import { loadSchedules } from "../../schedule/discover.ts";
-import { agentDirOrExit, failStartup } from "../fail.ts";
-import { contentLines } from "../content-view.ts";
-import { type ResolvedContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
+import { channelIngress } from "../../channels/discover.ts";
 import type { BoundContent } from "../../content/declare.ts";
 import { loadContent, loadEnvironment } from "../../content/file.ts";
-import { type DeclaredEnvironment, declaredVariables } from "../../environment/declare.ts";
+import { type ResolvedContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
+import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
+import { enterAgentEnv } from "../../env.ts";
+import type { DeclaredEnvironment } from "../../environment/declare.ts";
+import { modelEnvironment } from "../../harnesses/models/environment.ts";
+import { buildDefinition, prepareDefinition, secretsManifest } from "../../harnesses/pi-durable/open.ts";
+import { readCommands } from "../../harnesses/pi-durable/text.ts";
+import { resolveStateRoot } from "../../paths.ts";
+import { nextRun } from "../../schedule/cron.ts";
+import { contentLines } from "../content-view.ts";
+import { agentDirOrExit, failStartup } from "../fail.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -35,10 +22,18 @@ export interface InfoOptions {
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const agentDir = agentDirOrExit(resolve(dirArg));
-  enterAgentEnv(agentDir); // skills/tools may read env — and fetch — at load time
-  const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
-  const modelSpec = resolveModelSpec(opts.model, config);
-  // Reported, not fatal, like a tool that does not load: `info` is how an author finds out a content entry is missing.
+  enterAgentEnv(agentDir); // code may read its secrets, and fetch, when it is built
+  const definition = await prepareDefinition(agentDir).catch(failStartup);
+  const { config } = definition;
+  const modelSpec = opts.model ?? (process.env.FASTAGENT_MODEL || config.model);
+  const manifest = secretsManifest(definition);
+  const declared = manifest.flatMap(({ name, optional, declaredIn }) =>
+    declaredIn.map((source) => ({ name, optional, source })),
+  );
+  const unsetSecrets = missingSecrets(declared);
+  // Built only when every required secret has a value: building is what reads them.
+  const code = unsetSecrets.length === 0 ? buildDefinition(definition) : undefined;
+  // Reported, not fatal: `info` is how an author finds out a content entry is missing, or the environment refused.
   let content: ResolvedContent[] = [];
   let contentAbsent: BoundContent[] = [];
   let contentError: string | undefined;
@@ -49,8 +44,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   } catch (error) {
     contentError = (error as Error).message;
   }
-  const definition = await loadAgentDefinition(agentDir).catch(failStartup);
-  // Reported like content: `info` is how an author finds out context.json declares what the agent does not support.
   let environment: DeclaredEnvironment | undefined;
   let environmentError: string | undefined;
   try {
@@ -58,124 +51,50 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   } catch (error) {
     environmentError = (error as Error).message;
   }
-  // What this agent HAS: the definition's skills and prompt templates plus the ones its machine lends (machine.ts).
-  const machineResources = await readMachine(agentDir);
-  const skills = withMachine(definition.skills, machineResources.skills);
-  const prompts = withMachine(definition.prompts, machineResources.prompts);
-  // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a tool), is
-  // isolated the same way everywhere (G2).
-  const tools = await resolveAgentTools(config, agentDir)
-    .then((r) => ({
-      names: r.toolNames,
-      sources: r.toolSources,
-      indirect: r.indirectTools,
-      collisions: r.toolCollisions,
-      failures: r.toolFailures,
-      secrets: allSecrets(r.toolSecrets),
-      error: undefined as string | undefined,
-    }))
-    .catch((e: unknown) => ({
-      names: [] as string[],
-      sources: new Map<string, string>(),
-      indirect: [] as IndirectTool[],
-      collisions: [],
-      failures: [],
-      secrets: [] as DeclaredSecret[],
-      error: (e as Error).message,
-    }));
-  // IMPORTED, like tools and schedules: a channel's declared secrets are part of what this command
-  // exists to report (and a channel that cannot load is what `dev` would fail on next).
-  const inspected = await inspectChannels(agentDir).catch(failStartup);
-  const channels = inspected.channels.map((c) => c.name);
-  // Loaded (imported + validated), not just discovered.
-  const sched = await loadSchedules(agentDir).catch(failStartup);
-  // What the definition DECLARED it needs, and which of those have no value here. `info` reports
-  // (never asserts) the list `start` refuses to boot without and `deploy` requires a value for: channels are
-  // imported as `start` imports them, so a Feishu/Lark channel that `dev` connects by WebSocket shows the webhook
-  // values a deployment needs, and the line says so.
-  const declaredSecrets: DeclaredSecret[] = [
-    ...tools.secrets,
-    ...allSecrets(inspected.secrets),
-    ...declaredVariables(environment),
-  ];
-  const unsetSecrets = missingSecrets(declaredSecrets);
-  const schedules = sched.schedules.map((s) => ({
+  const models = modelEnvironment(agentDir, {}, code?.providers ?? []);
+  const slash = modelSpec?.indexOf("/") ?? -1;
+  const modelError =
+    modelSpec === undefined || models.models.getModel(modelSpec.slice(0, slash), modelSpec.slice(slash + 1))
+      ? undefined
+      : `no provider "${modelSpec.slice(0, Math.max(slash, 0))}" offers "${modelSpec.slice(slash + 1)}"`;
+  const channels = [...(code?.channels ?? new Map())].map(([name, module]) => ({
+    name,
+    ingress: channelIngress(module),
+  }));
+  const schedules = (code?.schedules ?? []).map((s) => ({
     name: s.name,
     cron: s.cron,
     tz: s.tz ?? null,
     next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
   }));
-  // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login create them,
-  // info must not).
+  const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
   const stateRoot = resolveStateRoot(agentDir);
-  const sessionsDir = resolveSessionsDir(agentDir);
-  // Both layers: "what is this agent's state" is the question `info` answers, and a credential it runs on can live in
-  // a file the agent dir does not contain.
-  const models = agentModels(agentDir);
-  const { auth } = models;
-
-  // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own
-  // surface (built-ins + its models.json), which is exactly what a custom endpoint changes.
-  const modelError = modelSpec
-    ? await models
-        .runtime()
-        .then((runtime) => {
-          resolveModel(runtime, modelSpec);
-          return undefined as string | undefined;
-        })
-        .catch((error: unknown) => (error as Error).message)
-    : undefined;
-
-  // The machine's own endpoints, which this agent inherits unless its models.json declares the same provider.
-  const machine = await machineModels(agentDir).then(
-    (value) => ({ value, error: undefined }),
-    (error: unknown) => ({ value: undefined, error: (error as Error).message }),
-  );
-  const modelFromMachine = modelSpec !== undefined && machine.value?.inherited.includes(providerOf(modelSpec)) === true;
+  const auth = models.auth;
 
   if (opts.json) {
     console.log(
       JSON.stringify(
         {
           agentDir,
+          name: definition.name,
           content,
           contentAbsent,
           contentError: contentError ?? null,
           environment: environment ?? null,
           environmentError: environmentError ?? null,
-          contextFiles: definition.contextFiles.map((file) => file.path),
-          configPath: configPath ?? null,
           model: modelSpec ?? null,
           modelError: modelError ?? null,
-          modelFromMachine,
-          machineModels: machine.value ?? null,
-          machineModelsError: machine.error ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
-          codingTools: [...CODING_TOOL_NAMES],
-          systemPrompt: definition.systemPrompt?.path ?? null,
-          appendSystemPrompt: definition.appendSystemPrompt?.path ?? null,
-          skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
-          prompts: prompts.map((prompt) => ({ name: prompt.name, description: prompt.description ?? null })),
-          tools: tools.names,
-          toolSources: Object.fromEntries(tools.sources),
-          indirectTools: tools.indirect,
-          toolError: tools.error ?? null,
-          channels,
-          schedules,
-          scheduleFailures: sched.failures,
-          channelFailures: inspected.failures,
+          tools: code?.tools.map(({ name }) => name) ?? null,
+          extensions: code?.extensions.map(({ name }) => name) ?? null,
+          channels: code === undefined ? null : channels,
+          schedules: code === undefined ? null : schedules,
+          commands,
+          secrets: manifest,
+          unsetSecrets: unsetSecrets.map(({ name }) => name),
           stateRoot,
-          sessionsDir,
-          authPath: auth.path,
-          fallbackAuthPath: auth.fallback ?? null,
-          diagnostics: definition.diagnostics,
-          skillCollisions: definition.collisions,
-          shadowed: definition.shadowed,
-          ignored: definition.ignored,
-          toolCollisions: tools.collisions,
-          toolFailures: tools.failures,
-          declaredSecrets,
-          unsetSecrets,
+          authPath: auth?.path ?? null,
+          fallbackAuthPath: auth?.fallback ?? null,
         },
         null,
         2,
@@ -183,11 +102,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     );
     return;
   }
-  // One padded label writer, so labels stay aligned.
   const line = (label: string, value: string): void => console.log(`${`${label}:`.padEnd(13)} ${value}`);
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
-  line("agent", agentDir);
+  line("agent", `${definition.name} — ${agentDir}`);
   for (const [label, value] of contentLines(content, contentAbsent)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line(
@@ -199,41 +117,24 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
         : "(none: the machine's commands)",
   );
   if (environmentError) cont(`⚠ ${environmentError}`);
-  line("config", configPath ?? "(none)");
-  line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
+  line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or model in fastagent.config.ts)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
-  if (modelFromMachine) cont(`endpoint from the machine's ${machine.value?.path} (does not ship with a deploy)`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
-  line("codingTools", CODING_TOOL_NAMES.join(", "));
-  line("prompt", describePrompt(definition));
-  line("skills", skills.map((skill) => skill.name).join(", ") || "(none)");
-  line("prompts", prompts.map((prompt) => prompt.name).join(", ") || "(none)");
+  const unbuilt = "(not built: a required secret has no value)";
+  line("tools", code ? code.tools.map(({ name }) => name).join(", ") || "(none)" : unbuilt);
+  if (code && code.extensions.length > 0) line("extensions", code.extensions.map(({ name }) => name).join(", "));
+  line("channels", code ? channels.map((c) => `${c.name} (${c.ingress})`).join(", ") || "(none)" : unbuilt);
   line(
-    "tools",
-    tools.error ? "(could not load — see warning below)" : describeTools(tools.names, tools.sources) || "(none)",
+    "schedules",
+    code ? schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)" : unbuilt,
   );
-  if (tools.indirect.length > 0) line("indirect", describeIndirectTools(tools.indirect));
-  line("channels", channels.join(", ") || "(none)");
-  line("schedules", schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)");
-  line("secrets", declaredSecrets.length > 0 ? describeSecrets(declaredSecrets) : "(none declared)");
-  if (unsetSecrets.length > 0)
-    cont(`⚠ start and deployments refuse to boot until set: ${unsetSecrets.map((s) => s.name).join(", ")}`);
-  line("state", stateRoot);
-  line("sessions", sessionsDir);
-  line("auth", auth.fallback === undefined ? auth.path : `${auth.path} (then ${auth.fallback})`);
-  if (machine.error) line("endpoints", `⚠ ${machine.error}`);
-  else if (machine.value) {
-    const { path, inherited, overridden } = machine.value;
-    const parts = [inherited.join(", ") || "(none inherited)"];
-    if (overridden.length > 0) parts.push(`overridden by the agent: ${overridden.join(", ")}`);
-    line("endpoints", `${path}: ${parts.join("; ")}`);
+  line("commands", commands.map(({ name }) => `/${name}`).join(", ") || "(none)");
+  line("secrets", declared.length > 0 ? describeSecrets(declared) : "(none declared)");
+  if (unsetSecrets.length > 0) {
+    cont(`⚠ dev, start and deployments refuse to boot until set: ${unsetSecrets.map((s) => s.name).join(", ")}`);
   }
-  reportToolCollisions(tools.collisions);
-  reportModuleLoadFailures(tools.failures);
-  reportModuleLoadFailures(sched.failures);
-  reportModuleLoadFailures(inspected.failures);
-  if (tools.error) log.warn(`[fastagent] ${tools.error}`);
-  reportFindingsIfChanged(definition.dir, definition);
+  line("state", stateRoot);
+  if (auth) line("auth", auth.fallback === undefined ? auth.path : `${auth.path} (then ${auth.fallback})`);
 }
 
 /** The packages and apt packages an environment declares, as one line. */

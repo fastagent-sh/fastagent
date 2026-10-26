@@ -8,6 +8,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { type PromptSection, section } from "@earendil-works/pi-durable";
 import { parse as parseYaml } from "yaml";
+import type { ResolvedContent } from "../../content/resolve.ts";
 import { log } from "../../log.ts";
 import type { AgentCommand } from "./agent.ts";
 
@@ -237,10 +238,49 @@ const fileText = (path: string): string | undefined => {
 };
 
 /** The prompt the definition contributes: `SYSTEM.md` as written, `AGENTS.md` as project context, then the skills. */
-export function definitionSections(agentDir: string): PromptSection[] {
+export function definitionSections(agentDir: string, content: readonly ResolvedContent[]): PromptSection[] {
   return [
     section("system", () => fileText(join(agentDir, "SYSTEM.md")), { tag: false }),
     section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
     section("skills", () => skillsPrompt(readSkills(agentDir))),
+    section("content", () => contentSection({ agentDir, content })),
   ];
+}
+
+/** What a content entry of this kind is, said to the agent: where it is, and whether another instance shares it. */
+function contentKind(c: ResolvedContent): string {
+  if (c.kind !== "github") return "a directory on this machine";
+  if (!c.clone) return `a checkout of github ${c.repo} on this machine`;
+  // Brought up to date in place at each start where git can do so without touching the agent's work; what the agent
+  // changes stays, and reaches anyone else only when pushed. The declared ref is what it follows, not a claim about
+  // where it is: a clone the agent moved elsewhere is left there.
+  const clone = `a shallow clone of github ${c.repo}${c.ref ? ` (declared ${c.ref})` : ""} in your own storage`;
+  return c.readonly
+    ? `${clone}, brought up to date each time you start`
+    : `${clone}: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change`;
+}
+
+/**
+ * Where the agent is and what it works on (agent-model.md §4): its own directory is itself, and each content entry is named
+ * with its location, whether it is the agent's to change, and where a change there goes. A result written where it
+ * does not last is how knowledge gets lost, so the agent is told which is which.
+ */
+function contentSection({ agentDir, content }: { agentDir: string; content: readonly ResolvedContent[] }): string {
+  const own =
+    `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
+    `land there unless you put them elsewhere.`;
+  if (content.length === 0) return `${own} Nothing else is declared for you: you work only in your own directory.`;
+  const line = (c: ResolvedContent) =>
+    `- ${c.name}: ${c.location} (${contentKind(c)})${c.description !== undefined ? ` ${c.description}` : ""}`;
+  const worksOn = content.filter((c) => !c.readonly);
+  const knows = content.filter((c) => c.readonly);
+  return [
+    own,
+    ...(worksOn.length > 0 ? ["You work on:", ...worksOn.map(line)] : []),
+    ...(knows.length > 0 ? ["You know, and do not write:", ...knows.map(line)] : []),
+    `Run a command in one of these directories with \`cd <its location> && …\`; file tools take the location directly.` +
+      (worksOn.length > 0
+        ? " A result worth keeping belongs in a directory you work on, not in your own directory."
+        : " You write only in your own directory: the directories above are for reading."),
+  ].join("\n");
 }
