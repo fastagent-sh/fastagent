@@ -4,16 +4,27 @@
  * These are the properties an embedder gets for free by calling one function instead of composing
  * the parts. Each was, at some point, composed wrong — inside this repo's own CLI.
  */
-import { mkdir, mkdtemp, rename, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { getEventListeners } from "node:events";
 import { log } from "../src/log.ts";
-import { describe, expect, it, vi } from "vitest";
-import { createAgentService } from "../src/harnesses/pi/service.ts";
-import { mountAgentService } from "../src/service.ts";
-import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { type MountAgentServiceOptions, mountAgentService } from "../src/service.ts";
+
+const opened: DurableAgent[] = [];
+afterAll(async () => {
+  for (const agent of opened) await agent.close();
+});
+
+/** The directory opened as a serve opens it, with no storage of its own, and mounted. */
+async function createAgentService(dir: string, options: MountAgentServiceOptions = {}) {
+  const served = await openServing(dir, { locking: "memory" });
+  opened.push(served.agent);
+  return mountAgentService({ ...served, channels: served.code.channels, schedules: served.code.schedules }, options);
+}
 
 async function agentDir(
   files: Record<string, string> = {},
@@ -29,10 +40,10 @@ async function agentDir(
   return dir;
 }
 
-describe("createAgentService", () => {
+describe("mountAgentService over an opened directory", () => {
   it("mounts channel routes on a handler, with health beside them", async () => {
     const dir = await agentDir({
-      "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("from-channel") });`,
+      "src/channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("from-channel") });`,
     });
     const service = await createAgentService(dir);
     try {
@@ -41,84 +52,31 @@ describe("createAgentService", () => {
       );
       expect((await service.handler(new Request("http://h/health"))).status).toBe(200);
       expect(service.channels.routes).toEqual(["hook"]);
-      // The DATA plane is there BESIDE the channel, not instead of it: `/invoke` is the framework's
-      // interface, so whether a definition happens to declare a channel cannot decide if it exists.
-      // 415 rather than 404: the route is mounted and refusing a body it was not told is JSON.
-      expect((await service.handler(new Request("http://h/invoke", { method: "POST" }))).status).toBe(415);
+      // Only routes that verify their caller are served: the agent has no network binding of its own.
+      expect(Object.keys(service.routes).sort()).toEqual(["GET /health", "POST /hook"]);
     } finally {
       await service.close();
     }
   });
 
-  it("a schedules/ directory reaches the clock — the only wiring dev and start use — and nothing runs one by name", async () => {
-    const dir = await agentDir({ "schedules/daily.md": `---\ncron: "0 9 * * *"\n---\nsummarise the day\n` });
+  it("a schedule in src/schedules/ reaches the clock", async () => {
+    const dir = await agentDir({
+      "src/schedules/daily.ts": `import { defineSchedule } from "@fastagent-sh/fastagent";
+export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" });\n`,
+    });
     const service = await createAgentService(dir);
     try {
-      expect(service.schedules()).toEqual([{ name: "daily", cron: "0 9 * * *", prompt: "summarise the day" }]);
-      // Work a caller starts itself is `POST /invoke`: there is no by-name route beside it.
-      expect([...service.unverifiedRoutes].sort()).toEqual(["GET /health", "POST /invoke"]);
-      expect((await service.handler(new Request("http://h/run", { method: "POST" }))).status).toBe(404);
+      expect(service.schedules).toEqual([{ name: "daily", cron: "0 9 * * *", prompt: "summarise the day" }]);
     } finally {
       await service.close();
     }
-  });
-
-  it("http.api: false withholds the agent's API, and frees its paths for a channel", async () => {
-    // The OFF switch: a deployment that should expose only a signed webhook must not also publish an anonymous,
-    // fully-tooled API on its public URL.
-    const dir = await agentDir(
-      { "channels/own.mjs": `export default () => ({ "POST /invoke": () => new Response("the channel's") });` },
-      `{ model: "openai-codex/gpt-5.5", http: { api: false } }`,
-    );
-    const service = await createAgentService(dir);
-    try {
-      expect(await (await service.handler(new Request("http://h/invoke", { method: "POST" }))).text()).toBe(
-        "the channel's",
-      );
-      // …and the startup report knows it is not ours. `routes` says `/invoke` answers; only
-      // `unverifiedRoutes` says whether WE answer there, which is what the try-it curl and the
-      // "unauthenticated data plane" warning both need.
-      expect(service.unverifiedRoutes).not.toContain("POST /invoke");
-      expect(service.unverifiedRoutes).toContain("GET /health");
-    } finally {
-      await service.close();
-    }
-  });
-
-  it("refuses an embedder's unusable cors origin, like the config file's", async () => {
-    // `allowedOrigin` compares exact strings, so one trailing slash is a rule that matches nothing —
-    // the front end gets 403 and nothing points at the list. `loadConfig` already refused this; the
-    // MountableAgent path is the other way in and had no check at all.
-    const dir = await agentDir();
-    const opened = await createPiAgentFromDir(dir, { serving: true });
-    await expect(mountAgentService({ ...opened, http: { cors: ["https://app.example.com/"] } })).rejects.toThrow(
-      /mountAgentService: http\.cors entry "https:\/\/app\.example\.com\/" is not the origin a browser sends/,
-    );
-  });
-
-  it("publishes the control plane at its prefix, unauthenticated", async () => {
-    // An embedded surface has no port of its own to advertise, so the prefix is all a client needs.
-    // Nothing gates it: fastagent authenticates nothing, and the embedder's own middleware is what
-    // decides who may reach this handler at all.
-    const dir = await mkdtemp(join(tmpdir(), "fa-surface-control-"));
-    await writeFile(
-      join(dir, "fastagent.config.ts"),
-      `export default { model: "openai-codex/gpt-5.5", http: { control: true } };\n`,
-    );
-    await writeFile(join(dir, "SYSTEM.md"), "You are a test agent.\n");
-    const service = await createAgentService(dir);
-    expect(service.planes).toEqual({ api: true, control: true });
-    const deleted = await service.handler(new Request("http://h/control/sessions/none", { method: "DELETE" }));
-    expect(deleted.status).toBe(404);
-    expect(await deleted.json()).toMatchObject({ error: { code: "not_found" } });
-    await service.close();
   });
 
   it("a connection that dies after coming up makes health say so again", async () => {
     // Readiness is two-way: the surface would otherwise keep telling a load balancer it serves a
     // channel it no longer has.
     const dir = await agentDir({
-      "channels/sock.mjs": `let end; export default {
+      "src/channels/sock.mjs": `let end; export default {
         name: "sock",
         connect: (ctx, signal) => ({
           ready: Promise.resolve(),
@@ -143,9 +101,9 @@ describe("createAgentService", () => {
     // `ready` while health is permanently 503 would answer the same question two ways.
     (globalThis as Record<string, unknown>).__faSlowReady = undefined;
     const dir = await agentDir({
-      "channels/dies.mjs": `export default { name: "dies", connect: () => ({
+      "src/channels/dies.mjs": `export default { name: "dies", connect: () => ({
         ready: Promise.resolve(), closed: Promise.resolve() }) };`,
-      "channels/slow.mjs": `export default { name: "slow", connect: (ctx, signal) => ({
+      "src/channels/slow.mjs": `export default { name: "slow", connect: (ctx, signal) => ({
         ready: new Promise((r) => { globalThis.__faSlowReady = r; }),
         closed: new Promise((r) => signal.addEventListener("abort", () => r(), { once: true })),
       }) };`,
@@ -168,7 +126,7 @@ describe("createAgentService", () => {
     // the surface, not by this test.
     (globalThis as Record<string, unknown>).__faSockClosed = false;
     const dir = await agentDir({
-      "channels/sock.mjs": `export default {
+      "src/channels/sock.mjs": `export default {
         name: "sock",
         connect: (ctx, signal) => ({
           ready: Promise.resolve(),
@@ -188,15 +146,20 @@ describe("createAgentService", () => {
   it("concurrent close calls share completion and failure, resolved or rejected", async () => {
     for (const reject of [false, true]) {
       const dir = await agentDir({
-        "channels/sock.mjs": `export let stopped = false;
-        export default { name: "sock", connect: (ctx, signal) => ({
+        "src/channels/sock.mjs": `export default { name: "sock", connect: (ctx, signal) => ({
           ready: Promise.resolve(),
           closed: new Promise((resolve, reject) => signal.addEventListener("abort", () => {
-            setTimeout(() => { stopped = true; ${reject ? 'reject(new Error("shutdown failed"))' : "resolve()"}; }, 30);
+            setTimeout(() => { globalThis.__faSockStopped = true; ${reject ? 'reject(new Error("shutdown failed"))' : "resolve()"}; }, 30);
           }, { once: true })),
         }) };`,
       });
-      const channel = await import(pathToFileURL(join(dir, "channels/sock.mjs")).href);
+      // Observed through a global: the channel module is loaded by the agent's registry, not by this test.
+      const channel = {
+        get stopped() {
+          return (globalThis as Record<string, unknown>).__faSockStopped === true;
+        },
+      };
+      (globalThis as Record<string, unknown>).__faSockStopped = false;
       const service = await createAgentService(dir);
       await service.ready;
       const first = service.close().finally(() => {
@@ -221,13 +184,13 @@ describe("createAgentService", () => {
     }
   });
 
-  it("every serve polls the agent's own wake-ups and re-reads schedules/ — no switch — and close() stops both", async () => {
+  it("every serve polls the agent's own wake-ups — no switch — and close() stops it", async () => {
     const timers = vi.spyOn(globalThis, "setTimeout");
     const cleared = vi.spyOn(globalThis, "clearTimeout");
     const service = await createAgentService(await agentDir({}, `{ model: "openai-codex/gpt-5.5" }`));
     try {
       const polls = timers.mock.calls.flatMap((args, i) => (args[1] === 30_000 ? [timers.mock.results[i]?.value] : []));
-      expect(polls).toHaveLength(2);
+      expect(polls).toHaveLength(1);
       await service.close();
       for (const poll of polls) expect(cleared).toHaveBeenCalledWith(poll);
     } finally {
@@ -251,7 +214,7 @@ describe("createAgentService", () => {
   it("an already-aborted signal closes the surface before open() returns", async () => {
     (globalThis as Record<string, unknown>).__faAbortedClosed = false;
     const dir = await agentDir({
-      "channels/sock.mjs": `export default {
+      "src/channels/sock.mjs": `export default {
         name: "sock",
         connect: (ctx, signal) => ({
           ready: Promise.resolve(),
@@ -288,7 +251,7 @@ describe("createAgentService", () => {
     // an embedder gets a rejection it can handle — and nothing is left running behind it.
     (globalThis as Record<string, unknown>).__faFailClosed = false;
     const dir = await agentDir({
-      "channels/sock.mjs": `export default {
+      "src/channels/sock.mjs": `export default {
         name: "sock",
         connect: (ctx, signal) => ({
           ready: Promise.reject(new Error("dial refused")),
@@ -309,7 +272,7 @@ describe("createAgentService", () => {
     // The contract puts a terminal failure on `closed`, and a channel that dies before connecting
     // may never settle `ready`. Waiting on `ready` alone hangs open() forever with no diagnosis.
     const dir = await agentDir({
-      "channels/stuck.mjs": `export default { name: "stuck", connect: () => ({
+      "src/channels/stuck.mjs": `export default { name: "stuck", connect: () => ({
         ready: new Promise(() => {}),
         closed: Promise.reject(new Error("dial refused")),
       }) };`,
@@ -323,13 +286,13 @@ describe("createAgentService", () => {
     // caller must still get the reason the start failed, not the aftermath of tearing it down.
     (globalThis as Record<string, unknown>).__faRolledBack = false;
     const dir = await agentDir({
-      "channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
+      "src/channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
         ready: Promise.resolve(),
         closed: new Promise((resolve) => signal.addEventListener("abort", () => {
           globalThis.__faRolledBack = true; resolve();
         }, { once: true })),
       }) };`,
-      "channels/b-throws.mjs": `export default { name: "b-throws", connect: () => { throw new Error("cannot dial"); } };`,
+      "src/channels/b-throws.mjs": `export default { name: "b-throws", connect: () => { throw new Error("cannot dial"); } };`,
     });
     await expect(createAgentService(dir, { onChannelClosed: () => {}, closeTimeoutMs: 200 })).rejects.toThrow(
       /cannot dial/,
@@ -341,11 +304,11 @@ describe("createAgentService", () => {
 
   it("observes a ready rejection when a later connect throws", async () => {
     const dir = await agentDir({
-      "channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
+      "src/channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
         ready: Promise.reject(new Error("first dial failed")),
         closed: new Promise(resolve => signal.addEventListener("abort", () => setTimeout(resolve, 10), { once: true })),
       }) };`,
-      "channels/b-throws.mjs": `export default { name: "b-throws", connect: () => { throw new Error("cannot dial"); } };`,
+      "src/channels/b-throws.mjs": `export default { name: "b-throws", connect: () => { throw new Error("cannot dial"); } };`,
     });
     await expect(createAgentService(dir)).rejects.toThrow("cannot dial");
   });
@@ -353,11 +316,11 @@ describe("createAgentService", () => {
   it("rejects an invalid ready OR closed promise and rolls back earlier connections", async () => {
     for (const field of ["ready", "closed"]) {
       const dir = await agentDir({
-        "channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
+        "src/channels/a-first.mjs": `export default { name: "a-first", connect: (ctx, signal) => ({
           ready: Promise.resolve(),
           closed: new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("rollback reached first")), { once: true })),
         }) };`,
-        "channels/b-invalid.mjs": `export default { name: "b-invalid", connect: () => ({
+        "src/channels/b-invalid.mjs": `export default { name: "b-invalid", connect: () => ({
           ready: Promise.resolve(), closed: Promise.resolve(), ${field}: null,
         }) };`,
       });
@@ -373,7 +336,7 @@ describe("createAgentService", () => {
 
   it("logs a throwing closure callback and still rolls back startup", async () => {
     const dir = await agentDir({
-      "channels/sock.mjs": `export default { name: "sock", connect: () => ({
+      "src/channels/sock.mjs": `export default { name: "sock", connect: () => ({
         ready: new Promise(() => {}), closed: Promise.resolve(),
       }) };`,
     });
@@ -397,7 +360,7 @@ describe("createAgentService", () => {
     // Both fail here: the connection cannot come up AND cannot stop. The caller needs the first —
     // the second is the aftermath, and replacing one with the other hides the actual cause.
     const dir = await agentDir({
-      "channels/doomed.mjs": `export default { name: "doomed", connect: () => ({
+      "src/channels/doomed.mjs": `export default { name: "doomed", connect: () => ({
         ready: Promise.reject(new Error("dial refused")),
         closed: Promise.reject(new Error("and could not stop either")),
       }) };`,
@@ -408,7 +371,7 @@ describe("createAgentService", () => {
 
   it("closing an unresponsive dialing channel also settles ready", async () => {
     const dir = await agentDir({
-      "channels/deaf.mjs": `export default { name: "deaf", connect: () => ({
+      "src/channels/deaf.mjs": `export default { name: "deaf", connect: () => ({
         ready: new Promise(() => {}), closed: new Promise(() => {}),
       }) };`,
     });
@@ -423,7 +386,7 @@ describe("createAgentService", () => {
     const dir = await agentDir(
       Object.fromEntries(
         ["a", "b"].map((name) => [
-          `channels/${name}.mjs`,
+          `src/channels/${name}.mjs`,
           `export default { name: "${name}", connect: (ctx, signal) => ({
         ready: Promise.resolve(),
         closed: new Promise((_, reject) => signal.addEventListener("abort", () => {
@@ -448,11 +411,11 @@ describe("createAgentService", () => {
     // message that blames every channel because one hung sends the reader to the wrong file: the
     // deadline reports what did not settle, individually.
     const dir = await agentDir({
-      "channels/quick.mjs": `export default { name: "quick", connect: (ctx, signal) => ({
+      "src/channels/quick.mjs": `export default { name: "quick", connect: (ctx, signal) => ({
         ready: Promise.resolve(),
         closed: new Promise((r) => signal.addEventListener("abort", () => r(), { once: true })),
       }) };`,
-      "channels/deaf.mjs": `export default { name: "deaf", connect: () => ({
+      "src/channels/deaf.mjs": `export default { name: "deaf", connect: () => ({
         ready: Promise.resolve(), closed: new Promise(() => {}) }) };`,
     });
     const service = await createAgentService(dir, { onChannelClosed: () => {}, closeTimeoutMs: 200 });
@@ -467,7 +430,7 @@ describe("createAgentService", () => {
     // The contract lets a connection settle `ready` as CANCELLATION on abort. Resolving normally
     // would tell the caller its channels are up while the surface is shut and health says 503.
     const dir = await agentDir({
-      "channels/slow.mjs": `export default { name: "slow", connect: (ctx, signal) => ({
+      "src/channels/slow.mjs": `export default { name: "slow", connect: (ctx, signal) => ({
         ready: new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true })),
         closed: new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true })),
       }) };`,
@@ -492,62 +455,19 @@ describe("createAgentService", () => {
     // to close at that point. (The route language happens to be enforced earlier still, at channel
     // load — this asserts the property, not which check catches it.)
     const dir = await agentDir({
-      "channels/bad.mjs": `export default () => ({ "GET /a/../x": () => new Response("x") });`,
-      "channels/sock.mjs": `export default { name: "sock", connect: () => { globalThis.__faConnected = true; return {
+      "src/channels/bad.mjs": `export default () => ({ "GET /a/../x": () => new Response("x") });`,
+      "src/channels/sock.mjs": `export default { name: "sock", connect: () => { globalThis.__faConnected = true; return {
         ready: Promise.resolve(), closed: new Promise(() => {}) }; } };`,
     });
     (globalThis as Record<string, unknown>).__faConnected = false;
-    await expect(createAgentService(dir)).rejects.toThrow(/failed to load|arrives as/);
+    await expect(createAgentService(dir)).rejects.toThrow(/arrives as/);
     expect((globalThis as unknown as { __faConnected?: boolean }).__faConnected).toBe(false);
   });
 
-  it("a broken schedule rejects instead of killing the host process", async () => {
-    // The library must not decide an embedder's app should die. `startSchedules` used to exit(1)
-    // here, which for a mounted surface means taking down someone else's server. A single bad
-    // schedule FILE is isolated on purpose (G2); this is the whole-load fault that is not.
-    const dir = await agentDir();
-    await writeFile(join(dir, "schedules"), "not a directory\n"); // readdir fails on it
-    await expect(createAgentService(dir)).rejects.toThrow(/ENOTDIR|not a directory/i);
-  });
-
-  it("surfaces a broken channel at open, rather than serving without it", async () => {
-    const dir = await agentDir({ "channels/bad.mjs": `throw new Error("boom at import");` });
-    await expect(createAgentService(dir)).rejects.toThrow(/failed to load: channels\/bad\.mjs \(boom at import/);
-  });
-
-  it("an enabled tool that cannot load refuses the service, like a channel does", async () => {
-    // The same declaration used to get a different guarantee per directory: a broken channel stopped the boot, a
-    // broken tool became one warning and a service that reported itself ready, with the model never seeing the tool.
-    // Absent directories stay valid; `*.disabled` is the opt-out.
-    const dir = await agentDir({ "tools/broken.mjs": `throw new Error("missing target");` });
-    await expect(createAgentService(dir)).rejects.toThrow(/failed to load: tools\/broken\.mjs \(missing target/);
-    // Renaming it to the disabled form is how an author says they meant it.
-    await rename(join(dir, "tools/broken.mjs"), join(dir, "tools/broken.mjs.disabled"));
-    const service = await createAgentService(dir);
-    await service.close();
-  });
-
-  it("a schedule that is not valid is said and left unarmed, and the service starts", async () => {
-    // The agent writes schedules/ too: one it got wrong must not keep the next start from serving, when nobody is
-    // talking to it to fix it. The author's own are held to the stricter rule by deploy's pre-flight.
-    const said: string[] = [];
-    const error = vi.spyOn(log, "error").mockImplementation((message: string) => void said.push(message));
-    try {
-      const dir = await agentDir({
-        "schedules/broken.md": "name: digest\nno frontmatter\n",
-        "schedules/daily.md": `---\ncron: "0 9 * * *"\n---\ngo\n`,
-      });
-      const service = await createAgentService(dir);
-      try {
-        expect(service.schedules().map((s) => s.name)).toEqual(["daily"]);
-        expect(said.join("\n")).toMatch(
-          /schedules\/broken\.md is not a valid schedule \(it must start with .*\) — not armed/,
-        );
-      } finally {
-        await service.close();
-      }
-    } finally {
-      error.mockRestore();
+  it("surfaces a broken channel or tool at open, rather than serving without it", async () => {
+    for (const file of ["src/channels/bad.mjs", "src/tools/bad.mjs"]) {
+      const dir = await agentDir({ [file]: `throw new Error("boom at import");` });
+      await expect(createAgentService(dir), file).rejects.toThrow(/loading src\/ through .*boom at import/);
     }
   });
 });
