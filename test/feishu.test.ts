@@ -1,25 +1,27 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { type ScriptedAgent, scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
+import {
+  type Asked,
+  type Prompt,
+  type ScriptedAgent,
+  asked,
+  promptOf,
+  scriptedAgent,
+  stoppedRun,
+  withStop,
+} from "./scripted-agent.ts";
 import { ev } from "./scripted-run.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import {
-  type AbortResult,
-  type Agent,
-  type ErrorCode,
-  type InvokeEvent,
-  type InvokeRequest,
-  type Prompt,
-  failure,
-} from "../src/protocol.ts";
+import { type AbortResult, type Agent, type ErrorCode, failure } from "../src/agent-api.ts";
+import type { TurnEvent as InvokeEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";
 import { feishuThreads, feishuTransport } from "../src/feishu.ts";
 import { eventSignature } from "../src/channels/feishu/crypto.ts";
 import { cardSummary } from "../src/channels/feishu/card.ts";
-import { piSessionId } from "../src/harnesses/pi/session-store.ts";
+import { newSession } from "../src/conversation-sessions.ts";
 import { log } from "../src/log.ts";
 
 const TOKEN = "verif-token";
@@ -27,10 +29,10 @@ const BASE = "http://feishu.test";
 
 /** A faux Agent that records each invocation's request and replies with `reply`. */
 function replyingAgent(reply = "") {
-  const calls: InvokeRequest[] = [];
+  const calls: Asked[] = [];
   const agent = scriptedAgent(async function* (request) {
     yield ev.accepted();
-    calls.push(request);
+    calls.push(asked(request));
     if (reply !== "") yield ev.text(reply);
     yield ev.ended();
   });
@@ -606,10 +608,6 @@ describe("turn flow", () => {
 
     // Rule 3 (memory follows the place): both messages share the chat session — no per-ask session.
     expect(calls.map((call) => call.sessionId)).toEqual(["feishu:oc_1", "feishu:oc_1"]);
-    // The id becomes an escaped jsonl filename, so the bound that matters is the filesystem's,
-    // not a round number: worst-case platform ids stay far under it.
-    const worstCase = `feishu:oc_${"a".repeat(32)}:omt_${"b".repeat(32)}`;
-    expect(piSessionId(worstCase).length).toBeLessThan(255);
     expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice, msg om_dm1]");
     expect(calls[0]?.prompt.text).toContain("hello there");
     // The reply contract rides every chat prompt: the channel owns delivery — no send-tool answering.
@@ -698,9 +696,9 @@ describe("turn flow", () => {
     const starts: { session: string; ask: string }[] = [];
     injectedAgent = scriptedAgent(async function* (request) {
       yield ev.accepted();
-      const ask = request.prompt.text.includes("first")
+      const ask = promptOf(request).text.includes("first")
         ? "first"
-        : request.prompt.text.includes("second")
+        : promptOf(request).text.includes("second")
           ? "second"
           : "other-chat";
       starts.push({ session: request.sessionId ?? "", ask });
@@ -753,9 +751,8 @@ describe("turn flow", () => {
     const seen: string[] = [];
     injectedAgent = scriptedAgent(async function* (request) {
       yield ev.accepted();
-      const ctx = { cwd: "/agent", sessionManager: { getSessionId: () => request.sessionId ?? "" } };
       // As the scaffolded tool calls it: inside an async execute, where a refusal is the tool's error.
-      const list = async () => feishuThreads(ctx).list();
+      const list = async () => feishuThreads(request.sessionId).list();
       seen.push(await list().catch((error: Error) => `refused: ${error.message}`));
       yield ev.text("ok");
       yield ev.ended();
@@ -854,7 +851,7 @@ describe("turn flow", () => {
     };
 
     // A schedule's digest, posted through the send tool's transport.
-    await feishuTransport(agentDir).sendText({ chatId: "oc_1" }, "Daily digest: 3 PRs merged");
+    await feishuTransport({ appId: "app", appSecret: "secret" }).sendText({ chatId: "oc_1" }, "Daily digest: 3 PRs merged");
     await ask("om_first");
     expect(calls[0]?.prompt.text).toMatch(/you \(msg om_bot_\d+\): Daily digest: 3 PRs merged/);
 
@@ -1236,7 +1233,7 @@ describe("turn flow", () => {
     let invocation = 0;
     injectedAgent = scriptedAgent(async function* (request) {
       yield ev.accepted();
-      prompts.push(request.prompt);
+      prompts.push(promptOf(request));
       if (++invocation === 2) {
         yield ev.failed("model failed", { retryable: true });
         return;
@@ -1288,7 +1285,7 @@ describe("turn flow", () => {
     });
     injectedAgent = scriptedAgent(async function* (request) {
       yield ev.accepted();
-      prompts.push(request.prompt);
+      prompts.push(promptOf(request));
       if (++invocation === 2) {
         markStarted();
         await gate;
@@ -1752,16 +1749,19 @@ describe("turn flow", () => {
           },
         }),
     });
-    const { handler, protocol, calls, idle } = buildChannel({ appId: "cli_self" });
+    const { handler, protocol, calls, idle, home } = buildChannel({ appId: "cli_self" });
     // The room already ran the ask the card answered, under the ask's message id, as the channel invokes.
-    for await (const _ of protocol.invoke({
-      sessionId: "feishu:oc_1",
+    const room = await newSession(protocol);
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "sessions.json"), JSON.stringify({ oc_1: room }));
+    const sent = await protocol.invoke({
+      sessionId: room,
       idempotencyKey: "om_original_ask",
-      prompt: { text: "加一个新的页面" },
-    })) {
-    }
-    const asked = await protocol.sessions.get("feishu:oc_1").messages.get({ idempotencyKey: "om_original_ask" });
-    const answer = asked?.status === "done" ? asked.answer?.entryId : undefined;
+      content: [{ type: "text", text: "加一个新的页面" }],
+    });
+    if (sent.ok) await sent.wait();
+    const ask = await protocol.getMessage(room, { idempotencyKey: "om_original_ask" });
+    const answer = ask?.status === "done" ? ask.answer?.entryId : undefined;
     expect(answer).toBeDefined();
     await flush(); // the group mention only matches once bot/v3/info has resolved this bot's open_id
     await handler(
@@ -1932,7 +1932,7 @@ describe("turn flow", () => {
     // ("tenant:user") that belongs to someone else entirely: cross-session injection.
     feishuFetch();
     const { handler, protocol, calls, idle } = buildChannel({
-      route: () => ({ session: "tenant:user:alice" }),
+      route: () => ({ conversation: "tenant:user:alice" }),
     });
     await handler(
       feishuRequest(messageEvent({ id: "om_routed", threadId: "omt_x", parentId: "om_root", text: "in a topic" })),
@@ -2469,7 +2469,7 @@ describe("turn flow", () => {
 
   it("a route supplying its own session leaves a BYSTANDER record — the thread's session never held the turn", async () => {
     feishuFetch();
-    const { handler, calls, home, idle } = buildChannel({ route: () => ({ session: "user:ou_alice" }) });
+    const { handler, calls, home, idle } = buildChannel({ route: () => ({ conversation: "user:ou_alice" }) });
 
     await handler(
       feishuRequest(messageEvent({ id: "om_rs", chatType: "group", threadId: "omt_rs", text: "routed elsewhere" })),
@@ -2531,7 +2531,7 @@ describe("turn flow", () => {
         om_lost: {
           id: "om_lost",
           seq: 1,
-          session: "oc_9",
+          conversation: "oc_9",
           baseText: "what a prior run never finished",
           group: false,
           askAt: 1_700_000_000_000,
@@ -2566,7 +2566,7 @@ describe("turn flow", () => {
     let invocation = 0;
     injectedAgent = scriptedAgent(async function* (request) {
       yield ev.accepted();
-      const ask = ["first", "second", "third"].find((x) => request.prompt.text.includes(`\n${x}`)) ?? "unknown";
+      const ask = ["first", "second", "third"].find((x) => promptOf(request).text.includes(`\n${x}`)) ?? "unknown";
       order.push(ask);
       if (++invocation === 1) await gate;
       yield ev.text(`answer ${ask}`);
@@ -2710,7 +2710,7 @@ describe("feishu stop command", () => {
     const stopped = (session: string): AbortResult => {
       aborted.push(session);
       if (result === "stopped") return stoppedRun;
-      if (result === "idle") return { ok: true, stopped: { taken: [], queued: [], compaction: false } };
+      if (result === "idle") return { ok: true, stopped: { taken: [], queued: [] } };
       return failure(result, "no run");
     };
     return { stopped, aborted };

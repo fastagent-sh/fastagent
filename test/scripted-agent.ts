@@ -285,3 +285,25 @@ export function withStop<A extends Agent>(
     aborted,
   };
 }
+
+/** What a message asks, read back as text and images: the shape a channel builds its content from. */
+export interface Prompt {
+  text: string;
+  images?: { mimeType: string; data: string }[];
+}
+
+export function promptOf(request: Pick<InvokeRequest, "content">): Prompt {
+  const text = request.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+  const images = request.content.flatMap((part) =>
+    part.type === "image" && "data" in part ? [{ mimeType: part.mimeType, data: part.data }] : [],
+  );
+  return images.length > 0 ? { text, images } : { text };
+}
+
+/** A message as a test records it: the request, and what it asks read back ({@link promptOf}). */
+export type Asked = InvokeRequest & { sessionId: string; prompt: Prompt };
+
+export const asked = (request: InvokeRequest & { sessionId: string }): Asked => ({
+  ...request,
+  prompt: promptOf(request),
+});

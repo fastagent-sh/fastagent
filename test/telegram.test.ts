@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
+import { type Asked, type Prompt, asked, promptOf, scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
 import { ev, scriptedRun } from "./scripted-run.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,25 +12,18 @@ import {
   telegramEnvelope,
   telegramTransport,
 } from "../src/telegram.ts";
-import {
-  type AbortResult,
-  type Agent,
-  type ErrorCode,
-  type InvokeRequest,
-  type Prompt,
-  failure,
-} from "../src/protocol.ts";
+import { type AbortResult, type Agent, type ErrorCode, failure } from "../src/agent-api.ts";
 import { registerTelegramTransport } from "../src/channels/telegram/shared-api.ts";
 import { log } from "../src/log.ts";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { fauxPiAgent } from "./faux.ts";
+import { fauxDurableAgent } from "./faux.ts";
 
 /** A faux Agent that records each invocation's prompt and replies with `reply`. */
 function replyingAgent(reply = "") {
   const calls: Prompt[] = [];
   const agent = scriptedAgent(async function* (request) {
     yield ev.accepted();
-    calls.push(request.prompt);
+    calls.push(promptOf(request));
     if (reply !== "") yield ev.text(reply);
     yield ev.ended();
   });
@@ -164,7 +157,7 @@ describe("durable group buffer (single-process restarts)", () => {
     const entered = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();
     let sawDiscussion = false;
-    const agent = fauxPiAgent([
+    const agent = await fauxDurableAgent([
       async (context) => {
         sawDiscussion = JSON.stringify(context.messages).includes("earlier discussion");
         entered.resolve();
@@ -185,7 +178,8 @@ describe("durable group buffer (single-process restarts)", () => {
       await entered.promise;
       expect(sawDiscussion).toBe(true);
       expect(Object.keys(JSON.parse(readFileSync(join(state, "turns.json"), "utf8")))).toHaveLength(1);
-      const running = await agent.sessions.get("telegram:-100").read({ limit: 0 });
+      const sessionId = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))["-100"];
+      const running = await agent.read(sessionId, { limit: 1 });
       expect(running.ok && running.state.status).toBe("running");
       await channel(tgRequest(group(3, "later arrival")));
     } finally {
@@ -196,8 +190,10 @@ describe("durable group buffer (single-process restarts)", () => {
     const buffered = readFileSync(join(state, "buffers.json"), "utf8");
     expect(buffered).toContain("later arrival");
     expect(buffered).not.toContain("earlier discussion");
-    const after = await agent.sessions.get("telegram:-100").read({ limit: 0 });
+    const sessionId = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))["-100"];
+    const after = await agent.read(sessionId, { limit: 1 });
     expect(after.ok && after.state.status).toBe("idle");
+    await agent.close();
   });
 
   it("the group buffer is persisted BEFORE the ACK and survives a restart", async () => {
@@ -252,7 +248,7 @@ describe("durable group buffer (single-process restarts)", () => {
     const calls: Prompt[] = [];
     const agent = scriptedAgent(async function* (request) {
       yield ev.accepted();
-      calls.push(request.prompt);
+      calls.push(promptOf(request));
       if (fail) {
         yield ev.failed("boom", { retryable: true });
         return;
@@ -318,7 +314,7 @@ describe("durable turn intent (crash recovery)", () => {
       JSON.stringify({
         "9": {
           id: "9",
-          session: "42",
+          conversation: "42",
           placeKey: "42",
           baseText: "recover me",
           chatId: 42,
@@ -340,9 +336,9 @@ describe("durable turn intent (crash recovery)", () => {
     // Recovery re-invokes; the key is what makes that a resend (an ended run is replayed, answer included) rather
     // than a second run of the same message.
     vi.stubGlobal("fetch", okFetch());
-    const requests: InvokeRequest[] = [];
+    const requests: Asked[] = [];
     const agent = scriptedAgent(async function* (request) {
-      requests.push(request);
+      requests.push(asked(request));
       yield* scriptedRun(request, { text: "done" });
     });
     const state = freshStateDir();
@@ -354,7 +350,7 @@ describe("durable turn intent (crash recovery)", () => {
       JSON.stringify({
         "9": {
           id: "9",
-          session: "42",
+          conversation: "42",
           placeKey: "42",
           baseText: "recover me",
           chatId: 42,
@@ -366,9 +362,9 @@ describe("durable turn intent (crash recovery)", () => {
     );
     telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
     await flush();
-    expect(requests.map((r) => [r.idempotencyKey, r.whenBusy, r.source])).toEqual([
-      ["5", "queue", { kind: "channel", name: "telegram" }],
-      ["9", "queue", { kind: "channel", name: "telegram" }],
+    expect(requests.map((r) => [r.idempotencyKey, r.whenBusy])).toEqual([
+      ["5", "queue"],
+      ["9", "queue"],
     ]);
   });
 
@@ -382,7 +378,7 @@ describe("durable turn intent (crash recovery)", () => {
       JSON.stringify({
         "9": {
           id: "9",
-          session: "42",
+          conversation: "42",
           placeKey: "42",
           baseText: "what did you say?",
           chatId: 42,
@@ -438,7 +434,7 @@ describe("durable turn intent (crash recovery)", () => {
       JSON.stringify({
         "9": {
           id: "9",
-          session: "42",
+          conversation: "42",
           placeKey: "42",
           baseText: "poison",
           chatId: 42,
@@ -478,7 +474,7 @@ describe("durable turn intent (crash recovery)", () => {
     const state = freshStateDir();
     const record = (id: string, baseText: string) => ({
       id,
-      session: "s",
+      conversation: "s",
       placeKey: "s",
       baseText,
       chatId: 42,
@@ -514,7 +510,7 @@ describe("durable turn intent (crash recovery)", () => {
       JSON.stringify({
         "8": {
           id: "8",
-          session: "s",
+          conversation: "s",
           placeKey: "s",
           baseText: "run me",
           chatId: 42,
@@ -524,7 +520,7 @@ describe("durable turn intent (crash recovery)", () => {
         },
         "9": {
           id: "9",
-          session: "s",
+          conversation: "s",
           placeKey: "s",
           baseText: "answered already",
           chatId: 42,
@@ -558,7 +554,7 @@ describe("durable turn intent (crash recovery)", () => {
       JSON.stringify({
         "9": {
           id: "9",
-          session: "s",
+          conversation: "s",
           placeKey: "s",
           baseText: "poison",
           chatId: 42,
@@ -568,7 +564,7 @@ describe("durable turn intent (crash recovery)", () => {
         },
         "8": {
           id: "8",
-          session: "s",
+          conversation: "s",
           placeKey: "s",
           baseText: "run me",
           chatId: 42,
@@ -1206,7 +1202,7 @@ describe("telegram channel", () => {
     const ch = telegramChannel(agent, {
       secretToken: SECRET,
       botToken: "BOT",
-      route: (u) => defaultTelegramRoute(u) && { session: `user:${u.message?.from?.id ?? "?"}` },
+      route: (u) => defaultTelegramRoute(u) && { conversation: `user:${u.message?.from?.id ?? "?"}` },
       apiBaseUrl: API,
     });
     const m: TelegramUpdate = {
@@ -1277,7 +1273,7 @@ describe("telegram channel", () => {
       secretToken: SECRET,
       botToken: "BOT",
       apiBaseUrl: API,
-      route: (u) => ({ chatId: u.message?.chat.id, session: "custom" }), // same chat, returned explicitly
+      route: (u) => ({ chatId: u.message?.chat.id, conversation: "custom" }), // same chat, returned explicitly
     });
     await ch(
       tgRequest({ update_id: 1, message: { message_id: 55, text: "yo", chat: { id: -100, type: "supergroup" } } }),
@@ -1454,10 +1450,9 @@ describe("telegram channel", () => {
       route: onlyCommands,
       stateDir: home,
     });
-    // A tool finds the mounted channel's transport by its agent's state root.
-    vi.stubEnv("FASTAGENT_STATE_DIR", rootOfHome.get(home) as string);
+    // A tool finds the mounted channel's transport by the bot token both hold.
     const digest = `Digest: 1. deploys 2. incidents 3. hiring ${"detail ".repeat(400)}`;
-    const sent = await telegramTransport("/any/agent/dir").sendText({ chatId: grp.id }, digest);
+    const sent = await telegramTransport("BOT").sendText({ chatId: grp.id }, digest);
     expect(sent.notRecorded).toBeUndefined();
 
     await ch(tgRequest(groupMsg(1, "alice", "/bot what did point 3 mean?")));
@@ -1502,8 +1497,7 @@ describe("telegram channel", () => {
       route: onlyCommands,
       stateDir: home,
     });
-    vi.stubEnv("FASTAGENT_STATE_DIR", rootOfHome.get(home) as string);
-    const transport = telegramTransport("/any/agent/dir");
+    const transport = telegramTransport("BOT");
 
     await transport.sendText({ chatId: "@team" }, "posted by channel name");
     const file = join(home, "report.txt");
@@ -1542,8 +1536,7 @@ describe("telegram channel", () => {
     );
     const home = freshStateDir();
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, stateDir: home });
-    vi.stubEnv("FASTAGENT_STATE_DIR", rootOfHome.get(home) as string);
-    await telegramTransport("/any/agent/dir").sendText({ chatId: 42 }, "your reminder: standup at 10");
+    await telegramTransport("BOT").sendText({ chatId: 42 }, "your reminder: standup at 10");
     await ch(tgRequest(MSG));
     await groupSettle();
     expect(calls[0]?.text ?? "").toContain("[recent discussion here:");
@@ -1556,17 +1549,15 @@ describe("telegram channel", () => {
       "fetch",
       vi.fn(async () => Response.json({ ok: true, result: { message_id: 9, chat: { id: -100 } } })),
     );
-    const root = rootOfHome.get(freshStateDir()) as string;
-    registerTelegramTransport(root, {
+    registerTelegramTransport({
       apiBaseUrl: API,
-      botToken: "BOT",
+      botToken: "BOT-UNRECORDED",
       record: () => {
         throw new Error("disk full");
       },
     });
-    vi.stubEnv("FASTAGENT_STATE_DIR", root);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const sent = await telegramTransport("/any/agent/dir").sendText({ chatId: -100 }, "digest");
+    const sent = await telegramTransport("BOT-UNRECORDED").sendText({ chatId: -100 }, "digest");
     expect(sent).toEqual({ messageIds: [9], notRecorded: "recording it failed: Error: disk full" });
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/not recorded into place -100: Error: disk full/));
   });
@@ -2028,7 +2019,7 @@ describe("telegram /stop command", () => {
     const stopped = (session: string): AbortResult => {
       aborted.push(session);
       if (result === "stopped") return stoppedRun;
-      if (result === "idle") return { ok: true, stopped: { taken: [], queued: [], compaction: false } };
+      if (result === "idle") return { ok: true, stopped: { taken: [], queued: [] } };
       return failure(result, "no run");
     };
     return { stopped, aborted };
@@ -2040,18 +2031,26 @@ describe("telegram /stop command", () => {
   const invoked: string[] = [];
   const agent = scriptedAgent(async function* (request) {
     yield ev.accepted();
-    invoked.push(request.prompt.text);
+    invoked.push(promptOf(request).text);
     yield ev.ended();
   });
+  /** A channel home where each conversation already talks in the session named for it. */
+  const homeWith = (sessions: Record<string, string>) => {
+    const stateDir = freshStateDir();
+    writeFileSync(join(stateDir, "sessions.json"), JSON.stringify(sessions));
+    return stateDir;
+  };
 
   it("/stop aborts the session, replies, and never becomes a turn", async () => {
     invoked.length = 0;
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { stopped, aborted } = fakeStop("stopped");
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", stopped });
+    const stateDir = homeWith({ "42": "session-42" });
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", stopped, stateDir });
     expect((await ch(tgRequest(stopUpdate("/stop")))).status).toBe(200);
-    expect(aborted).toEqual(["telegram:42"]); // the default session is branded with the channel kind
+    await flush(); // the abort runs after the acknowledgement: it waits for what it stops
+    expect(aborted).toEqual(["session-42"]);
     expect(invoked).toEqual([]);
     const sent = (fetchMock.mock.calls as unknown as [string, RequestInit][]).map(
       ([, init]) => JSON.parse(String(init.body)) as { text?: string },
@@ -2064,13 +2063,22 @@ describe("telegram /stop command", () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { stopped, aborted } = fakeStop("idle");
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", stopped });
+    const stateDir = freshStateDir();
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      botUsername: "mybot",
+      stopped,
+      stateDir,
+    });
     await ch(tgRequest(stopUpdate("/stop@otherbot"))); // routed as a normal turn, not a stop
     await flush();
     expect(aborted).toEqual([]);
     expect(invoked).toHaveLength(1);
     await ch(tgRequest(stopUpdate("/stop@mybot")));
-    expect(aborted).toEqual(["telegram:42"]); // the default session is branded with the channel kind
+    await flush();
+    // The turn gave the chat its session, which the stop is for.
+    expect(aborted).toEqual([JSON.parse(readFileSync(join(stateDir, "sessions.json"), "utf8"))["42"]]);
     const sent = (fetchMock.mock.calls as unknown as [string, RequestInit][]).map(
       ([, init]) => JSON.parse(String(init.body)) as { text?: string },
     );
@@ -2105,7 +2113,7 @@ describe("telegram /stop command", () => {
       const fetchMock = okFetch();
       vi.stubGlobal("fetch", fetchMock);
       const { stopped, aborted } = fakeStop("stopped");
-      const stateDir = freshStateDir();
+      const stateDir = homeWith({ "-100123": "session-group" });
       const ch = telegramChannel(agent, {
         secretToken: SECRET,
         botToken: "BOT",
@@ -2115,7 +2123,7 @@ describe("telegram /stop command", () => {
       });
       expect((await ch(tgRequest(groupStop(text, extra)))).status, text).toBe(200);
       await flush();
-      expect(aborted, text).toEqual(["telegram:-100123"]);
+      expect(aborted, text).toEqual(["session-group"]);
       expect(invoked, text).toEqual([]);
       expect(existsSync(join(stateDir, "buffers.json")), text).toBe(false);
       expect(stopFeedback(fetchMock), text).toEqual(["\u23f9 Stopped."]);
@@ -2132,11 +2140,28 @@ describe("telegram /stop command", () => {
       const fetchMock = okFetch();
       vi.stubGlobal("fetch", fetchMock);
       const { stopped } = fakeStop(result);
-      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", stopped });
+      const ch = telegramChannel(agent, {
+        secretToken: SECRET,
+        botToken: "BOT",
+        botUsername: "mybot",
+        stopped,
+        stateDir: homeWith({ "-100123": "session-group" }),
+      });
       await ch(tgRequest(groupStop("/stop@mybot")));
       await flush();
       expect(stopFeedback(fetchMock), label).toEqual([expected]);
     }
+  });
+
+  it("a stop where nothing was ever said asks the agent nothing, and says nothing is running", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { stopped, aborted } = fakeStop("stopped");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", botUsername: "mybot", stopped });
+    await ch(tgRequest(groupStop("/stop@mybot")));
+    await flush();
+    expect(aborted).toEqual([]);
+    expect(stopFeedback(fetchMock)).toEqual(["Nothing is running."]);
   });
 
   // Cutting mentions must not cut SOMEONE ELSE'S: `@otherbot /stop` names another addressee, and a
@@ -2192,8 +2217,8 @@ describe("telegram /stop command", () => {
     }
   });
 
-  // The route is the session authority: a custom route that remaps `session` (the shape docs/telegram.md
-  // shows) must have its stop abort the session its turns actually run on, not the message's place key.
+  // The route is the conversation authority: a custom route that remaps `conversation` (the shape docs/telegram.md
+  // shows) must have its stop abort the session its turns actually run on, not the place's.
   it("aborts the session a custom route remaps to", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { stopped, aborted } = fakeStop("stopped");
@@ -2202,14 +2227,15 @@ describe("telegram /stop command", () => {
       botToken: "BOT",
       botUsername: "mybot",
       stopped,
+      stateDir: homeWith({ "-100123": "session-place", "telegram:-100123": "session-remapped" }),
       route: (update) => {
         const base = defaultTelegramRoute(update, { botUsername: "mybot" });
-        return base && { ...base, session: `telegram:${update.message?.chat.id}` };
+        return base && { ...base, conversation: `telegram:${update.message?.chat.id}` };
       },
     });
     await ch(tgRequest(groupStop("/stop@mybot")));
     await flush();
-    expect(aborted).toEqual(["telegram:-100123"]);
+    expect(aborted).toEqual(["session-remapped"]);
   });
 
   // The route is also the gate: a route that ignores a chat (a whitelist) must not have the bot abort
