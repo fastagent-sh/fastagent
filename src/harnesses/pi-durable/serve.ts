@@ -9,8 +9,15 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
 import { loadContent } from "../../content/file.ts";
-import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
+import {
+  type ResolvedContent,
+  absentNotice,
+  cloneContent,
+  contentAbsentHere,
+  resolveContent,
+} from "../../content/resolve.ts";
 import { enterEnvironment } from "../../environment/mise.ts";
+import { log } from "../../log.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import type { DurableAgent } from "./agent.ts";
 import { type AgentDefinition, type BuiltDefinition, buildDefinition, openAgent, prepareDefinition } from "./open.ts";
@@ -39,6 +46,28 @@ export interface OpenedServing {
   stateRoot: string;
 }
 
+/**
+ * The content, once per process, before the agent opens: the locations are fixed until a restart, what is in them is
+ * read per message. This process runs the agent, so a repository with no checkout here is cloned, or its clone brought
+ * up to date in place where git can do so without touching the agent's work, first; then resolved again as what is now
+ * on disk.
+ */
+async function contentForThisRun(dir: string): Promise<ResolvedContent[]> {
+  const declaration = loadContent(dir);
+  for (const entry of resolveContent(dir, declaration)) {
+    if (entry.kind !== "github" || !entry.clone) continue;
+    const done = await cloneContent(entry);
+    if (done.outcome === "kept") {
+      log.warn(`[fastagent] content "${entry.name}": the clone in ${entry.location} is kept as it is, ${done.reason}`);
+    } else {
+      const said = { cloned: "cloned", updated: "brought up to date", current: "already up to date" }[done.outcome];
+      log.info(`[fastagent] github ${entry.repo}${entry.ref ? ` at ${entry.ref}` : ""}: ${said} in ${entry.location}`);
+    }
+  }
+  for (const absent of contentAbsentHere(declaration)) log.warn(`[fastagent] content ${absentNotice(absent)}`);
+  return resolveContent(dir, declaration);
+}
+
 /** The instance's database, under its state root. */
 const STORAGE_FILE = "agent.sqlite";
 
@@ -47,7 +76,7 @@ export async function openServing(dir: string, options: OpenServingOptions = {})
   const code = buildDefinition(definition);
   // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
   await enterEnvironment(dir);
-  const content = resolveContent(dir, loadContent(dir));
+  const content = await contentForThisRun(dir);
   const models = modelEnvironment(
     dir,
     {

@@ -15,7 +15,17 @@ import { cloneContent, resolveContent } from "../src/content/resolve.ts";
 import { readContentSource } from "../src/content/source.ts";
 import { type ContentEntry, declareBindings, declareContent } from "../src/content/declare.ts";
 import { githubRepoOf } from "../src/content/git.ts";
-import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { MemoryStorage } from "@earendil-works/pi-durable";
+import { buildDefinition, openAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+
+/** The agent in `dir` as a serve opens it, with no storage of its own: what its content resolves to. */
+async function openedContent(dir: string) {
+  const opened = await openServing(dir, { locking: "memory" });
+  await opened.agent.close();
+  return opened.content;
+}
 import { git, githubStandIn } from "./github-standin.ts";
 import { log } from "../src/log.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
@@ -348,18 +358,18 @@ describe("github content: what runs the agent clones, what reports on it does no
     expect(JSON.parse(info.stdout).content[0].notices).toEqual(["not cloned yet: it is cloned when the agent starts"]);
     expect(existsSync(join(agentDir, "content"))).toBe(false);
 
-    const opened = await createPiAgentFromDir(agentDir);
-    expect(opened.content).toEqual([
+    const opened = await openedContent(agentDir);
+    expect(opened).toEqual([
       expect.objectContaining({ name: "handbook", location: join(agentDir, "content", "handbook") }),
     ]);
-    expect(opened.content[0]?.notices).toEqual([]);
+    expect(opened[0]?.notices).toEqual([]);
     expect(readFileSync(join(agentDir, "content", "handbook", "AGENTS.md"), "utf8")).toBe("HANDBOOK: be brief.\n");
 
     // Offline, the next start runs on that clone and says so.
     github.offline();
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
-      await createPiAgentFromDir(agentDir);
+      await openedContent(agentDir);
       expect(warn).toHaveBeenCalledWith(
         expect.stringMatching(
           /^\[fastagent\] content "handbook": the clone in .* is kept as it is, could not reach github acme\/handbook: /,
@@ -379,11 +389,11 @@ describe("github content: what runs the agent clones, what reports on it does no
     const gone = join(root, "notes");
     await writeFile(join(agentDir, "context.local.json"), JSON.stringify({ content: { notes: { path: gone } } }));
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const opened = await createPiAgentFromDir(agentDir);
+    const opened = await openedContent(agentDir);
     const said = warn.mock.calls.map(([line]) => line);
     warn.mockRestore();
     const clone = join(agentDir, "content", "app");
-    expect(opened.content).toEqual([expect.objectContaining({ location: clone, clone: true, notices: [] })]);
+    expect(opened).toEqual([expect.objectContaining({ location: clone, clone: true, notices: [] })]);
     expect(said).toContain(
       `[fastagent] content notes: bound in context.local.json to ${gone}, which does not exist here: the agent is not told of it`,
     );
@@ -415,12 +425,17 @@ describe("github content: what runs the agent clones, what reports on it does no
         return fauxAssistantMessage("ok");
       },
     ]);
-    const { agent: running } = await createPiAgentFromDefinition(agentDir, {
+    const definition = await prepareDefinition(agentDir);
+    const running = await openAgent(definition, {
+      storage: new MemoryStorage(),
+      code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
+      credentials: new InMemoryCredentialStore(),
       model: "faux/faux-1",
-      providers: [faux.provider],
       content,
     });
-    await collect(running.invoke({ sessionId: "s", prompt: { text: "hi" } }));
+    const sent = await running.invoke({ content: [{ type: "text", text: "hi" }] });
+    if (sent.ok) await sent.wait();
+    await running.close();
     expect(prompt).toContain(
       `- app: ${join(agentDir, "content", "app")} (a shallow clone of github acme/app (declared main) in your own storage: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change) The product. Open pull requests against main.`,
     );
