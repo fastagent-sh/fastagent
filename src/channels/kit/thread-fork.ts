@@ -8,7 +8,7 @@
  * answer; at its own entry when it has none (still taken, or done without one); at the room's present when it is still
  * queued, or was never taken, since it is not in the history.
  */
-import type { Agent, MessageStatus } from "../../agent-api.ts";
+import { type Agent, AgentRejection, type MessageStatus } from "../../agent-api.ts";
 
 /** A reply chain is ids walked from the platform, each one a `getMessage`: bounded like ids, not payloads. */
 const MAX_CHAIN = 16;
@@ -45,7 +45,11 @@ export async function forkThread(
     room === undefined ? {} : { from: { sessionId: room, ...(at === undefined ? {} : { entryId: at }) } },
   );
   if (!created.ok) {
-    throw new Error(`starting a thread${room === undefined ? "" : ` from ${room}`} failed: ${created.error.message}`);
+    const from = room === undefined ? "" : ` from ${room}`;
+    throw new AgentRejection({
+      ...created.error,
+      message: `starting a thread${from} failed: ${created.error.message}`,
+    });
   }
   return created.sessionId;
 }

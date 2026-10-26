@@ -440,7 +440,7 @@ function createFeishuRuntimeFactory(
                 agent,
                 {
                   session: (chain) =>
-                    sessions.of(rec.conversation, () =>
+                    sessions.of(rec.conversation, agent, () =>
                       parent === undefined
                         ? newSession(agent)
                         : forkThread(agent, { room: sessions.get(parent), chain }),

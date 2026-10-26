@@ -129,11 +129,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const slot = "2026-07-07T10:00:00.000Z";
     const agent = await fauxDurableAgent([fauxAssistantMessage("done")]);
-    const sessionId = await scheduleSessions(root).of("job", async () => {
-      const created = await agent.createSession();
-      if (!created.ok) throw new Error(created.error.message);
-      return created.sessionId;
-    });
+    const sessionId = await scheduleSessions(root).of("job", agent);
     const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: "go" }], idempotencyKey: slot });
     if (!sent.ok) throw new Error("not sent");
     await sent.wait();

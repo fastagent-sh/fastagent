@@ -31,7 +31,7 @@ import { registerTelegramTransport } from "./shared-api.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
 import { ensureStateHome } from "../../state-file.ts";
-import { conversationSessions, newSession } from "../../conversation-sessions.ts";
+import { conversationSessions } from "../../conversation-sessions.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
@@ -197,7 +197,7 @@ export function telegramChannel({
           telegramTurnStream(
             agent,
             {
-              session: () => sessions.of(rec.conversation, () => newSession(agent)),
+              session: () => sessions.of(rec.conversation, agent),
               key: rec.id,
               text: `${discussionBlock(discussion.text)}${rec.baseText}`,
             },

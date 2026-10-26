@@ -62,6 +62,7 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
         "effect/Exit",
         "effect/Fiber",
         "effect/Queue",
+        "effect/Result",
         "effect/Stream",
       ]);
       expect(

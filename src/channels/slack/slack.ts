@@ -18,7 +18,7 @@ import { ensureStateHome } from "../../state-file.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
-import { conversationSessions, newSession } from "../../conversation-sessions.ts";
+import { conversationSessions } from "../../conversation-sessions.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -445,7 +445,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
                 slackTurnStream(
                   agent,
                   {
-                    session: () => sessions.of(turn.conversation, () => newSession(agent)),
+                    session: () => sessions.of(turn.conversation, agent),
                     ...enterRoom(turn),
                     key: turn.id,
                     text: `${discussionBlock(discussion.text)}${turn.baseText}`,

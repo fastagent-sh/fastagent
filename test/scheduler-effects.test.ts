@@ -15,7 +15,6 @@ import type { TurnEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { scriptedRun } from "./scripted-run.ts";
 import { scriptedAgent } from "./scripted-agent.ts";
 import { durableSubject } from "./durable-subject.ts";
-import { newSession } from "../src/conversation-sessions.ts";
 import { activeWork } from "../src/channels/busy.ts";
 import type { PortFailure } from "../src/effect-port.ts";
 import {
@@ -495,7 +494,7 @@ it("a schedule's occurrence on a busy session is skipped, not queued behind the 
   try {
     const agent = await subject.start();
     const stateRoot = await freshRoot();
-    const sessionId = await scheduleSessions(stateRoot).of("job", () => newSession(agent));
+    const sessionId = await scheduleSessions(stateRoot).of("job", agent);
     const running = await agent.invoke({ sessionId, content: [{ type: "text", text: "hold" }] });
     expect(running.ok).toBe(true);
     await vi.waitFor(() => expect(subject.held()).toBe(1));

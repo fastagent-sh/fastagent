@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import { join } from "node:path";
 import type { Agent, InvokeRequest, Outcome } from "../agent-api.ts";
-import { conversationSessions, newSession } from "../conversation-sessions.ts";
+import { conversationSessions } from "../conversation-sessions.ts";
 import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
@@ -24,7 +24,7 @@ export interface Scheduler {
 }
 
 /** All the scheduler asks of the agent. */
-export type ScheduledAgent = Pick<Agent, "invoke" | "createSession" | "getMessage">;
+export type ScheduledAgent = Pick<Agent, "invoke" | "createSession" | "getMessage" | "read">;
 
 export interface SchedulerOptions {
   agent: ScheduledAgent;
@@ -206,7 +206,7 @@ export function fireScheduleOnce(opts: {
     // Before anything is sent: the session it continues (created and recorded the first time), and its prompt.
     const prepared = yield* Effect.tryPromise({
       try: async () => ({
-        sessionId: await scheduleSessions(stateRoot).of(s.name, () => newSession(agent)),
+        sessionId: await scheduleSessions(stateRoot).of(s.name, agent),
         text: typeof s.prompt === "string" ? s.prompt : await s.prompt({ at: slot }),
       }),
       catch: (cause) => new PortFailure(cause),

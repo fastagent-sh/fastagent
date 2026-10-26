@@ -16,8 +16,17 @@
  * policies are not: see {@link loadBackground}.
  */
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
-import type { Agent, AgentError, Attachment, ContentPart, MessageStatus, SessionEvent } from "../../agent-api.ts";
+import {
+  type Agent,
+  type AgentError,
+  AgentRejection,
+  type Attachment,
+  type ContentPart,
+  type MessageStatus,
+  type SessionEvent,
+} from "../../agent-api.ts";
 import { stream } from "../../agent-api-stream.ts";
 import { log } from "../../log.ts";
 import { eventStream } from "./event-stream.ts";
@@ -40,7 +49,7 @@ export function promptContent(text: string, images: readonly Attachment[] | unde
 
 /**
  * One turn, end to end: the platform inputs prepared, the session the turn's conversation talks in (created and
- * recorded before anything is sent, kit/sessions.ts), then the message sent and its answer read as it is written
+ * recorded before anything is sent, conversation-sessions.ts), then the message sent and its answer read as it is written
  * (`stream`).
  *
  * The message queues behind whatever runs in the session (a wake-up, a schedule): the channel's own turns never
@@ -69,50 +78,63 @@ export function turnStream<R>(opts: {
    *  yes, since a retried download is cheap next to an unanswered ask. */
   retryableLoadFailure: (cause: unknown) => boolean;
 }): Stream.Stream<TurnEvent, PortFailure> {
+  const rejected = (error: AgentError) => Stream.succeed<TurnEvent>({ type: "rejected", error });
   return Stream.unwrap(
-    portJoin(async () => {
-      const resolved = await opts.resolve();
-      return { sessionId: await opts.session(resolved), resolved };
-    }).pipe(
-      Effect.flatMap(({ sessionId, resolved }) =>
-        Effect.gen(function* () {
-          const enter = opts.enter;
-          if (enter !== undefined)
-            yield* Effect.acquireRelease(
-              Effect.sync(() => enter(sessionId)),
-              (leave) => Effect.sync(leave),
-            );
-          const result = yield* portJoin(() =>
-            stream(opts.agent, { sessionId, ...opts.turn(resolved), whenBusy: "queue" }),
-          );
-          if (!result.ok) {
-            return Stream.succeed<TurnEvent>(
-              "error" in result
-                ? { type: "rejected", error: result.error }
-                : { type: "unknown", reason: result.unknown.reason },
-            );
-          }
-          const { ok: _, events, ...receipt } = result;
-          return Stream.concat(
-            Stream.succeed<TurnEvent>({ type: "accepted", ...receipt }),
-            eventStream(() => events, `${opts.label} (session=${sessionId})`).pipe(Stream.scoped),
-          );
-        }),
-      ),
-      Effect.catchTag("PortFailure", ({ cause }) =>
-        Effect.succeed(
-          Stream.succeed<TurnEvent>({
-            type: "rejected",
-            error: {
-              code: "unavailable",
-              message: `could not prepare the turn: ${String(cause)}`,
-              retryable: opts.retryableLoadFailure(cause),
-            },
-          }),
-        ),
-      ),
-    ),
+    Effect.gen(function* () {
+      const prepared = yield* Effect.result(portJoin(opts.resolve));
+      if (Result.isFailure(prepared)) {
+        const { cause } = prepared.failure;
+        return rejected({
+          code: "unavailable",
+          message: `could not prepare the turn: ${String(cause)}`,
+          retryable: opts.retryableLoadFailure(cause),
+        });
+      }
+      const resolved = prepared.success;
+      // The Agent's own question from here on, so its own answer says whether a retry is worth it.
+      const session = yield* Effect.result(portJoin(() => opts.session(resolved)));
+      if (Result.isFailure(session)) return rejected(agentFailure("its session", session.failure.cause));
+      const sessionId = session.success;
+      const enter = opts.enter;
+      if (enter !== undefined)
+        yield* Effect.acquireRelease(
+          Effect.sync(() => enter(sessionId)),
+          (leave) => Effect.sync(leave),
+        );
+      const sent = yield* Effect.result(
+        portJoin(() => stream(opts.agent, { sessionId, ...opts.turn(resolved), whenBusy: "queue" })),
+      );
+      if (Result.isFailure(sent)) return rejected(agentFailure("its message", sent.failure.cause));
+      const result = sent.success;
+      if (!result.ok) {
+        return "error" in result
+          ? rejected(result.error)
+          : Stream.succeed<TurnEvent>({ type: "unknown", reason: result.unknown.reason });
+      }
+      const { ok: _, events, ...receipt } = result;
+      return Stream.concat(
+        Stream.succeed<TurnEvent>({ type: "accepted", ...receipt }),
+        eventStream(() => events, `${opts.label} (session=${sessionId})`).pipe(Stream.scoped),
+      );
+    }),
   );
+}
+
+/**
+ * A step of the Agent's that threw: its refusal as it gave it (`AgentRejection`, with its own `retryable`), or a failure
+ * nothing was sent past, so worth a retry.
+ */
+function agentFailure(what: string, cause: unknown): AgentError {
+  if (cause instanceof AgentRejection) {
+    const { code, message, retryable, details } = cause;
+    return {
+      code,
+      message: `could not start ${what}: ${message}`,
+      retryable,
+      ...(details === undefined ? {} : { details }),
+    };
+  }
+  return { code: "unavailable", message: `could not start ${what}: ${String(cause)}`, retryable: true };
 }
 
 /**

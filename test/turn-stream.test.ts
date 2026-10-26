@@ -2,7 +2,7 @@
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Agent, ResumeEvent } from "../src/agent-api.ts";
+import { type Agent, AgentRejection, type ResumeEvent } from "../src/agent-api.ts";
 import { eventStream } from "../src/channels/kit/event-stream.ts";
 import { type TurnEvent, attachedFilesManifest, turnStream } from "../src/channels/kit/invoke-turn-kit.ts";
 import { PortFailure } from "../src/effect-port.ts";
@@ -93,6 +93,35 @@ it("a preparation that fails is the turn's refusal, carrying the channel's verdi
   // Nothing was asked, and no session was made for it.
   expect(session).not.toHaveBeenCalled();
   expect(agent.sent).toEqual([]);
+});
+
+it("a session that cannot be had is the turn's refusal on the Agent's own verdict, not the platform's", async () => {
+  // The channel's verdict (`retryableLoadFailure: () => false` here) is about ITS downloads; the session is the Agent's.
+  const refusedBy = (cause: unknown) =>
+    read(
+      turn(
+        scriptedAgent(() => ok),
+        undefined,
+        async () => {
+          throw cause;
+        },
+      ),
+    );
+  expect(
+    await refusedBy(new AgentRejection({ code: "unavailable", message: "storage is down", retryable: true })),
+  ).toMatchObject([
+    {
+      type: "rejected",
+      error: { code: "unavailable", message: "could not start its session: storage is down", retryable: true },
+    },
+  ]);
+  expect(
+    await refusedBy(new AgentRejection({ code: "invalid_request", message: "no such room", retryable: false })),
+  ).toMatchObject([{ type: "rejected", error: { code: "invalid_request", retryable: false } }]);
+  // Anything else stopped it before a message was sent, so a retry costs nothing it has not already cost.
+  expect(await refusedBy(new Error("ENOSPC"))).toMatchObject([
+    { type: "rejected", error: { message: "could not start its session: Error: ENOSPC", retryable: true } },
+  ]);
 });
 
 it("enters its session while the turn runs and leaves it after, whether the turn succeeds or fails", async () => {
