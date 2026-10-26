@@ -31,8 +31,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     declaredIn.map((source) => ({ name, optional, source })),
   );
   const unsetSecrets = missingSecrets(declared);
-  // Built only when every required secret has a value: building is what reads them.
-  const code = unsetSecrets.length === 0 ? buildDefinition(definition) : undefined;
+  // Built only when every required secret has a value: building is what reads them. A module that is not what its
+  // directory holds is said as the refusal `dev` and `start` would stop on.
+  const code =
+    unsetSecrets.length === 0
+      ? await Promise.resolve()
+          .then(() => buildDefinition(definition))
+          .catch(failStartup)
+      : undefined;
   // Reported, not fatal: `info` is how an author finds out a content entry is missing, or the environment refused.
   let content: ResolvedContent[] = [];
   let contentAbsent: BoundContent[] = [];
@@ -44,13 +50,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   } catch (error) {
     contentError = (error as Error).message;
   }
-  let environment: DeclaredEnvironment | undefined;
-  let environmentError: string | undefined;
-  try {
-    environment = loadEnvironment(agentDir);
-  } catch (error) {
-    environmentError = (error as Error).message;
-  }
+  // Read already, by the definition's secrets: a refused environment is a definition that does not open.
+  const environment = loadEnvironment(agentDir);
   const models = modelEnvironment(agentDir, {}, code?.providers ?? []);
   const slash = modelSpec?.indexOf("/") ?? -1;
   const modelError =
@@ -81,7 +82,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           contentAbsent,
           contentError: contentError ?? null,
           environment: environment ?? null,
-          environmentError: environmentError ?? null,
           model: modelSpec ?? null,
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
@@ -108,15 +108,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("agent", `${definition.name} — ${agentDir}`);
   for (const [label, value] of contentLines(content, contentAbsent)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
-  line(
-    "environment",
-    environmentError
-      ? "(refused: dev and start stop on it)"
-      : environment
-        ? describeEnvironment(environment)
-        : "(none: the machine's commands)",
-  );
-  if (environmentError) cont(`⚠ ${environmentError}`);
+  line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or model in fastagent.config.ts)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
