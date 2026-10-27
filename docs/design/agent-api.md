@@ -82,8 +82,6 @@ epoch.
 interface AgentInfo {
   name: string;
   description?: string;
-  /** The content part types a message may carry; "text" is always among them. */
-  inputs: string[];
   /** What a message may start with as `/<name>`: the agent's prompt templates, and `skill:<name>` per skill (§5.1). */
   commands: { name: string; description?: string }[];
   /** The tools a session may enable (`tools`, §4). */
@@ -103,9 +101,6 @@ interface Session {
   instructions?: string;
   /** The tools it enables, as set; a name the agent no longer has refuses its next message (`missing_tool`, §4). */
   tools?: string[];
-  /** The messages the agent is answering, and those waiting, in the order they will be taken. */
-  running: string[];
-  queued: string[];
   /** The agent's reply being written, as written so far: present only while one is. */
   reply?: { text: string; thinking?: string };
   usage: Usage;
@@ -121,22 +116,18 @@ interface Message {
   entryId?: string;
   /** The `assistant` entry the agent stopped on for it: present when `completed`, and when `incomplete`. */
   answer?: { entryId: string; text: string };
-  /** Why it is `incomplete`. */
-  incompleteReason?: "max_tokens";
   /** Why it `failed`. */
   error?: AgentError;
 }
 
 interface Entry {
+  /** The same in every session that shares it: a fork's history begins with its source's entries, ids and all. */
   id: string;
-  /** The session that wrote it: a fork's history begins with entries its source wrote. */
-  sessionId: string;
-  parentEntryId?: string;
   timestamp: number;
   kind: string;
   data: Json;
 }
-// user         { content: ContentPart[], messageId?, idempotencyKey? }
+// user         { content: ContentPart[], messageId? }
 // assistant    { text, thinking?, toolCalls?: { id, name, args }[], stop?: "max_tokens" | "failed" | "aborted", error?, usage }
 // tool_result  { toolCallId, toolName, isError, content: ContentPart[] }
 // compaction   { summary }
@@ -185,7 +176,7 @@ interface Agent {
     update(sessionId: string, changes: SessionChanges): Promise<Session>;
     entries(sessionId: string, options?: { after?: string; before?: string; limit?: number }): Promise<Page<Entry>>;
     events(sessionId: string, options?: { after?: string; signal?: AbortSignal }): AsyncIterable<SessionEvent>;
-    cancel(sessionId: string, options?: { wait?: number; signal?: AbortSignal }): Promise<{ stopped: string[] }>;
+    cancel(sessionId: string): Promise<{ stopped: string[] }>;
     compact(sessionId: string, options?: { instructions?: string }): Promise<void>;
     attachment(sessionId: string, ref: string): Promise<{ mimeType: string; data: Uint8Array }>;
   };
@@ -221,8 +212,8 @@ Every operation either resolves with what it names or rejects with an `AgentErro
 or entry cursor rejects `not_found`.
 
 A `signal` lets go of a wait, never of what it waits for. The call rejects with the signal's reason, and what it asked
-for goes on: a send that reached the agent is recorded and answered (with a key, sending again finds it, §5.2), and a
-recorded stop holds. A Caller that stops reading `events` or `stream` detaches the same way. Only `cancel` stops the
+for goes on: a send that reached the agent is recorded and answered (with a key, sending again finds it, §5.2). A
+Caller that stops reading `events` or `stream` detaches the same way. Only `cancel` stops the
 agent.
 
 - **`info`** says what the agent accepts and offers.
@@ -248,8 +239,7 @@ agent.
 - **`sessions.events`** watches the session (§6).
 - **`sessions.cancel`** stops everything the session is doing: the agent answering its running messages, every queued
   message, and a manual compaction not yet placed. It resolves once the stop is recorded, with the messages it stops
-  (none on an idle session); each ends `canceled`, which `get` and `events` report. With `wait`, it resolves once they
-  have ended, or after `wait` seconds; the list is the same either way. The stop holds after a restart. A running tool
+  (none on an idle session); each ends `canceled`, which `get` and `events` report. The stop holds after a restart. A running tool
   ends when it honors its abort signal, which a tool must. Messages sent after it are taken as usual.
 - **A `cancel` whose answer did not arrive** (a dropped connection, `unavailable`) may or may not have been recorded,
   and sending it again is not the way to find out: it would also stop what was sent since. The Caller reads the
@@ -269,8 +259,8 @@ agent.
 
 ### 5.1 Content and commands
 
-`content` holds at least one part, each of a type among `info().inputs`, else `invalid_request`, and nothing is
-recorded.
+`content` holds at least one part: text, or an image. A part of another type is `invalid_request`, and nothing is
+recorded. An image sent to a model that takes none reaches it as a placeholder.
 
 A message whose text starts with `/<name>`, for a `name` among `info().commands`, is a command. The agent expands it
 before the model sees it: a prompt template into its text, with the words after the name as its arguments, and
@@ -311,7 +301,7 @@ A message ends exactly once, and its end is recorded before it is reported.
 | Status | Means | `answer` |
 |---|---|---|
 | `completed` | The agent answered it | The `assistant` entry it stopped on |
-| `incomplete` | The agent's answer was cut off (`incompleteReason`) | The cut-off reply |
+| `incomplete` | The agent's answer was cut off at its token limit | The cut-off reply |
 | `failed` | It could not be answered: `error` says why (`missing_model`, `auth_required`, `model_error`, `internal`) | None |
 | `canceled` | `cancel` stopped it, or withdrew it while it was queued | None |
 
@@ -411,7 +401,7 @@ answer) or `internal` in its `error`.
 
 ### 7.1 Extending
 
-Event types, entry kinds, content part types, `inputs`, statuses and error codes are open sets: a later version may
+Event types, entry kinds, content part types, statuses and error codes are open sets: a later version may
 add values. A name this specification defines contains no `.`; one an implementation adds MUST, under a prefix of its
 own (`fastagent.plan`). A Caller ignores an event type it does not know and an entry kind it cannot show, treats an
 unknown session status as busy, and acts on `retryable` for an unknown error code.
@@ -444,7 +434,9 @@ interface LocalAgent extends Agent {
 }
 
 interface Service {
+  /** For an app's own server to route to. */
   fetch(request: Request): Promise<Response>;
+  /** Or a server of its own: the one way to start one. */
   listen(port: number, host?: string): Promise<void>;
   ready: Promise<void>;
   close(): Promise<void>;
@@ -513,7 +505,8 @@ export default defineChannel(({ agent, sessionFor, turn }) => ({
 }));
 ```
 
-What a channel is handed beside the agent:
+What a channel is handed beside the agent, and all it is handed: no directory of its own, since `sessionFor` keeps
+the one map a channel needs and the platform's message id as `idempotencyKey` keeps a redelivery from running twice.
 
 - **`turn(place, work)`** runs `work` after the route has answered, one at a time per place (a chat, a thread) in the
   order they arrived, and counts it as work in flight, which `dev`'s restart and AgentCore's `/ping` wait for. It
@@ -551,7 +544,7 @@ What a channel is handed beside the agent:
 | `PATCH /v1/sessions/{sessionId}` | `sessions.update` | `Session` |
 | `GET /v1/sessions/{sessionId}/entries?after&before&limit` | `sessions.entries` | `Page<Entry>` |
 | `GET /v1/sessions/{sessionId}/events?after` | `sessions.events` | An event stream (§9.3) |
-| `POST /v1/sessions/{sessionId}/cancel?wait` | `sessions.cancel` | `{ "stopped": [...] }`, once the stop is recorded |
+| `POST /v1/sessions/{sessionId}/cancel` | `sessions.cancel` | `{ "stopped": [...] }`, once the stop is recorded |
 | `POST /v1/sessions/{sessionId}/compact` | `sessions.compact` | `202` |
 | `GET /v1/sessions/{sessionId}/attachments/{ref}` | `sessions.attachment` | The image's bytes, with its `Content-Type` |
 | `POST /v1/sessions/{sessionId}/messages` | `messages.send`, `messages.stream` | `Message`, or an event stream with `"stream": true` |
@@ -591,6 +584,17 @@ deployments, beside the channels' routes and `/health`. Not on AgentCore in this
 through `/invocations`, and the API there needs its own design (a route through the forwarder Lambda, with response
 streaming).
 
+### 9.6 Keys and checks, from the CLI
+
+- **`fastagent deploy` gives a deployment a key.** When `.secrets/production/.env` holds no `FASTAGENT_API_KEY`, it
+  writes one, generated there, so that what it deploys can be called; its runbook and report name the API's URL. The
+  key travels to the host with the other values (`deploy` carries the value file), and replacing it is editing that
+  file and deploying again, with both keys listed while the Callers move.
+- **`fastagent invoke --url <base>` checks a deployed agent** the way `invoke` checks a local one: the same message,
+  output, `--json`, `--session` and exit code, over `connectAgent`, with the key from `FASTAGENT_API_KEY` in
+  `.secrets/production/.env` (or `--key`). A coding agent that checked the agent before deploying it checks the
+  deployment with the same command.
+
 ## 10. Security model
 
 - **One instance is one trust domain.** Whoever holds a key can do everything the API can, in every session, and the
@@ -613,8 +617,7 @@ bindings answer the same way. It checks:
   fails once it is recorded rejects `unconfirmed` with its `messageId`, never `unavailable`;
 - one end per message, kept across a restart, with no tool run twice; idempotent sends, concurrent ones included, and
   `connectAgent`'s own key on a send without one;
-- `whenBusy`; `cancel` answering once its stop is recorded, with and without `wait`, and its effect on running and
-  queued messages;
+- `whenBusy`; `cancel` answering once its stop is recorded, and its effect on running and queued messages;
 - `get` by id and by key, with `wait`, a `wait` over 60 seconds included, which ends the same way in both bindings;
 - a `signal` ending a wait or a stream and leaving the message going on;
 - the three parts of `events`, and a reconnect without a gap, by `after` and by `Last-Event-ID` over a URL that says
@@ -650,7 +653,7 @@ bindings answer the same way. It checks:
 | `unknown` on an invoke whose receipt could not be read | `unconfirmed`, not retryable, with what is known; `connectAgent` keys its own sends | A key makes the resend safe; without one, nothing may resend |
 | `unknown` on an `abort` that did not answer | The same rule, written for `cancel` (§4): read before cancelling again | A second stop also stops what was sent since |
 | `wait()` on the receipt, `unfinished` when it could not tell | `send` and `get` with `wait`, which answers the status as it is then | Waiting is an option of a request, and works over HTTP |
-| A `signal` on `wait()` and `abort` | A `signal` on `send`, `stream`, `get` and `cancel` | Every wait can be let go of; none stops the message |
+| A `signal` on `wait()` and `abort` | A `signal` on `send`, `stream` and `get` | Every wait can be let go of; none stops the message. `cancel` answers in about a millisecond (architecture.md §6.1), so it needs none |
 | `stream(agent, request)` in the Caller | `messages.stream`, served by the Agent | The hard part (a message that is queued, running or ended) is done once |
 | `status: "done"` with `outcome.status` | One `status` with a closed set of ends (§7.1); `max_tokens` is `incomplete` | One field to read, and room for a later waiting state |
 | `taken` | `running` | |
@@ -661,12 +664,12 @@ bindings answer the same way. It checks:
 | `createSession({ from })` | `sessions.create({ forkFrom })` | Says what it is |
 | `configure` (model, thinking level) | `sessions.update`, also `instructions` and `tools` | |
 | — | `missing_tool` | A removed tool refuses, as a missing model does, rather than running with less |
-| `abort`, answering once its messages had ended | `sessions.cancel`, answering once its stop is recorded, `wait` for more | An answer that a proxy's timeout cannot outlast |
+| `abort`, answering once its messages had ended | `sessions.cancel`, answering once its stop is recorded | An answer that a proxy's timeout cannot outlast |
 | — | `sessions.compact` | A Caller may compact a long session |
 | `attachment` answers base64, or `undefined` | `sessions.attachment` answers bytes, or rejects `not_found` | Bytes are what HTTP sends |
 | — | `usage()`, `info().models`, `info().tools`, `defaultModel` | Spend, and what a session may be set to |
 | `user_message`, `assistant_message`, `message_delta`, `retry_scheduled` | `user`, `assistant`, `delta`, `retrying` | "Message" means only what a Caller sends |
 | `serving_error` | `stream_error` | Says what it ends; not `error`, which `EventSource` gives to its connection listener |
 | The `assistant` entry's `outcome` (`failed`, `aborted`, `truncated`) | Its `stop` (`failed`, `aborted`, `max_tokens`) and `error` | The message's status is the outcome; an entry says how its reply stopped |
-| `position`, `duplicate`, `protocolVersion`, `context: "recent"` on a fork, the Middleware role | Gone | Nothing used them |
-| `openServing`, `mountAgentService`, `/core`, `/node`, `/pi` | `openAgent`, `serve`, and the entry points of §8 | One entry per kind of user |
+| `position`, `duplicate`, `protocolVersion`, `context: "recent"` on a fork, the Middleware role; `info().inputs`, the session's `taken` and `queued`, an entry's `parentEntryId` and `sessionId`, a `user` entry's `idempotencyKey` | Gone | Nothing used them |
+| `openServing`, `mountAgentService`, `serveNode`, `nodeListener`, `/core`, `/node`, `/pi` | `openAgent`, `serve` and its `listen`, and the entry points of §8 | One entry per kind of user, one way to start a server |
