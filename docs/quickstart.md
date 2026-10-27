@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: "From an installed CLI to a live local agent service: scaffold an agent, run it, add a typed tool, connect channels, and put the agent on a clock."
+description: "From an installed CLI to a live local agent service: scaffold an agent, check it, add a typed tool, connect channels, and put the agent on a clock."
 status: current
 ---
 
@@ -10,7 +10,7 @@ This guide takes you from an installed CLI to a live local agent service.
 
 ## Prerequisites
 
-- Node >= 24.15 (`node --version`).
+- Node >= 24.15 (`node --version`), or Bun >= 1.4.
 - FastAgent CLI: `npm i -g @fastagent-sh/fastagent`.
 
 Model credentials come in step 2, after the agent exists. `fastagent models` lists model specs.
@@ -23,35 +23,22 @@ cd my-agent
 ```
 
 `my-agent/` is the agent: its definition, and its working directory. The agent can edit its own definition;
-`APPEND_SYSTEM.md` and skills are re-read every turn.
+`SYSTEM.md` and skills are read for every message.
 
 ```txt
 my-agent/
-├── APPEND_SYSTEM.md               # standing instructions — how to improve yourself
+├── SYSTEM.md                      # the system prompt: who the agent is, what it does, how it improves itself
 ├── skills/writing-great-skills/   # the example skill: how to author skills well
-├── extensions/web-access.ts       # web search and page fetching (@fastagent-sh/pi-web-access)
-├── fastagent.config.ts            # model, http
-├── package.json
+├── fastagent.config.ts            # model, providers, http
+├── package.json                   # FastAgent, pi-durable and pi-ai, installed by init
 ├── .secrets/.env.example          # secrets live here, never committed
 └── .gitignore
 ```
 
-`APPEND_SYSTEM.md` tells the agent to capture improvements as skills, and `writing-great-skills` (from
+`SYSTEM.md` tells the agent to capture improvements as skills, and `writing-great-skills` (from
 [mattpocock/skills](https://github.com/mattpocock/skills)) shows how. Add skills with
-`fastagent add skill <owner/repo/path>`.
-
-`extensions/web-access.ts` gives the agent `web_search`, `fetch_content` (readable pages, PDFs, GitHub repositories),
-`get_search_content` and `source_check`, from `@fastagent-sh/pi-web-access`: fastagent's build of the pi package
-[pi-web-access](https://pi.dev/packages/pi-web-access) that keeps each conversation's results its own when the agent
-serves several at once ([fork](https://github.com/fastagent-sh/pi-web-access); the fix is proposed upstream). Where the
-model can add tools mid-conversation, a session starts with `web_enable` only, and the model calls it to make the
-others available, so a turn's first web tool event is often `web_enable`. It needs no key: searches go to Exa, or to
-OpenAI's search when you sign in with a ChatGPT subscription. Fetches of private and reserved addresses are blocked by
-default. For more providers, put their keys (`BRAVE_API_KEY`, `EXA_API_KEY`, `GEMINI_API_KEY`, … see the package
-README) in `.secrets/.env`, which travels with a deploy; `~/.pi/agent/web-search.json` on the serving machine works
-too, but stays on that machine. The file loads the package's tools only: its terminal commands (`/websearch`,
-`/curator`, `/google-account`, `/search`) open a browser on the serving machine or rewrite its config, so they are not
-offered to callers. To go without it, delete the file and `npm uninstall @fastagent-sh/pi-web-access`.
+`fastagent add skill <owner/repo/path>`. Code goes under `src/` when you need it: `src/tools/`, `src/channels/`,
+`src/schedules/`, `src/extensions/`.
 
 **To have it work on a project**, declare the project as its content: `fastagent init my-agent --content ~/code/app`,
 or later `fastagent content add ~/code/app`. The agent stays in its own directory and is told where the project is,
@@ -59,103 +46,73 @@ and reads the project's files, its `AGENTS.md` included, when it works there. A 
 repository in `context.json`, so every instance has it; any other directory is bound in `context.local.json`, on this
 machine only. A directory it should only read is added with `--readonly`. See [content](configuration.md#content).
 
-## 2. Inspect it
+## 2. Check it
 
 ```bash
 fastagent info
 ```
 
-`info` is read-only. It prints the content, model, prompt, skills, discovered tools, channels, diagnostics, and
-session path without starting a server.
+`info` prints what the agent opens as: its content, model, tools, skills and commands, channels, schedules, declared
+secrets and paths, without starting a server. `--json` is the form a script or a coding agent reads.
 
 A fresh agent presets no model. The first `fastagent dev` (or `start` / `invoke`) in a terminal shows the model
-catalog, providers with credentials first; picking one that needs auth runs the login, and the pick is written to
-`fastagent.config.ts`. Credentials are stored in `<agent dir>/.secrets/auth.json`, with
+catalog, providers with credentials first; picking one that needs auth runs the login, and the line to put in
+`fastagent.config.ts` is printed. Credentials are stored in `<agent dir>/.secrets/auth.json`, with
 `~/.fastagent/.secrets/auth.json` (`fastagent login -g`) as a fallback. To set the model without a prompt (CI,
 deploy):
 
 ```bash
 fastagent dev --model provider/model-id
 FASTAGENT_MODEL=provider/model-id fastagent dev
-# or edit fastagent.config.ts
+# or set `model` in fastagent.config.ts
 ```
 
-## 3. Run locally
+## 3. Send it a message
+
+```bash
+fastagent invoke "Summarize SYSTEM.md in one sentence"
+```
+
+`invoke` opens the agent, sends one message in a new session, prints the answer on stdout and each tool call on
+stderr, and exits non-zero unless the message completed. It needs no server.
+
+## 4. Run locally
 
 ```bash
 fastagent dev
 ```
 
-`dev` serves the agent on `:8787`. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md` and `skills/` apply on the next turn; code
-edits (`tools/`, `channels/`, config) restart the worker. Turns run through `POST /invoke`.
-
-Send one turn:
-
-```bash
-curl -N -X POST localhost:8787/invoke \
-  -H 'content-type: application/json' \
-  -d '{"sessionId":"s1","prompt":{"text":"Summarize https://example.com in two bullets"}}'
-```
-
-The response is Server-Sent Events ([SPEC v1](SPEC.md)). It starts with `accepted` (or `rejected`, with the reason),
-streams `message_delta` text and `tool_started` while the agent works, records your message, each tool result and
-the agent's settled message as an `entry`, and ends with `done`, whose `outcome` says `completed`, `failed` or
-`canceled` and whose `answer` is the reply.
-
-```txt
-data: {"type":"accepted","sessionId":"s1","message":{"messageId":"9f…","source":{"kind":"api"},"status":"taken","entryId":"a1…","takenAt":1767225600000},"duplicate":false}
-
-data: {"type":"entry","entry":{"id":"a1…","kind":"user_message","data":{"text":"Summarize https://example.com in two bullets","messageId":"9f…"},…}}
-
-data: {"type":"tool_started","toolCallId":"tool-1","name":"fetch_content","args":{"url":"https://example.com"}}
-
-data: {"type":"entry","entry":{"id":"c3…","kind":"tool_result","data":{"toolCallId":"tool-1","toolName":"fetch_content","isError":false,"text":"# Example Domain …"},…}}
-
-data: {"type":"message_delta","channel":"text","delta":"- Example Domain is …"}
-
-data: {"type":"done","message":{"messageId":"9f…","status":"done","outcome":{"status":"completed"},"answer":{"entryId":"e5…","text":"- Example Domain is …"},…}}
-```
-
-Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `.state/sessions` in the agent directory), so a dev restart keeps conversation history.
-
-## 4. Try authoring loops
-
-Open the same assembled agent in pi's interactive TUI:
-
-```bash
-fastagent chat
-```
-
-Run one agent turn without a server:
-
-```bash
-fastagent invoke "Summarize APPEND_SYSTEM.md in one sentence"
-```
+`dev` serves the agent locally: its channels, schedules and wake-ups. Edits to `SYSTEM.md`, `AGENTS.md`, `skills/` and
+`prompts/` apply on the next message; code edits (`src/`, config) restart the worker. There is no HTTP API: the agent
+is reached through its channels (step 7) and its schedules (step 8), and from an app that embeds it
+([Embedding](embedding.md)). Its sessions persist in `<state root>/agent.sqlite` (default `.state/` in the agent
+directory), so a restart keeps conversation history.
 
 ## 5. Add a tool
 
-Tools are modules in `tools/`. A tool that declares no `name` takes its file's name.
+Tools are modules in `src/tools/`, each default-exporting pi-durable's `defineTool`:
 
 ```ts
-// tools/reverse.ts
-import { defineTool, z } from "@fastagent-sh/fastagent";
+// src/tools/reverse.ts
+import { Type } from "@earendil-works/pi-ai";
+import { defineTool } from "@earendil-works/pi-durable";
 
 export default defineTool({
+  name: "reverse",
   description: "Reverse a string.",
-  input: z.object({ text: z.string() }),
-  async execute({ text }) {
-    return { reversed: [...text].reverse().join("") };
-  },
+  parameters: Type.Object({ text: Type.String() }),
+  execute: async ({ text }) => ({ output: [{ type: "text", text: [...text].reverse().join("") }] }),
 });
 ```
 
-Test it directly:
+Test it in a unit test (call its `execute`), then with the model:
 
 ```bash
-fastagent tool reverse '{"text":"hello"}'
+fastagent invoke "Reverse the word hello with the reverse tool"
 ```
 
-Mention the tool in `APPEND_SYSTEM.md` so the model knows when to use it. `fastagent dev` reloads on save.
+Mention the tool in `SYSTEM.md` so the model knows when to use it. `fastagent dev` restarts on save. A tool that reads
+a secret declares it with `needs` ([secrets in code](configuration.md#secrets-in-code)).
 
 ## 6. Serve without watch
 
@@ -166,8 +123,8 @@ fastagent start
 `start` serves like `dev` without watching files. There is no build step: copy the agent to a host with
 Node >= 24.15, install dependencies, and run `fastagent start`.
 
-For deployments, point the state root (sessions and channel state) and the secrets dir (`.env` and `auth.json`) at
-durable storage:
+For deployments, point the state root (the agent's storage and channel state) and the secrets dir (`.env` and
+`auth.json`) at durable storage:
 
 ```bash
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
@@ -194,29 +151,29 @@ Read [Channels](channels.md) for the channel model, [Telegram channel](telegram.
 
 ## 8. Run on a clock
 
-Channels turn external events into invocations; **schedules** do the same for the clock — firing the
-agent on a cron: a daily digest, a periodic check. Drop a Markdown file in `schedules/`, named by its filename: the
-cron in the frontmatter, the prompt under it.
+Channels turn external events into messages; **schedules** do the same for the clock — a daily digest, a periodic
+check. A schedule is a module of `src/schedules/`, named by its file:
 
-```md
-<!-- schedules/daily-digest.md -->
----
-cron: "0 9 * * *"
-tz: America/New_York
----
+```ts
+// src/schedules/daily-digest.ts
+import { defineSchedule } from "@fastagent-sh/fastagent";
 
-Summarize yesterday's activity and send it with telegram-send to chat 123456789.
+export default defineSchedule({
+  cron: "0 9 * * *",
+  tz: "America/New_York",
+  prompt: "Summarize yesterday's activity and send it with telegram_send to chat 123456789.",
+});
 ```
 
-The scheduler only fires the agent; a send tool delivers the output (`fastagent add telegram` scaffolds
-`tools/telegram-send.ts`). A scheduled turn has no chat, so **the prompt must name the target chat id**. Every fire
-continues one conversation, `schedule:daily-digest`, so the agent sees what its earlier runs did.
+The scheduler only sends the agent a message; a send tool delivers the output (`fastagent add telegram` scaffolds
+`src/tools/telegram-send.ts`). A scheduled message has no chat, so **the prompt must name the target chat id**. Every
+fire continues the schedule's own session, so the agent sees what its earlier runs did.
 
 On resident hosts, the cron fires while `dev`/`start` is serving; keep the process running.
-[AgentCore ingress](deploy.md#aws-bedrock-agentcore) instead uses EventBridge and supports scale-to-zero.
+[AgentCore](deploy.md#aws-bedrock-agentcore) instead uses EventBridge and supports scale-to-zero.
 `fastagent schedules list` shows when each schedule runs next and how its last run ended. To try the prompt now,
 `fastagent invoke` it. Agents can also schedule **themselves** with the built-in `wake` tool ("check the deploy in
-10 minutes"), mounted on every serve. See [Schedules](configuration.md#schedules).
+10 minutes"), on every serve. See [Schedules](configuration.md#schedules).
 
 ## Where next
 
@@ -224,5 +181,5 @@ On resident hosts, the cron fires while `dev`/`start` is serving; keep the proce
 - [Embedding](embedding.md) — use FastAgent as a library inside your own app.
 - [Channels](channels.md) — webhook and bot adapters.
 - [Deploy](deploy.md) — ship the directory to Fly, Railway, AWS Bedrock AgentCore, or any Docker host.
-- [Agent Handler SPEC](SPEC.md) — the event stream contract.
+- [Agent API SPEC](SPEC.md) — the API every Caller uses.
 - [Core design](design/core.md) — maintainer architecture notes.
