@@ -6,7 +6,7 @@ status: current
 
 # Slack channel
 
-The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/) at `POST /slack`. It verifies Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/), persists accepted work before ACK, serializes turns per session, and renders threaded replies with Slack's native [`chat.*Stream`](https://docs.slack.dev/reference/methods/chat.startStream) Agent APIs. A rate-limited edited-message renderer remains available for top-level replies and compatibility use.
+The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/) at `POST /slack`. It verifies Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/), persists accepted work before ACK, serializes turns per conversation, and renders threaded replies with Slack's native [`chat.*Stream`](https://docs.slack.dev/reference/methods/chat.startStream) Agent APIs. A rate-limited edited-message renderer remains available for top-level replies and compatibility use.
 
 ## Add the channel
 
@@ -23,8 +23,9 @@ invited to.
 The command creates:
 
 ```txt
-channels/slack.ts       # signed Events API adapter + policy
-tools/slack-send.ts     # text and external-upload file tool
+src/channels/slack.ts       # signed Events API adapter + policy
+src/tools/slack-send.ts     # text and external-upload file tool
+src/tools/slack-threads.ts  # reads the threads of the channel a message was asked in
 ```
 
 It also adds `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` placeholders to `.env.example` and, by
@@ -51,7 +52,7 @@ support it.
 
 Two symptoms name it: `slackChannel` refuses the `xoxe.…` token at startup, and `dev --tunnel` / `deploy --run`
 report that the app's manifest update was refused (`cannot_disable_once_enabled`). Create a new app: delete
-`channels/slack.ts`, `<state root>/channels/slack/onboarding.json` and the `SLACK_*` lines in `.secrets/.env`, then run
+`src/channels/slack.ts`, `<state root>/channels/slack/onboarding.json` and the `SLACK_*` lines in `.secrets/.env`, then run
 `fastagent add slack` again; the runtime secrets it writes are `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` alone.
 Remove the old app in the Slack console when the new one answers.
 
@@ -125,23 +126,21 @@ without touching the installed app or its runtime credentials.
 ## Scaffolded channel
 
 ```ts
+import { needs } from "@fastagent-sh/fastagent";
 import { slackChannel } from "@fastagent-sh/fastagent/slack";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default defineChannel({
-  secrets: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"],
-  channel: (secrets) =>
-    slackChannel({
-      botToken: secrets.SLACK_BOT_TOKEN,
-      signingSecret: secrets.SLACK_SIGNING_SECRET,
-      rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
-      // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-      // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
-      // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
-      // No session modes: an answer attaches to its question with a thread, and that thread is the session.
-      onError: (failed) => `⚠️ ${failed.details}`, // development transparency
-    }),
-});
+export default needs(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"], (secrets) =>
+  slackChannel({
+    botToken: secrets.SLACK_BOT_TOKEN,
+    signingSecret: secrets.SLACK_SIGNING_SECRET,
+    rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
+    // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
+    // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
+    // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
+    // No session modes: an answer attaches to its question with a thread, and that thread is the conversation.
+    onError: (failed) => `⚠️ ${failed.details}`, // development transparency
+  }),
+);
 ```
 
 Required credentials are validated when serving activates the module, so deployment inspection remains
@@ -155,7 +154,7 @@ While a turn runs, the channel adds a 👀 reaction to the user's triggering mes
 completion. Set `reactionAck` to override the emoji names or `false` to disable it. This needs the
 `reactions:write` scope; a missing scope degrades to no ack (the reply is unaffected).
 
-## Routing and sessions
+## Routing and conversations
 
 The default route answers:
 
@@ -168,14 +167,15 @@ Bot messages, edits, deletes, hidden events, and service subtypes are ignored. `
 `thread_broadcast` are new human content and remain eligible. Overlapping `app_mention` and `message.*`
 deliveries are deduplicated by logical message identity `(team, channel, ts)`, not only `event_id`.
 
-Default sessions:
+Default conversations, each with a session of its own, which the channel creates the first time it is asked there and
+records in `<state root>/channels/slack/sessions.json`:
 
-| Message | Session |
+| Message | Conversation |
 |---|---|
-| Top-level DM | `slack:<team>:<channel>:<ts>` |
-| DM thread continuation | `slack:<team>:<channel>:<root_ts>` |
-| Top-level group mention | `slack:<team>:<channel>:<ts>` |
-| Group thread continuation | `slack:<team>:<channel>:<root_ts>` |
+| Top-level DM | `<team>:<channel>:<ts>` |
+| DM thread continuation | `<team>:<channel>:<root_ts>` |
+| Top-level group mention | `<team>:<channel>:<ts>` |
+| Group thread continuation | `<team>:<channel>:<root_ts>` |
 
 There are no session modes. Slack has no quote primitive, so the only way to attach an answer to its
 question is a thread on it (`thread_ts = incoming.thread_ts ?? incoming.ts`) — and that thread is then
@@ -187,7 +187,7 @@ Follow-ups therefore live in the thread, which is also where Slack's own convent
 different threads run concurrently; turns within one are FIFO.
 
 Override `route(envelope)` for custom policy. It returns `null` to ignore or a `SlackRoute` with optional
-`session`, `channelId`, `threadTs`, and `text`. `threadTs: null` explicitly sends at channel top level.
+`conversation`, `channelId`, `threadTs`, and `text`. `threadTs: null` explicitly sends at channel top level.
 Supplying a custom route disables the default thread-participation and unsummoned-context admission policy; the
 custom route is then the complete authority.
 
@@ -249,7 +249,7 @@ retention/privacy policy.
 
 ### Reading threads
 
-`fastagent add slack` also scaffolds `tools/slack-threads.ts`. In a channel turn, the agent calls it with no
+`fastagent add slack` also scaffolds `src/tools/slack-threads.ts`. In a channel turn, the agent calls it with no
 arguments to list the channel's recent threads, and with a thread id (its first message's `ts`) to read one. That is
 how a question about another thread ("was the deploy failure resolved?") reaches what a person wrote there.
 
@@ -329,19 +329,21 @@ user's DM — Slack opens it under `chat:write`, no `conversations.open` needed 
 the DM channel id (`D…`), which is what a file upload to that user needs. A schedule that reports to its
 owner therefore needs only the owner's user id, named in its prompt:
 
-```md
----
-cron: "0 9 * * 1-5"
----
+```ts
+// src/schedules/growth-notes.ts
+import { defineSchedule } from "@fastagent-sh/fastagent";
 
-Summarize yesterday's growth notes and send them with slack-send to user U0123456789.
+export default defineSchedule({
+  cron: "0 9 * * 1-5",
+  prompt: "Summarize yesterday's growth notes and send them with slack_send to user U0123456789.",
+});
 ```
 
-The tool holds no transport of its own. It calls `slackTransport(ctx.cwd)` from
-`@fastagent-sh/fastagent/slack`, which hands back the mounted channel's Slack transport — the same
+The tool holds no transport of its own. It calls `slackTransport(SLACK_BOT_TOKEN)` from
+`@fastagent-sh/fastagent/slack`, which hands back the mounted channel's Slack transport for that bot — the same
 token, `apiBaseUrl`, Markdown splitting and rate-limit handling the channel replies with. With no
 channel mounted (`fastagent invoke`) the transport is built from `SLACK_BOT_TOKEN` against
-Slack's default API base. `tools/slack-send.ts` is the package's and is rewritten by every `add slack`.
+Slack's default API base. `src/tools/slack-send.ts` is the package's and is rewritten by every `add slack`.
 
 File mode uses Slack's current [external upload
 protocol](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/):
@@ -392,12 +394,13 @@ so gating the write would leave a thread marked as answered-in while the humans 
 intervening window went unrecorded, and the Agent would then speak into a crowd. Deleting the file is
 safe; each thread then costs one mention to re-enter.
 
-An accepted turn is persisted before the 200 ACK and replayed after an interrupted process. Replay is
-at-least-once: side-effecting Agent tools must be idempotent or tolerate duplication. A turn whose reply
+An accepted turn is persisted before the 200 ACK and replayed after an interrupted process. Its message was sent with
+the Slack message's identity as its key, so a replay reads the message already sent instead of sending a second one.
+Replay is still at-least-once: side-effecting Agent tools must be idempotent or tolerate duplication. A turn whose reply
 was already generated is not re-run — the answer is recorded before it is sent, so an interrupted or
 failed delivery is re-sent on the next start (a duplicate is preferred to a lost
 answer). The execution ceiling drops a turn that repeatedly starts without finishing and notifies the
-thread instead of crash-looping forever — unless its answer was already recorded, which is sent instead. File-backed channel state supports one process/replica only.
+thread instead of crash-looping forever — unless its answer was already recorded, which is sent instead. One process owns the state root: a second `dev` or `start` of the same agent is refused.
 
 ## Production
 
