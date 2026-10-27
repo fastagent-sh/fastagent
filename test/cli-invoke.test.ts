@@ -39,10 +39,10 @@ describe("cli: invoke", () => {
     const lines = json.stdout
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { type: string; name?: string; message?: { outcome?: unknown } });
-    expect(lines[0]).toMatchObject({ type: "receipt", sessionId, duplicate: false });
+      .map((line) => JSON.parse(line) as { type: string; name?: string; message?: { status?: string } });
+    expect(lines[0]).toMatchObject({ type: "message", message: { sessionId } });
     expect(lines.find((line) => line.type === "tool_started")).toMatchObject({ name: "read" });
-    expect(lines.at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
+    expect(lines.at(-1)).toMatchObject({ type: "done", message: { status: "completed" } });
   });
 
   it("ends the message a killed invoke left, so no later invoke runs it again", async () => {

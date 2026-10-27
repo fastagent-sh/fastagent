@@ -84,13 +84,7 @@ export async function reportAssembly(
   const names = (list: readonly { name: string }[]) => list.map(({ name }) => name).join(", ") || "(none)";
   reportLine("tools", names(code.tools));
   if (code.extensions.length > 0) reportLine("extensions", names(code.extensions));
-  reportLine(
-    "commands",
-    opened.agent
-      .info()
-      .commands.map(({ name }) => `/${name}`)
-      .join(", ") || "(none)",
-  );
+  reportLine("commands", (await opened.agent.info()).commands.map(({ name }) => `/${name}`).join(", ") || "(none)");
   reportLine("state", stateRoot);
   for (const [label, value] of extras) reportLine(label, value);
 }

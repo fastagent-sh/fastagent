@@ -148,8 +148,7 @@ describe("init: scaffoldAgent", () => {
       credentials: new InMemoryCredentialStore(),
       model: "faux/faux-1",
     });
-    const sent = await agent.invoke({ content: [{ type: "text", text: "hi" }] });
-    if (sent.ok) await sent.wait();
+    await agent.messages.send({ sessionId: (await agent.sessions.create()).id, content: "hi" }, { wait: 30 });
     await agent.close();
     expect(prompt).toContain(
       `<name>writing-great-skills</name>\n    <description>Reference for writing and editing skills well`,

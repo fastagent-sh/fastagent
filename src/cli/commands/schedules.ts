@@ -7,6 +7,7 @@
  */
 import { resolve } from "node:path";
 import * as Effect from "effect/Effect";
+import { AgentError, hasEnded } from "../../agent-api.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { buildDefinitionShape, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
 import { holdingInstance, openServing } from "../../harnesses/pi-durable/serve.ts";
@@ -103,16 +104,22 @@ export async function runScheduleNow(
   const sessionId = scheduleSessions(stateRoot).get(name);
   const message =
     fired.fired && sessionId !== undefined
-      ? await agent.getMessage(sessionId, { idempotencyKey: fired.slot.toISOString() })
+      ? await agent.messages
+          .get({ sessionId, idempotencyKey: fired.slot.toISOString() })
+          .catch((error: unknown) => {
+            // A fire refused before it sent its message (a busy session) has none.
+            if (error instanceof AgentError && error.code === "not_found") return undefined;
+            throw error;
+          })
+          .catch(failStartup)
       : undefined;
-  const ended = message?.status === "done" ? message : undefined;
+  const ended = message !== undefined && hasEnded(message) ? message : undefined;
   if (ended?.answer !== undefined) process.stdout.write(`${ended.answer.text}\n`);
   await agent.close();
   if (!fired.fired) console.error(`[fastagent] ${name} did not fire: ${fired.skippedReason}`);
   // The claim counts a cut-off answer as completed; the exit code does not.
-  else if (ended?.outcome.status === "max_tokens")
-    console.error(`[fastagent] ${name}: its answer was cut off (max_tokens)`);
-  process.exit(ended === undefined ? 1 : exitCodeOf(ended.outcome));
+  else if (ended?.status === "incomplete") console.error(`[fastagent] ${name}: its answer was cut off (incomplete)`);
+  process.exit(ended === undefined ? 1 : exitCodeOf(ended));
 }
 
 /**

@@ -20,30 +20,32 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import {
   type Agent,
-  type AgentError,
-  AgentRejection,
-  type Attachment,
-  type ContentPart,
-  type MessageStatus,
-  type SessionEvent,
+  AgentError,
+  type AgentErrorData,
+  type MessageStreamEvent,
+  type SendRequest,
 } from "../../agent-api.ts";
-import { stream } from "../../agent-api-stream.ts";
 import { log } from "../../log.ts";
 import { eventStream } from "./event-stream.ts";
-import { type PortFailure, portJoin } from "../../effect-port.ts";
+import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
 
 /**
- * What a turn reads, in order: the message's receipt or why there is none, then its session's events through its
- * `done` (SPEC.md §3.1). `unknown`: whether the message was taken is not known, and the same key finds it again.
+ * What a turn reads, in order: the message as it was recorded, or why there is none (`rejected`), then the events of
+ * its session that belong to it through its `done` (agent-api.md §6.2).
  */
-export type TurnEvent =
-  | { type: "accepted"; sessionId: string; message: MessageStatus; duplicate: boolean }
-  | { type: "rejected"; error: AgentError }
-  | { type: "unknown"; reason: string }
-  | SessionEvent;
+export type TurnEvent = { type: "rejected"; error: AgentErrorData } | MessageStreamEvent;
+
+/** An image a channel read from its platform, as a message carries it. */
+export interface ImageAttachment {
+  mimeType: string;
+  /** base64 */
+  data: string;
+}
+
+type MessageContent = Exclude<SendRequest["content"], string>;
 
 /** A turn's text and images as the content of one message. */
-export function promptContent(text: string, images: readonly Attachment[] | undefined): ContentPart[] {
+export function promptContent(text: string, images: readonly ImageAttachment[] | undefined): MessageContent {
   return [{ type: "text", text }, ...(images ?? []).map((image) => ({ type: "image" as const, ...image }))];
 }
 
@@ -72,13 +74,13 @@ export function turnStream<R>(opts: {
   /** Prepare this turn's inputs (download attachments, walk a reply chain). */
   resolve: () => Promise<R>;
   /** What the prepared inputs make of the turn: what it asks, and the key it is known by. */
-  turn: (resolved: R) => { content: ContentPart[]; idempotencyKey: string };
+  turn: (resolved: R) => { content: MessageContent; idempotencyKey: string };
   /** Whether a failed preparation is worth a platform redelivery. Stated per channel because it IS a
    *  platform question — Slack reads its API error's status, and a transport that cannot tell says
    *  yes, since a retried download is cheap next to an unanswered ask. */
   retryableLoadFailure: (cause: unknown) => boolean;
 }): Stream.Stream<TurnEvent, PortFailure> {
-  const rejected = (error: AgentError) => Stream.succeed<TurnEvent>({ type: "rejected", error });
+  const rejected = (error: AgentErrorData) => Stream.succeed<TurnEvent>({ type: "rejected", error });
   return Stream.unwrap(
     Effect.gen(function* () {
       const prepared = yield* Effect.result(portJoin(opts.resolve));
@@ -101,36 +103,32 @@ export function turnStream<R>(opts: {
           Effect.sync(() => enter(sessionId)),
           (leave) => Effect.sync(leave),
         );
-      const sent = yield* Effect.result(
-        portJoin(() => stream(opts.agent, { sessionId, ...opts.turn(resolved), whenBusy: "queue" })),
-      );
-      if (Result.isFailure(sent)) return rejected(agentFailure("its message", sent.failure.cause));
-      const result = sent.success;
-      if (!result.ok) {
-        return "error" in result
-          ? rejected(result.error)
-          : Stream.succeed<TurnEvent>({ type: "unknown", reason: result.unknown.reason });
-      }
-      const { ok: _, events, ...receipt } = result;
-      return Stream.concat(
-        Stream.succeed<TurnEvent>({ type: "accepted", ...receipt }),
-        eventStream(() => events, `${opts.label} (session=${sessionId})`).pipe(Stream.scoped),
+      const { content, idempotencyKey } = opts.turn(resolved);
+      const request = { sessionId, content, idempotencyKey, whenBusy: "queue" } as const;
+      // A send the agent refused rejects the stream's first read: the turn's `rejected`, not a failure of its stream.
+      return eventStream(() => opts.agent.messages.stream(request), `${opts.label} (session=${sessionId})`).pipe(
+        Stream.scoped,
+        Stream.catchCause((cause) => {
+          const error = portError(cause);
+          return error instanceof AgentError ? rejected(agentFailure("its message", error)) : Stream.failCause(cause);
+        }),
       );
     }),
   );
 }
 
 /**
- * A step of the Agent's that threw: its refusal as it gave it (`AgentRejection`, with its own `retryable`), or a failure
- * nothing was sent past, so worth a retry.
+ * A step of the Agent's that failed: its refusal as it gave it (an `AgentError`, with its own `retryable`), or a
+ * failure nothing was sent past, so worth a retry. A send that may have been recorded (`unconfirmed`) is worth one too:
+ * the turn's send carries its key, so sending it again finds the message rather than recording a second.
  */
-function agentFailure(what: string, cause: unknown): AgentError {
-  if (cause instanceof AgentRejection) {
+function agentFailure(what: string, cause: unknown): AgentErrorData {
+  if (cause instanceof AgentError) {
     const { code, message, retryable, details } = cause;
     return {
       code,
       message: `could not start ${what}: ${message}`,
-      retryable,
+      retryable: retryable || code === "unconfirmed",
       ...(details === undefined ? {} : { details }),
     };
   }

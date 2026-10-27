@@ -2,7 +2,7 @@
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type Agent, AgentRejection, type ResumeEvent } from "../src/agent-api.ts";
+import { type Agent, AgentError, type MessageStreamEvent } from "../src/agent-api.ts";
 import { eventStream } from "../src/channels/kit/event-stream.ts";
 import { type TurnEvent, attachedFilesManifest, turnStream } from "../src/channels/kit/invoke-turn-kit.ts";
 import { PortFailure } from "../src/effect-port.ts";
@@ -13,7 +13,7 @@ import { ev } from "./scripted-run.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
-const ok: TurnEvent[] = [ev.accepted(), ev.text("answer"), ev.ended()];
+const ok: TurnEvent[] = [ev.message(), ev.text("answer"), ev.ended()];
 
 const turn = (agent: Agent, resolve = async () => {}, session = async () => "s") =>
   turnStream({
@@ -40,32 +40,16 @@ const failOnEnd = (events: Stream.Stream<TurnEvent, PortFailure>, error: Error) 
     ),
   );
 
-const snapshot: ResumeEvent = {
-  type: "state",
-  state: { status: "idle", taken: [], queued: [], usage: { models: {}, tools: {} } },
-};
-const ownEntry: ResumeEvent = {
-  type: "entry",
-  entry: { id: "e0", sessionId: "s", timestamp: 0, kind: "user_message", data: { text: "hi", messageId: "message" } },
-};
+const recorded = ev.message() as MessageStreamEvent;
 
-/** An agent whose session events are `source`'s, for a test that watches how the turn pulls and closes them. */
-const agentOver = (source: AsyncIterator<ResumeEvent>) =>
-  ({
-    invoke: async () => ({
-      ok: true,
-      sessionId: "s",
-      message: { messageId: "message", status: "queued", position: 0 },
-      duplicate: false,
-      wait: async () => ({ ok: false, unfinished: { reason: "not in this double" } }),
-    }),
-    resume: () => ({ [Symbol.asyncIterator]: () => source }),
-  }) as unknown as Agent;
+/** An agent whose message stream is `source`, for a test that watches how the turn pulls and closes it. */
+const agentOver = (source: AsyncIterator<MessageStreamEvent>) =>
+  ({ messages: { stream: () => ({ [Symbol.asyncIterator]: () => source }) } }) as unknown as Agent;
 
 it("asks once, queued behind whatever runs in the session, under the turn's key", async () => {
   const agent = scriptedAgent(() => ok);
   const events = await read(turn(agent));
-  expect(events.map((event) => event.type)).toEqual(["accepted", "message_delta", "entry", "done"]);
+  expect(events.map((event) => event.type)).toEqual(["message", "entry", "delta", "entry", "done"]);
   expect(events[0]).toMatchObject(ok[0] as object);
   expect(agent.sent).toEqual([
     { sessionId: "s", idempotencyKey: "msg-1", content: [{ type: "text", text: "hi" }], whenBusy: "queue" },
@@ -108,7 +92,7 @@ it("a session that cannot be had is the turn's refusal on the Agent's own verdic
       ),
     );
   expect(
-    await refusedBy(new AgentRejection({ code: "unavailable", message: "storage is down", retryable: true })),
+    await refusedBy(new AgentError({ code: "unavailable", message: "storage is down", retryable: true })),
   ).toMatchObject([
     {
       type: "rejected",
@@ -116,7 +100,7 @@ it("a session that cannot be had is the turn's refusal on the Agent's own verdic
     },
   ]);
   expect(
-    await refusedBy(new AgentRejection({ code: "invalid_request", message: "no such room", retryable: false })),
+    await refusedBy(new AgentError({ code: "invalid_request", message: "no such room", retryable: false })),
   ).toMatchObject([{ type: "rejected", error: { code: "invalid_request", retryable: false } }]);
   // Anything else stopped it before a message was sent, so a retry costs nothing it has not already cost.
   expect(await refusedBy(new Error("ENOSPC"))).toMatchObject([
@@ -151,12 +135,15 @@ it("enters its session while the turn runs and leaves it after, whether the turn
   ]);
 });
 
-it("a refusal and an unknown receipt are each the turn's one event", async () => {
+it("a refusal is the turn's one event; an unconfirmed send is worth a retry, since the turn's key finds it", async () => {
   expect(await read(turn(scriptedAgent(() => [ev.rejected("busy")])))).toMatchObject([
-    { type: "rejected", error: { code: "busy" } },
+    { type: "rejected", error: { code: "busy", retryable: true } },
   ]);
-  expect(await read(turn(scriptedAgent(() => [ev.unknown("the disk is gone")])))).toEqual([
-    { type: "unknown", reason: "the disk is gone" },
+  expect(await read(turn(scriptedAgent(() => [ev.rejected("unconfirmed", "the disk is gone")])))).toEqual([
+    {
+      type: "rejected",
+      error: { code: "unconfirmed", message: "could not start its message: the disk is gone", retryable: true },
+    },
   ]);
 });
 
@@ -164,18 +151,17 @@ it("keeps the session's events behind consumer demand, and closes them when the 
   const close = vi.fn(async () => ({ done: true as const, value: undefined }));
   const next = vi
     .fn()
-    .mockResolvedValueOnce({ done: false, value: snapshot })
-    .mockResolvedValueOnce({ done: false, value: ownEntry })
+    .mockResolvedValueOnce({ done: false, value: recorded })
     .mockResolvedValueOnce({ done: false, value: ok[1] });
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const pull = yield* Stream.toPull(turn(agentOver({ next, return: close })));
         expect(next).not.toHaveBeenCalled();
-        expect(yield* pull).toMatchObject([{ type: "accepted" }]);
+        expect(yield* pull).toMatchObject([{ type: "message" }]);
         expect(next).toHaveBeenCalledTimes(1);
         expect(yield* pull).toEqual([ok[1]]);
-        expect(next).toHaveBeenCalledTimes(3);
+        expect(next).toHaveBeenCalledTimes(2);
         expect(close).not.toHaveBeenCalled();
       }),
     ),
@@ -186,7 +172,7 @@ it("keeps the session's events behind consumer demand, and closes them when the 
 it("a consumer failure at the end keeps its identity and closes the session's events", async () => {
   const error = new Error("handing the answer over failed");
   const close = vi.fn(async () => ({ done: true as const, value: undefined }));
-  const events = [snapshot, ownEntry, ok[1], ok[2]] as ResumeEvent[];
+  const events = [recorded, ok[1], ok[2]] as MessageStreamEvent[];
   const next = vi.fn(async () => {
     const value = events.shift();
     return value === undefined ? new Promise<never>(() => {}) : { done: false as const, value };

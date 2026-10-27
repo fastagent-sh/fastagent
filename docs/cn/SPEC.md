@@ -7,9 +7,9 @@ status: current
 # Agent API 设计解读
 
 规范原文见 [SPEC.md](../SPEC.md)，架构和取舍见 [architecture.md](../design/architecture.md)。两者与本文不一致时，以英文原文
-为准。代码实现的就是这套 API（`src/agent-api.ts`）。它的下一版 v2 已提出但尚未实现，见
-[design/agent-api.md](../design/agent-api.md)：同一套模型同时有进程内和 HTTP 两种绑定，HTTP 用 API key 认证。v2 实现后替换
-SPEC.md，本文随之更新。
+为准。本文解读的是 v1。代码已经在进程内改用下一版 v2（`src/agent-api.ts`），见
+[design/agent-api.md](../design/agent-api.md)：同一套模型同时有进程内和 HTTP 两种绑定，HTTP 用 API key 认证。v2 的 HTTP
+绑定完成后它替换 SPEC.md，本文随之更新。
 
 ## 一句话概括
 

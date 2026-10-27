@@ -18,7 +18,7 @@ afterEach(() => {
 
 /** A push-based event source, so a test controls exactly WHEN each event reaches the stream. */
 const eventSource = () => {
-  const queue: InvokeEvent[] = [ev.accepted()];
+  const queue: InvokeEvent[] = [ev.message()];
   let notify: (() => void) | undefined;
   let ended = false;
   const iterable: AsyncIterable<InvokeEvent> = {

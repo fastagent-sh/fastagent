@@ -77,8 +77,7 @@ describe("an opened agent's messages", () => {
       const base = activeWork();
       const agent = await subject.start();
       const sessionId = await newSession(agent);
-      const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: "hold" }] });
-      expect(sent.ok).toBe(true);
+      await agent.messages.send({ sessionId, content: "hold" });
       expect(activeWork()).toBe(base + 1);
       // A restart mid-message: the next process runs it on, and counts it.
       await subject.restart();

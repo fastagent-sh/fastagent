@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import { type AbortResult, type Agent, type ErrorCode, failure } from "../src/agent-api.ts";
+import { type Agent, type ErrorCode, agentError } from "../src/agent-api.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";
 import { feishuThreads, feishuTransport } from "../src/feishu.ts";
@@ -30,7 +30,7 @@ const BASE = "http://feishu.test";
 function replyingAgent(reply = "") {
   const calls: Asked[] = [];
   const agent = scriptedAgent(async function* (request) {
-    yield ev.accepted();
+    yield ev.message();
     calls.push(asked(request));
     if (reply !== "") yield ev.text(reply);
     yield ev.ended();
@@ -193,7 +193,7 @@ function feishuFetch(
 
 /** Build a channel on a temp state root; returns the handler + the recorded agent + the state home. */
 function buildChannel(
-  opts: Partial<FeishuChannelOptions> & { stopped?: (session: string) => AbortResult } = {},
+  opts: Partial<FeishuChannelOptions> & { stopped?: (session: string) => { stopped: string[] } } = {},
   agentReply = "the answer",
 ) {
   const { stopped, ...channelOpts } = opts;
@@ -640,7 +640,7 @@ describe("turn flow", () => {
     });
     let starts = 0;
     injectedAgent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       starts++;
       await gate;
       yield ev.ended();
@@ -700,7 +700,7 @@ describe("turn flow", () => {
     });
     const starts: { session: string; ask: string }[] = [];
     injectedAgent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       const ask = promptOf(request).text.includes("first")
         ? "first"
         : promptOf(request).text.includes("second")
@@ -755,7 +755,7 @@ describe("turn flow", () => {
     feishuFetch();
     const seen: string[] = [];
     injectedAgent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       // As the scaffolded tool calls it: inside an async execute, where a refusal is the tool's error.
       const list = async () => feishuThreads(request.sessionId).list();
       seen.push(await list().catch((error: Error) => `refused: ${error.message}`));
@@ -1180,7 +1180,7 @@ describe("turn flow", () => {
     });
     let invocation = 0;
     injectedAgent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       if (++invocation === 2) await gate;
       yield ev.text(`answer ${invocation}`);
       yield ev.ended();
@@ -1215,7 +1215,7 @@ describe("turn flow", () => {
     vi.spyOn(log, "error").mockImplementation((message) => errors.push(message));
     let invocation = 0;
     injectedAgent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       if (++invocation === 2) {
         yield ev.failed("model exploded", { retryable: false });
         return;
@@ -1243,7 +1243,7 @@ describe("turn flow", () => {
     const prompts: Prompt[] = [];
     let invocation = 0;
     injectedAgent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       prompts.push(promptOf(request));
       if (++invocation === 2) {
         yield ev.failed("model failed", { retryable: true });
@@ -1295,7 +1295,7 @@ describe("turn flow", () => {
       markStarted = resolve;
     });
     injectedAgent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       prompts.push(promptOf(request));
       if (++invocation === 2) {
         markStarted();
@@ -1530,7 +1530,7 @@ describe("turn flow", () => {
   it("a failed turn surfaces the onError text through the terminal write (default: neutral)", async () => {
     const fx = feishuFetch();
     injectedAgent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.failed("boom: harness exploded", { retryable: false });
     });
     const { handler, idle } = buildChannel({ onError: (f) => `⚠️ ${f.details}` });
@@ -1548,7 +1548,7 @@ describe("turn flow", () => {
       {
         id: "om_failed_delivery",
         agent: scriptedAgent(async function* (_request) {
-          yield ev.accepted();
+          yield ev.message();
           yield ev.failed("harness exploded", { retryable: false });
         }),
         delivery: "failed to deliver the agent-failure notice",
@@ -1558,7 +1558,7 @@ describe("turn flow", () => {
         id: "om_abnormal_delivery",
         // The session's events fail after the message was accepted.
         agent: scriptedAgent(async function* (_request) {
-          yield ev.accepted();
+          yield ev.message();
           throw new Error("stream exploded");
         }),
         delivery: "failed to deliver the abnormal-turn notice",
@@ -1764,14 +1764,12 @@ describe("turn flow", () => {
     const room = await newSession(protocol);
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, "sessions.json"), JSON.stringify({ "feishu:oc_1": room }));
-    const sent = await protocol.invoke({
-      sessionId: room,
-      idempotencyKey: "om_original_ask",
-      content: [{ type: "text", text: "加一个新的页面" }],
-    });
-    if (sent.ok) await sent.wait();
-    const ask = await protocol.getMessage(room, { idempotencyKey: "om_original_ask" });
-    const answer = ask?.status === "done" ? ask.answer?.entryId : undefined;
+    await protocol.messages.send(
+      { sessionId: room, idempotencyKey: "om_original_ask", content: "加一个新的页面" },
+      { wait: 30 },
+    );
+    const ask = await protocol.messages.get({ sessionId: room, idempotencyKey: "om_original_ask" });
+    const answer = ask.answer?.entryId;
     expect(answer).toBeDefined();
     await flush(); // the group mention only matches once bot/v3/info has resolved this bot's open_id
     await handler(
@@ -1799,7 +1797,7 @@ describe("turn flow", () => {
     // …and the thread starts as a fork of the room at the answer of the run its chain names: the card is no run's
     // message (the agent posted it), so the next message up, the ask, names the run that took it.
     expect(conversationOf(home, calls.at(-1)?.sessionId)).toBe("feishu:oc_1:omt_on_card");
-    expect(protocol.forks).toEqual([{}, { from: { sessionId: room, entryId: answer } }]);
+    expect(protocol.forks).toEqual([{}, { forkFrom: { sessionId: room, entryId: answer } }]);
   });
 
   it("a main-timeline turn carries no lineage — the room branched from nothing", async () => {
@@ -2566,7 +2564,7 @@ describe("turn flow", () => {
     const order: string[] = [];
     let invocation = 0;
     injectedAgent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       const ask = ["first", "second", "third"].find((x) => promptOf(request).text.includes(`\n${x}`)) ?? "unknown";
       order.push(ask);
       if (++invocation === 1) await gate;
@@ -2708,11 +2706,11 @@ describe("feishu stop command", () => {
   /** What `abort` answers: a run it stopped, nothing running, or a refusal. */
   const fakeStop = (result: "stopped" | "idle" | ErrorCode) => {
     const aborted: string[] = [];
-    const stopped = (session: string): AbortResult => {
+    const stopped = (session: string): { stopped: string[] } => {
       aborted.push(session);
       if (result === "stopped") return stoppedRun;
-      if (result === "idle") return { ok: true, stopped: { taken: [], queued: [] } };
-      return failure(result, "no run");
+      if (result === "idle") return { stopped: [] };
+      throw agentError(result, "no run");
     };
     return { stopped, aborted };
   };

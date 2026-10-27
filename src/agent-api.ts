@@ -1,221 +1,288 @@
 /**
- * The Agent API (docs/SPEC.md) as types, plus its limits and error values. Imports nothing: it is the layer
- * that keeps the harness away from its Callers.
+ * The Agent API (docs/design/agent-api.md) as Effect Schemas: its objects, what a Caller sends, its errors and its
+ * limits. Imports only `effect`: it is the layer that keeps the harness away from its Callers, and the HTTP binding is
+ * built from the same schemas, so the two bindings cannot describe different APIs.
  */
+import * as Schema from "effect/Schema";
 
-export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
+export type Json = Schema.Json;
 
-export interface Agent {
-  info(): AgentInfo;
-  invoke(request: InvokeRequest): Promise<InvokeResult>;
-  getMessage(
-    sessionId: string,
-    key: { messageId: string } | { idempotencyKey: string },
-  ): Promise<MessageStatus | undefined>;
-  createSession(options?: CreateSessionOptions): Promise<CreateSessionResult>;
-  configure(sessionId: string, settings: SessionSettings): Promise<ConfigureResult>;
-  read(sessionId: string, options?: ReadOptions): Promise<ReadResult>;
-  resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
-  abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
-  attachment(sessionId: string, ref: string): Promise<Attachment | undefined>;
-  listSessions(options?: ListOptions): Promise<ListResult>;
-}
+export const ModelRef = Schema.Struct({ provider: Schema.String, modelId: Schema.String });
+export type ModelRef = typeof ModelRef.Type;
 
-export interface AgentInfo {
-  protocolVersion: "1.0";
-  name: string;
-  description?: string;
-  inputs: string[];
-  commands: { name: string; description?: string }[];
-}
+export const ThinkingLevel = Schema.Literals(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+export type ThinkingLevel = typeof ThinkingLevel.Type;
 
-export interface InvokeRequest {
-  sessionId?: string;
-  content: ContentPart[];
-  idempotencyKey?: string;
-  whenBusy?: WhenBusy;
-}
+export class Tokens extends Schema.Opaque<Tokens>()(
+  Schema.Struct({
+    inputTokens: Schema.Number,
+    outputTokens: Schema.Number,
+    cacheReadTokens: Schema.optionalKey(Schema.Number),
+    cacheWriteTokens: Schema.optionalKey(Schema.Number),
+    cost: Schema.optionalKey(Schema.Number),
+  }),
+) {}
 
-/** @public */
-export type WhenBusy = "queue" | "steer" | "reject";
+/** Spend by `provider/model` for model calls, and by tool name for what tools reported (§3). */
+export class Usage extends Schema.Opaque<Usage>()(
+  Schema.Struct({
+    models: Schema.Record(Schema.String, Tokens),
+    tools: Schema.Record(Schema.String, Tokens),
+  }),
+) {}
 
-/** @public */
-export interface Receipt {
-  sessionId: string;
-  message: MessageStatus;
-  duplicate: boolean;
-}
+const Named = Schema.Struct({ name: Schema.String, description: Schema.optionalKey(Schema.String) });
 
-export type InvokeResult =
-  | ({ ok: true } & Receipt & { wait(options?: { signal?: AbortSignal }): Promise<WaitResult> })
-  | { ok: false; error: AgentError }
-  | { ok: false; unknown: { reason: string; sessionId?: string; messageId?: string } };
+export class AgentInfo extends Schema.Opaque<AgentInfo>()(
+  Schema.Struct({
+    name: Schema.String,
+    description: Schema.optionalKey(Schema.String),
+    /** What a message may start with as `/<name>` (§5.1). */
+    commands: Schema.Array(Named),
+    /** The tools a session may enable. */
+    tools: Schema.Array(Named),
+    /** The models a session may name: those whose provider has a credential here. */
+    models: Schema.Array(
+      Schema.Struct({ provider: Schema.String, modelId: Schema.String, name: Schema.optionalKey(Schema.String) }),
+    ),
+    defaultModel: Schema.optionalKey(ModelRef),
+  }),
+) {}
 
-export type WaitResult = { ok: true; message: DoneMessage } | { ok: false; unfinished: { reason: string } };
+const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
+/** An image in a message carries its bytes, base64. */
+const ImagePart = Schema.Struct({ type: Schema.Literal("image"), mimeType: Schema.String, data: Schema.String });
+/** An image in an entry is a ref, read with `sessions.attachment`. */
+const ImageRef = Schema.Struct({ type: Schema.Literal("image"), mimeType: Schema.String, ref: Schema.String });
+export const ContentPart = Schema.Union([TextPart, ImagePart, ImageRef]);
+export type ContentPart = typeof ContentPart.Type;
 
-/** What a session answers with. */
-export interface SessionSettings {
-  model?: { provider: string; modelId: string };
-  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-}
+/** The shape of an error as data: in a failed message, and in a `stream_error`. */
+export const AgentErrorData = Schema.Struct({
+  code: Schema.String,
+  message: Schema.String,
+  /** Whether the same request may succeed if sent again. */
+  retryable: Schema.Boolean,
+  details: Schema.optionalKey(Schema.Json),
+});
+export type AgentErrorData = typeof AgentErrorData.Type;
 
-export interface CreateSessionOptions extends SessionSettings {
-  from?: ForkSource;
-}
+/** What every operation rejects with (§7). */
+export class AgentError extends Schema.Error<AgentError>("AgentError")(AgentErrorData) {}
 
-export type CreateSessionResult = { ok: true; sessionId: string } | { ok: false; error: AgentError };
-
-export type ConfigureResult = { ok: true } | { ok: false; error: AgentError };
-
-/** @public */
-export interface ForkSource {
-  sessionId: string;
-  entryId?: string;
-  context?: "full" | "recent";
-}
-
-export type ReplayFrom = { type: "start" } | { type: "after"; entryId: string };
-
-export interface ReadOptions {
-  after?: string;
-  before?: string;
-  limit?: number;
-}
-
-export type ReadResult =
-  | { ok: true; state: SessionState; entries: Entry[]; prev?: string; next?: string }
-  | { ok: false; error: AgentError };
-
-export interface ListOptions {
-  before?: string;
-  limit?: number;
-}
-
-export type ListResult =
-  | { ok: true; sessions: { sessionId: string }[]; next?: string }
-  | { ok: false; error: AgentError };
-
-export type AbortResult =
-  | { ok: true; stopped: { taken: string[]; queued: string[] } }
-  | { ok: false; error: AgentError }
-  | { ok: false; unknown: { reason: string } };
-
-export type ResumeEvent = SessionEvent | { type: "rejected"; error: AgentError };
-
-export type ContentPart =
-  | { type: "text"; text: string }
-  | { type: "image"; mimeType: string; data: string }
-  | { type: "image"; mimeType: string; ref: string };
-
-/** @public */
-export interface Attachment {
-  mimeType: string;
-  data: string;
-}
-
-export type MessageStatus =
-  | { messageId: string; idempotencyKey?: string; status: "queued"; position: number }
-  | { messageId: string; idempotencyKey?: string; status: "taken"; entryId: string }
-  | DoneMessage;
-
-export interface DoneMessage {
-  messageId: string;
-  idempotencyKey?: string;
-  status: "done";
-  entryId?: string;
-  outcome: Outcome;
-  answer?: { entryId: string; text: string };
-}
-
-export type Outcome =
-  | { status: "completed" }
-  | { status: "max_tokens" }
-  | { status: "canceled" }
-  | { status: "failed"; error: AgentError };
-
-export type Usage = {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  cost?: number;
+const SettingsFields = {
+  model: Schema.optionalKey(ModelRef),
+  thinkingLevel: Schema.optionalKey(ThinkingLevel),
+  /** Text added at the end of the agent's system prompt for this session. */
+  instructions: Schema.optionalKey(Schema.String),
+  /** The tools the session enables, each among `info().tools`. */
+  tools: Schema.optionalKey(Schema.Array(Schema.String)),
 };
 
-/** The session as it is now, its settings included: a field it does not name yet is absent. */
-export interface SessionState extends SessionSettings {
-  status: "idle" | "running";
-  taken: string[];
-  queued: string[];
-  reply?: { text: string; thinking?: string };
-  /** What the session has spent: its own model calls by `provider/model`, and what its tools reported, by tool. */
-  usage: { models: Record<string, Usage>; tools: Record<string, Usage> };
+export class Session extends Schema.Opaque<Session>()(
+  Schema.Struct({
+    id: Schema.String,
+    status: Schema.Literals(["idle", "running"]),
+    ...SettingsFields,
+    /** The agent's reply being written, as written so far: present only while one is. */
+    reply: Schema.optionalKey(Schema.Struct({ text: Schema.String, thinking: Schema.optionalKey(Schema.String) })),
+    usage: Usage,
+  }),
+) {}
+
+/** A message's statuses: `queued` and `running` until it ends, then one of the four ends, which are all its ends. */
+export const MessageStatus = Schema.Literals(["queued", "running", "completed", "incomplete", "failed", "canceled"]);
+export type MessageStatus = typeof MessageStatus.Type;
+
+export class Message extends Schema.Opaque<Message>()(
+  Schema.Struct({
+    id: Schema.String,
+    sessionId: Schema.String,
+    idempotencyKey: Schema.optionalKey(Schema.String),
+    status: MessageStatus,
+    /** Its `user` entry, once the agent took it. */
+    entryId: Schema.optionalKey(Schema.String),
+    /** The `assistant` entry the agent stopped on for it: when `completed`, and when `incomplete`. */
+    answer: Schema.optionalKey(Schema.Struct({ entryId: Schema.String, text: Schema.String })),
+    /** Why it `failed`. */
+    error: Schema.optionalKey(AgentErrorData),
+  }),
+) {}
+
+const ENDS: ReadonlySet<string> = new Set<MessageStatus>(["completed", "incomplete", "failed", "canceled"]);
+
+/** Whether a message has ended: its ends are a closed set, so any other status, known or not, has not (§7.1). */
+export const hasEnded = (message: Pick<Message, "status">): boolean => ENDS.has(message.status);
+
+/**
+ * One durable record of a session's history. Its `data` by `kind`:
+ * - `user`: `{ content: ContentPart[], messageId? }`
+ * - `assistant`: `{ text, thinking?, toolCalls?: { id, name, args }[], stop?: "max_tokens" | "failed" | "aborted",
+ *   error?, usage }`
+ * - `tool_result`: `{ toolCallId, toolName, isError, content: ContentPart[] }`
+ * - `compaction`: `{ summary }`
+ */
+export class Entry extends Schema.Opaque<Entry>()(
+  Schema.Struct({ id: Schema.String, timestamp: Schema.Number, kind: Schema.String, data: Schema.Json }),
+) {}
+
+export interface Page<T> {
+  data: T[];
+  next?: string;
+  prev?: string;
 }
 
-export interface Entry {
-  id: string;
-  sessionId: string;
-  parentEntryId?: string;
-  timestamp: number;
-  kind: string;
-  data: Json;
+export const SessionEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("entry"), entry: Entry }),
+  Schema.Struct({ type: Schema.Literal("state"), session: Session }),
+  Schema.Struct({ type: Schema.Literal("delta"), channel: Schema.Literals(["text", "thinking"]), text: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("tool_started"),
+    toolCallId: Schema.String,
+    name: Schema.String,
+    args: Schema.Json,
+  }),
+  Schema.Struct({ type: Schema.Literal("tool_progress"), toolCallId: Schema.String, text: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("retrying"),
+    attempt: Schema.Number,
+    maxAttempts: Schema.Number,
+    delayMs: Schema.Number,
+    reason: Schema.String,
+  }),
+  Schema.Struct({ type: Schema.Literal("done"), message: Message }),
+  Schema.Struct({ type: Schema.Literal("stream_error"), error: AgentErrorData }),
+]);
+export type SessionEvent = typeof SessionEvent.Type;
+
+export const MessageStreamEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("message"), message: Message }),
+  ...SessionEvent.members,
+]);
+export type MessageStreamEvent = typeof MessageStreamEvent.Type;
+
+const Limit = (max: number) => Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: max }));
+const Seconds = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
+
+export const SessionSettings = Schema.Struct(SettingsFields);
+export type SessionSettings = typeof SessionSettings.Type;
+
+export const CreateSessionOptions = Schema.Struct({
+  ...SettingsFields,
+  forkFrom: Schema.optionalKey(Schema.Struct({ sessionId: Schema.String, entryId: Schema.optionalKey(Schema.String) })),
+});
+export type CreateSessionOptions = typeof CreateSessionOptions.Type;
+
+/** `null` clears a field back to the deployment's. */
+export const SessionChanges = Schema.Struct({
+  model: Schema.optionalKey(Schema.NullOr(ModelRef)),
+  thinkingLevel: Schema.optionalKey(Schema.NullOr(ThinkingLevel)),
+  instructions: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  tools: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+});
+export type SessionChanges = typeof SessionChanges.Type;
+
+export const ListOptions = Schema.Struct({
+  limit: Schema.optionalKey(Limit(500)),
+  after: Schema.optionalKey(Schema.String),
+});
+export type ListOptions = typeof ListOptions.Type;
+
+export const EntriesOptions = Schema.Struct({
+  after: Schema.optionalKey(Schema.String),
+  before: Schema.optionalKey(Schema.String),
+  limit: Schema.optionalKey(Limit(500)),
+});
+export type EntriesOptions = typeof EntriesOptions.Type;
+
+const IdempotencyKey = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
+
+export const SendRequest = Schema.Struct({
+  sessionId: Schema.String,
+  /** A string is one text part. */
+  content: Schema.Union([
+    Schema.String,
+    Schema.Array(Schema.Union([TextPart, ImagePart])).check(Schema.isMinLength(1)),
+  ]),
+  /** The Caller's key for this message, unique within the session (§5.2). */
+  idempotencyKey: Schema.optionalKey(IdempotencyKey),
+  /** What the message is when the session is busy with another (§5.3). Default: "queue". */
+  whenBusy: Schema.optionalKey(Schema.Literals(["queue", "steer", "reject"])),
+});
+export type SendRequest = typeof SendRequest.Type;
+
+/** In seconds: how long a call waits for a message to end before it answers with the message as it is then. */
+export const Wait = Seconds;
+
+/** A message, by its id or by the key it was sent with. */
+export const MessageKey = Schema.Union([
+  Schema.Struct({ sessionId: Schema.String, messageId: Schema.String }),
+  Schema.Struct({ sessionId: Schema.String, idempotencyKey: IdempotencyKey }),
+]);
+export type MessageKey = typeof MessageKey.Type;
+
+export const CompactOptions = Schema.Struct({ instructions: Schema.optionalKey(Schema.String) });
+export type CompactOptions = typeof CompactOptions.Type;
+
+export interface WaitOptions {
+  wait?: number;
+  signal?: AbortSignal;
 }
 
-export type SessionEvent =
-  | { type: "entry"; entry: Entry }
-  | { type: "done"; message: DoneMessage }
-  | { type: "state"; state: SessionState }
-  | { type: "message_delta"; channel: "text" | "thinking"; delta: string }
-  | { type: "tool_started"; toolCallId: string; name: string; args: Json }
-  | { type: "tool_progress"; toolCallId: string; text: string }
-  | { type: "retry_scheduled"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
-  | { type: "serving_error"; error: AgentError };
-
-export interface AgentError {
-  code: string;
-  message: string;
-  retryable: boolean;
-  details?: Json;
+export interface Agent {
+  info(): Promise<AgentInfo>;
+  usage(): Promise<Usage>;
+  sessions: {
+    create(options?: CreateSessionOptions): Promise<Session>;
+    get(sessionId: string): Promise<Session>;
+    list(options?: ListOptions): Promise<Page<Session>>;
+    update(sessionId: string, changes: SessionChanges): Promise<Session>;
+    entries(sessionId: string, options?: EntriesOptions): Promise<Page<Entry>>;
+    events(sessionId: string, options?: { after?: string; signal?: AbortSignal }): AsyncIterable<SessionEvent>;
+    cancel(sessionId: string): Promise<{ stopped: string[] }>;
+    compact(sessionId: string, options?: CompactOptions): Promise<void>;
+    attachment(sessionId: string, ref: string): Promise<{ mimeType: string; data: Uint8Array }>;
+  };
+  messages: {
+    send(request: SendRequest, options?: WaitOptions): Promise<Message>;
+    stream(request: SendRequest, options?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent>;
+    get(key: MessageKey, options?: WaitOptions): Promise<Message>;
+  };
 }
 
 export type ErrorCode =
   | "invalid_request"
+  | "unauthorized"
   | "not_found"
   | "busy"
   | "missing_model"
+  | "missing_tool"
   | "auth_required"
   | "model_error"
+  | "unconfirmed"
   | "unavailable"
   | "internal";
 
 export const LIMITS = {
   queuedPerSession: 20,
   inFlightPerProcess: 100,
-  readDefault: 100,
-  readMax: 500,
+  pageDefault: 100,
   pageBytes: 4 << 20,
-  idempotencyKeyMax: 256,
 } as const;
 
 const RETRYABLE_CODES: ReadonlySet<string> = new Set<ErrorCode>(["busy", "unavailable"]);
 
 export function agentError(code: ErrorCode, message: string, details?: Json): AgentError {
-  return { code, message, retryable: RETRYABLE_CODES.has(code), ...(details === undefined ? {} : { details }) };
+  return new AgentError({
+    code,
+    message,
+    retryable: RETRYABLE_CODES.has(code),
+    ...(details === undefined ? {} : { details }),
+  });
 }
 
-export function failure(code: ErrorCode, message: string, details?: Json): { ok: false; error: AgentError } {
-  return { ok: false, error: agentError(code, message, details) };
-}
-
-/** What `getMessage` and `attachment` reject with when the Agent's storage cannot answer (§2). */
-export class AgentRejection extends Error implements AgentError {
-  readonly code: string;
-  readonly retryable: boolean;
-  readonly details?: Json;
-  constructor(error: AgentError, options?: { cause?: unknown }) {
-    super(error.message, options);
-    this.name = "AgentRejection";
-    this.code = error.code;
-    this.retryable = error.retryable;
-    if (error.details !== undefined) this.details = error.details;
-  }
+/** An error as data, the way a message's `error` and a `stream_error` carry it. */
+export function errorData(error: AgentErrorData): AgentErrorData {
+  const { code, message, retryable, details } = error;
+  return { code, message, retryable, ...(details === undefined ? {} : { details }) };
 }

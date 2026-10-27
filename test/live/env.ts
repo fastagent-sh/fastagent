@@ -20,7 +20,7 @@ import { expect } from "vitest";
 import { destroyAgentcoreDeployment as destroyDeployment } from "../../src/deploy/agentcore/destroy.ts";
 import { PROBE_PAYLOAD, ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
 import type { CliRunner } from "../../src/deploy/runner.ts";
-import type { WaitResult } from "../../src/agent-api.ts";
+import type { Message } from "../../src/agent-api.ts";
 import { dotEnvPath } from "../../src/env.ts";
 import { environmentAuth } from "../../src/harnesses/models/models.ts";
 import { openServing } from "../../src/harnesses/pi-durable/serve.ts";
@@ -244,15 +244,9 @@ export default needs(["${PROBE_SECRET}"], (secrets) => ({ agent }) => ({
       return new Response("", { status: 401 });
     }
     const asked = await request.json();
-    let sessionId = asked.sessionId;
-    if (sessionId === undefined) {
-      const created = await agent.createSession();
-      if (!created.ok) return Response.json(created, { status: 500 });
-      sessionId = created.sessionId;
-    }
-    const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: asked.text }] });
-    if (!sent.ok) return Response.json(sent, { status: 502 });
-    return Response.json({ sessionId, end: await sent.wait() });
+    const sessionId = asked.sessionId ?? (await agent.sessions.create()).id;
+    const message = await agent.messages.send({ sessionId, content: asked.text }, { wait: 600 });
+    return Response.json({ sessionId, message });
   },
 }));
 `;
@@ -270,7 +264,7 @@ export async function stageProbeChannel(agentDir: string): Promise<string> {
 /** One message to a deployed agent through its probe channel: the session it went to, and how it ended. */
 export interface Asked {
   sessionId: string;
-  end: WaitResult;
+  message: Message;
 }
 
 /** Ask the agent served at `baseUrl` (or relayed to it) one thing, in `sessionId` or a new session. */
@@ -293,8 +287,7 @@ export async function ask(baseUrl: string, secret: string, text: string, session
  * discoverable only by re-running a 20-minute probe against a platform that had already moved on.
  */
 export function expectCompleted(asked: Asked, what: string): void {
-  const status = asked.end.ok ? asked.end.message.outcome.status : undefined;
-  expect(status, `${what} did not complete: ${JSON.stringify(asked.end)}`).toBe("completed");
+  expect(asked.message.status, `${what} did not complete: ${JSON.stringify(asked.message)}`).toBe("completed");
 }
 
 /**
@@ -302,7 +295,7 @@ export function expectCompleted(asked: Asked, what: string): void {
  * `47` into two tokens never spells it literally, and a `thinking` delta that reasoned about the number would satisfy
  * the assertion even when the answer got it wrong.
  */
-export const answerOf = (asked: Asked): string => (asked.end.ok ? (asked.end.message.answer?.text ?? "") : "");
+export const answerOf = (asked: Asked): string => asked.message.answer?.text ?? "";
 
 /**
  * Everything one AgentCore probe created, torn down BY THE PRODUCT — `fastagent destroy agentcore --run`,

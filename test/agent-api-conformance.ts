@@ -1,5 +1,5 @@
 /**
- * The Agent API's conformance suite (docs/SPEC.md §9), runnable against any `Agent`. What a message makes
+ * The Agent API's conformance suite (docs/design/agent-api.md §11), runnable against any `Agent`. What a message makes
  * the agent do is chosen by its text, which a subject maps onto its harness:
  *
  * - `hold`: a tool call that waits for `release()` and stops when aborted; `stubborn`: one that waits whatever its
@@ -8,21 +8,21 @@
  *   and `three of the lines`, written over time; `nested`: one that calls `lookup` with
  *   `{ city: "London" }` from inside it. After a tool call, the answer is `answer: <tool>`.
  * - `fail`: the model call fails; `flaky`: it fails once in a way worth retrying, then answers; `long`: the answer is
- *   cut off (`max_tokens`); `slow`: the answer streams slowly; `ponder`: it streams its thinking slowly, then answers.
+ *   cut off at its token limit; `slow`: the answer streams slowly; `ponder`: it streams its thinking slowly, then
+ *   answers; `instructions`: the answer is `instructions: ` and the system prompt the model saw.
  * - Anything else is answered `answer: <text the model saw>`. `info().commands` offers `greet`, which a model sees as
- *   `hello <args>`.
+ *   `hello <args>`. `info().tools` lists the tools above.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type StreamResult, stream } from "../src/agent-api-stream.ts";
-import type {
-  Agent,
-  ContentPart,
-  DoneMessage,
-  Entry,
-  InvokeRequest,
-  InvokeResult,
-  MessageStatus,
-  ResumeEvent,
+import {
+  type Agent,
+  type ContentPart,
+  type Entry,
+  type Message,
+  type MessageStreamEvent,
+  type SendRequest,
+  type SessionEvent,
+  hasEnded,
 } from "../src/agent-api.ts";
 
 export interface AgentApiSubject {
@@ -31,13 +31,13 @@ export interface AgentApiSubject {
    * its model provider without a credential.
    */
   start(options?: { inFlightPerProcess?: number; signedOut?: boolean }): Promise<Agent>;
-  /** The same storage, opened by a new process after the previous one stopped. */
-  restart(): Promise<Agent>;
+  /** The same storage, opened by a new process after the previous one stopped; `removeTools`: a deployment without them. */
+  restart(options?: { removeTools?: string[] }): Promise<Agent>;
   /** Lets every `hold` and `stubborn` call of the current process go on. */
   release(): void;
   /** How many `hold` and `stubborn` calls are running now. */
   held(): number;
-  /** How many `hold` and `stubborn` calls were told to stop: an abort's stop is recorded before it signals them. */
+  /** How many `hold` and `stubborn` calls were told to stop: a cancel's stop is recorded before it signals them. */
   signalled(): number;
   effects(): number;
   /** The storage fails every call from now on. */
@@ -45,112 +45,82 @@ export interface AgentApiSubject {
   stop(): Promise<void>;
 }
 
-type Receipt = Extract<InvokeResult, { ok: true }>;
-
+const WAIT = 30;
 const text = (value: string): ContentPart[] => [{ type: "text", text: value }];
 
-async function accepted(agent: Agent, request: InvokeRequest): Promise<Receipt> {
-  const result = await agent.invoke(request);
-  if (!result.ok) throw new Error(`invoke was not accepted: ${JSON.stringify(result)}`);
-  return result;
-}
-
 async function newSession(agent: Agent): Promise<string> {
-  const created = await agent.createSession();
-  if (!created.ok) throw new Error(`createSession failed: ${JSON.stringify(created)}`);
-  return created.sessionId;
+  return (await agent.sessions.create()).id;
 }
 
-async function ended(receipt: Receipt): Promise<DoneMessage> {
-  const result = await receipt.wait();
-  if (!result.ok) throw new Error(`wait() was unfinished: ${result.unfinished.reason}`);
-  return result.message;
+const byId = (message: Message) => ({ sessionId: message.sessionId, messageId: message.id });
+
+/** The message once it has ended. */
+async function ended(agent: Agent, message: Message): Promise<Message> {
+  const now = await agent.messages.get(byId(message), { wait: WAIT });
+  if (!hasEnded(now)) throw new Error(`the message has not ended after ${WAIT}s: ${JSON.stringify(now)}`);
+  return now;
 }
 
-async function statusOf(agent: Agent, sessionId: string, messageId: string): Promise<MessageStatus | undefined> {
-  return agent.getMessage(sessionId, { messageId });
-}
-
-async function untilStatus(agent: Agent, sessionId: string, messageId: string, status: MessageStatus["status"]) {
-  await vi.waitFor(async () => expect((await statusOf(agent, sessionId, messageId))?.status).toBe(status), {
+async function untilStatus(agent: Agent, message: Message, status: Message["status"]) {
+  await vi.waitFor(async () => expect((await agent.messages.get(byId(message))).status).toBe(status), {
     timeout: 5000,
     interval: 10,
   });
 }
 
-async function getDone(agent: Agent, sessionId: string, messageId: string): Promise<DoneMessage> {
-  await untilStatus(agent, sessionId, messageId, "done");
-  return (await statusOf(agent, sessionId, messageId)) as DoneMessage;
-}
-
 async function history(agent: Agent, sessionId: string): Promise<Entry[]> {
-  const out: Entry[] = [];
-  let after: string | undefined;
-  for (;;) {
-    const page = await agent.read(sessionId, { ...(after === undefined ? {} : { after }), limit: 500 });
-    if (!page.ok) throw new Error(`read failed: ${JSON.stringify(page)}`);
-    if (after === undefined && page.prev !== undefined) {
-      // The newest page came first: start again from the oldest.
-      const all: Entry[] = [];
-      let before: string | undefined = page.entries[0]?.id;
-      all.unshift(...page.entries);
-      while (before !== undefined) {
-        const older = await agent.read(sessionId, { before, limit: 500 });
-        if (!older.ok) throw new Error(`read failed: ${JSON.stringify(older)}`);
-        all.unshift(...older.entries);
-        before = older.prev === undefined ? undefined : older.entries[0]?.id;
-      }
-      return all;
-    }
-    out.push(...page.entries);
-    if (page.next === undefined) return out;
-    after = page.next;
+  const newest = await agent.sessions.entries(sessionId, { limit: 500 });
+  const all = [...newest.data];
+  for (let before = newest.prev; before !== undefined; ) {
+    const older = await agent.sessions.entries(sessionId, { before, limit: 500 });
+    all.unshift(...older.data);
+    before = older.prev;
   }
+  return all;
 }
 
-/** A `resume` being read: events arrive in order, and `close()` detaches. */
-function attach(agent: Agent, sessionId: string, options?: Parameters<Agent["resume"]>[1]) {
-  const iterator = agent.resume(sessionId, options)[Symbol.asyncIterator]();
-  const seen: ResumeEvent[] = [];
+/** A session's events being read: they arrive in order, and `close()` detaches. */
+function attach(agent: Agent, sessionId: string, options?: { after?: string; signal?: AbortSignal }) {
+  const iterator = agent.sessions.events(sessionId, options)[Symbol.asyncIterator]();
   return {
-    seen,
-    async until(stop: (event: ResumeEvent) => boolean): Promise<ResumeEvent[]> {
-      const out: ResumeEvent[] = [];
+    async until(stop: (event: SessionEvent) => boolean): Promise<SessionEvent[]> {
+      const out: SessionEvent[] = [];
       for (;;) {
         const next = await iterator.next();
         if (next.done) throw new Error(`the stream ended before the event awaited; read ${JSON.stringify(out)}`);
         out.push(next.value);
-        seen.push(next.value);
         if (stop(next.value)) return out;
       }
     },
-    async rest(): Promise<ResumeEvent[]> {
-      const out: ResumeEvent[] = [];
+    async rest(): Promise<SessionEvent[]> {
+      const out: SessionEvent[] = [];
       for (let next = await iterator.next(); !next.done; next = await iterator.next()) out.push(next.value);
       return out;
     },
+    next: () => iterator.next(),
     close: async () => {
       await iterator.return?.();
     },
   };
 }
 
-const isState = (event: ResumeEvent) => event.type === "state";
-const doneOf = (messageId: string) => (event: ResumeEvent) =>
-  event.type === "done" && event.message.messageId === messageId;
-const entriesIn = (events: ResumeEvent[]): Entry[] =>
+const isState = (event: SessionEvent) => event.type === "state";
+const doneOf = (message: Message) => (event: SessionEvent) => event.type === "done" && event.message.id === message.id;
+const entriesIn = (events: readonly MessageStreamEvent[]): Entry[] =>
   events.flatMap((event) => (event.type === "entry" ? [event.entry] : []));
-const userMessageOf = (entry: Entry): string | undefined =>
-  entry.kind === "user_message" ? ((entry.data as { messageId?: string }).messageId ?? undefined) : undefined;
+const messageOf = (entry: Entry): string | undefined =>
+  entry.kind === "user" ? ((entry.data as { messageId?: string }).messageId ?? undefined) : undefined;
 
 export function agentApiConformance(name: string, subject: AgentApiSubject): void {
   describe(`Agent API conformance: ${name}`, () => {
     let agent: Agent;
     /** Until the message just sent is running its `hold` or `stubborn` call, so a release or a stop reaches it. */
     const holding = () => vi.waitFor(() => expect(subject.held()).toBe(1), { timeout: 5000, interval: 5 });
-    /** Until the abort just sent has recorded its stop. */
+    /** Until the cancel just sent has signalled the tool it stops. */
     const stopRecorded = (count = 1) =>
       vi.waitFor(() => expect(subject.signalled()).toBe(count), { timeout: 5000, interval: 5 });
+    const send = (request: SendRequest, options?: Parameters<Agent["messages"]["send"]>[1]) =>
+      agent.messages.send(request, options);
     beforeEach(async () => {
       agent = await subject.start();
     });
@@ -158,498 +128,457 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
       await subject.stop();
     });
 
-    describe("Invoke", () => {
-      it("answers with a receipt once the message is recorded, without waiting for it to be answered", async () => {
+    describe("Sending", () => {
+      it("resolves once the message is recorded, without waiting for it to be answered", async () => {
         const sessionId = await newSession(agent);
-        const receipt = await accepted(agent, { sessionId, content: text("hold") });
-        expect(receipt.sessionId).toBe(sessionId);
-        expect(receipt.duplicate).toBe(false);
-        expect(["queued", "taken"]).toContain(receipt.message.status);
-        expect(await statusOf(agent, sessionId, receipt.message.messageId)).toBeDefined();
+        const message = await send({ sessionId, content: "hold" });
+        expect(message).toMatchObject({ sessionId, status: expect.stringMatching(/^(queued|running)$/) });
+        expect(await agent.messages.get(byId(message))).toMatchObject({ id: message.id });
         let settled = false;
-        const waiting = receipt.wait().then((result) => {
+        const waiting = ended(agent, message).then((end) => {
           settled = true;
-          return result;
+          return end;
         });
         await holding();
         expect(settled).toBe(false);
         subject.release();
-        const result = await waiting;
-        expect(result).toMatchObject({ ok: true, message: { status: "done", outcome: { status: "completed" } } });
+        expect(await waiting).toMatchObject({ status: "completed", answer: { text: "answer: hold" } });
       });
 
       it("records nothing for a rejection", async () => {
         const sessionId = await newSession(agent);
-        const refusals = await Promise.all([
-          agent.invoke({ sessionId, content: [] }),
-          agent.invoke({ sessionId, content: [{ type: "video" } as unknown as ContentPart] }),
-          agent.invoke({ content: text("keyed"), idempotencyKey: "k" }),
-          agent.invoke({ sessionId, content: text("keyed"), idempotencyKey: "" }),
-        ]);
-        for (const refusal of refusals) {
-          expect(refusal).toMatchObject({ ok: false, error: { code: "invalid_request", retryable: false } });
+        for (const request of [
+          { sessionId, content: [] },
+          { sessionId, content: [{ type: "video" }] },
+          { sessionId, content: [{ type: "image", mimeType: "image/png", ref: "x:1" }] },
+          { sessionId, content: "keyed", idempotencyKey: "" },
+          { sessionId, content: "keyed", idempotencyKey: "k".repeat(257) },
+          { sessionId, content: "hi", whenBusy: "later" },
+          { content: "no session" },
+        ]) {
+          await expect(send(request as SendRequest)).rejects.toMatchObject({
+            code: "invalid_request",
+            retryable: false,
+          });
         }
-        const page = await agent.read(sessionId);
-        expect(page).toMatchObject({ ok: true, entries: [], state: { status: "idle", taken: [], queued: [] } });
+        expect((await agent.sessions.entries(sessionId)).data).toEqual([]);
+        expect(await agent.sessions.get(sessionId)).toMatchObject({ status: "idle" });
       });
 
-      it("gives an invoke without sessionId a new session, and refuses an unknown one", async () => {
-        const receipt = await accepted(agent, { content: text("hi") });
-        expect((await ended(receipt)).answer?.text).toBe("answer: hi");
-        expect(await agent.read(receipt.sessionId)).toMatchObject({ ok: true });
-        const unknown = await agent.invoke({ sessionId: "no-such-session", content: text("hi") });
-        expect(unknown).toMatchObject({ ok: false, error: { code: "not_found" } });
-        const messageAsSession = await agent.invoke({ sessionId: receipt.message.messageId, content: text("hi") });
-        expect(messageAsSession).toMatchObject({ ok: false, error: { code: "not_found" } });
-      });
-
-      it("takes the content types info().inputs lists, and refuses others", async () => {
-        expect(agent.info()).toMatchObject({ protocolVersion: "1.0", inputs: expect.arrayContaining(["text"]) });
-        const receipt = await accepted(agent, {
-          content: [
-            { type: "text", text: "look" },
-            { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
-          ],
-        });
-        await ended(receipt);
-        const refused = await agent.invoke({ content: [{ type: "audio" } as unknown as ContentPart] });
-        expect(refused).toMatchObject({ ok: false, error: { code: "invalid_request" } });
-      });
-
-      it("expands a command for the model while its user_message holds the text as sent", async () => {
-        expect(agent.info().commands).toContainEqual({ name: "greet", description: "Greets someone" });
+      it("takes a string as one text part, and text and images", async () => {
         const sessionId = await newSession(agent);
-        const command = await accepted(agent, { sessionId, content: text("/greet Bob") });
-        expect((await ended(command)).answer?.text).toBe("answer: hello Bob");
-        const unknown = await accepted(agent, { sessionId, content: text("/nope x") });
-        expect((await ended(unknown)).answer?.text).toBe("answer: /nope x");
-        const users = (await history(agent, sessionId)).filter((entry) => entry.kind === "user_message");
+        expect((await ended(agent, await send({ sessionId, content: "hi" }))).answer?.text).toBe("answer: hi");
+        const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" } as const;
+        await ended(agent, await send({ sessionId, content: [{ type: "text", text: "look" }, image] }));
+        const users = (await history(agent, sessionId)).filter((entry) => entry.kind === "user");
+        expect((users[0] as Entry).data).toMatchObject({ content: text("hi") });
+      });
+
+      it("refuses an unknown session, and a message id as a session's, with not_found", async () => {
+        await expect(send({ sessionId: "no-such-session", content: "hi" })).rejects.toMatchObject({
+          code: "not_found",
+        });
+        const message = await send({ sessionId: await newSession(agent), content: "hi" });
+        await expect(send({ sessionId: message.id, content: "hi" })).rejects.toMatchObject({ code: "not_found" });
+      });
+
+      it("expands a command for the model while its user entry holds the text as sent", async () => {
+        expect((await agent.info()).commands).toContainEqual({ name: "greet", description: "Greets someone" });
+        const sessionId = await newSession(agent);
+        const command = await send({ sessionId, content: "/greet Bob" });
+        expect((await ended(agent, command)).answer?.text).toBe("answer: hello Bob");
+        const unknown = await send({ sessionId, content: "/nope x" });
+        expect((await ended(agent, unknown)).answer?.text).toBe("answer: /nope x");
+        const users = (await history(agent, sessionId)).filter((entry) => entry.kind === "user");
         expect(users.map((entry) => (entry.data as { content: ContentPart[] }).content)).toEqual([
           text("/greet Bob"),
           text("/nope x"),
         ]);
       });
 
-      it("resolves wait() with the message's done, also when it is called after the message ended", async () => {
+      it("waits for the end with `wait`, or answers the status as it is once the wait is over", async () => {
         const sessionId = await newSession(agent);
-        const receipt = await accepted(agent, { sessionId, content: text("hi") });
-        const first = await ended(receipt);
-        const again = await ended(receipt);
-        expect(again).toEqual(first);
-        expect(await statusOf(agent, sessionId, receipt.message.messageId)).toEqual(first);
-      });
-
-      it("resolves wait() unfinished when its signal is aborted, and the message goes on", async () => {
-        const sessionId = await newSession(agent);
-        const receipt = await accepted(agent, { sessionId, content: text("hold") });
-        await holding();
-        const controller = new AbortController();
-        const waiting = receipt.wait({ signal: controller.signal });
-        controller.abort();
-        expect(await waiting).toMatchObject({ ok: false, unfinished: { reason: expect.any(String) } });
-        expect((await statusOf(agent, sessionId, receipt.message.messageId))?.status).toBe("taken");
+        const answered = await send({ sessionId, content: "hi" }, { wait: WAIT });
+        expect(answered).toMatchObject({ status: "completed", answer: { text: "answer: hi" } });
+        const started = Date.now();
+        const running = await send({ sessionId, content: "hold" }, { wait: 0.2 });
+        expect(Date.now() - started).toBeGreaterThanOrEqual(150);
+        expect(running.status).toBe("running");
+        expect(await agent.messages.get(byId(running), { wait: 0.1 })).toMatchObject({ status: "running" });
         subject.release();
-        expect((await ended(receipt)).outcome).toEqual({ status: "completed" });
+        expect(await agent.messages.get(byId(running), { wait: WAIT })).toMatchObject({ status: "completed" });
+        expect(await agent.messages.get(byId(answered), { wait: WAIT })).toEqual(answered);
+        await expect(send({ sessionId, content: "hi" }, { wait: -1 })).rejects.toMatchObject({
+          code: "invalid_request",
+        });
       });
 
-      it("resolves wait() unfinished, never a rejection, when the storage fails", async () => {
+      it("lets go of a wait on its signal, rejecting with its reason, and the message goes on", async () => {
         const sessionId = await newSession(agent);
-        const receipt = await accepted(agent, { sessionId, content: text("hold") });
+        const controller = new AbortController();
+        const reason = new Error("the Caller left");
+        const sending = send({ sessionId, content: "hold" }, { wait: WAIT, signal: controller.signal });
         await holding();
-        const waiting = receipt.wait();
+        controller.abort(reason);
+        await expect(sending).rejects.toBe(reason);
+        const [message] = (await history(agent, sessionId)).flatMap((entry) => messageOf(entry) ?? []);
+        const running = await agent.messages.get({ sessionId, messageId: message as string });
+        expect(running.status).toBe("running");
+        const getting = agent.messages.get(byId(running), { wait: WAIT, signal: AbortSignal.abort(reason) });
+        await expect(getting).rejects.toBe(reason);
+        subject.release();
+        expect((await ended(agent, running)).status).toBe("completed");
+        await expect(send({ sessionId, content: "never sent" }, { signal: AbortSignal.abort(reason) })).rejects.toBe(
+          reason,
+        );
+        expect((await history(agent, sessionId)).filter((entry) => entry.kind === "user")).toHaveLength(1);
+      });
+
+      it("rejects a send whose storage fails once it is recorded unconfirmed, with its messageId", async () => {
+        const sessionId = await newSession(agent);
+        const sending = send({ sessionId, content: "hold" }, { wait: WAIT });
+        await holding();
         subject.failStorage();
         subject.release();
-        expect(await waiting).toMatchObject({ ok: false, unfinished: { reason: expect.any(String) } });
+        const error = await sending.then(
+          () => undefined,
+          (rejection: unknown) => rejection,
+        );
+        expect(error).toMatchObject({
+          code: "unconfirmed",
+          retryable: false,
+          details: { sessionId, messageId: expect.any(String) },
+        });
       });
 
       it("gives results and events that are JSON", async () => {
         const sessionId = await newSession(agent);
         const watching = attach(agent, sessionId);
         await watching.until(isState);
-        const receipt = await accepted(agent, { sessionId, content: text("hi") });
-        const { wait: _wait, ...data } = receipt;
-        expect(JSON.parse(JSON.stringify(data))).toEqual(data);
-        const events = await watching.until(doneOf(receipt.message.messageId));
+        const message = await send({ sessionId, content: "hi" });
+        expect(JSON.parse(JSON.stringify(message))).toEqual(message);
+        const events = await watching.until(doneOf(message));
         await watching.close();
         expect(JSON.parse(JSON.stringify(events))).toEqual(events);
-        const page = await agent.read(sessionId);
+        const page = await agent.sessions.entries(sessionId);
         expect(JSON.parse(JSON.stringify(page))).toEqual(page);
+        const session = await agent.sessions.get(sessionId);
+        expect(JSON.parse(JSON.stringify(session))).toEqual(session);
       });
     });
 
     describe("Busy", () => {
-      it("takes queued messages in arrival order, with their positions", async () => {
+      it("takes queued messages in arrival order", async () => {
         const sessionId = await newSession(agent);
-        const first = await accepted(agent, { sessionId, content: text("hold") });
+        const first = await send({ sessionId, content: "hold" });
         await holding();
-        const queued = [];
-        for (const word of ["a", "b", "c"]) queued.push(await accepted(agent, { sessionId, content: text(word) }));
-        expect(queued.map((receipt) => receipt.message)).toMatchObject([
-          { status: "queued", position: 0 },
-          { status: "queued", position: 1 },
-          { status: "queued", position: 2 },
-        ]);
+        const queued: Message[] = [];
+        for (const word of ["a", "b", "c"]) queued.push(await send({ sessionId, content: word }));
+        expect(queued.map((message) => message.status)).toEqual(["queued", "queued", "queued"]);
         subject.release();
-        for (const receipt of queued) expect((await ended(receipt)).outcome.status).toBe("completed");
-        const order = (await history(agent, sessionId)).flatMap((entry) => userMessageOf(entry) ?? []);
-        expect(order).toEqual([first, ...queued].map((receipt) => receipt.message.messageId));
+        for (const message of queued) expect((await ended(agent, message)).status).toBe("completed");
+        const order = (await history(agent, sessionId)).flatMap((entry) => messageOf(entry) ?? []);
+        expect(order).toEqual([first, ...queued].map((message) => message.id));
       });
 
       it("rejects a reject message to a busy session with busy/running, recording nothing", async () => {
         const sessionId = await newSession(agent);
-        await accepted(agent, { sessionId, content: text("hold") });
+        await send({ sessionId, content: "hold" });
         await holding();
-        const refused = await agent.invoke({ sessionId, content: text("now"), whenBusy: "reject" });
-        expect(refused).toMatchObject({
-          ok: false,
-          error: { code: "busy", retryable: true, details: { reason: "running" } },
+        await expect(send({ sessionId, content: "now", whenBusy: "reject" })).rejects.toMatchObject({
+          code: "busy",
+          retryable: true,
+          details: { reason: "running" },
         });
-        expect(await agent.read(sessionId, { limit: 0 })).toMatchObject({ ok: true, state: { queued: [] } });
+        expect((await history(agent, sessionId)).filter((entry) => entry.kind === "user")).toHaveLength(1);
         subject.release();
       });
 
-      it("queues a steer first, and takes it while the session is still busy", async () => {
+      it("takes a steer while the session is still busy, ahead of the queued messages", async () => {
         const sessionId = await newSession(agent);
-        const running = await accepted(agent, { sessionId, content: text("hold") });
+        const running = await send({ sessionId, content: "hold" });
         await holding();
-        const queued = await accepted(agent, { sessionId, content: text("later") });
-        const steer = await accepted(agent, { sessionId, content: text("steer"), whenBusy: "steer" });
-        expect(steer.message).toMatchObject({ status: "queued", position: 0 });
-        expect(await statusOf(agent, sessionId, queued.message.messageId)).toMatchObject({ position: 1 });
+        const queued = await send({ sessionId, content: "later" });
+        const steer = await send({ sessionId, content: "steer", whenBusy: "steer" });
+        expect(steer.status).toBe("queued");
         const watching = attach(agent, sessionId);
         await watching.until(isState);
         subject.release();
-        const events = await watching.until(doneOf(running.message.messageId));
+        const events = await watching.until(doneOf(running));
         await watching.close();
-        expect(entriesIn(events).some((entry) => userMessageOf(entry) === steer.message.messageId)).toBe(true);
-        await ended(steer);
-        await ended(queued);
+        expect(entriesIn(events).some((entry) => messageOf(entry) === steer.id)).toBe(true);
+        await ended(agent, steer);
+        await ended(agent, queued);
       });
 
       it("takes a steer the agent did not take before it stopped no later than the queued messages", async () => {
         const sessionId = await newSession(agent);
-        const running = await accepted(agent, { sessionId, content: text("slow") });
-        await untilStatus(agent, sessionId, running.message.messageId, "taken");
-        const queued = await accepted(agent, { sessionId, content: text("later") });
-        const steer = await accepted(agent, { sessionId, content: text("steer"), whenBusy: "steer" });
-        await ended(queued);
-        await ended(steer);
+        const running = await send({ sessionId, content: "slow" });
+        await untilStatus(agent, running, "running");
+        const queued = await send({ sessionId, content: "later" });
+        const steer = await send({ sessionId, content: "steer", whenBusy: "steer" });
+        await ended(agent, queued);
+        await ended(agent, steer);
         const all = await history(agent, sessionId);
-        const at = (messageId: string) => all.findIndex((entry) => userMessageOf(entry) === messageId);
-        const queuedAnswered = all.findIndex(
-          (entry, index) => index > at(queued.message.messageId) && entry.kind === "assistant_message",
-        );
-        expect(at(steer.message.messageId)).toBeGreaterThan(at(running.message.messageId));
-        expect(at(steer.message.messageId)).toBeLessThan(queuedAnswered);
+        const at = (message: Message) => all.findIndex((entry) => messageOf(entry) === message.id);
+        const queuedAnswered = all.findIndex((entry, index) => index > at(queued) && entry.kind === "assistant");
+        expect(at(steer)).toBeGreaterThan(at(running));
+        expect(at(steer)).toBeLessThan(queuedAnswered);
       });
 
       it("takes a message at once in an idle session, whatever whenBusy says", async () => {
         for (const whenBusy of ["queue", "steer", "reject"] as const) {
-          const receipt = await accepted(agent, { content: text("hi"), whenBusy });
-          expect(receipt.message.status).not.toBe("queued");
-          expect((await ended(receipt)).outcome.status).toBe("completed");
+          const message = await send({ sessionId: await newSession(agent), content: "hi", whenBusy });
+          expect(message.status).not.toBe("queued");
+          expect((await ended(agent, message)).status).toBe("completed");
         }
       });
 
       it("refuses the 21st queued message with busy/queue_full", async () => {
         const sessionId = await newSession(agent);
-        await accepted(agent, { sessionId, content: text("hold") });
+        await send({ sessionId, content: "hold" });
         await holding();
-        for (let i = 0; i < 20; i++) await accepted(agent, { sessionId, content: text(`q${i}`) });
-        const refused = await agent.invoke({ sessionId, content: text("one too many") });
-        expect(refused).toMatchObject({ ok: false, error: { code: "busy", details: { reason: "queue_full" } } });
+        for (let i = 0; i < 20; i++) await send({ sessionId, content: `q${i}` });
+        await expect(send({ sessionId, content: "one too many" })).rejects.toMatchObject({
+          code: "busy",
+          details: { reason: "queue_full" },
+        });
         subject.release();
       });
 
       it("refuses a message past the process's capacity with busy/capacity", async () => {
         agent = await subject.start({ inFlightPerProcess: 2 });
-        await accepted(agent, { content: text("hold") });
-        await accepted(agent, { content: text("hold") });
-        const refused = await agent.invoke({ content: text("hi") });
-        expect(refused).toMatchObject({ ok: false, error: { code: "busy", details: { reason: "capacity" } } });
+        await send({ sessionId: await newSession(agent), content: "hold" });
+        await send({ sessionId: await newSession(agent), content: "hold" });
+        await expect(send({ sessionId: await newSession(agent), content: "hi" })).rejects.toMatchObject({
+          code: "busy",
+          details: { reason: "capacity" },
+        });
         subject.release();
       });
     });
 
     describe("Idempotency", () => {
-      it("returns a key's message while it is queued, taken and done, recording it once", async () => {
+      it("returns a key's message while it is queued, running and ended, recording it once", async () => {
         const sessionId = await newSession(agent);
-        const running = await accepted(agent, { sessionId, content: text("hold"), idempotencyKey: "first" });
+        const running = await send({ sessionId, content: "hold", idempotencyKey: "first" });
         await holding();
-        const queued = await accepted(agent, { sessionId, content: text("hi"), idempotencyKey: "second" });
-        const whileQueued = await accepted(agent, { sessionId, content: text("other"), idempotencyKey: "second" });
-        expect(whileQueued).toMatchObject({
-          duplicate: true,
-          message: { messageId: queued.message.messageId, status: "queued" },
-        });
-        const whileTaken = await accepted(agent, { sessionId, content: text("hold"), idempotencyKey: "first" });
-        expect(whileTaken).toMatchObject({
-          duplicate: true,
-          message: { messageId: running.message.messageId, status: "taken" },
+        const queued = await send({ sessionId, content: "hi", idempotencyKey: "second" });
+        expect(await send({ sessionId, content: "other", idempotencyKey: "second" })).toEqual(queued);
+        expect(await send({ sessionId, content: "hold", idempotencyKey: "first" })).toMatchObject({
+          id: running.id,
+          status: "running",
+          idempotencyKey: "first",
         });
         subject.release();
-        const end = await ended(queued);
-        const whenDone = await accepted(agent, { sessionId, content: text("hi"), idempotencyKey: "second" });
-        expect(whenDone).toMatchObject({ duplicate: true, message: end });
-        expect(await ended(whenDone)).toEqual(end);
-        expect(await ended(whileQueued)).toEqual(end);
-        const users = (await history(agent, sessionId)).filter((entry) => entry.kind === "user_message");
-        expect(users.map((entry) => (entry.data as { idempotencyKey?: string }).idempotencyKey)).toEqual([
-          "first",
-          "second",
-        ]);
+        const end = await ended(agent, queued);
+        expect(await send({ sessionId, content: "hi", idempotencyKey: "second" })).toEqual(end);
+        const users = (await history(agent, sessionId)).filter((entry) => entry.kind === "user");
+        expect(users.map(messageOf)).toEqual([running.id, queued.id]);
       });
 
-      it("makes one message of concurrent invokes with one key", async () => {
+      it("makes one message of concurrent sends with one key", async () => {
         const sessionId = await newSession(agent);
-        const receipts = await Promise.all(
-          Array.from({ length: 5 }, () => accepted(agent, { sessionId, content: text("hi"), idempotencyKey: "once" })),
+        const messages = await Promise.all(
+          Array.from({ length: 5 }, () => send({ sessionId, content: "hi", idempotencyKey: "once" })),
         );
-        expect(new Set(receipts.map((receipt) => receipt.message.messageId)).size).toBe(1);
-        expect(receipts.filter((receipt) => !receipt.duplicate)).toHaveLength(1);
-        await ended(receipts[0] as Receipt);
-        expect((await history(agent, sessionId)).filter((entry) => entry.kind === "user_message")).toHaveLength(1);
+        expect(new Set(messages.map((message) => message.id)).size).toBe(1);
+        await ended(agent, messages[0] as Message);
+        expect((await history(agent, sessionId)).filter((entry) => entry.kind === "user")).toHaveLength(1);
+      });
+
+      it("keeps a key to its session", async () => {
+        const one = await send({ sessionId: await newSession(agent), content: "hi", idempotencyKey: "k" });
+        const other = await send({ sessionId: await newSession(agent), content: "hi", idempotencyKey: "k" });
+        expect(other.id).not.toBe(one.id);
       });
     });
 
     describe("Messages", () => {
-      it("follows a message through queued, taken and done by its id and by its key", async () => {
+      it("follows a message through queued, running and its end, by its id and by its key", async () => {
         const sessionId = await newSession(agent);
-        const running = await accepted(agent, { sessionId, content: text("hold") });
+        const running = await send({ sessionId, content: "hold" });
         await holding();
-        const receipt = await accepted(agent, { sessionId, content: text("hi"), idempotencyKey: "tracked" });
-        const byKey = () => agent.getMessage(sessionId, { idempotencyKey: "tracked" });
-        expect(await byKey()).toMatchObject({ messageId: receipt.message.messageId, status: "queued", position: 0 });
-        expect((await statusOf(agent, sessionId, running.message.messageId))?.status).toBe("taken");
+        const message = await send({ sessionId, content: "hi", idempotencyKey: "tracked" });
+        const byKey = () => agent.messages.get({ sessionId, idempotencyKey: "tracked" });
+        expect(await byKey()).toEqual({ id: message.id, sessionId, idempotencyKey: "tracked", status: "queued" });
+        expect(await agent.messages.get(byId(running))).toMatchObject({
+          status: "running",
+          entryId: expect.any(String),
+        });
         subject.release();
-        const end = await ended(receipt);
+        const end = await ended(agent, message);
         expect(await byKey()).toEqual(end);
-        expect(end).toMatchObject({ idempotencyKey: "tracked", outcome: { status: "completed" } });
-        expect(await agent.getMessage(sessionId, { messageId: "no-such-message" })).toBeUndefined();
-        expect(await agent.getMessage(sessionId, { idempotencyKey: "never-sent" })).toBeUndefined();
-        expect(await agent.getMessage("no-such-session", { messageId: receipt.message.messageId })).toBeUndefined();
+        expect(end).toMatchObject({ idempotencyKey: "tracked", status: "completed" });
         const other = await newSession(agent);
-        expect(await agent.getMessage(other, { messageId: receipt.message.messageId })).toBeUndefined();
+        for (const key of [
+          { sessionId, messageId: "no-such-message" },
+          { sessionId, idempotencyKey: "never-sent" },
+          { sessionId: "no-such-session", messageId: message.id },
+          { sessionId: other, messageId: message.id },
+        ]) {
+          await expect(agent.messages.get(key)).rejects.toMatchObject({ code: "not_found" });
+        }
       });
 
       it("ends a message whose Caller never waits or watches", async () => {
-        const receipt = await accepted(agent, { content: text("hi") });
-        await untilStatus(agent, receipt.sessionId, receipt.message.messageId, "done");
+        const message = await send({ sessionId: await newSession(agent), content: "hi" });
+        await untilStatus(agent, message, "completed");
       });
 
-      it("stops the taken message and withdraws the queued ones, answering once they ended canceled", async () => {
+      it("cancels the running message and withdraws the queued ones, answering once the stop is recorded", async () => {
         const sessionId = await newSession(agent);
-        expect(await agent.abort(sessionId)).toEqual({ ok: true, stopped: { taken: [], queued: [] } });
-        const running = await accepted(agent, { sessionId, content: text("hold") });
+        expect(await agent.sessions.cancel(sessionId)).toEqual({ stopped: [] });
+        const running = await send({ sessionId, content: "stubborn" });
         await holding();
-        const queued = await accepted(agent, { sessionId, content: text("hi") });
-        const result = await agent.abort(sessionId);
-        expect(result).toEqual({
-          ok: true,
-          stopped: { taken: [running.message.messageId], queued: [queued.message.messageId] },
-        });
-        for (const receipt of [running, queued]) {
-          const status = await statusOf(agent, sessionId, receipt.message.messageId);
-          expect(status).toMatchObject({ status: "done", outcome: { status: "canceled" } });
-          expect(status).not.toHaveProperty("answer");
-        }
-        expect(await statusOf(agent, sessionId, queued.message.messageId)).not.toHaveProperty("entryId");
-        expect(await agent.abort("no-such-session")).toMatchObject({ ok: false, error: { code: "not_found" } });
-      });
-
-      it("reports the same message from a second abort while a tool ignoring its signal keeps the first waiting", async () => {
-        const sessionId = await newSession(agent);
-        const running = await accepted(agent, { sessionId, content: text("stubborn") });
-        await holding();
-        const first = agent.abort(sessionId);
+        const queued = await send({ sessionId, content: "hi" });
+        // A tool that ignores its abort signal keeps running: the answer does not wait for it.
+        expect(await agent.sessions.cancel(sessionId)).toEqual({ stopped: [running.id, queued.id] });
         await stopRecorded();
-        const second = agent.abort(sessionId);
-        // The second abort reads which messages it stops before the tool is let go.
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(subject.held()).toBe(1);
+        expect(await agent.messages.get(byId(queued))).toEqual({ ...queued, status: "canceled" });
+        expect((await agent.messages.get(byId(running))).status).toBe("running");
+        // A second cancel finds the same stop recorded.
+        expect(await agent.sessions.cancel(sessionId)).toEqual({ stopped: [running.id] });
         subject.release();
-        const stopped = { ok: true, stopped: { taken: [running.message.messageId], queued: [] } };
-        expect(await first).toEqual(stopped);
-        expect(await second).toEqual(stopped);
-        expect(await statusOf(agent, sessionId, running.message.messageId)).toMatchObject({
-          outcome: { status: "canceled" },
-        });
+        const end = await ended(agent, running);
+        expect(end.status).toBe("canceled");
+        expect(end).not.toHaveProperty("answer");
+        await expect(agent.sessions.cancel("no-such-session")).rejects.toMatchObject({ code: "not_found" });
       });
 
-      it("answers unknown for an abort whose signal is aborted, and its stop still ends the message canceled", async () => {
+      it("takes the messages sent after a failed one, and after a cancel", async () => {
         const sessionId = await newSession(agent);
-        const running = await accepted(agent, { sessionId, content: text("stubborn") });
+        await send({ sessionId, content: "hold" });
         await holding();
-        const controller = new AbortController();
-        const stopping = agent.abort(sessionId, { signal: controller.signal });
-        await stopRecorded();
-        controller.abort();
-        expect(await stopping).toMatchObject({ ok: false, unknown: { reason: expect.any(String) } });
+        const failing = await send({ sessionId, content: "fail" });
+        const after = await send({ sessionId, content: "after" });
         subject.release();
-        await untilStatus(agent, sessionId, running.message.messageId, "done");
-        expect(await statusOf(agent, sessionId, running.message.messageId)).toMatchObject({
-          outcome: { status: "canceled" },
-        });
-      });
-
-      it("takes the messages invoked after a failed one", async () => {
-        const sessionId = await newSession(agent);
-        await accepted(agent, { sessionId, content: text("hold") });
+        expect(await ended(agent, failing)).toMatchObject({ status: "failed", error: { code: "model_error" } });
+        expect((await ended(agent, after)).status).toBe("completed");
+        await send({ sessionId, content: "stubborn" });
         await holding();
-        const failing = await accepted(agent, { sessionId, content: text("fail") });
-        const after = await accepted(agent, { sessionId, content: text("after") });
+        await agent.sessions.cancel(sessionId);
+        const next = await send({ sessionId, content: "next" });
         subject.release();
-        expect((await ended(failing)).outcome).toMatchObject({ status: "failed", error: { code: "model_error" } });
-        expect((await ended(after)).outcome).toEqual({ status: "completed" });
+        expect((await ended(agent, next)).status).toBe("completed");
       });
 
-      it("takes a message invoked while an abort is still ending the messages it stopped", async () => {
-        for (const signalled of [false, true]) {
-          const sessionId = await newSession(agent);
-          await accepted(agent, { sessionId, content: text("stubborn") });
-          await holding();
-          const controller = new AbortController();
-          const stopping = agent.abort(sessionId, { signal: controller.signal });
-          await stopRecorded(signalled ? 2 : 1);
-          const next = await accepted(agent, { sessionId, content: text("next") });
-          if (signalled) controller.abort();
-          subject.release();
-          await stopping;
-          expect((await ended(next)).outcome).toEqual({ status: "completed" });
-        }
-      });
-
-      it("gives an answer only to a completed or max_tokens message, never a reply whose tool calls ran", async () => {
+      it("gives an answer only to a completed or incomplete message, never a reply whose tool calls ran", async () => {
         const sessionId = await newSession(agent);
-        const completed = await ended(await accepted(agent, { sessionId, content: text("hi") }));
-        expect(completed).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: hi" } });
-        const cut = await ended(await accepted(agent, { sessionId, content: text("long") }));
-        expect(cut).toMatchObject({ outcome: { status: "max_tokens" }, answer: { text: "cut short" } });
-        const failed = await ended(await accepted(agent, { sessionId, content: text("fail") }));
-        expect(failed.outcome.status).toBe("failed");
+        const completed = await ended(agent, await send({ sessionId, content: "hi" }));
+        expect(completed).toMatchObject({ status: "completed", answer: { text: "answer: hi" } });
+        const cut = await ended(agent, await send({ sessionId, content: "long" }));
+        expect(cut).toMatchObject({ status: "incomplete", answer: { text: "cut short" } });
+        const failed = await ended(agent, await send({ sessionId, content: "fail" }));
+        expect(failed.status).toBe("failed");
         expect(failed).not.toHaveProperty("answer");
-        const finished = await ended(await accepted(agent, { sessionId, content: text("finish") }));
-        expect(finished.outcome).toEqual({ status: "completed" });
+        const finished = await ended(agent, await send({ sessionId, content: "finish" }));
+        expect(finished.status).toBe("completed");
         expect(finished).not.toHaveProperty("answer");
-        const tool = await ended(await accepted(agent, { sessionId, content: text("effect") }));
+        const tool = await ended(agent, await send({ sessionId, content: "effect" }));
         expect(tool.answer?.text).toBe("answer: effect");
       });
 
       it("ends a message failed with auth_required when its model provider has no credential", async () => {
         agent = await subject.start({ signedOut: true });
-        const end = await ended(await accepted(agent, { content: text("hi") }));
-        expect(end.outcome).toMatchObject({ status: "failed", error: { code: "auth_required", retryable: false } });
+        const end = await ended(agent, await send({ sessionId: await newSession(agent), content: "hi" }));
+        expect(end).toMatchObject({ status: "failed", error: { code: "auth_required", retryable: false } });
         expect(end).not.toHaveProperty("answer");
       });
     });
 
     describe("Restart", () => {
-      it("answers a message accepted just before a restart after it, and getMessage finds it", async () => {
+      it("answers a message accepted just before a restart after it, and get finds it", async () => {
         const sessionId = await newSession(agent);
-        const receipt = await accepted(agent, { sessionId, content: text("hold") });
+        const message = await send({ sessionId, content: "hold" });
         await holding();
         agent = await subject.restart();
-        expect(await statusOf(agent, sessionId, receipt.message.messageId)).toBeDefined();
-        await untilStatus(agent, sessionId, receipt.message.messageId, "done");
-        expect(await statusOf(agent, sessionId, receipt.message.messageId)).toMatchObject({
-          outcome: { status: "completed" },
-        });
+        expect((await ended(agent, message)).status).toBe("completed");
       });
 
       it("keeps the queued messages, and takes them", async () => {
         const sessionId = await newSession(agent);
-        await accepted(agent, { sessionId, content: text("hold") });
+        await send({ sessionId, content: "hold" });
         await holding();
-        const queued = [
-          await accepted(agent, { sessionId, content: text("a") }),
-          await accepted(agent, { sessionId, content: text("b") }),
-        ];
+        const queued = [await send({ sessionId, content: "a" }), await send({ sessionId, content: "b" })];
         agent = await subject.restart();
-        for (const receipt of queued) {
-          await untilStatus(agent, sessionId, receipt.message.messageId, "done");
-          expect(await statusOf(agent, sessionId, receipt.message.messageId)).toMatchObject({
-            outcome: { status: "completed" },
-          });
-        }
+        for (const message of queued) expect((await ended(agent, message)).status).toBe("completed");
       });
 
-      it("ends a message an abort was stopping when the process stopped canceled after the restart", async () => {
+      it("ends a message a cancel was stopping when the process stopped canceled after the restart", async () => {
         const sessionId = await newSession(agent);
-        const running = await accepted(agent, { sessionId, content: text("stubborn") });
+        const running = await send({ sessionId, content: "stubborn" });
         await holding();
-        void agent.abort(sessionId);
-        await stopRecorded();
+        await agent.sessions.cancel(sessionId);
         agent = await subject.restart();
-        await untilStatus(agent, sessionId, running.message.messageId, "done");
-        const status = await statusOf(agent, sessionId, running.message.messageId);
-        expect(status).toMatchObject({ outcome: { status: "canceled" } });
-        expect(status).not.toHaveProperty("answer");
+        const end = await ended(agent, running);
+        expect(end.status).toBe("canceled");
+        expect(end).not.toHaveProperty("answer");
       });
 
       it("does not redo a tool call the process stopped after its effect", async () => {
         const sessionId = await newSession(agent);
-        const receipt = await accepted(agent, { sessionId, content: text("mark") });
+        const message = await send({ sessionId, content: "mark" });
         await holding();
         expect(subject.effects()).toBe(1);
         agent = await subject.restart();
-        await untilStatus(agent, sessionId, receipt.message.messageId, "done");
-        expect(await statusOf(agent, sessionId, receipt.message.messageId)).toMatchObject({
-          outcome: { status: "completed" },
-        });
+        expect((await ended(agent, message)).status).toBe("completed");
         expect(subject.effects()).toBe(1);
       });
     });
 
-    describe("Resuming", () => {
-      it("replays nothing without replayFrom, every entry from start, and the entries after a cursor", async () => {
+    describe("Watching", () => {
+      it("replays nothing without after, every entry from start, and the entries after a cursor", async () => {
         const sessionId = await newSession(agent);
-        await ended(await accepted(agent, { sessionId, content: text("one") }));
-        await ended(await accepted(agent, { sessionId, content: text("two") }));
+        await ended(agent, await send({ sessionId, content: "one" }));
+        await ended(agent, await send({ sessionId, content: "two" }));
         const all = await history(agent, sessionId);
         expect(all).toHaveLength(4);
 
         const none = attach(agent, sessionId);
-        expect(await none.until(isState)).toMatchObject([{ type: "state", state: { status: "idle" } }]);
+        expect(await none.until(isState)).toMatchObject([
+          { type: "state", session: { id: sessionId, status: "idle" } },
+        ]);
         await none.close();
 
-        const fromStart = attach(agent, sessionId, { replayFrom: { type: "start" } });
+        const fromStart = attach(agent, sessionId, { after: "start" });
         const replayed = await fromStart.until(isState);
         await fromStart.close();
         expect(entriesIn(replayed)).toEqual(all);
         expect(replayed.at(-1)?.type).toBe("state");
 
-        const fromCursor = attach(agent, sessionId, { replayFrom: { type: "after", entryId: (all[1] as Entry).id } });
+        const fromCursor = attach(agent, sessionId, { after: (all[1] as Entry).id });
         const rest = await fromCursor.until(isState);
         await fromCursor.close();
         expect(entriesIn(rest)).toEqual(all.slice(2));
       });
 
-      it("delivers a message invoked after the resume opened, from its user_message to its done", async () => {
+      it("delivers a message sent after the watch opened, from its user entry to its done", async () => {
         const sessionId = await newSession(agent);
         const watching = attach(agent, sessionId);
         await watching.until(isState);
-        const receipt = await accepted(agent, { sessionId, content: text("hi") });
-        const events = await watching.until(doneOf(receipt.message.messageId));
+        const message = await send({ sessionId, content: "hi" });
+        const events = await watching.until(doneOf(message));
         await watching.close();
         const entries = entriesIn(events);
-        expect(entries.map((entry) => entry.kind)).toEqual(["user_message", "assistant_message"]);
-        expect(userMessageOf(entries[0] as Entry)).toBe(receipt.message.messageId);
-        expect(events.at(-1)).toEqual({ type: "done", message: await ended(receipt) });
+        expect(entries.map((entry) => entry.kind)).toEqual(["user", "assistant"]);
+        expect(messageOf(entries[0] as Entry)).toBe(message.id);
+        expect(events.at(-1)).toEqual({ type: "done", message: await ended(agent, message) });
       });
 
-      it("sends a message's done before the user_message of the message taken after it", async () => {
+      it("sends a message's done before the user entry of the message taken after it", async () => {
         const sessionId = await newSession(agent);
-        const running = await accepted(agent, { sessionId, content: text("hold") });
+        const running = await send({ sessionId, content: "hold" });
         await holding();
-        const queued = await accepted(agent, { sessionId, content: text("next") });
+        const queued = await send({ sessionId, content: "next" });
         const watching = attach(agent, sessionId);
         await watching.until(isState);
         subject.release();
-        const events = await watching.until(doneOf(queued.message.messageId));
+        const events = await watching.until(doneOf(queued));
         await watching.close();
-        const doneAt = events.findIndex(doneOf(running.message.messageId));
-        const takenAt = events.findIndex(
-          (event) => event.type === "entry" && userMessageOf(event.entry) === queued.message.messageId,
-        );
+        const doneAt = events.findIndex(doneOf(running));
+        const takenAt = events.findIndex((event) => event.type === "entry" && messageOf(event.entry) === queued.id);
         expect(doneAt).toBeGreaterThanOrEqual(0);
         expect(doneAt).toBeLessThan(takenAt);
         expect(events.filter((event) => event.type === "state")).toHaveLength(0);
@@ -657,23 +586,20 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
 
       it("gives a Caller attached mid-answer the reply so far, which the deltas continue", async () => {
         const sessionId = await newSession(agent);
-        const receipt = await accepted(agent, { sessionId, content: text("slow") });
-        await vi.waitFor(
-          async () => {
-            const page = await agent.read(sessionId, { limit: 0 });
-            expect(page.ok && page.state.reply?.text).toBeTruthy();
-          },
-          { timeout: 5000, interval: 10 },
-        );
+        const message = await send({ sessionId, content: "slow" });
+        await vi.waitFor(async () => expect((await agent.sessions.get(sessionId)).reply?.text).toBeTruthy(), {
+          timeout: 5000,
+          interval: 10,
+        });
         const watching = attach(agent, sessionId);
         const [state] = await watching.until(isState);
-        const events = await watching.until(doneOf(receipt.message.messageId));
+        const events = await watching.until(doneOf(message));
         await watching.close();
-        const shown = state?.type === "state" ? (state.state.reply?.text ?? "") : "";
+        const shown = state?.type === "state" ? (state.session.reply?.text ?? "") : "";
         const deltas = events.flatMap((event) =>
-          event.type === "message_delta" && event.channel === "text" ? [event.delta] : [],
+          event.type === "delta" && event.channel === "text" ? [event.text] : [],
         );
-        const answer = entriesIn(events).find((entry) => entry.kind === "assistant_message") as Entry;
+        const answer = entriesIn(events).find((entry) => entry.kind === "assistant") as Entry;
         expect(shown).not.toBe("");
         expect(deltas.length).toBeGreaterThan(0);
         expect((answer.data as { text: string }).text.startsWith(shown + deltas.join(""))).toBe(true);
@@ -683,10 +609,10 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const sessionId = await newSession(agent);
         const watching = attach(agent, sessionId);
         await watching.until(isState);
-        const streamed = await accepted(agent, { sessionId, content: text("stream") });
-        const events = await watching.until(doneOf(streamed.message.messageId));
-        const nested = await accepted(agent, { sessionId, content: text("nested") });
-        const more = await watching.until(doneOf(nested.message.messageId));
+        const streamed = await send({ sessionId, content: "stream" });
+        const events = await watching.until(doneOf(streamed));
+        const nested = await send({ sessionId, content: "nested" });
+        const more = await watching.until(doneOf(nested));
         await watching.close();
 
         const started = events.find((event) => event.type === "tool_started");
@@ -699,7 +625,7 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(lines.every((line) => ["one", "two", "three of the lines"].includes(line))).toBe(true);
         expect(new Set(lines).size).toBe(lines.length);
         const result = events.findIndex((event) => event.type === "entry" && event.entry.kind === "tool_result");
-        expect(events.indexOf(started as ResumeEvent)).toBeLessThan(result);
+        expect(events.indexOf(started as SessionEvent)).toBeLessThan(result);
         expect(events.slice(result).some((event) => event.type === "tool_progress")).toBe(false);
 
         const outer = more.find((event) => event.type === "tool_started");
@@ -712,16 +638,16 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         });
       });
 
-      it("explains a quiet gap with retry_scheduled before the attempt that answers", async () => {
+      it("explains a quiet gap with retrying before the attempt that answers", async () => {
         const sessionId = await newSession(agent);
         const watching = attach(agent, sessionId);
         await watching.until(isState);
-        const receipt = await accepted(agent, { sessionId, content: text("flaky") });
-        const events = await watching.until(doneOf(receipt.message.messageId));
+        const message = await send({ sessionId, content: "flaky" });
+        const events = await watching.until(doneOf(message));
         await watching.close();
-        const retry = events.findIndex((event) => event.type === "retry_scheduled");
+        const retry = events.findIndex((event) => event.type === "retrying");
         expect(events[retry]).toMatchObject({
-          type: "retry_scheduled",
+          type: "retrying",
           attempt: 1,
           maxAttempts: expect.any(Number),
           delayMs: expect.any(Number),
@@ -730,23 +656,23 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const answer = events.findIndex(
           (event) =>
             event.type === "entry" &&
-            event.entry.kind === "assistant_message" &&
-            (event.entry.data as { outcome?: unknown }).outcome === undefined,
+            event.entry.kind === "assistant" &&
+            (event.entry.data as { stop?: unknown }).stop === undefined,
         );
         expect(retry).toBeLessThan(answer);
-        expect(events.at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
+        expect(events.at(-1)).toMatchObject({ type: "done", message: { status: "completed" } });
       });
 
       it("streams the model's thinking on its own channel, never folded into the answer", async () => {
         const sessionId = await newSession(agent);
         const watching = attach(agent, sessionId);
         await watching.until(isState);
-        const receipt = await accepted(agent, { sessionId, content: text("ponder") });
-        const events = await watching.until(doneOf(receipt.message.messageId));
+        const message = await send({ sessionId, content: "ponder" });
+        const events = await watching.until(doneOf(message));
         await watching.close();
         const deltas = (channel: "text" | "thinking") =>
-          events.flatMap((event) => (event.type === "message_delta" && event.channel === channel ? [event.delta] : []));
-        const reply = entriesIn(events).find((entry) => entry.kind === "assistant_message") as Entry;
+          events.flatMap((event) => (event.type === "delta" && event.channel === channel ? [event.text] : []));
+        const reply = entriesIn(events).find((entry) => entry.kind === "assistant") as Entry;
         const data = reply.data as { text: string; thinking?: string };
         expect(deltas("thinking").length).toBeGreaterThan(0);
         expect(data.thinking?.startsWith(deltas("thinking").join(""))).toBe(true);
@@ -756,320 +682,315 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
 
       it("delivers each entry exactly once across a reconnect after the last entry it had", async () => {
         const sessionId = await newSession(agent);
-        await ended(await accepted(agent, { sessionId, content: text("one") }));
-        const first = attach(agent, sessionId, { replayFrom: { type: "start" } });
+        await ended(agent, await send({ sessionId, content: "one" }));
+        const first = attach(agent, sessionId, { after: "start" });
         const had = entriesIn(await first.until(isState));
         await first.close();
-        await ended(await accepted(agent, { sessionId, content: text("two") }));
-        const second = attach(agent, sessionId, { replayFrom: { type: "after", entryId: (had.at(-1) as Entry).id } });
+        await ended(agent, await send({ sessionId, content: "two" }));
+        const second = attach(agent, sessionId, { after: (had.at(-1) as Entry).id });
         const more = entriesIn(await second.until(isState));
         await second.close();
         expect([...had, ...more]).toEqual(await history(agent, sessionId));
       });
 
-      it("ends with serving_error when the storage fails", async () => {
+      it("ends with stream_error when the storage fails", async () => {
         const sessionId = await newSession(agent);
-        await accepted(agent, { sessionId, content: text("hold") });
+        await send({ sessionId, content: "hold" });
         await holding();
         const watching = attach(agent, sessionId);
         await watching.until(isState);
         subject.failStorage();
         subject.release();
         const rest = await watching.rest();
-        expect(rest.at(-1)).toMatchObject({ type: "serving_error", error: { code: "unavailable" } });
+        expect(rest.at(-1)).toMatchObject({ type: "stream_error", error: { code: "unavailable" } });
       });
 
-      it("rejects an unknown session or cursor with a single rejected", async () => {
-        const unknown = await attach(agent, "no-such-session").rest();
-        expect(unknown).toEqual([{ type: "rejected", error: expect.objectContaining({ code: "not_found" }) }]);
+      it("rejects an unknown session or cursor with not_found", async () => {
+        await expect(attach(agent, "no-such-session").next()).rejects.toMatchObject({ code: "not_found" });
         const sessionId = await newSession(agent);
-        const cursor = await attach(agent, sessionId, { replayFrom: { type: "after", entryId: "nope" } }).rest();
-        expect(cursor).toEqual([{ type: "rejected", error: expect.objectContaining({ code: "not_found" }) }]);
+        await expect(attach(agent, sessionId, { after: "nope" }).next()).rejects.toMatchObject({ code: "not_found" });
+      });
+
+      it("lets go on its signal: the read waiting then rejects with its reason", async () => {
+        const sessionId = await newSession(agent);
+        const controller = new AbortController();
+        const watching = attach(agent, sessionId, { signal: controller.signal });
+        await watching.until(isState);
+        const waiting = watching.next();
+        const reason = new Error("the Caller left");
+        controller.abort(reason);
+        await expect(waiting).rejects.toBe(reason);
       });
     });
 
     describe("Reading", () => {
-      it("pages by after, before and limit, the newest page first, and gives the state alone for limit 0", async () => {
+      it("pages by after, before and limit, the newest page first", async () => {
         const sessionId = await newSession(agent);
-        for (const word of ["one", "two", "three"])
-          await ended(await accepted(agent, { sessionId, content: text(word) }));
+        for (const word of ["one", "two", "three"]) await ended(agent, await send({ sessionId, content: word }));
         const all = await history(agent, sessionId);
         expect(all).toHaveLength(6);
-        expect(all.slice(1).map((entry) => entry.parentEntryId)).toEqual(all.slice(0, -1).map((entry) => entry.id));
-        expect(all[0]).not.toHaveProperty("parentEntryId");
+        expect(all[0]).toEqual({
+          id: expect.any(String),
+          timestamp: expect.any(Number),
+          kind: "user",
+          data: expect.any(Object),
+        });
 
-        const newest = await agent.read(sessionId, { limit: 2 });
-        expect(newest).toMatchObject({ ok: true, entries: all.slice(4), prev: all[4]?.id });
-        expect(newest).not.toHaveProperty("next");
-        const older = await agent.read(sessionId, { before: all[4]?.id, limit: 2 });
-        expect(older).toMatchObject({ ok: true, entries: all.slice(2, 4), prev: all[2]?.id, next: all[3]?.id });
-        const oldest = await agent.read(sessionId, { before: all[2]?.id, limit: 5 });
-        expect(oldest).toMatchObject({ ok: true, entries: all.slice(0, 2), next: all[1]?.id });
-        expect(oldest).not.toHaveProperty("prev");
-        const after = await agent.read(sessionId, { after: all[1]?.id, limit: 2 });
-        expect(after).toMatchObject({ ok: true, entries: all.slice(2, 4), prev: all[2]?.id, next: all[3]?.id });
+        const newest = await agent.sessions.entries(sessionId, { limit: 2 });
+        expect(newest).toEqual({ data: all.slice(4), prev: all[4]?.id });
+        const older = await agent.sessions.entries(sessionId, { before: all[4]?.id, limit: 2 });
+        expect(older).toEqual({ data: all.slice(2, 4), prev: all[2]?.id, next: all[3]?.id });
+        const oldest = await agent.sessions.entries(sessionId, { before: all[2]?.id, limit: 5 });
+        expect(oldest).toEqual({ data: all.slice(0, 2), next: all[1]?.id });
+        const after = await agent.sessions.entries(sessionId, { after: all[1]?.id, limit: 2 });
+        expect(after).toEqual({ data: all.slice(2, 4), prev: all[2]?.id, next: all[3]?.id });
 
-        expect(await agent.read(sessionId, { limit: 0 })).toEqual({
-          ok: true,
-          state: { status: "idle", taken: [], queued: [], usage: expect.any(Object), model: expect.any(Object) },
-          entries: [],
+        for (const options of [{ limit: 0 }, { limit: 501 }, { after: all[0]?.id, before: all[2]?.id }]) {
+          await expect(agent.sessions.entries(sessionId, options)).rejects.toMatchObject({ code: "invalid_request" });
+        }
+        await expect(agent.sessions.entries(sessionId, { after: "nope" })).rejects.toMatchObject({
+          code: "not_found",
         });
-        expect(await agent.read(sessionId, { limit: 501 })).toMatchObject({
-          ok: false,
-          error: { code: "invalid_request" },
-        });
-        expect(await agent.read(sessionId, { after: "nope" })).toMatchObject({
-          ok: false,
-          error: { code: "not_found" },
-        });
-        expect(await agent.read("no-such-session")).toMatchObject({ ok: false, error: { code: "not_found" } });
+        await expect(agent.sessions.entries("no-such-session")).rejects.toMatchObject({ code: "not_found" });
       });
 
-      it("names a taken message in its user_message, and gives every assistant_message its usage", async () => {
+      it("names a taken message in its user entry, and gives every assistant entry its usage", async () => {
         const sessionId = await newSession(agent);
-        const receipt = await accepted(agent, { sessionId, content: text("effect"), idempotencyKey: "named" });
-        await ended(receipt);
+        const message = await send({ sessionId, content: "effect", idempotencyKey: "named" });
+        await ended(agent, message);
         const all = await history(agent, sessionId);
-        expect(all[0]).toMatchObject({
-          kind: "user_message",
-          sessionId,
-          data: { content: text("effect"), messageId: receipt.message.messageId, idempotencyKey: "named" },
-        });
-        const replies = all.filter((entry) => entry.kind === "assistant_message");
+        expect(all[0]).toMatchObject({ kind: "user", data: { content: text("effect"), messageId: message.id } });
+        const replies = all.filter((entry) => entry.kind === "assistant");
         expect(replies).toHaveLength(2);
         for (const reply of replies) {
           expect(reply.data).toMatchObject({
             usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number) },
           });
         }
-        expect(all.map((entry) => entry.kind)).toEqual([
-          "user_message",
-          "assistant_message",
-          "tool_result",
-          "assistant_message",
-        ]);
+        expect(all.map((entry) => entry.kind)).toEqual(["user", "assistant", "tool_result", "assistant"]);
+        const cut = await ended(agent, await send({ sessionId, content: "long" }));
+        const [reply] = (await agent.sessions.entries(sessionId, { limit: 1 })).data;
+        expect(reply).toMatchObject({ id: cut.answer?.entryId, kind: "assistant", data: { stop: "max_tokens" } });
       });
 
-      it("counts a session's own spend in its state, a fork's from nothing", async () => {
+      it("counts a session's own spend, a fork's from nothing, and the instance's", async () => {
         const sessionId = await newSession(agent);
         const empty = { models: {}, tools: {} };
-        expect(await agent.read(sessionId, { limit: 0 })).toMatchObject({ state: { usage: empty } });
-        await ended(await accepted(agent, { sessionId, content: text("hi") }));
-        const spent = await agent.read(sessionId, { limit: 0 });
-        if (!spent.ok) throw new Error(JSON.stringify(spent));
-        const calls = Object.values(spent.state.usage.models);
+        expect(await agent.sessions.get(sessionId)).toMatchObject({ usage: empty });
+        await ended(agent, await send({ sessionId, content: "hi" }));
+        const spent = await agent.sessions.get(sessionId);
+        const calls = Object.values(spent.usage.models);
         expect(calls).toHaveLength(1);
         expect(calls[0]?.outputTokens).toBeGreaterThan(0);
-        const reply = (await history(agent, sessionId)).find((entry) => entry.kind === "assistant_message") as Entry;
+        const reply = (await history(agent, sessionId)).find((entry) => entry.kind === "assistant") as Entry;
         expect(calls[0]).toMatchObject((reply.data as { usage: object }).usage);
-        const fork = await agent.createSession({ from: { sessionId } });
-        if (!fork.ok) throw new Error(JSON.stringify(fork));
-        expect(await agent.read(fork.sessionId, { limit: 0 })).toMatchObject({ state: { usage: empty } });
+        const fork = await agent.sessions.create({ forkFrom: { sessionId } });
+        expect(fork.usage).toEqual(empty);
         const watching = attach(agent, sessionId);
         const [state] = await watching.until(isState);
         await watching.close();
-        expect(state).toMatchObject({ type: "state", state: { usage: spent.state.usage } });
+        expect(state).toMatchObject({ type: "state", session: { usage: spent.usage } });
+        await ended(agent, await send({ sessionId: fork.id, content: "more" }));
+        const instance = await agent.usage();
+        const [model] = Object.keys(spent.usage.models);
+        expect(instance.models[model as string]?.outputTokens).toBeGreaterThan(calls[0]?.outputTokens as number);
       });
 
-      it("moves the state from idle to running and back", async () => {
+      it("moves the session from idle to running and back", async () => {
         const sessionId = await newSession(agent);
-        expect(await agent.read(sessionId, { limit: 0 })).toMatchObject({ state: { status: "idle" } });
-        const running = await accepted(agent, { sessionId, content: text("hold") });
+        expect(await agent.sessions.get(sessionId)).toMatchObject({ id: sessionId, status: "idle" });
+        const running = await send({ sessionId, content: "hold" });
         await holding();
-        expect(await agent.read(sessionId, { limit: 0 })).toMatchObject({
-          state: { status: "running", taken: [running.message.messageId], queued: [] },
-        });
+        expect(await agent.sessions.get(sessionId)).toMatchObject({ status: "running" });
         subject.release();
-        await ended(running);
-        expect(await agent.read(sessionId, { limit: 0 })).toMatchObject({ state: { status: "idle", taken: [] } });
+        await ended(agent, running);
+        expect(await agent.sessions.get(sessionId)).toMatchObject({ status: "idle" });
+        await expect(agent.sessions.get("no-such-session")).rejects.toMatchObject({ code: "not_found" });
       });
 
-      it("returns an image a message carried through its ref", async () => {
+      it("returns the bytes of an image a message carried, through its ref", async () => {
         const sessionId = await newSession(agent);
         const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" } as const;
-        await ended(await accepted(agent, { sessionId, content: [{ type: "text", text: "look" }, image] }));
+        await ended(agent, await send({ sessionId, content: [{ type: "text", text: "look" }, image] }));
         const [user] = await history(agent, sessionId);
         const part = ((user as Entry).data as { content: ContentPart[] }).content[1];
         expect(part).toMatchObject({ type: "image", mimeType: "image/png", ref: expect.any(String) });
         const ref = (part as { ref: string }).ref;
-        expect(await agent.attachment(sessionId, ref)).toEqual({ mimeType: "image/png", data: image.data });
-        expect(await agent.attachment(sessionId, "nope")).toBeUndefined();
-        expect(await agent.attachment(await newSession(agent), ref)).toBeUndefined();
+        const got = await agent.sessions.attachment(sessionId, ref);
+        expect(got.mimeType).toBe("image/png");
+        expect(Buffer.from(got.data).toString("base64")).toBe(image.data);
+        await expect(agent.sessions.attachment(sessionId, "nope")).rejects.toMatchObject({ code: "not_found" });
+        await expect(agent.sessions.attachment(await newSession(agent), ref)).rejects.toMatchObject({
+          code: "not_found",
+        });
       });
     });
 
-    describe("stream()", () => {
-      type Streamed = Extract<StreamResult, { ok: true }>;
-      const streamed = async (target: Agent, request: InvokeRequest & { sessionId: string }) => {
-        const result = await stream(target, request);
-        if (!result.ok) throw new Error(`stream() was not accepted: ${JSON.stringify(result)}`);
-        return result;
-      };
-      const drain = async ({ events }: Streamed) => {
-        const out: ResumeEvent[] = [];
+    describe("Streaming a message", () => {
+      const drain = async (events: AsyncIterable<MessageStreamEvent>) => {
+        const out: MessageStreamEvent[] = [];
         for await (const event of events) out.push(event);
         return out;
       };
-      const replies = (events: ResumeEvent[]) =>
+      const replies = (events: MessageStreamEvent[]) =>
         entriesIn(events).map((entry) => `${entry.kind}:${(entry.data as { text?: string }).text ?? ""}`);
+      const firstOf = (events: MessageStreamEvent[]) => {
+        const [first] = events;
+        if (first?.type !== "message") throw new Error(`the stream began with ${JSON.stringify(first)}`);
+        return first.message;
+      };
 
-      it("delivers a new message's events after its user_message, through its done", async () => {
+      it("delivers a new message as recorded, then its events from its user entry through its done", async () => {
         const sessionId = await newSession(agent);
-        const result = await streamed(agent, { sessionId, content: text("hi") });
-        expect(result).toMatchObject({ sessionId, duplicate: false });
-        const events = await drain(result);
-        expect(replies(events)).toEqual(["assistant_message:answer: hi"]);
-        expect(events.at(-1)).toEqual({
-          type: "done",
-          message: await getDone(agent, sessionId, result.message.messageId),
-        });
+        const events = await drain(agent.messages.stream({ sessionId, content: "hi" }));
+        const message = firstOf(events);
+        expect(message).toMatchObject({ sessionId, status: expect.stringMatching(/^(queued|running)$/) });
+        expect(replies(events)).toEqual(["user:", "assistant:answer: hi"]);
+        expect(events.at(-1)).toEqual({ type: "done", message: await ended(agent, message) });
       });
 
       it("delivers only its own message's events for a message queued behind another", async () => {
         const sessionId = await newSession(agent);
-        await accepted(agent, { sessionId, content: text("hold") });
+        await send({ sessionId, content: "hold" });
         await holding();
-        const result = await streamed(agent, { sessionId, content: text("next") });
-        expect(result.message).toMatchObject({ status: "queued", position: 0 });
+        const streaming = drain(agent.messages.stream({ sessionId, content: "next" }));
+        await vi.waitFor(async () => expect((await history(agent, sessionId)).length).toBeGreaterThan(0));
         subject.release();
-        const events = await drain(result);
-        expect(replies(events)).toEqual(["assistant_message:answer: next"]);
-        expect(events.at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
+        const events = await streaming;
+        expect(firstOf(events).status).toBe("queued");
+        expect(replies(events)).toEqual(["user:", "assistant:answer: next"]);
+        expect(events.at(-1)).toMatchObject({ type: "done", message: { status: "completed" } });
       });
 
-      it("delivers a queued duplicate's events once it is taken", async () => {
+      it("delivers a queued message sent again by its key once it is taken", async () => {
         const sessionId = await newSession(agent);
-        await accepted(agent, { sessionId, content: text("hold") });
+        await send({ sessionId, content: "hold" });
         await holding();
-        const first = await accepted(agent, { sessionId, content: text("next"), idempotencyKey: "k" });
-        const result = await streamed(agent, { sessionId, content: text("next"), idempotencyKey: "k" });
-        expect(result).toMatchObject({
-          duplicate: true,
-          message: { messageId: first.message.messageId, status: "queued" },
-        });
+        const first = await send({ sessionId, content: "next", idempotencyKey: "k" });
+        const streaming = drain(agent.messages.stream({ sessionId, content: "next", idempotencyKey: "k" }));
+        await new Promise((resolve) => setTimeout(resolve, 50));
         subject.release();
-        expect(replies(await drain(result))).toEqual(["assistant_message:answer: next"]);
+        const events = await streaming;
+        expect(firstOf(events)).toEqual(first);
+        expect(replies(events)).toEqual(["user:", "assistant:answer: next"]);
       });
 
-      it("delivers a taken duplicate's events from its user_message on, what it already wrote included", async () => {
+      it("delivers a running message sent again from its user entry, what it already wrote included", async () => {
         const sessionId = await newSession(agent);
-        await accepted(agent, { sessionId, content: text("hold"), idempotencyKey: "k" });
+        await send({ sessionId, content: "hold", idempotencyKey: "k" });
         await holding();
-        const result = await streamed(agent, { sessionId, content: text("hold"), idempotencyKey: "k" });
-        expect(result).toMatchObject({ duplicate: true, message: { status: "taken" } });
+        const iterator = agent.messages
+          .stream({ sessionId, content: "hold", idempotencyKey: "k" })
+          [Symbol.asyncIterator]();
+        const first = await iterator.next();
+        expect(first.value).toMatchObject({ type: "message", message: { status: "running" } });
         subject.release();
-        const events = await drain(result);
-        expect(replies(events)).toEqual(["assistant_message:", "tool_result:", "assistant_message:answer: hold"]);
+        const events: MessageStreamEvent[] = [first.value as MessageStreamEvent];
+        for (let next = await iterator.next(); !next.done; next = await iterator.next()) events.push(next.value);
+        expect(replies(events)).toEqual(["user:", "assistant:", "tool_result:", "assistant:answer: hold"]);
+        expect(events.filter((event) => event.type === "state")).toHaveLength(1);
         expect(events.at(-1)).toMatchObject({ type: "done", message: { answer: { text: "answer: hold" } } });
       });
 
-      it("stops a taken duplicate at its answer when it ended before the stream reattached", async () => {
+      it("delivers an ended message sent again: its entries through its answer, then its done", async () => {
         const sessionId = await newSession(agent);
-        const held = await accepted(agent, { sessionId, content: text("hold"), idempotencyKey: "k" });
+        await ended(agent, await send({ sessionId, content: "effect", idempotencyKey: "k" }));
+        await ended(agent, await send({ sessionId, content: "after" }));
+        const events = await drain(agent.messages.stream({ sessionId, content: "effect", idempotencyKey: "k" }));
+        const message = firstOf(events);
+        expect(message.status).toBe("completed");
+        expect(replies(events)).toEqual(["user:", "assistant:", "tool_result:", "assistant:answer: effect"]);
+        expect(events.at(-1)).toEqual({ type: "done", message });
+        await ended(agent, await send({ sessionId, content: "fail", idempotencyKey: "failed" }));
+        const failed = await drain(agent.messages.stream({ sessionId, content: "fail", idempotencyKey: "failed" }));
+        expect(replies(failed)).toEqual(["user:"]);
+        expect(failed.at(-1)).toEqual({ type: "done", message: firstOf(failed) });
+      });
+
+      it("ends with the message's canceled done when it is cancelled", async () => {
+        const sessionId = await newSession(agent);
+        const events = drain(agent.messages.stream({ sessionId, content: "hold" }));
         await holding();
-        const next = await accepted(agent, { sessionId, content: text("next") });
-        // The message ends, and the next one is answered, between the receipt and the stream's second resume.
-        const late: Agent = {
-          ...agent,
-          resume: (id, options) =>
-            options?.replayFrom === undefined
-              ? agent.resume(id, options)
-              : {
-                  async *[Symbol.asyncIterator]() {
-                    subject.release();
-                    await untilStatus(agent, sessionId, held.message.messageId, "done");
-                    await untilStatus(agent, sessionId, next.message.messageId, "done");
-                    yield* agent.resume(id, options);
-                  },
-                },
-        };
-        const result = await streamed(late, { sessionId, content: text("hold"), idempotencyKey: "k" });
-        const events = await drain(result);
-        expect(replies(events)).toEqual(["assistant_message:", "tool_result:", "assistant_message:answer: hold"]);
-        expect(events.at(-1)).toMatchObject({ type: "done", message: { messageId: held.message.messageId } });
+        await agent.sessions.cancel(sessionId);
+        expect((await events).at(-1)).toMatchObject({ type: "done", message: { status: "canceled" } });
       });
 
-      it("delivers a done duplicate's entries through its answer, then its done", async () => {
+      it("rejects its first read with the send's refusal, recording nothing", async () => {
+        await expect(
+          drain(agent.messages.stream({ sessionId: "no-such-session", content: "hi" })),
+        ).rejects.toMatchObject({ code: "not_found" });
         const sessionId = await newSession(agent);
-        await ended(await accepted(agent, { sessionId, content: text("effect"), idempotencyKey: "k" }));
-        await ended(await accepted(agent, { sessionId, content: text("after") }));
-        const result = await streamed(agent, { sessionId, content: text("effect"), idempotencyKey: "k" });
-        expect(result).toMatchObject({ duplicate: true, message: { status: "done" } });
-        const events = await drain(result);
-        expect(replies(events)).toEqual(["assistant_message:", "tool_result:", "assistant_message:answer: effect"]);
-        expect(events.at(-1)).toEqual({ type: "done", message: result.message });
-        await ended(await accepted(agent, { sessionId, content: text("fail"), idempotencyKey: "failed" }));
-        const failed = await streamed(agent, { sessionId, content: text("fail"), idempotencyKey: "failed" });
-        expect(await drain(failed)).toEqual([{ type: "done", message: failed.message }]);
-      });
-
-      it("ends with the message's canceled done when it is aborted", async () => {
-        const sessionId = await newSession(agent);
-        const result = await streamed(agent, { sessionId, content: text("hold") });
-        await holding();
-        const events = drain(result);
-        expect(await agent.abort(sessionId)).toMatchObject({ ok: true });
-        expect((await events).at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "canceled" } } });
-      });
-
-      it("answers the invoke's refusal, and an unknown session's, recording nothing", async () => {
-        expect(await stream(agent, { sessionId: "no-such-session", content: text("hi") })).toMatchObject({
-          ok: false,
-          error: { code: "not_found" },
+        await expect(drain(agent.messages.stream({ sessionId, content: [] }))).rejects.toMatchObject({
+          code: "invalid_request",
         });
-        const sessionId = await newSession(agent);
-        await accepted(agent, { sessionId, content: text("hold") });
+        await send({ sessionId, content: "hold" });
         await holding();
-        expect(await stream(agent, { sessionId, content: text("now"), whenBusy: "reject" })).toMatchObject({
-          ok: false,
-          error: { code: "busy" },
-        });
-        expect(await agent.read(sessionId, { limit: 0 })).toMatchObject({ state: { queued: [] } });
+        await expect(
+          drain(agent.messages.stream({ sessionId, content: "now", whenBusy: "reject" })),
+        ).rejects.toMatchObject({ code: "busy" });
+        expect((await history(agent, sessionId)).filter((entry) => entry.kind === "user")).toHaveLength(1);
         subject.release();
+      });
+
+      it("lets go on its signal, rejecting the read waiting then with its reason, and the message goes on", async () => {
+        const sessionId = await newSession(agent);
+        await send({ sessionId, content: "hold" });
+        await holding();
+        // Queued behind the held message, the stream is quiet after its first event: the next read waits.
+        const controller = new AbortController();
+        const iterator = agent.messages
+          .stream({ sessionId, content: "later" }, { signal: controller.signal })
+          [Symbol.asyncIterator]();
+        const first = await iterator.next();
+        const message = (first.value as { message: Message }).message;
+        expect(message.status).toBe("queued");
+        const waiting = iterator.next();
+        const reason = new Error("the Caller left");
+        controller.abort(reason);
+        await expect(waiting).rejects.toBe(reason);
+        await expect(iterator.next()).rejects.toBe(reason);
+        subject.release();
+        expect((await ended(agent, message)).status).toBe("completed");
       });
     });
 
     describe("Listing", () => {
-      const listed = async (options?: Parameters<Agent["listSessions"]>[0]) => {
-        const result = await agent.listSessions(options);
-        if (!result.ok) throw new Error(`listSessions failed: ${JSON.stringify(result)}`);
-        return result;
-      };
-      const order = async () => (await listed()).sessions.map(({ sessionId }) => sessionId);
+      const order = async () => (await agent.sessions.list()).data.map((session) => session.id);
 
-      it("lists every session, most recently created first", async () => {
+      it("lists every session as it is, most recently created first", async () => {
         const a = await newSession(agent);
         const b = await newSession(agent);
-        const { sessionId: c } = await accepted(agent, { content: text("hello") });
+        const c = (await send({ sessionId: await newSession(agent), content: "hello" })).sessionId;
         expect(await order()).toEqual([c, b, a]);
+        expect((await agent.sessions.list()).data[1]).toEqual(await agent.sessions.get(b));
       });
 
       it("moves a session to the front when it accepts a message, and when it writes an entry", async () => {
         const a = await newSession(agent);
-        const held = await accepted(agent, { sessionId: a, content: text("hold") });
+        const held = await send({ sessionId: a, content: "hold" });
         await holding();
         const b = await newSession(agent);
         expect(await order()).toEqual([b, a]);
-        const queued = await accepted(agent, { sessionId: a, content: text("later") });
-        expect(queued.message.status).toBe("queued");
+        const queued = await send({ sessionId: a, content: "later" });
+        expect(queued.status).toBe("queued");
         expect(await order()).toEqual([a, b]);
         const c = await newSession(agent);
         expect(await order()).toEqual([c, a, b]);
         subject.release();
-        await ended(held);
-        await ended(queued);
+        await ended(agent, held);
+        await ended(agent, queued);
         expect(await order()).toEqual([a, c, b]);
       });
 
-      it("pages by before and limit, repeating no session and skipping none", async () => {
+      it("pages by after and limit, repeating no session and skipping none", async () => {
         const created: string[] = [];
         for (let i = 0; i < 5; i++) created.unshift(await newSession(agent));
-        const first = await listed({ limit: 2 });
-        expect(first.sessions.map(({ sessionId }) => sessionId)).toEqual(created.slice(0, 2));
-        const second = await listed({ limit: 2, before: first.next as string });
-        expect(second.sessions.map(({ sessionId }) => sessionId)).toEqual(created.slice(2, 4));
-        const last = await listed({ limit: 2, before: second.next as string });
-        expect(last.sessions.map(({ sessionId }) => sessionId)).toEqual(created.slice(4));
+        const first = await agent.sessions.list({ limit: 2 });
+        expect(first.data.map(({ id }) => id)).toEqual(created.slice(0, 2));
+        const second = await agent.sessions.list({ limit: 2, after: first.next as string });
+        expect(second.data.map(({ id }) => id)).toEqual(created.slice(2, 4));
+        const last = await agent.sessions.list({ limit: 2, after: second.next as string });
+        expect(last.data.map(({ id }) => id)).toEqual(created.slice(4));
         expect(last.next).toBeUndefined();
       });
 
@@ -1079,17 +1000,17 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           { limit: 0 },
           { limit: 501 },
           { limit: 1.5 },
-          { before: "no-such-cursor" },
-          { before: sessionId },
+          { after: "no-such-cursor" },
+          { after: sessionId },
         ]) {
-          expect(await agent.listSessions(options)).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+          await expect(agent.sessions.list(options)).rejects.toMatchObject({ code: "invalid_request" });
         }
       });
 
       it("keeps the order after a restart", async () => {
         const a = await newSession(agent);
-        await ended(await accepted(agent, { content: text("hello") }));
-        await ended(await accepted(agent, { sessionId: a, content: text("again") }));
+        await ended(agent, await send({ sessionId: await newSession(agent), content: "hello" }));
+        await ended(agent, await send({ sessionId: a, content: "again" }));
         const before = await order();
         agent = await subject.restart();
         expect(await order()).toEqual(before);
@@ -1100,81 +1021,134 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
     describe("Sessions", () => {
       it("forks the history up to an entry and none of the messages, leaving the source unchanged", async () => {
         const sessionId = await newSession(agent);
-        const first = await accepted(agent, { sessionId, content: text("one") });
-        await ended(first);
-        await ended(await accepted(agent, { sessionId, content: text("two") }));
+        const first = await send({ sessionId, content: "one" });
+        await ended(agent, first);
+        await ended(agent, await send({ sessionId, content: "two" }));
         const source = await history(agent, sessionId);
-        const fork = await agent.createSession({ from: { sessionId, entryId: (source[1] as Entry).id } });
-        if (!fork.ok) throw new Error(JSON.stringify(fork));
-        expect(await history(agent, fork.sessionId)).toEqual(source.slice(0, 2));
-        expect(await agent.getMessage(fork.sessionId, { messageId: first.message.messageId })).toBeUndefined();
-        const own = await accepted(agent, { sessionId: fork.sessionId, content: text("three") });
-        expect((await ended(own)).answer?.text).toBe("answer: three");
-        const forked = await history(agent, fork.sessionId);
-        expect(forked.slice(0, 2)).toEqual(source.slice(0, 2));
-        expect(forked.slice(2).map((entry) => entry.sessionId)).toEqual([fork.sessionId, fork.sessionId]);
-        expect(forked[2]?.parentEntryId).toBe(source[1]?.id);
+        const fork = await agent.sessions.create({ forkFrom: { sessionId, entryId: (source[1] as Entry).id } });
+        expect(await history(agent, fork.id)).toEqual(source.slice(0, 2));
+        await expect(agent.messages.get({ sessionId: fork.id, messageId: first.id })).rejects.toMatchObject({
+          code: "not_found",
+        });
+        const own = await send({ sessionId: fork.id, content: "three" });
+        expect((await ended(agent, own)).answer?.text).toBe("answer: three");
+        expect((await history(agent, fork.id)).slice(0, 2)).toEqual(source.slice(0, 2));
         expect(await history(agent, sessionId)).toEqual(source);
 
-        const whole = await agent.createSession({ from: { sessionId } });
-        if (!whole.ok) throw new Error(JSON.stringify(whole));
-        expect(await history(agent, whole.sessionId)).toEqual(source);
+        const whole = await agent.sessions.create({ forkFrom: { sessionId } });
+        expect(await history(agent, whole.id)).toEqual(source);
       });
 
-      it("configures a session's model and thinking level, read back in its state and used from its next message", async () => {
-        const state = async (sessionId: string) => {
-          const read = await agent.read(sessionId, { limit: 0 });
-          if (!read.ok) throw new Error(JSON.stringify(read));
-          return read.state;
-        };
-        const chosen = await agent.createSession({ thinkingLevel: "low" });
-        if (!chosen.ok) throw new Error(JSON.stringify(chosen));
-        expect(await state(chosen.sessionId)).toMatchObject({ thinkingLevel: "low" });
-        expect(await state(chosen.sessionId)).not.toHaveProperty("model");
+      it("takes a fork's settings from its source, each one given replacing the inherited one", async () => {
+        const sessionId = (await agent.sessions.create({ thinkingLevel: "low", instructions: "Be brief." })).id;
+        const fork = await agent.sessions.create({ forkFrom: { sessionId }, thinkingLevel: "high" });
+        expect(fork).toMatchObject({ thinkingLevel: "high", instructions: "Be brief." });
+      });
+
+      it("updates a session's settings, read back and used from its next message", async () => {
+        const chosen = await agent.sessions.create({ thinkingLevel: "low" });
+        expect(chosen).toMatchObject({ thinkingLevel: "low" });
+        expect(chosen).not.toHaveProperty("model");
 
         const sessionId = await newSession(agent);
-        await ended(await accepted(agent, { sessionId, content: text("one") }));
-        const { model } = await state(sessionId);
+        await ended(agent, await send({ sessionId, content: "one" }));
+        const { model } = await agent.sessions.get(sessionId);
         if (model === undefined) throw new Error("the session's first message took no model");
-        expect(await agent.configure(sessionId, { thinkingLevel: "high" })).toEqual({ ok: true });
-        expect(await state(sessionId)).toMatchObject({ model, thinkingLevel: "high" });
+        expect(await agent.sessions.update(sessionId, { thinkingLevel: "high" })).toMatchObject({
+          model,
+          thinkingLevel: "high",
+        });
         const watching = attach(agent, sessionId);
-        expect((await watching.until(isState)).at(-1)).toMatchObject({ state: { model, thinkingLevel: "high" } });
+        expect((await watching.until(isState)).at(-1)).toMatchObject({ session: { model, thinkingLevel: "high" } });
         await watching.close();
 
         // Stored as given, as at creation: a model the agent lacks refuses the next message, not the change.
         const elsewhere = { provider: "nowhere", modelId: "none" };
-        expect(await agent.configure(sessionId, { model: elsewhere })).toEqual({ ok: true });
-        expect(await state(sessionId)).toMatchObject({ model: elsewhere, thinkingLevel: "high" });
-        expect(await agent.invoke({ sessionId, content: text("two") })).toMatchObject({
-          ok: false,
-          error: { code: "missing_model", details: { model: "nowhere/none" } },
+        expect(await agent.sessions.update(sessionId, { model: elsewhere })).toMatchObject({ model: elsewhere });
+        await expect(send({ sessionId, content: "two" })).rejects.toMatchObject({
+          code: "missing_model",
+          details: { model: "nowhere/none" },
         });
-        expect(await agent.configure(sessionId, { model })).toEqual({ ok: true });
-        expect((await ended(await accepted(agent, { sessionId, content: text("three") }))).answer?.text).toBe(
-          "answer: three",
-        );
+        await agent.sessions.update(sessionId, { model });
+        expect((await ended(agent, await send({ sessionId, content: "three" }))).answer?.text).toBe("answer: three");
+
+        expect(await agent.sessions.update(sessionId, { instructions: "Answer in French." })).toMatchObject({
+          instructions: "Answer in French.",
+        });
+        const instructed = await ended(agent, await send({ sessionId, content: "instructions" }));
+        expect(instructed.answer?.text).toContain("Answer in French.");
+        const cleared = await agent.sessions.update(sessionId, { instructions: null, thinkingLevel: null });
+        expect(cleared).not.toHaveProperty("instructions");
+        const plain = await ended(agent, await send({ sessionId, content: "instructions" }));
+        expect(plain.answer?.text).not.toContain("Answer in French.");
       });
 
-      it("refuses to configure an unknown session with not_found, and nothing at all with invalid_request", async () => {
-        expect(await agent.configure("nope", { thinkingLevel: "high" })).toMatchObject({
-          ok: false,
-          error: { code: "not_found" },
+      it("enables only the tools a session names, among the agent's own", async () => {
+        const tools = (await agent.info()).tools.map(({ name }) => name);
+        expect(tools).toEqual(expect.arrayContaining(["hold", "effect", "stream"]));
+        const sessionId = (await agent.sessions.create({ tools: ["effect", "hold"] })).id;
+        expect(await agent.sessions.get(sessionId)).toMatchObject({ tools: ["effect", "hold"] });
+        expect((await ended(agent, await send({ sessionId, content: "effect" }))).answer?.text).toBe("answer: effect");
+        await expect(agent.sessions.create({ tools: ["no-such-tool"] })).rejects.toMatchObject({
+          code: "invalid_request",
+          details: { tools: ["no-such-tool"] },
+        });
+        await expect(agent.sessions.update(sessionId, { tools: ["effect", "nope"] })).rejects.toMatchObject({
+          code: "invalid_request",
+        });
+
+        // A later deployment without one of them refuses the session's next message, until its tools change.
+        agent = await subject.restart({ removeTools: ["hold"] });
+        await expect(send({ sessionId, content: "effect" })).rejects.toMatchObject({
+          code: "missing_tool",
+          retryable: false,
+          details: { tools: ["hold"] },
+        });
+        expect((await history(agent, sessionId)).filter((entry) => entry.kind === "user")).toHaveLength(1);
+        expect(await agent.sessions.update(sessionId, { tools: null })).not.toHaveProperty("tools");
+        expect((await ended(agent, await send({ sessionId, content: "hi" }))).status).toBe("completed");
+      });
+
+      it("refuses an unknown session with not_found, and an update of nothing with invalid_request", async () => {
+        await expect(agent.sessions.update("nope", { thinkingLevel: "high" })).rejects.toMatchObject({
+          code: "not_found",
         });
         const sessionId = await newSession(agent);
-        expect(await agent.configure(sessionId, {})).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+        await expect(agent.sessions.update(sessionId, {})).rejects.toMatchObject({ code: "invalid_request" });
+        await expect(agent.sessions.update(sessionId, { thinkingLevel: "loud" } as never)).rejects.toMatchObject({
+          code: "invalid_request",
+        });
       });
 
       it("refuses a fork of an unknown session or entry with not_found", async () => {
-        expect(await agent.createSession({ from: { sessionId: "nope" } })).toMatchObject({
-          ok: false,
-          error: { code: "not_found" },
+        await expect(agent.sessions.create({ forkFrom: { sessionId: "nope" } })).rejects.toMatchObject({
+          code: "not_found",
         });
         const sessionId = await newSession(agent);
-        expect(await agent.createSession({ from: { sessionId, entryId: "nope" } })).toMatchObject({
-          ok: false,
-          error: { code: "not_found" },
+        await expect(agent.sessions.create({ forkFrom: { sessionId, entryId: "nope" } })).rejects.toMatchObject({
+          code: "not_found",
         });
+      });
+
+      it("compacts a session on request, and its summary arrives as a compaction entry", async () => {
+        const sessionId = await newSession(agent);
+        for (const word of ["one", "two", "three"]) await ended(agent, await send({ sessionId, content: word }));
+        await agent.sessions.compact(sessionId, { instructions: "Keep the numbers." });
+        await vi.waitFor(
+          async () => expect((await history(agent, sessionId)).some((entry) => entry.kind === "compaction")).toBe(true),
+          { timeout: 5000, interval: 20 },
+        );
+        await expect(agent.sessions.compact("nope")).rejects.toMatchObject({ code: "not_found" });
+      });
+    });
+
+    describe("Info", () => {
+      it("says what the agent offers: its commands, tools and models, and the model a session answers with", async () => {
+        const info = await agent.info();
+        expect(info).toMatchObject({ name: expect.any(String), defaultModel: expect.any(Object) });
+        expect(info.models).toContainEqual(expect.objectContaining(info.defaultModel));
+        agent = await subject.start({ signedOut: true });
+        expect((await agent.info()).models).toEqual([]);
       });
     });
   });

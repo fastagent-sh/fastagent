@@ -5,7 +5,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Type, createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { AgentDoc, Harness, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { sessionIdOf } from "../src/harnesses/pi-durable/ids.ts";
 import { agentApiConformance } from "./agent-api-conformance.ts";
@@ -26,6 +26,11 @@ function fauxModels() {
 const temporaryStorage = () => join(mkdtempSync(join(tmpdir(), "fastagent-durable-")), "agent.sqlite");
 
 describe("the Agent on pi-durable", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const hi = "hi";
+  const answerOf = async (agent: DurableAgent, sessionId: string, content: string) =>
+    (await agent.messages.send({ sessionId, content }, { wait: 30 })).answer?.text;
+
   it("answers not_found for an id from another storage, which pi-durable numbers the same", async () => {
     const { models } = fauxModels();
     const open = async () =>
@@ -36,43 +41,27 @@ describe("the Agent on pi-durable", () => {
         name: "ids",
       });
     const [one, two] = [await open(), await open()];
-    const created = await one.createSession();
-    await two.createSession();
-    if (!created.ok) throw new Error(JSON.stringify(created));
-    expect(await two.read(created.sessionId)).toMatchObject({ ok: false, error: { code: "not_found" } });
-    expect(await one.read(created.sessionId)).toMatchObject({ ok: true });
+    const created = await one.sessions.create();
+    await two.sessions.create();
+    await expect(two.sessions.get(created.id)).rejects.toMatchObject({ code: "not_found" });
+    expect(await one.sessions.get(created.id)).toMatchObject({ id: created.id });
     await Promise.all([one.close(), two.close()]);
   });
 
-  it('refuses a fork with context "recent", which is not implemented, creating no session', async () => {
-    const { models } = fauxModels();
-    const storage = await openNodeSqliteStorage(temporaryStorage());
-    const agent = await openDurableAgent({ storage, models, registry: createRegistry(), name: "recent" });
-    const created = await agent.createSession();
-    if (!created.ok) throw new Error(JSON.stringify(created));
-    expect(await agent.createSession({ from: { sessionId: created.sessionId, context: "recent" } })).toMatchObject({
-      ok: false,
-      error: { code: "invalid_request" },
-    });
-    expect(await agent.listSessions()).toEqual({ ok: true, sessions: [{ sessionId: created.sessionId }] });
-    await agent.close();
-  });
-
   it.each([false, true])(
-    "keeps an empty snapshot's first live entry parentless when a write follows attachment (replay=%s)",
+    "delivers a write that follows the snapshot once, live, as the history has it (replay=%s)",
     async (replay) => {
       const { faux, models, model } = fauxModels();
       faux.setResponses([fauxAssistantMessage("answer")]);
       const storage = await openNodeSqliteStorage(temporaryStorage());
       const agent = await openDurableAgent({ storage, models, registry: createRegistry(), name: "snapshot", model });
-      const created = await agent.createSession({ model });
-      if (!created.ok) throw new Error(JSON.stringify(created));
-      const conversation = await agent.conversation(created.sessionId);
+      const created = await agent.sessions.create({ model });
+      const conversation = await agent.conversation(created.id);
       if (conversation === undefined) throw new Error("The created session has no conversation");
       let submitted: ReturnType<typeof conversation.submit> | undefined;
       let insert = true;
       const scanTasks = storage.scanTasks.bind(storage);
-      const spy = vi.spyOn(storage, "scanTasks").mockImplementation(async (...args) => {
+      vi.spyOn(storage, "scanTasks").mockImplementation(async (...args) => {
         const tasks = await scanTasks(...args);
         if (insert && args[0].kind === "pi.generation" && args[0].status === "completing") {
           insert = false;
@@ -81,13 +70,11 @@ describe("the Agent on pi-durable", () => {
         }
         return tasks;
       });
-      const stream = agent
-        .resume(created.sessionId, replay ? { replayFrom: { type: "start" } } : undefined)
-        [Symbol.asyncIterator]();
+      const stream = agent.sessions.events(created.id, replay ? { after: "start" } : {})[Symbol.asyncIterator]();
       try {
         expect(await stream.next()).toMatchObject({
           done: false,
-          value: { type: "state", state: { status: "idle", taken: [], queued: [] } },
+          value: { type: "state", session: { status: "idle" } },
         });
         expect(submitted).toBeDefined();
         if (submitted === undefined) throw new Error("The interleaved submission did not start");
@@ -97,14 +84,10 @@ describe("the Agent on pi-durable", () => {
           if (next.value.type === "entry") live.push(next.value.entry);
           if (next.value.type === "done") break;
         }
-        const read = await agent.read(created.sessionId);
-        if (!read.ok) throw new Error(JSON.stringify(read));
-        expect(live.map((entry) => entry.kind)).toEqual(["user_message", "assistant_message"]);
-        expect(live[0]).not.toHaveProperty("parentEntryId");
-        expect(live).toEqual(read.entries);
+        expect(live.map((entry) => entry.kind)).toEqual(["user", "assistant"]);
+        expect(live).toEqual((await agent.sessions.entries(created.id)).data);
       } finally {
         await stream.return?.();
-        spy.mockRestore();
         await agent.close();
       }
     },
@@ -174,34 +157,22 @@ describe("the Agent on pi-durable", () => {
         model: ref(modelId),
         thinkingLevel,
       });
-    const session = async (agent: DurableAgent) => {
-      const created = await agent.createSession();
-      if (!created.ok) throw new Error(JSON.stringify(created));
-      return created.sessionId;
-    };
-    const answer = async (agent: DurableAgent, sessionId: string) => {
-      const receipt = await agent.invoke({ sessionId, content: [{ type: "text", text: "which?" }] });
-      if (!receipt.ok) throw new Error(JSON.stringify(receipt));
-      const end = await receipt.wait();
-      if (!end.ok) throw new Error(end.unfinished.reason);
-      return end.message.answer?.text;
-    };
     const settings = async (agent: DurableAgent, sessionId: string) =>
       agent.harness.snapshot(AgentDoc, (await agent.conversation(sessionId))?.id as never, context);
 
     let agent = await open("a", "low");
-    const first = await session(agent);
-    expect(await answer(agent, first)).toBe("from a");
+    const first = (await agent.sessions.create()).id;
+    expect(await answerOf(agent, first, "which?")).toBe("from a");
     await agent.close();
 
     agent = await open("b", "high");
-    expect(await answer(agent, first)).toBe("from a");
+    expect(await answerOf(agent, first, "which?")).toBe("from a");
     expect(await settings(agent, first)).toMatchObject({ thinkingLevel: "low" });
-    const second = await session(agent);
-    expect(await answer(agent, second)).toBe("from b");
+    const second = (await agent.sessions.create()).id;
+    expect(await answerOf(agent, second, "which?")).toBe("from b");
     expect(await settings(agent, second)).toMatchObject({ thinkingLevel: "high" });
     await (await agent.conversation(first))?.configure({ model: ref("c") }, context);
-    expect(await answer(agent, first)).toBe("from c");
+    expect(await answerOf(agent, first, "which?")).toBe("from c");
     await agent.close();
   });
 
@@ -232,11 +203,10 @@ describe("the Agent on pi-durable", () => {
         );
       }
     });
-    const created = await agent.createSession(chosen);
+    const created = await agent.sessions.create(chosen);
     unsubscribe();
-    if (!created.ok) throw new Error(JSON.stringify(created));
     expect(commits).toEqual([[chosen]]);
-    const conversation = await agent.conversation(created.sessionId);
+    const conversation = await agent.conversation(created.id);
     if (conversation === undefined) throw new Error("The created session has no conversation");
     expect(await agent.harness.snapshot(AgentDoc, conversation.id, context)).toEqual(chosen);
     await agent.close();
@@ -249,9 +219,7 @@ describe("the Agent on pi-durable", () => {
         return fauxAssistantMessage("chosen answer");
       },
     ]);
-    const receipt = await agent.invoke({ sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
-    if (!receipt.ok) throw new Error(JSON.stringify(receipt));
-    expect(await receipt.wait()).toMatchObject({ ok: true, message: { answer: { text: "chosen answer" } } });
+    expect(await answerOf(agent, created.id, hi)).toBe("chosen answer");
     expect(await agent.harness.snapshot(AgentDoc, conversation.id, context)).toEqual(chosen);
     await agent.close();
   });
@@ -265,9 +233,8 @@ describe("the Agent on pi-durable", () => {
       name: "fork settings",
     });
     const original = { model, thinkingLevel: "high" as const };
-    const created = await agent.createSession(original);
-    if (!created.ok) throw new Error(JSON.stringify(created));
-    const source = await agent.conversation(created.sessionId);
+    const created = await agent.sessions.create(original);
+    const source = await agent.conversation(created.id);
     if (source === undefined) throw new Error("The created session has no conversation");
     const replacement = { provider: "another", modelId: "chosen" };
     const cases = [
@@ -282,41 +249,41 @@ describe("the Agent on pi-durable", () => {
     for (const populated of [false, true]) {
       if (populated) {
         faux.setResponses([fauxAssistantMessage("source answer")]);
-        const receipt = await agent.invoke({ sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
-        if (!receipt.ok) throw new Error(JSON.stringify(receipt));
-        await receipt.wait();
+        await agent.messages.send({ sessionId: created.id, content: hi }, { wait: 30 });
       }
-      const history = await agent.read(created.sessionId);
-      if (!history.ok) throw new Error(JSON.stringify(history));
+      const history = await agent.sessions.entries(created.id);
       for (const { options, expected } of cases) {
-        const fork = await agent.createSession({ from: { sessionId: created.sessionId }, ...options });
-        if (!fork.ok) throw new Error(JSON.stringify(fork));
-        const conversation = await agent.conversation(fork.sessionId);
+        const fork = await agent.sessions.create({ forkFrom: { sessionId: created.id }, ...options });
+        const conversation = await agent.conversation(fork.id);
         if (conversation === undefined) throw new Error("The fork has no conversation");
         expect(await agent.harness.snapshot(AgentDoc, conversation.id, context)).toEqual(expected);
-        expect(await agent.read(fork.sessionId)).toMatchObject({ entries: history.entries });
+        expect(await agent.sessions.entries(fork.id)).toEqual(history);
       }
       expect(await agent.harness.snapshot(AgentDoc, source.id, context)).toEqual(original);
-      expect(await agent.read(created.sessionId)).toEqual(history);
+      expect(await agent.sessions.entries(created.id)).toEqual(history);
     }
-    const history = await agent.read(created.sessionId);
-    if (!history.ok || history.entries[0] === undefined) throw new Error("The source has no entry to fork at");
+    const [first] = (await agent.sessions.entries(created.id)).data;
+    if (first === undefined) throw new Error("The source has no entry to fork at");
     await source.configure({ thinkingLevel: "low" }, context);
-    const bounded = await agent.createSession({
-      from: { sessionId: created.sessionId, entryId: history.entries[0].id },
+    const bounded = await agent.sessions.create({
+      forkFrom: { sessionId: created.id, entryId: first.id },
       model: replacement,
     });
-    if (!bounded.ok) throw new Error(JSON.stringify(bounded));
-    const branch = await agent.conversation(bounded.sessionId);
+    const branch = await agent.conversation(bounded.id);
     if (branch === undefined) throw new Error("The fork has no conversation");
     expect(await agent.harness.snapshot(AgentDoc, branch.id, context)).toEqual({ ...original, model: replacement });
     expect(await agent.harness.snapshot(AgentDoc, source.id, context)).toEqual({ ...original, thinkingLevel: "low" });
     await agent.close();
   });
 
-  it.each(["before_commit", "after_commit", "status", "duplicate_receipt"] as const)(
-    "answers unknown rather than a rejection when submission or its receipt fails at %s",
-    async (stage) => {
+  it.each([
+    ["before_commit", "unconfirmed"],
+    ["after_commit", "unconfirmed"],
+    ["status", "unconfirmed"],
+    ["duplicate_receipt", "unavailable"],
+  ] as const)(
+    "rejects a send whose storage fails at %s with %s, and the same key finds what it left",
+    async (stage, code) => {
       const path = temporaryStorage();
       const { faux, models, model } = fauxModels();
       let effects = 0;
@@ -380,38 +347,25 @@ describe("the Agent on pi-durable", () => {
         },
       });
       let agent = await openDurableAgent({ storage, models, registry, model, name: "receipt failure" });
-      const content = [{ type: "text" as const, text: "effect" }];
-      const key = "once";
-      let sessionId: string | undefined;
-      let previousMessageId: string | undefined;
-      // A failed first invoke without a key must still return the session and message ids it learned.
-      if (stage !== "status") {
-        const created = await agent.createSession();
-        if (!created.ok) throw new Error(JSON.stringify(created));
-        sessionId = created.sessionId;
-      }
-      if (stage === "duplicate_receipt") {
-        const receipt = await agent.invoke({ sessionId, content, idempotencyKey: key });
-        if (!receipt.ok) throw new Error(JSON.stringify(receipt));
-        expect(await receipt.wait()).toMatchObject({ ok: true });
-        previousMessageId = receipt.message.messageId;
-      }
+      const sessionId = (await agent.sessions.create()).id;
+      const request = { sessionId, content: "effect", idempotencyKey: "once" };
+      let previous: string | undefined;
+      if (stage === "duplicate_receipt") previous = (await agent.messages.send(request, { wait: 30 })).id;
       armed = true;
-      const result = await agent.invoke({
-        content,
-        ...(sessionId === undefined ? {} : { sessionId, idempotencyKey: key }),
-      });
+      const error = await agent.messages.send(request).then(
+        (message) => {
+          throw new Error(`the send was not refused: ${JSON.stringify(message)}`);
+        },
+        (rejection: unknown) => rejection,
+      );
       expect(injected).toBe(true);
-      expect(result).toMatchObject({ ok: false, unknown: { reason: expect.stringContaining(`injected ${stage}`) } });
-      expect(result).not.toHaveProperty("error");
-      if (result.ok || !("unknown" in result)) throw new Error(JSON.stringify(result));
-      const known = result.unknown;
-      expect(known.sessionId).toEqual(sessionId ?? expect.any(String));
-      if (stage === "status" || stage === "duplicate_receipt") {
-        expect(known.messageId).toEqual(previousMessageId ?? expect.any(String));
-      } else {
-        expect(known.messageId).toBeUndefined();
-      }
+      expect(error).toMatchObject({ code, message: expect.stringContaining(`injected ${stage}`) });
+      if (code === "unconfirmed") {
+        expect(error).toMatchObject({ retryable: false, details: { sessionId } });
+        const known = (error as { details: { messageId?: string } }).details.messageId;
+        if (stage === "status") expect(known).toEqual(expect.any(String));
+        else expect(known).toBeUndefined();
+      } else expect(error).toMatchObject({ retryable: true });
       expect(await agent.harness.closed).toMatchObject({ reason: "failed" });
       await agent.close();
 
@@ -420,66 +374,62 @@ describe("the Agent on pi-durable", () => {
         models,
         registry,
         model,
-        name: "reopened",
+        name: "again",
       });
-      const restoredSessionId = known.sessionId as string;
-      const found = await agent.getMessage(
-        restoredSessionId,
-        known.messageId === undefined ? { idempotencyKey: key } : { messageId: known.messageId },
-      );
+      const found = await agent.messages.get({ sessionId, idempotencyKey: "once" }).catch(() => undefined);
       if (stage === "before_commit") expect(found).toBeUndefined();
       else expect(found).toBeDefined();
-      if (stage === "status") {
-        const watch = agent.resume(restoredSessionId)[Symbol.asyncIterator]();
-        await watch.next();
-        const current = await agent.getMessage(restoredSessionId, { messageId: known.messageId as string });
-        if (current?.status !== "done") {
-          for (let next = await watch.next(); !next.done; next = await watch.next()) {
-            if (next.value.type === "done" && next.value.message.messageId === known.messageId) break;
-          }
-        }
-        await watch.return?.();
-      } else {
-        const retry = await agent.invoke({ sessionId: restoredSessionId, content, idempotencyKey: key });
-        if (!retry.ok) throw new Error(JSON.stringify(retry));
-        expect(retry.duplicate).toBe(stage !== "before_commit");
-        if (found !== undefined) expect(retry.message.messageId).toBe(found.messageId);
-        expect(await retry.wait()).toMatchObject({ ok: true });
-      }
-      const history = await agent.read(restoredSessionId);
-      if (!history.ok) throw new Error(JSON.stringify(history));
-      expect(history.entries.filter((entry) => entry.kind === "user_message")).toHaveLength(1);
+      if (previous !== undefined) expect(found?.id).toBe(previous);
+      const retried = await agent.messages.send(request, { wait: 30 });
+      if (found !== undefined) expect(retried.id).toBe(found.id);
+      expect(retried.status).toBe("completed");
+      const users = (await agent.sessions.entries(sessionId)).data.filter((entry) => entry.kind === "user");
+      expect(users).toHaveLength(1);
       expect(effects).toBe(1);
       await agent.close();
     },
   );
 
-  it("reports a message invoked between reading what an abort stops and recording the stop", async () => {
+  it("never ends a message canceled that its cancel does not report, sent while the cancel runs", async () => {
     const subject = durableSubject();
     const agent = (await subject.start()) as DurableAgent;
-    const text = (value: string) => [{ type: "text" as const, text: value }];
-    const created = await agent.createSession();
-    if (!created.ok) throw new Error(JSON.stringify(created));
-    const { sessionId } = created;
-    const running = await agent.invoke({ sessionId, content: text("hold") });
-    if (!running.ok) throw new Error(JSON.stringify(running));
-    await vi.waitFor(() => expect(subject.held()).toBe(1), { timeout: 5000, interval: 5 });
-    const conversation = await agent.conversation(sessionId);
-    const prototype = Object.getPrototypeOf(conversation) as { abort: (...args: unknown[]) => Promise<void> };
-    const recordStop = prototype.abort;
-    let late: Awaited<ReturnType<DurableAgent["invoke"]>> | undefined;
-    const spy = vi.spyOn(prototype, "abort").mockImplementationOnce(async function (this: unknown, ...args) {
-      late = await agent.invoke({ sessionId, content: text("hi") });
-      return recordStop.apply(this, args);
-    });
-    const result = await agent.abort(sessionId);
-    spy.mockRestore();
-    if (late === undefined || !late.ok) throw new Error(JSON.stringify(late));
-    expect(result).toEqual({
-      ok: true,
-      stopped: { taken: [running.message.messageId], queued: [late.message.messageId] },
-    });
-    await subject.stop();
+    try {
+      for (let round = 0; round < 10; round++) {
+        const sessionId = (await agent.sessions.create()).id;
+        const running = await agent.messages.send({ sessionId, content: "hold" });
+        await vi.waitFor(() => expect(subject.held()).toBe(1), { timeout: 5000, interval: 5 });
+        const [late, { stopped }] = await Promise.all([
+          agent.messages.send({ sessionId, content: "hi" }),
+          agent.sessions.cancel(sessionId),
+        ]);
+        expect(stopped).toContain(running.id);
+        subject.release();
+        const end = await agent.messages.get({ sessionId, messageId: late.id }, { wait: 30 });
+        expect(end.status === "canceled").toBe(stopped.includes(late.id));
+      }
+    } finally {
+      await subject.stop();
+    }
+  });
+
+  it("does not answer a cancel whose stop was not recorded", async () => {
+    const subject = durableSubject();
+    const agent = (await subject.start()) as DurableAgent;
+    try {
+      const sessionId = (await agent.sessions.create()).id;
+      await agent.messages.send({ sessionId, content: "hold" });
+      await vi.waitFor(() => expect(subject.held()).toBe(1), { timeout: 5000, interval: 5 });
+      const conversation = await agent.conversation(sessionId);
+      const prototype = Object.getPrototypeOf(conversation) as { abort: (...args: unknown[]) => Promise<void> };
+      vi.spyOn(prototype, "abort").mockRejectedValueOnce(new Error("pi-durable refused the stop"));
+      await expect(agent.sessions.cancel(sessionId)).rejects.toMatchObject({
+        code: "internal",
+        message: expect.stringContaining("pi-durable refused the stop"),
+      });
+      expect((await agent.sessions.get(sessionId)).status).toBe("running");
+    } finally {
+      await subject.stop();
+    }
   });
 
   it("records nothing when expanding a command fails", async () => {
@@ -500,11 +450,12 @@ describe("the Agent on pi-durable", () => {
         },
       ],
     });
-    expect(await agent.invoke({ content: [{ type: "text", text: "/broken now" }] })).toMatchObject({
-      ok: false,
-      error: { code: "internal", message: expect.stringContaining("SKILL.md vanished") },
+    const sessionId = (await agent.sessions.create()).id;
+    await expect(agent.messages.send({ sessionId, content: "/broken now" })).rejects.toMatchObject({
+      code: "internal",
+      message: expect.stringContaining("SKILL.md vanished"),
     });
-    expect((await storage.scanConversations({}, 10, undefined, context)).items).toEqual([]);
+    expect((await storage.scanSubmissions({}, 10, undefined, context)).items).toEqual([]);
     await agent.close();
   });
 
@@ -529,30 +480,29 @@ describe("the Agent on pi-durable", () => {
         ...(defaultModel === undefined ? {} : { model: { provider: faux.getModel().provider, modelId: defaultModel } }),
       });
     };
-    const hi = [{ type: "text" as const, text: "hi" }];
 
     let agent = await open(["a"], undefined);
-    expect(await agent.invoke({ content: hi })).toMatchObject({ ok: false, error: { code: "missing_model" } });
+    const unanswerable = (await agent.sessions.create()).id;
+    await expect(agent.messages.send({ sessionId: unanswerable, content: hi })).rejects.toMatchObject({
+      code: "missing_model",
+    });
     await agent.close();
 
     agent = await open(["a"], "a");
-    const first = await agent.invoke({ content: hi });
-    if (!first.ok) throw new Error(JSON.stringify(first));
-    await first.wait();
+    const first = (await agent.sessions.create()).id;
+    await agent.messages.send({ sessionId: first, content: hi }, { wait: 30 });
     await agent.close();
 
     // The deployment's models no longer have the model the session took.
     agent = await open(["b"], "b");
-    const before = await agent.read(first.sessionId);
-    const refused = await agent.invoke({ sessionId: first.sessionId, content: hi });
-    expect(refused).toMatchObject({
-      ok: false,
-      error: { code: "missing_model", message: expect.stringContaining("faux/a"), details: { model: "faux/a" } },
+    const before = await agent.sessions.entries(first);
+    await expect(agent.messages.send({ sessionId: first, content: hi })).rejects.toMatchObject({
+      code: "missing_model",
+      message: expect.stringContaining("faux/a"),
+      details: { model: "faux/a" },
     });
-    expect(await agent.read(first.sessionId)).toEqual(before);
-    const fresh = await agent.invoke({ content: hi });
-    if (!fresh.ok) throw new Error(JSON.stringify(fresh));
-    expect(await fresh.wait()).toMatchObject({ ok: true, message: { answer: { text: "from b" } } });
+    expect(await agent.sessions.entries(first)).toEqual(before);
+    expect(await answerOf(agent, (await agent.sessions.create()).id, hi)).toBe("from b");
     await agent.close();
   });
 
@@ -584,19 +534,17 @@ describe("the Agent on pi-durable", () => {
     ]);
     const storage = await openNodeSqliteStorage(temporaryStorage());
     const agent = await openDurableAgent({ storage, models, registry, name: "subagents", model });
-    const sent = await agent.invoke({ content: [{ type: "text", text: "go" }] });
-    if (!sent.ok) throw new Error(JSON.stringify(sent));
-    expect(await sent.wait()).toMatchObject({ ok: true, message: { answer: { text: "spawned" } } });
+    const sessionId = (await agent.sessions.create()).id;
+    expect(await answerOf(agent, sessionId, "go")).toBe("spawned");
     const all = await storage.scanConversations({}, 10, undefined, context);
     const owned = all.items.filter((conversation) => conversation.owner !== undefined);
     expect(owned).toHaveLength(1);
-    expect(await agent.listSessions()).toEqual({ ok: true, sessions: [{ sessionId: sent.sessionId }] });
+    expect((await agent.sessions.list()).data.map(({ id }) => id)).toEqual([sessionId]);
     // Its id as the Agent would encode it: the session's incarnation, the subagent's number.
-    const subagent = sent.sessionId.replace(/\.\d+$/, `.${owned[0]?.id}`);
-    expect(await agent.read(subagent, { limit: 0 })).toMatchObject({ ok: false, error: { code: "not_found" } });
-    expect(await agent.invoke({ sessionId: subagent, content: [{ type: "text", text: "hi" }] })).toMatchObject({
-      ok: false,
-      error: { code: "not_found" },
+    const subagent = sessionId.replace(/\.\d+$/, `.${owned[0]?.id}`);
+    await expect(agent.sessions.get(subagent)).rejects.toMatchObject({ code: "not_found" });
+    await expect(agent.messages.send({ sessionId: subagent, content: hi })).rejects.toMatchObject({
+      code: "not_found",
     });
     await agent.close();
   });

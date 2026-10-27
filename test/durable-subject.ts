@@ -41,6 +41,27 @@ function lastUserText(messages: readonly Message[]): string {
   return "";
 }
 
+/**
+ * The system prompt the model is given: every system message's text, then its sections as the latest message that names
+ * each one left it (a later message replaces a section by name, and `null` removes it). A session's instructions are a
+ * section.
+ */
+function systemText(messages: readonly Message[]): string {
+  const texts: string[] = [];
+  const sections = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role !== "system") continue;
+    texts.push(
+      typeof message.content === "string" ? message.content : message.content.map((part) => part.text).join(""),
+    );
+    for (const [name, section] of Object.entries(message.sections ?? {})) {
+      if (section === null) sections.delete(name);
+      else sections.set(name, section);
+    }
+  }
+  return [...texts, ...sections.values()].join("\n");
+}
+
 const STREAMED = new Set(["slow", "ponder"]);
 
 /** What the model does, chosen by the message it answers (agent-api-conformance.ts lists the words). */
@@ -54,6 +75,7 @@ function responder() {
       flaked = true;
       return fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 the model is overloaded" });
     }
+    if (text === "instructions") return fauxAssistantMessage(`instructions: ${systemText(context.messages)}`);
     return respond(text);
   };
 }
@@ -157,76 +179,78 @@ export function durableSubject(): AgentApiSubject {
       },
     });
 
-  const tools = defineExtension({
-    name: "subject",
-    tools: [
-      holdTool("hold", "Waits until the test lets it go; stops when aborted", () => {}),
-      holdTool("mark", "Has an effect the test counts, then waits like hold", () => {
+  const tools = (without: readonly string[]) =>
+    defineExtension({
+      name: "subject",
+      tools: allTools.filter((tool) => !without.includes(tool.name)),
+    });
+  const allTools = [
+    holdTool("hold", "Waits until the test lets it go; stops when aborted", () => {}),
+    holdTool("mark", "Has an effect the test counts, then waits like hold", () => {
+      effects++;
+    }),
+    defineTool({
+      name: "stubborn",
+      description: "Waits until the test lets it go, whatever its abort signal says",
+      parameters: Type.Object({}),
+      execute: (_args, _api, context) =>
+        new Promise<ToolExecutionResult>((resolve) => {
+          held.push(() => resolve({ output: [{ type: "text", text: "done" }] }));
+          context.abortSignal?.addEventListener("abort", () => signalled++, { once: true });
+        }),
+    }),
+    defineTool({
+      name: "effect",
+      description: "Has an effect the test counts",
+      parameters: Type.Object({}),
+      execute: async () => {
         effects++;
-      }),
-      defineTool({
-        name: "stubborn",
-        description: "Waits until the test lets it go, whatever its abort signal says",
-        parameters: Type.Object({}),
-        execute: (_args, _api, context) =>
-          new Promise<ToolExecutionResult>((resolve) => {
-            held.push(() => resolve({ output: [{ type: "text", text: "done" }] }));
-            context.abortSignal?.addEventListener("abort", () => signalled++, { once: true });
-          }),
-      }),
-      defineTool({
-        name: "effect",
-        description: "Has an effect the test counts",
-        parameters: Type.Object({}),
-        execute: async () => {
-          effects++;
-          return { output: [{ type: "text", text: `effect ${effects}` }] };
-        },
-      }),
-      defineTool({
-        name: "stream",
-        description: "Writes a few status lines while it runs, keeping only the tail of them",
-        parameters: Type.Object({}),
-        outputLimits: { maxBytes: 24, retain: "tail" },
-        execute: async (_args, api) => {
-          for (const line of ["one\n", "two\n", "three of the lines\n"]) {
-            api.output(line);
-            await new Promise((resolve) => setTimeout(resolve, 150));
-          }
-          return {};
-        },
-      }),
-      defineTool({
-        name: "nested",
-        description: "Calls lookup, as a codemode script does",
-        parameters: Type.Object({}),
-        execute: async (_args, api, context) => {
-          await api.executeTool("lookup", { city: "London" }, context);
-          return { output: [{ type: "text", text: "looked up" }] };
-        },
-      }),
-      defineTool({
-        name: "lookup",
-        description: "Looks a city up, slowly",
-        parameters: Type.Object({ city: Type.String() }),
-        execute: async (args) => {
+        return { output: [{ type: "text", text: `effect ${effects}` }] };
+      },
+    }),
+    defineTool({
+      name: "stream",
+      description: "Writes a few status lines while it runs, keeping only the tail of them",
+      parameters: Type.Object({}),
+      outputLimits: { maxBytes: 24, retain: "tail" },
+      execute: async (_args, api) => {
+        for (const line of ["one\n", "two\n", "three of the lines\n"]) {
+          api.output(line);
           await new Promise((resolve) => setTimeout(resolve, 150));
-          return { output: [{ type: "text", text: `found ${args.city}` }] };
-        },
-      }),
-      defineTool({
-        name: "finish",
-        description: "Ends the run without another model call",
-        parameters: Type.Object({}),
-        execute: async () => ({ output: [{ type: "text", text: "finished" }], control: { terminate: true } }),
-      }),
-    ],
-  });
+        }
+        return {};
+      },
+    }),
+    defineTool({
+      name: "nested",
+      description: "Calls lookup, as a codemode script does",
+      parameters: Type.Object({}),
+      execute: async (_args, api, context) => {
+        await api.executeTool("lookup", { city: "London" }, context);
+        return { output: [{ type: "text", text: "looked up" }] };
+      },
+    }),
+    defineTool({
+      name: "lookup",
+      description: "Looks a city up, slowly",
+      parameters: Type.Object({ city: Type.String() }),
+      execute: async (args) => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return { output: [{ type: "text", text: `found ${args.city}` }] };
+      },
+    }),
+    defineTool({
+      name: "finish",
+      description: "Ends the run without another model call",
+      parameters: Type.Object({}),
+      execute: async () => ({ output: [{ type: "text", text: "finished" }], control: { terminate: true } }),
+    }),
+  ];
 
-  const open = async (): Promise<DurableAgent> => {
+  const open = async (without: readonly string[] = []): Promise<DurableAgent> => {
     const { models, model } = subjectModels(signedOut);
     const registry = createRegistry();
-    registry.install(tools);
+    registry.install(tools(without));
     const storage = failable(await openNodeSqliteStorage(join(directory, "agent.sqlite")));
     fail = storage.fail;
     current = await openDurableAgent({
@@ -236,7 +260,8 @@ export function durableSubject(): AgentApiSubject {
       name: "subject",
       model,
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
-      settings: { retry: { maxRetries: 1, baseDelayMs: 1 } },
+      // A manual compaction of the suite's short sessions finds something to summarize only when little is kept.
+      settings: { retry: { maxRetries: 1, baseDelayMs: 1 }, compaction: { keepRecentTokens: 1 } },
       ...(inFlight === undefined ? {} : { inFlightPerProcess: inFlight }),
     });
     return current;
@@ -253,14 +278,14 @@ export function durableSubject(): AgentApiSubject {
       signedOut = options?.signedOut ?? false;
       return open();
     },
-    async restart() {
+    async restart(options) {
       const previous = current;
       current = undefined;
       // Closing interrupts running work without settling it, as a process that stops does.
       const closing = previous?.close();
       for (const release of held.splice(0)) release();
       await closing;
-      return open();
+      return open(options?.removeTools);
     },
     release() {
       for (const release of held.splice(0)) release();

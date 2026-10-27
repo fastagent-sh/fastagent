@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { runInvokeJson, runInvokeStream } from "../src/cli/invoke-stream.ts";
-import type { Json, Outcome, SessionEvent } from "../src/agent-api.ts";
-import type { StreamResult } from "../src/agent-api-stream.ts";
+import { type AgentErrorData, type Json, type MessageStreamEvent, agentError } from "../src/agent-api.ts";
 
-type InvokeEvent = SessionEvent;
-const messageId = "m1";
+type InvokeEvent = MessageStreamEvent;
+type Ending = { status: "completed" | "incomplete" | "canceled" } | { status: "failed"; error: AgentErrorData };
+const id = "m1";
+const message = { id, sessionId: "s", status: "queued" } as const;
 let n = 0;
 const entry = (kind: string, data: Json): InvokeEvent => ({
   type: "entry",
-  entry: { id: `e${++n}`, sessionId: "s", timestamp: 0, kind, data },
+  entry: { id: `e${++n}`, timestamp: 0, kind, data },
 });
-const delta = (text: string): InvokeEvent => ({ type: "message_delta", channel: "text", delta: text });
+const delta = (text: string): InvokeEvent => ({ type: "delta", channel: "text", text });
 const started = (id: string, name: string, args: Json = {}): InvokeEvent => ({
   type: "tool_started",
   toolCallId: id,
@@ -19,21 +20,25 @@ const started = (id: string, name: string, args: Json = {}): InvokeEvent => ({
 });
 const progress = (id: string, text: string): InvokeEvent => ({ type: "tool_progress", toolCallId: id, text });
 const result = (id: string, isError: boolean) => entry("tool_result", { toolCallId: id, isError, text: "" });
-const ended = (outcome: Outcome = { status: "completed" }): InvokeEvent => ({
+const ended = (ending: Ending = { status: "completed" }): InvokeEvent => ({
   type: "done",
-  message: { messageId, status: "done", outcome },
+  message: { id, sessionId: "s", ...ending },
 });
 
-/** A message accepted, then `events` as its session writes them. */
-function stream(...events: InvokeEvent[]): StreamResult {
+/** A message recorded, then `events` as its session writes them. */
+function stream(...events: InvokeEvent[]): AsyncIterable<MessageStreamEvent> {
+  return (async function* () {
+    yield { type: "message", message };
+    yield* events;
+  })();
+}
+
+/** A send the agent refused: the stream's first read rejects with its error. */
+function refusedWith(code: "busy" | "unconfirmed", text: string): AsyncIterable<MessageStreamEvent> {
   return {
-    ok: true,
-    sessionId: "s",
-    message: { messageId, status: "queued", position: 0 },
-    duplicate: false,
-    events: (async function* () {
-      yield* events;
-    })(),
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.reject(agentError(code, text)),
+    }),
   };
 }
 /** Capture the two sinks runInvokeStream writes to (out = reply text, err = diagnostics). */
@@ -54,7 +59,7 @@ describe("runInvokeStream", () => {
 
   it("a run whose answer arrives as an entry only (no deltas) still prints it", async () => {
     const s = sinks();
-    await runInvokeStream(stream(entry("assistant_message", { text: "late" }), ended()), s.outFn, s.errFn);
+    await runInvokeStream(stream(entry("assistant", { text: "late" }), ended()), s.outFn, s.errFn);
     expect(s.out.join("")).toBe("late");
   });
 
@@ -67,14 +72,13 @@ describe("runInvokeStream", () => {
     expect(s.out.join("")).toBe("hmm"); // text still went to out, never err
   });
 
-  it("a refusal, an unknown receipt and a stream that ends before its message each exit 1, saying which", async () => {
+  it("a refusal, an unconfirmed send and a stream that ends before its message each exit 1, saying which", async () => {
     const s = sinks();
-    const rejected: StreamResult = { ok: false, error: { code: "busy", message: "busy", retryable: true } };
-    expect(await runInvokeStream(rejected, s.outFn, s.errFn)).toBe(1);
-    expect(await runInvokeStream({ ok: false, unknown: { reason: "the disk is gone" } }, s.outFn, s.errFn)).toBe(1);
+    expect(await runInvokeStream(refusedWith("busy", "busy"), s.outFn, s.errFn)).toBe(1);
+    expect(await runInvokeStream(refusedWith("unconfirmed", "the disk is gone"), s.outFn, s.errFn)).toBe(1);
     expect(await runInvokeStream(stream(delta("x")), s.outFn, s.errFn)).toBe(1);
     expect(s.err.join("\n")).toMatch(/rejected: busy/);
-    expect(s.err.join("\n")).toMatch(/whether the message was taken is not known: the disk is gone/);
+    expect(s.err.join("\n")).toMatch(/rejected: unconfirmed: the disk is gone/);
     expect(s.err.join("\n")).toMatch(/ended before the message did/);
   });
 
@@ -121,38 +125,30 @@ describe("runInvokeStream", () => {
 });
 
 describe("runInvokeJson", () => {
-  const lines = async (from: StreamResult) => {
+  const lines = async (from: AsyncIterable<MessageStreamEvent>) => {
     const written: string[] = [];
     const code = await runInvokeJson(from, (line) => written.push(line));
     return { code, parsed: written.map((line) => JSON.parse(line) as { type: string }) };
   };
 
-  it("prints the receipt, then every event as the Agent API has it, through done", async () => {
+  it("prints the message as recorded, then every event as the Agent API has it, through done", async () => {
     const events = [started("t1", "read", { path: "SYSTEM.md" }), result("t1", false), delta("ok"), ended()];
     const { code, parsed } = await lines(stream(...events));
     expect(code).toBe(0);
-    expect(parsed).toEqual([
-      { type: "receipt", sessionId: "s", message: { messageId, status: "queued", position: 0 }, duplicate: false },
-      ...events,
-    ]);
+    expect(parsed).toEqual([{ type: "message", message }, ...events]);
   });
 
   it("exits 1 for every end but completed, its last line saying why", async () => {
     const error = { code: "model_error", message: "boom", retryable: true };
-    expect((await lines(stream(ended({ status: "max_tokens" })))).code).toBe(1);
+    expect((await lines(stream(ended({ status: "incomplete" })))).code).toBe(1);
     const failed = await lines(stream(ended({ status: "failed", error })));
     expect([failed.code, failed.parsed.at(-1)]).toEqual([1, ended({ status: "failed", error })]);
-    const rejected = await lines({ ok: false, error: { code: "busy", message: "busy", retryable: true } });
+    const rejected = await lines(refusedWith("busy", "busy"));
     expect([rejected.code, rejected.parsed]).toEqual([
       1,
       [{ type: "rejected", error: { code: "busy", message: "busy", retryable: true } }],
     ]);
-    const unknown = await lines({ ok: false, unknown: { reason: "the disk is gone", sessionId: "s" } });
-    expect([unknown.code, unknown.parsed]).toEqual([
-      1,
-      [{ type: "unknown", reason: "the disk is gone", sessionId: "s" }],
-    ]);
-    const serving = { type: "serving_error", error: { code: "internal", message: "lost", retryable: false } } as const;
+    const serving = { type: "stream_error", error: { code: "internal", message: "lost", retryable: false } } as const;
     const broken = await lines(stream(delta("x"), serving, ended()));
     expect([broken.code, broken.parsed.at(-1)]).toEqual([1, serving]);
     const cut = await lines(stream(delta("x")));

@@ -12,7 +12,8 @@
  * ancestors, and degrade per attachment: one expired background file must not block the current ask
  * or hide its still-readable siblings.
  */
-import type { Agent, Attachment as ImageRef } from "../../agent-api.ts";
+import type { Agent } from "../../agent-api.ts";
+import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import { log } from "../../log.ts";

@@ -157,13 +157,12 @@ if (process.argv[1] === "fail") {
 } else {
 const service = await openStartService(${JSON.stringify(agent)}, { input: false });
 try {
-  const created = await service.agent.createSession();
-  const sent = await service.agent.invoke({ sessionId: created.sessionId, content: [{ type: "text", text: "Read my context" }] });
-  const end = await sent.wait();
-  const page = await service.agent.read(created.sessionId);
+  const created = await service.agent.sessions.create();
+  const end = await service.agent.messages.send({ sessionId: created.id, content: "Read my context" }, { wait: 60 });
+  const page = await service.agent.sessions.entries(created.id);
   // Where \`prepareStartWorkspace\` pointed the machinery: the storage, beside the replaced definition.
   const { realpathSync } = await import("node:fs");
-  console.log(JSON.stringify({ sessionId: created.sessionId, end, entries: page.entries, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR, content: realpathSync("content") }));
+  console.log(JSON.stringify({ sessionId: created.id, end, entries: page.data, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR, content: realpathSync("content") }));
 } finally {
   await service.close();
   await service.agent.close();
@@ -181,7 +180,7 @@ try {
     );
     const reported = JSON.parse(out.stdout.trim().split("\n").at(-1)!) as {
       sessionId: string;
-      end: { ok: boolean; message?: { outcome: unknown } };
+      end: { status: string };
       entries: { kind: string; data: unknown }[];
       state: string;
       mise: string;
@@ -195,7 +194,7 @@ try {
       mise: join(root, ".state", "mise"),
       content: join(await realpath(root), "content"),
     });
-    expect(reported.end).toMatchObject({ ok: true, message: { outcome: { status: "completed" } } });
+    expect(reported.end).toMatchObject({ status: "completed" });
     const result = JSON.stringify(reported.entries.find((entry) => entry.kind === "tool_result")?.data ?? "");
     // The tool knows the session it runs in.
     expect(result).toContain(reported.sessionId);

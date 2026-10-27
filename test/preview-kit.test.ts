@@ -45,7 +45,7 @@ describe("turn-view reducer", () => {
   /** A turn's events after its receipt: the receipt names the run, and only that run's events are the turn's. */
   const apply = (events: InvokeEvent[]) => {
     const view = createTurnView();
-    applyTurnEvent(view, ev.accepted());
+    applyTurnEvent(view, ev.message());
     const changes = events.map((e) => applyTurnEvent(view, e));
     return { view, changes };
   };
@@ -96,7 +96,7 @@ describe("turn-view reducer", () => {
 
   it("thinkingLine takes a code-point-safe tail and collapses whitespace", () => {
     const view = createTurnView();
-    applyTurnEvent(view, ev.accepted());
+    applyTurnEvent(view, ev.message());
     applyTurnEvent(view, ev.thinking(`a\nb  ${"🐍".repeat(10)}`));
     expect(thinkingLine(view, 6)).toBe("💭 …🐍🐍🐍🐍🐍"); // marker + 5 points, no torn surrogate
     expect(thinkingLine(createTurnView(), 6)).toBe("");

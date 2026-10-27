@@ -15,7 +15,7 @@ afterEach(() => {
 /** A push-based event source, so a test controls exactly WHEN each event reaches telegramReply. It opens with the
  *  invoke's receipt, which names the run the pushed events belong to. */
 const eventSource = () => {
-  const queue: InvokeEvent[] = [ev.accepted()];
+  const queue: InvokeEvent[] = [ev.message()];
   let notify: (() => void) | undefined;
   let ended = false;
   const iterable: AsyncIterable<InvokeEvent> = {
@@ -65,7 +65,7 @@ const recordingFetch = () => {
 
 /** One invoke's events: its receipt, then `list`. */
 async function* events(...list: InvokeEvent[]): AsyncIterable<InvokeEvent> {
-  yield ev.accepted();
+  yield ev.message();
   for (const e of list) yield e;
 }
 

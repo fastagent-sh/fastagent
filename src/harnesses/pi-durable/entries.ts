@@ -1,7 +1,6 @@
 /**
- * pi-durable's entries as the Agent API publishes them (SPEC.md §6): the conversation's messages, its tool results
- * and its compactions. The harness's own entries (`pi.system`, resets, FastAgent's bookkeeping) are not published, so a
- * published entry's parent is the published entry before it.
+ * pi-durable's entries as the Agent API publishes them (agent-api.md §3): the conversation's messages, its tool results
+ * and its compactions. The harness's own entries (`pi.system`, resets, FastAgent's bookkeeping) are not published.
  */
 import type {
   AssistantMessage,
@@ -12,7 +11,7 @@ import type {
   UserMessage,
 } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import type { ContentPart, Entry, Json, Usage } from "../../agent-api.ts";
+import type { ContentPart, Entry, Json, Tokens } from "../../agent-api.ts";
 import type { Ids } from "./ids.ts";
 
 /** A message as it was taken: the model saw the record's content, a Caller sees what it sent (`sent`). */
@@ -37,22 +36,14 @@ export function requestIdOf(record: EntryRecord): string | undefined {
   return record.kind === USER_ENTRY ? (record.data as UserEntryData).requestId : undefined;
 }
 
-export interface Published {
-  ids: Ids;
-  parent: number | undefined;
-  /** The message a user entry names, when it names one. */
-  message?: { messageId: number; idempotencyKey?: string };
-}
-
-export function publishEntry(record: EntryRecord, { ids, parent, message }: Published): Entry {
+/** `messageId`: the message a user entry names, when it names one. */
+export function publishEntry(record: EntryRecord, ids: Ids, messageId: number | undefined): Entry {
   const model = record.model?.[0] as Message;
   const ref = (index: number) => imageRef(ids.encode(record.id), index);
   return {
     id: ids.encode(record.id),
-    sessionId: ids.encode(record.conversationId),
-    ...(parent === undefined ? {} : { parentEntryId: ids.encode(parent) }),
     timestamp: model.timestamp,
-    ...published(record, model, ref, ids, message),
+    ...published(record, model, ref, ids, messageId),
   };
 }
 
@@ -61,7 +52,7 @@ function published(
   model: Message,
   ref: (index: number) => string,
   ids: Ids,
-  message: Published["message"],
+  messageId: number | undefined,
 ): Pick<Entry, "kind" | "data"> {
   switch (model.role) {
     case "user": {
@@ -71,16 +62,12 @@ function published(
       const first = content[0];
       if (sent !== undefined && first?.type === "text") content[0] = { type: "text", text: sent };
       return {
-        kind: "user_message",
-        data: {
-          content: content as Json,
-          ...(message === undefined ? {} : { messageId: ids.encode(message.messageId) }),
-          ...(message?.idempotencyKey === undefined ? {} : { idempotencyKey: message.idempotencyKey }),
-        },
+        kind: "user",
+        data: { content: content as Json, ...(messageId === undefined ? {} : { messageId: ids.encode(messageId) }) },
       };
     }
     case "assistant":
-      return { kind: "assistant_message", data: assistantData(model) };
+      return { kind: "assistant", data: assistantData(model) };
     case "toolResult":
       return {
         kind: "tool_result",
@@ -101,30 +88,23 @@ function assistantData(message: AssistantMessage): Json {
     block.type === "toolCall" ? [{ id: block.id, name: block.name, args: block.arguments as Json }] : [],
   );
   const thinking = thinkingOf(message);
-  const outcome = replyOutcome(message);
+  const stop = STOPS[message.stopReason];
   return {
     text: replyText(message),
     ...(thinking === undefined ? {} : { thinking }),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
-    ...(outcome === undefined ? {} : { outcome }),
-    usage: usageOf(message.usage),
+    ...(stop === undefined ? {} : { stop }),
+    ...(stop === undefined || message.errorMessage === undefined ? {} : { error: message.errorMessage }),
+    usage: { ...usageOf(message.usage) },
   };
 }
 
-function replyOutcome(message: AssistantMessage): Json | undefined {
-  const failed = (status: string): Json =>
-    message.errorMessage === undefined ? { status } : { status, error: { message: message.errorMessage } };
-  switch (message.stopReason) {
-    case "error":
-      return failed("failed");
-    case "aborted":
-      return failed("aborted");
-    case "length":
-      return { status: "truncated" };
-    default:
-      return undefined;
-  }
-}
+/** How a reply stopped, when it did not stop as an answer or a tool call does. */
+const STOPS: Partial<Record<AssistantMessage["stopReason"], string>> = {
+  length: "max_tokens",
+  error: "failed",
+  aborted: "aborted",
+};
 
 export function replyText(message: Pick<AssistantMessage, "content">): string {
   return message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
@@ -142,7 +122,7 @@ export function hasToolCalls(message: AssistantMessage): boolean {
   return message.content.some((block) => block.type === "toolCall");
 }
 
-export function usageOf(usage: Pick<PiUsage, "input" | "output" | "cacheRead" | "cacheWrite" | "cost">): Usage {
+export function usageOf(usage: Pick<PiUsage, "input" | "output" | "cacheRead" | "cacheWrite" | "cost">): Tokens {
   return {
     inputTokens: usage.input,
     outputTokens: usage.output,

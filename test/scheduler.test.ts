@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { InvokeRequest } from "../src/agent-api.ts";
+import { type SendRequest, agentError } from "../src/agent-api.ts";
 import { type RunScript, failed, refused, scriptedRun } from "./scripted-run.ts";
 import { promptOf, scriptedAgent } from "./scripted-agent.ts";
 import type { Schedule } from "../src/schedule/schedule.ts";
@@ -20,7 +20,7 @@ import { readFires, settleClaim } from "../src/schedule/state.ts";
 /** A fake agent that records each invoke's session + text (and the whole request) and answers with the script. */
 function recordingAgent(script: RunScript = {}) {
   const calls: { session: string; text: string }[] = [];
-  const requests: InvokeRequest[] = [];
+  const requests: SendRequest[] = [];
   const agent = scriptedAgent((request) => {
     calls.push({ session: request.sessionId, text: promptOf(request).text });
     requests.push(request);
@@ -130,9 +130,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const slot = "2026-07-07T10:00:00.000Z";
     const agent = await fauxDurableAgent([fauxAssistantMessage("done")]);
     const sessionId = await scheduleSessions(root).of("job", agent);
-    const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: "go" }], idempotencyKey: slot });
-    if (!sent.ok) throw new Error("not sent");
-    await sent.wait();
+    await agent.messages.send({ sessionId, content: "go", idempotencyKey: slot }, { wait: 30 });
     seedClaim(root, "job", slot, undefined, false);
     const s = createScheduler({
       agent,
@@ -666,17 +664,15 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const scripted = scriptedAgent((request) => scriptedRun(request));
     const agent = {
       ...scripted,
-      invoke: async (request: InvokeRequest) => {
-        const receipt = await scripted.invoke(request);
-        if (!receipt.ok) return receipt;
-        return {
-          ...receipt,
-          wait: async () => ({ ok: false as const, unfinished: { reason: "the storage failed: ENOSPC" } }),
-        };
+      messages: {
+        ...scripted.messages,
+        get: async () => {
+          throw agentError("unavailable", "the storage failed: ENOSPC");
+        },
       },
     };
     const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
-    expect(outcome).toMatchObject({ fired: true, failed: "the storage failed: ENOSPC" });
+    expect(outcome).toMatchObject({ fired: true, failed: "waiting for its end failed: the storage failed: ENOSPC" });
     expect(readFires(root, "job")).toMatchObject([{ outcome: "failed" }]);
     expect(lines.join("\n")).toMatch(/ERROR.*job failed .*ENOSPC/);
   });

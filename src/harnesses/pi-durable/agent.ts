@@ -1,67 +1,74 @@
 /**
- * The Agent API (docs/SPEC.md) over pi-durable: a Harness opened on the instance's storage, and the ten
- * operations read from and submitted to it. Admission (a key's lookup, the limits and the submission) is one step per
- * process, since one process owns a storage.
+ * The Agent API (agent-api.md) over pi-durable: a Harness opened on the instance's storage, and the operations read
+ * from and submitted to it. Admission (a key's lookup, the limits and the submission) is one step per process, since
+ * one process owns a storage.
  */
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import type { ImageContent, Models, ModelThinkingLevel, TextContent } from "@earendil-works/pi-ai";
 import {
+  type AgentChange,
   AgentDoc,
   type Conversation,
   ConversationBusy,
   DEFAULT_RETRY_POLICY,
-  SessionFailed,
   type EntryRecord,
   Harness,
   type HarnessOptions,
   type HarnessSettings,
+  InboxDoc,
+  LiveDoc,
   type ModelRef,
   type RegistryReader,
+  SessionFailed,
   type Storage,
   type Submission,
-  type SubmissionId,
+  type ToolRegistration,
+  configure,
 } from "@earendil-works/pi-durable";
+import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
-  type AbortResult,
   type Agent,
-  type AgentError,
+  AgentError,
   type AgentInfo,
-  AgentRejection,
-  type ConfigureResult,
-  type ContentPart,
-  type CreateSessionOptions,
-  type CreateSessionResult,
+  CompactOptions,
+  CreateSessionOptions,
   type Entry,
-  type InvokeRequest,
-  type InvokeResult,
+  EntriesOptions,
   LIMITS,
-  type ListOptions,
-  type ListResult,
-  type ReadOptions,
-  type ReadResult,
-  type SessionSettings,
-  type WaitResult,
+  ListOptions,
+  type Message,
+  MessageKey,
+  type Page,
+  SendRequest,
+  type Session,
+  SessionChanges,
+  Wait,
+  type WaitOptions,
   agentError,
-  failure,
+  hasEnded as messageHasEnded,
 } from "../../agent-api.ts";
 import { beginWork } from "../../channels/busy.ts";
-import { type PortFailure, port, portError } from "../../effect-port.ts";
+import { type PortFailure, port, portAbort, portError } from "../../effect-port.ts";
 import { log } from "../../log.ts";
-import { USER_ENTRY, type UserEntryData, imageAt, parseImageRef } from "./entries.ts";
-import { type Defaults, takeDefaults } from "./defaults.ts";
+import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
+import { USER_ENTRY, type UserEntryData, imageAt, isPublished, parseImageRef } from "./entries.ts";
+import { sessionEvents } from "./events.ts";
 import { type Ids, storageIds } from "./ids.ts";
-import { type InputRecord, hasEnded, isInput, queuedInputs, requestIdFor } from "./messages.ts";
+import { type InputRecord, isInput, queuedInputs, requestIdFor, usageOfState } from "./messages.ts";
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
-import { resumeStream } from "./resume.ts";
 import { type Sessions, trackSessions } from "./sessions.ts";
+import { messageStream } from "./stream.ts";
 
-/** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (SPEC.md §3). */
+/** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (agent-api.md §5.1). */
 export interface AgentCommand {
   name: string;
   description?: string;
@@ -76,7 +83,7 @@ export interface DurableAgentOptions {
   env?: HarnessOptions["env"];
   name: string;
   description?: string;
-  /** Read for every `info()` and invoke, so a command the definition gains is offered without a restart. */
+  /** Read for every `info()` and send, so a command the definition gains is offered without a restart. */
   commands?: () => readonly AgentCommand[];
   /** What a conversation answers with when its own settings name none (defaults.ts). */
   model?: ModelRef;
@@ -96,14 +103,13 @@ export interface DurableAgentOptions {
 export type Unfinished = "resume" | "abort" | "refuse";
 
 export interface DurableAgent extends Agent {
-  /** pi-durable's own API, for operating the agent (SPEC.md §11). */
+  /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
   /** The conversation a session id names, to operate it through `harness`. */
   conversation(sessionId: string): Promise<Conversation | undefined>;
   close(): Promise<void>;
 }
 
-const INPUTS = ["text", "image"];
 const OWNERLESS = { ownership: { kind: "ownerless" } } as const;
 const COMMAND = /^\/([^\s]+)(?:\s+([\s\S]*))?$/;
 
@@ -168,6 +174,28 @@ function countUntilSettled(submission: Submission): void {
   submission.wait(BACKGROUND_CONTEXT).then(done, done);
 }
 
+/** A wait its Caller's signal let go of: the call rejects with the signal's reason, and the message goes on. */
+class Released {
+  readonly reason: unknown;
+  constructor(reason: unknown) {
+    this.reason = reason;
+  }
+}
+
+const released = (signal: AbortSignal): Effect.Effect<never, Released> =>
+  Effect.callback<never, Released>((resume) => {
+    const onAbort = () => resume(Effect.fail(new Released(signal.reason)));
+    if (signal.aborted) return onAbort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    return Effect.sync(() => signal.removeEventListener("abort", onAbort));
+  });
+
+/** An input as `schema` reads it, or `invalid_request` saying where it is not. */
+const decode = <A>(schema: Schema.Codec<A, unknown>, input: unknown, what: string): Exit.Exit<A, AgentError> =>
+  Exit.mapError(Schema.decodeUnknownExit(schema)(input), (error) =>
+    agentError("invalid_request", `${what}: ${error.message.replace(/\s*\n\s*/g, " ")}`),
+  );
+
 function durableAgent(
   harness: Harness,
   ids: Ids,
@@ -193,63 +221,85 @@ function durableAgent(
     log.error(`[fastagent] the agent failed: ${error instanceof Error ? (error.stack ?? message) : message}`);
     return agentError("internal", message);
   };
-  /** An operation's Effect as the Promise the API promises: a failure becomes the operation's failure value. */
-  const resolve = <A>(program: Effect.Effect<A, PortFailure>, failed: (error: unknown) => A): Promise<A> =>
-    Effect.runPromise(program.pipe(Effect.catchCause((cause) => Effect.sync(() => failed(portError(cause))))));
-  /** `getMessage` and `attachment` have no failure value: they reject (SPEC.md §2). */
-  const settleOrReject = <A>(program: Effect.Effect<A, PortFailure>): Promise<A> =>
+
+  /** An operation as the Promise the API promises: what it names, or a rejection with an AgentError (§4). */
+  const settle = <A>(program: Effect.Effect<A, AgentError | PortFailure | Released>): Promise<A> =>
     Effect.runPromise(
-      program.pipe(Effect.catchCause((cause) => Effect.fail(new AgentRejection(failureOf(portError(cause)))))),
-    );
-  const failed = (error: unknown) => ({ ok: false as const, error: failureOf(error) });
-  const info = (): AgentInfo => ({
-    protocolVersion: "1.0",
-    name: options.name,
-    ...(options.description === undefined ? {} : { description: options.description }),
-    inputs: INPUTS,
-    commands: commands().map(({ name, description }) => ({
-      name,
-      ...(description === undefined ? {} : { description }),
-    })),
-  });
-
-  const wait = (id: SubmissionId, signal: AbortSignal | undefined): Promise<WaitResult> =>
-    resolve<WaitResult>(
-      Effect.gen(function* () {
-        const waiting = signal === undefined ? context : withAbortSignal(signal, context);
-        const handle = yield* port(() => harness.submission(id, waiting));
-        if (handle === undefined) throw new Error(`submission ${id} is not in the storage it was accepted into`);
-        const record = yield* port(() => handle.wait(waiting));
-        if (!isInput(record) || !hasEnded(record)) throw new Error(`submission ${id} settled as a write`);
-        return { ok: true, message: yield* reads.done(record) };
-      }),
-      (error) => ({
-        ok: false,
-        unfinished: { reason: signal?.aborted ? "The wait was aborted" : failureOf(error).message },
-      }),
-    );
-
-  const unknownReceipt = (conversation: Conversation, messageId: number | undefined, error: unknown): InvokeResult => ({
-    ok: false,
-    unknown: {
-      reason: `${messageId === undefined ? "The submission's acceptance could not be confirmed" : "The message was recorded, but its receipt could not be read"}: ${failureOf(error).message}`,
-      sessionId: ids.encode(conversation.id),
-      ...(messageId === undefined ? {} : { messageId: ids.encode(messageId) }),
-    },
-  });
-
-  const receipt = (conversation: Conversation, record: InputRecord, duplicate: boolean) =>
-    reads.status(record).pipe(
-      Effect.map(
-        (message): InvokeResult => ({
-          ok: true,
-          sessionId: ids.encode(conversation.id),
-          message,
-          duplicate,
-          wait: (waitOptions) => wait(record.id, waitOptions?.signal),
+      program.pipe(
+        Effect.catchCause((cause) => {
+          const error = portError(cause);
+          if (error instanceof Released) return Effect.fail(error.reason);
+          return Effect.fail(error instanceof AgentError ? error : failureOf(error));
         }),
       ),
-      Effect.catchCause((cause) => Effect.sync(() => unknownReceipt(conversation, record.id, portError(cause)))),
+    );
+
+  const conversationOf = (sessionId: string): Effect.Effect<Conversation, AgentError | PortFailure> =>
+    reads
+      .conversation(sessionId)
+      .pipe(
+        Effect.flatMap((conversation) =>
+          conversation === undefined
+            ? Effect.fail(agentError("not_found", `No session ${sessionId}`))
+            : Effect.succeed(conversation),
+        ),
+      );
+
+  /** The agent's tools by name: the registry's, read for each use, so a tool the definition gains is offered at once. */
+  const toolsByName = (): Map<string, ToolRegistration> => {
+    const tools = new Map<string, ToolRegistration>();
+    for (const { tool } of options.registry.snapshot().tools()) if (!tools.has(tool.name)) tools.set(tool.name, tool);
+    return tools;
+  };
+
+  /** What pi-durable stores for `changes`: tools by their registrations, which it stores by name. */
+  const changeOf = (changes: SessionChanges): Effect.Effect<AgentChange, AgentError> =>
+    Effect.suspend(() => {
+      const { model, thinkingLevel, instructions, tools } = changes;
+      let registrations: ToolRegistration[] | null | undefined;
+      if (tools !== undefined && tools !== null) {
+        const known = toolsByName();
+        const unknown = tools.filter((name) => !known.has(name));
+        if (unknown.length > 0) {
+          return Effect.fail(
+            agentError("invalid_request", `This agent has no tool named ${unknown.join(", ")}`, { tools: unknown }),
+          );
+        }
+        registrations = tools.map((name) => known.get(name) as ToolRegistration);
+      } else registrations = tools;
+      return Effect.succeed({
+        ...(model === undefined
+          ? {}
+          : { model: model === null ? null : { provider: model.provider, modelId: model.modelId } }),
+        ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        ...(instructions === undefined ? {} : { instructions }),
+        ...(registrations === undefined ? {} : { tools: registrations }),
+      });
+    });
+
+  const info = (): Promise<AgentInfo> =>
+    settle(
+      Effect.gen(function* () {
+        const available = yield* port(() => options.models.getAvailable());
+        const named = ({ name, description }: { name: string; description?: string }) => ({
+          name,
+          ...(description ? { description } : {}),
+        });
+        return {
+          name: options.name,
+          ...(options.description === undefined ? {} : { description: options.description }),
+          commands: commands().map(named),
+          tools: [...toolsByName().values()].map(named),
+          models: available.map((model) => ({
+            provider: model.provider,
+            modelId: model.id,
+            ...(model.name ? { name: model.name } : {}),
+          })),
+          ...(options.model === undefined
+            ? {}
+            : { defaultModel: { provider: options.model.provider, modelId: options.model.modelId } }),
+        };
+      }),
     );
 
   const inFlight = port(() => harness.inspect(context)).pipe(
@@ -260,134 +310,213 @@ function durableAgent(
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
   };
+  const has = {
+    model: (model: ModelRef) => options.models.getModel(model.provider, model.modelId) !== undefined,
+    tool: (name: string) => toolsByName().has(name),
+  };
 
-  const available = (model: ModelRef) => options.models.getModel(model.provider, model.modelId) !== undefined;
-  /** A message no model could answer is refused, recording nothing, rather than accepted only to fail. */
-  const noModel = (model: ModelRef | undefined) =>
-    failure(
+  /** A message no setting of its session could answer is refused, recording nothing, rather than accepted to fail. */
+  const unanswerable = (refused: Unanswerable): AgentError => {
+    if (refused.missing === "tools") {
+      const names = refused.tools.join(", ");
+      return agentError("missing_tool", `This session enables ${names}, which this agent no longer has`, {
+        tools: refused.tools,
+      });
+    }
+    const { model } = refused;
+    return agentError(
       "missing_model",
       model === undefined
         ? "Neither this session nor the agent names a model"
         : `This session answers with ${model.provider}/${model.modelId}, which is not among this agent's models`,
       model === undefined ? undefined : { model: `${model.provider}/${model.modelId}` },
     );
-
-  const admit = (request: InvokeRequest): Effect.Effect<InvokeResult, PortFailure> =>
-    Effect.gen(function* () {
-      const requestId = requestIdFor(request.idempotencyKey);
-      // Before anything is written: reading or expanding a command reads the definition's files, and may throw.
-      const { content, sent } = expandCommand(request.content, commands());
-      let conversation: Conversation | undefined;
-      if (request.sessionId !== undefined) {
-        conversation = yield* reads.conversation(request.sessionId);
-        if (conversation === undefined) return failure("not_found", `No session ${request.sessionId}`);
-        if (request.idempotencyKey !== undefined) {
-          const seen = yield* reads.submissionByKey(conversation, requestId);
-          if (seen !== undefined) return yield* receipt(conversation, seen, true);
-        }
-      }
-      if ((yield* inFlight) >= inFlightLimit) {
-        return failure("busy", `This agent already holds ${inFlightLimit} messages`, { reason: "capacity" });
-      }
-      if (conversation === undefined) {
-        if (defaults.model === undefined || !available(defaults.model)) return noModel(defaults.model);
-        conversation = yield* port(() => harness.createConversation(OWNERLESS, context));
-      } else if (request.whenBusy !== "reject") {
-        const inbox = yield* reads.inbox(conversation);
-        if (queuedInputs(inbox).length >= LIMITS.queuedPerSession) {
-          return failure("busy", `The session already has ${LIMITS.queuedPerSession} queued messages`, {
-            reason: "queue_full",
-          });
-        }
-      }
-      const target = conversation;
-      const settings = yield* port(() =>
-        target.commit((tx) => takeDefaults(tx, target.id, defaults, available), context),
-      );
-      if (!settings.ok) return noModel(settings.model);
-      const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
-      let messageId: SubmissionId | undefined;
-      return yield* Effect.gen(function* () {
-        const submission = yield* port(() =>
-          target.submit(
-            {
-              type: "input",
-              content,
-              requestId,
-              whenBusy: request.whenBusy === "steer" ? "steer" : request.whenBusy === "reject" ? "reject" : "followUp",
-              entry: { kind: USER_ENTRY, data },
-            },
-            context,
-          ),
-        );
-        messageId = submission.id;
-        // Counted once its receipt is read, whether or not that read succeeds: the wait must not be what reads the
-        // storage first, or a failing read would fail it instead of answering this call.
-        const record = yield* port(() => submission.status(context)).pipe(
-          Effect.ensuring(Effect.sync(() => countUntilSettled(submission))),
-        );
-        if (!isInput(record)) throw new Error(`submission ${record.id} was admitted as a write`);
-        return yield* receipt(target, record, false);
-      }).pipe(
-        // Once submission starts, only pi-durable's explicit refusal proves nothing was recorded.
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            const error = portError(cause);
-            return messageId === undefined && error instanceof ConversationBusy
-              ? failure("busy", "The session is answering another message", { reason: "running" })
-              : unknownReceipt(target, messageId, error);
-          }),
-        ),
-      );
-    });
-
-  const invoke = (request: InvokeRequest): Promise<InvokeResult> => {
-    const refused = invalidInvoke(request);
-    if (refused !== undefined) return Promise.resolve({ ok: false, error: refused });
-    return resolve<InvokeResult>(Semaphore.withPermits(admission, 1)(admit(request)), failed);
   };
 
-  const getMessage: Agent["getMessage"] = (sessionId, key) =>
-    settleOrReject(
+  const unconfirmed = (conversation: Conversation, messageId: number | undefined, error: unknown): AgentError =>
+    agentError(
+      "unconfirmed",
+      `${messageId === undefined ? "The message may have been recorded, and that could not be confirmed" : "The message was recorded, and reading it back failed"}: ${failureOf(error).message}`,
+      {
+        sessionId: ids.encode(conversation.id),
+        ...(messageId === undefined ? {} : { messageId: ids.encode(messageId) }),
+      },
+    );
+
+  /** Admission: a key's lookup, the limits, the settings and the submission, one at a time per process. */
+  const admit = (
+    request: SendRequest,
+  ): Effect.Effect<{ message: Message; replayed: boolean }, AgentError | PortFailure> =>
+    Semaphore.withPermits(
+      admission,
+      1,
+    )(
       Effect.gen(function* () {
-        const conversation = yield* reads.conversation(sessionId);
-        if (conversation === undefined) return undefined;
-        const record =
-          "messageId" in key
-            ? yield* reads.submission(key.messageId)
-            : yield* reads.submissionByKey(conversation, requestIdFor(key.idempotencyKey));
-        if (record === undefined || record.conversationId !== conversation.id) return undefined;
-        return yield* reads.status(record);
+        const requestId = requestIdFor(request.idempotencyKey);
+        // Before anything is written: reading or expanding a command reads the definition's files, and may throw.
+        const { content, sent } = expandCommand(request.content, commands());
+        const conversation = yield* conversationOf(request.sessionId);
+        if (request.idempotencyKey !== undefined) {
+          const seen = yield* reads.submissionByKey(conversation, requestId);
+          if (seen !== undefined) return { message: yield* reads.message(seen), replayed: true };
+        }
+        if ((yield* inFlight) >= inFlightLimit) {
+          return yield* agentError("busy", `This agent already holds ${inFlightLimit} messages`, {
+            reason: "capacity",
+          });
+        }
+        if (request.whenBusy !== "reject") {
+          const inbox = yield* reads.inbox(conversation);
+          if (queuedInputs(inbox).length >= LIMITS.queuedPerSession) {
+            return yield* agentError("busy", `The session already has ${LIMITS.queuedPerSession} queued messages`, {
+              reason: "queue_full",
+            });
+          }
+        }
+        const refused = yield* port(() =>
+          conversation.commit((tx) => admitSettings(tx, conversation.id, defaults, has), context),
+        );
+        if (refused !== undefined) return yield* unanswerable(refused);
+        const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
+        let messageId: number | undefined;
+        return yield* Effect.gen(function* () {
+          const submission = yield* port(() =>
+            conversation.submit(
+              {
+                type: "input",
+                content,
+                requestId,
+                whenBusy:
+                  request.whenBusy === "steer" ? "steer" : request.whenBusy === "reject" ? "reject" : "followUp",
+                entry: { kind: USER_ENTRY, data },
+              },
+              context,
+            ),
+          );
+          messageId = submission.id;
+          // Counted once it is read back, whether or not that read succeeds: the wait must not be what reads the
+          // storage first, or a failing read would fail it instead of answering this call.
+          const record = yield* port(() => submission.status(context)).pipe(
+            Effect.ensuring(Effect.sync(() => countUntilSettled(submission))),
+          );
+          if (!isInput(record)) throw new Error(`submission ${record.id} was admitted as a write`);
+          return { message: yield* reads.message(record), replayed: false };
+        }).pipe(
+          // Once submission starts, only pi-durable's explicit refusal proves nothing was recorded.
+          Effect.catchCause((cause) => {
+            const error = portError(cause);
+            return Effect.fail(
+              messageId === undefined && error instanceof ConversationBusy
+                ? agentError("busy", "The session is answering another message", { reason: "running" })
+                : unconfirmed(conversation, messageId, error),
+            );
+          }),
+        );
       }),
     );
 
-  const createSession = (createOptions?: CreateSessionOptions): Promise<CreateSessionResult> =>
-    resolve<CreateSessionResult>(
+  /** The message as it is now. */
+  const current = (message: Message): Effect.Effect<Message, PortFailure> =>
+    reads.submission(message.id).pipe(
+      Effect.flatMap((record) => {
+        if (record === undefined) throw new Error(`message ${message.id} is not in the storage it was accepted into`);
+        return reads.message(record);
+      }),
+    );
+
+  /** The message once it has ended, or after `seconds` as it is then; `signal` lets go of the wait. */
+  const awaitEnd = (
+    message: Message,
+    seconds: number,
+    signal: AbortSignal | undefined,
+  ): Effect.Effect<Message, PortFailure | Released> => {
+    if (messageHasEnded(message) || seconds === 0) return Effect.succeed(message);
+    const ended = port(() => harness.submission(ids.decode(message.id) as Submission["id"], context)).pipe(
+      Effect.flatMap((handle) => {
+        if (handle === undefined) throw new Error(`message ${message.id} is not in the storage it was accepted into`);
+        const controller = new AbortController();
+        return portAbort(
+          "a message's wait",
+          () => handle.wait(withAbortSignal(controller.signal, context)),
+          () => controller.abort(),
+        );
+      }),
+      Effect.flatMap((record) => reads.message(record as InputRecord)),
+    );
+    const timed = ended.pipe(
+      Effect.timeoutOption(Duration.seconds(seconds)),
+      Effect.flatMap(Option.match({ onNone: () => current(message), onSome: Effect.succeed })),
+    );
+    return signal === undefined ? timed : Effect.raceFirst(timed, released(signal));
+  };
+
+  const send = (request: SendRequest, sendOptions?: WaitOptions): Promise<Message> =>
+    settle(
       Effect.gen(function* () {
-        const { from, model, thinkingLevel } = createOptions ?? {};
-        const agent = {
-          ...(model === undefined ? {} : { model }),
-          ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-        };
-        const creation = { ...OWNERLESS, agent };
-        if (from === undefined) {
-          const created = yield* port(() => harness.createConversation(creation, context));
-          return { ok: true, sessionId: ids.encode(created.id) };
+        const decoded = yield* decode(SendRequest, request, "messages.send");
+        const seconds = sendOptions?.wait === undefined ? undefined : yield* decode(Wait, sendOptions.wait, "wait");
+        const signal = sendOptions?.signal;
+        // A send whose Caller let go before it was made is not made, as `fetch` does not send one.
+        if (signal?.aborted) return yield* Effect.fail(new Released(signal.reason));
+        const { message } = yield* admit(decoded);
+        if (seconds === undefined) return message;
+        return yield* awaitEnd(message, seconds, signal).pipe(
+          Effect.catchCause((cause): Effect.Effect<never, AgentError | Released> => {
+            const error = portError(cause);
+            if (error instanceof Released) return Effect.fail(error);
+            return Effect.fail(
+              agentError(
+                "unconfirmed",
+                `The message was recorded, and waiting for it failed: ${failureOf(error).message}`,
+                {
+                  sessionId: message.sessionId,
+                  messageId: message.id,
+                },
+              ),
+            );
+          }),
+        );
+      }),
+    );
+
+  const get = (key: MessageKey, getOptions?: WaitOptions): Promise<Message> =>
+    settle(
+      Effect.gen(function* () {
+        const decoded = yield* decode(MessageKey, key, "messages.get");
+        const seconds = getOptions?.wait === undefined ? undefined : yield* decode(Wait, getOptions.wait, "wait");
+        const signal = getOptions?.signal;
+        if (signal?.aborted) return yield* Effect.fail(new Released(signal.reason));
+        const conversation = yield* conversationOf(decoded.sessionId);
+        const record =
+          "messageId" in decoded
+            ? yield* reads.submission(decoded.messageId)
+            : yield* reads.submissionByKey(conversation, requestIdFor(decoded.idempotencyKey));
+        if (record === undefined || record.conversationId !== conversation.id) {
+          const which = "messageId" in decoded ? decoded.messageId : `with key ${decoded.idempotencyKey}`;
+          return yield* agentError("not_found", `No message ${which} in session ${decoded.sessionId}`);
         }
-        if (from.context === "recent") {
-          return failure("invalid_request", 'A fork with context "recent" is not implemented yet');
+        const message = yield* reads.message(record);
+        return seconds === undefined ? message : yield* awaitEnd(message, seconds, signal);
+      }),
+    );
+
+  const create = (createOptions?: CreateSessionOptions): Promise<Session> =>
+    settle(
+      Effect.gen(function* () {
+        const { forkFrom, ...settings } = yield* decode(CreateSessionOptions, createOptions ?? {}, "sessions.create");
+        const creation = { ...OWNERLESS, agent: yield* changeOf(settings) };
+        if (forkFrom === undefined) {
+          return yield* reads.session(yield* port(() => harness.createConversation(creation, context)));
         }
-        const source = yield* reads.conversation(from.sessionId);
-        if (source === undefined) return failure("not_found", `No session ${from.sessionId}`);
+        const source = yield* conversationOf(forkFrom.sessionId);
         const at =
-          from.entryId === undefined
-            ? yield* reads.history(source, { order: "descending" }).pipe(
-                Stream.runHead,
-                Effect.map((head) => (head._tag === "Some" ? head.value : undefined)),
-              )
-            : yield* reads.visibleEntry(source, from.entryId);
-        if (at === undefined && from.entryId !== undefined) {
-          return failure("not_found", `No entry ${from.entryId} in session ${from.sessionId}`);
+          forkFrom.entryId === undefined
+            ? yield* reads
+                .history(source, { order: "descending" })
+                .pipe(Stream.runHead, Effect.map(Option.getOrUndefined))
+            : yield* reads.visibleEntry(source, forkFrom.entryId);
+        if (at === undefined && forkFrom.entryId !== undefined) {
+          return yield* agentError("not_found", `No entry ${forkFrom.entryId} in session ${forkFrom.sessionId}`);
         }
         const fork =
           at === undefined
@@ -398,169 +527,197 @@ function durableAgent(
                   {
                     ...creation,
                     init: async (tx, id) => {
-                      Object.assign(await tx.doc(AgentDoc, id), inherited, agent);
+                      Object.assign(await tx.doc(AgentDoc, id), inherited);
+                      await configure(tx, id, creation.agent);
                     },
                   },
                   context,
                 );
               })
             : yield* port(() => source.fork(at.id, creation, context));
-        return { ok: true, sessionId: ids.encode(fork.id) };
+        return yield* reads.session(fork);
       }),
-      failed,
     );
 
-  /** pi-durable's `configure()`, its two fields a Caller sets: stored as given, used from the next model request. */
-  const configure = (sessionId: string, settings: SessionSettings): Promise<ConfigureResult> => {
-    const { model, thinkingLevel } = settings;
-    if (model === undefined && thinkingLevel === undefined) {
-      return Promise.resolve(
-        failure("invalid_request", "Nothing to configure: give a model, a thinking level or both"),
-      );
-    }
-    return resolve<ConfigureResult>(
+  const update = (sessionId: string, changes: SessionChanges): Promise<Session> =>
+    settle(
       Effect.gen(function* () {
-        const conversation = yield* reads.conversation(sessionId);
-        if (conversation === undefined) return failure("not_found", `No session ${sessionId}`);
-        const change = {
-          ...(model === undefined ? {} : { model: { provider: model.provider, modelId: model.modelId } }),
-          ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-        };
+        const decoded = yield* decode(SessionChanges, changes, "sessions.update");
+        if (Object.keys(decoded).length === 0) {
+          return yield* agentError(
+            "invalid_request",
+            "Nothing to update: give a model, a thinking level, instructions or tools",
+          );
+        }
+        const conversation = yield* conversationOf(sessionId);
+        const change = yield* changeOf(decoded);
         yield* port(() => conversation.configure(change, context));
-        return { ok: true };
+        return yield* reads.session(conversation);
       }),
-      failed,
+    );
+
+  const list = (listOptions?: ListOptions): Promise<Page<Session>> =>
+    settle(
+      Effect.gen(function* () {
+        const { after, limit = LIMITS.pageDefault } = yield* decode(ListOptions, listOptions ?? {}, "sessions.list");
+        const position = after === undefined ? undefined : ids.decodeCursor(after);
+        if (after !== undefined && position === undefined) {
+          return yield* agentError("invalid_request", `${JSON.stringify(after)} is not a cursor of this agent's`);
+        }
+        const ordered = sessions.byActivity();
+        const rest = position === undefined ? ordered : ordered.filter(({ activity }) => activity < position);
+        const page = rest.slice(0, limit);
+        const last = page.at(-1);
+        const data = yield* Effect.forEach(page, ({ conversationId }) => reads.session({ id: conversationId }));
+        return {
+          data,
+          ...(rest.length > limit && last !== undefined ? { next: ids.encodeCursor(last.activity) } : {}),
+        };
+      }),
+    );
+
+  const entries = (sessionId: string, entriesOptions?: EntriesOptions): Promise<Page<Entry>> =>
+    settle(
+      Effect.gen(function* () {
+        const decoded = yield* decode(EntriesOptions, entriesOptions ?? {}, "sessions.entries");
+        if (decoded.after !== undefined && decoded.before !== undefined) {
+          return yield* agentError("invalid_request", "A page is after an entry or before one, not both");
+        }
+        return yield* readPage(reads, yield* conversationOf(sessionId), sessionId, decoded);
+      }),
+    );
+
+  /** One entry the session published, by its id: where `messages.stream` starts a message that is already running. */
+  const entry = (sessionId: string, entryId: string): Promise<Entry> =>
+    settle(
+      Effect.gen(function* () {
+        const record = yield* reads.visibleEntry(yield* conversationOf(sessionId), entryId);
+        const [published] = record === undefined || !isPublished(record) ? [] : yield* reads.publish([record]);
+        if (published === undefined)
+          return yield* agentError("not_found", `No entry ${entryId} in session ${sessionId}`);
+        return published;
+      }),
+    );
+
+  const events = (sessionId: string, eventsOptions?: { after?: string; signal?: AbortSignal }) => {
+    const stream = sessionEvents(
+      {
+        harness,
+        reads,
+        ids,
+        context,
+        failureOf,
+        maxRetries: options.settings?.retry?.maxRetries ?? DEFAULT_RETRY_POLICY.maxRetries,
+      },
+      sessionId,
+      eventsOptions?.after,
+    );
+    const signal = eventsOptions?.signal;
+    return Stream.toAsyncIterable(
+      signal === undefined
+        ? stream
+        : stream.pipe(Stream.interruptWhen(released(signal).pipe(Effect.mapError((error) => error.reason)))),
     );
   };
 
-  const read = (sessionId: string, readOptions: ReadOptions = {}): Promise<ReadResult> => {
-    const refused = invalidRead(readOptions);
-    if (refused !== undefined) return Promise.resolve({ ok: false, error: refused });
-    return resolve<ReadResult>(readPage(reads, sessionId, readOptions), failed);
-  };
-
-  /** The conversation's newest message id, ended ones included; 0 before its first. */
-  const newestSubmission = (conversation: Conversation) =>
-    port(() =>
-      options.storage.scanSubmissions({ conversationId: conversation.id, order: "descending" }, 1, undefined, context),
-    ).pipe(Effect.map((page) => page.items[0]?.id ?? 0));
-
-  /** The conversation's messages newer than `boundary` that an abort ended. */
-  const abortedSince = (conversation: Conversation, boundary: number): Effect.Effect<InputRecord[], PortFailure> =>
-    Effect.gen(function* () {
-      const found: InputRecord[] = [];
-      let cursor: Parameters<Storage["scanSubmissions"]>[2];
-      do {
-        const page = yield* port(() =>
-          options.storage.scanSubmissions(
-            { conversationId: conversation.id, status: "unanswered", order: "descending" },
-            LIMITS.queuedPerSession,
-            cursor,
-            context,
-          ),
-        );
-        for (const record of page.items) {
-          if (record.id <= boundary) return found;
-          if (isInput(record) && record.reason === "aborted") found.push(record);
-        }
-        cursor = page.next;
-      } while (cursor !== undefined);
-      return found;
-    });
-
-  const abort = (sessionId: string, abortOptions?: { signal?: AbortSignal }): Promise<AbortResult> =>
-    resolve<AbortResult>(
+  /**
+   * Stops everything the session is doing, and answers once that stop is recorded rather than once it has ended
+   * (§4). pi-durable runs commits one at a time in the order they are called, and `abort()` calls its commit at once:
+   * so the read before it sees what it stops, and the check after it runs once the stop is in the storage.
+   */
+  const cancel = (sessionId: string): Promise<{ stopped: string[] }> =>
+    settle(
       Effect.gen(function* () {
-        const conversation = yield* reads.conversation(sessionId);
-        if (conversation === undefined) return failure("not_found", `No session ${sessionId}`);
-        // Read before the state: a message admitted between this read and the stop is newer than it, and one admitted
-        // before it is in the state unless it has ended.
-        const boundary = yield* newestSubmission(conversation);
-        const before = yield* reads.state(conversation);
-        const signal = abortOptions?.signal;
-        const stopping = signal === undefined ? context : withAbortSignal(signal, context);
-        const stopped = yield* port(() => conversation.abort(stopping)).pipe(
-          Effect.as(undefined),
-          Effect.catchCause((cause) =>
-            Effect.succeed(signal?.aborted ? "The abort was aborted" : failureOf(portError(cause)).message),
-          ),
-        );
-        if (stopped !== undefined) return { ok: false, unknown: { reason: stopped } };
-        const ended = new Map<number, InputRecord>();
-        for (const messageId of [...before.taken, ...before.queued]) {
-          const record = yield* reads.submission(messageId);
-          if (record?.status === "unanswered" && record.reason === "aborted") ended.set(record.id, record);
+        const conversation = yield* conversationOf(sessionId);
+        let abortFailed: unknown;
+        const recorded = yield* port(() => {
+          const before = harness.commit(async (tx) => {
+            // Copied out: a document read in a transaction cannot be read once it has settled.
+            const run = (await tx.doc(LiveDoc, conversation.id))?.run;
+            return {
+              run: run === undefined ? undefined : { taskId: run.taskId, inputs: [...run.inputs] },
+              queued: queuedInputs(await tx.doc(InboxDoc, conversation.id)),
+            };
+          }, context);
+          conversation.abort(context).catch((error: unknown) => {
+            abortFailed = error;
+            if (!closing) log.warn(`[fastagent] stopping session ${sessionId} failed: ${String(error)}`);
+          });
+          return harness.commit(async (tx) => {
+            const { run, queued } = await before;
+            const task = run === undefined ? undefined : await tx.task(run.taskId);
+            const stillQueued = new Set(queuedInputs(await tx.doc(InboxDoc, conversation.id)));
+            return {
+              marked:
+                (task === undefined || task.abortRequested || task.state.status === "terminal") &&
+                queued.every((id) => !stillQueued.has(id)),
+              stopped: [...(run?.inputs ?? []), ...queued],
+            };
+          }, context);
+        });
+        if (!recorded.marked) {
+          throw new Error(
+            `the stop of session ${sessionId} was not recorded: ${String(abortFailed ?? "no reason given")}`,
+          );
         }
-        // Not told apart: a message invoked after this stop that a later abort ended before this read.
-        for (const record of yield* abortedSince(conversation, boundary)) ended.set(record.id, record);
-        const records = [...ended.values()].sort((a, b) => a.id - b.id);
-        const idsOf = (taken: boolean) =>
-          records.filter((record) => (record.entry !== undefined) === taken).map((record) => ids.encode(record.id));
-        return { ok: true, stopped: { taken: idsOf(true), queued: idsOf(false) } };
+        return { stopped: recorded.stopped.map((id) => ids.encode(id)) };
       }),
-      failed,
     );
 
-  const attachment: Agent["attachment"] = (sessionId, ref) =>
-    settleOrReject(
+  const compact = (sessionId: string, compactOptions?: CompactOptions): Promise<void> =>
+    settle(
       Effect.gen(function* () {
+        const { instructions } = yield* decode(CompactOptions, compactOptions ?? {}, "sessions.compact");
+        const conversation = yield* conversationOf(sessionId);
+        yield* port(() => conversation.compact(instructions, context));
+      }),
+    );
+
+  const attachment = (sessionId: string, ref: string): Promise<{ mimeType: string; data: Uint8Array }> =>
+    settle(
+      Effect.gen(function* () {
+        const missing = agentError("not_found", `No attachment ${ref} in session ${sessionId}`);
         const parsed = parseImageRef(ref);
-        if (parsed === undefined) return undefined;
-        const conversation = yield* reads.conversation(sessionId);
-        if (conversation === undefined) return undefined;
-        const entry = yield* reads.visibleEntry(conversation, parsed.entryId);
-        const image = entry === undefined ? undefined : imageAt(entry, parsed.index);
-        return image === undefined ? undefined : { mimeType: image.mimeType, data: image.data };
+        if (parsed === undefined) return yield* missing;
+        const record = yield* reads.visibleEntry(yield* conversationOf(sessionId), parsed.entryId);
+        const image = record === undefined ? undefined : imageAt(record, parsed.index);
+        if (image === undefined) return yield* missing;
+        return { mimeType: image.mimeType, data: new Uint8Array(Buffer.from(image.data, "base64")) };
       }),
     );
 
-  /** Most recently active first; the cursor is the activity of the last session a page listed. */
-  const listSessions = async (listOptions: ListOptions = {}): Promise<ListResult> => {
-    const { before, limit = LIMITS.readDefault } = listOptions;
-    if (!Number.isInteger(limit) || limit < 1 || limit > LIMITS.readMax) {
-      return failure("invalid_request", `limit is an integer from 1 to ${LIMITS.readMax}`);
-    }
-    const after = before === undefined ? undefined : ids.decodeCursor(before);
-    if (before !== undefined && after === undefined) {
-      return failure("invalid_request", `${JSON.stringify(before)} is not a cursor of this agent's`);
-    }
-    const ordered = sessions.byActivity();
-    const rest = after === undefined ? ordered : ordered.filter(({ activity }) => activity < after);
-    const page = rest.slice(0, limit);
-    const last = page.at(-1);
-    return {
-      ok: true,
-      sessions: page.map(({ conversationId }) => ({ sessionId: ids.encode(conversationId) })),
-      ...(rest.length > limit && last !== undefined ? { next: ids.encodeCursor(last.activity) } : {}),
-    };
+  const stream: Agent["messages"]["stream"] = (request, streamOptions) => {
+    const decoded = decode(SendRequest, request, "messages.stream");
+    if (Exit.isFailure(decoded)) return failing(Cause.squash(decoded.cause));
+    return messageStream(
+      {
+        events: (sessionId, after) => events(sessionId, after === undefined ? {} : { after }),
+        admit: (sent) => settle(admit(sent)),
+        get: (sessionId, messageId) => get({ sessionId, messageId }),
+        entry,
+        entries,
+      },
+      decoded.value,
+      streamOptions?.signal,
+    );
   };
 
   return {
     harness,
     info,
-    invoke,
-    getMessage,
-    createSession,
-    configure,
-    read,
-    resume: (sessionId, resumeOptions) =>
-      Stream.toAsyncIterable(
-        resumeStream(
-          {
-            harness,
-            reads,
-            ids,
-            context,
-            failureOf,
-            maxRetries: options.settings?.retry?.maxRetries ?? DEFAULT_RETRY_POLICY.maxRetries,
-          },
-          sessionId,
-          resumeOptions?.replayFrom,
-        ),
-      ),
-    abort,
-    attachment,
-    listSessions,
+    usage: () => settle(port(() => harness.usage(context)).pipe(Effect.map((spent) => usageOfState(spent)))),
+    sessions: {
+      create,
+      get: (sessionId) => settle(conversationOf(sessionId).pipe(Effect.flatMap(reads.session))),
+      list,
+      update,
+      entries,
+      events,
+      cancel,
+      compact,
+      attachment,
+    },
+    messages: { send, stream, get },
     conversation: (sessionId) => Effect.runPromise(reads.conversation(sessionId)),
     close: async () => {
       closing = true;
@@ -570,44 +727,26 @@ function durableAgent(
   };
 }
 
-function invalidInvoke(request: InvokeRequest): AgentError | undefined {
-  const { sessionId, idempotencyKey, content } = request;
-  if (idempotencyKey !== undefined) {
-    if (sessionId === undefined) return agentError("invalid_request", "An idempotencyKey requires a sessionId");
-    if (idempotencyKey.length < 1 || idempotencyKey.length > LIMITS.idempotencyKeyMax) {
-      return agentError("invalid_request", `An idempotencyKey has 1 to ${LIMITS.idempotencyKeyMax} characters`);
-    }
-  }
-  if (content.length === 0) return agentError("invalid_request", "A message has at least one content part");
-  const outside = content.find((part) => !INPUTS.includes(part.type));
-  if (outside !== undefined) {
-    return agentError("invalid_request", `This agent does not take content of type ${JSON.stringify(outside.type)}`);
-  }
-  if (content.some((part) => part.type === "image" && !("data" in part))) {
-    return agentError("invalid_request", "An image in a message carries its data, not a ref");
-  }
-  return undefined;
-}
-
-function invalidRead({ after, before, limit }: ReadOptions): AgentError | undefined {
-  if (after !== undefined && before !== undefined) {
-    return agentError("invalid_request", "A read pages after an entry or before one, not both");
-  }
-  if (limit !== undefined && (!Number.isInteger(limit) || limit < 0 || limit > LIMITS.readMax)) {
-    return agentError("invalid_request", `limit is an integer from 0 to ${LIMITS.readMax}`);
-  }
-  return undefined;
+/** An iterable whose first read rejects with `error`: an operation refused before it began. */
+function failing(error: unknown): AsyncIterable<never> {
+  return {
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.reject(error),
+      return: async () => ({ done: true as const, value: undefined }),
+    }),
+  };
 }
 
 /** The content the model sees, and the first text as sent when it was a command the agent expanded. */
 function expandCommand(
-  content: ContentPart[],
+  content: SendRequest["content"],
   commands: readonly AgentCommand[],
 ): { content: (TextContent | ImageContent)[]; sent?: string } {
-  const parts = content.map((part): TextContent | ImageContent =>
-    part.type === "text"
-      ? { type: "text", text: part.text }
-      : { type: "image", mimeType: part.mimeType, data: (part as { data: string }).data },
+  const parts = (typeof content === "string" ? [{ type: "text" as const, text: content }] : content).map(
+    (part): TextContent | ImageContent =>
+      part.type === "text"
+        ? { type: "text", text: part.text }
+        : { type: "image", mimeType: part.mimeType, data: part.data },
   );
   const first = parts[0];
   const match = first?.type === "text" ? COMMAND.exec(first.text) : null;
@@ -616,22 +755,19 @@ function expandCommand(
   return { content: [{ type: "text", text: command.expand(match[2] ?? "") }, ...parts.slice(1)], sent: first.text };
 }
 
-/** One page of a session's published entries (SPEC.md §5): after a cursor, before one, or the newest. */
+/** One page of a session's published entries (§4): after a cursor, before one, or the newest. */
 function readPage(
   reads: Reads,
+  conversation: Conversation,
   sessionId: string,
-  { after, before, limit = LIMITS.readDefault }: ReadOptions,
-): Effect.Effect<ReadResult, PortFailure> {
+  { after, before, limit = LIMITS.pageDefault }: EntriesOptions,
+): Effect.Effect<Page<Entry>, AgentError | PortFailure> {
   return Effect.gen(function* () {
-    const conversation = yield* reads.conversation(sessionId);
-    if (conversation === undefined) return failure("not_found", `No session ${sessionId}`);
     const cursor = after ?? before;
     const at = cursor === undefined ? undefined : yield* reads.visibleEntry(conversation, cursor);
     if (cursor !== undefined && at === undefined) {
-      return failure("not_found", `No entry ${cursor} in session ${sessionId}`);
+      return yield* agentError("not_found", `No entry ${cursor} in session ${sessionId}`);
     }
-    const state = yield* reads.state(conversation);
-    if (limit === 0) return { ok: true, state, entries: [] };
     const bound = (id: number) => id as EntryRecord["id"];
     const take = (query: Parameters<Reads["published"]>[1]) =>
       reads.published(conversation, query).pipe(Stream.take(limit + 1), Stream.runCollect);
@@ -640,16 +776,13 @@ function readPage(
       const records = yield* take({ order: "ascending", minEntryId: bound(at.id + 1) });
       const page = records.slice(0, limit);
       const first = page[0];
-      if (first === undefined) return { ok: true, state, entries: [] };
-      const parent = yield* reads.newestPublished(conversation, first.id - 1);
-      const entries = withinBudget(yield* reads.publish(page, parent), "oldest");
-      const last = entries.at(-1) as Entry;
+      if (first === undefined) return { data: [] };
+      const earlier = yield* reads.newestPublished(conversation, first.id - 1);
+      const data = withinBudget(yield* reads.publish(page), "oldest");
       return {
-        ok: true,
-        state,
-        entries,
-        ...(parent === undefined ? {} : { prev: (entries[0] as Entry).id }),
-        ...(records.length > limit || entries.length < page.length ? { next: last.id } : {}),
+        data,
+        ...(earlier === undefined ? {} : { prev: (data[0] as Entry).id }),
+        ...(records.length > limit || data.length < page.length ? { next: (data.at(-1) as Entry).id } : {}),
       };
     }
 
@@ -658,29 +791,25 @@ function readPage(
       ...(at === undefined ? {} : { maxEntryId: bound(at.id - 1) }),
     });
     const page = records.slice(0, limit).reverse();
-    if (page.length === 0) return { ok: true, state, entries: [] };
+    if (page.length === 0) return { data: [] };
     const older = records[limit];
-    const published = yield* reads.publish(page, older?.id);
-    const entries = withinBudget(published, "newest");
+    const published = yield* reads.publish(page);
+    const data = withinBudget(published, "newest");
     const newer =
       at === undefined
         ? undefined
         : yield* reads
             .published(conversation, { order: "ascending", minEntryId: bound(at.id) })
             .pipe(Stream.take(1), Stream.runHead);
-    const first = entries[0] as Entry;
-    const last = entries.at(-1) as Entry;
     return {
-      ok: true,
-      state,
-      entries,
-      ...(older !== undefined || entries.length < published.length ? { prev: first.id } : {}),
-      ...(newer !== undefined && newer._tag === "Some" ? { next: last.id } : {}),
+      data,
+      ...(older !== undefined || data.length < published.length ? { prev: (data[0] as Entry).id } : {}),
+      ...(newer !== undefined && newer._tag === "Some" ? { next: (data.at(-1) as Entry).id } : {}),
     };
   });
 }
 
-/** A page stops at the byte budget (SPEC.md §7.2), keeping at least one entry: the end nearest its cursor. */
+/** A page stops at the byte budget (§7), keeping at least one entry: the end nearest its cursor. */
 function withinBudget(entries: Entry[], keep: "oldest" | "newest"): Entry[] {
   const ordered = keep === "oldest" ? entries : [...entries].reverse();
   const kept: Entry[] = [];

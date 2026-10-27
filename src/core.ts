@@ -1,40 +1,34 @@
-// Harness-neutral: the Agent API (docs/SPEC.md), reading a message's answer as it is written, and the
-// channel contract a channel is written against. No Node built-in, no harness.
+// Harness-neutral: the Agent API (docs/design/agent-api.md) and the channel contract a channel is written against.
+// No Node built-in, no harness.
 export type {
-  AbortResult,
   Agent,
-  AgentError,
+  AgentErrorData,
   AgentInfo,
-  Attachment,
-  ConfigureResult,
+  CompactOptions,
   ContentPart,
   CreateSessionOptions,
-  CreateSessionResult,
-  DoneMessage,
+  EntriesOptions,
   Entry,
   ErrorCode,
-  ForkSource,
-  InvokeRequest,
-  InvokeResult,
   Json,
   ListOptions,
-  ListResult,
+  Message,
+  MessageKey,
   MessageStatus,
-  Outcome,
-  ReadOptions,
-  ReadResult,
-  Receipt,
-  ReplayFrom,
-  ResumeEvent,
+  MessageStreamEvent,
+  ModelRef,
+  Page,
+  SendRequest,
+  Session,
+  SessionChanges,
   SessionEvent,
   SessionSettings,
-  SessionState,
+  ThinkingLevel,
+  Tokens,
   Usage,
-  WaitResult,
-  WhenBusy,
+  WaitOptions,
 } from "./agent-api.ts";
-export { AgentRejection, LIMITS } from "./agent-api.ts";
-export { type StreamResult, stream } from "./agent-api-stream.ts";
+export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 export { readBodyCapped } from "./channels/body.ts";
 export { text, textHeaders } from "./channels/respond.ts";
 export type {

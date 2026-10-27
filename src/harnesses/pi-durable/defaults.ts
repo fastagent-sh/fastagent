@@ -11,26 +11,35 @@ export interface Defaults {
   thinkingLevel?: ModelThinkingLevel;
 }
 
+/** Why a session's settings cannot answer a message: a model the agent lacks, or tools it no longer has. */
+export type Unanswerable = { missing: "model"; model: ModelRef | undefined } | { missing: "tools"; tools: string[] };
+
 /**
- * Take the defaults the conversation's settings lack, unless the model it would answer with is not among the agent's
- * models: then nothing is written, and that model (or none) is returned so the message can be refused.
+ * Take the defaults the conversation's settings lack, unless the settings cannot answer a message: the model it would
+ * answer with is not among the agent's models, or a tool it enables is not among the agent's tools. Then nothing is
+ * written, and what is missing is returned so the message can be refused.
  */
-export async function takeDefaults(
+export async function admitSettings(
   tx: Tx,
   conversationId: ConversationId,
   defaults: Defaults,
-  available: (model: ModelRef) => boolean,
-): Promise<{ ok: true } | { ok: false; model: ModelRef | undefined }> {
+  has: { model(model: ModelRef): boolean; tool(name: string): boolean },
+): Promise<Unanswerable | undefined> {
   const agent = await tx.doc(AgentDoc, conversationId);
   const model = agent.model ?? defaults.model;
-  if (model === undefined || !available(model)) {
-    return { ok: false, model: model === undefined ? undefined : { provider: model.provider, modelId: model.modelId } };
+  if (model === undefined || !has.model(model)) {
+    return {
+      missing: "model",
+      model: model === undefined ? undefined : { provider: model.provider, modelId: model.modelId },
+    };
   }
+  const missing = Array.isArray(agent.tools) ? agent.tools.filter((name) => !has.tool(name)) : [];
+  if (missing.length > 0) return { missing: "tools", tools: missing };
   await configure(tx, conversationId, {
     ...(agent.model === undefined ? { model } : {}),
     ...(agent.thinkingLevel === undefined && defaults.thinkingLevel !== undefined
       ? { thinkingLevel: defaults.thinkingLevel }
       : {}),
   });
-  return { ok: true };
+  return undefined;
 }

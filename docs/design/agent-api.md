@@ -1,16 +1,17 @@
 ---
-title: Agent API v2 (proposed)
-description: "The proposed second version of the Agent API: one model of sessions, messages and entries, bound in process in TypeScript and over HTTP, with an API key that keeps everyone but the instance's customer out."
+title: Agent API v2
+description: "The second version of the Agent API: one model of sessions, messages and entries, bound in process in TypeScript and over HTTP, with an API key that keeps everyone but the instance's customer out."
 type: spec
-status: proposed
+status: in progress
 version: 2.0-draft
-updated: 2026-10-27
+updated: 2026-10-28
 ---
 
-# Agent API v2 (proposed)
+# Agent API v2
 
-> **Status: proposed, not implemented.** The code implements [v1](../SPEC.md). When this is implemented, it replaces
-> `docs/SPEC.md`. Changing its semantics before then is a review of this draft.
+> **Status: in progress.** The code implements the in-process binding (§8's interface; the entry points of §8 and the
+> HTTP binding of §9 are not yet). When it is all implemented, this replaces `docs/SPEC.md`, which still describes
+> v1. Changing its semantics before then is a review of this draft.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
 
@@ -222,9 +223,10 @@ agent.
   the source's entries up to `entryId` (all of them without it), the same ids and data, and what it writes afterwards
   is its own. The source's messages stay the source's. A fork takes its source's settings as of that entry, each
   supplied field replacing the inherited one. Settings are stored without checking them against the agent: a message
-  into a session whose model is not among `info().models` is refused `missing_model`, and one whose `tools` names a
-  tool not among `info().tools` (a later deployment removed it) is refused `missing_tool`, naming it, until `update`
-  changes the setting. A session never runs with fewer tools than it names.
+  into a session whose model the agent does not have is refused `missing_model` (one it has, whose provider has no
+  credential here, is taken and fails `auth_required`), and one whose `tools` names a tool not among `info().tools`
+  (a later deployment removed it) is refused `missing_tool`, naming it, until `update` changes the setting. A session
+  never runs with fewer tools than it names.
 - **`sessions.get`** is the session as it is now.
 - **`sessions.list`** lists every session the instance holds, whoever created it (a channel, a schedule, `invoke`, an
   app), most recently active first. `next` is the cursor `after` takes for the next page. A session that becomes active

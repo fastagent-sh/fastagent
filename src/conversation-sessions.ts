@@ -9,21 +9,21 @@
  * sent only once its session is recorded.
  */
 import { dirname } from "node:path";
-import { type Agent, AgentRejection } from "./agent-api.ts";
+import { type Agent, AgentError } from "./agent-api.ts";
 import { log } from "./log.ts";
 import { ensureStateHome, loadStateFile, saveStateFile } from "./state-file.ts";
 
-/** A new, empty session: what a conversation the agent has not talked in starts with. */
-export async function newSession(agent: Pick<Agent, "createSession">): Promise<string> {
-  const created = await agent.createSession();
-  if (!created.ok) {
-    throw new AgentRejection({ ...created.error, message: `creating a session failed: ${created.error.message}` });
-  }
-  return created.sessionId;
-}
-
 /** What the map asks of the Agent: whether a recorded session is still there, and a new one when it is not. */
-type SessionsAgent = Pick<Agent, "read" | "createSession">;
+type SessionsAgent = { sessions: Pick<Agent["sessions"], "get" | "create"> };
+
+/** A new, empty session: what a conversation the agent has not talked in starts with. */
+export async function newSession(agent: SessionsAgent): Promise<string> {
+  const created = await agent.sessions.create().catch((error: unknown) => {
+    if (!(error instanceof AgentError)) throw error;
+    throw new AgentError({ ...error, message: `creating a session failed: ${error.message}` });
+  });
+  return created.id;
+}
 
 export interface ConversationSessions {
   /** The session `conversation` was recorded with, when it has one, as recorded. */
@@ -54,10 +54,15 @@ export function conversationSessions(file: string): ConversationSessions {
   const confirmed = new Set<string>();
   const held = async (agent: SessionsAgent, sessionId: string): Promise<boolean> => {
     if (confirmed.has(sessionId)) return true;
-    const page = await agent.read(sessionId, { limit: 0 });
-    if (!page.ok && page.error.code !== "not_found") throw new AgentRejection(page.error);
-    if (page.ok) confirmed.add(sessionId);
-    return page.ok;
+    const held = await agent.sessions.get(sessionId).then(
+      () => true,
+      (error: unknown) => {
+        if (error instanceof AgentError && error.code === "not_found") return false;
+        throw error;
+      },
+    );
+    if (held) confirmed.add(sessionId);
+    return held;
   };
   return {
     get: (conversation) => map().get(conversation),
