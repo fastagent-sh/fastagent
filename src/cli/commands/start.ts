@@ -167,9 +167,8 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
       "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
     );
   }
-  const mountable = { ...opened, channels: opened.code.channels, schedules: opened.code.schedules };
   const service = await (isAgentcoreRuntime()
-    ? mountAgentcoreService(mountable)
-    : mountAgentService(mountable, cliMountOptions()));
+    ? mountAgentcoreService(opened)
+    : mountAgentService(opened, cliMountOptions()));
   return { ...service, stateRoot, port: opened.definition.config.http?.port ?? DEFAULT_HTTP_PORT };
 }

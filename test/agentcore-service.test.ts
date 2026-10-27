@@ -19,10 +19,7 @@ async function agentDir(files: Record<string, string> = {}, config = `{ model: "
 }
 
 /** The directory opened as a serve opens it, with no storage of its own, as the mount takes it. */
-const open = async (dir: string) => {
-  const opened = await openServing(dir, { locking: "memory" });
-  return { ...opened, channels: opened.code.channels, schedules: opened.code.schedules };
-};
+const open = (dir: string) => openServing(dir, { locking: "memory" });
 
 const DIGEST = `import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({ cron: "0 9 * * *", prompt: "hi" });\n`;
