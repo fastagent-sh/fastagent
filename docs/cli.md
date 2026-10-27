@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, content, dev, chat, invoke, tool, start, login, models, add, schedules, and deploy commands with flags."
+description: "The fastagent CLI reference: init, info, content, env, models, login, dev, invoke, start, schedules, add, deploy, logs, and destroy, with their flags."
 status: current
 ---
 
@@ -21,14 +21,12 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `init <dir>` | Create an agent in a directory of its own; `--content` declares what it works on: a directory or a GitHub repository. |
 | `info [agent]` | Show what an agent assembles into, without serving. |
 | `content list\|add\|remove` | List, add or remove what the agent works on and knows. |
-| `env add\|remove\|update\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
-| `models [search]` | List model specs. |
+| `env add\|remove\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
+| `models [search]` | List the model specs the agent can name. |
 | `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
-| `dev [agent]` | Serve locally with watch/reload. |
-| `chat [agent]` | Open the assembled agent in pi's interactive TUI. |
-| `invoke <message> [agent]` | Run one turn and exit. |
+| `dev [agent]` | Serve locally, restarting on code edits. |
+| `invoke <message> [agent]` | Send one message in a new session, print its answer, and exit. |
 | `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
-| `tool <name> <json> [agent]` | Run one tool directly. |
 | `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. With `--no-onboard`, each writes only the channel (if missing) and its tools, which is how an existing agent picks up a new tool. |
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). `--tunnel --run` also starts a Quick Tunnel and registers webhooks. |
@@ -49,10 +47,9 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 fastagent init <dir> [--content <source>]... [--no-install]
 ```
 
-Creates the agent in `<dir>` itself, which must be new or empty: `APPEND_SYSTEM.md`, a `writing-great-skills`
-example skill, `extensions/web-access.ts` (web search and page fetching from `@fastagent-sh/pi-web-access`, which
-`package.json` depends on), `fastagent.config.ts`, `package.json`, `.secrets/.env.example`,
-`.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`, then makes the directory a git
+Creates the agent in `<dir>` itself, which must be new or empty: `SYSTEM.md` (its system prompt), a
+`writing-great-skills` example skill, `fastagent.config.ts`, `package.json` (FastAgent, and the exact pi-durable and
+pi-ai versions this release is built with), `.secrets/.env.example`, `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`, then makes the directory a git
 repository whose first commit is the scaffold, so a change the agent makes to itself can be reviewed and undone. It
 says when it does not: the directory is already inside a git repository that tracks it (one that ignores it, such as
 a home directory kept in git with `*` ignored, does not count), git is not installed, or the commit failed for lack of
@@ -85,23 +82,22 @@ A `fastagent.config.ts` makes a directory an agent, whatever its name. Its conte
 fastagent info [agent] [--json] [--model provider/modelId]
 ```
 
-Prints, without serving:
+Prints what the agent builds into, without serving it:
 
 - the agent directory, its content (`works on` / `knows`, each with its location), its environment (the packages and
-  apt packages `context.json` declares), config path, model and its source,
-- the prompt (pi's default or `SYSTEM.md`, plus `APPEND_SYSTEM.md`),
-- skills and their diagnostics,
-- coding tools, authored tools and collisions,
-- channels that import cleanly (a failing one is reported, and listed as `channelFailures` in `--json`),
-- schedules with their next fire instant (a file that is not a valid schedule is reported),
-- declared secrets (a tool's or channel's, and the variables `context.json` declares), flagging any with no value
-  here (`dev`/`start` refuse to boot without them),
-- state, sessions and auth paths.
+  apt packages `context.json` declares), the config path, and the model with its source (`--model`,
+  `FASTAGENT_MODEL` or the config) and whether it resolves,
+- its tools, extensions, skills and commands (prompt templates and `/skill:<name>`),
+- its channels, each with how it is reached (webhook or long connection),
+- its schedules with their next fire instant,
+- the declared secrets (each with where it is declared and what it is for), flagging any with no value here: `dev`
+  and `start` refuse to boot without them,
+- state, secrets and auth paths.
 
-Content that cannot be resolved (its directory is missing, say) and an environment FastAgent refuses are reported, not
-fatal; `info` installs nothing. `--json` carries `content`, `contentError`, `environment`, `environmentError` (what
-dev and start stop on) and `contextFiles` (the agent directory's `AGENTS.md`; nothing of its content).
-Read-only.
+A module that does not load, a schedule whose cron is not valid, or an environment FastAgent refuses makes `info`
+fail as `dev` and `start` would, with the reason (exit 1). Content that cannot be resolved (a bound directory is
+missing, say) is reported, not fatal. `info` installs and clones nothing. It writes nothing but the generated
+`.fastagent/`, as every command that reads the definition does.
 
 ## `fastagent content`
 
@@ -175,19 +171,14 @@ whose image runs the FastAgent they list.
 ## `fastagent models`
 
 ```bash
-fastagent models [search] [--refresh] [-g|--global]
+fastagent models [search] [-g|--global]
 ```
 
-Lists the model specs (`provider/modelId`) the agent in the current directory can name, optionally filtered: pi's
-built-ins, its `models-store.json` and `models.json` over the machine's (`~/.fastagent/`). Outside an agent, or with
-`-g`, it lists the machine's. Inside an agent's subdirectory it refuses (as `login` does) rather than list the
-machine's without the agent's own files: `cd` to the agent, or pass `-g`.
-
-`--refresh` first fetches the model catalog from pi.dev into `models-store.json`, so models released after the
-installed pi appear: the agent's, with its credentials (commit the file; it ships with a deploy), or with `-g` the
-machine's, with the global credentials file and the environment (every agent here reads it; it does not ship). It
-fails, naming the provider, when the refresh does, and when no provider has a usable credential. See
-[configuration](configuration.md#models-newer-than-pi-models-storejson).
+Lists the model specs (`provider/modelId`) the agent in the current directory can name, optionally filtered: pi-ai's
+built-in providers, and the providers its `fastagent.config.ts` declares
+([custom models](configuration.md#custom-models)). It needs none of the secrets the agent declares. Outside an agent,
+or with `-g`, it lists pi-ai's built-ins alone. Inside an agent's subdirectory it refuses (as `login` does): `cd` to
+the agent, or pass `-g`.
 
 ## `fastagent login`
 
@@ -201,7 +192,7 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
 `~/.fastagent/.secrets/auth.json`. Inside an agent but not at its root, it refuses and says where to `cd`.
 
 - An agent reads the global file for a provider it has no credential of its own for: no entry in its `auth.json`, no
-  `apiKey` in its `models.json`, no env variable ([order](configuration.md#auth-and-secrets)). So one `login -g`
+  provider in its config that authenticates itself, no env variable ([order](configuration.md#auth-and-secrets)). So one `login -g`
   serves every agent on the machine that has nothing else for that provider. A refresh is written back to the file
   it was read from. `login` warns when an env variable already authenticates the provider, because the global login
   is then not used.
@@ -212,7 +203,7 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
   each copy rotates the single-use refresh token and breaks the other.
 - An API-key login is checked with one request to pi's default model for the provider, before the key is written.
   A 401 is never stored, so the file keeps what it held, and the key is asked for again; other failures keep the
-  key and print the provider's message. Inside an agent the check goes to the endpoint its `models.json` names (a
+  key and print the provider's message. Inside an agent the check goes to the endpoint its config's provider names (a
   gateway in front of a built-in provider, say); with `-g` it goes to the provider's own endpoint.
 - `auth.json` is always written `0600`. `.secrets/.env` is `0600` only when fastagent creates it; directories keep
   the permissions you gave them.
@@ -220,35 +211,23 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
 ## `fastagent dev`
 
 ```bash
-fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-api] [--no-input]
+fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-input]
 ```
 
-Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, skills and prompt templates are re-read
-every turn. A supervisor restarts the
-worker on edits to `tools/`, `channels/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`,
-once the turns running in it finish (at most 10 minutes, after which it restarts anyway and says it cut work off), so
-an agent that edits its own `tools/` does not cut off the turn that made the edit.
+Serves the agent locally: its channels, schedules and wake-ups. `SYSTEM.md`, `AGENTS.md`, `skills/` and `prompts/` are
+read for every message. A supervisor restarts the worker on edits to `src/`, `fastagent.config.ts`, `package.json` and
+`.secrets/.env`, once the messages running in it finish (at most 10 minutes, after which it restarts anyway and says it
+cut work off), so an agent that edits its own code does not cut off the message that made the edit. A helper imported
+from outside `src/` is not watched: restart `dev` after editing one.
 
-With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`,
-`chat`, `deploy`) show the model catalog and write the pick to the config.
+The instance's storage (`<state root>/agent.sqlite`) is held by one process at a time: a second `dev` or `start` of the
+same agent is refused, naming the file.
+
+With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`, `deploy`) show the model
+catalog and use the pick for this run, printing the line to put in the config.
 
 `--tunnel` opens a Cloudflare Quick Tunnel (needs `cloudflared`), prints the public URL, and registers webhooks
 where it can; see [Local webhook development](channels.md#local-webhook-development).
-
-## `fastagent chat`
-
-```bash
-fastagent chat [agent] [--model provider/modelId]
-```
-
-Opens the agent in pi's TUI with the definition's prompt files, `AGENTS.md`, skills, prompt templates, `tools/` and
-`extensions/`, plus the machine's skills and prompt templates. Your pi extensions and `APPEND_SYSTEM.md` are not loaded.
-
-- Sessions are pi's per-directory records (`~/.pi/agent/sessions/<encoded agent directory>`), separate from served
-  sessions.
-- Auth is fastagent's (`FASTAGENT_AUTH_PATH` > the agent's `auth.json`); pi's `/login` writes to the same file.
-- TUI settings (theme, keybindings, editor) come from `~/.pi/agent/settings.json`. Reasoning effort comes from
-  `thinkingLevel` in `fastagent.config.ts`, as when serving.
 
 ## `fastagent invoke`
 
@@ -256,7 +235,10 @@ Opens the agent in pi's TUI with the definition's prompt files, `AGENTS.md`, ski
 fastagent invoke <message> [agent] [--model provider/modelId] [--no-input]
 ```
 
-Runs one turn and exits: answer text to stdout, tool and diagnostic lines to stderr, non-zero exit on `failed`.
+Sends one message in a new session and exits: the answer text to stdout, tool and diagnostic lines to stderr, and a
+non-zero exit unless the message completed. It opens the agent on storage of its own, in memory, so it runs beside a
+`dev` or `start` of the same agent and leaves no session behind; it has no `wake` tool, since nothing would fire it.
+This is the check a coding agent runs: one message, its answer, and an exit code.
 
 ## `fastagent schedules list`
 
@@ -264,37 +246,20 @@ Runs one turn and exits: answer text to stdout, tool and diagnostic lines to std
 fastagent schedules list [agent] [--json]
 ```
 
-Lists every schedule (`schedules/<name>.md`, see [Schedules](configuration.md#schedules)) with its next cron
-instant, how its last run ended and the session its runs continue (`schedule:<name>`), then the agent's pending
-wake-ups (id, next fire, one-shot or cron, session, prompt). `--json` adds each schedule's retained fire history
-(the last 512):
+Lists every schedule (`src/schedules/<name>.ts`, see [Schedules](configuration.md#schedules)) with its next cron
+instant, how its last run ended and the session its runs continue, then the agent's pending wake-ups (id, next fire,
+one-shot or cron, session, prompt). `--json` adds each schedule's retained fire history (the last 512):
 
 | Outcome | Meaning |
 |---|---|
-| `completed` / `failed` | The turn finished, or failed. |
+| `completed` / `failed` | The message finished, or failed. |
 | `skipped` | The previous run was still going when this instant arrived. |
-| `interrupted` | The process stopped mid-turn. The instant is not replayed; the next resident start records it. |
-| `unreported` | Still running, or never settled (AgentCore has no resident start to record it). |
+| `interrupted` | The process stopped after claiming the instant and before sending its message. The instant is not replayed. |
+| `unreported` | Still running, or not settled yet: the next start settles it from what became of its message. |
 
-What the agent said is in its session under `<state root>/sessions/`. A failure before the model was reached
+What the agent said is in the schedule's session, in the instance's storage. A failure before the model was reached
 (credentials, model) is only in the logs, under the host's retention. The agent cancels its own wake-ups with
-`unwake({ id })`; as a last resort, edit `<state root>/schedule/wakeups.json`.
-
-## `fastagent tool`
-
-```bash
-fastagent tool <name> '<json-args>' [agent]
-```
-
-Runs one tool directly, without a model or server. It gets the agent directory as `cwd` and the agent's content,
-but no session.
-
-```bash
-fastagent tool reverse '{"text":"hello"}'
-```
-
-The result goes to stdout; stderr reports its size in model tokens. See
-[Output budget](api-reference.md#output-budget).
+`unwake({ id })`, from the session that set them.
 
 ## `fastagent add telegram|slack|feishu|lark`
 
@@ -309,8 +274,8 @@ fastagent add lark [agent]     # Lark international: console + credential valida
                              # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding
 ```
 
-Writes `channels/<kind>.ts` (yours after that) and the channel's companion tools (`tools/<kind>-send.ts`, and
-`tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), appends variables to
+Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion tools (`src/tools/<kind>-send.ts`, and
+`src/tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), appends variables to
 `.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
 `add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
 `--env production` selects `.secrets/production/.env` and `.state/production` without changing dev credentials.
@@ -339,16 +304,16 @@ from the machine's skill directories. `--update` overwrites an existing one.
 ## `fastagent start`
 
 ```bash
-fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-api] [--no-input]
+fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
 ```
 
-Serves without watch. Binds all interfaces by default.
+Serves without watching. Binds all interfaces by default. A serve answers only its channels' routes and `GET /health`:
+there is no HTTP API ([security boundary](design/security-boundary.md)).
 
 ```txt
 port:     --port > PORT > fastagent.config.ts http.port > 8787
 bind:     --bind > all interfaces
-api:      --no-api > fastagent.config.ts http.api > served
-state:    FASTAGENT_STATE_DIR   > <agent dir>/.state/production
+state:    FASTAGENT_STATE_DIR   > <agent dir>/.state/production    (agent.sqlite, channel and schedule state)
 secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production
 content:  <agent dir>/content/<name> (clones; a host has no context.local.json)
 ```
@@ -361,7 +326,6 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-api` | `dev`, `start` | Do not serve the agent's API (`POST /invoke`, `/sessions/*`, `/agent/*`) on this run, whatever the config says. For a `dev --tunnel` session whose only intended ingress is signed channel webhooks. |
 | `--no-input` | `dev`, `start`, `invoke`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
 | `--json` | `info`, `schedules list`, `content list` | Machine-readable output. |
@@ -371,5 +335,5 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Code | Meaning |
 |---|---|
 | `0` | Success (including help and version). |
-| `1` | Runtime failure: a failed turn, a broken definition, a deploy gate, an unknown tool name, invalid runtime configuration. |
+| `1` | Runtime failure: a message that did not complete, a definition that does not open, a deploy gate, an unsupported runtime, invalid configuration. |
 | `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags. A mistyped command suggests the nearest one. |
