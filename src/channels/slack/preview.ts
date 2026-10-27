@@ -288,7 +288,13 @@ function streamNativeSlackReply(
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
         if (target.channelId.startsWith("D")) setStatus("");
-        yield* statuses.finish.pipe(Effect.orDie);
+        // A finalizer does not fail: its defect would make the turn's typed failure one too. Unreachable while
+        // `setStatus` catches its own failures, which no test can make it stop doing.
+        yield* statuses.finish.pipe(
+          Effect.catchTag("PortFailure", (error) =>
+            Effect.sync(() => log.warn(`${label} could not finish the Slack Agent status: ${String(error.cause)}`)),
+          ),
+        );
       }),
     );
     let stopAttempted = false;

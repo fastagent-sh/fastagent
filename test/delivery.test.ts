@@ -7,9 +7,10 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { previewPump, serialWriter, renderReply, turnEnd, type PreviewPump } from "../src/channels/kit/delivery.ts";
 import { PortFailure, portError, portJoin } from "../src/effect-port.ts";
+import { log } from "../src/log.ts";
 import { run } from "./channel-effects.ts";
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -160,7 +161,53 @@ it("scope interruption drains accepted native writes in order before releasing",
   expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
 });
 
-it("a failed writer surfaces its original cause, and closed admission fails visibly", async () => {
+// A spy a failed assertion leaves in place would swallow the next test's log.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+it("a write failure finish was interrupted before receiving is still logged", async () => {
+  const error = vi.spyOn(log, "error").mockImplementation(() => {});
+  const gate = Promise.withResolvers<void>();
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const writer = yield* serialWriter();
+        writer.enqueue(async () => {
+          await gate.promise;
+          throw new Error("append failed late");
+        });
+        const finishing = yield* Effect.forkChild(writer.finish, { startImmediately: true });
+        yield* Fiber.interrupt(finishing);
+        gate.resolve();
+      }),
+    ),
+  );
+  expect(error.mock.calls.flat().join(" ")).toContain(
+    "a write failed after its turn stopped: Error: append failed late",
+  );
+});
+
+it("a write failure no finish reported is logged, and the scope still ends as its body did", async () => {
+  const error = vi.spyOn(log, "error").mockImplementation(() => {});
+  const failing = new Error("append failed");
+  const exit = await Effect.runPromiseExit(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const writer = yield* serialWriter();
+        writer.enqueue(async () => {
+          throw failing;
+        });
+        return "body done";
+      }),
+    ),
+  );
+  expect(exit).toEqual(Exit.succeed("body done"));
+  expect(error.mock.calls.flat().join(" ")).toContain("a write failed after its turn stopped: Error: append failed");
+});
+
+it("a failed writer surfaces its original cause, once, and closed admission fails visibly", async () => {
+  const logged = vi.spyOn(log, "error").mockImplementation(() => {});
   const error = new Error("append failed");
   await expect(
     run(
@@ -175,6 +222,8 @@ it("a failed writer surfaces its original cause, and closed admission fails visi
       ),
     ),
   ).rejects.toBe(error);
+  // `finish` reported it: the finalizer that drains the writer does not say it again.
+  expect(logged).not.toHaveBeenCalled();
   await run(
     Effect.scoped(
       Effect.gen(function* () {
@@ -217,7 +266,7 @@ it("preserves a source OR completed failure without duplicate terminal delivery"
     ).rejects.toBe(primary);
     expect(settle, phase).toHaveBeenCalledOnce();
     if (phase === "source") expect(warning, phase).toHaveBeenCalledWith(expect.stringContaining(secondary.message));
-    warning.mockRestore();
+    warning.mockRestore(); // per phase: the next phase's spy starts with no calls
   }
 });
 

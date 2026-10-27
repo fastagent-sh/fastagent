@@ -19,8 +19,9 @@ export function eventStream<A>(
         (iterator) => {
           const close = iterator.return?.bind(iterator);
           if (!close || exhausted) return Effect.void;
+          // Logged, not raised: a failing release would make the consumer's typed failure a defect.
           return Effect.promise(close).pipe(
-            Effect.onError((cause) =>
+            Effect.catchCause((cause) =>
               Effect.sync(() => log.warn(`${label} source cleanup failed: ${String(Cause.squash(cause))}`)),
             ),
           );

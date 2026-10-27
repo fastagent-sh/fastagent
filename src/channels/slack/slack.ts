@@ -476,7 +476,13 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
             portJoin(async () => {
               if (Exit.isSuccess(exit)) await reaction?.complete();
               else await reaction?.remove();
-            }).pipe(Effect.orDie),
+            }).pipe(
+              // A release does not fail: its defect would make the turn's typed failure one too. Unreachable while
+              // the reaction's `complete` and `remove` catch their own failures (reaction.ts).
+              Effect.catchTag("PortFailure", (error) =>
+                Effect.sync(() => log.warn(`${label} could not settle the Slack reaction: ${String(error.cause)}`)),
+              ),
+            ),
         );
       },
     });

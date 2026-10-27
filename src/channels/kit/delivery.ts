@@ -9,7 +9,7 @@ import * as Stream from "effect/Stream";
 import type { TurnEvent } from "./invoke-turn-kit.ts";
 import { log } from "../../log.ts";
 import type { ChannelFailure } from "./preview-kit.ts";
-import { PortFailure, portJoin } from "../../effect-port.ts";
+import { PortFailure, portError, portJoin } from "../../effect-port.ts";
 
 /** How a turn ended: answered, or the failure to tell the asker about. */
 export type TurnEnd = { answered: true } | { failure: ChannelFailure };
@@ -205,11 +205,33 @@ export function serialWriter(): Effect.Effect<SerialWriter, never, Scope.Scope> 
       }
     }).pipe(Effect.catchTag("Done", () => Effect.void));
     const fiber = yield* Effect.forkScoped(work);
-    const finish = Effect.sync(() => {
+    const end = Effect.sync(() => {
       Queue.endUnsafe(queue);
-    }).pipe(Effect.andThen(Fiber.join(fiber)));
-    // This finalizer precedes forkScoped's interruption: accepted append/status writes must drain.
-    yield* Effect.addFinalizer(() => finish.pipe(Effect.orDie));
+    });
+    let reported = false;
+    const finish = end.pipe(
+      Effect.andThen(Fiber.join(fiber)),
+      Effect.onExit((exit) =>
+        Effect.sync(() => {
+          if (!Exit.hasInterrupts(exit)) reported = true;
+        }),
+      ),
+    );
+    // This finalizer precedes forkScoped's interruption: accepted append/status writes must drain. It must not fail:
+    // a defect makes the scope's typed failure one too, and a `catchTag` downstream misses it. So a write failure no
+    // `finish` reported is said in the log.
+    yield* Effect.addFinalizer(() =>
+      end.pipe(
+        Effect.andThen(Fiber.await(fiber)),
+        Effect.flatMap((exit) =>
+          Exit.isFailure(exit) && !reported && !Cause.hasInterruptsOnly(exit.cause)
+            ? Effect.sync(() =>
+                log.error(`[delivery] a write failed after its turn stopped: ${String(portError(exit.cause))}`),
+              )
+            : Effect.void,
+        ),
+      ),
+    );
     return {
       enqueue: (next) => {
         if (!Queue.offerUnsafe(queue, next)) throw new Error("delivery writer is closed");
