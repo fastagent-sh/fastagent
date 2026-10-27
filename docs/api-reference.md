@@ -105,8 +105,8 @@ failure is thrown. `storage` says which one:
 |---|---|
 | `{ instance: "posix" }` (default) | The instance's `<stateRoot>/agent.sqlite`, which one process holds at a time: a second opener is refused. The agent gets `wake` and `unwake` |
 | `{ instance: "leased-dotfile" }` | The same, locked by a `<path>.lock` directory, for a file system whose POSIX locks fail (AgentCore's session storage) |
-| `{ file, holders }` | A database of your own at `file`, held the same way; `holders` names, in the refusal, what else opens it. No `wake`: no clock fires for it. `fastagent invoke --session` uses one |
-| `"memory"` | Nothing kept, as `fastagent invoke` without `--session`. No `wake` |
+| `{ file, holders }` | A database of your own at `file`, held the same way; `holders` names, in the refusal, what else opens it. No `wake`: no clock fires for it. `fastagent invoke` uses one, `<stateRoot>/invoke.sqlite` |
+| `"memory"` | Nothing kept. No `wake` |
 
 The default model is optional here: without one the agent opens, and a message to a session with no model of its own
 ends refused `missing_model` until the session is given one (`configure`).

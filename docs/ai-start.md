@@ -274,8 +274,8 @@ fastagent invoke "Use plan-batches for 5 proposals at 2 per batch. Do not send a
 This makes a real model request and may incur cost. `invoke` prints the answer on stdout and each tool call on
 stderr, and exits non-zero unless the message completed: verify the tool use and the answer, not just the exit code.
 `--json` prints the message's events as JSON lines instead (each tool call with its arguments and result, then the
-outcome), for a check that asserts on them. `--session <name>` continues a conversation across runs, for behavior
-that needs a second message. It opens the agent on storage of its own, so it runs beside a `dev` of the same agent
+outcome), for a check that asserts on them. Every run prints its session's id; `--session <id>` sends the next message into it, for
+behavior that needs a second message. It opens the agent on storage of its own, so it runs beside a `dev` of the same agent
 ([CLI](cli.md#fastagent-invoke)). For continuous local
 development, ask the owner to run:
 

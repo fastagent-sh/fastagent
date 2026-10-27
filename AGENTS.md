@@ -226,8 +226,8 @@ src/
     │   ├── serve.ts        # openServing: a directory opened to be served (definition, code, models, content,
     │   │                   # storage, Agent) — what dev, start, AgentCore and an embedder open through; holding
     │   │                   # the instance for a command that writes its state outside a serve
-    │   ├── storage.ts      # a SQLite database one process holds (the instance's, an `invoke --session`
-    │   │                   # conversation's), and its lock where SQLite's own locks fail
+    │   ├── storage.ts      # a SQLite database one process holds (the instance's, `invoke`'s), and its lock
+    │   │                   # where SQLite's own locks fail
     │   ├── define.ts       # what an author writes: defineAgent, needs (secrets beside the code that reads them),
     │   │                   # defineSchedule
     │   ├── registry.ts     # the generated `.fastagent/registry.ts`: one default import per module of src/

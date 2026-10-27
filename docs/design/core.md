@@ -204,8 +204,8 @@ AgentCore and an embedder call it, and it works in this order:
    the machine's, or a store the caller supplies), pi-ai's built-in providers over it, and the definition's providers.
    Every reader builds it here: the serve, the startup report, `info`, `login`, a box's `login --if-missing`.
 5. **The storage** (`storage.ts`): `<stateRoot>/agent.sqlite`, opened by one process at a time (§9). `invoke` never
-   opens it, since a serve of the same directory may hold it: a conversation named by `--session` is a database of
-   its own, `<stateRoot>/invoke/<name>.sqlite`, held the same way, and without `--session` the storage is memory.
+   opens it, since a serve of the same directory may hold it: its sessions are kept in `<stateRoot>/invoke.sqlite`,
+   held the same way, so one `invoke` of an agent runs at a time.
 6. **The Agent** (`openAgent`): the default model is checked against the models; a registry installs pi-durable's
    coding tools, then FastAgent's definition extension (its prompt sections, §2, and the definition's tools, after the
    coding tools, so a tool of the definition's own with one of their names replaces it), then the definition's
@@ -618,7 +618,7 @@ is due when a request next wakes it.
 ```txt
 <stateRoot>/                # <agent dir>/.state, .state/production for start (FASTAGENT_STATE_DIR overrides)
 ├── agent.sqlite            # the instance's storage: sessions, messages, entries (pi-durable)
-├── invoke/<name>.sqlite    # an `invoke --session <name>` conversation, apart from the instance's
+├── invoke.sqlite           # `fastagent invoke`'s sessions, apart from the instance's
 ├── channels/<kind>/        # sessions.json, turns, history cursors, dedup; files/ holds inbound attachments
 └── schedule/               # sessions.json, claims/, wakeups.json
 ```

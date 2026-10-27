@@ -1,11 +1,12 @@
 /**
  * A storage only one process opens: the instance's SQLite database, held by the one process that owns the instance
- * (architecture.md §4.3), and the database of an `invoke --session` conversation. pi-durable does no cross-process locking of its own, and in WAL mode SQLite lets a second process open and
- * write the same file, which would resume and run the same messages twice. So the database is opened in EXCLUSIVE
- * locking mode: the first access takes the file's lock and keeps it until the process closes it or dies, and a second
- * opener is refused. Locally that is SQLite's own POSIX lock. On a file system where those fail (AgentCore's session
- * storage), the database locks by a `<path>.lock` directory instead, which outlives a stopped microVM: the process
- * that holds the deployment's lease knows such a lock is a dead process's, removes it, and says so.
+ * (architecture.md §4.3), and `fastagent invoke`'s own. pi-durable does no cross-process locking of its own, and in
+ * WAL mode SQLite lets a second process open and write the same file, which would resume and run the same messages
+ * twice. So the database is opened in EXCLUSIVE locking mode: the first access takes the file's lock and keeps it
+ * until the process closes it or dies, and a second opener is refused. Locally that is SQLite's own POSIX lock. On a
+ * file system where those fail (AgentCore's session storage), the database locks by a `<path>.lock` directory
+ * instead, which outlives a stopped microVM: the process that holds the deployment's lease knows such a lock is a dead
+ * process's, removes it, and says so.
  */
 import { existsSync, mkdirSync, rmdirSync } from "node:fs";
 import { dirname } from "node:path";

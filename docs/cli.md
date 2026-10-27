@@ -25,7 +25,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `models [search]` | List the model specs the agent can name. |
 | `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
 | `dev [agent]` | Serve locally, restarting on code edits. |
-| `invoke <message> [agent]` | Send one message, print its answer (`--json`: its events), and exit; `--session <name>` continues a conversation. |
+| `invoke <message> [agent]` | Send one message, print its answer (`--json`: its events), and exit; `--session <id>` continues an earlier run's session. |
 | `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
 | `schedules run <name> [agent]` | Fire one schedule now, as its clock would. |
 | `schedules unwake <id> [agent]` | Cancel a pending wake-up, whatever session set it. |
@@ -234,7 +234,7 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 ## `fastagent invoke`
 
 ```bash
-fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--json] [--session <name>]
+fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--json] [--session <id>]
 ```
 
 Sends one message and exits: the answer text to stdout, tool and diagnostic lines to stderr, and a non-zero exit
@@ -245,14 +245,14 @@ unless the message completed. This is the check a coding agent runs: one message
   `tool_started`, ...), ending with its `done`. A message that ends another way ends with the line that says why:
   `{"type": "rejected", "error"}`, `{"type": "unknown", "reason"}` (whether it was taken is not known), a
   `serving_error` event, or `{"type": "unfinished", "reason"}`. The exit code is the same as without `--json`.
-- **`--session <name>`** creates the conversation `<name>` (letters, digits, `.`, `_`, `-`) or continues it: a second
-  `invoke --session <name>` sees the first. Each run answers with the model it resolves (`--model`, `FASTAGENT_MODEL`,
-  the config), a continued conversation included. Without it, the message starts a conversation that is not kept.
+- **`--session <id>`** sends the message into a session an earlier run created, continuing it. Every run prints its
+  session's id on stderr (`[fastagent] session <id> …`), and `--json`'s receipt carries it as `sessionId`; without
+  `--session`, a run starts a new session. Each run answers with the model it resolves (`--model`,
+  `FASTAGENT_MODEL`, the config), a continued session included.
 
-`invoke` never opens the instance's storage, so it runs beside a `dev` or `start` of the same agent: a conversation is
-kept in `<stateRoot>/invoke/<name>.sqlite`, one process at a time (two runs of one name at once refuse the second),
-and without `--session` nothing is kept. Delete the file to start the conversation over. It has no `wake` tool, since
-no clock fires for it.
+`invoke` keeps its sessions in `<stateRoot>/invoke.sqlite`, never the instance's storage, so it runs beside a `dev`
+or `start` of the same agent. One `invoke` of an agent runs at a time: a second one while the first runs is refused.
+It has no `wake` tool, since no clock fires for its sessions.
 
 ## `fastagent schedules list`
 

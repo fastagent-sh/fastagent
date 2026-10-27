@@ -118,21 +118,21 @@ const invoke: CommandSpec = {
   description:
     "Send ONE message to the agent and exit — no server. The answer streams to stdout, tool/diagnostics to " +
     "stderr; --json prints the receipt and the message's events as JSON lines instead. A message that does not " +
-    "complete exits non-zero. Without --session, the message starts a new conversation that is not kept; " +
-    "--session <name> creates or continues the conversation of that name, kept in <state>/invoke/<name>.sqlite " +
-    "apart from the storage a serve holds, so it runs beside `dev`. Same model resolution as dev, a continued " +
-    "conversation included. For CI smoke and quick checks, by a person or a coding agent.",
+    "complete exits non-zero. Each run starts a new session and prints its id on stderr; --session <id> sends " +
+    "the message into that session instead, continuing it. Sessions are kept in <state>/invoke.sqlite, apart " +
+    "from the storage a serve holds, so it runs beside `dev`; one invoke of an agent runs at a time. Same model " +
+    "resolution as dev, a continued session included. For CI smoke and quick checks, by a person or a coding agent.",
   args: [{ name: "<message>", description: "the message to send" }, AGENT_ARG],
   flags: [
     MODEL,
     NO_INPUT,
     { flags: "--json", description: "the receipt and the message's events as JSON lines on stdout" },
-    { flags: "--session <name>", description: "create or continue the conversation of this name" },
+    { flags: "--session <id>", description: "continue the session an earlier invoke printed" },
   ],
   examples: [
     { cmd: `fastagent invoke "summarize today's inbox"` },
-    { cmd: `fastagent invoke --session smoke --json "remember 42"`, note: "continued by" },
-    { cmd: `fastagent invoke --session smoke --json "which number?"` },
+    { cmd: `fastagent invoke "remember 42"`, note: "prints its session's id" },
+    { cmd: `fastagent invoke --session <id> "which number?"` },
   ],
   run: async (args, f) =>
     (await import("./commands/invoke.ts")).runInvoke(args[0] as string, args[1] as string, {
