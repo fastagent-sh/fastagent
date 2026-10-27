@@ -1,49 +1,46 @@
 ---
 title: Configuration
-description: "Configure a FastAgent agent: model selection, auth, ports, sessions, tools, channels, state paths, and deploy options in fastagent.config.ts."
+description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, content, the system prompt, the environment, auth and secrets, ports, state paths, tools, extensions, channels, and schedules."
 status: current
 ---
 
 # Configuration
 
-- Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`
-  and `tools/`, all in the agent directory.
-- What it works on and knows, its content, is declared in `context.json`.
-- Deployment choices live in `fastagent.config.ts`, CLI flags, and environment variables.
+- Agent behavior lives in its prompt files (`SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/` and its code under
+  `src/`, all in the agent directory.
+- What it works on and knows, its content, and the commands it runs, its environment, are declared in `context.json`.
+- The model, providers and serving choices live in `fastagent.config.ts`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
 ## Config file
 
-An agent is identified by one filename, `fastagent.config.ts`. (Your own `tools/` and `channels/` accept `.ts`,
-`.js`, or `.mjs`.)
+An agent is identified by one filename, `fastagent.config.ts`:
 
 ```ts
-import type { FastagentConfig } from "@fastagent-sh/fastagent";
+import { defineAgent } from "@fastagent-sh/fastagent";
 
-export default {
+export default defineAgent({
   model: "openai-codex/gpt-5.5",
   http: { port: 8787 },
-} satisfies FastagentConfig;
+});
 ```
 
-The import is type-only: your editor completes and checks every key. `defineConfig({ … })` is exported too and
-behaves identically; keep the plain `export default {` shape, which the first-run model picker rewrites.
-
-Every key is optional. Unknown keys fail at startup.
+`defineAgent` returns what it is given, typed. A scaffolded agent writes `export default { … } satisfies AgentConfig`
+with a type-only import instead, so it opens before `npm install`. Every key is optional; an unknown key, nested ones
+included, refuses the start.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `model` | none | Default model spec, `provider/modelId`. With none set, the first-run picker asks and writes the choice here. |
-| `thinkingLevel` | `"medium"` | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Levels a model does not support are clamped. |
-| `tools` | `[]` | Extra programmatic tools appended after the coding tools. Prefer `tools/` files. |
+| `name` | `package.json`'s name | The agent's name, as `info()` reports it. |
+| `description` | none | One line about the agent, as `info()` reports it. |
+| `model` | none | Default model spec, `provider/modelId` ([model selection](#model-selection)). |
+| `thinkingLevel` | the harness's | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. |
+| `providers` | `[]` | Model providers beyond pi-ai's built-ins: a self-hosted endpoint, a gateway ([custom models](#custom-models)). A provider with a built-in's id replaces it. |
+| `extensions` | `[]` | Third-party pi-durable extensions, installed after `src/extensions/` ([extensions](#extensions)). |
 | `http.port` | `8787` | Default port for `dev` / `start`. |
-| `http.cors` | `*` | Which origins a **browser** may call this serve from. The default answers every origin, on every bind: any page your users visit can call this port and read the reply, including a loopback `dev` serve. Setting it replaces the default: `["https://app.example.com"]` allows only that origin. An empty list is refused. `*` cannot be combined with cookie credentials. Channel routes are never browser-callable. |
-| `http.api` | `true` | Serve the agent's API ([SPEC v1](SPEC.md)): `POST /invoke`, `/sessions/*` (read, follow, abort, rewind, compact, runs) and `/agent/*` (info, models, commands). It is unauthenticated: it runs a turn with the agent's full tools and reads every session, a channel's direct messages included. Set `false` when the port is public and the channels' signature checks should be the only way in; with it off, a channel may serve those paths itself. `--no-api` does the same for one run. |
-| `http.control` | `false` | Serve the control plane at `/control/*`: rename, reconfigure (model, thinking level) and delete any session. **Unauthenticated**: bind loopback (`--bind 127.0.0.1`), firewall the port, or put a gateway in front. A chat channel's stop command does not need it. |
 | `deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM (60–1209600 s). Memory bills for the idle tail; a session past it cold-starts. Changing it changes the template, so a kept `agentcore.template.yaml` needs `--force`. |
 
-The generated `.dockerignore` keeps `.git`. Add an exclusion if the agent does not need history. See
-[what deploy bakes](deploy.md#what-deploy-bakes).
+A provider or extension that reads a secret is wrapped in [`needs`](#secrets-in-code), like any module.
 
 ## Model selection
 
@@ -54,13 +51,12 @@ CLI --model > FASTAGENT_MODEL > fastagent.config.ts model
 ```
 
 With none set, a serving command (`dev` / `start` / `invoke`) in a terminal shows the model catalog (providers with
-credentials first; picking one that needs auth runs `login` inline) and writes the choice to the config.
-Non-interactive runs fail with `missing model`.
+credentials first; picking one that needs auth runs `login` inline), uses the pick for this run, and prints the line
+to put in the config. Non-interactive runs fail with `missing model`.
 
-The default is optional for an app embedding the agent (`createPiAgentFromDir`, `createAgentService`): without one
-the agent still opens and lists its conversations, each existing conversation runs on the model it recorded, and a
-conversation with no model of its own is refused with `missing_model` until it is given one
-(`docs/api-reference.md`, `createPiAgentFromDir`).
+The default is optional for an app embedding the agent (`openServing`): without one the agent still opens, a session
+created with its own model runs on it, and a message to a session with no model is refused `missing_model` until the
+session is given one (`configure`).
 
 ```bash
 fastagent dev --model openai-codex/gpt-5.5
@@ -68,131 +64,54 @@ FASTAGENT_MODEL=openai-codex/gpt-5.5 fastagent start
 ```
 
 `deploy` evaluates the same chain in production: `FASTAGENT_MODEL` from `.secrets/production/.env`, else
-`config.model`. Your shell is not read, and `deploy` has no `--model` flag. The production value is
-recorded in the release manifest (`fastagent.release.json`); a variable already set on the platform wins over it.
-`deploy` prints the effective model and its source.
+`config.model`. Your shell is not read, and `deploy` has no `--model` flag. The production value is recorded in the
+release manifest (`fastagent.release.json`); a variable already set on the platform wins over it. `deploy` prints the
+effective model and its source.
 
-## Custom model endpoints
+## Custom models
 
-Declare a self-hosted model (vLLM, SGLang, Ollama, LM Studio) or your own gateway in `models.json` next to
-`fastagent.config.ts`. The file's existence is the switch.
+pi-ai's built-in providers are always available. A self-hosted model (vLLM, SGLang, Ollama, LM Studio) or a gateway
+is a provider in code, made with pi-ai's `createProvider` and listed in `providers`:
 
-```json
-{
-  "providers": {
-    "mygw": {
-      "baseUrl": "http://vllm.internal:8000/v1",
-      "api": "openai-completions",
-      "apiKey": "$MYGW_API_KEY",
-      "models": [{ "id": "deepseek-v3", "contextWindow": 65536 }]
-    }
-  }
-}
+```ts
+import { createProvider } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { defineAgent, needs } from "@fastagent-sh/fastagent";
+
+const baseUrl = "http://vllm.internal:8000/v1";
+
+export default defineAgent({
+  model: "mygw/deepseek-v3",
+  providers: [
+    needs(["MYGW_API_KEY"], ({ MYGW_API_KEY }) =>
+      createProvider({
+        id: "mygw",
+        name: "My gateway",
+        baseUrl,
+        auth: { apiKey: { name: "My gateway", resolve: async () => ({ auth: { apiKey: MYGW_API_KEY } }) } },
+        models: [
+          {
+            id: "deepseek-v3", name: "DeepSeek V3", api: "openai-completions", provider: "mygw", baseUrl,
+            reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 65536, maxTokens: 8192,
+          },
+        ],
+        api: openAICompletionsApi(),
+      }),
+    ),
+  ],
+});
 ```
 
-The provider id joins the model id into a spec (`model: "mygw/deepseek-v3"`). Custom endpoints are additive:
-built-in providers stay available.
-
-### Keys
-
-`apiKey` and `headers` values resolve at request time: `"$NAME"` reads an environment variable, `"!cmd"` uses a
-command's stdout, anything else is a literal.
-
-Use a reference for a real key: the file ships inside the image. `deploy` warns about every literal `apiKey`
-(it cannot tell a placeholder such as `"ollama"` from a credential). `headers` values are not inspected.
-
-A variable referenced here travels to the host once it is in `.secrets/production/.env`, like every other production value. The
-variable backing the selected model is required: `deploy --run` refuses to start without a value for it.
-
-### Routing a built-in provider through a proxy
-
-Give an existing provider a new `baseUrl` and nothing else. Its models, pricing and compatibility flags are kept,
-and existing OAuth / API-key auth keeps working:
-
-```json
-{
-  "providers": {
-    "deepseek": { "baseUrl": "https://llm-proxy.internal/v1" }
-  }
-}
-```
-
-### Compatibility flags
-
-`compat` (per provider, or per model) carries switches for OpenAI-compatible servers, e.g.
-`supportsDeveloperRole: false` or `thinkingFormat`.
-
-| Setting | Use |
-|---|---|
-| `vllmPriority` | OpenAI Completions: sends vLLM's request priority. Lower numbers run earlier; requires the server's `--scheduling-policy priority`. |
-| `supportsMaxOutputTokens: false` | OpenAI Responses: omits `max_output_tokens` for gateways that reject it. |
-| `supportsMidConvoEffort: true` | Anthropic Messages: enables per-turn effort and signed-thinking binding controls. Enable only for a verified Claude model and faithful transport. |
-
-### Image limits
-
-A model's `inputLimits.images.resize` (`maxWidth`, `maxHeight`, `maxBytes`, `jpegQuality`) sets how images are
-resized before they reach it: a turn's prompt images, `read` results, and tool-result images. A message steered or
-queued into a running turn uses pi's defaults (2000 by 2000 pixels, 4.5 MiB encoded) instead.
-
-```json
-{
-  "providers": {
-    "mygw": {
-      "models": [{ "id": "vision-large", "inputLimits": { "images": { "resize": { "maxWidth": 4096, "maxHeight": 4096 } } } }]
-    }
-  }
-}
-```
-
-The schema is pi's; the full reference is pi's `docs/models.md` (`@earendil-works/pi-coding-agent`). Two FastAgent
-differences:
-
-- pi's own `~/.pi/agent/models.json` is not read. The machine's endpoints live in `~/.fastagent/models.json`
-  instead (below).
-- A malformed `models.json` fails startup.
-- **Edits take effect while the agent runs.** Every reader (a turn, the model list, `update({ model })`) checks the
-  model files first, this agent's and the machine's, and reads them again when one changed. An edit that cannot be
-  used (it does not load, or it drops the agent's default model) keeps the models read before and is logged once,
-  until it is fixed: the agent can write its own
-  `models.json`, and a broken one must not leave it unable to run a turn. The `chat` session already open keeps its
-  models; the next one reads the edit.
-
-### Endpoints for this machine: `~/.fastagent/models.json`
-
-An endpoint set up for the machine rather than for one agent (a local Ollama or LM Studio server, a company
-gateway) goes in `~/.fastagent/models.json`, in the same schema. `FASTAGENT_MODELS_PATH` moves it. Every agent on
-the machine inherits its providers, next to the global credentials file `~/.fastagent/.secrets/auth.json`, where a
-provider's key can be stored instead of written into the file.
-
-- The agent's own `models.json` wins a provider id: an agent that pins an endpoint keeps it.
-- A malformed file fails startup, naming the file.
-- It is plain JSON (no comments), and while it exists so must the agent's own `models.json` be: fastagent merges
-  the two itself, into a snapshot under `~/.fastagent/.cache/models/`. An edit to either file makes a new snapshot,
-  read from the next turn on. Snapshots are never pruned; delete the directory while no fastagent process runs.
-- It does not ship, and neither does a key written into it. `fastagent info` lists the providers the agent
-  inherits from it and marks a model whose endpoint comes from it. `deploy` refuses a model whose provider exists
-  only there (with `--run`; a warning otherwise), and warns when it only overrides one of pi's built-in providers,
-  which the deployed agent then runs without that entry.
-
-`fastagent models` lists what the agent here can name (outside an agent, or with `-g`, the machine);
-`fastagent info` shows what an agent resolved.
-
-### Models newer than pi: `models-store.json`
-
-pi bundles a model catalog with each release. A model released later is known once a **model catalog** lists it:
-`fastagent models --refresh` fetches the catalog from pi.dev, for the providers the agent's credentials authenticate,
-into `models-store.json` next to its `models.json`. Nothing refreshes it on its own.
-
-- The agent's `models-store.json` is part of the definition: commit it, and it ships with a deploy, so the deployed
-  agent knows the same models without a network call.
-- `fastagent models --refresh -g` writes the machine's, `~/.fastagent/models-store.json`, with the global
-  credentials file and the environment. Every agent here reads it under its own (the agent's wins a model id), and
-  it does not ship: `deploy` refuses a model only it knows (with `--run`; a warning otherwise). Refresh in the agent
-  to record it there. An embedding client runs the same refresh with its own credentials through
-  `refreshMachineModelCatalog` ([API reference](api-reference.md)).
-- An entry no newer than the installed pi's bundled catalog is ignored, so after a pi upgrade the bundled metadata
-  takes over again.
-- A refresh takes effect in a running agent from its next turn, whichever process ran it, without a restart.
+- The provider id joins the model id into a spec (`mygw/deepseek-v3`). `@earendil-works/pi-ai` is a dependency of
+  the agent's `package.json` (`init` adds it).
+- A key belongs in the environment, read through `needs`: the config ships in the image, so a key written into it
+  ships too. `needs` makes the value required (the start refuses without it) and carries it to a deployment like any
+  declared secret.
+- A provider that resolves its own auth counts as authenticated: `info`, the startup report and `deploy`'s pre-flight
+  report it so, and `login` is not needed for it.
+- `fastagent models` lists its models beside the built-ins, and `fastagent info --model mygw/deepseek-v3` says whether
+  a spec resolves.
 
 ## Content
 
@@ -236,7 +155,7 @@ Each entry is named by its key: one segment of letters, digits, `-` and `_`, uni
 Where the agent reaches each one on this machine:
 
 - **A repository** is a clone fastagent makes at `content/<name>` in the agent directory: shallow, at `ref`, the
-  first time the agent starts (`dev`, `start`, `chat`, `invoke`). At each later start it is brought up to date in
+  first time the agent starts (`dev`, `start`, `invoke`). At each later start it is brought up to date in
   place, by git's own rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or
   commit it is pinned to). git refuses whatever would overwrite the agent's work: a changed file the update touches,
   an untracked file it would replace, commits the remote does not have. Then, and when the fetch fails, when the
@@ -244,7 +163,7 @@ Where the agent reaches each one on this machine:
   startup warns with the reason. Nothing is deleted: the agent's branches, stashes and the changes an update does
   not touch stay.
 
-  `info`, `content list` and `fastagent tool` report it without cloning. A first clone that fails stops the start,
+  `info` and `content list` report it without cloning. A first clone that fails stops the start,
   with git's reason. A clone of another repository under the entry's name (it was renamed or redeclared) stops
   the start and is named, never removed: move it away yourself. `content/` carries its own `.gitignore` (`*`) and
   holds only clones: a link there is refused.
@@ -270,8 +189,6 @@ What each entry gives the agent:
 
 - **A place in the prompt**: its name, its location, whether the agent works on it or only knows it, and its
   `description`. The agent runs a command in it with `cd <location> && …`.
-- **Its location for tools**: an authored tool reads `ctx.content` ([API reference](api-reference.md#tool-authoring)).
-
 What a project holds stays in the project. Its `AGENTS.md` and its skills are files the agent reads when it works
 there, like any other file; none of them is added to the agent's prompt, whose instructions and skills come from the
 agent directory alone. To have the agent read the project's `AGENTS.md` before it changes anything, say so in the
@@ -286,61 +203,25 @@ and add it as `github:owner/repo`.
 
 ## The system prompt
 
-pi builds the agent's system prompt: its default (who the agent is, its tools, its rules, where pi's documentation
-is), the project context from the agent directory's `AGENTS.md`, the skills, and the working directory. Two more
-files in the agent directory change it, both re-read every turn like `AGENTS.md`:
+`SYSTEM.md` is the agent's whole system prompt, as written: who it is, what it is responsible for, and when it must
+ask. Nothing is added to it or replaces it. It is read for every message, so an edit takes effect on the next one.
 
-| File | Effect |
+FastAgent adds its own sections after it:
+
+| Section | From |
 |---|---|
-| `SYSTEM.md` | Replaces pi's default: identity, tool list, rules and documentation pointers. Write it when the agent should be someone other than pi's coding assistant. The model still receives every tool's schema |
-| `APPEND_SYSTEM.md` | Added after the prompt, whichever it is. Standing instructions, goals, an approval policy. `init` scaffolds it |
+| Project context | The agent directory's `AGENTS.md`: how this agent is built and changed. A content entry's `AGENTS.md` is a file of that project, which the agent reads there |
+| Skills | `skills/`: each skill's name, description and location ([Agent Skills](https://agentskills.io/specification)) |
+| Content | Where the agent is and what it works on and knows ([content](#content)) |
+| Changing itself | On a deployed host: how long its storage lasts, and what takes effect when |
 
-pi's default says the agent is "an expert coding assistant", so an identity ("You are…") written into
-`APPEND_SYSTEM.md` gives the model two; put it in `SYSTEM.md` instead. A `persona.md` is refused: its text belongs
-in one of the two. A blank `SYSTEM.md` or `APPEND_SYSTEM.md` is reported and not used, since pi treats an empty
-prompt as none. `deploy` loads the definition too, so any of these refusals stops it before an image is built.
+All of it comes from the agent directory. Nothing is read from the machine: no `~/.pi/agent` skill, prompt template
+or system prompt, since a prompt from someone's machine would make the agent theirs. `fastagent add skill <source>`
+vendors a skill into `skills/` (a git source, a local path, or a name from the machine's skill directories).
 
-FastAgent adds its own sections after these, whichever wrote the prompt: where the agent is and what it works on and
-knows ([content](#content)), a note about tools that are registered but not loaded yet, and on a deployed host how
-long its storage lasts and how the agent changes itself.
-
-The machine's `~/.pi/agent/SYSTEM.md` and `APPEND_SYSTEM.md` are never read: a system prompt from someone's machine
-would make the agent theirs.
-
-An embedder that replaces the coding tools (`createPiAgentFromDefinition(dir, { tools })` without `read`, `bash`,
-`edit` and `write`) must give the agent a prompt that matches, through `base` or a `SYSTEM.md`: pi's default claims
-those tools, so the assembly is refused without one, and so is any turn after `SYSTEM.md` is deleted.
-
-## Where the definition's files are read
-
-Each resource has a FastAgent spelling at the agent directory's root, and pi's spelling in `.pi/` is read too,
-below it. A name found twice in the definition takes the first and is reported, never silently:
-
-| Resource | Read in this order |
-|---|---|
-| System prompt | `SYSTEM.md`, `.pi/SYSTEM.md`; `APPEND_SYSTEM.md`, `.pi/APPEND_SYSTEM.md` |
-| Skills | `skills/`, `.pi/skills/`, `.agents/skills/`, then the machine's (below) |
-| Prompt templates | `prompts/`, `.pi/prompts/`, then the machine's (below) |
-| Extensions | `extensions/` only; a `.pi/extensions/` is reported as not loaded |
-
-## What the machine lends the agent
-
-**Skills** and **prompt templates** also load from this machine, through pi's
-[Agent Skills](https://agentskills.io/specification) discovery (`~/.pi/agent/skills/`, `~/.agents/skills/`, and
-`.agents/skills/` in the directories above the agent's, up to its repository's root). pi's project scope is the agent
-directory, so its `.pi/skills/`, `.agents/skills/` and `.pi/prompts/` are the definition's, not the machine's. A name
-in the definition wins over the machine's silently: `fastagent add skill <name>` vendors one into `skills/` for
-exactly that.
-
-Skills and prompts from installed pi **packages** load too. A listed package that is not installed is skipped with
-a warning; fastagent never installs one. The machine is read once, at startup.
-
-A deployed image has only what its build put in it. The machine's extensions and system prompt are never used.
-
-**Prompt templates on a served agent can be fired by anyone talking to it.** A template is invoked by a bare
-`/<name>` in the prompt text, and on a channel or `POST /invoke` that text comes from other people. A template whose
-name matches a platform command (`prompts/start.md` against Telegram's `/start`) rewrites that message. Keep the
-machine's `prompts/` for `chat`, or put a template that belongs to the agent in its definition's `prompts/`.
+**Prompt templates can be fired by anyone talking to the agent.** A template (`prompts/<name>.md`) is invoked by a bare
+`/<name>` in the message text, and on a channel that text comes from other people. A template whose name matches a
+platform command (`prompts/start.md` against Telegram's `/start`) rewrites that message.
 
 ## Environment
 
@@ -368,12 +249,12 @@ needs, installed on every machine that runs it and in its image:
 - **`aptPackages`** are Debian packages the image installs, for what has no cross-platform build, like a browser or
   fonts. A start on Debian or Ubuntu names the ones this machine lacks, with the `apt-get` command that installs them;
   FastAgent never runs apt itself, and elsewhere it says nothing.
-- **`variables`** are the environment variables the agent's commands read, declared by name with what each is for, as a
-  tool declares its `secrets`. Their values come from the environment, never from `context.json`: `.secrets/.env` here,
+- **`variables`** are the environment variables the agent's commands read, declared by name with what each is for, as code
+  declares the secrets it reads with `needs`. Their values come from the environment, never from `context.json`: `.secrets/.env` here,
   and `.secrets/production/.env` for a deployment, the one file `deploy` reads and carries (a variable exported where
   you run `deploy` does not reach the deployment). A process you start yourself also reads the variables it is started
-  with. Every declared variable is required: `dev`, `start`, `chat`, `invoke` and an embedder's `createAgentService`
-  refuse to start without its value and name `context.json`, `deploy` refuses before it changes anything and lists each
+  with. Every declared variable is required: `dev`, `start`, `invoke` and an embedder's `openServing` refuse to
+  start without its value and name `context.json`, `deploy` refuses before it changes anything and lists each
   with its description, and `info` and `fastagent env list` say which have a value here. A value you would share across
   stages, like an enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template.
   Names the deployment sets itself (`PORT`, `FASTAGENT_MODEL`, the state and storage paths) cannot be declared.
@@ -385,8 +266,7 @@ for Windows, so an agent that declares packages does not run there.
 
 **Nothing is locked.** A package is a release the agent uses, as a CLI you install on your own machine is: each place
 installs the newest release its declared version allows when it first needs the package, and keeps it. `dev`,
-`start`, `chat`, `invoke`, `tool` and an embedder's [`createAgentService`](embedding.md) install the declared
-packages that have no install matching them here yet, and put them first on the agent's `PATH`; one already
+`start`, `invoke` and an embedder's [`openServing`](embedding.md) install the declared packages that have no install matching them here yet, and put them first on the agent's `PATH`; one already
 installed is kept, so a start needs no network. `fastagent env install` installs the newest release of each again.
 A change to `context.json` restarts `dev`. A package is installed into mise's data directory on this machine
 (`~/.local/share/mise`), which other mise projects share.
@@ -416,32 +296,8 @@ directory's configuration, a `mise.toml` you keep beside `context.json` for your
 `mise.local.toml`. That isolation is FastAgent's runs alone: a mise the agent runs (the machine's, in a content
 repository with its own `mise.toml`) works as it does in your shell. `fastagent info` lists what is declared.
 
-## Harness settings: `~/.pi/agent/settings.json`
-
-Compaction, retries, prompt-cache warming and transport timeouts are pi settings. `dev`, `start` and `chat` read
-the machine's `~/.pi/agent/settings.json` and the agent directory's `.pi/settings.json` (deep-merged, the agent's
-wins) once at startup. The agent's file is part of its definition, so it ships with a deploy. Nothing of pi's
-project scope is read from content.
-
-| Setting | Default | Effect |
-|---|---|---|
-| `cacheWarming` | `"streaming"` | During a long tool call, pi re-sends the last request with a one-token budget to keep the provider's prompt cache alive, billed as a cache read, only when the expected saving exceeds $0.05. `"off"` never does; `"idle"` also warms between turns. |
-| `compaction` | pi's defaults | `reserveTokens` / `keepRecentTokens`, and per-model overrides in `compaction.modelOverrides`. |
-| `retry` | pi's defaults | Provider and agent retry budgets. `retry.maxAgentDelayMs` (60s) caps how long a turn waits in backoff. |
-
-```json
-{
-  "cacheWarming": "off",
-  "compaction": { "modelOverrides": { "anthropic/claude-fable-5": { "keepRecentTokens": 40000 } } }
-}
-```
-
-### The prompt lives in the session record
-
-pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or
-`AGENTS.md` is appended as a patch. On models that accept mid-conversation system messages this keeps the
-provider's cached prefix; on others the edit still costs a cache miss. The session control plane reports that
-entry with an empty payload.
+Harness settings (compaction, retries) are pi-durable's defaults. An embedder that needs others passes `settings`
+to `openAgent`.
 
 ## Auth and secrets
 
@@ -455,16 +311,41 @@ entry with an empty payload.
 For one provider, the agent uses the first of:
 
 1. its own `auth.json`;
-2. an `apiKey` in `models.json`;
-3. the provider's env var;
-4. the global `~/.fastagent/.secrets/auth.json`.
+2. what the provider resolves itself: its env var, or a provider in code's own `auth`;
+3. the global `~/.fastagent/.secrets/auth.json`.
 
-The first three are pi's order. The global file comes last because a deployment never has it: a global login that
-outranked a key in `.secrets/.env` would run one credential locally and another deployed. A refresh is written back
-to the file the credential was read from. Setting `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR` names the one
-file to use, so the global file is not read at all.
+The global file comes last because a deployment never has it: a global login that outranked a key in `.secrets/.env`
+would run one credential locally and another deployed. A refresh is written back to the file the credential was read
+from. Setting `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR` names the one file to use, so the global file is not
+read at all.
 
 Do not commit `.env` or credentials. `fastagent info` and `fastagent dev` print the resolved auth source.
+
+### Secrets in code
+
+Code that reads a secret declares it, in the module that reads it:
+
+```ts
+import { Type } from "@earendil-works/pi-ai";
+import { defineTool } from "@earendil-works/pi-durable";
+import { needs } from "@fastagent-sh/fastagent";
+
+export default needs(
+  ["WEATHER_API_KEY", { name: "WEATHER_UNITS", description: "metric or imperial", optional: true }],
+  ({ WEATHER_API_KEY, WEATHER_UNITS }) =>
+    defineTool({
+      name: "weather",
+      description: "Current weather for a city.",
+      parameters: Type.Object({ city: Type.String() }),
+      execute: async ({ city }) => ({ output: [{ type: "text", text: await lookup(city, WEATHER_API_KEY, WEATHER_UNITS) }] }),
+    }),
+);
+```
+
+`needs` hands the code exactly the values it declared, typed. A required one without a value refuses the start
+(`dev`, `start`, an embedder's `openServing`), naming the file that declared it; `deploy` refuses before its first
+side effect. Every declaration is written into `.fastagent/secrets.json`, which `info`, `deploy` and runbooks read.
+The same works around a tool, an extension, a channel, a schedule or a provider.
 
 ## Ports
 
@@ -484,18 +365,15 @@ start: --bind > all interfaces
 LAN. `--tunnel` dials `localhost`, so it refuses a bind `localhost` does not reach (`--bind 192.168.1.5`,
 `--bind 127.0.0.2`).
 
-**Nothing FastAgent serves is authenticated** — `POST /invoke` and `/control/*` alike. Whoever can reach the port
-can use everything the agent mounts, and a bind address only limits who can reach it by network. Authenticate in a
-channel's own handler, in your app's middleware when you [embed](embedding.md), or in a gateway in front.
-Channels that dial out (WebSocket) are reachable by whoever can message the bot, whatever the bind.
-
-Browsers get the `http.cors` policy (default `*`). Unauthenticated routes refuse a body that is not
-`application/json`, which stops cross-origin writes that skip the preflight.
+A serve answers only its channels' routes, each of which verifies that a request comes from its platform, and
+`GET /health`. There is no HTTP API to protect ([security boundary](design/security-boundary.md)). Channels that dial
+out (WebSocket) are reachable by whoever can message the bot, whatever the bind.
 
 ## Machinery: `.state/`, `.secrets/` and `content/`
 
-- `<agent dir>/.state/` — mutable machine state: sessions, channel state (`channels/<kind>/`), schedule state.
-  Single-process; point it at a volume in a container.
+- `<agent dir>/.state/` — the instance's state: its storage (`agent.sqlite`: sessions, messages, entries), channel
+  state (`channels/<kind>/`) and schedule state (`schedule/`). One process holds it at a time; point it at a volume in
+  a container.
 - `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `settings.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
   secret store; its `auth.json` is its own login (`fastagent login --deployment`) and lives on the volume.
@@ -520,114 +398,69 @@ FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent 
 state root: FASTAGENT_STATE_DIR    > <agent dir>/.state (production: .state/production)
 secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets (production: .secrets/production)
 content:    <agent dir>/content/<name> (a clone), or the directory context.local.json binds
-sessions:   <state root>/sessions
+storage:    <state root>/agent.sqlite
 auth:       FASTAGENT_AUTH_PATH    > <secrets>/auth.json
-endpoints:  FASTAGENT_MODELS_PATH  > ~/.fastagent/models.json (under the agent's own models.json)
 ```
 
 A leading `~` is expanded. `auth.json` is written `0600` on every write; `.env` and directories keep the
 permissions you gave them. `FASTAGENT_SECRETS_DIR` set inside `.env` moves `auth.json` but not the `.env` itself.
 `.env.example` always stays at `<agent dir>/.secrets/.env.example`.
 
-## Code inputs must be real files
+## Code: `src/`
 
-Each of `tools/`, `channels/`, and `schedules/` must be inside the agent directory, and each entry must be a real
-file. A symlink is skipped with a warning (`info`, `dev`, `start`), never followed. To share code between agents,
-publish a package or copy the file.
+The definition's code is four directories, each module default-exporting one thing:
+
+| Directory | Each module default-exports |
+|---|---|
+| `src/tools/` | A tool: pi-durable's `defineTool` ([tools](#tools)) |
+| `src/extensions/` | An extension: pi-durable's `defineExtension` ([extensions](#extensions)) |
+| `src/channels/` | A channel ([channels](#channels)) |
+| `src/schedules/` | A schedule: `defineSchedule` ([schedules](#schedules)) |
+
+Any of them may be `needs([...], (values) => …)` around what it exports. A module is a `.ts`, `.mts`, `.js` or `.mjs`
+file directly in its directory; tests (`*.test.*`, `*.spec.*`) and `.d.ts` files are not modules, and a helper a module
+imports lives outside these directories (`lib/`, say). Each command that opens the agent generates
+`.fastagent/registry.ts`, plain imports of every module, from these files: there is nothing to register by hand. A
+module that does not load, or is not what its directory holds, refuses the start, naming the file; so do two modules
+of one name.
 
 ## Tools
 
-Two ways to add tools:
-
-1. Modules below `tools/`, at any depth. Every tool a module exports is mounted (what `defineTool` makes, or a pi
-   `AgentTool`), and a module that exports none is a helper, so a service's tools and the client they share can sit
-   in one folder. Tests (`*.test.*`, `*.spec.*`), `.d.ts` files, `node_modules` and dot-folders are not loaded. A tool
-   is named by `defineTool({ name })`. One without a name takes its file's name (`tools/lookup-order.ts` →
-   `lookup-order`) only when its module sits directly in `tools/` and exports no other tool; any other unnamed tool
-   refuses the start. Group related tools with `defineTool({ namespace })`.
-2. `config.tools`, for programmatic injection.
-
-Every directory agent mounts pi's coding tools: `read`, `grep`, `find`, `ls`, `bash`, `edit`, and `write`. They are
-capabilities, not a security policy; to isolate an agent, sandbox its whole process.
-
-`config.tools` and `tools/` are appended after the coding tools. On a name collision the earlier tool wins and the
-collision is reported. Pi's codemode and tool-search extensions load by default; their settings control activation,
-and `"extensions": ["-builtin:codemode"]` in Pi's settings turns one off. Pi's MCP extension is not loaded, so
-`mcp.json` has no effect on an agent. Every serve mounts `wake`/`unwake`.
-The startup report and `fastagent info` list each authored tool with where it comes from (its file, or
-`config.tools`). `fastagent info --json` shows the mounted surface: `tools` are the authored tools the model gets up
-front, `toolSources` where each comes from, and
-`indirectTools` the rest, each with how it is reached (`tool_search`, `codemode`, `hidden`, `inactive` until an
-authored loader activates it, or `unreachable` when pi's settings disable the built-in extension it needs).
-
-Reusable packages export ordinary `FastagentTool[]`:
+Every agent has pi-durable's coding tools: `read`, `write`, `edit` and `bash`. They are capabilities, not a security
+policy; to isolate an agent, sandbox its whole process. Its own tools are the modules of `src/tools/`:
 
 ```ts
-import type { FastagentConfig } from "@fastagent-sh/fastagent";
-import { integrationTools } from "@acme/fastagent-tools";
+import { Type } from "@earendil-works/pi-ai";
+import { defineTool } from "@earendil-works/pi-durable";
 
-export default {
-  tools: integrationTools(),
-} satisfies FastagentConfig;
+export default defineTool({
+  name: "reverse",
+  description: "Reverse a text.",
+  parameters: Type.Object({ text: Type.String() }),
+  execute: async ({ text }) => ({ output: [{ type: "text", text: [...text].reverse().join("") }] }),
+});
 ```
 
-Package tools receive the same `ToolContext` as `defineTool` tools. Their `secrets` declarations count like your
-own: `dev`/`start` refuse to boot, and `deploy --run` refuses to start, while one has no value in the selected
-environment. Dev uses `.secrets/.env`; production uses `.secrets/production/.env`.
+`parameters` is a TypeBox schema: the harness validates a call's arguments against it before `execute`. A tool of the
+definition's own with a coding tool's name replaces it. Every serve also gives the agent `wake` and `unwake`
+([self-scheduling](api-reference.md#self-scheduling)). MCP servers are not supported yet
+([#678](https://github.com/fastagent-sh/fastagent/issues/678)). `fastagent info` lists each tool with its file.
+
+A tool that needs to know which session it runs in asks `await sessionIdOf(api, context)` (from
+`@fastagent-sh/fastagent`): the id the Agent hands out, the one a channel's map records.
 
 ## Extensions
 
-Extension modules under `extensions/` run in `fastagent chat` and when serving (`dev`, `start`, channels, a
-container).
-
-Discovered shapes: `extensions/notify.ts` and `extensions/audit/index.ts`. A subdirectory whose `package.json`
-declares a `pi` field is not supported and is warned about. A symlinked entry is refused. The machine's `~/.pi`
-extensions are never loaded. An npm package an extension imports goes in the agent's `package.json`, like a tool's.
-An extension that fails to load is warned about once and left out; the rest of the agent runs.
-
-| | serving | `chat` |
-|---|---|---|
-| tools it registers | offered to the model | offered to the model |
-| event and lifecycle handlers | run | run |
-| `/name` commands it registers | run when a prompt is `/name [args]` | run |
-| `ctx.hasUI` | `false` | `true` |
-| `select` / `confirm` / `input` / `custom` | resolve as cancelled (`undefined`, `false`) | shown to you |
-| `notify` | logged | shown |
-| status, widgets, shortcuts, renderers | no effect | shown |
-| `ctx.newSession` / `fork` / `navigateTree` / `switchSession` / `reload` | throw | run |
-| `ctx.shutdown()` | logs a warning; the process keeps serving | exits |
-| `pi.registerProvider()` / `registerVirtualModel()` | session-local | session-local |
-
-When serving, every session gets its own extension instances: the factory runs and `session_start` fires when a
-turn (or a control-plane write) opens the session, and `session_shutdown` fires when it ends. An unbound factory
-also runs when the model catalog is built, before resolving the configured model; virtual models declared there
-can be startup selections. State kept in
-memory does not survive to the next turn; rebuild it from the session in `session_start`. Stop timers and close
-handles in `session_shutdown`: a stale `pi` or `ctx` throws when used after it, and an exception nobody catches
-ends the process.
-
-A served command settles the invoke:
-
-- if it starts a model turn (`pi.sendUserMessage`, or `pi.sendMessage` with `triggerTurn`), the invoke streams
-  that turn;
-- if it does its work without one, the invoke completes with no text, so write anything the caller should see
-  into the session or start a turn;
-- if it throws, or a turn it starts cannot begin (no credentials, for example), the invoke fails with that error.
-
-Anyone who can send the agent a message can run its commands, and a command runs without the model deciding to.
-
-**Extensions are live.** When any file under `extensions/` changed (an edited extension, a module it imports from
-there, an added one), whatever loads the extensions next loads the code as it is now: the next session, the `/` menu,
-the model catalog (so a model an extension declares is in session control's `models()` and can be set) and `chat`. No
-restart, in `dev` or `start`. So an agent can give itself a tool or a command by writing an extension. Code it
-imports from outside `extensions/` is reloaded only when something under `extensions/` changes too. What an
-extension starts when it LOADS (a timer, a socket opened at import) keeps running across a reload; start such
-things in `session_start` and stop them in `session_shutdown`.
+An extension is pi-durable's named bundle of tools, prompt sections and hooks. The agent's own are the modules of
+`src/extensions/`, default-exporting `defineExtension({ name, … })`; a third-party one is listed in
+`defineAgent({ extensions: [...] })`, after the agent's own. Its name may not be one FastAgent installs (the coding
+tools', the definition's, `wake`'s). An extension's code is the definition's code: a change takes effect at the next
+start.
 
 ### More than one agent
 
-Each agent is a directory of its own, with its own config, prompt, skills, tools, channels, schedules, `.state/` and
-`.secrets/`. Several agents can work on one project: each declares it as content.
+Each agent is a directory of its own, with its own config, prompt, skills, code, `.state/` and `.secrets/`. Several
+agents can work on one project: each declares it as content.
 
 ```bash
 fastagent init ~/agents/reviewer --content ~/code/app
@@ -637,56 +470,45 @@ fastagent dev ~/agents/reviewer
 
 ## Channels
 
-A file under `channels/` (`.ts` / `.js` / `.mjs`) enables a channel; rename it to `<name>.ts.disabled` to disable
-it. Channels are not configured in `fastagent.config.ts`. See [Channels](channels.md).
+A module of `src/channels/` enables a channel, named by its file; move it out, or rename it to `<name>.ts.disabled`,
+to disable it. Channels are not configured in `fastagent.config.ts`. See [Channels](channels.md).
 
 ## Schedules
 
-A schedule is a prompt the agent runs on a cron: `schedules/<name>.md`, with the cron and its timezone in the
-frontmatter and the prompt as the body. The file name is the schedule's name.
+A schedule is a prompt the agent runs on a cron: a module of `src/schedules/`, named by its file.
 
-```md
----
-cron: "0 9 * * 1-5"
-tz: America/New_York
----
+```ts
+import { defineSchedule } from "@fastagent-sh/fastagent";
 
-Generate today's digest and send it with slack-send to channel C0123456789.
+export default defineSchedule({
+  cron: "0 9 * * 1-5",
+  tz: "America/New_York",
+  prompt: "Generate today's digest and send it with slack_send to channel C0123456789.",
+});
 ```
 
-- **The frontmatter** holds `cron` (5 fields, required) and `tz` (an IANA timezone, default UTC), one `key: value`
-  line each, quoted or not: a cron starting with `*` may be written bare. Any other key or line refuses the file.
-  Only `*.md` files are schedules; rename one to `<name>.md.disabled` to turn it off.
-- **The same guard as a recurring wake-up**, since the agent can write these files too: no two instants of a
-  schedule may be under 10 minutes apart, which also refuses the six-field per-second form and a year field. This is
-  judged on the expression alone, so `0,5 9 * * *` is refused at any hour. At most 20 schedules are armed, the first
-  20 by name, counting an old definition kept for a file that broke.
+- **`cron`** has 5 fields; **`tz`** is an IANA timezone, default UTC. **`prompt`** is a text, or a function of the
+  instant it fires for (`({ at }) => …`), which may read secrets through `needs`.
+- **Checked when the definition is built**: no two instants of a schedule may be under 10 minutes apart, which also
+  refuses the six-field per-second form; at most 20 schedules.
 - **A cron AgentCore can run, on every host.** AgentCore's clock is EventBridge, which cannot express a few cron
   forms: both day fields restricted at once (`0 9 15 * WED`, "the 15th or any Wednesday"), `L` and `#` day forms,
-  and nicknames such as `@daily`. Such a file is refused everywhere, so a schedule that runs locally also runs
-  there. One difference remains: on the day a DST change skips a local hour, a time inside it (02:30 in most of
-  the US) is skipped on AgentCore and run an hour later elsewhere. A file refused for any reason is logged and not
-  armed; it never stops a serve, and `deploy --run` refuses to ship one.
-- **One conversation per schedule.** Every fire continues `schedule:<name>`, so the agent sees what its earlier runs
-  did, and nothing of users' chats.
+  and nicknames such as `@daily`. Such a schedule is refused everywhere, so one that runs locally also runs there.
+  One difference remains: on the day a DST change skips a local hour, a time inside it (02:30 in most of the US) is
+  skipped on AgentCore and run an hour later elsewhere.
+- **One session per schedule.** Every fire continues the schedule's own session, created the first time it fires, so
+  the agent sees what its earlier runs did, and nothing of users' chats.
 - **It delivers nothing.** The agent's tools send output; name the target (a chat or channel id) in the prompt.
-  What the agent said is in its session under `<stateRoot>/sessions/`.
-- **Each instant fires at most once**, even with several schedulers over one state root: a claim under
-  `<stateRoot>/schedule/claims/<name>/` is taken before the turn. After downtime one overdue run is caught up, not
-  one per missed instant; a schedule that has never fired starts at its next instant. A run still going when the
-  next instant arrives makes that one `skipped`.
-- **Where the clock is.** `dev` and `start` run it while they serve. On AgentCore the container mirrors each
-  schedule into a recurring EventBridge schedule, which fires it on EventBridge's own clock and wakes the container,
-  once an envelope has reached it through the forwarder after a deploy (`deploy --run` probes it). A schedule keeps one Fly or Railway machine running; to scale to zero, a clock of your own replaces it
-  ([Deploy](deploy.md#scale-to-zero)).
-- **Nothing runs a schedule by name.** Work started on demand is `POST /invoke` (or `fastagent invoke`) with its
-  prompt. A prompt kept as a template in `prompts/<name>.md` is reused by sending `/<name>`, and a schedule's body
-  can be that same `/<name>`.
-- **Edits take effect within 30 seconds, without a restart**: the clock re-reads `schedules/`, arming an added or
-  changed schedule from its next instant and disarming a removed one. A file that stops being valid keeps its last
-  definition and is logged; at start, it is logged and not armed. It never stops the serve, since the agent writes
-  schedules too and one it got wrong must not take the agent down at its next start; `fastagent info` reports it, and
-  `deploy --run` refuses to ship one. A release replaces an agent-written schedule like any file in the definition.
+  What the agent said is in the schedule's session.
+- **Each instant fires at most once**: a claim under `<stateRoot>/schedule/claims/<name>/` is taken before the message
+  is sent. After downtime one overdue run is caught up, not one per missed instant; a schedule that has never fired
+  starts at its next instant. A run still going when the next instant arrives makes that one `skipped`.
+- **Where the clock is.** `dev` and `start` run it while they serve. On AgentCore the container mirrors each schedule
+  into a recurring EventBridge schedule, which fires it on EventBridge's own clock and wakes the container, once an
+  envelope has reached it through the forwarder after a deploy (`deploy --run` probes it). A schedule keeps one Fly or
+  Railway machine running.
+- **It is code**: a change takes effect at the next start or release. To try a schedule's prompt now, send it with
+  `fastagent invoke`.
 
 `fastagent schedules list` shows each schedule's next instant, how its last run ended and its session, and the
 agent's own pending wake-ups. A wake-up is work the agent schedules for itself with the `wake` tool, on every serve
@@ -706,5 +528,5 @@ A real environment variable wins over the file.
 
 ## Not config
 
-Custom session stores, execution environments, distributed leases, base prompt overrides, and code-based model
-providers (`providers`) are library injection points. See [Embedding](embedding.md).
+The instance's storage, the execution environment and harness settings are library injection points: `openAgent`
+takes them ([embedding](embedding.md)).
