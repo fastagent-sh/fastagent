@@ -252,7 +252,9 @@ unless the message completed. This is the check a coding agent runs: one message
 
 `invoke` keeps its sessions in `<stateRoot>/invoke.sqlite`, never the instance's storage, so it runs beside a `dev`
 or `start` of the same agent. One `invoke` of an agent runs at a time: a second one while the first runs is refused.
-It has no `wake` tool, since no clock fires for its sessions.
+A message whose `invoke` was stopped (Ctrl-C, a timeout) is not run again: the next `invoke` ends it, aborted, and
+says so on stderr. It has no `wake` tool, since no clock fires for its sessions. The file keeps every session it was
+given and grows with them; delete it, while no `invoke` runs, to start from none.
 
 ## `fastagent schedules list`
 
@@ -283,9 +285,14 @@ fastagent schedules run <name> [agent] [--model provider/modelId] [--no-input]
 Fires the schedule `<name>` now, the way its clock would: in the schedule's own session, with its claim and its
 outcome recorded, so `schedules list` shows the fire. A fire a stopped serve claimed and never reported is settled
 first, as a serve's start settles it. The answer goes to stdout and the fire's log to stderr; the exit is non-zero
-unless the fire completed. It opens the instance's storage, so it is refused while `dev` or `start` serves the agent,
-and they are refused while it runs. It fires a schedule of this machine's instance; a deployed one keeps its own
-state.
+unless its message completed, as `invoke`'s: a cut-off answer (`max_tokens`) exits 1, though the claim records it
+`completed`. `--model` is the default model, as for `dev`: a schedule's session takes it at its first fire and keeps
+it after that.
+
+It opens the instance's storage, so it is refused while `dev` or `start` serves the agent, and they are refused while
+it runs. It is refused too while the storage holds messages a stopped serve left unfinished: it would run them, with
+no channel to deliver their answers, and cut them off when it exits. `dev` runs them on; stop it once they end. It
+fires a schedule of this machine's instance; a deployed one keeps its own state.
 
 ## `fastagent schedules unwake`
 

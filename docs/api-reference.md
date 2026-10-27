@@ -76,8 +76,8 @@ function openServing(dir: string, options?: OpenServingOptions): Promise<OpenedS
 
 interface OpenServingOptions {
   model?: string; // "provider/modelId", over the config's
-  thinkingLevel?: ThinkingLevel;
-  storage?: { instance: "posix" | "leased-dotfile" } | { file: string; holders: string } | "memory"; // default below
+  thinkingLevel?: ThinkingLevel;  storage?: { instance: "posix" | "leased-dotfile" } | { file: string; holders?: string } | "memory"; // default below
+  unfinished?: "resume" | "abort" | "refuse"; // what an earlier process left unfinished in it; default "resume"
   authPath?: string; // the credentials file (default: the agent's own, layered over the machine's)
   credentialStore?: CredentialStore; // or a store of your own (an OS keychain); not with authPath
 }
@@ -105,8 +105,13 @@ failure is thrown. `storage` says which one:
 |---|---|
 | `{ instance: "posix" }` (default) | The instance's `<stateRoot>/agent.sqlite`, which one process holds at a time: a second opener is refused. The agent gets `wake` and `unwake` |
 | `{ instance: "leased-dotfile" }` | The same, locked by a `<path>.lock` directory, for a file system whose POSIX locks fail (AgentCore's session storage) |
-| `{ file, holders }` | A database of your own at `file`, held the same way; `holders` names, in the refusal, what else opens it. No `wake`: no clock fires for it. `fastagent invoke` uses one, `<stateRoot>/invoke.sqlite` |
+| `{ file, holders? }` | A database of your own at `file`, held the same way; `holders`, when given, names in the refusal what else opens it. No `wake`: no clock fires for it. `fastagent invoke` uses one, `<stateRoot>/invoke.sqlite` |
 | `"memory"` | Nothing kept. No `wake` |
+
+`unfinished` says what becomes of the messages an earlier process accepted and stopped before they ended (it was
+killed, or closed mid-answer): `"resume"` runs them on in this process, as a serve does; `"abort"` ends them, aborted,
+before anything runs, as `fastagent invoke` does with what a stopped `invoke` left; `"refuse"` fails the open, naming
+their sessions, as `fastagent schedules run` does.
 
 The default model is optional here: without one the agent opens, and a message to a session with no model of its own
 ends refused `missing_model` until the session is given one (`configure`).

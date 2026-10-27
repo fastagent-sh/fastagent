@@ -16,6 +16,7 @@ import { fireScheduleNow, scheduleSessions } from "../../schedule/scheduler.ts";
 import { latestFire, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeAnyWakeup } from "../../schedule/wakeups.ts";
 import { failStartup, agentDirOrExit } from "../fail.ts";
+import { exitCodeOf } from "../invoke-stream.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 /**
@@ -78,7 +79,7 @@ export async function runSchedulesList(dirArg: string, json: boolean): Promise<v
 /**
  * Fire the schedule `name` now, as its clock would: in its session, with its claim and its outcome recorded. It opens
  * the instance's storage, so a serve of it refuses this, and the other way round. The answer goes to stdout; exit 0
- * only when the fire completed.
+ * only when its message completed, as `invoke`'s.
  */
 export async function runScheduleNow(
   name: string,
@@ -86,7 +87,11 @@ export async function runScheduleNow(
   opts: { model?: string; input?: boolean },
 ): Promise<void> {
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
-  const { agent, models, schedules, stateRoot } = await openServing(agentDir, { model: modelSpec }).catch(failStartup);
+  // Refused while the instance holds work a stopped serve left: this process would run it, and cut it off at its exit.
+  const { agent, models, schedules, stateRoot } = await openServing(agentDir, {
+    model: modelSpec,
+    unfinished: "refuse",
+  }).catch(failStartup);
   const schedule = schedules.find((s) => s.name === name);
   if (schedule === undefined) {
     await agent.close();
@@ -96,13 +101,18 @@ export async function runScheduleNow(
   await reportAuth(models, modelSpec, agentDir);
   const fired = await Effect.runPromise(fireScheduleNow({ agent, stateRoot, schedule })).catch(failStartup);
   const sessionId = scheduleSessions(stateRoot).get(name);
-  if (fired.fired && sessionId !== undefined) {
-    const message = await agent.getMessage(sessionId, { idempotencyKey: fired.slot.toISOString() });
-    if (message?.status === "done" && message.answer !== undefined) process.stdout.write(`${message.answer.text}\n`);
-  }
+  const message =
+    fired.fired && sessionId !== undefined
+      ? await agent.getMessage(sessionId, { idempotencyKey: fired.slot.toISOString() })
+      : undefined;
+  const ended = message?.status === "done" ? message : undefined;
+  if (ended?.answer !== undefined) process.stdout.write(`${ended.answer.text}\n`);
   await agent.close();
   if (!fired.fired) console.error(`[fastagent] ${name} did not fire: ${fired.skippedReason}`);
-  process.exit(fired.fired && fired.failed === undefined ? 0 : 1);
+  // The claim counts a cut-off answer as completed; the exit code does not.
+  else if (ended?.outcome.status === "max_tokens")
+    console.error(`[fastagent] ${name}: its answer was cut off (max_tokens)`);
+  process.exit(ended === undefined ? 1 : exitCodeOf(ended.outcome));
 }
 
 /**

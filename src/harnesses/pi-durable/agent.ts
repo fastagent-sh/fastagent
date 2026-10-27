@@ -82,7 +82,18 @@ export interface DurableAgentOptions {
   model?: ModelRef;
   thinkingLevel?: ModelThinkingLevel;
   inFlightPerProcess?: number;
+  /** What becomes of the messages an earlier process accepted and did not end ({@link Unfinished}). */
+  unfinished?: Unfinished;
 }
+
+/**
+ * What a process does with the messages an earlier one accepted and did not end (it was stopped, or killed). `"resume"`
+ * (the default, a serve's): they run on in this one, as its own work. `"abort"`: they end aborted before anything runs,
+ * for a Caller whose messages do not outlive it (`fastagent invoke`), where running one again would run what its user
+ * stopped. `"refuse"`: the open fails naming them, for a process that runs one thing and would cut the rest off
+ * (`fastagent schedules run`).
+ */
+export type Unfinished = "resume" | "abort" | "refuse";
 
 export interface DurableAgent extends Agent {
   /** pi-durable's own API, for operating the agent (SPEC.md §11). */
@@ -113,11 +124,30 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
   try {
     const ids = await storageIds(harness, context);
     const sessions = await Effect.runPromise(Scope.provide(trackSessions(harness, options.storage, context), lifetime));
-    // What an earlier process accepted and did not settle runs on in this one: it is this process's work now.
-    for (const record of (await harness.inspect(context)).submissions) {
-      if (!isInput(record)) continue;
-      const submission = await harness.submission(record.id, context);
-      if (submission !== undefined) countUntilSettled(submission);
+    // Before `resume()`, which runs an earlier process's work. An abort enables the scheduler too, but commits first, so
+    // the aborted work does not run (measured).
+    const unsettled = (await harness.inspect(context)).submissions.filter(isInput);
+    const unfinished = options.unfinished ?? "resume";
+    if (unsettled.length > 0 && unfinished !== "resume") {
+      const where = [...new Set(unsettled.map((record) => record.conversationId))]
+        .filter((id) => sessions.has(id))
+        .map((id) => ids.encode(id));
+      const said = `${unsettled.length} message(s) an earlier process accepted and stopped before they ended (sessions: ${where.join(", ")})`;
+      if (unfinished === "refuse") {
+        throw new Error(
+          `the storage holds ${said}, which this process would not finish: serve the agent until they end, then try again`,
+        );
+      }
+      for (const conversationId of new Set(unsettled.map((record) => record.conversationId))) {
+        await (await harness.conversation(conversationId, context))?.abort(context);
+      }
+      log.warn(`[fastagent] aborted ${said}: none of it runs again`);
+    } else {
+      // What an earlier process accepted and did not settle runs on in this one: it is this process's work now.
+      for (const record of unsettled) {
+        const submission = await harness.submission(record.id, context);
+        if (submission !== undefined) countUntilSettled(submission);
+      }
     }
     harness.resume();
     await Effect.runPromise(Scope.provide(releaseWaitingQueues(harness, context), lifetime));

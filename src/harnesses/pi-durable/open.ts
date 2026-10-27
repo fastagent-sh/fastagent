@@ -30,7 +30,7 @@ import { readPackageJson } from "../../runtime.ts";
 import { DEV_SERVE_ENV } from "../../serving-command.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { modelsOver } from "../models/models.ts";
-import { type DurableAgent, openDurableAgent } from "./agent.ts";
+import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isNeeds } from "./define.ts";
 import { GENERATED_DIR, REGISTRY_FILE, REGISTRY_KINDS, type Registry, generateRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
@@ -352,6 +352,7 @@ export interface OpenAgentOptions {
   settings?: HarnessSettings;
   /** Where the instance's state is: given by a serve, whose scheduler fires the wake-ups `wake` keeps there. */
   stateRoot?: string;
+  unfinished?: Unfinished;
 }
 
 /** Open the definition as an Agent: pi-ai's built-in models and the definition's providers, the coding tools, then its own. */
@@ -389,6 +390,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     ...(model === undefined ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
+    ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
     env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? dir, shellEnv: { [DEV_SERVE_ENV]: undefined } }),
     commands: () => readCommands(dir),

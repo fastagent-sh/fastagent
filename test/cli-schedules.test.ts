@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveStateRoot } from "../src/paths.ts";
 import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
-import { agentWorkspace, fauxAgent as agent, run, whileServed } from "./cli-run.ts";
+import { agentWorkspace, fauxAgent as agent, killWhileLingering, lingered, run, whileServed } from "./cli-run.ts";
 
 /** A schedule module as `defineSchedule` returns it, so the fixture needs no package of its own. */
 const schedule = (cron: string, extra = "") =>
@@ -96,7 +96,9 @@ describe("cli: schedules", () => {
   });
 });
 
-const SCHEDULE = `export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: "write the digest" };\n`;
+const scheduleOf = (prompt: string) =>
+  `export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: ${JSON.stringify(prompt)} };\n`;
+const SCHEDULE = scheduleOf("write the digest");
 
 describe("cli: schedules run and unwake", () => {
   it("schedules run fires a schedule in its own session with its claim recorded, and only when no serve runs", async () => {
@@ -123,6 +125,23 @@ describe("cli: schedules run and unwake", () => {
     const unknown = await run(["schedules", "run", "weekly", dir]);
     expect(unknown.code).toBe(1);
     expect(unknown.stderr).toMatch(/no schedule "weekly" in .*src\/schedules\/ \(declared: digest\)/);
+  });
+
+  it("schedules run exits 1 on a cut-off answer, and refuses work a stopped process left unfinished", async () => {
+    const dir = await agent("fa-schedules-unfinished-", {
+      "src/schedules/clipped.ts": scheduleOf("cut it short"),
+      "src/schedules/slow.ts": scheduleOf("linger over it"),
+    });
+    // The claim counts a cut-off answer as completed; a check does not.
+    const clipped = await run(["schedules", "run", "clipped", dir]);
+    expect([clipped.code, clipped.stdout.trim()], clipped.stderr).toEqual([1, "cut sho"]);
+    expect(clipped.stderr).toContain("clipped: its answer was cut off (max_tokens)");
+
+    await killWhileLingering(["schedules", "run", "slow", dir], dir);
+    const refused = await run(["schedules", "run", "clipped", dir]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/the storage holds 1 message\(s\) an earlier process accepted and stopped before/);
+    expect(await lingered(dir)).toBe(1);
   });
 
   it("schedules unwake cancels a wake-up whatever session set it, and only when no serve runs", async () => {

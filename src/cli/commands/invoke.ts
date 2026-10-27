@@ -50,6 +50,8 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   const { agent, models, definition } = await openServing(agentDir, {
     model: modelSpec,
     storage: { file, holders: "another `fastagent invoke` of this agent" },
+    // Its messages do not outlive it: one a stopped invoke left is not run again by the next.
+    unfinished: "abort",
   }).catch(failStartup);
   console.error(`[fastagent] invoke: ${agentDir} (${modelSpec})`);
   await reportAuth(models, modelSpec, agentDir);

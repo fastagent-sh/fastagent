@@ -529,10 +529,19 @@ const schedules: CommandSpec = {
       description:
         "Fire the schedule <name> now, the way its clock would: in its own session, with its claim and outcome " +
         "recorded (`schedules list` shows them). The answer goes to stdout, the fire's log to stderr; it exits " +
-        "non-zero unless the fire completed. It opens the instance's storage, so it is refused while `dev` or " +
-        "`start` serves this agent, and they are refused while it runs.",
+        "non-zero unless its message completed. It opens the instance's storage, so it is refused while `dev` or " +
+        "`start` serves this agent, and they are refused while it runs; it is refused too while the instance holds " +
+        "messages a stopped serve left unfinished, which it would run and cut off: serve them to their end first.",
       args: [{ name: "<name>", description: "the schedule, as src/schedules/<name>.ts names it" }, AGENT_ARG],
-      flags: [MODEL, NO_INPUT],
+      flags: [
+        {
+          flags: MODEL.flags,
+          description:
+            "the default model, as for dev: the schedule's session takes it at its first fire, and keeps the one " +
+            "it took after that",
+        },
+        NO_INPUT,
+      ],
       examples: [{ cmd: "fastagent schedules run daily-digest" }],
       run: async (args, f) =>
         (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, args[1] as string, {

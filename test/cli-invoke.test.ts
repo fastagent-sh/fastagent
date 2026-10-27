@@ -3,7 +3,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { describe, expect, it } from "vitest";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { resolveStateRoot } from "../src/paths.ts";
-import { fauxAgent as agent, run, whileServed } from "./cli-run.ts";
+import { fauxAgent as agent, killWhileLingering, lingered, run, whileServed } from "./cli-run.ts";
 
 /** The session id an invoke printed on stderr. */
 function sessionOf(stderr: string): string {
@@ -43,6 +43,16 @@ describe("cli: invoke", () => {
     expect(lines[0]).toMatchObject({ type: "receipt", sessionId, duplicate: false });
     expect(lines.find((line) => line.type === "tool_started")).toMatchObject({ name: "read" });
     expect(lines.at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
+  });
+
+  it("ends the message a killed invoke left, so no later invoke runs it again", async () => {
+    const dir = await agent("fa-invoke-killed-");
+    await killWhileLingering(["invoke", "linger, then deploy to prod", dir], dir);
+    const next = await run(["invoke", "hello", dir]);
+    expect([next.code, next.stdout.trim()], next.stderr).toEqual([0, "seen 1"]);
+    expect(next.stderr).toMatch(/aborted 1 message\(s\) an earlier process accepted and stopped before they ended/);
+    expect((await run(["invoke", "hello again", dir])).stderr).not.toContain("aborted");
+    expect(await lingered(dir)).toBe(1);
   });
 
   it("refuses a session it does not hold, and runs while no other invoke of the agent does", async () => {

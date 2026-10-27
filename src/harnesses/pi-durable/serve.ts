@@ -20,7 +20,7 @@ import {
 import { enterEnvironment } from "../../environment/mise.ts";
 import { log } from "../../log.ts";
 import { resolveStateRoot } from "../../paths.ts";
-import type { DurableAgent } from "./agent.ts";
+import type { DurableAgent, Unfinished } from "./agent.ts";
 import { type AgentDefinition, type BuiltDefinition, buildDefinition, openAgent, prepareDefinition } from "./open.ts";
 import { type StorageLocking, openLockedStorage } from "./storage.ts";
 
@@ -32,12 +32,15 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    * Where the Agent keeps its sessions. Default `{ instance: "posix" }`: the instance's `agent.sqlite`, which one process
    * holds at a time (storage.ts), with `wake` and `unwake`, since a serve's clock fires the wake-ups they keep. The other
    * two never meet the storage a serve of the same directory holds, and have no `wake`, since no clock fires for them:
-   * `{ file }` is a database of the caller's own, held the same way, and `"memory"` keeps nothing.
+   * `{ file }` is a database of the caller's own, held the same way (`holders`, when given, names in the refusal of a
+   * second opener what else opens it), and `"memory"` keeps nothing.
    */
   storage?: ServingStorage;
+  /** What becomes of the messages an earlier process left unfinished in the storage. Default `"resume"`. */
+  unfinished?: Unfinished;
 }
 
-type ServingStorage = { instance: StorageLocking } | { file: string; holders: string } | "memory";
+type ServingStorage = { instance: StorageLocking } | { file: string; holders?: string } | "memory";
 
 /** Who opens the instance's storage, for the refusal of a second opener. */
 const INSTANCE_HOLDERS =
@@ -127,6 +130,7 @@ export async function openServing(dir: string, options: OpenServingOptions = {})
     ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
+    ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
   }).catch(async (error: unknown) => {
     // An Agent that did not open does not own the storage, and its lock would refuse this process's next attempt.
     await storage.close(BACKGROUND_CONTEXT);

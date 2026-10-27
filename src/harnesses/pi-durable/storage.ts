@@ -22,8 +22,8 @@ export type StorageLocking = "posix" | "leased-dotfile";
 const BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY = 5;
 
-/** Open the database at `path`, or say who holds it: `holders` names the commands that open it. */
-export async function openLockedStorage(path: string, locking: StorageLocking, holders: string): Promise<Storage> {
+/** Open the database at `path`, or refuse, naming `holders` (what else opens it) when given. */
+export async function openLockedStorage(path: string, locking: StorageLocking, holders?: string): Promise<Storage> {
   mkdirSync(dirname(path), { recursive: true });
   if (locking === "leased-dotfile") breakStaleLock(`${path}.lock`);
   const location = locking === "posix" ? path : `file:${path}?vfs=unix-dotfile`;
@@ -39,9 +39,8 @@ export async function openLockedStorage(path: string, locking: StorageLocking, h
     // The connection only: the adapter's close checkpoints first, which a refused opener cannot do.
     database.close();
     if ((error as { errcode?: unknown }).errcode !== SQLITE_BUSY) throw error;
-    throw new Error(`the storage ${path} is held by another process: ${holders} is running. Stop that one first`, {
-      cause: error,
-    });
+    const who = holders === undefined ? "" : `: ${holders} is running`;
+    throw new Error(`the storage ${path} is held by another process${who}. Stop that one first`, { cause: error });
   }
 }
 

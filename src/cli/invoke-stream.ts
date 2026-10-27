@@ -3,6 +3,9 @@ import type { Outcome } from "../agent-api.ts";
 import type { StreamResult } from "../agent-api-stream.ts";
 import { answerText } from "../answer-text.ts";
 
+/** A command that sends a message exits 0 only when it completed. */
+export const exitCodeOf = (outcome: Outcome): number => (outcome.status === "completed" ? 0 : 1);
+
 function failure(outcome: Outcome): string | undefined {
   switch (outcome.status) {
     case "completed":
@@ -56,9 +59,8 @@ export async function runInvokeStream(
       }
       case "done": {
         const failed = failure(event.message.outcome);
-        if (failed === undefined) return 0;
-        err(`[fastagent] failed: ${failed}`);
-        return 1;
+        if (failed !== undefined) err(`[fastagent] failed: ${failed}`);
+        return exitCodeOf(event.message.outcome);
       }
     }
   }
@@ -86,7 +88,7 @@ export async function runInvokeJson(result: StreamResult, line: (json: string) =
   for await (const event of events) {
     line(JSON.stringify(event));
     if (event.type === "serving_error") return 1;
-    if (event.type === "done") return failure(event.message.outcome) === undefined ? 0 : 1;
+    if (event.type === "done") return exitCodeOf(event.message.outcome);
   }
   line(JSON.stringify({ type: "unfinished", reason: "the stream ended before the message did" }));
   return 1;

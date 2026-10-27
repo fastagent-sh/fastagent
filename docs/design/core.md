@@ -212,7 +212,10 @@ AgentCore and an embedder call it, and it works in this order:
    extensions, then `wake` and `unwake` when a serve gives the state root and the definition has neither (§8). Its
    execution environment runs in the agent directory, with the process's environment minus `dev`'s mark.
 7. **The harness** (`openDurableAgent`, `agent.ts`): pi-durable's `Harness` opens on the storage; what an earlier
-   process accepted and did not settle is counted as work in flight (`channels/busy.ts`) and resumed.
+   process accepted and did not settle is counted as work in flight (`channels/busy.ts`) and resumed. Two openers ask
+   otherwise (`unfinished`), before the scheduler starts: `invoke`, whose messages do not outlive it, aborts what a
+   stopped `invoke` left (`"abort"`), so a message its user stopped is not run by the next one; `schedules run`, which
+   would run that work and cut it off when it exits, refuses to open over it (`"refuse"`).
 
 If the Agent does not open, the storage is closed before the failure is thrown, so the same process can open it again.
 
