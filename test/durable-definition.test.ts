@@ -4,7 +4,7 @@
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   InMemoryCredentialStore,
@@ -234,9 +234,9 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       for (const agent of opened) await agent.close();
     });
 
-    async function open(files = FILES, options: Partial<OpenAgentOptions> = {}) {
+    async function open(files = FILES, options: Partial<OpenAgentOptions> = {}, opening = (dir: string) => dir) {
       const dir = agentPackage(files);
-      const definition = await prepareDefinition(dir);
+      const definition = await prepareDefinition(opening(dir));
       const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
       const agent = await openAgent(definition, {
         storage: new MemoryStorage(),
@@ -283,6 +283,22 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       const path = join(dir, "skills/lookup-order/SKILL.md");
       faux.setResponses([
         () => toolCall("read", { path }),
+        (context) => fauxAssistantMessage(`saw: ${lastToolResult(context)}`),
+      ]);
+      const end = await ask(agent, "where is order 7?");
+      expect(end.answer?.text).toContain("Ask for the order number, then read references/codes.md.");
+    });
+
+    it("reads a skill where its prompt says it is, when the agent was opened by a relative path", async () => {
+      // An embedder's `openServing("./agent")`: a relative location in the prompt would resolve against the agent's
+      // own working directory, the agent directory itself, and name a file that is not there.
+      const { agent, faux } = await open(FILES, {}, (dir) => relative(process.cwd(), dir));
+      faux.setResponses([
+        (context) => {
+          const location = /<location>(.*)<\/location>/.exec(getCurrentSystemPrompt(context.messages))?.[1];
+          if (location === undefined) throw new Error("the prompt names no skill location");
+          return toolCall("read", { path: location });
+        },
         (context) => fauxAssistantMessage(`saw: ${lastToolResult(context)}`),
       ]);
       const end = await ask(agent, "where is order 7?");

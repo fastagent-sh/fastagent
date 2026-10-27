@@ -6,7 +6,7 @@
  */
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { getEventListeners } from "node:events";
 import { log } from "../src/log.ts";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -41,6 +41,15 @@ async function agentDir(
 }
 
 describe("mountAgentService over an opened directory", () => {
+  it("opens a directory named by a relative path at its absolute location", async () => {
+    // The prompt names the agent's files and working directory by these, and its tools resolve a relative one
+    // against that working directory.
+    const dir = await agentDir();
+    const served = await openServing(relative(process.cwd(), dir), { storage: "memory" });
+    opened.push(served.agent);
+    expect([served.agentDir, served.definition.dir]).toEqual([dir, dir]);
+  });
+
   it("mounts channel routes on a handler, with health beside them", async () => {
     const dir = await agentDir({
       "src/channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("from-channel") });`,
