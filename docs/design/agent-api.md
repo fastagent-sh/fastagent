@@ -673,5 +673,8 @@ bindings answer the same way. It checks:
 | Question | Why it is open |
 |---|---|
 | Where `Session.createdAt`, `Session.lastActiveAt` and `Message.createdAt` come from | pi-durable's conversation records hold no time, and its submissions' `createdAt` is a sequence number. FastAgent records the times itself, in the commits that create a session and accept a message; the order of `list` stays the sequence's ([architecture.md](architecture.md) §2) |
-| How `cancel` learns its stop is recorded before the messages end | pi-durable's `conversation.abort()` resolves once the conversation is idle, and commits its mark first. The answer needs that commit's point, which a spike finds |
-| What `sessions.update({ tools })` writes | pi-durable's `tools` selects tools by object; a name is resolved against the registry when the setting is made, and a name it no longer finds refuses `missing_tool` (§4) |
+
+Settled by measurement ([architecture.md](architecture.md) §6.1): `cancel` answers at the commit in which pi-durable's
+`abort()` withdraws the queued messages and marks the live tasks, which comes about a millisecond after the call and
+holds after a restart; `update({ tools })` stores names, and since pi-durable drops a stored name it no longer has
+without a word, the `missing_tool` refusal is FastAgent's own check at admission.

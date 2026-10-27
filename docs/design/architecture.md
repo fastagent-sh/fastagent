@@ -339,6 +339,16 @@ storage at `/mnt/data`, in `ap-southeast-1`:
 | A run cut off by `StopRuntimeSession` | The microVM stops at once (the tool's writes stop); nothing runs while the session is not invoked; the next invocation gets a new microVM in about 2 s with the storage and the incarnation as they were, and pi-durable carries on: the cut-off tool is not run again but answered as interrupted, the message is answered, and the one queued behind it too | Opens the storage and calls `harness.resume()` when each process starts, before it handles the invocation (§4.3) |
 | Idle timeout (120 s) during a 200 s tool | `/ping` answering `HealthyBusy` kept the session: the tool ran to its end on the same microVM | Answers `HealthyBusy` while a run is live |
 
+For the Agent API v2 ([agent-api.md](agent-api.md)), on pi-durable 1.3.0 with pi-ai's faux model, in process and
+against SQLite storage in a process killed with `SIGKILL`:
+
+| Question | Measured | So the implementation |
+|---|---|---|
+| When a stop is recorded | `conversation.abort()` commits the whole stop in one commit, about 1 ms after the call: the queued message withdrawn (`unanswered`, `aborted`) and every live task of the conversation marked `abortRequested`. The call resolves only when those tasks end: 1.5 s later, behind a tool that ignored its signal | `cancel` calls `abort()` and answers at the first commit after which the conversation has no queued input and every live task is marked, without waiting for the call; with `wait`, it waits for the call too |
+| Whether that commit outlives the process | Killed right after it, the reopened process ended both messages `canceled`, and the tool had run once. Killed without an abort, both were answered after the restart, and the cut-off tool was not run again (it is not `replay: "safe"`) | The answer of `cancel` is a promise that holds after a restart |
+| What `configure({ tools })` stores | The names (`["alpha"]` in `pi.agent`), resolved against the registry at every request; `null` clears them back to every tool | `sessions.update` checks each name against the registry snapshot's tools and passes those registrations |
+| A stored tool name the registry no longer has | Dropped without a word: the next request was written a `toolsRemoved` entry and offered no tools, and the message completed; the stored names stayed `["alpha"]` | Admission compares the session's stored names with the registry's, in the commit that takes the deployment's defaults, and refuses `missing_tool` naming the absent ones |
+
 The coding tools' `read` reading a skill's `SKILL.md` through a `NodeExecutionEnv` rooted at the agent's directory was
 checked with the definition's assembly (test/durable-definition.test.ts): the model's answer carries the file's text.
 
