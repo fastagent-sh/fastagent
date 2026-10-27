@@ -6,7 +6,7 @@ status: current
 
 # Telegram channel
 
-The Telegram channel turns a Telegram Bot API webhook update into an agent turn and sends the agent's reply back to the chat.
+The Telegram channel turns a Telegram Bot API webhook update into a message to the agent and sends the agent's reply back to the chat.
 
 Telegram is request/reply: the channel holds the bot token, streams a live preview message while the turn runs, and edits it into the final answer.
 
@@ -21,8 +21,8 @@ fastagent add telegram
 This creates:
 
 ```txt
-channels/telegram.ts      # inbound webhook adapter + routing policy
-tools/telegram-send.ts    # optional outbound send tool for the agent (message or file)
+src/channels/telegram.ts      # inbound webhook adapter + routing policy
+src/tools/telegram-send.ts    # optional outbound send tool for the agent (message or file)
 ```
 
 It also appends the required env vars to `.env.example` when possible.
@@ -60,19 +60,17 @@ https://<host>/telegram
 A minimal channel module looks like this:
 
 ```ts
+import { needs } from "@fastagent-sh/fastagent";
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default defineChannel({
-  secrets: ["TELEGRAM_SECRET_TOKEN", "TELEGRAM_BOT_TOKEN"],
-  channel: (secrets) =>
-    telegramChannel({
-      secretToken: secrets.TELEGRAM_SECRET_TOKEN,
-      botToken: secrets.TELEGRAM_BOT_TOKEN,
-      // Optional. The scaffold uses this for development transparency.
-      onError: (failed) => `⚠️ ${failed.details}`,
-    }),
-});
+export default needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) =>
+  telegramChannel({
+    secretToken: secrets.TELEGRAM_SECRET_TOKEN,
+    botToken: secrets.TELEGRAM_BOT_TOKEN,
+    // Optional. The scaffold uses this for development transparency.
+    onError: (failed) => `⚠️ ${failed.details}`,
+  }),
+);
 ```
 
 Both `secretToken` and `botToken` are required. Construction fails if either is empty, so a public endpoint never silently accepts forged updates or fails later without a bot token.
@@ -87,52 +85,50 @@ By default, `telegramChannel` uses `defaultTelegramRoute`:
 - groups answer when the message replies to THIS bot — matched by the bot id parsed from the token, so a reply to another bot in a multi-bot group stays silent, precisely from the first update (no getMe race),
 - groups answer on an `@botname` mention when the bot username is known — detected from Telegram's own `mention` entities, not a text scan, so `@fast` never matches `@fastagent`, and an `@botname` inside a code block or a URL does not summon (it is not a mention entity).
 
-A slash command does **not** summon in a group (bare or directed like `/cmd@botname`) — it was noise; a bot that wants commands adds a custom `route`. The one exception is a `/stop` [addressed to this bot](#stopping-a-running-turn): refusing it would leave the stop buffered as ordinary discussion while the run it meant to stop kept going. Override `route` to decide whether and where to answer; a custom route owns its own group-summon policy — including `/stop`, which is gated by the route like any other message and aborts the session the route returns. Reuse `defaultTelegramRoute` (as below) or the exported `telegramStop(update, { botUsername, botId })` to keep the command working. When reusing `defaultTelegramRoute`, pass your bot's identity (`botUsername` and/or `botId`) — group summon needs it, and a bare call answers only private chats (fail-closed: "is this addressed to me?" cannot be yes without knowing who "me" is).
+A slash command does **not** summon in a group (bare or directed like `/cmd@botname`) — it was noise; a bot that wants commands adds a custom `route`. The one exception is a `/stop` [addressed to this bot](#stopping-a-running-turn): refusing it would leave the stop buffered as ordinary discussion while the run it meant to stop kept going. Override `route` to decide whether and where to answer; a custom route owns its own group-summon policy — including `/stop`, which is gated by the route like any other message and aborts the session of the conversation the route returns. Reuse `defaultTelegramRoute` (as below) or the exported `telegramStop(update, { botUsername, botId })` to keep the command working. When reusing `defaultTelegramRoute`, pass your bot's identity (`botUsername` and/or `botId`) — group summon needs it, and a bare call answers only private chats (fail-closed: "is this addressed to me?" cannot be yes without knowing who "me" is).
 
 ## Group chats
 
-A group answers one shared `telegram:<chat>[:<thread>]` session: everyone talks to the same agent with one history. To keep that shared session coherent:
+A group is one shared conversation (`<chat>`, or `<chat>:<thread>` in a topic), with one session: everyone talks to the same agent with one history. To keep it coherent:
 
-- **Serialized turns.** Concurrent summons in the same session run one at a time (FIFO) — the right UX when several people talk in one group. Different sessions still run in parallel.
-- **Queue feedback.** A summon that lands while the session is busy gets an immediate "⏳ Queued" notice (reply-quoted to the asker, so a group sees whose ask is waiting); when its turn starts, the live preview edits that same message in place — the notice morphs into the answer, no orphan messages. Not group-specific: any busy session answers this way, including a private chat with two quick asks.
+- **Serialized turns.** Concurrent summons in the same conversation run one at a time (FIFO) — the right UX when several people talk in one group. Different conversations still run in parallel.
+- **Queue feedback.** A summon that lands while the session is busy gets an immediate "⏳ Queued" notice (reply-quoted to the asker, so a group sees whose ask is waiting); when its turn starts, the live preview edits that same message in place — the notice morphs into the answer, no orphan messages. Not group-specific: any busy conversation answers this way, including a private chat with two quick asks.
 - **Sender attribution.** Each message is prefixed with its sender, and a group is flagged in the prompt, so the model can tell participants apart and answer "summarize the discussion".
-- **Context buffer.** The channel keeps a small per-chat buffer of recent **un-summoned** messages (bounded by a character budget; the oldest are dropped) and folds it into the next answered turn — annotated with message ids and reply relations, so "the one Alex replied to" resolves. Attachments posted without summoning ride along too: the next summon downloads the most recent few files (readable by the agent's tools) and includes recent photos as vision inputs (photos ride along without per-photo attribution — the fold marks every attachment line with `[photo]`/`[document: …]` next to its sender, caption or not), so "summarize the file from earlier" actually works; a stale or cap-skipped earlier attachment is counted in a visible note instead of silently missing or failing the ask. The buffer is durable: persisted before each webhook ACK and reloaded on start, so a restart keeps the discussion; folded discussion lives in the durable session.
+- **Context buffer.** The channel keeps a small per-chat buffer of recent **un-summoned** messages (bounded by a character budget; the oldest are dropped) and folds it into the next answered turn — annotated with message ids and reply relations, so "the one Alex replied to" resolves. Attachments posted without summoning ride along too: the next summon downloads the most recent few files (readable by the agent's tools) and includes recent photos as vision inputs (photos ride along without per-photo attribution — the fold marks every attachment line with `[photo]`/`[document: …]` next to its sender, caption or not), so "summarize the file from earlier" actually works; a stale or cap-skipped earlier attachment is counted in a visible note instead of silently missing or failing the ask. The buffer is durable: persisted before each webhook ACK and reloaded on start, so a restart keeps the discussion; folded discussion lives in the session, in the instance's storage.
 
 The buffer needs Telegram **group privacy mode off** (@BotFather → `/setprivacy` → Disable) to receive un-summoned messages at all. The channel resolves the bot's privacy flag once at startup and warns when it is on.
 
 ```ts
+import { needs } from "@fastagent-sh/fastagent";
 import { defaultTelegramRoute, telegramChannel, telegramEnvelope } from "@fastagent-sh/fastagent/telegram";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
 const botUsername = "my_bot";
 
-export default defineChannel({
-  secrets: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"],
-  channel: (secrets) =>
-    telegramChannel({
-      secretToken: secrets.TELEGRAM_SECRET_TOKEN,
-      botToken: secrets.TELEGRAM_BOT_TOKEN,
-      botUsername,
-      route(update) {
-        const base = defaultTelegramRoute(update, { botUsername });
-        if (!base) return null;
-        const message = update.message;
-        if (!message) return null;
-        return {
-          ...base,
-          session: `telegram:${message.chat.id}`,
-          text: `${telegramEnvelope(message)}\n\nAnswer briefly.`,
-        };
-      },
-    }),
-});
+export default needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) =>
+  telegramChannel({
+    secretToken: secrets.TELEGRAM_SECRET_TOKEN,
+    botToken: secrets.TELEGRAM_BOT_TOKEN,
+    botUsername,
+    route(update) {
+      const base = defaultTelegramRoute(update, { botUsername });
+      if (!base) return null;
+      const message = update.message;
+      if (!message) return null;
+      return {
+        ...base,
+        conversation: `${message.chat.id}`, // one conversation per chat, topics included
+        text: `${telegramEnvelope(message)}\n\nAnswer briefly.`,
+      };
+    },
+  }),
+);
 ```
 
 `route(update)` returns:
 
 ```ts
 type TelegramRoute = {
-  session?: string;
+  conversation?: string; // which conversation, and so which session; default `<chat>` or `<chat>:<thread>`
   chatId?: number | string;
   threadId?: number;
   text?: string;
@@ -151,12 +147,15 @@ The channel appends a formatting instruction so replies use Telegram-supported H
 
 Telegram Threaded Mode is handled automatically:
 
-- if `message_thread_id` is present, the default session is `telegram:<chat>:<thread>`,
-- otherwise the default session is `telegram:<chat>`.
+- if `message_thread_id` is present, the default conversation is `<chat>:<thread>`,
+- otherwise it is `<chat>`.
+
+Each conversation has its own session, which the channel creates the first time it is asked there and records in
+`<state root>/channels/telegram/sessions.json`. A new topic starts a session of its own.
 
 Replies are sent back to the same thread unless `route` overrides `threadId`.
 
-Telegram serializes updates per session in FIFO order, so two messages for the same chat wait for each other. Different sessions still run concurrently; a run the channel did not start in that session, such as a self-scheduled wake-up, is waited for: the turn queues behind it.
+Telegram serializes updates per conversation in FIFO order, so two messages for the same chat wait for each other. Different conversations still run concurrently; work the channel did not start in that session, such as a self-scheduled wake-up, is waited for: the message queues behind it.
 
 ## Streaming behavior
 
@@ -181,7 +180,7 @@ For development bots, surfacing `failed.details` is useful. For public bots, pre
 
 A `/stop` **addressed to this bot** aborts the chat's active turn (queued asks are independent and keep
 running — send `/stop` again when one starts). No configuration is needed: stopping the running turn is
-part of serving, not part of `/control/*`.
+part of serving.
 
 Four ways to address it, all equivalent: a bare `/stop` in a private chat, `/stop@<thisbot>`,
 `@<thisbot> /stop`, and a bare `/stop` replying to one of the bot's own messages.
@@ -198,8 +197,8 @@ run it meant to stop. If your route is that permissive, decide what to do with a
 yourself: `telegramStop(update, { botUsername, botId })` tells you whether a stop is addressed to this
 bot, and returning `null` for the rest keeps them out of the queue.
 
-`/stop` runs through `route` like any other message: it aborts the session the route resolves (so a
-route that remaps `session` stops the session it actually runs), and a route that returns `null` for
+`/stop` runs through `route` like any other message: it aborts the session of the conversation the route resolves
+(so a route that remaps `conversation` stops the session it actually runs), and a route that returns `null` for
 the chat silences the command there too. Pass `botUsername` to `telegramChannel` whenever you also
 pass a custom `route` (as the example above does) — the channel matches an addressed stop against its
 OWN identity, which it otherwise only learns from `getMe`, and not at all if that call fails.
@@ -208,9 +207,9 @@ OWN identity, which it otherwise only learns from `getMe`, and not at all if tha
 
 Telegram media are handled by the channel before the agent turn runs.
 
-- Photos are downloaded, converted to `prompt.images`, and resized by the harness before reaching the model. The selected model must support vision.
+- Photos are downloaded, sent as image content, and resized by the harness before reaching the model. The selected model must support vision.
 - Documents, voice, video, and audio are downloaded to `<state root>/channels/telegram/files/c-<chat>/` (`c-` plus the URL-encoded chat id). Their local paths are appended to the prompt so the agent can read them with tools.
-- Download failures become `failed` events, never silent drops.
+- A download failure fails the turn with the reason, never a silent drop.
 
 Downloaded files are kept: the path the agent was given stays readable for as long as the conversation can refer back to it, and nothing removes them. Treat `<state root>/channels/telegram/` like session state — git-ignored machine state that wants a volume, and a cleanup policy you choose, on a long-running bot that receives a lot of files.
 
@@ -219,14 +218,17 @@ Downloaded files are kept: the path the agent was given stays readable for as lo
 The channel persists its state under `<state root>/channels/telegram/`:
 
 - `buffers.json` — the group-context buffer, written before each webhook ACK.
+- `sessions.json` — which session each conversation talks in.
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run.
 - `files/c-<chat>/` — downloaded inbound files, one directory per chat. Kept across restarts, and never pruned by FastAgent (see above).
 
-Turns queue in memory, one at a time per session, and each accepted turn is also recorded in `turns.json` before
+Turns queue in memory, one at a time per conversation, and each accepted turn is also recorded in `turns.json` before
 the webhook ACK:
 
-- A crash or rolling deploy mid-turn replays the whole turn on the next start. This is **at-least-once**:
-  side-effecting tools can run again, and in a narrow pre-ACK window a turn can run twice.
+- A crash or rolling deploy mid-turn replays the turn on the next start. Its message was sent with the update's id as
+  its key, so the replay finds the message already sent and reads its end rather than sending it again; the agent
+  answers an accepted message after a restart too. In a narrow pre-ACK window a turn can still be accepted twice, and
+  a message the agent was answering when the process died may run its tools again: this is **at-least-once**.
 - A turn interrupted repeatedly is dropped after a few attempts and its asker is told to ask again (or, if its
   answer was already recorded, the answer is sent).
 - An answer produced but not delivered is re-sent on the next start without re-running the model. When Telegram
@@ -236,15 +238,15 @@ the webhook ACK:
 
 Exactly-once execution is not provided.
 
-The state home lives under `.state/`, which the agent `.gitignore` excludes, so buffered chat content is not committable. A corrupt `buffers.json` or `turns.json` logs a warning and starts empty — the bot boots, the loss is visible. Single-process semantics: two processes must not share a state dir.
+The state home lives under `.state/`, which the agent `.gitignore` excludes, so buffered chat content is not committable. A corrupt `buffers.json` or `turns.json` logs a warning and starts empty — the bot boots, the loss is visible. One process owns the state root: a second `dev` or `start` of the same agent is refused.
 
 ## Sending messages and files back (`telegram-send`)
 
-`fastagent add telegram` also scaffolds `tools/telegram-send.ts`. The tool takes its file's name, so the agent can call the `telegram-send` tool with a `chatId` from the `[telegram: chat …]` envelope to send a text message or a local file back through the bot. It is also the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up, whose plain reply is not delivered anywhere; those turns have no `[telegram: chat …]` line, so the schedule's prompt (or the wake's) must name the target chat id.
+`fastagent add telegram` also scaffolds `src/tools/telegram-send.ts`, a tool named `telegram_send`: the agent calls it with a `chatId` from the `[telegram: chat …]` envelope to send a text message or a local file back through the bot. It is also the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up, whose plain reply is not delivered anywhere; those turns have no `[telegram: chat …]` line, so the schedule's prompt (or the wake's) must name the target chat id.
 
-What the tool sends becomes part of that chat's discussion: Telegram never delivers a bot its own messages, so a digest a schedule posted would otherwise be unknown to the chat it went to. The next answered turn there sees it as `you (sent by the agent) (msg …): …`, up to 2,000 characters (longer is cut and marked `… (truncated)`), and like any buffered line it is evicted oldest-first when later discussion fills the buffer. It is recorded only when the channel is mounted in the same process as the tool — a serve, where schedules run. A `fastagent tool` run sends with `TELEGRAM_BOT_TOKEN` and its result says the message was not recorded. On AgentCore the channel is built on the first webhook, so a schedule that wakes a cold session sends without recording, and says so.
+What the tool sends becomes part of that chat's discussion: Telegram never delivers a bot its own messages, so a digest a schedule posted would otherwise be unknown to the chat it went to. The next answered turn there sees it as `you (sent by the agent) (msg …): …`, up to 2,000 characters (longer is cut and marked `… (truncated)`), and like any buffered line it is evicted oldest-first when later discussion fills the buffer. It is recorded only when the channel is mounted in the same process as the tool — a serve, where schedules run. A process with no channel mounted (`fastagent invoke`) sends with `TELEGRAM_BOT_TOKEN`, and the tool's result says the message was not recorded. On AgentCore the channel is built on the first webhook, so a schedule that wakes a cold session sends without recording, and says so.
 
-**Do not use it to answer the current turn** — the channel already delivers the reply, so calling the tool as well posts it twice. The scaffolded description says so. `tools/telegram-send.ts` is the package's, not authored glue: re-running `fastagent add telegram` rewrites it and keeps `channels/telegram.ts`, which is how an agent scaffolded by an earlier release picks up the current tool if it is double-posting.
+**Do not use it to answer the current turn** — the channel already delivers the reply, so calling the tool as well posts it twice. The scaffolded description says so. `src/tools/telegram-send.ts` is the package's, not authored glue: re-running `fastagent add telegram` rewrites it and keeps `src/channels/telegram.ts`, which is how an agent scaffolded by an earlier release picks up the current tool if it is double-posting.
 
 ## Limits
 

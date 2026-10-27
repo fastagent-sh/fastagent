@@ -1,5 +1,5 @@
 /**
- * The Agent API (docs/design/agent-api.md) over pi-durable: a Harness opened on the instance's storage, and the ten
+ * The Agent API (docs/SPEC.md) over pi-durable: a Harness opened on the instance's storage, and the ten
  * operations read from and submitted to it. Admission (a key's lookup, the limits and the submission) is one step per
  * process, since one process owns a storage.
  */
@@ -61,7 +61,7 @@ import { releaseWaitingQueues } from "./release.ts";
 import { resumeStream } from "./resume.ts";
 import { type Sessions, trackSessions } from "./sessions.ts";
 
-/** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (agent-api.md §3). */
+/** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (SPEC.md §3). */
 export interface AgentCommand {
   name: string;
   description?: string;
@@ -85,7 +85,7 @@ export interface DurableAgentOptions {
 }
 
 export interface DurableAgent extends Agent {
-  /** pi-durable's own API, for operating the agent (agent-api.md §11). */
+  /** pi-durable's own API, for operating the agent (SPEC.md §11). */
   readonly harness: Harness;
   /** The conversation a session id names, to operate it through `harness`. */
   conversation(sessionId: string): Promise<Conversation | undefined>;
@@ -166,7 +166,7 @@ function durableAgent(
   /** An operation's Effect as the Promise the API promises: a failure becomes the operation's failure value. */
   const resolve = <A>(program: Effect.Effect<A, PortFailure>, failed: (error: unknown) => A): Promise<A> =>
     Effect.runPromise(program.pipe(Effect.catchCause((cause) => Effect.sync(() => failed(portError(cause))))));
-  /** `getMessage` and `attachment` have no failure value: they reject (agent-api.md §2). */
+  /** `getMessage` and `attachment` have no failure value: they reject (SPEC.md §2). */
   const settleOrReject = <A>(program: Effect.Effect<A, PortFailure>): Promise<A> =>
     Effect.runPromise(
       program.pipe(Effect.catchCause((cause) => Effect.fail(new AgentRejection(failureOf(portError(cause)))))),
@@ -586,7 +586,7 @@ function expandCommand(
   return { content: [{ type: "text", text: command.expand(match[2] ?? "") }, ...parts.slice(1)], sent: first.text };
 }
 
-/** One page of a session's published entries (agent-api.md §5): after a cursor, before one, or the newest. */
+/** One page of a session's published entries (SPEC.md §5): after a cursor, before one, or the newest. */
 function readPage(
   reads: Reads,
   sessionId: string,
@@ -650,7 +650,7 @@ function readPage(
   });
 }
 
-/** A page stops at the byte budget (agent-api.md §7.2), keeping at least one entry: the end nearest its cursor. */
+/** A page stops at the byte budget (SPEC.md §7.2), keeping at least one entry: the end nearest its cursor. */
 function withinBudget(entries: Entry[], keep: "oldest" | "newest"): Entry[] {
   const ordered = keep === "oldest" ? entries : [...entries].reverse();
   const kept: Entry[] = [];

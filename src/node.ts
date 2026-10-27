@@ -1,5 +1,7 @@
 /** Binding a Fetch handler to a Node HTTP server. */
 export { nodeListener, serveNode } from "./channels/serve.ts";
+// What a custom channel compares its platform's secret with: constant-time, so the comparison leaks no prefix.
+export { secretEquals } from "./channels/secret.ts";
 
 // The assembly: an opened agent becomes a mounted service.
 export {

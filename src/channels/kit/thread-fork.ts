@@ -1,5 +1,5 @@
 /**
- * Where a NEW thread starts from (participant-model.md §5, agent-service.md §8.3): a fork of the room's session at
+ * Where a NEW thread starts from (participant-model.md §5, architecture.md §2): a fork of the room's session at
  * the message the thread's reply chain names, or at the room's present when nothing in it names one. A thread that
  * already exists is left alone.
  *

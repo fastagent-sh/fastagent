@@ -12,7 +12,7 @@ Common FastAgent setup and runtime issues.
 
 FastAgent needs a model spec such as `openai-codex/gpt-5.5`. In a terminal, `dev` / `start` /
 `invoke` prompt you to pick one from the full catalog (logging you in inline when the pick needs
-auth) and save it. This error means the run is **non-interactive** (CI, a container, a piped
+auth) and use it for the run, printing the line to put in the config. This error means the run is **non-interactive** (CI, a container, a piped
 command) with no model set.
 
 Check available specs:
@@ -41,7 +41,8 @@ The selected provider has no credentials.
 
 Most common cause: you ran `fastagent login` in a different agent. Login writes `<agent dir>/.secrets/auth.json`;
 an agent also reads `~/.fastagent/.secrets/auth.json` (written by `fastagent login -g`) for a provider it has no
-other credential for (its own `auth.json`, a `models.json` key, an env variable), but not another project's file. An explicit `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR` disables that
+other credential for (its own `auth.json`, a provider in its config that authenticates itself, an env variable), but
+not another project's file. An explicit `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR` disables that
 fallback.
 
 Options:
@@ -59,23 +60,27 @@ OPENAI_API_KEY=...
 
 Behind a proxy, set `HTTPS_PROXY` before running login or serving.
 
-## Tool import fails
+## A module does not load
 
-Symptoms include `Cannot find package`, `Cannot use import statement outside a module`, or `Unexpected token 'export'`.
+Symptoms include `Cannot find package`, `Cannot use import statement outside a module`, `Unexpected token 'export'`,
+or a refusal naming a file of `src/`.
 
 Check:
 
-- the agent ran `npm install`,
-- dependencies used by tools are in the agent's `package.json`,
+- the agent ran `npm install`, and the packages its code imports (`@earendil-works/pi-durable`,
+  `@earendil-works/pi-ai`, its own) are in its `package.json`,
 - `package.json` has `"type": "module"`,
-- the tool's module exports `defineTool({...})` (a module that exports no tool is a helper and mounts nothing),
-- the module is below `tools/`, ends in `.ts`, `.js`, or `.mjs`, and is not a test (`*.test.*`, `*.spec.*`),
-- `fastagent info` lists the tool with its file; one missing there was not exported as a tool.
+- the module sits directly in `src/tools/`, `src/extensions/`, `src/channels/` or `src/schedules/`, ends in `.ts`,
+  `.mts`, `.js` or `.mjs`, and is not a test (`*.test.*`, `*.spec.*`); a helper it imports lives outside those
+  directories,
+- it default-exports what its directory holds (a tool: pi-durable's `defineTool`; a schedule: `defineSchedule`), or
+  `needs([...])` around it,
+- `fastagent info` lists it with its file; it refuses, naming the file, when one does not load.
 
-Run the tool directly for faster feedback:
+Then send the agent a message that uses it:
 
 ```bash
-fastagent tool <name> '{"arg":"value"}'
+fastagent invoke "Use the <name> tool on …"
 ```
 
 ## `Invalid schema for function '…'`
@@ -85,16 +90,13 @@ Codex error: Invalid schema for function 'fetch-url': In context=('properties', 
 ```
 
 OpenAI's strict tool schemas accept only these string formats: `date-time`, `time`, `date`, `duration`, `email`,
-`hostname`, `ipv4`, `ipv6`, `uuid`. Any other one fails every turn on that provider, so the tool cannot be called
-at all. `z.url()` emits `format: "uri"`: use a pattern instead, which every provider accepts, and validate further in
-`execute` if needed:
+`hostname`, `ipv4`, `ipv6`, `uuid`. Any other one fails every message on that provider, so the tool cannot be called
+at all. `Type.String({ format: "uri" })` emits it: use a pattern instead, which every provider accepts, and validate
+further in `execute` if needed:
 
 ```ts
-input: z.object({ url: z.string().regex(/^https?:\/\/\S+$/) }),
+parameters: Type.Object({ url: Type.String({ pattern: "^https?://\\S+$" }) }),
 ```
-
-An agent made by an older `init` may hold a `tools/fetch-url.ts` with the `z.url()` form: replace that line, or delete
-the tool, since `init` now gives agents `extensions/web-access.ts` instead.
 
 ## Port already in use
 
@@ -111,13 +113,12 @@ For `start`, hosted environments can set `PORT`.
 
 `fastagent dev` separates two change classes:
 
-- **`SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, skills and prompt templates** are re-read every turn.
-- **Code inputs** (`tools/`, `channels/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`)
-  restart the dev worker once the turns running in it finish (at most 10 minutes).
-- **`schedules/`** is re-read by the running clock within 30 seconds; nothing restarts.
+- **`SYSTEM.md`, `AGENTS.md`, skills and prompt templates** are read for every message.
+- **Code inputs** (`src/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`) restart the dev worker once the
+  messages running in it finish (at most 10 minutes).
 
-Nothing else is watched, including files the agent writes and helper code imported from outside those
-directories; restart manually for those. `fastagent chat` reads everything once at startup.
+Nothing else is watched, including files the agent writes and helper code imported from outside `src/`; restart
+manually for those.
 
 If the worker stopped after a broken code edit, save another change after fixing the error. The supervisor should retry.
 
@@ -125,7 +126,8 @@ Use `--no-watch` to serve once without the supervisor.
 
 ## Sessions disappear after redeploy
 
-By default, machine state (sessions, channel state, schedule state) lives under the agent's
+By default, machine state (the agent's storage, `agent.sqlite`, with its sessions; channel state; schedule state)
+lives under the agent's
 `.state/`, the credentials (`auth.json`, rotated by each OAuth refresh) under its `.secrets/`, and the clones of its
 github content under its `content/`:
 
@@ -142,7 +144,7 @@ ln -sfn /data/content content   # in the agent directory, before every start: a 
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
-Sessions live under the state root. Set `FASTAGENT_SECRETS_DIR` too, or a rotated `auth.json` stays in the agent
+The storage lives under the state root. Set `FASTAGENT_SECRETS_DIR` too, or a rotated `auth.json` stays in the agent
 dir.
 
 ## `busy`
@@ -158,20 +160,19 @@ Fixes depend on the caller:
 - send each message with an `idempotencyKey`, so a resend returns the message it already sent,
 - design tools to be idempotent if events can overlap.
 
-## Tool, channel or schedule failed to load
+## `the storage … is held by another process`
 
-If an enabled file under `tools/` or `channels/` cannot import, is missing a declared secret, or has an invalid
-export, `dev` / `start` fails and names every such file. A file under `schedules/` that is not a valid schedule does
-not stop the serve: it is logged (`is not a valid schedule`) and not armed, and `fastagent info` reports it.
+One process holds an agent's storage (`<state root>/agent.sqlite`) at a time: another `dev` or `start` of the same agent
+is running, or another agent shares its state root (`FASTAGENT_STATE_DIR`). Stop that one first. `fastagent invoke`
+uses storage of its own and runs beside them.
 
-Fix the reported files and environment. To intentionally disable one without deleting it, rename it so
-it no longer ends in `.ts`, `.js`, or `.mjs`, for example:
+## A channel or schedule is disabled
+
+To keep a module without mounting it, rename it so it no longer ends in `.ts`, `.mts`, `.js` or `.mjs`:
 
 ```bash
-mv channels/telegram.ts channels/telegram.ts.disabled
+mv src/channels/telegram.ts src/channels/telegram.ts.disabled
 ```
-
-`fastagent info` loads what it can and reports the rest.
 
 ## Webhook not receiving events locally
 
@@ -203,7 +204,7 @@ Check:
 - the bot is allowed to message the chat,
 - group messages match the route policy (private chat, reply to bot, or `@botname` mention by default),
 - model credentials are configured,
-- the operator log for a `failed` event or Bot API error.
+- the operator log for a failed turn or Bot API error.
 
 ## Slack requests return 401 or no events arrive
 
@@ -286,16 +287,16 @@ Cron schedules fire only while a serving process is up:
   scheduler,
 - a run missed while the process was down is caught up once on the next start, not once per missed
   slot,
-- a scaled-to-zero deployment sleeps through cron instants; keep one machine running, or replace the schedule with a clock of your own (see
-  [Deploy](deploy.md#scale-to-zero)).
+- a scaled-to-zero deployment sleeps through cron instants; keep one machine running, or wake it with a clock of your
+  own through a channel (see [Deploy](deploy.md#scale-to-zero)).
 
 Diagnose with `fastagent schedules list`: every schedule's next instant and how its last run ended (`--json` for the
-retained history). A `schedules/<name>.md` that is not a valid schedule is reported by `fastagent info` before it ever
-reaches `dev`.
+retained history). A schedule whose cron is not valid is refused when the definition is built: `fastagent info`
+names it, and `dev` and `start` refuse to start.
 
 ## Deployed agent crash-loops with `missing model`
 
-`deploy` reads the model from `FASTAGENT_MODEL` in `.secrets/.env`, else `model` in `fastagent.config.ts`. A
+`deploy` reads the model from `FASTAGENT_MODEL` in `.secrets/production/.env`, else `model` in `fastagent.config.ts`. A
 `FASTAGENT_MODEL` exported in your shell is not read, and `deploy` has no `--model` flag. Set one of the two and
 redeploy; `deploy` prints the effective model and its source. To switch models, change it here and redeploy. See
 [Deploy](deploy.md).

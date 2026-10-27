@@ -77,7 +77,7 @@ type InvokeEnd = { refused: string; busy: boolean } | { outcome: Outcome } | { u
 
 /**
  * Send one message and wait for its end; `onAccepted` hears the receipt. Interrupted, it stops waiting, and the agent
- * goes on: a Caller that stops waiting only detaches (agent-api.md §3.1).
+ * goes on: a Caller that stops waiting only detaches (SPEC.md §3.1).
  */
 async function readInvoke(
   agent: ScheduledAgent,
@@ -284,7 +284,7 @@ function accountForUnreportedFire(
       return;
     }
     log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} was taken before a restart — reading its end`);
-    // The key alone names the message, so this sends nothing: its receipt is the one the fire had (agent-api.md §3.3).
+    // The key alone names the message, so this sends nothing: its receipt is the one the fire had (SPEC.md §3.3).
     const request: InvokeRequest = {
       sessionId,
       content: [{ type: "text", text: "(the scheduled message this key names)" }],

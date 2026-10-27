@@ -31,8 +31,9 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 | Requirement | How |
 |---|---|
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
-| **`.secrets/production/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
-| **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). A key the definition references (`"$NAME"` in `models.json`) or the provider's key variable in `.secrets/production/.env` travels, and so does a literal or `!command` key in `models.json`. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
+| **`.secrets/production/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`needs([...])`), the variables `context.json` declares, and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
+| **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable in `.secrets/production/.env` travels, and so does a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
+| **Something reaches it** | A channel or a schedule. A deployment with neither is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
 | **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/`, `.secrets/` and `content/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 | **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/production/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` entry stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, outside `content/`, which every release ships; move what it works on and must keep to a repository. |
 
@@ -93,14 +94,6 @@ A login stored on the box outranks a key in its environment (pi lets a stored cr
 added to `.secrets/production/.env` after the box was logged in is not used; the box's startup log says so and names the
 command that switches it to the key (`fastagent login <provider> --deployment`, choosing "API key").
 
-**A deployment made before this login existed** still holds a copy of this machine's `auth.json`: `--run` used to
-carry it as `FASTAGENT_AUTH_SEED`, which nothing reads any more, and the copy it seeded is still on the volume,
-where `--run` now keeps it as the box's credential. That copy shares its grant with this machine, so either side can
-still log the other out. Replace it once: delete the old secret (`fly secrets unset FASTAGENT_AUTH_SEED`, or
-`railway variable delete FASTAGENT_AUTH_SEED`, plus any `_2`, `_3`… it was split into), then run `fastagent login
-<provider> --deployment <host>`, which overwrites the copy with a grant of the box's own. Docker needs only the
-login (its Compose no longer passes the seed); AgentCore needs nothing, its storage is reset by every deploy.
-
 Until it is logged in, the box is already running: a long-connection channel (a Feishu/Lark WebSocket) is connected
 and schedules fire, and each turn they start fails for want of a model credential. Only webhooks wait for
 the login. For an unattended first deploy of such an agent, use an API key.
@@ -140,14 +133,16 @@ service:
 - `restart: unless-stopped`.
 
 ```bash
-docker compose -f fastagent.compose.yml up -d --build
+docker compose -f fastagent.compose.yml build --pull
+docker compose -f fastagent.compose.yml up -d
 docker compose -f fastagent.compose.yml logs -f agent
 docker compose -f fastagent.compose.yml ps
 docker compose -f fastagent.compose.yml down     # keeps the state volume
 docker compose -f fastagent.compose.yml down -v  # destructive: deletes all state
 ```
 
-`--run` checks Docker and the daemon, gates missing values before building, runs `up -d --build`, checks the
+`--run` checks Docker and the daemon, gates missing values before building, builds with `--pull` (the base image is a
+floating tag) and runs `up -d`, checks the
 services, and waits for `/health`. Nothing passes through Compose's environment: the container reads
 `.secrets/production/.env` itself.
 
@@ -241,15 +236,13 @@ crashes on boot.
 
 | Definition has | Fly (`min_machines_running`) / Railway (App Sleeping) |
 |---|---|
-| a schedule (`schedules/*.md`) | kept up: the schedule is the agent's own clock, and nothing wakes a stopped machine at its instant |
+| a schedule (`src/schedules/`) | kept up: the schedule is the agent's own clock, and nothing wakes a stopped machine at its instant |
 | a long-connection channel | kept up; an outbound connection cannot wake a stopped machine |
 | neither | may scale to zero |
 
-Timed work on a deployment that scales to zero is a clock of your own (Fly Cron Manager, a Railway cron service, a
-CI job) calling `POST /invoke`, **in place of** the schedule: keep the prompt as `prompts/<name>.md` and send
-`/<name>`, and delete `schedules/<name>.md`. Both at once would run the work twice, or race for one session. The
-route must then be served (`http.api` not `false`); it runs any prompt with the agent's full tools for whoever
-reaches it, so put a gateway in front of a public URL.
+A clock that must wake a scaled-to-zero machine is a channel of your own: a route the clock calls (Fly Cron Manager, a
+Railway cron service, a CI job), which verifies the clock's call (a shared secret compared with `secretEquals`) and
+sends the agent its message. There is no HTTP API to call instead.
 
 The generated `fly.toml` and the Railway runbook follow this table. If a kept `fly.toml` scales to zero where it
 should not, `deploy` warns and `--run` refuses until you raise it.
@@ -277,9 +270,9 @@ The stack carries:
 - the **Runtime** (your container; `FASTAGENT_AGENTCORE=1` serves `POST /invocations` and `GET /ping`);
 - a **forwarder Lambda** with a public Function URL: it relays webhooks when a webhook channel exists (channels
   verify signatures as on every host) and manages the EventBridge schedules below;
-- **EventBridge schedules**, which the container sets itself: one recurring cron schedule per `schedules/` file,
-  which EventBridge fires on its own clock, and a self-deleting one-shot per pending wake-up. Both wake the container
-  on time, and a schedule edited on the runtime needs no deploy. The container sets them once an envelope has
+- **EventBridge schedules**, which the container sets itself: one recurring cron schedule per schedule, which
+  EventBridge fires on its own clock, and a self-deleting one-shot per pending wake-up. Both wake the container on
+  time. The container sets them once an envelope has
   reached it through the forwarder, which tells it where the forwarder is: `--run` does this with its probe; after a
   manual deploy, `POST <ForwarderUrl>/__fastagent/probe` with `{"auth":"<FastagentIngressSecret>"}` once (the runbook
   prints it). An `invoke-agent-runtime` call does not, since that door is IAM's and carries no forwarder address.
@@ -289,9 +282,8 @@ change the template.
 
 What to know:
 
-- **Idle cost.** A session keeps its microVM for `deploy.agentcore.idleTimeoutSeconds` (default 180) after it goes
-  idle, and memory bills for that time; after it, the next message cold-starts. `/ping` reports `HealthyBusy`
-  while work runs, so a turn is not cut short.
+- **Idle cost.** A session keeps its microVM for `deploy.agentcore.idleTimeoutSeconds` (default 180) after it goes  idle, and memory bills for that time; after it, the next message cold-starts. `/ping` reports `HealthyBusy`
+  while any message is not yet settled, so work is not cut short.
 - **Every deploy resets the state.** Managed SessionStorage survives compute stop/resume but is wiped on every
   runtime update (every deploy) and after 14 idle days: sessions, channel state and pending wake-ups start blank.
   For state that survives deploys, use Fly or Railway.
@@ -304,8 +296,9 @@ What to know:
 - **Redeploys stop the runtime session** so the next call uses the new image; in-flight work is lost.
 - **No long-connection channels.** Feishu/Lark receive by webhook here by default; a `FEISHU_INGRESS=websocket` in
   `.secrets/production/.env` makes `--run` refuse.
-- **Programmatic invokes** use the deployment's fixed `runtimeSessionId` (printed in the runbook); the envelope's
-  `session` selects the conversation.
+- **The IAM-gated door takes only a probe.** `InvokeAgentRuntime` with the deployment's fixed `runtimeSessionId`
+  (printed in the runbook) answers whether the definition opened; the agent is reached through its channels and
+  schedules.
 - **Webhook bodies over about 4 MiB** cannot pass the Lambda Function URL (6 MB request cap).
 - **A kept template that no longer matches the definition** (a new channel) stops `--run` until
   `--force`. A template without the marker line is never regenerated.
@@ -349,7 +342,7 @@ excludes. Each start publishes it onto persistent storage:
 ```text
 <persistent-root>/
 ├── definition/           # the deployed definition: the agent's working directory on the host
-├── .state/               # sessions, channels, scheduled work, mise's data directory (mise/)
+├── .state/               # agent.sqlite (sessions and messages), channels, scheduled work, mise's data directory (mise/)
 ├── .secrets/             # credentials, including refreshed auth.json
 ├── content/              # the agent's content: clones of its github entries; each release links its own here
 └── .deployment/          # release and recovery metadata
@@ -365,7 +358,8 @@ excludes. Each start publishes it onto persistent storage:
   it behind unread. Move out what you need and delete it, or deploy onto fresh storage.
 - The agent's `package.json` dependencies install at build time; keep the deploy CLI and the agent's FastAgent
   dependency on the same version.
-- Markdown in the definition is read every turn; tools, channels and config need a restart.
+- `SYSTEM.md`, `AGENTS.md`, skills and prompt templates are read for every message; code under `src/` and config
+  need a restart.
 
 **The environment**: with [packages](configuration.md#environment) declared, `deploy` lists them in
 `fastagent.packages`, and the image copies that file and installs each package at the newest release its version allows,
@@ -375,7 +369,7 @@ to mise's system directory (`/usr/local/share/mise`), so a start on the host dow
 here. `--run` stops when `package.json` does not list mise, when mise is not installed here to check the packages (run
 `fastagent env install`), on a package whose backend FastAgent refuses, or on a PyPI package without `python` and `uv`
 declared; without `--run`, these are warnings. Chromium with CJK fonts adds about 1 GB to the image. The
-[variables](configuration.md#environment) `context.json` declares are required like a tool's secrets: the runbook lists
+[variables](configuration.md#environment) `context.json` declares are required like a module's secrets: the runbook lists
 each with its description, and a deploy whose `.secrets/production/.env` has no value for one stops before it changes
 anything.
 
@@ -402,9 +396,9 @@ route channels, public ingress and webhook registration. A long-connection chann
 
 ## Single-machine tier
 
-Resident deployments need **one active replica** with durable storage. More replicas need shared storage and
-coordination for sessions, channel state and scheduled work. The `PiSessionRecordStore` / `Lease` seams cover
-harness sessions (see [Embedding](embedding.md)), not channel state.
+Resident deployments need **one active replica** with durable storage: one process holds an instance's storage at a
+time, and a second is refused. Spreading one instance over several processes needs a router that sends each session's
+calls to the process holding it ([architecture.md](design/architecture.md) §4.3); it is not built.
 
 ## Where next
 

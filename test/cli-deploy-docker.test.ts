@@ -14,7 +14,8 @@ describe("cli: deploy docker", () => {
     const first = await run(["deploy", "docker", dir]);
     expect(first.code).toBe(0);
     expect(first.stdout).toContain(
-      "docker compose -f fastagent.compose.yml up -d --build", // one spelling: the generated Compose names the value file itself
+      // One spelling: the generated Compose names the value file itself.
+      "docker compose -f fastagent.compose.yml build --pull\ndocker compose -f fastagent.compose.yml up -d\n",
     );
     const generatedCompose = await readFile(join(dir, "fastagent.compose.yml"), "utf8");
     expect(generatedCompose).toContain('"127.0.0.1:8787:8787"');
@@ -47,7 +48,8 @@ describe("cli: deploy docker", () => {
     expect(result.stderr).toMatch(/edit it, delete it and regenerate, or pass --force/);
     expect(result.stdout).not.toContain("logs -f tunnel");
     expect(result.stdout).toContain(
-      "docker compose -f fastagent.compose.yml up -d --build", // one spelling: the generated Compose names the value file itself
+      // One spelling: the generated Compose names the value file itself.
+      "docker compose -f fastagent.compose.yml build --pull\ndocker compose -f fastagent.compose.yml up -d\n",
     );
     expect(await readFile(composePath, "utf8")).toBe(compose);
   });

@@ -20,12 +20,12 @@ invalidates the rules rather than adjusting them.
 ## 0.1 What a participant's text can invoke
 
 A participant's message is prompt TEXT, and the harness expands two spellings in it before the model
-sees them: `/skill:<name>` and the bare `/<name>` of a prompt template. Both resolve against what this
-process loaded — the definition's skills plus the machine's (`docs/configuration.md`).
+sees them: `/skill:<name>` and the bare `/<name>` of a prompt template. Both resolve against the
+definition's `skills/` and `prompts/` (`info().commands`).
 
 That is worth stating here because of who is talking. On a chat channel the author is usually not in
-the room: the text comes from whoever sent it, so any participant can fire a template the operator
-keeps in `~/.pi/agent/prompts`, and a template named like a platform command (`start.md` against
+the room: the text comes from whoever sent it, so any participant can fire a template the author
+keeps in `prompts/`, and a template named like a platform command (`start.md` against
 Telegram's `/start`) rewrites that message silently. No capability is added — the turn runs with the
 same tools whatever the text says — but the decision to run the operator's macro belongs to the sender.
 A `/stop` is the one exception, because the channel takes it before the agent ever sees it
@@ -184,8 +184,8 @@ The unit of concurrency is the session, and the session is the place:
 - one conversation is sequential: people take turns, and an answer may depend on the previous one;
 - separate conversations are parallel: threads proceed independently.
 
-Two turns in one place serialize (`channels/kit/turn-queue.ts` FIFO, and a session runs one run at a time, SPEC
-§3.2). Two turns in different places run concurrently.
+Two turns in one place serialize (`channels/kit/turn-queue.ts` FIFO, and a session takes one message at a time,
+[Agent API](../SPEC.md) §3.2). Two turns in different places run concurrently.
 
 Finer-grained concurrency (parallel turns *inside* one session) is rejected: a conversation needs
 convergence, and a tree only provides divergence. Concatenating two independently computed turns
@@ -241,30 +241,19 @@ is deliberate: the walk repeats per reply turn, so an established session re-rea
 already hold (attachments are deduplicated by message identity; text cannot be, from a layer that
 cannot read the session).
 
-> With the decided [Agent API](agent-api.md) the Agent names sessions, so the thread's session id is recorded in the
-> channel's state instead of being the record itself, created inside the per-place turn queue in the order
-> `createSession`, record, invoke ([architecture.md](architecture.md) §2, §5). This section describes the code until
-> that move lands.
-
 **Rungs 3 and 4 are one mechanism with two parameters, implemented as a fork of the room's session.** The
 channel knows which place this one branched from and the reply chain the thread starts under (the referent,
-then each message it replies to, nearest first). When the thread's session does not exist yet, the channel
-creates it with `sessions.create({ fork: { sessionId: <the room>, entryId, context: "recent" } })` (SPEC v1 §5),
-ONCE: the session existing is the record that the decision was taken, so there is no marker to persist and no
-decision to retry. The branch point is the first protocol message the chain names (`kit/thread-fork.ts`): a channel
-invokes with the platform's message id as the `idempotencyKey`, so `messages.get({ idempotencyKey })` finds the
+then each message it replies to, nearest first). When the thread has no session yet, the channel
+creates one with `createSession({ from: { sessionId: <the room's>, entryId } })` ([Agent API](../SPEC.md) §5) and
+records it in its map, inside the per-place turn queue, in the order session, record, message
+([architecture.md](architecture.md) §2): the record is the decision, so there is no marker to persist and no decision
+to retry. The branch point is the first message of the room's that the chain names (`kit/thread-fork.ts`): a channel
+sends with the platform's message id as the `idempotencyKey`, so `getMessage(room, { idempotencyKey })` finds the
 message a user's chat message became, and the thread forks at its answer, at its own entry when it has none, and at
 the room's present when nothing in the chain names one (a chat message the agent was not asked about, or one it
-posted itself) or it is still queued. A chat message the channel posted for an answer does not name it yet: that half of
-agent-service.md §8.3 is [#796](https://github.com/fastagent-sh/fastagent/issues/796). `context: "recent"` is how the harness bounds what the model sees with
-one mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, measured with
-pi's `estimateTokens` on what the model will see (an attempt pi omitted costs nothing). A room compaction
-copied along keeps its retained tail only while everything fits: pi reads the newest compaction alone,
-so a mark drops that tail, and the room's summary is carried into the mark instead. The window is
-generated from real session entries instead of re-serialized prompt text, so images and tool
-results come along for free. The newest exchange is a floor, kept whole even when it alone exceeds the
-budget. Every edge (missing parent, oversize journal, torn tail line) fails toward an empty session
-with a warn.
+posted itself) or it is still queued. A chat message the channel posted for an answer does not name it yet
+([#796](https://github.com/fastagent-sh/fastagent/issues/796)). A fork shares the room's history up to that entry, and what the model sees of it
+is bounded the way any session's is, by the harness's compaction.
 
 **The two rungs carry different halves.** The fork carries what the room's SESSION knew; a room's
 session only advances when the agent is summoned, so discussion since its last answered turn is

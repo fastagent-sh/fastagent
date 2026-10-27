@@ -60,10 +60,7 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   assertTunnelBindable(host, tunnel);
   const opened = await openServing(agentDir, { model: modelSpec }).catch(failStartup);
   await reportAssembly(opened, modelSpec);
-  const service = await mountAgentService(
-    { ...opened, channels: opened.code.channels, schedules: opened.code.schedules },
-    cliMountOptions(),
-  ).catch(failStartup);
+  const service = await mountAgentService(opened, cliMountOptions()).catch(failStartup);
   serveService(
     service,
     { port: portFlag ?? opened.definition.config.http?.port ?? DEFAULT_HTTP_PORT, host },

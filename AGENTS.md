@@ -2,17 +2,17 @@
 
 ## What this is
 
-fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (`SYSTEM.md` / `APPEND_SYSTEM.md` prompt, `skills/`, tools, and existing `AGENTS.md` project context) into a live service inside an app, in Telegram, Slack or Feishu, or behind a custom channel without a new authoring DSL.
+fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (a `SYSTEM.md` prompt, `skills/`, code under `src/`, and existing `AGENTS.md` project context) into a live service inside an app, in Telegram, Slack or Feishu, or behind a custom channel without a new authoring DSL.
 
-The design center is decided in `docs/design/architecture.md`: an agent is a definition assembled onto one harness, pi-durable, and served through one API of our own, the consumer Agent API of `docs/design/agent-api.md`; everything else is pi-durable's own API. The code runs that design; the documents that still describe the SPEC v1 stack it replaced (`docs/SPEC.md`, the user guides) are rewritten in #788's docs step.
+The design center is decided in `docs/design/architecture.md`: an agent is a definition assembled onto one harness, pi-durable, and served through one API of our own, the consumer Agent API of `docs/SPEC.md`; everything else is pi-durable's own API.
 
 ## Source of truth
 
 | Document | Purpose |
 |---|---|
-| `docs/design/agent-api.md` | The consumer Agent API, which the code implements. Do not change its semantics without an explicit decision. It replaces `docs/SPEC.md` (v1, retired) in #788's docs step. |
+| `docs/SPEC.md` | The consumer Agent API, which the code implements. Do not change its semantics without an explicit decision. |
 | `docs/design/architecture.md` | The decided architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
-| `docs/design/core.md` | The SPEC v1 reference implementation; rewritten in #788's docs step. |
+| `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
 | `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review policy). |
@@ -27,7 +27,7 @@ one place that cannot drift away from the code it explains. Directories that hav
 
 ```
 src/
-├── agent-api.ts            # the Agent API (docs/design/agent-api.md) as types, plus its limits and error values;
+├── agent-api.ts            # the Agent API (docs/SPEC.md) as types, plus its limits and error values;
 │                           # imports nothing
 ├── agent-api-stream.ts     # stream(agent, request): send a message and read its answer as written, over any Agent
 ├── answer-text.ts          # a message's answer text as it streams: its deltas, plus entry text no delta carried
@@ -252,7 +252,7 @@ src/
         │                   # every reader builds it here, never from the parts
         └── login.ts        # signing in to a model provider, for any front end; `fastagent login` is one
 test/                       # vitest; faux models by default
-├── agent-api-conformance.ts # the Agent API's conformance suite (agent-api.md §9), run in process by
+├── agent-api-conformance.ts # the Agent API's conformance suite (docs/SPEC.md §9), run in process by
 │                           # durable-agent.test.ts over durable-subject.ts
 ├── scripted-agent.ts       # an Agent whose answers a test scripts: what channel, schedule and service tests run on
 ├── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)
@@ -273,12 +273,12 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 ## Working rules specific to this repo
 
 - **The API imports no harness.** `src/agent-api.ts` must not import any harness (`@earendil-works/pi-*` only under `src/harnesses/`): the consumer API is the layer that keeps a harness's changes away from clients, and keeping FastAgent's own harness code in one directory bounds what replacing the harness costs FastAgent. It does not bound what it costs an author: an agent's tools and extensions are pi-durable code, an accepted trade-off ([architecture.md](docs/design/architecture.md) §2).
-- **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. A message that cannot be answered ends with its outcome saying why, and a refused operation returns an `AgentError` value (agent-api.md); neither throws through a Caller's iteration.
+- **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. A message that cannot be answered ends with its outcome saying why, and a refused operation returns an `AgentError` value (docs/SPEC.md); neither throws through a Caller's iteration.
 - **One process owns an instance's state.** Durable state is the instance's storage (pi-durable's SQLite: sessions, messages, entries) and each Caller's own files under the state root (a channel's session map and turn records, the schedules' claims, wake-ups). One process opens a storage at a time, so a deployment routes every session of one storage to one process ([architecture.md](docs/design/architecture.md) §4.3). The process holds the open Agent and each Caller's queues; what a caller reads afterwards is durable before it is reported.
 - **Public surface is scoped on purpose.** `src/core.ts` is harness- and runtime-neutral (no package but `effect`, no Node built-in; `src/agent-api.ts` and `src/channel.ts` themselves import nothing), `src/node.ts` is harness-neutral but needs a Node runtime, `src/pi.ts` names the harness, and `src/index.ts` combines all of them. Internals (`openDurableAgent`, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **Effect first.** Write with Effect, and with what Effect gives you, rather than hand-rolled async plumbing or a thin wrapper over it.
 - **Learn Effect from its source, not from guesses.** The installed `effect@4` ships uncompiled source and its own agent guide: read `node_modules/effect/AGENTS.md` before writing Effect code, and the relevant module under `node_modules/effect/src/` for how an API is actually used ([why](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive)). Prefer it over an invented API, a stale memory, or a web search. Read-only reference: never edit it, never import from a path inside it.
-- **The artifact carries the agent; the machine lends it an environment.** What a definition declares — its prompt files, `AGENTS.md`, its code under `src/` (tools, channels, schedules), its own `skills/` — is the artifact and must come from the bundle, never from the builder's global state. What the box supplies is inherited, the way `bash` already inherits the `PATH`: pi's skills, prompt templates and harness settings (retry budget, compaction thresholds, cache warming) come from `~/.pi/agent` in every posture, including a container, whose environment is whatever its image was built with. The line is not "definition vs machine" but IDENTITY vs ENVIRONMENT — a system prompt from someone's laptop would make the agent theirs, so that one is overridden. Deploying ships the project scope; the environment is not compared against a deployment, the same way nobody is told their local `ffmpeg` is not in the image.
+- **The artifact carries the agent; the machine lends it an environment.** What a definition declares — its prompt files, `AGENTS.md`, its code under `src/` (tools, channels, schedules), its own `skills/` — is the artifact and must come from the bundle, never from the builder's global state. What the box supplies is its environment, inherited the way `bash` inherits the `PATH`: the commands `context.json` does not declare, and the process's variables. Nothing of the agent itself comes from the machine: no skill, prompt template or system prompt from `~/.pi/agent`, since a prompt from someone's laptop would make the agent theirs. The line is IDENTITY vs ENVIRONMENT. The environment is not compared against a deployment, the same way nobody is told their local `ffmpeg` is not in the image.
 - **A session id belongs to the Agent; a conversation id belongs to the Caller.** The Agent names sessions, and a Caller maps its own conversations onto them (`conversation-sessions.ts`) — a telegram group is `-1001234567890`, a feishu thread carries `:` and `/`, and neither is ever a session id. A tool asking which session it runs in gets the id the Agent handed out (`sessionIdOf`), never pi-durable's own.
 - **The run plane and the observation plane read the same state, through the same function.** They answer different questions about one session — what will execute, and what to report — so deriving them separately is how they come to disagree. The concrete failures this rule is made of: a turn running on assembly defaults while `state()` reported the recorded override, and one plane refusing a record with a cut parent chain while the other silently ran on the truncated path.
 - **A convention with four enforcers has none.** When several call sites must each remember to do a thing, the thing belongs in a function they all call, and that function must REPAIR rather than trust the first writer. `writeFileAtomic` is that shape.

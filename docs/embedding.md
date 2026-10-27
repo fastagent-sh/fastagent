@@ -1,163 +1,169 @@
 ---
 title: Embedding
-description: "Use FastAgent as a library: get an agent, consume its event stream, and mount the Fetch handler in Next.js, Hono, Express, Fastify, Bun, or Node."
+description: "Use FastAgent as a library: open an agent directory in your app, call the Agent API in process, put it on your own routes, and mount its channels in Next.js, Hono, Express, Fastify, Bun, or Node."
 type: doc
 status: current
 ---
 
 # Embedding
 
-Use FastAgent as a **library** — the agent is one capability inside a product you already have, living in your own route, wired to your session store, your auth, your host. For the embedded CLI path (`init` / `dev` / `start`), see [quickstart](quickstart.md); both serve the **same** assembled agent.
+Use FastAgent as a **library**: the agent is one capability inside a product you already have, in your own process,
+behind your own auth, on your own host. For the CLI path (`init` / `dev` / `start`), see [quickstart](quickstart.md);
+both run the **same** agent.
 
 ## Prerequisites
 
-- **Node ≥ 24.15.** Ships compiled JS + types; no build step for FastAgent itself.
-- **Install as a dependency:** `npm i @fastagent-sh/fastagent`.
-- **Model credentials** — `fastagent login` (OAuth, writes the project-level `<agent dir>/.secrets/auth.json`) or a provider API key in the environment (e.g. `OPENAI_API_KEY`). Auth is invisible to your code; see [Auth](#4-auth) below.
+- **Node ≥ 24.15** (or Bun ≥ 1.4). Ships compiled JS + types; no build step for FastAgent itself.
+- **Install as a dependency** of your app: `npm i @fastagent-sh/fastagent`. The agent directory has its own
+  `package.json` too ([init](cli.md#fastagent-init)); keep the versions aligned.
+- **Model credentials**: `fastagent login` in the agent directory (writes its `.secrets/auth.json`) or a provider API
+  key in the environment (e.g. `OPENAI_API_KEY`). See [Auth](#4-auth).
 
 ## The one mental model
 
-An agent is a thing with `invoke` and sessions ([SPEC v1](SPEC.md)). Everything else is "how you get it" and "how
-you consume it".
+An agent is the [Agent API](SPEC.md): sessions the Agent names, messages whose outcome outlives whoever sent them,
+and a durable history of entries. It is TypeScript, in process; FastAgent puts it on no network.
 
 ```ts
 interface Agent {
-  invoke(request: { sessionId?: string; prompt: { text: string }; idempotencyKey?: string }): AsyncIterable<InvokeEvent>;
-  sessions: { create; list; get(sessionId: string): Session }; // read, follow, abort, rewind, compact, update, delete
-  info(); models(); commands();
+  invoke(request: { sessionId?: string; content: ContentPart[]; idempotencyKey?: string; whenBusy?: "queue" | "steer" | "reject" }): Promise<InvokeResult>;
+  createSession(options?): Promise<CreateSessionResult>;
+  getMessage(sessionId, key): Promise<MessageStatus | undefined>;
+  read(sessionId, options?): Promise<ReadResult>; // state and a page of entries
+  resume(sessionId, options?): AsyncIterable<ResumeEvent>; // replay, a snapshot, then live events
+  abort(sessionId): Promise<AbortResult>;
+  configure(sessionId, settings): Promise<ConfigureResult>; // a session's model and thinking level
+  listSessions(options?): Promise<ListResult>; // most recently active first
+  attachment(sessionId, ref): Promise<Attachment | undefined>;
+  info(): AgentInfo;
 }
-type InvokeEvent =
-  | { type: "accepted"; sessionId: string; message: MessageStatus }   // first: the message is recorded
-  | { type: "rejected"; error: AgentError }                            // or first and only: nothing ran
-  | { type: "message_delta"; channel: "text" | "thinking"; delta: string } // live text
-  | { type: "tool_started"; toolCallId: string; name: string; args: Json }
-  | { type: "entry"; entry: Entry }                                    // durable: messages, tool results
-  | { type: "done"; message: DoneMessage }                             // last: its outcome and answer
-  | /* tool_progress, retry_scheduled, state, serving_error */ …;
 ```
 
-The stream ends with the message's `done`, whose `outcome` says how it ended and whose `answer` is the reply.
-`sessionId` is an opaque string you choose; reuse it to continue a conversation. A message for a busy session queues
-behind the ones before it. Stopping reading detaches; the agent goes on, and `agent.sessions.get(id).abort()` stops
-it.
+`invoke` answers with a receipt; `wait()` on it resolves with the message's end, its outcome and its answer. A message
+for a busy session queues behind the ones before it. Failures are values (`{ ok: false, error }`). See the
+[API reference](api-reference.md#the-agent-api).
 
-## 1. Get the agent (pick by what you have)
-
-| You have | Use | Returns |
-|---|---|---|
-| An agent directory (`APPEND_SYSTEM.md` + `skills/` + `tools/` + config) | `createPiAgentFromDir(dir, { model? })` | `{ agent, definition, modelSpec, … }` — auto-discovers everything |
-| A definition directory, but you want to control the K ports | `createPiAgentFromDefinition(dir, { model, … })` | `{ agent, definition }` |
-| No directory — assemble from code | `createPiAgent({ model, instructions, tools })` | `agent` |
+## 1. Open the agent
 
 ```ts
-// A) directory, batteries-included (the same assembly `fastagent dev` uses)
-const { agent } = await createPiAgentFromDir("./agent", { model: "openai-codex/gpt-5.5" });
+import { openServing } from "@fastagent-sh/fastagent";
 
-// B) no directory — Tier 1: three concrete fields
-import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent";
-
-const lookupOrder = defineTool({
-  name: "lookup-order",                       // set the name explicitly when assembling in code
-  description: "Look up an order by id.",
-  input: z.object({ orderId: z.string() }),
-  async execute({ orderId }) {
-    return await db.find(orderId);            // a plain value is auto-wrapped; a throw is reported to the model
-  },
-});
-
-const agent = createPiAgent({
-  model: "openai-codex/gpt-5.5",              // a "provider/modelId" spec string
-  instructions: "You are a support assistant. Use lookup-order to answer order questions.",
-  tools: [lookupOrder],
-});
-```
-
-Use the `z` re-exported from `@fastagent-sh/fastagent`, not a separately installed `zod`: `defineTool` converts schemas with its own copy. Every type our signatures name (`AgentTool`, `Skill`, `Model`, `PiSessionEntry`, …) is re-exported. Import `createProvider` and a provider's wire-protocol `api` from `@earendil-works/pi-ai` (see §5).
-
-`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no harness identity prepended. The directory path instead has pi build its default prompt (or uses `SYSTEM.md` in its place), then adds `APPEND_SYSTEM.md`, the agent directory's `AGENTS.md` as project context, skills, and environment context. See [core design §2](design/core.md).
-
-## 2. Consume the stream (three ways)
-
-```ts
-// (1) raw stream — render tokens as they arrive
-for await (const e of agent.invoke({ sessionId: "u1", prompt: { text: "hi" } })) {
-  if (e.type === "message_delta" && e.channel === "text") render(e.delta);
-  if (e.type === "done") done(e.message);
-}
-
-// (2) buffered JSON — one question, one answer
-import { collect, MessageNotCompleted } from "@fastagent-sh/fastagent";
-const { text } = await collect(agent.invoke({ sessionId: "u1", prompt: { text: "hi" } }));
-// `collect` throws AgentRejection (nothing ran), MessageNotCompleted (the message ended otherwise; `.outcome` says
-// how) or MessageUnfinished (the stream stopped first).
-
-// (3) HTTP/SSE — the agent's API as one Fetch handler: POST /invoke, /sessions/*, /agent/*
-import { createAgentHandler } from "@fastagent-sh/fastagent";
-const handler = createAgentHandler(agent);   // (Request) => Promise<Response>; `{ control: true }` adds /control/*
-// It requires content-type: application/json on a body and caps it. It sends NO CORS headers and answers no preflight
-// — mounted in your app, who may call it cross-origin is your middleware's decision — unless you name the origins:
-// `createAgentHandler(agent, { corsOrigins: ["https://app.example.com"] })`. Call it from another process with
-// `connectAgent`.
-```
-
-### The whole agent, as a service
-
-The handler above serves the agent's API only. To mount the **whole** agent — every channel it declares,
-its API, health — open the directory as a service:
-
-```ts
-import { nodeListener, createAgentService } from "@fastagent-sh/fastagent";
-
-const service = await createAgentService("./my-agent");
-app.use("/agent", nodeListener(service.handler));   // channels + the agent's API + health
-await service.ready;      // long connections up; rejects if one cannot come up
+const opened = await openServing("./my-agent", { model: "openai-codex/gpt-5.5" });
+const { agent } = opened;
 // ...
-await service.close();    // stops long connections and schedules
+await agent.close(); // on shutdown: releases the instance's storage
 ```
 
-`createAgentService` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
-bound, no signal handlers are installed, nothing calls `process.exit`. Like them, it enters the agent's
-[environment](configuration.md#environment): the declared packages are installed where they have no install yet,
-and put first on this process's `PATH`, which the agent's commands inherit, and an environment FastAgent
-refuses fails the call. Two agents opened in one process share that `PATH`. `service.planes` says which of
-the agent's HTTP planes it serves (`api`: `/invoke`, `/sessions`, `/agent`; `control`: `/control`), so your app
-can route around them.
+`openServing` is what `dev` and `start` run: it reads the definition (`SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`,
+`src/`, `fastagent.config.ts`), builds its code with the secrets it declares, installs its declared
+[environment](configuration.md#environment) where it has no install yet and puts it first on this process's `PATH`,
+clones its content, and opens the instance's storage (`<agent dir>/.state/agent.sqlite`), which one process holds at a
+time. Without a `model`, the config's is the default; with none at all the agent still opens, and a session needs a
+model of its own (`createSession({ model })`, `configure`) before a message is answered.
 
-**Nothing fastagent serves is authenticated** — `POST /invoke` and `/control/*` alike. Mount the handler behind
-your own middleware. The cross-origin default is `*`: any page your users visit can call it and read the reply
-unless you set `http.cors` to your front end's origin.
+A definition is always a directory: the prompt is its `SYSTEM.md`, and its tools are modules of `src/tools/`. To
+assemble one in code, write the directory.
 
-Pass `{ signal }` to bind its lifetime to something you already own.
+## 2. Send a message
 
-### Mounting a single handler
+```ts
+// One question, one answer.
+const created = await agent.createSession();
+if (!created.ok) throw new Error(created.error.message);
+const sent = await agent.invoke({ sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
+if (!sent.ok) throw new Error("error" in sent ? sent.error.message : sent.unknown.reason);
+const end = await sent.wait();
+if (end.ok && end.message.outcome.status === "completed") reply(end.message.answer?.text);
 
-The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`. It does not start a server: your app keeps its own, and fastagent becomes routes on it. It routes on the request's path (`/invoke`, `/sessions/…`), so mount it under a prefix your host strips, or strip it yourself.
+// Its answer as it is written.
+import { stream } from "@fastagent-sh/fastagent";
+const result = await stream(agent, { sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
+if (result.ok) {
+  for await (const event of result.events) {
+    if (event.type === "message_delta" && event.channel === "text") render(event.delta);
+    if (event.type === "done") finish(event.message);
+  }
+}
+```
+
+Keep the `sessionId` to continue the conversation. An `idempotencyKey` (your request's id) makes a resend return the
+same message rather than a second one. Leaving the iteration detaches; the agent goes on, and `agent.abort(sessionId)`
+stops it.
+
+### Putting it on your network
+
+There is no HTTP API to mount. To give a browser or another service the agent, write the routes your product needs
+over these calls, behind your own authentication. Every result and event is JSON, so you can send them on as they are,
+for example as Server-Sent Events:
+
+```ts
+app.post("/chat/:session", requireUser, async (req, res) => {
+  const sessionId = await sessionOfUser(req.user, req.params.session); // yours: which session this user may use
+  const result = await stream(agent, { sessionId, content: [{ type: "text", text: req.body.text }] });
+  if (!result.ok) return res.status(409).json(result);
+  res.setHeader("content-type", "text/event-stream");
+  for await (const event of result.events) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  res.end();
+});
+```
+
+**An instance is one trust domain.** The agent's tools reach every session of its instance, whichever user asked, so
+keeping users apart by session id works only for an agent whose tools reach neither its storage nor its files. Users
+who must not see each other's conversations get an instance each
+([security boundary](design/security-boundary.md#3-people-who-must-be-kept-apart)).
+
+## 3. The whole agent, as a service
+
+To serve the agent's channels and schedules from your app too, mount it:
+
+```ts
+import { mountAgentService, nodeListener, openServing } from "@fastagent-sh/fastagent";
+
+const opened = await openServing("./my-agent");
+const service = await mountAgentService(opened);
+app.use("/agent", nodeListener(service.handler)); // the channels' routes + GET /health
+await service.ready; // long connections up; rejects if one cannot come up
+// ...
+await service.close(); // stops long connections and schedules
+await opened.agent.close();
+```
+
+`mountAgentService` is the assembly `dev`/`start` perform, minus the process: no port is bound, no signal handlers are
+installed, nothing calls `process.exit`. Its handler answers only the channels' routes, each of which verifies its
+platform, and `GET /health`. Pass `{ signal }` to bind its lifetime to something you already own.
+
+### Mounting a handler
+
+The Fetch handler mounts wherever your host speaks `(Request) => Response`, and `nodeListener` bridges hosts that speak
+Node's `(req, res)`. It does not start a server: your app keeps its own. It routes on the request's path (`/telegram`,
+`/health`), so mount it under a prefix your host strips, or strip it yourself.
 
 > **Mount before your body parser.** A body parser registered ahead of the mount consumes the request stream, and
 > webhook channels verify signatures over the raw body:
 >
 > ```ts
-> app.use("/agent", nodeListener(handler));  // first: fastagent takes these requests
-> app.use(express.json());                   // then: parses everything else as usual
+> app.use("/agent", nodeListener(service.handler)); // first: fastagent takes these requests
+> app.use(express.json()); // then: parses everything else as usual
 > ```
 >
 > Scoping the parser (`app.use("/other", express.json())`) works too. Getting it wrong is logged with this fix.
 
 ```ts
+const { handler } = service;
+
 // Next.js App Router — app/agent/[...path]/route.ts: strip the prefix the route lives under
-const toApi = (req: Request) => {
+const toAgent = (req: Request) => {
   const url = new URL(req.url);
   url.pathname = url.pathname.slice("/agent".length);
   return handler(new Request(url, req));
 };
-export { toApi as GET, toApi as POST, toApi as PATCH, toApi as DELETE };
+export { toAgent as GET, toAgent as POST };
 
 // Hono — mount strips the prefix
 app.mount("/agent", handler);
 
 // Express — nodeListener bridges (req, res) to the Fetch handler, and app.use strips the prefix. It reads the RAW
 // body stream, so mount it BEFORE any body parser (see the note above).
-import { nodeListener } from "@fastagent-sh/fastagent";
 app.use("/agent", nodeListener(handler));
 
 // Fastify — same bridge on the raw req/res: keep the body stream unread, hijack the reply, strip the prefix
@@ -174,110 +180,43 @@ app.register(async (scope) => {
 // Bun — the handler is the whole server
 Bun.serve({ port: 8787, fetch: handler });
 
-// Plain Node (no native Fetch routing) — the built-in server
-import { createAgentService, serveNode } from "@fastagent-sh/fastagent";
-serveNode(handler, { port: 8787 });                    // just the agent's API
-// ...or the whole agent, channels and all:
-serveNode((await createAgentService("./my-agent")).handler, { port: 8787 });
+// Plain Node — the built-in server
+import { serveNode } from "@fastagent-sh/fastagent";
+serveNode(handler, { port: 8787 });
 ```
-
-Backpressure and a body cap are native to the web-stream primitives. A client disconnect detaches from the message,
-which the agent goes on answering; `POST /sessions/{s}/abort` or `/messages/{m}/cancel` stops it. A second message
-for a busy session queues behind it, as `whenBusy` says.
-
-## 3. Tier 1 vs Tier 2
-
-The common path is three concrete fields. The harness ports are optional injection points you reach for only when you need them — defaults run out of the box.
-
-```ts
-createPiAgent({
-  model: "openai-codex/gpt-5.5",   // Tier 1: which model (spec string)
-  instructions: "…",               // Tier 1: the system prompt
-  tools: [/* defineTool(...) */],  // Tier 1: capabilities
-  skills: [/* … */],               // optional: on-demand skill files
-
-  // ── Tier 2: injectable ports (default values run fine) ──
-  sessions,   // PiSessionRecordStore  — persistence (default: in-memory)
-  cwd,        // string          — working directory (default: process.cwd())
-  providers,  // Provider[]      — your own model source (see §5)
-});
-```
-
-| Port | Default | Reach for it when |
-|---|---|---|
-| `sessions` | `piInMemorySessionRecordStore()` (lost on restart) | `piSessionRecordStore({ dir })` for restart-surviving continuity, or your own `PiSessionRecordStore` |
-| `cwd` | `process.cwd()` | tools should operate in another directory; it is not a sandbox |
-| `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
-
-`env` governs definition loading only. The coding tools and your `tools/` use the local process directly, so `env`
-is not a sandbox; to isolate an agent, constrain its whole process.
 
 ## 4. Auth
 
-Credentials resolve from a **credentials file**, then **env vars** (e.g. `ANTHROPIC_API_KEY`).
+`openServing` reads the agent's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's environment
+variable, and then the global `~/.fastagent/.secrets/auth.json` for a provider the agent authenticates no other way
+([order](configuration.md#auth-and-secrets)).
 
-- `createPiAgentFromDir` (what `dev`/`start` use) and `createPiAgentFromDefinition(dir)` read
-  `<agent dir>/.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), and fall back to the global
-  `~/.fastagent/.secrets/auth.json` for a provider the project authenticates no other way
-  ([order](configuration.md#auth-and-secrets)).
-- `createPiAgent` and `createPiModels` read the global file.
-- Every opener accepts an explicit `authPath`, which then is the only file read.
-- Every opener also accepts a `credentialStore` of your own (an OS keychain, Electron `safeStorage`), which replaces
-  the credentials files, refreshes included. Env variables and `models.json` keys still apply, as with `authPath`.
-  See [the store's contract](api-reference.md#config-and-models).
+- `authPath` names the one credentials file to read instead.
+- `credentialStore` is a store of your own (an OS keychain, Electron `safeStorage`), which replaces the credentials
+  files, refreshes included. Environment variables and a provider's own auth still apply.
+- `opened.models.authStatus("openai-codex")` says what authenticates a provider, resolved as a message would:
+  `{ source: "OAuth" }`, an environment variable's name, or no `source` with the `error` when resolving failed.
+- `login({ provider, method, authPath | credentialStore, interaction })` signs a provider in from your own UI
+  ([API reference](api-reference.md#models-and-sign-in)).
 
-To check what's in effect: `probeAuthSource(createPiModels({ authPath }), "openai-codex/gpt-5.5")` returns the resolved source label — `"OAuth"` for a stored OAuth credential (what a logged-in `openai-codex` user sees), `"stored credential"` for a stored API key, an env-var name like `"ANTHROPIC_API_KEY"`, or `undefined` when nothing is configured. It rejects when resolving fails (a corrupt entry, a refresh the provider refused), with the reason.
+## 5. Your own model source
 
-There is no `apiKey` option: put keys in the credentials file or the environment. For your own endpoint, see
-`providers` below.
-
-## 5. Your own model source: `providers`
-
-> Reach for this only when the provider needs **code**. An endpoint that is just a URL, a key and some
-> model ids is data: declare it in the agent's own `models.json` and every path — `dev`, `start`,
-> `invoke`, `chat`, `deploy`, and L2 embedding — picks it up with no wiring. See
-> [Custom model endpoints](configuration.md#custom-model-endpoints).
-
-When your model source needs per-request logic (minting or rotating a token, calling an auth service), register
-it as a provider; a `model` spec selects it by id.
-
-```ts
-import { createPiAgent } from "@fastagent-sh/fastagent";
-// Both come from pi-ai: the provider factory and the wire-protocol impl (reuse, don't reimplement).
-import { createProvider } from "@earendil-works/pi-ai";
-import { /* the matching api impl */ } from "@earendil-works/pi-ai/api/openai-responses";
-
-const myGateway = createProvider({
-  id: "acme",
-  baseUrl: "https://gw.acme/v1",
-  auth: {
-    apiKey: {
-      name: "Acme gateway",
-      // resolve() runs per request — mint / fetch / rotate a token from your auth service here
-      resolve: async () => ({ auth: { apiKey: await mintToken() }, source: "acme" }),
-    },
-  },
-  models: [/* your model descriptors */],
-  api: /* the reused api impl */,
-});
-
-const agent = createPiAgent({ model: "acme/gpt-x", providers: [myGateway] });
-```
-
-`providers` override built-ins with the same id. A same-id entry in the agent's `models.json` overrides an injected
-provider, so use a distinct id when you want both.
+A gateway or a self-hosted model is a provider in the agent's `fastagent.config.ts` (`providers`), so every path
+(`dev`, `start`, `invoke`, `deploy`, and your app) picks it up: see [custom models](configuration.md#custom-models).
+Its `auth.apiKey.resolve()` runs per request, which is where a token you mint or rotate goes.
 
 ## How embed and CLI relate
 
-`fastagent dev` / `start` are `createPiAgentFromDir` plus process concerns (`.env`, proxy, watch, serve). The agent
-they serve is the one `createPiAgentFromDefinition` returns when embedding.
+`fastagent dev` / `start` are `openServing` plus `mountAgentService` plus process concerns (`.env`, the proxy, the dev
+watcher, the port, the signal handlers). The agent they serve is the one `openServing` returns to your app.
 
-Subpaths: `/core` (the contract and channel kit, no third-party packages), `/node` (`mountAgentService`,
-`serveNode`, `nodeListener`), `/session` (the control-plane contract), `/pi` (the pi assembly). The root entry
+Subpaths: `/core` (the Agent API's types, `stream`, the channel contract), `/node` (`mountAgentService`, `serveNode`,
+`nodeListener`, content and authoring), `/pi` (`openServing`, `defineAgent`, the model environment). The root entry
 re-exports all of them.
 
 ## Where next
 
-- [SPEC](SPEC.md) — the Agent Handler contract the whole thing rests on.
-- [quickstart](quickstart.md) — the CLI path (`init` / `dev` / `start`).
-- [core design](design/core.md) — the assembly ladder (L1–L2), the four-segment prompt assembly, and the N × M × K layering.
+- [SPEC](SPEC.md): the Agent API the whole thing rests on.
+- [API reference](api-reference.md): every export.
+- [quickstart](quickstart.md): the CLI path (`init` / `dev` / `start`).
+- [core design](design/core.md): how a directory is opened onto pi-durable.

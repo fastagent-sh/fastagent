@@ -1,5 +1,5 @@
 /**
- * pi-durable's input submissions as the Agent API's messages (agent-api.md §4): a submission is a message, its request
+ * pi-durable's input submissions as the Agent API's messages (SPEC.md §4): a submission is a message, its request
  * id carries the Caller's key, and its settlement is the message's outcome.
  */
 import { randomUUID } from "node:crypto";

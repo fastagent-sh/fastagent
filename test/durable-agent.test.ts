@@ -44,6 +44,20 @@ describe("the Agent on pi-durable", () => {
     await Promise.all([one.close(), two.close()]);
   });
 
+  it('refuses a fork with context "recent", which is not implemented, creating no session', async () => {
+    const { models } = fauxModels();
+    const storage = await openNodeSqliteStorage(temporaryStorage());
+    const agent = await openDurableAgent({ storage, models, registry: createRegistry(), name: "recent" });
+    const created = await agent.createSession();
+    if (!created.ok) throw new Error(JSON.stringify(created));
+    expect(await agent.createSession({ from: { sessionId: created.sessionId, context: "recent" } })).toMatchObject({
+      ok: false,
+      error: { code: "invalid_request" },
+    });
+    expect(await agent.listSessions()).toEqual({ ok: true, sessions: [{ sessionId: created.sessionId }] });
+    await agent.close();
+  });
+
   it.each([false, true])(
     "keeps an empty snapshot's first live entry parentless when a write follows attachment (replay=%s)",
     async (replay) => {

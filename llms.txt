@@ -1,14 +1,14 @@
 # FastAgent
 
-> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, Slack or Feishu, handling webhook events, exposed as an API endpoint, or running behind a custom channel. Harness-, model-, and infra-neutral; the built-in harness is pi.
+> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, Slack or Feishu, handling webhook events, running on a clock, or behind a custom channel. The harness is pi-durable; models come from pi-ai, with your own providers in code.
 
 Key facts:
 
 - Install: `npm i -g @fastagent-sh/fastagent` (CLI) or `npm i @fastagent-sh/fastagent` (library). Requires Node >= 24.15 (or Bun >= 1.4).
-- The agent is a `fastagent/` folder in a project, whose parent is its workspace: optional `persona.md` (identity), `skills/`, `tools/`, `channels/`, `routines/` (cron triggers), markdown context, and `fastagent.config.ts`; the project's `AGENTS.md` is context. No framework rewrite, no build step.
-- The contract is `invoke(scope, prompt) => AsyncIterable<AgentEvent>` (the Agent Handler SPEC).
-- Core CLI: `fastagent init | info | models | login | dev | chat | invoke | tool | fire | schedule | start | add | deploy`.
-- Channels: HTTP/SSE (default), Telegram, Slack, Feishu/Lark, plus custom adapters.
+- An agent is a directory of its own, marked by `fastagent.config.ts` (`defineAgent`): `SYSTEM.md` (its prompt), `AGENTS.md`, `skills/`, `prompts/`, and code under `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/`. What it works on is declared in `context.json` as its content. No build step.
+- The contract is the Agent API (docs/SPEC.md), TypeScript in process: sessions the Agent names, messages whose outcome outlives their callers, a durable history. A serve exposes no HTTP API: only its channels' routes, which verify their platform.
+- Core CLI: `fastagent init | info | content | env | models | login | dev | invoke | schedules | start | add | deploy | logs | destroy`. A coding agent checks an agent with `fastagent info --json` and `fastagent invoke`.
+- Channels: Telegram, Slack, Feishu/Lark, plus custom adapters.
 
 ## Start here
 
@@ -19,24 +19,24 @@ Key facts:
 ## Guides
 
 - [Overview](https://fastagent.sh/docs/overview/): what FastAgent is and is not.
-- [Quickstart](https://fastagent.sh/docs/quickstart/): scaffold, run locally, add a tool, and start.
-- [Configuration](https://fastagent.sh/docs/configuration/): model, auth, ports, sessions, tools, and channels.
+- [Quickstart](https://fastagent.sh/docs/quickstart/): scaffold, check, add a tool, and run.
+- [Configuration](https://fastagent.sh/docs/configuration/): model, providers, auth, ports, tools, channels, and schedules.
 - [CLI reference](https://fastagent.sh/docs/cli/): every command and flag.
 - [Embedding](https://fastagent.sh/docs/embedding/): use FastAgent as a library inside your own app.
 - [Channels](https://fastagent.sh/docs/channels/): add webhook/bot channels.
 - [Telegram channel](https://fastagent.sh/docs/telegram/): Telegram bot.
 - [Channel development](https://fastagent.sh/docs/channel-development/): build a custom channel adapter.
-- [Deploy](https://fastagent.sh/docs/deploy/): ship the directory to Fly, Railway, or any Docker host.
+- [Deploy](https://fastagent.sh/docs/deploy/): ship the directory to Fly, Railway, AWS Bedrock AgentCore, or any Docker host.
 - [Troubleshooting](https://fastagent.sh/docs/troubleshooting/): common setup/runtime issues.
 
 ## Reference
 
 - [API reference](https://fastagent.sh/docs/api-reference/): public TypeScript exports.
-- [Agent Handler SPEC](https://fastagent.sh/docs/spec/): the v1 protocol contract.
+- [Agent API SPEC](https://fastagent.sh/docs/spec/): the API every Caller uses.
 - [Design principles](https://fastagent.sh/docs/principles/): design choices, core primitives, and non-goals.
 
 ## Optional
 
-- [Core design notes](https://fastagent.sh/docs/design/core/): pi reference implementation architecture.
+- [Core design notes](https://fastagent.sh/docs/design/core/): how a directory is opened onto pi-durable.
 - [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md): branch model, PR loop, and review tiers.
 - [Security policy](https://github.com/fastagent-sh/fastagent/security/policy): how to report a vulnerability.

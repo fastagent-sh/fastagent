@@ -6,34 +6,33 @@ status: current
 
 # Channels
 
-A **channel** is an agent's inbound surface — it turns an external event into invocations: HTTP, Telegram messages, Slack events, even the clock ([schedules](quickstart.md#8-run-on-a-clock)).
+A **channel** is an agent's inbound surface: it turns an external event (an HTTP webhook, a Telegram message, a Slack
+event) into messages to the agent. The clock is the other way in ([schedules](configuration.md#schedules)).
 
-Channels consume only the harness-neutral [Agent contract](SPEC.md). The same channel can drive any conforming agent.
+Channels call the [Agent API](SPEC.md), in process, like every other Caller.
 
 > To build a new channel adapter, see [Channel development](channel-development.md).
 
 ## Mental model
 
 ```txt
-external event → channel adapter → agent.invoke(request) → channel response/action
+external event → channel: verify, parse → the conversation's session → agent.invoke → reply or action
 ```
 
 A channel decides:
 
-- how to verify and parse an external event,
-- whether the agent should run,
-- which `session` to use,
-- what prompt text/images/files to pass,
+- how to verify that an event comes from its platform, and parse it,
+- whether the agent should answer,
+- which conversation it belongs to, and so which session (the channel keeps that map),
+- what text, images and files to send,
 - how to acknowledge or reply to the external system.
-
-The agent remains the same assembled agent.
 
 ## Discovery
 
-An agent declares channels with files under `channels/`:
+An agent declares channels with modules of `src/channels/`, each named by its file:
 
 ```txt
-channels/
+src/channels/
 ├── telegram.ts   # POST /telegram
 └── slack.ts      # POST /slack
 ```
@@ -45,7 +44,7 @@ import type { ChannelModule } from "@fastagent-sh/fastagent/core";
 
 const channel: ChannelModule = ({ agent, stateRoot }) => ({
   "POST /webhook": async (req) => {
-    // parse req, call agent, return a Response; durable channel state goes under
+    // verify the platform, parse, send the agent a message, return a Response; durable channel state goes under
     // `${stateRoot}/channels/<kind>` (never process.cwd())
     return new Response(null, { status: 204 });
   },
@@ -70,19 +69,17 @@ const channel: LongConnectionChannelModule = {
 export default channel;
 ```
 
-`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`. Function exports
-contribute route tables to the HTTP server; object exports open long connections. Both receive the
-assembled agent and resolved state root. Long-connection adapters own reconnects, observe shutdown
-through `AbortSignal`, and report first readiness plus terminal closure through the two promises.
+`fastagent dev` and `fastagent start` mount every channel: function exports contribute route tables to the HTTP
+server; object exports open long connections. Both receive the agent and the resolved state root. Long-connection
+adapters own reconnects, observe shutdown through `AbortSignal`, and report first readiness plus terminal closure
+through the two promises.
 
-**A channel verifies its own caller**, by checking the platform's signature (`X-Telegram-Bot-Api-Secret-Token`,
-Feishu's signature). FastAgent adds no authentication to channel routes, and does not apply the JSON content-type
-requirement or CORS policy of its own routes to them. A custom channel that verifies nothing can be driven by
-anyone, including a web page.
+**A channel MUST verify its caller**, by checking the platform's signature or secret
+(`X-Telegram-Bot-Api-Secret-Token`, Slack's `v0` HMAC, Feishu's token and signature). A serve has no API and no
+authentication of its own: its routes are the channels' and `GET /health`, so a custom channel that verifies nothing
+can be driven by anyone who finds its URL ([security boundary](design/security-boundary.md)).
 
-The agent's API is reserved: a channel route at `POST /invoke`, under `/sessions` or `/agent`, or under `/control`
-when that plane is on, makes `dev` / `start` fail (unless `http.api: false`, or `http.control` off). Rename
-a channel file to e.g. `telegram.ts.disabled` to keep it without mounting it. A channel that fails to load, or
+Rename a channel file to e.g. `telegram.ts.disabled` to keep it without mounting it. A channel that fails to load, or
 collides with another channel's route, makes `dev` / `start` fail.
 
 ## Routes
@@ -108,7 +105,7 @@ Examples:
 
 A route overlap is surfaced as a collision. A bare `/webhook` conflicts with `POST /webhook`; `GET /webhook` and `POST /webhook` can coexist.
 
-FastAgent adds a default `GET /health` route unless a channel already covers it.
+FastAgent adds a `GET /health` route beside the channels'.
 
 ## First-party channels
 
@@ -121,62 +118,63 @@ FastAgent ships lightweight first-party adapters as subpath exports.
 | Feishu bot (飞书) | `@fastagent-sh/fastagent/feishu` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add feishu` |
 | Lark bot (international) | `@fastagent-sh/fastagent/lark` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add lark` |
 
-Example Telegram glue:
+Example Telegram glue (`fastagent add telegram` writes it):
 
 ```ts
+import { needs } from "@fastagent-sh/fastagent";
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default defineChannel({
-  secrets: ["TELEGRAM_SECRET_TOKEN", "TELEGRAM_BOT_TOKEN"],
-  channel: (secrets) =>
-    telegramChannel({
-      secretToken: secrets.TELEGRAM_SECRET_TOKEN,
-      botToken: secrets.TELEGRAM_BOT_TOKEN,
-    }),
-});
+export default needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) =>
+  telegramChannel({
+    secretToken: secrets.TELEGRAM_SECRET_TOKEN, // verifies inbound updates really come from Telegram
+    botToken: secrets.TELEGRAM_BOT_TOKEN,
+  }),
+);
 ```
 
 Example Slack glue:
 
 ```ts
+import { needs } from "@fastagent-sh/fastagent";
 import { slackChannel } from "@fastagent-sh/fastagent/slack";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default defineChannel({
-  secrets: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"],
-  channel: (secrets) =>
-    slackChannel({
-      botToken: secrets.SLACK_BOT_TOKEN,
-      signingSecret: secrets.SLACK_SIGNING_SECRET,
-      rendering: "native", // Slack Agent stream with inline tool traces; "classic" for compatibility
-      // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-    }),
-});
+export default needs(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"], (secrets) =>
+  slackChannel({
+    botToken: secrets.SLACK_BOT_TOKEN,
+    signingSecret: secrets.SLACK_SIGNING_SECRET,
+    rendering: "native", // Slack Agent stream with inline tool traces; "classic" for compatibility
+  }),
+);
 ```
 
-Example canonical Feishu glue (Lark international exposes a branded `larkChannel` compatibility
-adapter over this engine and reads `LARK_*`):
+Example canonical Feishu glue, receiving by webhook (Lark international exposes a branded `larkChannel`
+compatibility adapter over this engine and reads `LARK_*`; the scaffold picks the WebSocket form under `dev`):
 
 ```ts
+import { needs } from "@fastagent-sh/fastagent";
 import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default defineChannel({
-  secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
-  channel: (secrets) =>
+export default needs(
+  [
+    "FEISHU_APP_ID",
+    "FEISHU_APP_SECRET",
+    "FEISHU_VERIFICATION_TOKEN",
+    { name: "FEISHU_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
+  ],
+  (secrets) =>
     feishuChannel({
       appId: secrets.FEISHU_APP_ID,
       appSecret: secrets.FEISHU_APP_SECRET,
       verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
-      encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
+      encryptKey: secrets.FEISHU_ENCRYPT_KEY,
     }),
-});
+);
 ```
 
-A route-adapter call returns a `ChannelModule`; a WebSocket adapter such as
-`feishuWebSocketChannel` returns a `LongConnectionChannelModule`. In either form the glue holds only
-policy (the declared `secrets` and `route`); `agent` and the state root come from the framework. Each adapter has
+A route-adapter call returns a `ChannelModule`; a WebSocket adapter such as `feishuWebSocketChannel` returns a
+`LongConnectionChannelModule`. In either form the glue holds only policy (the declared secrets and `route`); `agent`
+and the state root come from the framework. `needs` makes each required secret a startup refusal while unset, and
+carries it to a deployment. Each adapter has
 a default route (`POST /telegram`, `POST /slack`, `POST /feishu`, `POST /lark`); wrap it in your own
 `ChannelModule` to remap.
 
@@ -187,9 +185,9 @@ A channel usually has two layers:
 | Layer | Reusable? | Example |
 |---|---|---|
 | Adapter | yes | verify a platform signature, parse a Telegram update, call an SDK |
-| Glue | agent-specific | map one event to `{ session, text }`, choose routing policy |
+| Glue | agent-specific | map one event to `{ conversation, text }`, choose routing policy |
 
-Keep transport mechanics in reusable adapters. Keep product/agent policy in the agent's `channels/*.ts` file.
+Keep transport mechanics in reusable adapters. Keep product/agent policy in the agent's `src/channels/*.ts` file.
 
 ## Local webhook development
 
@@ -224,27 +222,25 @@ Heavy or long-tail adapters should live outside `@fastagent-sh/fastagent`:
 The user's agent installs the adapter and wires it with a channel file:
 
 ```ts
+import { needs } from "@fastagent-sh/fastagent";
 import { acmeChannel } from "fastagent-channel-acme";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default defineChannel({
-  secrets: ["ACME_SECRET"],
-  channel: (secrets) =>
-    acmeChannel({
-      secret: secrets.ACME_SECRET,
-      on: (event) => ({ session: event.user, text: event.text, deliveryId: event.deliveryId }),
-    }),
-});
+export default needs(["ACME_SECRET"], ({ ACME_SECRET }) =>
+  acmeChannel({
+    secret: ACME_SECRET,
+    on: (event) => ({ conversation: event.user, text: event.text, deliveryId: event.deliveryId }),
+  }),
+);
 ```
 
-Declaring `secrets` makes an unset value a startup failure (and a `deploy --run` refusal).
+Declaring the secret makes an unset value a startup failure (and a `deploy --run` refusal).
 
 Read [Channel development](channel-development.md) for adapter design, packaging, and testing guidance.
 
 ## Operational notes
 
-- Channels choose the `session` string. Core same-session concurrency fails fast; a channel such as Telegram may queue before invoking.
-- Work started after a webhook ACK is lost if the process exits, unless the channel persists it (Telegram, Slack and Feishu/Lark do).
+- A channel maps its conversations to the Agent's sessions, in its own state. A message for a busy session queues behind the ones before it; the first-party chat channels also serialize their own turns per conversation.
+- An accepted message is durable and answered after a restart. Delivering its answer after a webhook ACK is the channel's to make durable (Telegram, Slack and Feishu/Lark persist each turn).
 - Public endpoints should verify signatures/secrets and cap request bodies before parsing untrusted payloads.
 - User-facing error messages should avoid leaking provider or infrastructure details; log full diagnostics for operators.
 - Live previews show tool activity to everyone in the conversation: each call's argument summary and, while it runs,

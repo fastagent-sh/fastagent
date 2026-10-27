@@ -16,7 +16,7 @@ hosts when it landed (#656).
 
 ## Two rules
 
-**Drive a product entry, observe from outside it.** `createPiAgentFromDir`, `deploy docker --run`,
+**Drive a product entry, observe from outside it.** `openServing`, `deploy docker --run`,
 `deploy fly --run`, `deploy railway --run`, `npm install`, `startCloudflareTunnel`, `startSchedules`,
 `registerTelegramWebhook`, `registerFeishuWebhook`, `createSlackApi`. A probe that rebuilds the
 assembly to get a better observation point measures the rebuild, and the entry's own steps

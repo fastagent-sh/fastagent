@@ -23,7 +23,7 @@ afterAll(async () => {
 async function createAgentService(dir: string, options: MountAgentServiceOptions = {}) {
   const served = await openServing(dir, { locking: "memory" });
   opened.push(served.agent);
-  return mountAgentService({ ...served, channels: served.code.channels, schedules: served.code.schedules }, options);
+  return mountAgentService(served, options);
 }
 
 async function agentDir(

@@ -39,10 +39,10 @@ Preserve existing code, context, credentials, and deployment ownership.
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
 | Deterministic operations and external-system access | `src/tools/<name>.ts` | Expose a small typed capability with validated input, useful results, and visible failures. |
 | Event ingress and conversational replies | `src/channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. |
-| Clock triggers and follow-ups | `src/schedules/` and the `wake` tool (mounted on every serve) | State the work and its recipient. A timer triggers a turn; it does not deliver the reply. |
-| Model, serving, and deployment choices | `fastagent.config.ts` | Keep configuration declarative. Use [supported keys](configuration.md#config-file). |
-| Credentials and machine state | `.secrets/`, `.state/`, or their configured roots | Let FastAgent manage auth, journals, channel state, and scheduling records. Preserve them according to the host. |
-| Business notes and decisions | Existing working files or an explicitly chosen durable store | Record sources, approval decisions, outcomes, and pending work. A session journal is not a business database. |
+| Clock triggers and follow-ups | `src/schedules/` and the `wake` tool (given on every serve) | State the work and its recipient. A timer sends the agent a message; it does not deliver the reply. |
+| Model, providers, and deployment choices | `fastagent.config.ts` (`defineAgent`) | Keep configuration declarative. Use [supported keys](configuration.md#config-file). |
+| Credentials and machine state | `.secrets/`, `.state/`, or their configured roots | Let FastAgent manage auth, the instance's storage, channel state, and scheduling records. Preserve them according to the host. |
+| Business notes and decisions | Existing working files or an explicitly chosen durable store | Record sources, approval decisions, outcomes, and pending work. A session's history is not a business database. |
 
 For a research agent, put the research method in a skill, expose searches and deterministic calculations
 as tools, and let the agent choose sources, tool combinations, and follow-ups. Avoid hard-coding that
@@ -253,16 +253,17 @@ To reuse an existing Agent Skill, run `fastagent add skill <source>` with a git 
 `owner/repo/path`, a local path, or a name from your global skill directories. Review its contents and
 permissions before relying on it. See [CLI reference](cli.md).
 
-## 5. Authenticate and verify one real turn
+## 5. Authenticate and verify one real message
 
-Choose a provider and model with the owner. `fastagent models` lists available specifications.
+Choose a provider and model with the owner. `fastagent models` lists available specifications, the providers
+`fastagent.config.ts` declares included ([custom models](configuration.md#custom-models)).
 Ask the owner to run `fastagent login` in the agent directory, or have them configure an approved
 provider key in `.secrets/.env`. Keep credentials out of chat transcripts, issue comments,
 source files, and logs. The CLI reads the agent's `.secrets/.env`, not a `.env` at its root.
 
 Set `model: "provider/model-id"` in the existing `fastagent.config.ts`, preserving its export. A terminal
 picker can also set the model; unattended invocations require an explicit model. A deployment resolves
-from two sources only — that config value, or `FASTAGENT_MODEL` in `.secrets/.env`, which
+from two sources only — that config value, or `FASTAGENT_MODEL` in `.secrets/production/.env`, which
 `deploy` reads from the file and records in the release manifest. A `--model` flag is local to the run
 that passes it, and `deploy` has none. See [models and auth](configuration.md).
 
@@ -270,29 +271,29 @@ that passes it, and `deploy` has none. See [models and auth](configuration.md).
 fastagent invoke "Use plan-batches for 5 proposals at 2 per batch. Do not send anything."
 ```
 
-This makes a real model request and may incur cost. Verify tool use and the answer, not just successful
-process exit. For continuous local development, ask the owner to run:
+This makes a real model request and may incur cost. `invoke` prints the answer on stdout and each tool call on
+stderr, and exits non-zero unless the message completed: verify the tool use and the answer, not just the exit code.
+It opens the agent on storage of its own, so it runs beside a `dev` of the same agent. For continuous local
+development, ask the owner to run:
 
 ```bash
 fastagent dev
 ```
 
-`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, skills and prompt templates
-are read on the next turn.
-With watching enabled, changes under the agent's `tools/` and `channels/`
-restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, and resolved
-`.env` (only when that file is inside the agent directory). The restart waits for the turns running in the worker
-to finish (at most 10 minutes), so editing your own `tools/` does not cut off the turn that made the edit; the
-change takes effect from the next turn after the restart.
+`dev` is a long-running server. Edits to `SYSTEM.md`, `AGENTS.md`, skills and prompt templates are read on the next
+message. With watching enabled, changes under the agent's `src/` restart the worker, as do changes to its
+`fastagent.config.ts`, `package.json`, and resolved `.env` (only when that file is inside the agent directory). The
+restart waits for the messages running in the worker to finish (at most 10 minutes), so editing your own `src/` does
+not cut off the message that made the edit; the change takes effect from the next message after the restart.
 
-**After editing `lib/batches.ts` or another imported helper outside those watched directories,
-stop and restart `fastagent dev`.** `lib/` is not watched, and imported modules remain cached in the
-running worker. `start` serves without watching. `chat` opens the same definition in an interactive TUI.
-A coding agent should background servers with a cleanup path or delegate them to the owner.
+**After editing `lib/batches.ts` or another imported helper outside `src/`, stop and restart `fastagent dev`.**
+`lib/` is not watched, and imported modules remain cached in the running worker. `start` serves without watching.
+One `dev` or `start` holds the agent's storage at a time; a second is refused. A coding agent should background
+servers with a cleanup path or delegate them to the owner.
 
 ## 6. Add a native channel
 
-A file in `channels/` enables a channel. Prefer the existing integrations over application-authored
+A module in `src/channels/` enables a channel. Prefer the existing integrations over application-authored
 webhook servers, token refresh loops, or reply pipelines:
 
 | Channel | Command from the agent directory | Owner action and reference |
@@ -305,7 +306,7 @@ webhook servers, token refresh loops, or reply pipelines:
 After owner-approved setup, use `fastagent dev --tunnel` for webhook testing (`cloudflared` required).
 Confirm each channel loads, inspect registration results, and send a real message from the authorized
 account. A URL verification challenge proves reachability, not a completed conversation. Keep manual
-console steps visible. Rename a channel to, for example, `slack.ts.disabled` to disable it; a broken
+console steps visible. Rename a channel to, for example, `src/channels/slack.ts.disabled` to disable it; a broken
 enabled channel must fail serving instead of silently disappearing.
 
 ### Slack installation and credential ownership
@@ -322,8 +323,8 @@ credentials are spent on the install, and the runtime has exactly `SLACK_BOT_TOK
 without it the CLI reports the manual console action. `fastagent add slack --replace-config` replaces
 only the builder's App Configuration credentials.
 
-`slack-send` delivers through the mounted channel's transport (`slackTransport(ctx.cwd)`); every
-`fastagent add slack` rewrites `tools/slack-send.ts`.
+`slack-send` delivers through the mounted channel's transport (`slackTransport(SLACK_BOT_TOKEN)`); every
+`fastagent add slack` rewrites `src/tools/slack-send.ts`.
 
 ### Replies and proactive delivery are different
 
@@ -363,50 +364,48 @@ fastagent schedules list
 ```
 
 It reads the selected local state root, not a deployed host's state: the next fire, how the last one ended, and the
-session it ran in. To try the prompt now, run its text as one turn with `fastagent invoke "Review pending
-proposals …"`. That is a real turn: it can perform tool side effects; it does not advance the cron fire state, and
-`invoke` does not mount the serving-time `wake` tool or prove that a future timer fires.
+session it ran in. To try the prompt now, send its text as one message with `fastagent invoke "Review pending
+proposals …"`. That is a real message: it can perform tool side effects; it does not advance the cron fire state, and
+`invoke` has no `wake` tool and does not prove that a future timer fires.
 
-Every serve mounts the `wake` tool, so the agent can schedule its own follow-ups. Test
-an actual `wake` while serving, including its eventual action and delivery. Cancelling one is the
-agent's own job (`unwake({ id })`, session-scoped): a wake-up only fires while a serve is running, and a
-running serve is one whose session can be spoken to.
+Every serve gives the agent the `wake` tool, so it can schedule its own follow-ups. Test an actual `wake` while
+serving, including its eventual action and delivery. Cancelling one is the agent's own job (`unwake({ id })`, from
+the session that set it).
 
 | Execution posture | Clock and persistence requirements |
 |---|---|
-| Resident `dev` / `start` or embedded `createAgentService` | The process runs the scheduler. Keep one active scheduler with durable state; a sleeping/stopped process cannot fire timers. Fly/Railway deployment gates account for time triggers. |
-| AgentCore webhook/schedule ingress | The container mirrors each schedule into a recurring EventBridge schedule and each wake-up into a one-shot, which wake it. Scale-to-zero is supported on this path; no resident timer is required. |
-| Direct `InvokeAgentRuntime` calls | Reuse the deployment's fixed `runtimeSessionId`; the envelope's `session` selects the conversation. A direct invocation does not verify channel activation or future wake delivery. All entry points share storage that resets on deploy. |
+| Resident `dev` / `start`, or an app's `mountAgentService` | The process runs the scheduler, with durable state; a sleeping or stopped process cannot fire timers. Fly/Railway deployment gates account for time triggers. |
+| AgentCore | The container mirrors each schedule into a recurring EventBridge schedule and each wake-up into a one-shot, which wake it. Scale-to-zero is supported on this path; no resident timer is required. Its storage resets on deploy. |
 
 See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and
 [schedules](configuration.md#schedules) for the exact guarantees.
 
 ## 8. Embed only what the application needs
 
-Install FastAgent in the application package that imports it as well as in the agent package
-that imports it; keep package versions aligned.
+Install FastAgent in the application package that imports it as well as in the agent package that imports it; keep
+package versions aligned.
 
-- For the whole service, use `createAgentService(agentDir)`, mount its Fetch `handler`, await `ready`,
-  and close the service on application shutdown. This includes discovered channels and scheduling.
-- For the agent's API only, use `createPiAgentFromDefinition` / `createPiAgentFromDir` and
-  `createAgentHandler(agent)`, or consume `agent.invoke` directly. The API handler alone does not
-  mount native channels or start schedules.
+- To call the agent from the app, open it with `openServing(agentDir)` and use the [Agent API](SPEC.md) on
+  `opened.agent`: `createSession`, `invoke` and `wait()`, or `stream()` for an answer as it is written. To serve it to
+  the app's own users, write the routes the product needs over these calls, behind the app's authentication.
+- To serve the agent's channels and schedules from the app too, `mountAgentService(opened)`, mount its Fetch
+  `handler`, await `ready`, and close the service and then the agent on shutdown.
 
-The application owns authentication, users, database, and deployment. Preserve raw webhook bodies when
-mounting under a framework. Follow [Embedding](embedding.md) rather than rebuilding the service assembly,
-Slack transport, or a separate scheduler. Nothing in the assembly isolates the process.
+The application owns authentication, users, database, and deployment. Preserve raw webhook bodies when mounting under
+a framework. Follow [Embedding](embedding.md) rather than rebuilding the service assembly, Slack transport, or a
+separate scheduler. Nothing in the assembly isolates the process.
 
 One agent instance is one trust domain. Recording which user owns which session does not keep users apart: the
-coding tools (`read`, `bash`) read every session's record under the state root, whichever user's message asked them
-to. Users who must not see each other's conversations get an instance each, or an agent without tools that reach its
-instance's storage and files ([security boundary](design/security-boundary.md) §4).
+coding tools (`read`, `bash`) reach every session in the instance's storage, whichever user's message asked them to.
+Users who must not see each other's conversations get an instance each, or an agent without tools that reach its
+instance's storage and files ([security boundary](design/security-boundary.md#3-people-who-must-be-kept-apart)).
 
 ## 9. Deploy and preserve the right data
 
 Choose a host, cost budget, credentials, and public ingress with the owner. Generate only the selected
 host's artifacts from the **agent directory**, preserving the CLI's formats and existing user-owned files.
-A `github` content entry is cloned on the host (put `GITHUB_TOKEN` in `.secrets/.env` for a private repository or for
-pushes); a `local` entry stays on this machine, and the deployed agent works without it (`deploy` says so).
+A `github` content entry is cloned on the host (put `GITHUB_TOKEN` in `.secrets/production/.env` for a private
+repository or for pushes); a `local` entry stays on this machine, and the deployed agent works without it (`deploy` says so).
 Copy reference material the agent only reads into the agent directory, outside `content/`, which every release
 ships; move data it works on to a repository.
 
@@ -426,24 +425,27 @@ an approved region, and local Docker/buildx for its arm64 image. `fastagent depl
 the CloudFormation topology, forwarder, and clock wiring required by the definition; `--run` provisions
 and verifies it. Review [Deploy](deploy.md) before authorizing resource creation or cost.
 
-Put the model in config and every value the deployment needs in `.secrets/.env`; `deploy` carries the whole file. A
+Put the model in config and every value the deployment needs in `.secrets/production/.env`; `deploy` carries the whole
+file, never the dev one. A
 model without an API key there (an OAuth subscription) is logged in on the deployment by the owner, in a terminal:
 `--run` starts `fastagent login --deployment <host>` once the box is up, and without a terminal it stops and names that
 command ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
-host. AgentCore's public webhook URL belongs to its forwarder; direct runtime invocations use AWS IAM.
+host. A deployed agent is reached through its channels and schedules only: there is no HTTP API, and a deploy with
+neither is warned about. AgentCore's public webhook URL belongs to its forwarder; its IAM-gated door takes only the
+deploy's `probe`.
 `fastagent logs agentcore --follow` reads runtime logs; `--source forwarder` selects ingress logs.
 
 | Data | What must survive, and how |
 |---|---|
-| Prompt files, skills, tools, config, and package lockfile | The image holds the agent directory and installs its dependencies. Definition edits survive same-release restarts; a new release replaces the definition. Git is optional version control. |
-| Runtime session journals, channel state, pending work, fired-slot claims | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
+| Prompt files, skills, code, config, and package lockfile | The image holds the agent directory and installs its dependencies. Definition edits survive same-release restarts; a new release replaces the definition. Git is optional version control. |
+| The instance's storage (`agent.sqlite`: sessions and messages), channel state, pending work, fired-slot claims | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
 | Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. A model login is the box's own (`fastagent login --deployment`); a redeploy keeps it. AgentCore clears them on deploy, so a login there is repeated after every deploy; an API key in the value file avoids it. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
 | Business notes, approvals, generated artifacts | Locally, write ongoing work into content the agent works on. On a host, the agent's own directory is replaced by every release and local content is not deployed, so use an external store. |
 
-Turn recovery is channel-specific: Telegram, Slack, and Feishu/Lark replay accepted turns at least once,
-so side effects must tolerate repetition.
+An accepted message is durable: the agent answers it after a restart. Telegram, Slack, and Feishu/Lark also replay
+accepted turns at least once, so side effects must tolerate repetition.
 
 `fastagent info` shows resolved paths. Verify retention on the selected host; deleting its volume also
 deletes the data it holds. See [what deploy bakes](deploy.md#what-deploy-bakes), [host guarantees](deploy.md),
@@ -455,8 +457,8 @@ Keep these checks distinct. Use the smallest relevant ones, and make credentiale
 
 | Check | What it proves |
 |---|---|
-| Typecheck, unit test, direct tool execution, `info` | Source types, exercised runtime validation/logic, and definition inspection. These do not prove model or channel behavior. |
-| One real `invoke` | A provider call and the exercised tool path. It does not verify timers, webhook ingress, or deployment. |
+| Typecheck, unit test, a tool's `execute` called in a test, `info --json` | Source types, exercised runtime validation/logic, and what the definition opens as. These do not prove model or channel behavior. |
+| One real `invoke` | A provider call, the exercised tool path, and the answer (exit code 0 only when completed). It does not verify timers, webhook ingress, or deployment. |
 | URL verification and a real channel conversation | Report registration separately from actual receipt and framework-managed reply delivery. |
 | Proactive message/file and a fired schedule/wake | Verify the intended recipient, observable delivery, and the selected clock path. Check token renewal when applicable. |
 | Generated plan / accepted CloudFormation template | Artifact generation or platform template validation only; neither proves deployed operation. |

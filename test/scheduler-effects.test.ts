@@ -460,7 +460,7 @@ it("claims an external slot synchronously before a concurrent duplicate can invo
 
 it("stopping the scheduler detaches from a running fire, and the message goes on to its end", async () => {
   // A stop interrupts the scheduler's loops, and so their waits for the messages they sent; a Caller that stops
-  // waiting only detaches (agent-api.md §3.1), so the message still finishes, and what it did is in its session.
+  // waiting only detaches (SPEC.md §3.1), so the message still finishes, and what it did is in its session.
   const subject = durableSubject();
   try {
     const agent = await subject.start();

@@ -39,19 +39,19 @@
 
   <text class="l a1" x="20" y="80"><tspan class="cm"># vibe first</tspan></text>
   <text class="l a2" x="20" y="106"><tspan class="tp">❯ </tspan><tspan class="txt">claude </tspan><tspan class="am">"read fastagent.sh/start.md, build a support agent"</tspan></text>
-  <text class="l a3" x="20" y="132"><tspan class="ok">✓ </tspan><tspan class="txt">wrote persona.md · </tspan><tspan class="dir">skills/</tspan><tspan class="txt"> · </tspan><tspan class="dir">tools/</tspan><tspan class="txt"> · </tspan><tspan class="acc">channels/</tspan></text>
+  <text class="l a3" x="20" y="132"><tspan class="ok">✓ </tspan><tspan class="txt">wrote SYSTEM.md · </tspan><tspan class="dir">skills/</tspan><tspan class="txt"> · </tspan><tspan class="dir">src/tools/</tspan><tspan class="txt"> · </tspan><tspan class="acc">src/channels/</tspan><tspan class="txt"> · </tspan><tspan class="acc">src/schedules/</tspan></text>
 
   <text class="l a4" x="20" y="170"><tspan class="cm"># then fastagent</tspan></text>
   <text class="l a5" x="20" y="196"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent dev</tspan></text>
-  <text class="l a6" x="20" y="222"><tspan class="dim">[fastagent] assembled </tspan><tspan class="txt">persona · skills · tools · channels</tspan></text>
-  <text class="l a7" x="20" y="248"><tspan class="dim">[fastagent] </tspan><tspan class="txt">github · telegram · http</tspan><tspan class="dim"> — listening on </tspan><tspan class="ok">:8787</tspan></text>
+  <text class="l a6" x="20" y="222"><tspan class="dim">[fastagent] opened </tspan><tspan class="txt">SYSTEM.md · skills · tools · channels · schedules</tspan></text>
+  <text class="l a7" x="20" y="248"><tspan class="dim">[fastagent] </tspan><tspan class="txt">telegram · slack · daily-digest</tspan><tspan class="dim"> — listening on </tspan><tspan class="ok">:8787</tspan></text>
 
-  <text class="l a8" x="20" y="286"><tspan class="pu">[github]</tspan><tspan class="dim">    ▸ </tspan><tspan class="pu">pull_request.opened</tspan><tspan class="txt">  #128</tspan></text>
-  <text class="l a9" x="20" y="312"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">review posted · 2 inline comments </tspan><tspan class="dim">(2.1s)</tspan></text>
-  <text class="l a10" x="20" y="338"><tspan class="bl">[telegram]</tspan><tspan class="dim">  ▸ </tspan><tspan class="bl">message</tspan><tspan class="txt">  @ops-room </tspan><tspan class="dim">"order #9231?"</tspan></text>
-  <text class="l a11" x="20" y="364"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">replied · refund approved </tspan><tspan class="dim">(1.4s)</tspan></text>
-  <text class="l a12" x="20" y="390"><tspan class="ok">[http]</tspan><tspan class="dim">      ▸ </tspan><tspan class="ok">POST /invoke</tspan><tspan class="txt">  session=s_42</tspan></text>
-  <text class="l a13" x="20" y="416"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">streamed 14 events </tspan><tspan class="dim">(0.9s)</tspan></text>
+  <text class="l a8" x="20" y="286"><tspan class="bl">[telegram]</tspan><tspan class="dim">  ▸ </tspan><tspan class="bl">message</tspan><tspan class="txt">  @ops-room </tspan><tspan class="dim">"order #9231?"</tspan></text>
+  <text class="l a9" x="20" y="312"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">replied · refund approved </tspan><tspan class="dim">(1.4s)</tspan></text>
+  <text class="l a10" x="20" y="338"><tspan class="pu">[slack]</tspan><tspan class="dim">     ▸ </tspan><tspan class="pu">app_mention</tspan><tspan class="txt">  #support </tspan><tspan class="dim">"is the outage over?"</tspan></text>
+  <text class="l a11" x="20" y="364"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">answered in thread · status page checked </tspan><tspan class="dim">(2.1s)</tspan></text>
+  <text class="l a12" x="20" y="390"><tspan class="am">[schedule]</tspan><tspan class="dim">  ▸ </tspan><tspan class="am">daily-digest</tspan><tspan class="txt">  09:00 </tspan><tspan class="dim">cron "0 9 * * *"</tspan></text>
+  <text class="l a13" x="20" y="416"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">digest sent to #ops </tspan><tspan class="dim">(3.2s)</tspan></text>
 
   <text class="l a14" x="20" y="454"><tspan class="cm"># ships anywhere</tspan></text>
   <text class="l a15" x="20" y="480"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent deploy fly --run</tspan></text>

@@ -1,5 +1,5 @@
 /**
- * The Agent API (docs/design/agent-api.md) as types, plus its limits and error values. Imports nothing: it is the layer
+ * The Agent API (docs/SPEC.md) as types, plus its limits and error values. Imports nothing: it is the layer
  * that keeps the harness away from its Callers.
  */
 
