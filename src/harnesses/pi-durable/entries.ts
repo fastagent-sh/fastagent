@@ -1,5 +1,5 @@
 /**
- * pi-durable's entries as the Agent API publishes them (agent-api.md §6): the conversation's messages, its tool results
+ * pi-durable's entries as the Agent API publishes them (SPEC.md §6): the conversation's messages, its tool results
  * and its compactions. The harness's own entries (`pi.system`, resets, FastAgent's bookkeeping) are not published, so a
  * published entry's parent is the published entry before it.
  */

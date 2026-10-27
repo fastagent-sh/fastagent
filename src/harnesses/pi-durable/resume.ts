@@ -1,5 +1,5 @@
 /**
- * `resume` (agent-api.md §5.1) over pi-durable's event stream of one conversation: the entries asked for, a `state`
+ * `resume` (SPEC.md §5.1) over pi-durable's event stream of one conversation: the entries asked for, a `state`
  * snapshot, then what each commit adds. pi-durable captures its snapshot and the registration for later commits
  * atomically, so the replay ends at the snapshot's newest entry and the live part starts after it.
  */

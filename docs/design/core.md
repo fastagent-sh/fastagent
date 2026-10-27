@@ -1,64 +1,58 @@
 ---
 title: Core design
-description: "Architecture of FastAgent's pi reference implementation: the assembly ladder, prompt assembly, event translation, sessions, channels, schedules, and state."
+description: "Architecture of FastAgent as the code is now: the agent directory and its content, the assembly onto pi-durable, messages and sessions, tools and the execution environment, channels, schedules, state, and deployment."
 type: design-doc
 status: current
-updated: 2026-07-19
 ---
 
 # Core design
 
-Architecture of FastAgent's pi reference implementation, as the code is now. [architecture.md](architecture.md)
-decides what replaces it (pi-durable as the only harness, behind the consumer [Agent API](agent-api.md)); until that
-lands, the code serves [SPEC v1](../SPEC.md). Code in `src/` is the implementation source of truth. User
-behavior belongs in the other `docs/` guides.
+FastAgent as the code is now. [architecture.md](architecture.md) says why it has this shape, and the
+[Agent API](../SPEC.md) is the contract it implements. Code in `src/` is the implementation source of truth, and each
+file's header says what it owns; user behavior belongs in the other `docs/` guides.
 
 ## 1. Product boundary
 
-FastAgent serves file-defined agents. Its stable center is the harness-neutral Agent Handler:
-
-```ts
-agent.invoke(request) => AsyncIterable<InvokeEvent>   // and agent.sessions, whose messages outlive their callers
-```
-
-The contract separates three things that otherwise form an integration matrix:
+FastAgent serves file-defined agents. An agent is a definition assembled onto one harness, pi-durable, and everything
+that talks to it calls the consumer [Agent API](../SPEC.md), in process:
 
 | Concern | FastAgent seam |
 |---|---|
-| Trigger: HTTP, channel, schedule | Calls an `Agent` |
-| Harness/model implementation | Implements `Agent` |
-| Host/runtime | Supplies process, storage, credentials, and deployment |
+| What the agent is | The definition: `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/`, `fastagent.config.ts` (§2) |
+| How it runs | pi-durable, behind the Agent API (§3, §4) |
+| What reaches it | Callers in its process: channels (§7), schedules and wake-ups (§8), `fastagent invoke`, an app that embeds it |
+| Where it runs | A host, which supplies the process, the storage, the credentials and the deployment (§9) |
 
-pi is the reference implementation. The contract does not require pi, but pi-specific assembly,
-sessions, models, and tool types live under `src/harnesses/pi/` and the public `/pi` subpath.
-Harness-neutral consumers use `/core`.
+The Agent API is the one API of our own; operating the agent (its definition, compaction, inspecting a session) is
+pi-durable's own API (`agent.harness`). The public surface is three layers, by what each costs to import: `/core` (the
+Agent API's types, `stream()`, the channel contract; Effect and nothing else), `/node` (the service assembly, content
+and authoring; needs Node), and `/pi` (what an author writes, opening a definition, the model environment; names the
+harness). `package-boundary.test.ts` asserts it.
 
-## 2. Agent shape, content and prompt assembly
+## 2. Agent shape, content and prompt
 
 One agent shape, one marker:
 
 ```txt
 <agent dir>/                # any name — the config below is what makes it an agent
-├── SYSTEM.md               # optional: replaces pi's default system prompt
-├── APPEND_SYSTEM.md        # optional: standing instructions added to it
-├── AGENTS.md               # optional: how this agent is built and changed, loaded every turn
-├── skills/  prompts/  tools/  channels/  schedules/
-├── fastagent.config.ts     # THE marker
-├── context.json            # the agent's declared content: repositories by name, no machine's path
+├── fastagent.config.ts     # THE marker: defineAgent({ model, thinkingLevel, providers, extensions, http, deploy })
+├── SYSTEM.md               # optional: the system prompt, as written
+├── AGENTS.md               # optional: how this agent is built and changed, a section of every prompt
+├── skills/  prompts/       # Agent Skills and prompt templates
+├── src/tools/  src/extensions/  src/channels/  src/schedules/   # code: one default export per file
+├── package.json            # its dependencies: fastagent, pi-durable and pi-ai, and its own
+├── context.json            # the agent's declared content and environment: repositories by name, no machine's path
 ├── context.local.json      # this machine's bindings: its directories by name; never in git or an image
-├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
-│                           # travels into the image). The machine's ~/.fastagent/models.json layers
-│                           # under it as environment and does not travel
-├── models-store.json       # optional model catalog (`models --refresh`): models newer than the installed
-│                           # pi, travels like models.json; the machine's ~/.fastagent/ one layers under it
+├── .fastagent/             # generated by every command that opens it: registry.ts and secrets.json
 ├── .gitignore              # scaffolded once by init, yours after
 ├── .secrets/               # the local instance's .env + auth.json; only .env.example + .gitignore travel
-├── .state/                 # the local instance's mutable state: sessions, channel state, schedule state
+├── .state/                 # the local instance's state: agent.sqlite, channel state, schedule state
 └── content/                # the clones of the declared repositories; its own .gitignore
 ```
 
-**The agent directory is the agent's working directory**, its coding tools' root, the key its session records
-are kept under, pi's project scope, and deploy's build context. What it works on is not derived from where it sits:
+`.secrets/` and `.state/` hold the `dev` environment's; `start` and a deployment use `production/` in each.
+
+**The agent directory is the agent's working directory**, its coding tools' root, and deploy's build context. What it works on is not derived from where it sits:
 it is declared as its **content** ([agent model](agent-model.md) §3): the repositories every instance reaches in
 `context.json`, and the directories of this machine it is bound to in `context.local.json`:
 
@@ -73,28 +67,26 @@ that is not one path segment or collides ignoring case; `file.ts` reads both fil
 `context.local.json`'s alone. `resolve.ts` answers where each entry is for this instance (`ResolvedContent`: name, kind,
 readonly, description, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per
 process start; the content at those locations is re-read per turn. It reads the disk and git, never the network, and
-writes nothing. The prompt's `content` section, `ctx.content`, `info`, `fastagent content list` and the opener all read
-that one resolution.
+writes nothing. The prompt's `content` section, `info`, `fastagent content list` and `openServing` all read that one
+resolution.
 
 A `github` entry that `context.local.json` binds under its name to the root of a checkout of that repository is that
 checkout, used as it is: never fetched, never moved to its `ref`, only said to be off it; a binding to anything else
 is refused, and one to a directory that is gone is said, with the clone used. A `github` entry with no checkout bound
 is a clone at `content/<name>` (`mount.ts` makes `content/` with its own `.gitignore`, and a link there is refused),
-which `cloneContent` makes or brings up to date each time a process that runs the agent opens it (the opener, before
-it resolves). The first clone is shallow, at `ref`, built
+which `cloneContent` makes or brings up to date each time a process that runs the agent opens it (`openServing`, before it resolves). The first clone is shallow, at `ref`, built
 beside and renamed into place (another process's clone that got there first stands). After that the clone is only ever updated IN PLACE, by
 git's own rules (`git.ts`): `fetch`, then `merge --ff-only` on the branch it is on, or `checkout --detach` for a tag
 or commit. git refuses whatever would overwrite the agent's work, and that refusal, a failed fetch, a clone on
 another branch than declared, or commits no branch or tag holds keep it as it is, with the reason as a startup
 warning. No directory is ever replaced or deleted, so a running agent's writes, branches and stashes are never at
-stake. A clone of another repository under the entry's name stops the start, named. `info`, `content list` and `fastagent tool` resolve without
-cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a GitHub checkout's root, any other
-directory); `authoring.ts` (pi) edits both files under one lock, `context.json`'s, since whether a name is taken is
+stake. A clone of another repository under the entry's name stops the start, named. `info` and `content list` resolve without cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a GitHub checkout's root, any other
+directory); `authoring.ts` edits both files under one lock, `context.json`'s, since whether a name is taken is
 asked of both, and writes only the files an edit changes, so a refusal leaves both as they were. A deployed host links
 each release's `content/` to its storage's (`workspace.ts`), so a `github` entry is a clone there that outlives
 releases. `context.local.json` never reaches a host (`init`'s `.gitignore`, the generated `.dockerignore`), so a `local`
 entry is only ever this machine's; one whose directory is gone is left out of the resolution (`contentAbsentHere`): the
-agent is not told of it, and the opener warns. The deploy preflight names each `local` entry the host will not have, a
+agent is not told of it, and `openServing` warns. The deploy preflight names each `local` entry the host will not have, a
 warning for one the agent works on (agent model §3).
 Every clone of fastagent's names a credential helper in its config that answers with `GITHUB_TOKEN` when git has
 no credential of its own, so the token reaches git, and the agent's push, without being stored.
@@ -105,7 +97,7 @@ for, and no environment variable selects an agent.
 
 - **The marker is the config, and it is a declaration rather than configuration.** Nothing in an agent directory is
   logically required to serve a turn, so the marker has to be the one artifact present in every agent and absent
-  from every non-agent. `SYSTEM.md`, `skills/`, `tools/`, `channels/` and `schedules/` are each optional and generic
+  from every non-agent. `SYSTEM.md`, `skills/` and `src/` are each optional and generic
   enough that scanning for them would read half the world's repositories as agents. `export default {}` is a
   signature — the same job `package.json`, `Cargo.toml` and `pyproject.toml` do.
 - **Content and the agent directory are kept apart.** A definition is released to every instance; writable
@@ -135,45 +127,27 @@ credential. A secrets dir named by `FASTAGENT_SECRETS_DIR` belongs to the operat
 template there would hide that directory's other contents from `git add`, so `add <channel>` states
 the fact instead.
 
-pi builds the prompt; FastAgent hands it the pieces and adds its own sections:
+### The prompt
+
+pi-durable builds the system prompt from the sections of the extensions installed on the agent (§3). FastAgent's own
+extension contributes the definition's:
 
 | Section | Source |
 |---|---|
-| preamble, tools, rules, docs | pi's default, built by pi so it follows pi; L2's `base` (else `SYSTEM.md`, else `.pi/SYSTEM.md`) replaces all four; a blank file or `base` is no prompt (pi would build its default), so it is reported or refused. Never the machine's `~/.pi/agent/SYSTEM.md` (`systemPromptOverride` ignores pi's `base`) |
-| addendum | `APPEND_SYSTEM.md`, else `.pi/APPEND_SYSTEM.md`; never the machine's |
-| project context | the agent directory's `AGENTS.md`, handed to pi through `agentsFilesOverride`; none above it, and none of a content entry's |
-| skills | pi lists the agent's skills — the definition's (`skills/`, `.pi/skills/`, `.agents/skills/`) and the machine's (§5), never a content entry's — when `read` is active |
-| cwd | pi appends it, without a date line that would invalidate the prefix cache daily |
-| FastAgent's sections | `content` (the agent's own directory, then what it works on and knows, each with its location), `deferred_tools` and, on a deployed host, `self_change`, added on `before_agent_start` as named sections, so they hold under a `SYSTEM.md` |
+| `system` | `SYSTEM.md`, as written, untagged. Nothing is added to it and nothing replaces it: a machine's prompt never reaches the agent |
+| `project_context` | The agent directory's `AGENTS.md`. Never a content entry's: that is a file of the project, which the agent reads there |
+| `skills` | The definition's `skills/`, listed as pi lists them (name, description, location); the model reads a skill's `SKILL.md` when a task matches, and `/skill:<name>` loads it into the message |
+| `content` | The agent's own directory, then what it works on and knows, each with its location (agent model §4) |
+| `self_change` | On a deployed host only: what lasts of a change the agent makes to itself, and, when it has the tool, `wake` |
 
-pi lists a tool only when it has a `promptSnippet`. The coding tools FastAgent mounts are pi's `AgentTool`s, which
-carry none, so FastAgent copies pi's own snippets and guidelines onto them; an authored tool's snippet is the
-first line of its description. pi's default says the agent reads files, runs commands and edits code, so an L2
-`tools` list without the coding tools needs `base` or a `SYSTEM.md`, checked at assembly and every turn.
+`prompts/<name>.md` are the prompt templates a Caller sends as `/<name>`; they and the skills are `info().commands`.
 
-`SYSTEM.md` is an identity of the agent's own; `APPEND_SYSTEM.md` is standing instructions; the agent directory's
-`AGENTS.md` is how the agent is built and changed; a content entry's `AGENTS.md` is a file in the project, which the
-agent reads there like any other. A `persona.md` is refused, naming both files. The definition is re-read for every
-invocation, so prompt,
-context and skill edits take effect on the next turn; code modules are reloaded by
-the dev supervisor instead, and by a restart under `start`. That is also how an agent improves itself while it
-runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
-process every call, its failure in the same turn's output — a tool or command of its own is an extension, and its
-own follow-up work is the `wake` tool, mounted on every serve. Extensions are live: the session factory lists
-`extensions/` again before every load (a session, the `/` menu, the model catalog, `chat`) and, when anything under
-it changed since pi last loaded it (a fingerprint of paths, sizes and modification times, kept per process and
-directory as pi's cache is), drops pi's per-process module cache first. pi exports no way to drop it; a throwaway
-resource loader that loads nothing does, on its second `reload()` (`live-extensions.ts`). jiti then imports the code
-afresh, relative imports included. The model catalog is rebuilt from it, and session control reads the catalog and
-the default model the way a turn resolves them, at each call (`models()`, `state()`, `update()`). `tools/` and
-`channels/` are the author's: they change with a restart or a release. (Reloading `tools/` in-process was built and
-removed — the design is #582, why it went is #600: Node's own module cache, which jiti does not share, made it a
-list of limits.) `schedules/` is live (§8): #600 also refused live `routines/` because they duplicated `wake` while
-bypassing its frequency floor; a schedule now passes that same guard (`recurringCronError`, at most every 10
-minutes, at most 20 armed), so an agent that writes one gets no more than a recurring wake-up would give it. A skill the
-agent writes lives in the definition, so it lasts until the next deployment replaces it; the deployed prompt says so
-and sends anything lasting to the author's release. The low-level `createPiAgent({ instructions })` path takes the prompt body
-without directory identity or project-context assembly; pi appends skills and cwd on both paths.
+**The text is read for every message; the code is not.** `SYSTEM.md`, `AGENTS.md`, `skills/` and `prompts/` take effect
+on the next message. The code in `src/`, the configuration and `package.json` take effect when the process restarts:
+`dev` restarts its worker on an edit, `start` at the next start or release. So an agent that gives itself a new
+capability while it runs writes a skill, whose script it runs through `bash`, read fresh every message; a tool or a
+schedule of its own is code, which waits for the author's release; and its own follow-up work is `wake` (§8). A skill
+it writes lives in the definition, so it lasts until the next deployment replaces it, and the deployed prompt says so.
 
 ### Decisions behind the agent model
 
@@ -184,16 +158,16 @@ deleted when its stages landed:
 |---|---|---|
 | When content is resolved | Once per process start; content re-read per turn | Per turn: network and git on every turn, for declarations that only change with a restart anyway |
 | Whether a local directory reaches a host | No: content reaches a host only by a type whose home the host reaches (a repository today); the agent directory reaches it as the definition, replaced by each release | A copy baked into the image (`copy: true`, removed before it was released): each instance's copy became data of its own, which nothing brought back together; it tied the data to the release cadence and image size, put local data in the image registry, and needed a staged build directory and a different build context on every host |
-| How FastAgent's sections enter the prompt | Named sections on `before_agent_start` | `APPEND_SYSTEM.md`'s slot: the author's file and ours would share one addendum, and `SYSTEM.md` users would need ours re-added by hand |
+| How FastAgent's sections enter the prompt | Named sections of an extension FastAgent installs, beside the author's `SYSTEM.md` | Text appended to the author's file: the author's prompt and ours would share one section, and an edit of either would touch the other |
 | Where content is declared | `context.json`, repositories by name with no machine's path; each machine binds its own directories in `context.local.json` | The TypeScript config: a client could only edit it by rewriting a literal block and re-importing it, and its `local` paths committed one machine's layout to the definition |
-| Where an agent's work goes, apart from its definition | Content it works on, as the prompt directs; the working directory stays the agent's own directory | A content entry declared `workdir` (#716; built in #719, closed). It differs from writable content in where commands start (measured: 180 runs on three models, no difference with `cd <location> && …`) and where a file created without a path lands (directed by the prompt). It would separate pi's one cwd from the agent directory in every reader. Reopen with a measurement of results landing in the definition |
+| Where an agent's work goes, apart from its definition | Content it works on, as the prompt directs; the working directory stays the agent's own directory | A content entry declared `workdir` (#716; built in #719, closed). It differs from writable content in where commands start (measured: 180 runs on three models, no difference with `cd <location> && …`) and where a file created without a path lands (directed by the prompt). It would separate the one working directory from the agent directory in every reader. Reopen with a measurement of results landing in the definition |
 | Whether a process restarts onto a changed definition by itself | No: code modules and configuration take effect at the author's restart or the next release (agent model §6); `dev` restarts on an edit | A supervisor on every process that checks a changed definition, drains every way a turn starts and restarts: no observed need, a large cost across four hosts. Reopen with a case where an agent must put a code module it wrote into service before the next release |
 
 ### Promise ports
 
-Every contract at the edge of this codebase is Promise-shaped and none of them are ours to change: the
-SPEC fixes `Agent.invoke` as an AsyncIterable and its other operations as Promises, pi's SDK is
-Promise-based, every platform client is `fetch`, and so is the filesystem. `src/effect-port.ts` is the
+Every contract at the edge of this codebase is Promise-shaped: the Agent API's operations are Promises and its
+streams AsyncIterables, pi-durable's API is Promise-based, every platform client is `fetch`, and so is the
+filesystem. `src/effect-port.ts` is the
 single crossing into Effect execution, and it holds exactly two opinions.
 
 **Interruption joins.** A Promise exposes no abort hook, so cancelling the fiber awaiting one does not
@@ -207,95 +181,69 @@ is the abandonable case, for reads and for writes a caller is free to walk away 
 classification, the channels' platform error types and every operator-facing message read it;
 `portError` is how a caller gets it back.
 
-One module, because each layer re-derived both during the Effect migration: the channel kit, the pi
-harness, the AgentCore runtime and the scheduler each grew a tagged error, a squash-unwrapper and a
+One module, because each layer re-derived both during the Effect migration: the channel kit, the harness, the AgentCore runtime and the scheduler each grew a tagged error, a squash-unwrapper and a
 join-on-interrupt combinator that differed only in the word before `Failure`.
 
-## 3. Assembly ladder
+## 3. Assembly: the definition onto pi-durable
 
-| Rung | Function | Responsibility |
-|---|---|---|
-| L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
-| L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
+`openServing(dir, options)` (`harnesses/pi-durable/serve.ts`) opens a directory to be served. `dev`, `start`, `invoke`,
+AgentCore and an embedder call it, and it works in this order:
 
-`createPiAgentFromDir` sits above L2 and resolves the agent directory, config, content, model, auth, tools,
-sessions, and machinery paths. `dev`, `start` and `invoke` share it rather than carrying parallel
-implementations. Every rung's assembly runs as `agentOf`: `piLoopHarness` behind `loopPort`, behind `servingAgent`
-(§4).
+1. **The definition** (`prepareDefinition`, `open.ts`): the registry is generated (`.fastagent/registry.ts`, plain
+   imports of every module of `src/`), the configuration and the registry are imported, the configuration's keys are
+   checked (nested ones included), and every declared secret is written into one manifest (`.fastagent/secrets.json`).
+   Both generated files are written whole (`writeFileAtomic`): every command that opens the definition writes them,
+   while `dev`'s worker may be importing them.
+2. **Its code** (`buildDefinition`): a required secret without a value refuses the start, naming where it is declared;
+   each module wrapped in `needs([...])` is built with exactly the values it declared; each module must be what its
+   directory holds; two tools, extensions, channels or schedules of one name are refused, as is an extension named like
+   one FastAgent installs. `buildDefinitionShape` builds the same code with stand-ins for missing values, for readers
+   that need only its shape: `deploy`'s pre-flight, `add <channel>`, `models`, `login`, `schedules list`.
+3. **The environment** (`enterEnvironment`, §5) and **the content** (`cloneContent`, §2), before anything can run.
+4. **The model environment** (`harnesses/models/environment.ts`): the credential store (the agent's file, layered over
+   the machine's, or a store the caller supplies), pi-ai's built-in providers over it, and the definition's providers.
+   Every reader builds it here: the serve, the startup report, `info`, `login`, a box's `login --if-missing`.
+5. **The storage** (`storage.ts`): `<stateRoot>/agent.sqlite`, opened by one process at a time (§9). `invoke` uses
+   memory storage instead, since a serve of the same directory may hold the instance's.
+6. **The Agent** (`openAgent`): the default model is checked against the models; a registry installs pi-durable's
+   coding tools, then FastAgent's definition extension (its prompt sections, §2, and the definition's tools, after the
+   coding tools, so a tool of the definition's own with one of their names replaces it), then the definition's
+   extensions, then `wake` and `unwake` when a serve gives the state root and the definition has neither (§8). Its
+   execution environment runs in the agent directory, with the process's environment minus `dev`'s mark.
+7. **The harness** (`openDurableAgent`, `agent.ts`): pi-durable's `Harness` opens on the storage; what an earlier
+   process accepted and did not settle is counted as work in flight (`channels/busy.ts`) and resumed.
 
-Each run binds a fresh `AgentSession` to its record and disposes it when the run settles. Continuity comes
-from `PiSessionRecordStore`, not a resident session: process affinity only while a message is taken or queued (SPEC MUST 8,
-what AgentCore and every scaled channel host require). That is the default on an axis a deployment owns;
-[conformance-levels.md](conformance-levels.md) states what each posture owes.
+If the Agent does not open, the storage is closed before the failure is thrown, so the same process can open it again.
 
-Reopening restores the loadout from the active transcript: pi does it itself (`AgentSession`'s constructor reads the
-newest system message's tool declarations, and keeps a declared tool an extension registers later pending until it
-does). There is no separate activation journal. pi applies the `defaultTools` setting to a resumed session again only
-on `reload()`, which a binding never calls, so the shared binder, for serving and chat, adds what a new session would
-get now: the settings' selection, every tool the definition registers, mounted or from `extensions/`, that activates
-on registration, and the discovery tools its exposures need. Transcript removals are not honored: fastagent's own
-activation only adds, so a removal records a turn on which the definition or the settings did not offer the tool, not
-the conversation's choice.
-Discoveries survive rebind, resume, fork, and compaction on that branch.
+## 4. Messages and sessions on pi-durable
 
-Every binding also owns a fresh `ModelRuntime`. Credentials are shared through their store, but extension
-provider registrations and virtual router contexts are session-local. An unbound extension-aware catalog supplies
-startup model resolution, model listings, authentication reporting, and control-plane validation. Virtual selections
-remain selected in `model_change`; assistant entries record the physical model that answered. Context usage uses
-that physical model's limits. Extension factories run for catalog registration too, so work requiring a session
-belongs in lifecycle handlers, not the factory.
+The ten operations of the Agent API are read from and submitted to pi-durable (`harnesses/pi-durable/`):
 
-`invoke` is the only way to start work. Reading, following, stopping and setting a session are the same `Agent`'s
-other operations (SPEC §5), served from the session's log, never from resident process state.
-
-## 4. Runs: from pi's events to the session's log
-
-pi's `AgentSession` exposes a subscription for streaming events and a `prompt()` that resolves without
-a value — a run's outcome is the assistant message the stream ended on, never an index into session
-state (compaction and overflow recovery rewrite that array mid-run). Three layers turn that into the protocol,
-each written once:
-
-| Layer | Owns |
+| Module | Owns |
 |---|---|
-| `serving-layer.ts` (`servingAgent`) | Session ids, the request rules a type cannot carry, the invoke stream (a receipt, then the message replayed from its own entry until its `done`), `follow`, and pages of `read`. The same for every harness |
-| `loop-port.ts` (`loopPort`) | What a harness that is only a loop lacks: admission and the queue, idempotency keys, steering, message records (`message_accepted`, `message_taken`, `message_ended`, never published) written into the session's own log through its one writer, and ending the messages a previous process left open |
-| `harnesses/pi/loop-harness.ts` (`piLoopHarness`) | One `SessionManager` per held session as its log, a fresh `AgentSession` per run, and what became of each message it was handed (taken as a user message, consumed by an extension, or never taken) |
+| `agent.ts` | The operations. Admission (a key's lookup, the limits and the submission) is one step per process, since one process owns a storage |
+| `ids.ts` | Every id handed out: the storage's incarnation, then pi-durable's id, so an id kept from a storage that is gone is `not_found` rather than someone else's (architecture.md §2); `listSessions`' cursors; the session id a tool runs in (`sessionIdOf`) |
+| `messages.ts` | pi-durable's input submissions as messages: the request id carries the Caller's key, the settlement is the outcome |
+| `entries.ts` | Which entries are published (messages, tool results, compactions) and which are the harness's own |
+| `reads.ts`, `resume.ts` | What the operations read; `resume` as replay, a `state` snapshot, then what each commit adds |
+| `sessions.ts` | Which conversations are sessions (a subagent's is not) and each one's latest activity, its newest own id: a cache read at open and moved by every commit, which `listSessions` reads |
+| `defaults.ts` | The deployment's default model and thinking level, written into a conversation that names none when a message is admitted |
+| `release.ts` | Temporary: places the messages a run that did not answer left waiting, until pi-durable does it itself |
 
-pi's vocabulary is read in three modules: `live-events.ts` turns its events into the run's live events (deltas, a tool
-call's status line, retries), `log-records.ts` its journal entries into the log's records and how full the context
-is, and `messages.ts` an answer into its outcome and a thrown error into a failure, `retryable` read from the
-provider's status or network code before its prose. The Promise crossings are `src/effect-port.ts`
-([Promise ports](#promise-ports)); a fault the port reports is the serving layer's `internal` failure, logged.
-
-A run settles on one outcome, decided in order: a thrown error, a fault while observing it, a failure an extension
-reported for work it owes (a command, or a message it sent), a retry pi started after answer text was streamed, the
-last answer, and, when an extension took the message and no model ran, `intercepted`. Each message the run took ends
-with that outcome; its answer is the reply the run stopped on, for `completed` and `max_tokens` only, and never one
-whose tool calls ran (a run a tool ended has none). What each model call cost rides on its own entry: an
-`assistant_message` or a `compaction` publishes pi's `usage`, except in a fork's copy, which is every entry written
-before the fork's provenance stamp (session-markers.ts). A stop that
-arrives before pi starts its agent run (or the automatic compaction `prompt()` runs first) is applied when it does
-(#691).
-
-Manual compaction binds its own session and answers when the compaction is done. Admission is pi's own: an internal
-extension observes `session_before_compact`, which pi emits once `prepareCompaction` found work and before the model
-call. It is the event's first listener, so a definition's own handler (a custom summarizer, a cancel) runs after
-admission. fastagent does not predict pi's private cut-point rules. An `abort` reaches the compaction; one that came
-before admission reached pi's previous abort controller, so it is sent again once pi admits the compaction.
-
-pi retries a failed assistant request itself. That is free resilience while the run is silent and
-corruption once it is not — deltas are append-only, so a second attempt would concatenate its
-answer onto the first one's half-sentence. The harness refuses the retry exactly there: once answer text has
-been streamed, never on tool events (refusing on those would push the retry out to the caller, who can
-only re-run the whole prompt and execute the tool a second time).
+`abort` waits until the messages it stopped have ended, so a channel's `/stop` runs off the path that acknowledges its
+platform's webhook (`kit/stop-command.ts`). The Agent API's conformance suite (`test/agent-api-conformance.ts`) runs
+against this Agent in process, on memory and SQLite storage.
 
 ## 5. Tools, skills, and execution environment
 
-**An agent inherits the machine it runs on**, the way it already inherits the `PATH`. Skills and
-prompt templates come from the definition's own `skills/` and from the box — pi's Agent Skills
-discovery, installed pi packages included (fastagent never installs one) — and pi's harness settings
-come from the box too. A name in the definition wins a collision; `fastagent add skill` vendors one in.
-The machine is read once per process, like any environment; the definition stays live.
+**The agent's own definition is all it is given.** Its tools are pi-durable's coding tools (`read`, `write`, `edit`,
+`bash`) and the definition's own: the modules of `src/tools/` (pi-durable's `defineTool`, TypeBox parameters), and
+those of its extensions (`src/extensions/` and `defineAgent({ extensions })`). Its skills and prompt templates are its
+`skills/` and `prompts/`; `fastagent add skill` vendors one in. Nothing is taken from the machine's pi setup: not its
+skills, not its prompt, not its extensions. MCP is not served yet ([#678](https://github.com/fastagent-sh/fastagent/issues/678)).
+
+A tool gets its session as the Agent hands it out through `sessionIdOf(api, context)`, never pi-durable's own id: that
+is how a channel's thread-reading tool finds the room its turn runs in (`kit/room-threads.ts`).
 
 The commands the agent runs are the machine's too, unless the `environment` of its `context.json` declares them
 (`src/environment/`, [agent service](agent-service.md) §4). `declare.ts` reads the declaration, refuses what FastAgent
@@ -305,133 +253,73 @@ optional npm dependency per platform, with the packages as arguments (`gh@2`) an
 Nothing is locked. `installPackages` gives mise the packages it names (`newest`) whatever is installed, which installs
 the newest release their version allows, and of the rest only those with no matching install, which `mise where` answers
 without the network; what is installed goes on the install's PATH (a PyPI package needs its uv there). A start names
-none, `fastagent env add` names what it adds or re-versions, and `fastagent env install` names every one (`"all"`). The
-assembly (`resolveAgentAssembly`) enters the environment (`enterEnvironment`: the missing ones installed, then
-`mise env --json` of every package) and puts the packages on `process.env.PATH` before anything is spawned, so every
-process that opens the agent does, an embedder's `createAgentService` included; `fastagent tool`, which opens none, does
-it itself, and the `dev` supervisor does not. It writes nothing in the agent directory. An edit to `context.json`
+none, `fastagent env add` names what it adds or re-versions, and `fastagent env install` names every one (`"all"`). `openServing` enters the environment (`enterEnvironment`: the missing ones installed, then `mise env --json` of every
+package) and puts the packages on `process.env.PATH` before anything is spawned, so every process that opens the agent
+does, an embedder's included, and the `dev` supervisor does not. It writes nothing in the agent directory. An edit to `context.json`
 restarts the `dev` worker. Only the packages reach that `PATH`: the isolation variables go to FastAgent's own mise runs,
 and mise itself is not put there.
 
-Deploying ships pi's project scope, which is the agent directory. What the machine lends is not compared against a
-deployment, for the same reason nobody is told their local `ffmpeg` is not in the image: an image is a
-machine too, and whatever its builder put in it is that environment's answer
-(`src/harnesses/pi/machine.ts`).
 
-The machine's extensions stay out of this: they are its owner's setup, and a served agent runs the
-definition's own `extensions/` (`docs/configuration.md#extensions`). So does the system prompt — inheriting
-capability is one thing, inheriting an identity would be the agent becoming someone else's.
+**What the machine still lends is its environment**, the way `bash` inherits the `PATH`: the commands on it, unless
+`context.json` declares them, and the process's variables. An image is a machine too: whatever its builder put in it is
+that environment's answer, and it is not compared against a deployment, for the same reason nobody is told their local
+`ffmpeg` is not in the image.
 
-A directory agent's tools merge in this order: all pi coding tools
-(`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then the tools exported by modules at any
-depth below `tools/`, each named by `defineTool({ name })` ([configuration](../configuration.md#tools)). Earlier names
-win, collisions are reported, and a broken discovered tool
-refuses the run — an enabled file is a declaration, and the same rule covers `channels/` (a `schedules/` file that is
-not valid is logged and left unarmed instead, §8). The coding set is fixed for directory agents: isolation belongs around the whole
-agent process, where it also covers authored tools and channel code. Pi's codemode and tool-search
-extensions load by default (`BUILTIN_EXTENSIONS`, machine.ts); Pi's MCP extension is not loaded, because its server
-connections live as long as a session and a served session lives one turn; self-scheduling `wake` remains serving-only. Reusable
-integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting.
-
-Every `defineTool` execution receives the same runtime context. Serving adapts the session it binds for
-the turn, chat adapts its resident one, both through the same adapter onto the FastAgent-owned
-read-only port (`getSessionId`, `getHeader`, `getBranch`) — `getSessionId` answers the *caller's* id,
-not pi's encoded record name, and `content` is the agent's resolved content. Sessionless direct execution
-provides cwd and content but no manager. Native pi tools receive the same cwd (the agent directory) and caller
-session id; their `thinkingLevel` getter reads the bound
-`AgentSession`.
-
-**Tool exposure and discovery** use Pi's native `direct`, `model-only`, `codemode`, `deferred`, and `hidden`
-exposures. Codemode defaults to mode `on`; `codemode` and `tool_search` are registered inactive until settings
-or a mounted tool with that exposure selects them (`bindPiSession`, the same rule Pi's MCP extension applies). A rebound
-session runs on the current defaults plus its transcript's still-mounted declarations; a tool
-whose exposure was narrowed stays declared in conversations that already declared it, since the transcript does not
-record why a tool was declared. Built-ins the machine's settings disable (`"extensions": ["-builtin:codemode"]`) are not
-loaded. No fastagent loader or keyword policy is layered over Pi. `ToolContext.tools` remains a small
-adapter for authored loaders: Pi filters the requested names and records the resulting declarations.
-
-`defineTool({ output: z.object(...) })` gives scripts validated `structuredContent`; tools without an output
-schema retain text results. Full Pi results pass through unchanged. Nested calls use Pi's `ctx.executeTool`, so
-validation, permission hooks, cancellation, and errors share the native tool pipeline. Authored tools get the same
-function as `ToolContext.executeTool`, taken from the per-call context because Pi binds it to the calling tool call
-(the parent of what it runs), and `ToolContext.onUpdate` over Pi's update callback. `annotations` and `namespace`
-pass through to Pi unchanged. The observation plane
-retains `parentToolCallId` on nested events. The Agent Handler/channel projection emits only outer calls, whose
-Pi display details include bounded nested traces, and reports each nested call starting as its outer call's
-`tool_progress` status; machine-readable `structuredContent` stays internal.
-
-**Nothing here is a sandbox.** The definition is read from the local filesystem, with pi's own skill
-loader, and all seven coding tools come from pi-coding-agent and reach `node:fs` directly. An execution
-seam for the tools was tried and given up: it never closed anything by itself — author-written `tools/`
-import whatever they like — while it cost a 167-line parity suite and a hand-built image pipeline. A
-sandbox adapter constrains the process it runs in.
+**Nothing here is a sandbox.** The coding tools reach the filesystem and run commands with the process's authority, and
+the definition's tools import whatever they like. An execution seam for the tools was tried and given up: it never
+closed anything by itself, while it cost a parity suite and a hand-built image pipeline. Isolation belongs around the
+whole agent process, where it also covers the definition's code; pi-durable's pluggable `ExecutionEnv` is where a
+sandbox would go.
 
 ## 6. Sessions and concurrency
 
-The reference stores are `piInMemorySessionRecordStore()` for embedding/tests and
-`piSessionRecordStore({ dir })` for restart-surviving local continuity.
+The Agent names sessions; a Caller maps its own conversations onto them (`conversation-sessions.ts`). A channel keeps
+its map in `<stateRoot>/channels/<kind>/sessions.json` (a chat, a thread), the schedules theirs in
+`<stateRoot>/schedule/sessions.json` (one session per schedule). The map is read once per process and written whole
+when a conversation gets a session, in one order (architecture.md §2): the session, then the record, then the message.
+A crash between the session and the record leaves a session nothing refers to, which the retry does not reuse; no
+message is answered twice, since a message is sent only once its session is recorded. A recorded session the storage no
+longer holds (it was reset, or restored from an older copy) is replaced, and the log says so.
 
-A tool call left without a result (an interrupted process, a move onto an assistant whose result
-is off-path, a fork taken mid-run) is not repaired in the record. pi-ai pairs it at request
-time with a synthetic error result (`transformMessages`), after dropping `error`/`aborted`
-assistants, so the provider always receives a valid transcript. A durable repair written here
-would duplicate that rule and drift from it: a result for a call pi-ai later drops reaches the
-provider unpaired, and every later turn is rejected. Replay does not make side-effecting tools
-exactly-once.
-
-A message that arrives while a session is busy queues behind the ones before it by default (SPEC v1 §3.2), is handed
-to the running run with `whenBusy: "steer"` (or, arriving after that run answered, starts the next run, ahead of the
-queue), or is refused with `busy` with `whenBusy: "reject"`, which is how a schedule's occurrence is skipped. Telegram, Slack and Feishu/Lark also serialize their own turns per session (see
-§7), because each turn reads its discussion when it starts.
+A message that arrives while its session is busy queues behind the ones before it by default, is handed to the running
+work with `whenBusy: "steer"`, or is refused `busy` with `whenBusy: "reject"`, which is how a schedule's occurrence is
+skipped. Telegram, Slack and Feishu/Lark also serialize their own turns per conversation (§7), because each turn reads
+its discussion when it starts.
 
 ## 7. Channels and hosting
 
-A channel file has one of two explicit module forms:
+A channel is a module of `src/channels/`, its name its file's, default-exporting one of two forms, or `needs([...])`
+around one:
 
 ```ts
-// Existing HTTP route channel
+// An HTTP route channel
 (ctx: { agent, stateRoot }) => Routes
 
-// Long-connection channel
+// A long-connection channel
 { name: string, connect(ctx, signal): { ready: Promise<void>, closed: Promise<void> } }
 ```
 
 The distinction is structural: a function is a route channel, an object with `connect` is a
-`LongConnectionChannelModule`. There is no shared mount object, ingress enum, or second metadata
-declaration. Deployment imports enabled channel modules to inspect that shape without invoking route
-modules or opening connections, so top-level module construction must not require runtime secrets. The
-adapter owns reconnects; `AbortSignal` is the sole shutdown command, while `ready` and `closed` expose
-lifecycle observation without a second `close()` path.
+`LongConnectionChannelModule`. Reading its shape builds the module without calling it (`channelIngress`), so `deploy`
+and `add` learn which channels exist and how each is reached without opening a connection. The adapter owns
+reconnects; `AbortSignal` is the sole shutdown command, while `ready` and `closed` expose lifecycle observation without
+a second `close()` path. A module that does not import, or is not one of the two forms, refuses the start: a declared
+inbound endpoint must not silently disappear.
 
-Enabled agent channels are files ending in `.ts`, `.js`, or `.mjs` under `channels/`. Renaming to
-`telegram.ts.disabled` disables one without adding a second config source.
+**Every route verifies its caller** ([security boundary](security-boundary.md)): a channel verifies its platform's
+signature, so the router (`channels/router.ts`) adds no guard of its own; it dispatches literal paths and answers 404
+and 405. `mountAgentService` (`service.ts`) mounts the channels' routes beside `GET /health`, starts long connections,
+schedules and the wake-up poll, and owns their shutdown. There is no HTTP Agent API. AgentCore serves the Runtime's own
+`/invocations` and `/ping` instead (§9). Health returns 503 until every long connection is ready, and again if one
+closes unexpectedly. The CLI binds the service's handler through `channels/serve.ts` and exits on unexpected channel
+closure; its SIGINT/SIGTERM handler closes the service and listener and bounds shutdown time. It does not drain the
+agent's messages: they are durable, and answered after a restart.
 
-The loader collects all per-file diagnostics, but `dev`/`start` treats any broken enabled channel or
-route collision as fatal: a declared inbound endpoint must not silently disappear.
-
-`mountAgentService` adds the agent's API and `GET /health`, starts long connections and schedules, and owns their
-shutdown. The API is the user plane (`POST /invoke`, `/sessions`, `/agent`; `http.api`, on by default) and the control
-plane (`/control`; `http.control`, off by default). The protocol's paths are reserved, so a channel claiming one is
-refused; `/health` stays overridable, because a probe is the deployment's to shape. AgentCore serves the Runtime's own
-`/invocations` contract instead, and carries both planes as IAM-gated `api` envelopes. Health returns
-503 until every long connection is ready, and again if one closes unexpectedly. The CLI binds the
-service's handler through `channels/serve.ts` and exits on unexpected channel closure; its
-SIGINT/SIGTERM handler closes the service and listener, force-closes active HTTP streams, and bounds
-shutdown time. It does not drain Agent turns.
-
-The resident service lifecycle uses an Effect scope for scheduler cleanup, connection readiness and
-closure observers, and the caller's abort listener. Shutdown broadcasts the transport abort before
-closing the scope, then waits for all connections under one deadline; its result is cached so
-concurrent and repeated `close()` calls wait for the same completion or failure. Startup rollback uses
-that same shutdown. Effect stays internal to `/node` service assembly, `/pi` execution/control, and the
-stateful chat channels; `/core` stays free of Node and of every package but Effect, and exposes no Effect types.
-
-`channels/sse.ts` owns the Fetch-only response lifecycle shared by the invoke and follow streams:
-eager subscription, heartbeat, serialization and iterator cleanup; callers own their event shapes.
-Synchronous subscription errors reach the HTTP error boundary before a response is created; errors
-during body streaming close the source and heartbeat and propagate through the response body. The
-remote client (`protocol-remote.ts`) ends an invoke stream at its message's `done`; a stream cut off before then ends
-with `serving_error`, so a caller never reads a cut message as an ended one.
+The resident service lifecycle uses an Effect scope for scheduler cleanup, connection readiness and closure observers,
+and the caller's abort listener. Shutdown broadcasts the transport abort before closing the scope, then waits for all
+connections under one deadline; its result is cached so concurrent and repeated `close()` calls wait for the same
+completion or failure. Startup rollback uses that same shutdown. `/core` stays free of Node and of every package but
+Effect, and exposes no Effect types.
 
 ### Shared chat execution
 
@@ -445,9 +333,11 @@ permit overlapping work and premature idle snapshots — `effect-port.ts` is wha
 happening (see [Promise ports](#promise-ports)). Side-task drains observe only the tasks tracked when
 called.
 
-`invoke-turn-kit.ts` owns the turn itself: resolve the platform inputs, then ask the agent. A failed
-resolution becomes the invoke's `rejected` event, never a thrown iteration; its only per-channel part is whether it is
-worth a redelivery — Slack reads its API error's status, the other two say yes.
+`invoke-turn-kit.ts` owns the turn itself: resolve the platform inputs, then the conversation's session
+(`sessions.of`, §6; a new thread forks its room's, `kit/thread-fork.ts`), then ask the agent. A failed step becomes
+the turn's `rejected` event, never a thrown iteration. Whether a failed resolution is worth a redelivery is the
+platform's question: Slack reads its API error's status, the other two say yes. A failed session step carries the
+Agent's own `retryable`.
 
 A write's rate-limit budget is the caller's to set, through `kit/transport.ts`. A live-preview frame
 passes `DROPPABLE_FRAME`: the next frame carries the same snapshot and the terminal write supersedes
@@ -460,10 +350,10 @@ intent before committing the exact discussion snapshot consumed (a buffer's entr
 cursor); later discussion waits for the next answered turn. Effect
 interruption and process termination preserve unfinished intent for recovery.
 
-A turn is one invoke (`invoke-turn-kit.ts` `turnStream`): `whenBusy: "queue"`, so a collision with work the channel
-did not start (a wake-up, an API caller) waits behind it, and `idempotencyKey` set to the turn's platform message id,
-so a turn the store replays after a restart is the message it already sent: one that ended is replayed, answer
-included, and only an `interrupted` one is taken again. The channel's own queue still serializes its turns, because
+A turn is one message (`invoke-turn-kit.ts` `turnStream`, over `stream()`): `whenBusy: "queue"`, so a collision with
+work the channel did not start (a wake-up, a schedule) waits behind it, and `idempotencyKey` set to the turn's platform
+message id, so a turn the store replays after a restart is the message it already sent: one that ended is read back,
+answer included. The channel's own queue still serializes its turns, because
 a turn's discussion and attachments are read when it starts, not when it arrives. The stream pulls only on downstream
 demand; a reader that leaves only detaches, so the work goes on.
 
@@ -487,7 +377,7 @@ Telegram is the stateful channel reference:
 | `preview.ts` | live preview and terminal write policy |
 | `telegram-api.ts` | Bot API timeouts/retries and HTML-aware splitting |
 | `shared-api.ts` | the transport the channel and the send tool share; a message the agent sends itself is pushed into that chat's buffer, since Telegram never echoes a bot its own messages and has no history read |
-| `../kit/state.ts` | atomic small JSON state files |
+| `../../state-file.ts` | atomic small JSON state files |
 
 Turn replay is at-least-once: a crash can re-run side-effecting tools, and a narrow pre-ACK window can
 run a delivery twice. Exactly-once execution needs a different backend/resume model.
@@ -505,9 +395,9 @@ be what was crashing the process. A turn with nothing to deliver — or whose la
 
 ### Slack
 
-Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It keeps the neutral
-`Agent.invoke` boundary and reuses the shared `turn-queue`, generic `turn-store`, `place-history`,
-invoke-turn kit, `state`, `seen`, and `preview-kit`. Platform-specific modules own
+Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It calls the Agent API like the others
+and reuses the shared `turn-queue`, generic `turn-store`, `place-history`, invoke-turn kit, `state-file`, `seen`, and
+`preview-kit`. Platform-specific modules own
 signature verification/event acceptance, message subtype policy, thread participation/context,
 private-file resolution, Web API transport, and dual native-stream / rate-limited edited-message
 rendering.
@@ -515,8 +405,8 @@ rendering.
 The request boundary verifies Slack's `v0` HMAC over the capped raw body and a five-minute timestamp,
 then persists turn intent before returning 200. Logical dedup uses
 `(team, channel, ts)` because `app_mention` and `message.*` subscriptions may overlap; `event_id` alone
-does not identify that shared message. Sessions follow the place, not the ask: an answer goes in a
-thread on the ask and that thread *is* the session, so there are no session modes. `context` group mode
+does not identify that shared message. Conversations follow the place, not the ask: an answer goes in a
+thread on the ask and that thread *is* the conversation, with a session of its own, so there are no session modes. `context` group mode
 subscribes to channel/private-channel/MPIM message streams, admits a bare human reply where the
 participation rule allows it (see [participant-model.md](participant-model.md) §3), and folds other
 discussion with the same peek→completed→commit invariant as Telegram/Feishu. That discussion is read
@@ -589,12 +479,12 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   that already produced a durable turn intent (or a `/stop`). It is post-persist, best-effort
   insurance rather than exactly-once: a crash between the state and ring writes, a failed ring write,
   or an id beyond the cap retains the at-least-once tail.
-- **Session partitioning follows the place, not the ask.** A chat is one session (`<kind>:<chat_id>`)
-  and a thread is another (`<kind>:<chat_id>:<thread_id>`), branded with the channel kind because
-  session ids share one namespace across every channel in a deployment. A room keeps one memory
-  everyone in it shares; a side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the
+- **Conversations follow the place, not the ask.** A chat is one conversation (`<kind>:<chat_id>`)
+  and a thread is another (`<kind>:<chat_id>:<thread_id>`), each with its own session in the channel's
+  map; a new thread's session forks its room's at the message its reply chain names. A room keeps one
+  memory everyone in it shares; a side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the
   platform's `root_id` tracks the reply chain and can differ between messages of one thread, which
-  would split a side conversation across sessions and history reads. One place stays FIFO while
+  would split a side conversation across conversations and history reads. One place stays FIFO while
   different places run concurrently — the concurrency unit is the place because the causal unit is.
   The rules are derived in [participant-model.md](participant-model.md); there is no session-mode
   option.
@@ -651,150 +541,113 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
 
 ## 8. Schedules and self-scheduling
 
-A **schedule** is `schedules/<name>.md`: a frontmatter holding `cron` and an optional `tz`, over the prompt. It is
-data, like a skill, so an author, a client or the agent writes one without TypeScript; the frontmatter is read
-strictly (two keys, one line each) rather than as YAML, so a bare `*/15 * * * *` works and anything else is refused
-naming the file. Every fire runs in the stable session `schedule:<name>`. The clock claims a slot before invoking,
+A **schedule** is a module of `src/schedules/`, its name its file's, default-exporting
+`defineSchedule({ cron, tz?, prompt })`, or `needs([...])` around one. The prompt is a text, or a function of the
+instant it fires for. It is code: it is built with the definition, its cron is checked there, in the dialect
+EventBridge accepts too (AgentCore's clock), and a change takes effect at a restart or a release. An agent has at most
+as many schedules as one conversation may have pending wake-ups (20). Every fire runs in the schedule's own session,
+created and recorded in `schedule/sessions.json` the first time it fires. The clock claims a slot before sending,
 catches up one overdue occurrence after downtime (not every missed slot, and not at all before its first fire —
-nothing recorded that it was armed then), writes the outcome back into that claim, and leaves delivery to agent
+nothing recorded that it was armed then), writes the outcome back into that claim, and leaves delivery to the agent's
 tools.
 
-**Edits are armed while the agent runs.** The clock re-reads `schedules/` every 30 seconds: an added or changed
-schedule is armed from its next instant (an edit is not a missed run to catch up), a removed one is disarmed, and a
-file that stops being valid keeps the definition it last had, said once in the log. At start an invalid file is
-logged and not armed, unlike a broken tool or channel, which refuses the serve: the agent writes schedules, and one it
-got wrong must not keep the next start (a crash, a scaled-to-zero host waking, AgentCore reclaiming idle compute) from
-serving at all, when nobody is talking to it to fix it. The deploy pre-flight still refuses the author's. So an agent can schedule work in its definition and have it run without a restart; a release
-replaces the file like anything else the agent wrote there. `dev` does not restart on `schedules/`.
+**The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`, one JSON object —
+`{"firedAt"}` at claim time, gaining `outcome` and `ms` when the message reports — pruned to the newest 512, which is
+what makes the history `fastagent schedules list --json` reads bounded by construction rather than by a retention
+policy. JSON rather than a line this module splits itself, because `settleClaim` may not write atomically (see §9):
+half an object does not parse, so a torn claim reads as unsettled instead of as a record whose third field happened to
+look like a number. Two events have no claim and therefore no stored record at all: a wake-up (removed from the store
+before its message is sent) and a stale slot (refused before a claim is taken; it is a WARN line where a duplicate
+delivery is INFO).
 
-**Nothing runs a schedule by name.** Work a caller starts is `POST /invoke`, and a prompt it reuses is a prompt
-template (`/<name>`), which pi expands on every invoke. An earlier design had a named unit of work with an optional
-cron (a "routine"), a `POST /run` route and a CLI to run one; a prompt template plus `POST /invoke` already did that
-job, and a schedule whose prompt was built in TypeScript from declared secrets is now a plain prompt that names its
-target.
+**What the agent SAID is stored once, and not here.** Every fire runs in a session, kept in the instance's storage like
+any other, so the claim carries the outcome and nothing else, and the log carries the fact that the fire completed, plus
+the failure detail when it did not. A second copy in the claim file and a third in a log stream would accumulate where
+nothing prunes them (#546). A log line is also the wrong shape for it: it has no escaping (a reply containing a newline
+would emit a second line byte-for-byte identical to a real record — `oneLine` folds the failure detail for exactly this
+reason), its audience is every reader of the deployment's log stream rather than of the agent's storage, and its
+retention is set per host.
 
-**The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
-one JSON object — `{"firedAt"}` at claim time, gaining `outcome` and `ms` when the turn reports — pruned
-to the newest 512, which is what makes the history `fastagent schedules list --json` reads bounded by construction rather than
-by a retention policy. JSON rather than a line this module splits itself, because `settleClaim` may not
-write atomically (see below): half an object does not parse, so a torn claim reads as unsettled instead
-of as a record whose third field happened to look like a number. Two events have no claim and therefore no stored record at all: a wake-up (removed from the store
-before its turn starts) and a stale slot (refused before a claim is taken; it is a WARN line where a
-duplicate delivery is INFO).
+Logs still need a bound for ordinary reasons, and the hosts differ: Fly and Railway retain a window of their own,
+`deploy docker` writes one into the compose file (`logging: json-file` with `max-size`, since Docker's default never
+rotates), and AgentCore has no default at all — CloudWatch keeps log data indefinitely, so its runbook and its `--run`
+summary both print the `put-retention-policy` call.
 
-**What the turn SAID is stored once, and not here.** Every fire runs in a session — `schedule:<name>` for
-a schedule, the asking conversation for a wake-up — and a session is persisted under `<stateRoot>/sessions/`
-like any other, with the harness's own storage and compaction semantics. The claim therefore carries the
-outcome and nothing else, and the log carries the fact that the fire completed, plus the failure detail
-when it did not. #546 was about model output accumulating where nothing prunes it; a second copy in the
-claim file and a third in a log stream are both that same accumulation, so neither exists. A log line is
-also the wrong shape for it: it has no escaping (a reply containing a newline would emit a second line
-byte-for-byte identical to a real record — `oneLine` folds the failure detail for exactly this reason),
-its audience is every reader of the deployment's log stream rather than of the agent's volume, and its
-retention is set per host, so it would answer "why did last night's run fail" for a different length of
-time than the claim answers "did it".
+The resident scheduler owns one Effect loop per cron and one sequential wake loop. Their waits use the captured Effect
+clock; Croner computes calendar instants, with capped waits rechecking wall time. Cron claim IO failures are typed: the
+resident loop logs a skipped fire, while external slot delivery receives the original error.
 
-Logs still need a bound for ordinary reasons, and the hosts differ: Fly and Railway retain a window of
-their own, `deploy docker` writes one into the compose file (`logging: json-file` with `max-size`, since
-Docker's default never rotates), and AgentCore has no default at all — CloudWatch keeps log data
-indefinitely, so its runbook and its `--run` summary both print the `put-retention-policy` call.
+Every fire is a message to the Agent. A schedule's is `{ sessionId: <its session>, whenBusy: "reject",
+idempotencyKey: <the slot> }`: an occurrence that finds the previous work still going is refused, and settled
+`skipped`. A wake-up's is `{ sessionId: <its session>, whenBusy: "queue", idempotencyKey: "wake:<id>@<fireAt>" }`: it
+runs after whatever runs there, and its receipt is its delivery, so the wake loop goes on to the next due wake-up while
+the message is followed to its end apart, for the log line that is a wake-up's whole record. Queued, a wake-up is
+refused only while the process or its session's queue is full: a one-shot one goes back in the store for the next
+poll, and a recurring one has its next occurrence.
 
-The resident scheduler owns one Effect loop per cron and one sequential wake loop. Their waits use the
-captured Effect clock; Croner computes calendar instants, with capped waits rechecking wall time. Cron
-claim IO failures are typed: the resident loop logs a skipped fire, while external slot delivery
-receives the original error.
+`stop()` interrupts pending waits without canceling a claimed occurrence: a Caller that stops waiting only detaches
+([Agent API](../SPEC.md) §3.1), so the message goes on to its end and stays in its session. A claimed cron occurrence
+finishes its settlement before its loop exits; no next wake is claimed. The process itself is not waited for, so a
+restart can land between a claim and its settlement. Every `start()` therefore reads the newest claim of each schedule,
+and settles one left unsettled by what became of its message: one the agent took is durable and answered after the
+restart, so its end is read through its key and written back; one never taken is `interrupted`, with a warning, and
+not re-fired — a fire that kills its own process would then replay on every boot. On AgentCore every container start
+is such a `start()`. Waiting loops do not count as business work. A wake-up counts as work until its message is
+accepted; from then on the message itself is counted (`channels/busy.ts`).
 
-Every fire is an invoke of the SPEC v1 Agent, with its `source`. A schedule's is
-`{ sessionId: "schedule:<name>", whenBusy: "reject", idempotencyKey: <the slot> }`: an occurrence that finds the
-previous work still going is refused, and settled `skipped`. A wake-up's is
-`{ sessionId: <its session>, whenBusy: "queue", idempotencyKey: "wake:<id>@<fireAt>" }`: it runs after whatever
-runs there, and its `accepted` is its delivery, so the wake loop goes on to the next due wake-up while the message is
-followed to its end apart, for the log line that is a wake-up's whole record. Queued, a wake-up is refused only while
-the process or its session's queue is full: a one-shot one goes back in the store for the next poll, and a recurring
-one has its next occurrence. A message whose stream ends on a `serving_error` (its end could not be recorded, or missed
-events could not be read back) fails with that error, in the claim's log line and the external fire's reply.
+Every serve installs `wake` and `unwake` (unless the definition has its own). Wake-ups are kept in
+`<stateRoot>/schedule/wakeups.json`, bounded by a minimum delay, a frequency floor for recurring ones and a per-session
+count, and fired back into the session that set them. `unwake` cancels one only from that session. A message that
+fails is not replayed, because its tools may already have produced side effects.
 
-`stop()` interrupts pending waits synchronously without canceling a claimed occurrence: interrupting a read of a
-message's stream only detaches from it (SPEC v1 §3.1), so the work goes on to its end and stays in its session. A
-claimed cron occurrence finishes execution and settlement before its loop exits; no next wake is claimed. The
-process itself is not waited for, so a restart can still land between a cron claim and its settlement:
-the next `start()` reads the claims it is about to arm and settles an unsettled one as `interrupted`,
-with a warning — which also makes the check idempotent across boots. It is not re-fired — a turn that
-kills its own process would then replay on every boot — and external slot delivery skips the check, so
-on AgentCore an interrupted fire stays `unreported` forever (there is no boot of a resident scheduler
-to reconcile it, and that host reclaims its container most often). A
-killed wake-up leaves nothing to reconcile: its claim removes it from the store before the turn starts.
-Waiting loops do not count as business work. A wake-up counts as work until its run is accepted; from then on
-the run itself is counted (`channels/busy.ts`).
-
-Every serve mounts `wake`/`unwake`. Wake-ups are persisted, bounded by
-minimum delay/frequency and per-session count, and fired back into the originating session. A run that fails is
-not replayed, because its tools may already have produced side effects.
-
-A declared cron needs one continuously running process, and deploy preflight prevents scale-to-zero settings
-that would silently miss one. Wake-ups do not pin a machine: the store is on the volume, so a box that slept fires
-what is due when a request next wakes it.
+A declared cron needs one continuously running process, and the deploy pre-flight prevents scale-to-zero settings
+that would silently miss one. Wake-ups do not pin a machine: the store is on the volume, so a box that slept fires what
+is due when a request next wakes it.
 
 ## 9. State and deployment
 
 `FASTAGENT_STATE_DIR` selects the one machine-state root:
 
 ```txt
-<stateRoot>/                # <agent dir>/.state (FASTAGENT_STATE_DIR overrides)
-├── sessions/
-├── channels/telegram/  channels/slack/  channels/feishu/   # …/files/ holds inbound attachments
-└── schedule/
+<stateRoot>/                # <agent dir>/.state, .state/production for start (FASTAGENT_STATE_DIR overrides)
+├── agent.sqlite            # the instance's storage: sessions, messages, entries (pi-durable)
+├── channels/<kind>/        # sessions.json, turns, history cursors, dedup; files/ holds inbound attachments
+└── schedule/               # sessions.json, claims/, wakeups.json
 ```
 
-Two kinds of thing live here, and only one of them is FastAgent's to bound. **Bookkeeping** — fired-slot
-claims, delivery dedup rings, turn intent — is written by this project for its own machinery, so it is
-bounded by construction (claims are pruned by count, §8; the seen ring is capped). **Conversation data**
-— `sessions/` and a channel's `files/` — is what the agent was told and sent, and nothing here deletes
-it: an inbound attachment is part of the conversation exactly as the session entry naming it is, and its
-path stays readable for as long as that conversation can refer back to it. Both grow with use, which is
-an operator's capacity decision (size the volume, prune deliberately), not a retention policy this
-project may impose on someone's data.
+Two kinds of thing live here, and only one of them is FastAgent's to bound. **Bookkeeping** — fired-slot claims,
+delivery dedup rings, turn intent — is written by this project for its own machinery, so it is bounded by construction
+(claims are pruned by count, §8; the seen ring is capped). **Conversation data** — `agent.sqlite`, a channel's
+`files/`, and the conversation maps that grow with them — is what the agent was told and sent, and nothing here deletes
+it: an inbound attachment is part of the conversation exactly as the entry naming it is. Both grow with use, which is
+an operator's capacity decision (size the volume, prune deliberately), not a retention policy this project may impose
+on someone's data.
 
-Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because
-the deploy lifecycle differs: values ride the host's secret store, a model login is made on the box
-itself, and state rides the volume. A deployed box points both knobs at its volume so its login, and
-every OAuth refresh of it, persists.
+Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because the deploy
+lifecycle differs: values ride the host's secret store, a model login is made on the box itself, and state rides the
+volume. A deployed box points both knobs at its volume so its login, and every OAuth refresh of it, persists.
 
-The shipped file-backed implementations are single-process, and the cost of ignoring that is specific
-rather than general — measured, not assumed:
+**One process owns an instance's state.** What enforces it, and what it costs to ignore:
 
-- **Two writers do not corrupt a session.** pi appends one whole transaction per line, so the file
-  stays parseable; the conversation *branches* (both writers' entries share a parent) and one branch
-  falls off the path the next turn reads. Within one process this cannot happen — `LoopPort` holds each
-  session's one writer while it is busy — so it is that rule not reaching across processes.
-- **Channel state is keyed by channel kind**, so two processes serving different channels never touch
-  the same files. Two processes serving the SAME channel means one ingress credential in two places,
-  which no local guard can see: the same bot token in two different directories does it too.
-- **The clock is the one true singleton.** Two schedulers over one state root would fire a cron slot
-  twice — a real billed turn. That decision is therefore atomic: `claimSlot` creates the slot's claim
-  file with `O_EXCL`, and creating it IS the decision (`src/schedule/state.ts`). A slot is also refused
-  when a LATER one has already been claimed: claims are pruned by count, and a platform that retries an
-  event for up to 24h (EventBridge) would otherwise get a stale slot fired once its own claim aged out.
-  The claim is the ONLY state this path writes, and it carries the wall-clock instant it was taken, so
-  one file answers both planes — was that fire ever reported (the boot-time `interrupted` check), and
-  where does catch-up resume — and the turn's outcome is written back into that same file. A second file
-  would reintroduce a window in which a killed process leaves a claimed slot nothing accounts for. A
-  claim outliving its process is correct: the slot was taken, and a fire interrupted mid-turn is settled
-  `interrupted` by the next start. That check has one known false positive — a second scheduler booting
-  while the first is mid-turn settles a claim nothing accounts for YET, which the first process then
-  overwrites when its turn ends; telling them apart would need the claimer's liveness, which is a lease
-  rather than a claim. The settlement is a plain write, not the atomic rename `writeFileAtomic` does:
-  its temp file would land in the directory the claim gate lists, where a leftover would sort after
-  every real claim. A torn write reads back as an unsettled claim, which is visible, not lost.
-- **Recovered turns can run twice** if two resident processes share a directory, which is the
-  already-stated at-least-once floor (a duplicate over a loss); claiming each turn on disk would make
-  a killed process block its own replay, which is worse than the duplicate.
+- **The storage refuses a second process.** pi-durable does no cross-process locking, and in WAL mode SQLite lets a
+  second process open and write the file, which would resume and run the same messages twice. `agent.sqlite` is
+  therefore opened in EXCLUSIVE locking mode (`storage.ts`): the first process keeps the lock until it closes or dies,
+  and a second `dev` or `start` over the same state root is refused, naming the file. On AgentCore, whose session
+  storage refuses SQLite's own locks, the lock is a `<path>.lock` directory that the deployment's lease holder breaks
+  when it finds one left by a stopped microVM (architecture.md §4.3).
+- **Channel state is keyed by channel kind**, and every state file is written whole (`writeFileAtomic`).
+- **The clock is the one true singleton.** Two schedulers would fire a cron slot twice — a real billed message. That
+  decision is therefore atomic: `claimSlot` creates the slot's claim file with `O_EXCL`, and creating it IS the decision
+  (`src/schedule/state.ts`). A slot is also refused when a LATER one has already been claimed: claims are pruned by
+  count, and a platform that retries an event for up to 24h (EventBridge) would otherwise get a stale slot fired once
+  its own claim aged out. The claim is the ONLY state this path writes, and it carries the wall-clock instant it was
+  taken, so one file answers both planes — was that fire ever reported (§8), and where does catch-up resume — and the
+  outcome is written back into that same file. The settlement is a plain write, not the atomic rename `writeFileAtomic`
+  does: its temp file would land in the directory the claim gate lists, where a leftover would sort after every real
+  claim. A torn write reads back as an unsettled claim, which is visible, not lost.
 
-Multiple instances still require shared session, credential, and channel-state backends, and a router that sends a
-session's calls to the process running it (SPEC MUST 8). What
-is deliberately absent is a directory-level writer lock: it would forbid harmless topologies (two
-channels in two processes, a one-shot `invoke` beside a serving `dev`, an embedder mounting twice)
-without preventing the dangerous one above.
+Scaling an instance out needs a router that sends each session's calls to the process holding its storage
+(architecture.md §4.3); it is not built.
 
 `fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config,
 persistent-volume wiring, required secret names, and a runbook. Docker adds a user-owned
@@ -838,14 +691,14 @@ box holds the PKCE verifier and exchanges the code, so it is the only holder of 
 can log the builder's machine out. The browser's return to the flow's `localhost` redirect is caught on
 the builder's machine (`catchingRedirect` in `cli/box-login.ts`) and answered as the paste. Success is read only from that line, because a host shell can drop
 a session and still exit 0. `deploy --run` starts the same login once the box is up, keeping a
-credential the box already authenticates with (`--if-missing`, answered by `AgentModels.authStatus`, the same
-resolution the box's startup report prints); without a terminal it exits 1 naming the command. The
+credential the box already authenticates with (`--if-missing`, answered by `ModelEnvironment.authStatus`, with the
+definition's providers, the same resolution the box's startup report prints); without a terminal it exits 1 naming the command. The
 builder never predicts that answer from its own credentials: `credentialRoute` decides only what the
 deploy ships.
 
-`start` loads the actual service from the persistent definition's installed package, because its tools
-and session context must use the same runtime module instance — reusing the image's harness after
-copying dependencies would give tools a different `AsyncLocalStorage`. Dependency installation stays
+`start` loads the actual service from the persistent definition's installed package, because the definition's code
+and the harness must use the same module instances: the image's copy of pi-durable is not the one the definition's
+tools import. Dependency installation stays
 marked until it succeeds: an interrupted install may already have created the CLI link, so link
 existence alone cannot authorize reuse.
 
@@ -858,9 +711,9 @@ and no per-schedule resource: the container sets its own EventBridge schedules (
 unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
 reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with
-the slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as
-SSE. `GET /ping` reports `HealthyBusy` while any work runs (`channels/busy.ts`: every queued or running run and
-compaction however it started, and channel work not yet at one) so an idle reclaim cannot kill a
+the slot as the idempotency key (EventBridge delivery is at-least-once), and the IAM-gated door takes only a `probe`.
+`GET /ping` reports `HealthyBusy` while any work runs (`channels/busy.ts`: every message not yet settled however it
+started, and channel and schedule work not yet at one) so an idle reclaim cannot kill a
 post-ACK turn, and always carries `time_of_last_update`: the field is documented
 as optional, but measured platform behavior reads only it — without it the idle timer counts from the
 last `InvokeAgentRuntime` and reclaims mid-turn regardless of `HealthyBusy`. All ingress traffic shares
@@ -918,8 +771,7 @@ never infers a dead writer from a missing JavaScript heartbeat.
 `deploy agentcore --run` stops the fixed runtime session, then probes the new serving path through
 `/__fastagent/probe`. Authenticated initialization and channel failures use transport-200 structured
 verdicts `{ ok, error? }`, preserving their diagnostics through the forwarder — the ordinary webhook
-relay folds a non-200 into an opaque 502. All entry points use the same runtime session id; the
-envelope session id selects the conversation. The S3 bucket holds only the content-hashed forwarder
+relay folds a non-200 into an opaque 502. All entry points use the same runtime session id. The S3 bucket holds only the content-hashed forwarder
 deployment package.
 
 AgentCore IO crosses the Promise boundary through `src/effect-port.ts` like every other host port:
@@ -963,12 +815,12 @@ run, because nothing can restore their ingress when compute is reclaimed.
 
 Explicit limits, not implied capabilities:
 
-- pi is the reference implementation; additional harness bindings can implement the same Agent contract;
+- one harness, pi-durable, behind the Agent API; a second harness would need its own adapter, and none is designed for;
 - nothing in the process sandboxes a directory agent;
 - Telegram, Slack, and Feishu/Lark replay is at-least-once;
-- file-backed state is single-process;
-- the AgentCore target has no resident process: long-connection channels are unsupported there, and a
-  wake-up set in a direct-invoke session fires only while that session's compute is awake;
-- observability is logs/traces, without an OpenTelemetry exporter.
+- one process owns an instance's state;
+- the AgentCore target has no resident process: long-connection channels are unsupported there, and a wake-up fires
+  only once its alarm wakes the container;
+- observability is logs, without an OpenTelemetry exporter.
 
 Keep new implementations behind the existing contract rather than adding speculative concepts to it.

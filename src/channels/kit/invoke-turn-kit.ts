@@ -34,7 +34,7 @@ import { type PortFailure, portJoin } from "../../effect-port.ts";
 
 /**
  * What a turn reads, in order: the message's receipt or why there is none, then its session's events through its
- * `done` (agent-api.md §3.1). `unknown`: whether the message was taken is not known, and the same key finds it again.
+ * `done` (SPEC.md §3.1). `unknown`: whether the message was taken is not known, and the same key finds it again.
  */
 export type TurnEvent =
   | { type: "accepted"; sessionId: string; message: MessageStatus; duplicate: boolean }

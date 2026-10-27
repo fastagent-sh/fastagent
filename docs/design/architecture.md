@@ -2,15 +2,15 @@
 title: Architecture
 description: "What FastAgent is for, and the shape that follows: one harness (pi-durable), one consumer API (the Agent API), a definition that compiles to it, an npm package as the artifact, context packages, and hosts that keep the state off the box."
 type: design-doc
-status: decided
+status: implemented in part
 ---
 
 # Architecture
 
-**Status: decided, not implemented.** This note and the [Agent API](agent-api.md) replace the harness-neutral design of
-[agent-service.md](agent-service.md) §7 to §9, [conformance-levels.md](conformance-levels.md) and
-[SPEC v1](../SPEC.md). The code still serves
-that design until the move lands ([#788](https://github.com/fastagent-sh/fastagent/issues/788)); §6 is the order.
+**Status: decided; implemented through §6 step 2.** The code serves an agent on pi-durable through the
+[Agent API](../SPEC.md). The artifact (§4.1), context packages (§4.2) and what §4.4 leaves for later are not built yet;
+§6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol (never released),
+a harness port, and the conformance levels behind them (§5).
 
 ## 1. What FastAgent is for
 
@@ -43,15 +43,15 @@ goal needs.
 | Decision | Why |
 |---|---|
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
-| **One API of our own: the consumer [Agent API](agent-api.md)**, bound in TypeScript, in process | Every consumer, ours included (channels, schedules, wake-ups, `fastagent invoke`), needs the same ten operations, and every one runs in the process that runs the agent, as does an app that embeds it. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
+| **One API of our own: the consumer [Agent API](../SPEC.md)**, bound in TypeScript, in process | Every consumer, ours included (channels, schedules, wake-ups, `fastagent invoke`), needs the same ten operations, and every one runs in the process that runs the agent, as does an app that embeds it. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
 | **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (its definition, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A session's model and thinking level are a consumer's choice, at creation, at a fork, or later with `configure`, which is pi-durable's `configure()` with those two fields: a Caller who may use a session may choose what it answers with |
-| **An instance is one trust domain, and serves nothing that does not verify its caller** | Whoever holds the Agent can do everything it can, every session and the agent's tools included, so FastAgent serves the API on no network ([agent-api.md](agent-api.md) §8, §10). A deployment's routes are its channels', which MUST verify that a request comes from their platform, and its host's own (AgentCore's, behind IAM); an app that embeds the agent serves its own routes behind its own authentication. A platform's signature proves the platform, not the person: everyone who can message a channel's bot is inside the trust domain, and can ask the agent for anything its tools reach, every other chat's conversation included. None of FastAgent's own Callers needs the API over a network: channels, schedules, wake-ups, `fastagent invoke` and an embedding app call it in process. What calls it remotely today (an outside clock in place of a schedule, a deploy's smoke test, `curl`, `connectAgent`) goes or is replaced (§5), and the remote needs that remain, duang's online agents and agents calling agents (§4.4), are not built, so a binding is designed when one is, with its requirements. People who must not read each other's conversations are kept apart by giving each an instance, not inside one: the agent's tools reach every session of their instance, whichever session asked, so a check on session ids would not keep them apart. A session id is a name, not a credential |
+| **An instance is one trust domain, and serves nothing that does not verify its caller** | Whoever holds the Agent can do everything it can, every session and the agent's tools included, so FastAgent serves the API on no network ([Agent API](../SPEC.md) §8, §10). A deployment's routes are its channels', which MUST verify that a request comes from their platform, and its host's own (AgentCore's, behind IAM); an app that embeds the agent serves its own routes behind its own authentication. A platform's signature proves the platform, not the person: everyone who can message a channel's bot is inside the trust domain, and can ask the agent for anything its tools reach, every other chat's conversation included. None of FastAgent's own Callers needs the API over a network: channels, schedules, wake-ups, `fastagent invoke` and an embedding app call it in process. What called it remotely before (an outside clock in place of a schedule, a deploy's smoke test, `curl`, `connectAgent`) went or was replaced (§5), and the remote needs that remain, duang's online agents and agents calling agents (§4.4), are not built, so a binding is designed when one is, with its requirements. People who must not read each other's conversations are kept apart by giving each an instance, not inside one: the agent's tools reach every session of their instance, whichever session asked, so a check on session ids would not keep them apart. A session id is a name, not a credential |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
 | **Sessions are listed, most recently active first; none is deleted** | A client shows an agent's conversations whatever started them: duang's sidebar lists the ones a channel or a schedule started too, which no list a Caller keeps could hold. An instance is one trust domain, so a list shows nothing its Caller could not already read. Within one storage the order needs no clock: pi-durable gives sessions, messages and entries their ids from one counter, so a session's newest id is its latest activity. Several storages behind one instance compare activity by time, designed with them (#788, scale-out on AgentCore). pi-durable has no deletion |
 | **An agent is a standard npm and TypeScript package** (§3) | The artifact is an npm package (§4.1), and an agent must be a value other code can import: an app that embeds it, a deploy by package name and version, another agent that depends on it |
 | **One configuration file, `fastagent.config.ts`, with `defineAgent()`; every field optional** | It is the `defineConfig` pattern of Vite and its peers: typed, and read by the build. The model, thinking level and tools it names are defaults: a deployment overrides them with a flag or an environment variable, and a session with pi-durable's own API |
-| **Code is registered by where it is, at build time**: `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/` | `fastagent dev` and `build` generate a registry of plain imports, as TanStack Router's route tree and Next.js's route manifest are generated: nothing to import by hand, full types, and a bundler can follow it. Not a scan at run time (no types, no bundling, a loader to keep), and not `import.meta.glob`, which only Vite understands while `dev` runs on Node |
+| **Code is registered by where it is, at build time**: `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/` | Every command that opens the definition generates a registry of plain imports (`.fastagent/registry.ts`; `build` will too), as TanStack Router's route tree and Next.js's route manifest are generated: nothing to import by hand, full types, and a bundler can follow it. Not a scan at run time (no types, no bundling, a loader to keep), and not `import.meta.glob`, which only Vite understands while `dev` runs on Node |
 | **The code is pi-durable's**: tools are its `defineTool` (TypeBox), extensions its `defineExtension` | With one harness, a portable layer over its tool and extension APIs would be a second API to learn for nothing |
 | **Third-party capabilities are pi-durable extensions**, listed in `defineAgent({ extensions })` | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. Contexts, skills, MCP and environments travel as context packages (§4.2) |
 | **Schedules are TypeScript**: `defineSchedule({ cron, tz, prompt })`, the prompt a text or a function | A schedule is behaviour, like a tool: a prompt that depends on the time it fires, secrets it may need, and a cron the build checks, including the dialect an external clock accepts |
@@ -76,7 +76,7 @@ A crash after `createSession` and before the record leaves a session nothing ref
 retry does not reuse and nothing deletes; no message is answered twice, since a message is only sent once its session
 is recorded. A crash after the record is a redelivery that finds it, and the key makes the invoke a duplicate.
 
-The previous design's pi-coding-agent harness goes with it: pi's `extensions/` and `.pi/`, `APPEND_SYSTEM.md`, the
+The previous design's pi-coding-agent harness went with it: pi's `extensions/` and `.pi/`, `APPEND_SYSTEM.md`, the
 `chat` TUI, and the skills and prompt templates a machine lends from `~/.pi/agent`. Nothing interactive replaces
 `chat`: an agent is built in a coding environment, by a coding agent as often as by a person, and what checks it there
 is a command a coding agent can run and read: `fastagent info --json` for what the definition opened as, and
@@ -143,7 +143,7 @@ location, the model reads its `SKILL.md` with `read` through the execution envir
 `/skill:<name>` loads it into the message. Prompt templates are FastAgent's, not the harness's: `invoke` expands a
 message that starts with `/<name>` before pi-durable sees it, with pi's template format (a `description` in the
 frontmatter, `$1`, `$@` and their default and slice forms for arguments), and `info()` lists them with the skills as
-the agent's commands ([Agent API](agent-api.md) §3). The result is the Agent
+the agent's commands ([Agent API](../SPEC.md) §3). The result is the Agent
 API's `Agent`, plus `harness`. `dev`, `start` and an embedder's process call the same function, so an agent behaves the
 same wherever it runs.
 
@@ -277,11 +277,13 @@ a context service. An agent calling another, in another instance, is a remote Ca
 (§2), so that binding, or A2A, which AgentCore can host, is designed when this is built, with its requirements. Both
 wait for the steps above.
 
-## 5. What goes
+## 5. What went
 
-| Goes | Replaced by |
+What the previous design had, and what took its place:
+
+| Went | Replaced by |
 |---|---|
-| [SPEC v1](../SPEC.md)'s surface: Caller-named sessions, `sessions.list`, `sessions.get(...).rewind/compact/update/delete`, `messages.*`, capabilities, `source`, the control plane | The [Agent API](agent-api.md), which then becomes `docs/SPEC.md`, and `agent.harness` |
+| SPEC v1's surface: Caller-named sessions, `sessions.list`, `sessions.get(...).rewind/compact/update/delete`, `messages.*`, capabilities, `source`, the control plane | The [Agent API](../SPEC.md), and `agent.harness` |
 | `harness-port.ts`, `serving-layer.ts`, `loop-port.ts`, the conformance suite over a harness port | The Agent implemented on pi-durable, and the suite over that Agent |
 | `harnesses/pi/` serving and session code, the `chat` TUI | The pi-durable assembly; `fastagent invoke` checks an agent from a coding environment |
 | `defineTool` with Zod, and its `secrets`; `defineChannel`'s `secrets` | pi-durable's `defineTool`; `needs([...])` in the module that reads them |
@@ -290,19 +292,20 @@ wait for the steps above.
 | Extensions an agent writes for itself, live on its next session | A build and a deployment, as for any code (§3) |
 | Schedules an agent writes for itself, live within 30 seconds | `wake`'s recurring form, kept in the instance's state (§3) |
 | A thread's Caller-named session, whose existence records that the room was forked ([participant-model.md](participant-model.md) rungs 3 and 4) | The thread's session id, recorded in the channel's state after `createSession` forks the room, in the order and place of §2. The branch point is still found by key (`getMessage` with the platform's message id) |
-| The served HTTP API (`/invoke`, `/sessions`, `/agent`, `/control`), `http.api`, `http.control`, `http.cors`, `--no-api`, `connectAgent` and `createAgentHandler`, AgentCore's `api` envelope | Nothing: a deployment serves its channels and its host's routes, and an embedding app calls the Agent API in process (§2). What used them goes with them or moves, by the list below |
+| The served HTTP API (`/invoke`, `/sessions`, `/agent`, `/control`), `http.api`, `http.control`, `http.cors`, `--no-api`, `connectAgent` and `createAgentHandler`, AgentCore's `api` envelope | Nothing: a deployment serves its channels and its host's routes, and an embedding app calls the Agent API in process (§2). What used them went with them or moved, by the list below |
 | An outside clock (Fly's Cron Manager, a Railway cron service, a CI job) calling `POST /invoke` in place of a schedule, so a host can scale to zero; `deploy`'s pre-flight offering it | Gone. A schedule keeps its machine resident, except on AgentCore, whose EventBridge alarms wake the container through its own envelope. A clock that must wake a scaled-to-zero machine is a channel its author writes, which verifies the clock's call |
 | The AgentCore runbook's smoke test, a turn sent as an `api` envelope | A `probe` envelope, which says whether the definition opened; a turn is tried through a channel or a schedule |
 | `start`'s `try it: curl …/invoke` | `fastagent invoke`, in process |
 | `connectAgent` for a web panel, a desktop app or another service | Gone until a remote Caller is built (§2): a local client embeds the agent |
 | A deployment with no channel and no schedule, reached through the API | Nothing reaches it but its health check, and `deploy`'s pre-flight says so: such an agent is used by embedding it |
-| [agent-service.md](agent-service.md) §3.6 and §7 to §14, [conformance-levels.md](conformance-levels.md) | This note and the Agent API |
+| agent-service.md's contexts, serving protocol, architecture and deployment (its §3.6 and §7 to §14), and conformance-levels.md | This note and the Agent API; [agent-service.md](agent-service.md) keeps its §1 to §6 |
 
 ## 6. Order
 
-1. **A spike on pi-durable**, on 1.3.0, locally and on AgentCore (§6.1).
-2. The Agent on pi-durable, with the conformance suite in process; channels, schedules, wake-ups, the CLI and
-   AgentCore moved onto it; the previous protocol, its HTTP API, `LoopPort` and the pi-coding-agent harness deleted.
+1. **Done.** A spike on pi-durable, on 1.3.0, locally and on AgentCore (§6.1).
+2. **Done** ([#788](https://github.com/fastagent-sh/fastagent/issues/788)). The Agent on pi-durable, with the
+   conformance suite in process; channels, schedules, wake-ups, the CLI and AgentCore moved onto it; the previous
+   protocol, its HTTP API, `LoopPort` and the pi-coding-agent harness deleted.
 3. The artifact: `fastagent build`, and `deploy` from it.
 4. Context packages.
 5. Shared contexts and agents working together.
@@ -316,7 +319,7 @@ On pi-durable 1.3.0 with pi-ai's faux model, in process, against memory and SQLi
 | The definition rendered | `SYSTEM.md`, `AGENTS.md` and the skill list render as an extension's prompt sections, and pi-durable adds no prompt of its own; a tool made by `needs([...])` around pi-durable's `defineTool` receives its secret | Installs one extension of FastAgent's own with those sections, beside the agent's tools and extensions |
 | A command kept as sent | An input submitted with the expanded text as `content` and `entry: { kind: "fastagent.user", data: { content: <as sent> } }` is recorded with that kind and data, while the model sees `content` | Submits every message that way, and publishes `fastagent.user` as `user_message` |
 | Images | Stored inline, as base64, in the entry's model message; there is no separate blob store | `attachment(ref)` reads from the entry: a ref names the entry and the part. Images grow the storage |
-| An answer being written | Its text so far is in `pi.live.generation.message`, and in a new `watchEvents` stream's snapshot, with its attempt number; its entry gets an id only when the answer is complete | `state.reply` is that text and `message_delta` carries no entry id ([Agent API](agent-api.md) §6) |
+| An answer being written | Its text so far is in `pi.live.generation.message`, and in a new `watchEvents` stream's snapshot, with its attempt number; its entry gets an id only when the answer is complete | `state.reply` is that text and `message_delta` carries no entry id ([Agent API](../SPEC.md) §6) |
 | A fork's history | Shares the source's entries: the same ids, with the source's `conversationId` | Publishes `Entry.sessionId` from it |
 | The queue after a run that did not answer | Waits, after a model failure and across a restart (the inbox persists with no run live); a write submission of FastAgent's kind `fastagent.release` with `edits: []` places it (the conversation takes the inputs waiting in its inbox), and lands as an entry | Submits that write after each run that did not answer and at the first open of a conversation whose inbox waits with no run live, and never publishes the entry |
 | Abort | `conversation.abort()` ends the running message and withdraws the queued ones, and a message sent after it settles is taken; but one sent while the aborted run is still settling waits in the inbox, and `abort()` itself waits for a running tool that ignores its signal | Calls `conversation.abort()` and answers `abort` when it returns, as the Agent API's `abort` does (§5 there). The `fastagent.release` write follows the end of the stopped run, as after any run that did not answer, whether or not the `abort` call is still waiting: its Caller may have stopped waiting |
@@ -369,9 +372,8 @@ process, and an app that puts it on a network chooses how). Asking the user, a w
 notice event (ACP) can be added later under the API's rules for extending, without breaking a Caller. Bindings to
 those protocols are outside the product's goals.
 
-## 8. Open
+## 8. Settled in the move
 
-Settled when they are implemented:
-
-- Hot reload in `dev`: the definition is read on every invoke today; pi-durable installs extensions in a registry.
-- Bun: pi-durable's portable SQLite core runs there given an adapter over `bun:sqlite`, which does not exist yet.
+- Reloading in `dev`: the definition's text (`SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`) is read for every
+  message, and an edit to its code (`src/`, the configuration, `package.json`) restarts the `dev` worker.
+- Bun: it ships `node:sqlite` from 1.4.0, so pi-durable's Node adapter serves it too, and 1.4.0 is the floor.

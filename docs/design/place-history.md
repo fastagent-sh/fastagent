@@ -24,7 +24,7 @@ Both are the same gap: the place's history is not where the agent looks.
 
 | | What it is | Who keeps it |
 |---|---|---|
-| Session | what the agent saw and said in its own turns | fastagent (SPEC MUST 8: durable; process affinity only while the session works) |
+| Session | what the agent saw and said in its own turns | the Agent: durable, in the instance's storage ([Agent API](../SPEC.md) §5) |
 | Place history | everything said in a chat or a thread | the platform, where it can be read; fastagent only where it cannot |
 
 The context buffer (`channels/kit/context-buffer.ts`) is a partial copy of the second:
@@ -175,7 +175,7 @@ says "could not read the recent discussion here: <the platform's error>" instead
 
 | Phase | Scope | Done when |
 |---|---|---|
-| 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`: its send methods, which only `telegram-send` calls, record what they send into that chat's buffer. The channel's answers go out through its own preview path and are not recorded: they are in the session. The buffer has one writer, the mounted channel; a send from a process with no channel mounted (`fastagent tool`, `invoke`) is delivered but not recorded, and the tool's result says so. Where channel state does not persist (AgentCore, no volume) the buffer itself does not, so this holds only within one instance's life (#754) | a schedule's post is in the chat's next answered turn, where the schedule fires in the serving process |
+| 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`: its send methods, which only `telegram-send` calls, record what they send into that chat's buffer. The channel's answers go out through its own preview path and are not recorded: they are in the session. The buffer has one writer, the mounted channel; a send from a process with no channel mounted (`invoke`) is delivered but not recorded, and the tool's result says so. Where channel state does not persist (AgentCore, no volume) the buffer itself does not, so this holds only within one instance's life (#754) | a schedule's post is in the chat's next answered turn, where the schedule fires in the serving process |
 | 2. Kit + Feishu / Lark | `place-history.ts` (the seam and the fold, built with its first async, platform-read source); Feishu `history.ts` over the measured API; names from members; bot messages labeled; buffer removed | live: a digest sent with `feishu-send` is answered about without quoting it, in an ordinary and a topic group |
 | 3. Slack | `history.ts`; the place state moved into the kit (`createPlaceHistory`), shared with Feishu; buffer removed | the same, live |
 | 4. Thread reading (#374) | `{feishu,lark,slack}-threads` tools over `kit/room-threads.ts` (below) | done: lists and reads run against both platforms; a thread named for another chat is refused |
@@ -191,7 +191,7 @@ top level holds the asks (left out as turn inputs) and what a send tool posted t
 
 ### Thread reading (phase 4)
 
-A scaffolded tool per channel (`tools/feishu-threads.ts`, `lark-threads.ts`, `slack-threads.ts`) lists the room's
+A scaffolded tool per channel (`src/tools/feishu-threads.ts`, `lark-threads.ts`, `slack-threads.ts`) lists the room's
 recent threads, or reads one. #374's spike settled the shape: two operations, no per-turn index in the prompt, a
 short list, a bounded read.
 

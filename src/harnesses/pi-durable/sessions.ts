@@ -1,5 +1,5 @@
 /**
- * Which conversations are sessions, and each one's latest activity (agent-api.md §5), kept in memory as a cache of the
+ * Which conversations are sessions, and each one's latest activity (SPEC.md §5), kept in memory as a cache of the
  * storage: read once when the Agent opens, then moved forward by every commit, so `listSessions` reads no storage and
  * every operation asks the same question `listSessions` answers.
  *

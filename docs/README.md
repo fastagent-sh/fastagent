@@ -47,7 +47,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 |---|---|
 | Use the CLI | [CLI reference](cli.md) |
 | Look up TypeScript exports | [API reference](api-reference.md) |
-| Understand the event stream contract | [Agent Handler SPEC](SPEC.md) |
+| Look up the API every Caller uses | [Agent API SPEC](SPEC.md) |
 | Fix common setup/runtime issues | [Troubleshooting](troubleshooting.md) |
 
 ## Core concepts
@@ -65,12 +65,13 @@ These are not required to use FastAgent, but they explain public architecture de
 | Document | Purpose |
 |---|---|
 | [Design notes](design/README.md) | What belongs in public design docs |
-| [Core design](design/core.md) | pi reference implementation, assembly ladder, sessions, auth, and deployment model |
+| [Architecture](design/architecture.md) | One harness (pi-durable), one API, the definition and its assembly, the artifact, context packages, and hosts |
+| [Core design](design/core.md) | The code as it is now: the agent directory and its content, the assembly onto pi-durable, channels, schedules, state, and deployment |
 | [Configuration and credential ownership](design/configuration.md) | Where each configuration fact lives, deployment environments, and who owns which credential |
 | [Distribution and provenance](design/distribution.md) | Why an agent directory has no manifest, and where a vendored skill's origin should be recorded |
 | [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
 | [Place history](design/place-history.md) | In progress: what a chat place said, read from the platform when a turn needs it instead of copied into a buffer |
 | [Channels across environments](design/channel-environments.md) | A deployment receives Feishu/Lark by webhook by default and `dev` keeps WebSocket (`FEISHU_INGRESS`); one app serves one environment at a time until per-environment apps (#749) |
-| [Security boundary](design/security-boundary.md) | Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, and why an instance is one trust domain: a facade keeps users apart only for an agent without tools that reach its storage, otherwise each customer gets an instance. When #788 lands, a serve publishes no API (design/architecture.md §2) |
+| [Security boundary](design/security-boundary.md) | Why a serve publishes no API and every route verifies its caller, and why an instance is one trust domain, so people who must be kept apart get an instance each |
 
 For contribution workflow, see [../CONTRIBUTING.md](../CONTRIBUTING.md).

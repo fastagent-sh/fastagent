@@ -1,4 +1,4 @@
-// Harness-neutral: the Agent API (docs/design/agent-api.md), reading a message's answer as it is written, and the
+// Harness-neutral: the Agent API (docs/SPEC.md), reading a message's answer as it is written, and the
 // channel contract a channel is written against. No Node built-in, no harness.
 export type {
   AbortResult,

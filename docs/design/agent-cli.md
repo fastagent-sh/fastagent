@@ -41,9 +41,9 @@ are processes serving the same instance. Its state is kept beside the definition
 
 ```text
 ~/agents/reviewer/                   the working directory
-├── APPEND_SYSTEM.md  skills/  …     the definition
+├── SYSTEM.md  skills/  src/  …      the definition
 ├── .secrets/                        the instance's credentials
-├── .state/                          the instance's sessions, channel and schedule state
+├── .state/                          the instance's storage (agent.sqlite), channel and schedule state
 └── content/                         where the instance reaches each content entry: a link, or its clone
 ```
 
@@ -92,11 +92,8 @@ with `fastagent content add --readonly`.
   agent makes to itself can be reviewed and undone ([agent model](agent-model.md) §6). Inside an existing repository
   that tracks it, it does not; without git, or without a commit identity, it says so.
 
-`init` scaffolds `APPEND_SYSTEM.md` for the agent's standing instructions, so a
-new agent keeps pi's default prompt and follows it as pi improves it. An agent that should be someone other than
-pi's coding assistant replaces the default with `SYSTEM.md` instead ([agent model](agent-model.md) §2). An agent
-directory that still has a `persona.md` is refused rather than served with an identity it ignores; the refusal
-names both files and when to use each.
+`init` scaffolds `SYSTEM.md`, the agent's whole system prompt, for the author to write who the agent is and what it
+does ([agent model](agent-model.md) §2).
 
 Example output:
 
@@ -135,7 +132,7 @@ fastagent content remove <name> [agent]
   is written by hand: `{ "content": { "<name>": { "path": "<checkout>" } } }` in `context.local.json`;
   [configuration](../configuration.md#content)).
 
-## 5. Running: `dev`, `start`, `chat`, `invoke`
+## 5. Running: `dev`, `start`, `invoke`
 
 Startup says what the agent works on and what it knows:
 
@@ -184,7 +181,7 @@ knows     papers    a directory of this machine   stays here; the deployed agent
 - **A local directory does not reach a host, and the deploy goes ahead without it** ([agent model](agent-model.md)
   §3): preflight names it, a warning for one the agent works on. `context.local.json` stays out of the image, so the
   host is never told of it. The agent directory does reach a host, as the definition each release replaces.
-- **A `github` entry's credential is `GITHUB_TOKEN` in `.secrets/.env`**, which travels with the other values;
+- **A `github` entry's credential is `GITHUB_TOKEN` in `.secrets/production/.env`**, which travels with the other values;
   only a private repository, or an agent that pushes, needs it.
 
 ## 8. `login` and `add <channel>`

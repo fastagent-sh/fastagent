@@ -47,36 +47,36 @@ Questions 2 and 3 give four boxes, and **only three are inhabited**. Something b
 |---|---|---|---|
 | **A. Builder-local** | The consumer is the `deploy` process itself | **None.** Delivering a value nothing reads only creates drift | `deploy.agentcore.idleTimeoutSeconds`, the declared secret *names*, host location (AWS account/region, fly region) |
 | **B. Derived, non-sensitive** | FastAgent computes it and knows it is not sensitive | **Release manifest.** Rewritten by every deploy (cannot go stale), rides an immutable image (cannot go stale on the platform, cannot interpolate a shell), is JSON (no code-generation syntax to escape) | the resolved model, `releaseId`, the agent directory |
-| **C. Authored application defaults** | In git, identical in every deployment | **The definition itself.** It already ships; a second copy would be a second truth | `model`, `thinkingLevel`, `http.port`, `http.api`, `http.control` |
-| **D. Operator-supplied environment values** | Differs per deployment, not in git, **sensitivity known only to the author** | **The platform's secret storage.** Must not enter a readable artifact, and must be rotatable on the target without rebuilding the image | channel secrets, provider API keys, anything a `{ secrets: […] }` declaration names, the secrets `deploy` mints (`FASTAGENT_WAKE_SECRET`, `FASTAGENT_INGRESS_SECRET`) |
+| **C. Authored application defaults** | In git, identical in every deployment | **The definition itself.** It already ships; a second copy would be a second truth | `model`, `thinkingLevel`, `http.port` |
+| **D. Operator-supplied environment values** | Differs per deployment, not in git, **sensitivity known only to the author** | **The platform's secret storage.** Must not enter a readable artifact, and must be rotatable on the target without rebuilding the image | channel secrets, provider API keys, anything a `needs([...])` declaration or `environment.variables` names, the secrets `deploy` mints (`FASTAGENT_WAKE_SECRET`, `FASTAGENT_INGRESS_SECRET`) |
 | **E. Self-refreshing credentials** | The target rewrites it | **None: it is created on the target.** The deployment logs in itself (`fastagent login --deployment`, §8) and its volume holds the only copy. A carried copy would give one grant two holders that each refresh it | `auth.json` |
 
-**D is treated as sensitive wholesale**, even though members like a `SLACK_DIGEST_CHANNEL` are not credentials. That follows from question 4: `{ secrets: […] }` declares "this value comes from the environment", not "this value is a credential", and FastAgent has no basis to guess. The cost is bounded and real (a runbook lists it as required, AgentCore makes it a `NoEcho` parameter so `describe-stacks` cannot show it). The escape hatch is a `sensitive: false` on the declaration, and it is not built until the diagnosability actually hurts — the framework must not guess.
+**D is treated as sensitive wholesale**, even though members like a `SLACK_DIGEST_CHANNEL` are not credentials. That follows from question 4: a declared secret says "this value comes from the environment", not "this value is a credential", and FastAgent has no basis to guess. The cost is bounded and real (a runbook lists it as required, AgentCore makes it a `NoEcho` parameter so `describe-stacks` cannot show it). The escape hatch is a `sensitive: false` on the declaration, and it is not built until the diagnosability actually hurts — the framework must not guess.
 
 Where a credential's **literal value** may appear follows from B/C versus D/E, and is absolute:
 
-> Literal credentials exist in exactly two places: `.secrets/` (0600 files, gitignored, excluded from the image) and the platform's secret storage. **Every file inside the definition may only carry a reference**: `"$MY_API_KEY"` or `!command` in `models.json` (pi resolves both), and a declared name everywhere else.
+> Literal credentials exist in exactly two places: `.secrets/` (0600 files, gitignored, excluded from the image) and the platform's secret storage. **Every file inside the definition may only carry a reference**: a declared name, whose value the environment supplies (`needs([...])` hands it to the code that declared it).
 
 That rule is advice to the author, and FastAgent can only report on it — which brings the executable form of question 4:
 
 > **Gate what FastAgent causes. Warn about what the author chose.**
 
-A `.dockerignore` that fails to exclude `.secrets/auth.json` **gates `--run`**: a packing rule of ours would put a credential in the image, and we can decide that with certainty. A literal `apiKey` in `models.json` only **warns**: the author wrote that string into their own committed file, and whether it is a credential is knowledge the framework does not have — pi's docs prescribe `"apiKey": "ollama"` for a keyless local server, and no static property separates that from a leaked key. (An endpoint's reachability is not one: `gw.example.com` may be internal DNS and `10.0.0.1` may be NAT-exposed.)
+A `.dockerignore` that fails to exclude `.secrets/auth.json` **gates `--run`**: a packing rule of ours would put a credential in the image, and we can decide that with certainty. A literal key the author writes into a provider in `fastagent.config.ts` is not reported at all: the author wrote that string into their own committed file, and whether it is a credential is knowledge the framework does not have — a keyless local server takes a placeholder key, and no static property separates that from a leaked one.
 
 This is the rule §3's question 4 already implied, written as something a reviewer can apply. It was learned the expensive way: a gate built on "is this string sensitive?" took five rounds of patches enumerating private address ranges before the premise itself turned out to be undecidable.
 
 ## 4. Files
 
 ```
-fastagent.config.ts               # in git (or .js/.mjs): name / model / http / deploy.{secrets,apt}
-SYSTEM.md  APPEND_SYSTEM.md  skills/  prompts/  tools/  channels/  schedules/
+fastagent.config.ts               # in git: defineAgent({ name, model, thinkingLevel, providers, extensions, http, deploy })
+SYSTEM.md  AGENTS.md  skills/  prompts/  src/  context.json
 
 .secrets/.env                     # the local (= single-instance deploy) values
 .secrets/auth.json                # this project's OAuth credentials (login writes here by default)
 .secrets/.env.example             # in git: the inventory of expected names
 
-.secrets/production/.env          # day two only: that env's values (API key, AWS_REGION, FASTAGENT_MODEL…)
-.secrets/alpha/.env
+.secrets/production/.env          # the production environment's values, which start and deploy read (channel-environments.md)
+.secrets/alpha/.env               # day two only: another named environment's
 
 .state/                           # local state (no secrets)
 ~/.fastagent/.secrets/auth.json   # this person on this machine (login -g)
@@ -99,7 +99,7 @@ The defaults live in different places for exactly one reason: one can be committ
 Two properties of the credential chain are not free choices, and both were paid for:
 
 - **The fallback is per provider, not per file.** A file-level fallback would make every other provider in the global store vanish the instant `login anthropic` created a project `auth.json`.
-- **An explicitly named path takes no second layer.** `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` are instructions, not preferences (`resolveAuthLayers` in `src/harnesses/pi/auth.ts`). The deployed artifacts set the third one, and a container must read its mounted credentials and nothing else — otherwise a fly/railway/agentcore box would quietly mount `$HOME/.fastagent/.secrets/auth.json` as a second layer.
+- **An explicitly named path takes no second layer.** `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` are instructions, not preferences (`resolveAuthLayers` in `src/harnesses/models/credentials.ts`). The deployed artifacts set the third one, and a container must read its mounted credentials and nothing else — otherwise a fly/railway/agentcore box would quietly mount `$HOME/.fastagent/.secrets/auth.json` as a second layer.
 
 `deploy` carries no credentials file at all, project or global (§8).
 
@@ -128,7 +128,7 @@ fastagent logs agentcore --env production
 | `deploy <host> [dir]` | add `--env <name>`; drop `--model` (§5: it never reaches the box) and `--auth-path`; `host` stays a required positional (unambiguous, so it does not move) |
 | `logs <host> [dir]` | add `--env <name>` |
 | `login [provider]` | add `-g`; drop the `--auth-path` flag (the SDK's `authPath` option stays) |
-| `dev`, `chat`, `info`, `invoke`, `start` | drop the `--auth-path` flag; `FASTAGENT_AUTH_PATH` stays (§11) |
+| `dev`, `info`, `invoke`, `start` | drop the `--auth-path` flag; `FASTAGENT_AUTH_PATH` stays (§11) |
 | the other six commands | unchanged |
 
 `[dir]` is a positional both `deploy` and `logs` already carry, so `--env` is a flag rather than a second optional positional — `deploy fly production` and `deploy fly ./myagent` are indistinguishable otherwise. `deploy` without `--run` keeps its current meaning: it writes the generated artifacts into the agent dir (ownership markers decide what may be overwritten) and changes nothing on the host. Reading back remote state is **not** part of this proposal.
@@ -148,7 +148,7 @@ Availability is a property of **ordering**, not of how many commands the operato
 
 Step 4 is `publicHealthGate` (`src/deploy/channel-ingress.ts`), asked by the hosts whose public URL the platform mints — fly and railway — before they reach `registerWebhooks`: `fly deploy` and `railway up --ci` both exit 0 on a deployment that then crash-loops, and `setWebhook` does not verify that anything answers the URL. It is asked only when the deployment actually has a webhook to point or a login on the box follows (the login runs the CLI the box installs on its first boot); docker keeps probing the port it published locally, and agentcore its own runtime probe. It deliberately does not spend a real model call: it costs money and an unexpired access token **does not prove future refreshability**. A partial failure in step 3 is reported and stops the run — no success claim, no newly enabled scheduled work.
 
-Step 5 needs no probe of its own, and `/health` must not grow a credential check. The login reports its own outcome as one result line from the box (a credential for the provider now exists there, or not), and without a terminal to run it in, `--run` stops right there with the command to run. Re-deriving it inside `/health` would add no coverage and would let a healthy deployment whose key comes from a `models.json` `!command` be declared dead.
+Step 5 needs no probe of its own, and `/health` must not grow a credential check. The login reports its own outcome as one result line from the box (a credential for the provider now exists there, or not), and without a terminal to run it in, `--run` stops right there with the command to run. Re-deriving it inside `/health` would add no coverage and would let a healthy deployment whose key a provider in its code resolves itself be declared dead.
 
 The point of the ordering is that a run with no usable credential **registers no webhook**, instead of reporting success and failing on the first real message. What the box starts by itself is not gated: a long-connection channel connects and the resident scheduler runs from boot, so on a host that stays up without a login (a first `--run` from CI) those turns fail until someone logs the box in. The alternative, holding them back until a credential exists, would put a credential check in the serving path, which step 5 rules out.
 
@@ -216,7 +216,7 @@ Day one is built: the credential layers (§5, §8), the value-file-only delivery
 |---|---|
 | `resolveEnvValues(agentDir, envName?)` → `{ envName, file, values }`: the **one** read of the selected value file, shared by the plan side and the run side | a new module under `src/deploy/` |
 | Loading a definition under a given env's values (channel discovery) runs in a **subprocess**: a module captures `process.env` at import time, and a subprocess is cheaper than inventing ESM cache invalidation | `src/env.ts` (`loadEnvValues` already returns a Map without writing `process.env`) |
-| `config.name`, whose only consumer is the `<name>-<env>` prefix | `src/harnesses/pi/config.ts` |
+| `config.name`, whose only consumer is the `<name>-<env>` prefix | `src/harnesses/pi-durable/define.ts` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) | `src/deploy/container.ts` + each host's `plan.ts` |
 

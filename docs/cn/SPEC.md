@@ -6,9 +6,8 @@ status: current
 
 # Agent API 设计解读
 
-规范原文见 [agent-api.md](../design/agent-api.md)，架构和取舍见 [architecture.md](../design/architecture.md)。两者与本文
-不一致时，以英文原文为准。Agent API 已经定下、还没实现：迁移（#788）完成后它替换 [SPEC.md](../SPEC.md)，在那之前代码实现的
-仍是 SPEC.md。
+规范原文见 [SPEC.md](../SPEC.md)，架构和取舍见 [architecture.md](../design/architecture.md)。两者与本文不一致时，以英文原文
+为准。代码实现的就是这套 API（`src/agent-api.ts`）。
 
 ## 一句话概括
 
@@ -18,7 +17,7 @@ status: current
 
 ## 1. 为什么是这个形状
 
-现在的 SPEC v1 想做一个“任何 harness 都能实现”的中立协议，为此定义了 harness 端口和 `LoopPort`，在 pi-coding-agent 上模拟
+之前的 SPEC v1（没有发布过）想做一个“任何 harness 都能实现”的中立协议，为此定义了 harness 端口和 `LoopPort`，在 pi-coding-agent 上模拟
 pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上重建它不保存的事实。这些工作标准化的恰恰是各家 harness 差异最大、
 变化最快的部分，而产品目标里没有一个需要它。
 
@@ -71,7 +70,7 @@ pi-durable 原生就有的排队、幂等和消息记录，又在 pi-durable 上
   先用 `createSession` 建出来，并在发任何消息之前记下它的 id。Agent 保证一条消息的 `done` 先于之后被取走的消息的 entry 发出，即使
   pi-durable 在同一次提交里结束前一条、放入后一条，所以“从 `user_message` 到 `done`”的划分是可靠的。`done` 不会被重放，所以在 `invoke` 之后才 `resume` 的调用方，要在拿到快照后用 `getMessage` 查一次，
   补上订阅之前就已结束的情况。
-- `stream(agent, request)` 把这件事包了起来，适用于任何 `Agent`，只是 API 的一个调用方，不增加任何语义（见 agent-api.md
+- `stream(agent, request)` 把这件事包了起来，适用于任何 `Agent`，只是 API 的一个调用方，不增加任何语义（见 SPEC.md
   §3.1）。它返回 `StreamResult`：成功时是回执加 `events`（这条消息 `user_message` 之后、到它的 `done` 为止的事件，会话无法继续
   跟随时以 `serving_error` 结束）；也可能是 invoke 的拒绝或 `unknown`，包括后者携带的已知 id。channel 用回执里的 `messageId`
   记录这一轮，并把拒绝的原因告诉用户。它要求请求带 `sessionId`：只有已存在的会话才能在发消息之前订阅，新对话由调用方先建会话、记下
@@ -129,7 +128,7 @@ delta 可能没覆盖到回答的最后一段，以 entry 的文字为准。
   随之发出的 id 也可能被再次发出。AgentCore 的 session storage 在宿主机故障后就是这种情况（见 architecture.md §4.3）。不能丢消息的
   调用方，应该一直保留消息，直到看到它的 `done`。
 - **开 thread**：分叉点仍然按 key 找（`getMessage` 带平台消息 id）；thread 对应的会话按上面的顺序建立和记录。
-- **一个实例就是一个信任域，Agent API 不上网络**（agent-api.md §8、§10；architecture.md §2）。Agent 不认证任何人；拿到它的
+- **一个实例就是一个信任域，Agent API 不上网络**（SPEC.md §8、§10；architecture.md §2）。Agent 不认证任何人；拿到它的
   代码能做它能做的一切：对每个会话发消息、读取、接上、改设置、停止、分叉，agent 的工具也带着进程的全部权限。它的调用方都在运行
   agent 的那个进程里：我们自己的 channels、定时任务、wake、`invoke` 命令，以及嵌入 agent 的应用。谁把 agent 放到网络上，谁决定谁能访问：
   channel 必须（MUST）校验请求确实来自它的平台（平台的签名或 token），嵌入方用自己应用的认证保护自己写的路由。FastAgent 的部署
@@ -203,28 +202,3 @@ ACP v2 独立地得出了同样的模型：agent 生成会话 id、消息写入�
 | 人工确认、agent 反问 | 以后的版本按 §6.1 加 |
 | 图片以外的文件上传 | 这一版不做 |
 | ACP、A2A 等其他协议 | 在这套 API 外面调用它；做这些协议的绑定不在当前产品目标里 |
-
-## 7. 和现在的 SPEC v1 的对照
-
-这一节解读 agent-api.md §12 的第一张表。
-
-| 现在的 SPEC v1（代码实现的） | Agent API |
-|---|---|
-| harness 无关的协议，通过 harness 端口和 `LoopPort` 实现 | 一个 harness（pi-durable）的消费者接口 |
-| 调用方可以给会话命名，也可以由 Agent 命名 | 全部由 Agent 命名；id 不透明、永不复用 |
-| `/control` 平面的 `update` | `configure`，放在消费者 API 上：会话的模型和 thinking level 和创建时一样由调用方选择 |
-| `sessions.list` | `listSessions`，最近有活动的排在前面，分页读取 |
-| `rewind`、`compact`、`delete`、`/control` 平面的其余部分、`models` | 去掉；运维用 pi-durable 原生 API |
-| `commands()` | 并入 `info().commands`，调用方读一次即可 |
-| `messages.get`、`messages.follow`、`messages.cancel` | `getMessage`（按 id 或 key）；`resume`；`abort` |
-| `follow` | `resume`：按 `replayFrom` 重放，必发快照，再接实时；回答中途也能接上 |
-| invoke 流式返回这条消息的事件，到它的 `done` 为止 | `invoke` 只返回回执；看过程用 `resume`，等结局用 `wait()`，和 pi-durable 的 `submit`、`watchEvents`、`Submission.wait()` 一样 |
-| `prompt: { text, images }` | `content` 内容数组，按 `info().inputs` 检查 |
-| `sessions.create({ sessionId, fork })` | `createSession({ from?, model?, thinkingLevel? })`，模型和 thinking level 传给 pi-durable 的创建选项 |
-| fork 复制 entry，id 是新的，不带 `usage` | fork 共享源会话的 entry；每条 entry 带写入它的 `sessionId`；会话的花费是 `state.usage`，只算它自己的调用；`compaction` 不带 `usage` |
-| `capabilities`、`durableQueue`、`durableTaken` | 去掉：持久性直接写进 MUST |
-| `intercepted`、`interrupted` 结局；`source`；`takenAt`、`endedAt` | 去掉 |
-| `collect`；`Accept: application/json` 返回 `202` | `wait()`，可能是 `unfinished`，可以用 `signal` 放弃等待；提交或读取回执失败又无法证明拒绝时返回 `unknown`，并报告所有已知 id |
-| `abort` 发出停止就返回：撤回排队的消息、通知 run 停止，不等消息结束 | `abort` 等被停下的消息都结束后才返回，和 pi-durable 的 `conversation.abort()` 一样，可以带 `signal`；没拿到答复时返回 `unknown`。所以迁移时，channel 的 `/stop` 不能在确认平台 webhook 的路径上等 `abort` |
-| `serving_error { message }` | `serving_error { error }`：无法继续的 `resume` 以它结束 |
-| 每次服务都对外提供、不认证的 HTTP API，带 JSON 门槛和 CORS；`connectAgent` | 没有网络绑定：调用方都在进程内，要放到网络上的应用自己写路由 |
