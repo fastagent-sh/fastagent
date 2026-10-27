@@ -10,6 +10,7 @@ import * as Stream from "effect/Stream";
 import { expect, it, vi } from "vitest";
 import { previewPump, serialWriter, renderReply, turnEnd, type PreviewPump } from "../src/channels/kit/delivery.ts";
 import { PortFailure, portError, portJoin } from "../src/effect-port.ts";
+import { log } from "../src/log.ts";
 import { run } from "./channel-effects.ts";
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -160,7 +161,27 @@ it("scope interruption drains accepted native writes in order before releasing",
   expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
 });
 
-it("a failed writer surfaces its original cause, and closed admission fails visibly", async () => {
+it("a write failure no finish reported is logged, and the scope still ends as its body did", async () => {
+  const error = vi.spyOn(log, "error").mockImplementation(() => {});
+  const failing = new Error("append failed");
+  const exit = await Effect.runPromiseExit(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const writer = yield* serialWriter();
+        writer.enqueue(async () => {
+          throw failing;
+        });
+        return "body done";
+      }),
+    ),
+  );
+  expect(exit).toEqual(Exit.succeed("body done"));
+  expect(error.mock.calls.flat().join(" ")).toContain("a write failed after its turn stopped: Error: append failed");
+  error.mockRestore();
+});
+
+it("a failed writer surfaces its original cause, once, and closed admission fails visibly", async () => {
+  const logged = vi.spyOn(log, "error").mockImplementation(() => {});
   const error = new Error("append failed");
   await expect(
     run(
@@ -175,6 +196,9 @@ it("a failed writer surfaces its original cause, and closed admission fails visi
       ),
     ),
   ).rejects.toBe(error);
+  // `finish` reported it: the finalizer that drains the writer does not say it again.
+  expect(logged).not.toHaveBeenCalled();
+  logged.mockRestore();
   await run(
     Effect.scoped(
       Effect.gen(function* () {
