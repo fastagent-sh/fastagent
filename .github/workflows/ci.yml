@@ -104,6 +104,10 @@ jobs:
           bun dist/cli.js models gpt-5.5
           bun dist/cli.js --version
 
+      # Vitest runs on Node; this is the serving host's contract on Bun's own server.
+      - name: Serve on Bun
+        run: bun test/bun/serve.ts
+
   # Stable-named aggregate gate: this is the branch-protection required check.
   # Keeping a fixed name (independent of the matrix) means adding/removing Node
   # versions never requires editing branch protection. ("Core" = the essential
