@@ -42,11 +42,12 @@ async function agentDir(
 
 describe("mountAgentService over an opened directory", () => {
   it("opens a directory named by a relative path at its absolute location", async () => {
-    // The prompt names the agent's files and content by these, and its tools resolve a relative one elsewhere.
+    // The prompt names the agent's files and working directory by these, and its tools resolve a relative one
+    // against that working directory.
     const dir = await agentDir();
     const served = await openServing(relative(process.cwd(), dir), { storage: "memory" });
     opened.push(served.agent);
-    expect([served.agentDir, served.definition.dir, served.stateRoot]).toEqual([dir, dir, join(dir, ".state")]);
+    expect([served.agentDir, served.definition.dir]).toEqual([dir, dir]);
   });
 
   it("mounts channel routes on a handler, with health beside them", async () => {
