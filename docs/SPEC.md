@@ -11,7 +11,8 @@ updated: 2026-10-26
 
 > **Status: current.** This is the API a served agent offers its consumers, and what the code implements
 > (`src/agent-api.ts`). Changing its semantics needs an explicit decision. Why it has this shape is
-> [architecture.md](design/architecture.md).
+> [architecture.md](design/architecture.md). Its successor, one model in process and over HTTP, is proposed in
+> [design/agent-api.md](design/agent-api.md) and replaces this document when implemented.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
 

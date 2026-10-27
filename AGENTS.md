@@ -11,6 +11,7 @@ The design center is decided in `docs/design/architecture.md`: an agent is a def
 | Document | Purpose |
 |---|---|
 | `docs/SPEC.md` | The consumer Agent API, which the code implements. Do not change its semantics without an explicit decision. |
+| `docs/design/agent-api.md` | The proposed Agent API v2, in process and over HTTP, which replaces `docs/SPEC.md` when implemented. |
 | `docs/design/architecture.md` | The decided architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
 | `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
