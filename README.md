@@ -143,12 +143,12 @@ its webhooks, mounted where your framework routes them ([Embedding](docs/embeddi
 ## Public API surface & stability
 
 The root export intentionally contains the supported surface only. The entries are layered by what each costs to
-import, and every layer's dependency list is asserted in CI:
+import, and every layer's static dependency list is asserted in CI:
 
 | | Harness-neutral | Runtime-neutral | Costs |
 |---|---|---|---|
 | `/core` | yes | yes | Effect only |
-| `/node` | yes | no (filesystem, clock, environment) | `@hono/node-server`, `croner`, `proper-lockfile` |
+| `/node` | yes | no (filesystem, clock, environment) | Effect, `@hono/node-server`, `croner`, `proper-lockfile`; serving imports `@effect/platform-node` on Node or `@effect/platform-bun` on Bun when it starts |
 | `/pi` | no | no | pi-durable and pi-ai |
 
 | Area | Examples | Stability |

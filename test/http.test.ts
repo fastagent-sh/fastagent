@@ -6,20 +6,48 @@ import { createServer } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { nodeListener, serveNode } from "../src/index.ts";
 
-describe("nodeListener (embedded server bridge)", () => {
-  async function serving(handler: (req: Request) => Promise<Response>) {
+type Handler = (req: Request) => Promise<Response>;
+interface Served {
+  url: string;
+  port: number;
+  close(): Promise<void>;
+}
+
+/**
+ * The two ways a Fetch handler reaches a socket: an app's own `node:http` server through `nodeListener`, and the
+ * server `dev`, `start` and AgentCore serve on (`serveNode`). The host contract below holds for both, through a real
+ * socket, so it survives swapping either bridge.
+ */
+const bridges: Record<string, (handler: Handler) => Promise<Served>> = {
+  nodeListener: async (handler) => {
     const server = createServer(nodeListener(handler));
     await new Promise<void>((r) => server.listen(0, r));
     const port = (server.address() as AddressInfo).port;
     return {
       url: `http://localhost:${port}`,
+      port,
       async close() {
         server.closeAllConnections();
         await new Promise<void>((r) => server.close(() => r()));
       },
     };
-  }
+  },
+  serveNode: async (handler) => {
+    const host = serveNode(handler, { port: 0 });
+    const port = await host.listening;
+    return {
+      url: `http://localhost:${port}`,
+      port,
+      async close() {
+        const closing = host.close();
+        host.closeAllConnections();
+        await closing;
+      },
+    };
+  },
+};
 
+describe.each(Object.entries(bridges))("%s: bridging a Fetch handler", (_, serving) => {
   it("bridges a streamed response chunk by chunk, with the request's method, path and body", async () => {
     const srv = await serving(async (req) => {
       const url = new URL(req.url);
@@ -62,9 +90,16 @@ describe("nodeListener (embedded server bridge)", () => {
     }
   });
 
-  it("a client that disconnects cancels the response stream", async () => {
+  it("a client that disconnects cancels the response stream, aborts the request's signal, and is no failure", async () => {
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
     const cancelled = Promise.withResolvers<void>();
-    const srv = await serving(async () => {
+    const aborted = Promise.withResolvers<void>();
+    const srv = await serving(async (req) => {
+      // A channel that streams unsubscribes on its request's signal: it must fire after the handler has returned.
+      req.signal.addEventListener("abort", () => aborted.resolve());
       const encoder = new TextEncoder();
       let timer: ReturnType<typeof setInterval> | undefined;
       return new Response(
@@ -89,30 +124,21 @@ describe("nodeListener (embedded server bridge)", () => {
         cancelled.promise,
         new Promise((_, reject) => setTimeout(() => reject(new Error("the stream was never cancelled")), 3000)),
       ]);
+      await Promise.race([
+        aborted.promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("the request's signal never aborted")), 3000)),
+      ]);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(errs.filter((e) => /failed/.test(e))).toEqual([]);
     } finally {
       await srv.close();
     }
   });
 });
 
-describe("nodeListener totality (the host must survive arbitrary channel code)", () => {
+describe("nodeListener: a body upstream middleware already read", () => {
   afterEach(() => vi.restoreAllMocks());
-
-  /** Serve `handler` on a real server and hand back the port. Black-box on purpose: these three
-   *  requirements (never crash, never leak, always surface) belong to the HOST CONTRACT, not to any
-   *  one bridge implementation — asserted through a real socket, they survive swapping the bridge. */
-  async function serving(handler: (req: Request) => Promise<Response>) {
-    const server = createServer(nodeListener(handler));
-    await new Promise<void>((r) => server.listen(0, r));
-    const port = (server.address() as AddressInfo).port;
-    return {
-      port,
-      close: async () => {
-        server.closeAllConnections();
-        await new Promise<void>((r) => server.close(() => r()));
-      },
-    };
-  }
+  const serving = bridges.nodeListener as (handler: Handler) => Promise<Served>;
 
   it("a drained body is diagnosed with its fix, not with 'Body is unusable'", async () => {
     // The embedding trap: `app.use(express.json())` ahead of the mount eats the one-shot stream.
@@ -215,6 +241,49 @@ describe("nodeListener totality (the host must survive arbitrary channel code)",
       await new Promise<void>((r) => server.close(() => r()));
     }
   });
+});
+
+describe.each(Object.entries(bridges))("%s: the host survives arbitrary channel code", (_, serving) => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("a throwing handler is logged, and says nothing else", async () => {
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
+    const host = await serving(async () => {
+      throw new Error("boom /etc/secret-path");
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${host.port}/x`);
+      expect(res.status).toBe(500);
+      const body = await res.text();
+      expect(errs.some((e) => /request failed.*boom/.test(e))).toBe(true); // visible in the log
+      expect(body).not.toMatch(/etc\/secret-path/); // ...and nowhere else
+    } finally {
+      await host.close();
+    }
+  });
+
+  it("a handler that returns a Response whose body it already read is a 500 the log explains", async () => {
+    // A channel that read its own Response, or returns one Response it built once for every request.
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...args) => {
+      errs.push(args.map(String).join(" "));
+    });
+    const host = await serving(async () => {
+      const read = new Response("once");
+      await read.text();
+      return read;
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${host.port}/x`);
+      expect(res.status).toBe(500);
+      expect(errs.join("\n")).toMatch(/locked|unusable|disturbed|already/i);
+    } finally {
+      await host.close();
+    }
+  });
 
   it("a client that disconnects mid-handler leaves the server serving the next request", async () => {
     // The dead-socket case: the client is gone before the handler resolves. Writing to that socket
@@ -241,32 +310,6 @@ describe("nodeListener totality (the host must survive arbitrary channel code)",
 
       await new Promise((r) => setTimeout(r, 20));
       expect(await (await fetch(`http://127.0.0.1:${host.port}/next`)).text()).toBe("alive");
-    } finally {
-      await host.close();
-    }
-  });
-
-  it("the SERVING path has the same boundary: a throwing handler is logged, and says nothing else", async () => {
-    // Not a duplicate of the nodeListener case: `dev`/`start` reach the socket through serveNode, so
-    // wiring the boundary into only the exported listener would leave the path that actually serves
-    // users failing silently — which is how it was first written.
-    const errs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((m) => {
-      errs.push(String(m));
-    });
-    const host = serveNode(
-      async () => {
-        throw new Error("boom /etc/secret-path");
-      },
-      { port: 0 },
-    );
-    const port = await host.listening;
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/x`);
-      expect(res.status).toBe(500);
-      const body = await res.text();
-      expect(errs.some((e) => /request failed.*boom/.test(e))).toBe(true); // visible in the log
-      expect(body).not.toMatch(/etc\/secret-path/); // ...and nowhere else
     } finally {
       await host.close();
     }

@@ -322,12 +322,16 @@ describe("the contracts depend on nothing", () => {
       "croner",
       "effect/Cause",
       "effect/Clock",
+      "effect/Context",
       "effect/Deferred",
+      "effect/Duration",
       "effect/Effect",
       "effect/Exit",
       "effect/Fiber",
+      "effect/Layer",
       "effect/Result",
       "effect/Scope",
+      "effect/http",
       "proper-lockfile",
     ]);
     // ...and neither neutral layer names a harness (the harness-neutrality suite above covers this
@@ -335,11 +339,21 @@ describe("the contracts depend on nothing", () => {
     expect([...staticPackageGraph("node.ts")].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
   });
 
-  it("...and the mechanism that serves them depends on one, for the node bridge only", () => {
-    // The guard has teeth: serving pulls a package, contracts pull none. What it pulls is the
-    // node:http↔Fetch adapter — dispatch itself is a Map lookup over literal paths, so no routing
-    // library is in the graph.
-    const pkgs = [...staticPackageGraph("channels/serve.ts")];
-    expect(pkgs).toEqual(["@hono/node-server"]);
+  it("...and the mechanism that serves them depends on Effect's HTTP server, and one bridge", () => {
+    // The guard has teeth: serving pulls packages, contracts pull none. What it pulls is Effect's HTTP server, whose
+    // runtime's own server (@effect/platform-node or -bun) is imported when a serve starts, so neither is in the static
+    // graph; and the node:http↔Fetch adapter `nodeListener` bridges an app's own server through. Dispatch itself is a
+    // Map lookup over literal paths, so no routing library is in the graph.
+    const pkgs = [...staticPackageGraph("channels/serve.ts")].sort();
+    expect(pkgs).toEqual([
+      "@hono/node-server",
+      "effect/Context",
+      "effect/Duration",
+      "effect/Effect",
+      "effect/Exit",
+      "effect/Layer",
+      "effect/Scope",
+      "effect/http",
+    ]);
   });
 });
