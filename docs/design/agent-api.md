@@ -486,6 +486,9 @@ const service = await agent.serve();
 app.mount("/agent", service.fetch);
 ```
 
+On a server that does not take a Fetch handler (Express, a plain `node:http` one), `getRequestListener(service.fetch)`
+from `@hono/node-server` is the listener to mount: the package FastAgent's own `listen` serves through.
+
 A custom channel, from the agent's `src/channels/`:
 
 ```ts
