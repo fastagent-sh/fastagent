@@ -41,7 +41,7 @@ const init: CommandSpec = {
   summary: "create an agent in a directory of its own and install its dependencies",
   description:
     "Create an agent in dir, which must be new or empty, then run npm install there. Content is a " +
-    "self-iterating agent: SYSTEM.md (its standing instructions), a writing-great-skills " +
+    "self-iterating agent: SYSTEM.md (its system prompt), a writing-great-skills " +
     "example skill, config, package.json, .gitignore.",
   args: [{ name: "<dir>", description: "the new agent's directory (created when missing)" }],
   flags: [
@@ -245,13 +245,13 @@ const add: CommandSpec = {
     channelSub(
       "telegram",
       "scaffold the Telegram bot channel (durable turns, live preview)",
-      "Scaffold channels/telegram.ts — the Telegram bot channel with durable turns, a live-preview " +
+      "Scaffold src/channels/telegram.ts — the Telegram bot channel with durable turns, a live-preview " +
         "message pump, and an optional route() policy.",
     ),
     channelSub(
       "slack",
       "scaffold the Slack Events API channel (files, threads, context, live preview)",
-      "Scaffold channels/slack.ts plus its tools (slack-send.ts, slack-threads.ts), create a single-workspace " +
+      "Scaffold src/channels/slack.ts plus its tools (src/tools/slack-send.ts, slack-threads.ts), create a single-workspace " +
         "internal Slack app from a manifest, and install it through OAuth. The channel provides signed " +
         "Events API ingress, durable turns, files, threads, context, and an edited live preview.",
       "Automated onboarding requires Slack App Configuration access + refresh tokens and a temporary " +
@@ -261,7 +261,7 @@ const add: CommandSpec = {
     channelSub(
       "feishu",
       "scaffold the Feishu channel AND create/configure the platform app",
-      "Scaffold channels/feishu.ts and create/configure the Feishu app through scan-to-create, writing its " +
+      "Scaffold src/channels/feishu.ts and create/configure the Feishu app through scan-to-create, writing its " +
         "credentials to the selected environment. Dev uses WebSocket; deploy --run creates a separate production app for webhook.",
       "Feishu (open.feishu.cn) is the canonical implementation. WebSocket needs only App ID/Secret and " +
         "no public URL; webhook additionally captures the Verification Token through a temporary tunnel. " +
@@ -270,7 +270,7 @@ const add: CommandSpec = {
     channelSub(
       "lark",
       "scaffold the Lark (international) channel with guided credential setup",
-      "Scaffold channels/lark.ts and guide credential setup against the international developer console. " +
+      "Scaffold src/channels/lark.ts and guide credential setup against the international developer console. " +
         "Dev uses WebSocket; deploy --run guides setup of a separate production app for webhook.",
       "Lark international (open.larksuite.com) is Feishu's compatibility profile. WebSocket stops after " +
         "App ID/Secret validation and a permission check; webhook setup probes config automation and falls " +
@@ -325,7 +325,7 @@ const deploy: CommandSpec = {
     {
       flags: "--run",
       description:
-        "drive the target CLI to completion. Docker runs `docker compose up -d --build`; with a tunnel " +
+        "drive the target CLI to completion. Docker builds (pulling the base image) and runs `docker compose up -d`; with a tunnel " +
         "service, reads its URL and registers webhooks. Fly/Railway provision app/service + volume + " +
         "secrets + deploy + webhook setup. AgentCore builds/pushes the arm64 image and deploys the " +
         "stack (aws + docker CLIs). A model key in the value file travels; any other credential is a login on " +
@@ -519,7 +519,7 @@ const destroy: CommandSpec = {
     "AgentCore only, and it exists because `aws cloudformation delete-stack` is not enough: the S3 " +
     "artifact bucket and the ECR repository have to exist BEFORE the stack that reads from them, BOTH " +
     "log groups (the forwarder's and the runtime's own stdout) are created by AWS on first write so no " +
-    "template mentions them, and the EventBridge schedules (one per schedules/ file, one per pending wake-up) " +
+    "template mentions them, and the EventBridge schedules (one per schedule, one per pending wake-up) " +
     "are minted at runtime by the container — left behind, they keep firing into a deleted Lambda. " +
     "Derives the same names from the agent directory that deploy did. Without --run it deletes nothing and reports what " +
     "is out there.",

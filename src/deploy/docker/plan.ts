@@ -178,7 +178,9 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     ``,
     `# Before building a new definition release, run \`fastagent deploy docker\` to refresh its manifest.`,
     `# The Compose volume at ${MOUNT} retains the deployed definition, state and credentials.`,
-    `${compose} up -d --build`,
+    `# --pull: the base image is a floating tag, and a copy cached here may be older than the runtime floor.`,
+    `${compose} build --pull`,
+    `${compose} up -d`,
     `curl --fail http://127.0.0.1:${input.port}/health`,
     ...(input.boxLogin
       ? [

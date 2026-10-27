@@ -81,7 +81,7 @@ describe("cli kernel: spec conformance", () => {
       [["add", "lark"], "config-route 404"],
       [["add", "skill"], "review with git diff"],
       [["deploy"], "Durable ingress remains operator-owned"],
-      [["deploy"], "docker compose up -d --build"],
+      [["deploy"], "docker compose up -d"],
       [["deploy"], "provision app/service + volume + secrets + deploy + webhook setup"],
       [["deploy"], "missing CLI/daemon/login/secret"],
       [["deploy"], "Existing Compose stays authoritative"],

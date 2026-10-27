@@ -130,7 +130,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     const out = runbook(planDockerDeploy({ ...base, channels: declaredChannels(["telegram", "slack"]) }));
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
     // One spelling everywhere: the generated file names the value file itself, so no command needs a flag.
-    for (const cmd of ["up -d --build", "logs -f agent", "ps", "down"]) {
+    for (const cmd of ["build --pull", "up -d", "logs -f agent", "ps", "down"]) {
       expect(out).toContain(`docker compose -f fastagent.compose.yml ${cmd}`);
     }
     expect(out).toContain("down        # stops containers; keeps the state volume");
