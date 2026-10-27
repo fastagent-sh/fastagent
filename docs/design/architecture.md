@@ -349,6 +349,20 @@ against SQLite storage in a process killed with `SIGKILL`:
 | What `configure({ tools })` stores | The names (`["alpha"]` in `pi.agent`), resolved against the registry at every request; `null` clears them back to every tool | `sessions.update` checks each name against the registry snapshot's tools and passes those registrations |
 | A stored tool name the registry no longer has | Dropped without a word: the next request was written a `toolsRemoved` entry and offered no tools, and the message completed; the stored names stayed `["alpha"]` | Admission compares the session's stored names with the registry's, in the commit that takes the deployment's defaults, and refuses `missing_tool` naming the absent ones |
 
+For the HTTP binding, with `effect` 4.0.2's `http` and `http-api` served by `@effect/platform-node` 4.0.2 and
+`@effect/platform-bun` 4.0.2, on Node 24.15.0, Node 26.11.1 and Bun 1.4.4 (the same results on each, except where a
+runtime is named):
+
+| Question | Measured | So the implementation |
+|---|---|---|
+| Whether the packages resolve together | `@effect/platform-node@4.0.2` depends on `@effect/platform-node-shared@^4.0.2`, which resolved to 4.0.6 and failed to load against `effect` 4.0.2 (`effect/Path` has no export `make`) | Pins `effect` and every `@effect/platform-*` package, transitive ones included, to one version, and upgrades them together |
+| One contract: auth, errors, OpenAPI, a client | A bearer scheme answered 401; a declared error answered its status with its body; `/v1/openapi.json` was OpenAPI 3.1 with every route, body schema and the bearer scheme; `HttpApiClient` built a typed client from the same contract | Writes the HTTP binding as one `HttpApi` contract, served, documented and called from it |
+| A channel's raw route beside the API | A Fetch handler mounted with `HttpEffect.fromWebHandler` read the request body byte for byte (its hash matched); `/health` served beside it | Channels keep their Fetch handlers, on the same router |
+| Server-sent events | `StreamSse` with `id` and `event` fields; a client that disconnected interrupted the request's fiber, and the stream's finalizer ran once | `events` and `stream` are `StreamSse` responses whose cleanup is the fiber's |
+| A stream silent for 12 s | Node: unaffected, with `requestTimeout` set to 1 s. Bun: cut after 10 s (`Bun.serve() timed out a request after 10 seconds`) until `idleTimeout: 60` was passed | Sets Bun's `idleTimeout` above the keep-alive interval, which is shorter than 10 s |
+| Shutdown with a client still reading a stream | Closing the server took `gracefulShutdownTimeout` (2 s here; 20 s by default). Node then ended the stream cleanly; Bun reset the connection (`ECONNRESET`) and logged the interrupted body. Ending the streams first (each stops on a closing signal), then closing: 0.1 s, a clean end on both, no unhandled error | `close()` ends the open event streams, then stops the server |
+| The same app as a Fetch handler | `HttpRouter.toWebHandler` answered the channel route and the API (401 without a key) without a server | `service.fetch` is that handler |
+
 The coding tools' `read` reading a skill's `SKILL.md` through a `NodeExecutionEnv` rooted at the agent's directory was
 checked with the definition's assembly (test/durable-definition.test.ts): the model's answer carries the file's text.
 
