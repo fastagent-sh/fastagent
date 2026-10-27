@@ -75,7 +75,8 @@ share an answer; each message's status and answer are its own.
 
 ## 3. Objects
 
-Fields are camelCase; enum values and discriminators are snake_case. Timestamps are milliseconds since the epoch.
+Fields are camelCase; enum values and discriminators are snake_case. An entry's `timestamp` is milliseconds since the
+epoch.
 
 ```ts
 interface AgentInfo {
@@ -98,7 +99,8 @@ interface Session {
   status: "idle" | "running";
   /** Its settings, as set at creation or by `update`; a field it does not name follows the deployment. */
   model?: { provider: string; modelId: string };
-  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";  instructions?: string;
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  instructions?: string;
   /** The tools it enables, as set; a name the agent no longer has refuses its next message (`missing_tool`, §4). */
   tools?: string[];
   /** The messages the agent is answering, and those waiting, in the order they will be taken. */
@@ -106,26 +108,23 @@ interface Session {
   queued: string[];
   /** The agent's reply being written, as written so far: present only while one is. */
   reply?: { text: string; thinking?: string };
-  usage: Usage;  /** A time FastAgent records: pi-durable keeps none (§14). */
-  createdAt: number;
-  /** The newest of its creation, the messages it accepted and the entries it wrote. */
-  lastActiveAt: number;
+  usage: Usage;
 }
 
 interface Message {
   id: string;
   sessionId: string;
-  idempotencyKey?: string;  /** `queued` and `running` until it ends; then one of the four ends, which are all its ends (§5.4, §7.1). */
+  idempotencyKey?: string;
+  /** `queued` and `running` until it ends; then one of the four ends, which are all its ends (§5.4, §7.1). */
   status: "queued" | "running" | "completed" | "incomplete" | "failed" | "canceled";
   /** Its `user` entry, once the agent took it. */
   entryId?: string;
   /** The `assistant` entry the agent stopped on for it: present when `completed`, and when `incomplete`. */
   answer?: { entryId: string; text: string };
   /** Why it is `incomplete`. */
-  incompleteReason?: "max_tokens";  /** Why it `failed`. */
+  incompleteReason?: "max_tokens";
+  /** Why it `failed`. */
   error?: AgentError;
-  /** When it was accepted: a time FastAgent records, as pi-durable's own is a sequence number (§14). */
-  createdAt: number;
 }
 
 interface Entry {
@@ -185,11 +184,13 @@ interface Agent {
     list(options?: { limit?: number; after?: string }): Promise<Page<Session>>;
     update(sessionId: string, changes: SessionChanges): Promise<Session>;
     entries(sessionId: string, options?: { after?: string; before?: string; limit?: number }): Promise<Page<Entry>>;
-    events(sessionId: string, options?: { after?: string; signal?: AbortSignal }): AsyncIterable<SessionEvent>;    cancel(sessionId: string, options?: { wait?: number; signal?: AbortSignal }): Promise<{ stopped: string[] }>;
+    events(sessionId: string, options?: { after?: string; signal?: AbortSignal }): AsyncIterable<SessionEvent>;
+    cancel(sessionId: string, options?: { wait?: number; signal?: AbortSignal }): Promise<{ stopped: string[] }>;
     compact(sessionId: string, options?: { instructions?: string }): Promise<void>;
     attachment(sessionId: string, ref: string): Promise<{ mimeType: string; data: Uint8Array }>;
   };
-  messages: {    send(request: SendRequest, options?: { wait?: number; signal?: AbortSignal }): Promise<Message>;
+  messages: {
+    send(request: SendRequest, options?: { wait?: number; signal?: AbortSignal }): Promise<Message>;
     stream(request: SendRequest, options?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent>;
     get(key: { sessionId: string; messageId: string } | { sessionId: string; idempotencyKey: string },
         options?: { wait?: number; signal?: AbortSignal }): Promise<Message>;
@@ -228,7 +229,8 @@ agent.
 - **`usage`** is what the instance has spent, across every session (§3).
 - **`sessions.create`** creates an empty session, or, with `forkFrom`, a fork: the new session's history begins with
   the source's entries up to `entryId` (all of them without it), the same ids and data, and what it writes afterwards
-  is its own. The source's messages stay the source's. A fork takes its source's settings as of that entry, each  supplied field replacing the inherited one. Settings are stored without checking them against the agent: a message
+  is its own. The source's messages stay the source's. A fork takes its source's settings as of that entry, each
+  supplied field replacing the inherited one. Settings are stored without checking them against the agent: a message
   into a session whose model is not among `info().models` is refused `missing_model`, and one whose `tools` names a
   tool not among `info().tools` (a later deployment removed it) is refused `missing_tool`, naming it, until `update`
   changes the setting. A session never runs with fewer tools than it names.
@@ -337,7 +339,8 @@ type SessionEvent =
   | { type: "delta"; channel: "text" | "thinking"; text: string }
   | { type: "tool_started"; toolCallId: string; name: string; args: Json }
   | { type: "tool_progress"; toolCallId: string; text: string }
-  | { type: "retrying"; attempt: number; maxAttempts: number; delayMs: number; reason: string }  | { type: "done"; message: Message }
+  | { type: "retrying"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
+  | { type: "done"; message: Message }
   | { type: "stream_error"; error: AgentError };
 ```
 
@@ -667,14 +670,3 @@ bindings answer the same way. It checks:
 | The `assistant` entry's `outcome` (`failed`, `aborted`, `truncated`) | Its `stop` (`failed`, `aborted`, `max_tokens`) and `error` | The message's status is the outcome; an entry says how its reply stopped |
 | `position`, `duplicate`, `protocolVersion`, `context: "recent"` on a fork, the Middleware role | Gone | Nothing used them |
 | `openServing`, `mountAgentService`, `/core`, `/node`, `/pi` | `openAgent`, `serve`, and the entry points of §8 | One entry per kind of user |
-
-## 14. Open questions
-
-| Question | Why it is open |
-|---|---|
-| Where `Session.createdAt`, `Session.lastActiveAt` and `Message.createdAt` come from | pi-durable's conversation records hold no time, and its submissions' `createdAt` is a sequence number. FastAgent records the times itself, in the commits that create a session and accept a message; the order of `list` stays the sequence's ([architecture.md](architecture.md) §2) |
-
-Settled by measurement ([architecture.md](architecture.md) §6.1): `cancel` answers at the commit in which pi-durable's
-`abort()` withdraws the queued messages and marks the live tasks, which comes about a millisecond after the call and
-holds after a restart; `update({ tools })` stores names, and since pi-durable drops a stored name it no longer has
-without a word, the `missing_tool` refusal is FastAgent's own check at admission.
