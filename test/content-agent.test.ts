@@ -154,7 +154,7 @@ describe("one resolution", () => {
     await writeFile(join(agentDir, "fastagent.config.ts"), `export default {\n  model: "openai-codex/gpt-5.5",\n};\n`);
     await bind(agentDir, { app: { path: "../app" } });
     const readers = async () => {
-      const opened = await openServing(agentDir, { locking: "memory" });
+      const opened = await openServing(agentDir, { storage: "memory" });
       await opened.agent.close();
       const info = JSON.parse((await cli(["info", "--json"], agentDir)).stdout);
       const list = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);

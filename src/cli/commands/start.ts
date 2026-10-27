@@ -153,7 +153,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
   const opened = await openServing(agentDir, {
     model: modelSpec,
     // AgentCore's session storage refuses SQLite's own locks; the deployment's lease makes the dotfile lock safe.
-    locking: isAgentcoreRuntime() ? "leased-dotfile" : "posix",
+    storage: { instance: isAgentcoreRuntime() ? "leased-dotfile" : "posix" },
   });
   const { stateRoot } = opened;
   await reportAssembly(opened, modelSpec);

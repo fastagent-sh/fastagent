@@ -273,7 +273,10 @@ fastagent invoke "Use plan-batches for 5 proposals at 2 per batch. Do not send a
 
 This makes a real model request and may incur cost. `invoke` prints the answer on stdout and each tool call on
 stderr, and exits non-zero unless the message completed: verify the tool use and the answer, not just the exit code.
-It opens the agent on storage of its own, so it runs beside a `dev` of the same agent. For continuous local
+`--json` prints the message's events as JSON lines instead (each tool call with its arguments and result, then the
+outcome), for a check that asserts on them. `--session <name>` continues a conversation across runs, for behavior
+that needs a second message. It opens the agent on storage of its own, so it runs beside a `dev` of the same agent
+([CLI](cli.md#fastagent-invoke)). For continuous local
 development, ask the owner to run:
 
 ```bash
@@ -364,13 +367,13 @@ fastagent schedules list
 ```
 
 It reads the selected local state root, not a deployed host's state: the next fire, how the last one ended, and the
-session it ran in. To try the prompt now, send its text as one message with `fastagent invoke "Review pending
-proposals …"`. That is a real message: it can perform tool side effects; it does not advance the cron fire state, and
-`invoke` has no `wake` tool and does not prove that a future timer fires.
+session it ran in. To try one now, `fastagent schedules run <name>` fires it as its clock would: in its own session,
+with its claim recorded, exiting non-zero unless it completed. That is a real fire: it can perform tool side effects,
+and it is refused while `dev` serves the agent. It does not prove that the clock fires at the next instant.
 
 Every serve gives the agent the `wake` tool, so it can schedule its own follow-ups. Test an actual `wake` while
-serving, including its eventual action and delivery. Cancelling one is the agent's own job (`unwake({ id })`, from
-the session that set it).
+serving, including its eventual action and delivery. The agent cancels one with `unwake({ id })` from the session
+that set it; `fastagent schedules unwake <id>` cancels any, such as one set during a schedule's fire.
 
 | Execution posture | Clock and persistence requirements |
 |---|---|
@@ -458,7 +461,8 @@ Keep these checks distinct. Use the smallest relevant ones, and make credentiale
 | Check | What it proves |
 |---|---|
 | Typecheck, unit test, a tool's `execute` called in a test, `info --json` | Source types, exercised runtime validation/logic, and what the definition opens as. These do not prove model or channel behavior. |
-| One real `invoke` | A provider call, the exercised tool path, and the answer (exit code 0 only when completed). It does not verify timers, webhook ingress, or deployment. |
+| One real `invoke` (`--json` to assert on its events, `--session` for a second message) | A provider call, the exercised tool path, and the answer (exit code 0 only when completed). It does not verify timers, webhook ingress, or deployment. |
+| `schedules run <name>` | One fire of the schedule, in its session, with its claim. It does not verify that the clock fires it. |
 | URL verification and a real channel conversation | Report registration separately from actual receipt and framework-managed reply delivery. |
 | Proactive message/file and a fired schedule/wake | Verify the intended recipient, observable delivery, and the selected clock path. Check token renewal when applicable. |
 | Generated plan / accepted CloudFormation template | Artifact generation or platform template validation only; neither proves deployed operation. |

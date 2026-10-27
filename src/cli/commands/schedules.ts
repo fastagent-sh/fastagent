@@ -1,19 +1,22 @@
 /**
- * `fastagent schedules list` — what is going to wake this agent up: the schedules its definition declares, and the
- * wake-ups it set for itself.
+ * `fastagent schedules` — what is going to wake this agent up: the schedules its definition declares, and the wake-ups
+ * it set for itself. `list` shows both, `run` fires a schedule now, `unwake` cancels a wake-up.
  *
- * The two have different owners (a schedule is the definition's, a wake-up the state's, cancelled with `unwake`) but
- * answer the same operator question, so one command lists both, labelled apart.
+ * The two have different owners (a schedule is the definition's, a wake-up the state's) but answer the same operator
+ * question, so one command lists both, labelled apart.
  */
 import { resolve } from "node:path";
+import * as Effect from "effect/Effect";
 import { enterAgentEnv } from "../../env.ts";
 import { buildDefinitionShape, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
+import { holdingInstance, openServing } from "../../harnesses/pi-durable/serve.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
-import { scheduleSessions } from "../../schedule/scheduler.ts";
+import { fireScheduleNow, scheduleSessions } from "../../schedule/scheduler.ts";
 import { latestFire, readFires } from "../../schedule/state.ts";
-import { listWakeups } from "../../schedule/wakeups.ts";
+import { listWakeups, removeAnyWakeup } from "../../schedule/wakeups.ts";
 import { failStartup, agentDirOrExit } from "../fail.ts";
+import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 /**
  * Text mode answers "when does each run next, and did the last run work?" from the newest claim alone, so an old file
@@ -70,4 +73,52 @@ export async function runSchedulesList(dirArg: string, json: boolean): Promise<v
     const kind = w.cron ? `cron ${w.cron}${w.tz ? ` ${w.tz}` : ""}` : "one-shot";
     console.log(`wake ${w.id}  ${w.fireAt}  ${kind}  session=${w.session}  ${w.prompt.slice(0, 60)}`);
   }
+}
+
+/**
+ * Fire the schedule `name` now, as its clock would: in its session, with its claim and its outcome recorded. It opens
+ * the instance's storage, so a serve of it refuses this, and the other way round. The answer goes to stdout; exit 0
+ * only when the fire completed.
+ */
+export async function runScheduleNow(
+  name: string,
+  dirArg: string,
+  opts: { model?: string; input?: boolean },
+): Promise<void> {
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
+  const { agent, models, schedules, stateRoot } = await openServing(agentDir, { model: modelSpec }).catch(failStartup);
+  const schedule = schedules.find((s) => s.name === name);
+  if (schedule === undefined) {
+    await agent.close();
+    const declared = schedules.map((s) => s.name).join(", ") || "none";
+    failStartup(new Error(`no schedule "${name}" in ${agentDir}/src/schedules/ (declared: ${declared})`));
+  }
+  await reportAuth(models, modelSpec, agentDir);
+  const fired = await Effect.runPromise(fireScheduleNow({ agent, stateRoot, schedule })).catch(failStartup);
+  const sessionId = scheduleSessions(stateRoot).get(name);
+  if (fired.fired && sessionId !== undefined) {
+    const message = await agent.getMessage(sessionId, { idempotencyKey: fired.slot.toISOString() });
+    if (message?.status === "done" && message.answer !== undefined) process.stdout.write(`${message.answer.text}\n`);
+  }
+  await agent.close();
+  if (!fired.fired) console.error(`[fastagent] ${name} did not fire: ${fired.skippedReason}`);
+  process.exit(fired.fired && fired.failed === undefined ? 0 : 1);
+}
+
+/**
+ * Cancel the pending wake-up `id`, whatever session set it: the one way out of a wake-up set where nobody can message
+ * the agent (a schedule's own session). It holds the instance's storage while it writes, so it is refused while a serve
+ * of the instance runs, whose poll writes the same store.
+ */
+export async function runUnwake(id: string, dirArg: string): Promise<void> {
+  const target = agentDirOrExit(resolve(dirArg));
+  enterAgentEnv(target);
+  const stateRoot = resolveStateRoot(target);
+  const removed = await holdingInstance(stateRoot, () => removeAnyWakeup(stateRoot, id)).catch(failStartup);
+  if (removed === undefined) {
+    failStartup(new Error(`no pending wake-up ${id} (state: ${stateRoot}); \`fastagent schedules list\` shows them`));
+  }
+  console.log(
+    `removed wake ${removed.id}  ${removed.fireAt}  session=${removed.session}  ${removed.prompt.slice(0, 60)}`,
+  );
 }

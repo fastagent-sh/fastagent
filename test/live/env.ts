@@ -29,7 +29,7 @@ import { fastagentVersion } from "../../src/version.ts";
 import { TARBALL_ENV } from "./pack.ts";
 /** The agent in `dir`, opened and mounted as `start` does it (with no storage of its own): what a probe binds. */
 export async function serveDirectory(dir: string): Promise<{ service: AgentService; close(): Promise<void> }> {
-  const opened = await openServing(dir, { locking: "memory" });
+  const opened = await openServing(dir, { storage: "memory" });
   const service = await mountAgentService(opened);
   return {
     service,

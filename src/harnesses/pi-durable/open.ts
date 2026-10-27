@@ -106,7 +106,7 @@ function checkConfig(config: unknown, file: string): AgentConfig {
   return config as AgentConfig;
 }
 
-function modelRefOf(spec: string, where: string): ModelRef {
+export function modelRefOf(spec: string, where: string): ModelRef {
   const slash = typeof spec === "string" ? spec.indexOf("/") : -1;
   if (slash < 1 || slash === spec.length - 1) {
     throw new Error(`${where} must be "provider/modelId", got ${JSON.stringify(spec)}`);

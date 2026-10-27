@@ -203,8 +203,9 @@ AgentCore and an embedder call it, and it works in this order:
 4. **The model environment** (`harnesses/models/environment.ts`): the credential store (the agent's file, layered over
    the machine's, or a store the caller supplies), pi-ai's built-in providers over it, and the definition's providers.
    Every reader builds it here: the serve, the startup report, `info`, `login`, a box's `login --if-missing`.
-5. **The storage** (`storage.ts`): `<stateRoot>/agent.sqlite`, opened by one process at a time (§9). `invoke` uses
-   memory storage instead, since a serve of the same directory may hold the instance's.
+5. **The storage** (`storage.ts`): `<stateRoot>/agent.sqlite`, opened by one process at a time (§9). `invoke` never
+   opens it, since a serve of the same directory may hold it: a conversation named by `--session` is a database of
+   its own, `<stateRoot>/invoke/<name>.sqlite`, held the same way, and without `--session` the storage is memory.
 6. **The Agent** (`openAgent`): the default model is checked against the models; a registry installs pi-durable's
    coding tools, then FastAgent's definition extension (its prompt sections, §2, and the definition's tools, after the
    coding tools, so a tool of the definition's own with one of their names replaces it), then the definition's
@@ -597,8 +598,14 @@ accepted; from then on the message itself is counted (`channels/busy.ts`).
 
 Every serve installs `wake` and `unwake` (unless the definition has its own). Wake-ups are kept in
 `<stateRoot>/schedule/wakeups.json`, bounded by a minimum delay, a frequency floor for recurring ones and a per-session
-count, and fired back into the session that set them. `unwake` cancels one only from that session. A message that
-fails is not replayed, because its tools may already have produced side effects.
+count, and fired back into the session that set them. `unwake` cancels one only from that session. The operator's
+`fastagent schedules unwake <id>` cancels any, the way to one set in a session nobody can message (a schedule's own);
+it holds the instance's storage while it writes, so no serve's poll writes the store between its read and its write.
+A message that fails is not replayed, because its tools may already have produced side effects.
+
+`fastagent schedules run <name>` fires one schedule outside its clock (`fireScheduleNow`): it settles an unreported
+newest claim as a `start()` does, then claims this instant and runs it through `fireScheduleOnce`, like any fire. It
+opens the instance's storage, so it and a serve exclude each other.
 
 A declared cron needs one continuously running process, and the deploy pre-flight prevents scale-to-zero settings
 that would silently miss one. Wake-ups do not pin a machine: the store is on the volume, so a box that slept fires what
@@ -611,6 +618,7 @@ is due when a request next wakes it.
 ```txt
 <stateRoot>/                # <agent dir>/.state, .state/production for start (FASTAGENT_STATE_DIR overrides)
 ├── agent.sqlite            # the instance's storage: sessions, messages, entries (pi-durable)
+├── invoke/<name>.sqlite    # an `invoke --session <name>` conversation, apart from the instance's
 ├── channels/<kind>/        # sessions.json, turns, history cursors, dedup; files/ holds inbound attachments
 └── schedule/               # sessions.json, claims/, wakeups.json
 ```
@@ -631,8 +639,7 @@ volume. A deployed box points both knobs at its volume so its login, and every O
 
 - **The storage refuses a second process.** pi-durable does no cross-process locking, and in WAL mode SQLite lets a
   second process open and write the file, which would resume and run the same messages twice. `agent.sqlite` is
-  therefore opened in EXCLUSIVE locking mode (`storage.ts`): the first process keeps the lock until it closes or dies,
-  and a second `dev` or `start` over the same state root is refused, naming the file. On AgentCore, whose session
+  therefore opened in EXCLUSIVE locking mode (`storage.ts`): the first process keeps the lock until it closes or dies,  and a second `dev`, `start` or `schedules run` over the same state root is refused, naming the file. On AgentCore, whose session
   storage refuses SQLite's own locks, the lock is a `<path>.lock` directory that the deployment's lease holder breaks
   when it finds one left by a stopped microVM (architecture.md §4.3).
 - **Channel state is keyed by channel kind**, and every state file is written whole (`writeFileAtomic`).

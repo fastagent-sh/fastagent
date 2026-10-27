@@ -46,7 +46,7 @@ src/
 ├── cli/                    # the CLI, built on clig.dev
 │   ├── kernel.ts           # CommandSpec-as-data + the commander adapter (commander appears ONLY here); exit 0/1/2
 │   ├── program.ts          # the spec registry — the CLI surface's source of truth; lazy per-command imports
-│   ├── invoke-stream.ts    # `invoke`: one message's answer, as stream() reads it → exit code
+│   ├── invoke-stream.ts    # `invoke`: one message's answer, as stream() reads it, as text or JSON lines → exit code
 │   ├── models-view.ts, auth-view.ts, content-view.ts # `models` / auth-report / content output
 │   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
@@ -211,7 +211,8 @@ src/
 │   ├── schedule.ts         # a schedule as built ({ name, cron, tz?, prompt }) from `defineSchedule` in src/schedules/
 │   ├── cron.ts             # the one place touching `croner`: nextRun + cronError
 │   ├── scheduler.ts        # the resident clock loops + claim/run/settle over the Agent API: a schedule is refused
-│   │                       # by a busy session (skipped), a wake-up queues; stop cancels waits, runs go on
+│   │                       # by a busy session (skipped), a wake-up queues; stop cancels waits, runs go on;
+│   │                       # fireScheduleNow, one fire outside the clock (`schedules run`)
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups: neutral store + guardrails
 │   ├── wake-alarm.ts       # the EXTERNAL-clock form of both: schedules as recurring EventBridge schedules,
 │   │                       # wake-ups as one-shots
@@ -223,8 +224,10 @@ src/
     │   ├── open.ts         # a definition (config + generated registry) assembled into an Agent; the secrets
     │   │                   # gate and manifest; pi-ai's built-in models with the definition's providers
     │   ├── serve.ts        # openServing: a directory opened to be served (definition, code, models, content,
-    │   │                   # storage, Agent) — what dev, start, AgentCore and an embedder open through
-    │   ├── storage.ts      # the instance's one SQLite database, and its lock where SQLite's own locks fail
+    │   │                   # storage, Agent) — what dev, start, AgentCore and an embedder open through; holding
+    │   │                   # the instance for a command that writes its state outside a serve
+    │   ├── storage.ts      # a SQLite database one process holds (the instance's, an `invoke --session`
+    │   │                   # conversation's), and its lock where SQLite's own locks fail
     │   ├── define.ts       # what an author writes: defineAgent, needs (secrets beside the code that reads them),
     │   │                   # defineSchedule
     │   ├── registry.ts     # the generated `.fastagent/registry.ts`: one default import per module of src/

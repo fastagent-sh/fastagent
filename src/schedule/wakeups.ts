@@ -147,22 +147,29 @@ export function addWakeup(
 }
 
 /**
- * Remove ONE pending wake-up, and only from the session that made it.
- *
- * SESSION-SCOPED WITH NO WAY AROUND IT, because `unwake` is the only caller: an agent cancels its own alarm, and
- * cancelling another conversation's silently is a cost with no matching benefit. There is no operator command, so a
- * wake-up is cancelled by asking the agent in the session that set it. KNOWN GAP: one set in a session nobody can
- * message (a schedule's own) has no supported way out. `unwake` refuses it from any other session, so what removes it
- * is an edit of `<stateRoot>/schedule/wakeups.json`, by hand or by the agent's own file tools when asked in a session
- * someone can message, and that edit is not serialized with this module's writes: a wake-up firing or being set
- * between the edit's read and its write undoes one of the two.
+ * Remove ONE pending wake-up, and only from the session that made it: `unwake`, an agent cancelling its own alarm.
+ * Cancelling another conversation's silently is a cost with no matching benefit.
  */
 export function removeWakeup(stateRoot: string, id: string, session: string): boolean {
+  return removeWhere(stateRoot, (w) => w.id === id && w.session === session) !== undefined;
+}
+
+/**
+ * Remove ONE pending wake-up whatever session set it: the operator's `fastagent schedules unwake`, the one way out of a
+ * wake-up set in a session nobody can message (a schedule's own). Its caller holds the instance, so no serve's poll
+ * writes the store between this read and its write.
+ */
+export function removeAnyWakeup(stateRoot: string, id: string): Wakeup | undefined {
+  return removeWhere(stateRoot, (w) => w.id === id);
+}
+
+function removeWhere(stateRoot: string, match: (w: Wakeup) => boolean): Wakeup | undefined {
   const all = load(stateRoot);
-  const kept = all.filter((w) => !(w.id === id && w.session === session));
-  if (kept.length === all.length) return false;
-  save(stateRoot, kept);
-  return true;
+  const index = all.findIndex(match);
+  if (index === -1) return undefined;
+  const [removed] = all.splice(index, 1);
+  save(stateRoot, all);
+  return removed;
 }
 
 /**

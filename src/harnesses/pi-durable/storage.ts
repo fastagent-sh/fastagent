@@ -1,6 +1,6 @@
 /**
- * The instance's storage: one SQLite database, opened by the one process that owns the instance (architecture.md
- * §4.3). pi-durable does no cross-process locking of its own, and in WAL mode SQLite lets a second process open and
+ * A storage only one process opens: the instance's SQLite database, held by the one process that owns the instance
+ * (architecture.md §4.3), and the database of an `invoke --session` conversation. pi-durable does no cross-process locking of its own, and in WAL mode SQLite lets a second process open and
  * write the same file, which would resume and run the same messages twice. So the database is opened in EXCLUSIVE
  * locking mode: the first access takes the file's lock and keeps it until the process closes it or dies, and a second
  * opener is refused. Locally that is SQLite's own POSIX lock. On a file system where those fail (AgentCore's session
@@ -21,7 +21,8 @@ export type StorageLocking = "posix" | "leased-dotfile";
 const BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY = 5;
 
-export async function openInstanceStorage(path: string, locking: StorageLocking): Promise<Storage> {
+/** Open the database at `path`, or say who holds it: `holders` names the commands that open it. */
+export async function openLockedStorage(path: string, locking: StorageLocking, holders: string): Promise<Storage> {
   mkdirSync(dirname(path), { recursive: true });
   if (locking === "leased-dotfile") breakStaleLock(`${path}.lock`);
   const location = locking === "posix" ? path : `file:${path}?vfs=unix-dotfile`;
@@ -37,11 +38,9 @@ export async function openInstanceStorage(path: string, locking: StorageLocking)
     // The connection only: the adapter's close checkpoints first, which a refused opener cannot do.
     database.close();
     if ((error as { errcode?: unknown }).errcode !== SQLITE_BUSY) throw error;
-    throw new Error(
-      `the storage ${path} is held by another process: another \`fastagent dev\` or \`start\` serves this agent ` +
-        "(or another agent with the same state root). Stop that one first",
-      { cause: error },
-    );
+    throw new Error(`the storage ${path} is held by another process: ${holders} is running. Stop that one first`, {
+      cause: error,
+    });
   }
 }
 

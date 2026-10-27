@@ -30,7 +30,7 @@ function createAndOpen(dir: string): Promise<string> {
     import { createAgent } from ${JSON.stringify(join(SRC, "authoring.ts"))};
     import { openServing } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/serve.ts"))};
     await createAgent(${JSON.stringify(dir)});
-    await openServing(${JSON.stringify(dir)}, { locking: "memory" }).then(
+    await openServing(${JSON.stringify(dir)}, { storage: "memory" }).then(
       async (opened) => {
         await opened.agent.close();
         console.log("opened");

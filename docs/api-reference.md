@@ -77,7 +77,7 @@ function openServing(dir: string, options?: OpenServingOptions): Promise<OpenedS
 interface OpenServingOptions {
   model?: string; // "provider/modelId", over the config's
   thinkingLevel?: ThinkingLevel;
-  locking?: "posix" | "leased-dotfile" | "memory"; // default "posix": the instance's agent.sqlite, one process at a time
+  storage?: { instance: "posix" | "leased-dotfile" } | { file: string; holders: string } | "memory"; // default below
   authPath?: string; // the credentials file (default: the agent's own, layered over the machine's)
   credentialStore?: CredentialStore; // or a store of your own (an OS keychain); not with authPath
 }
@@ -98,8 +98,15 @@ interface OpenedServing {
 `openServing` opens a directory the way `dev` and `start` do: it generates `.fastagent/` from `src/`, builds the code
 with the secrets it declares (a required one without a value refuses, naming where it is declared), enters the
 declared environment, clones the content, builds the model environment, opens the instance's storage, and opens the
-Agent on it. `locking: "memory"` opens no storage of the instance's, as `fastagent invoke` does. The agent's storage is
-held until `agent.close()`; if the Agent does not open, it is released before the failure is thrown.
+Agent on it. The storage is held until `agent.close()`; if the Agent does not open, it is released before the
+failure is thrown. `storage` says which one:
+
+| `storage` | What the Agent keeps its sessions in |
+|---|---|
+| `{ instance: "posix" }` (default) | The instance's `<stateRoot>/agent.sqlite`, which one process holds at a time: a second opener is refused. The agent gets `wake` and `unwake` |
+| `{ instance: "leased-dotfile" }` | The same, locked by a `<path>.lock` directory, for a file system whose POSIX locks fail (AgentCore's session storage) |
+| `{ file, holders }` | A database of your own at `file`, held the same way; `holders` names, in the refusal, what else opens it. No `wake`: no clock fires for it. `fastagent invoke --session` uses one |
+| `"memory"` | Nothing kept, as `fastagent invoke` without `--session`. No `wake` |
 
 The default model is optional here: without one the agent opens, and a message to a session with no model of its own
 ends refused `missing_model` until the session is given one (`configure`).
@@ -294,19 +301,20 @@ A channel that keeps state derives its home from `ctx.stateRoot` (`<stateRoot>/c
 ## Schedules
 
 A schedule is a module of `src/schedules/` default-exporting `defineSchedule({ cron, tz?, prompt })`
-([Configuration](configuration.md#schedules)). `AgentService.schedules` lists what the service armed. To run a
-schedule's prompt now, send it as a message.
+([Configuration](configuration.md#schedules)). `AgentService.schedules` lists what the service armed.
+`fastagent schedules run <name>` fires one now, as its clock would.
 
 ### Self-scheduling
 
-Every serve (`dev`, `start`, `mountAgentService` over a storage, not `fastagent invoke`) gives the agent the
+Every serve (`dev`, `start`, `mountAgentService` over the instance's storage, not `fastagent invoke`) gives the agent the
 **`wake`** and **`unwake`** tools:
 
 - `wake({ in: "30m", prompt })` records a one-shot wake-up; `wake({ cron: "0 9 * * *", tz?, prompt })` a recurring
   one. Wake-ups persist in `<stateRoot>/schedule/wakeups.json` and fire back into the session that set them, with the
   prompt marked as the agent's own scheduled message.
 - Limits: a minimum delay, at least 10 minutes between recurring fires, and at most 20 pending per session.
-- `unwake({ id })` cancels one, from the session that set it.
+- `unwake({ id })` cancels one, from the session that set it. `fastagent schedules unwake <id>` cancels any, while
+  no serve runs.
 
 ## Subpath exports
 
