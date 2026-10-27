@@ -374,7 +374,7 @@ out (WebSocket) are reachable by whoever can message the bot, whatever the bind.
 - `<agent dir>/.state/` — the instance's state: its storage (`agent.sqlite`: sessions, messages, entries), channel
   state (`channels/<kind>/`) and schedule state (`schedule/`). One process holds it at a time; point it at a volume in
   a container.
-- `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `settings.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
+- `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `device.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
   secret store; its `auth.json` is its own login (`fastagent login --deployment`) and lives on the volume.
 - `<agent dir>/content/` — where this machine keeps the agent's content: links to its directories, and the clones of
@@ -528,5 +528,5 @@ A real environment variable wins over the file.
 
 ## Not config
 
-The instance's storage, the execution environment and harness settings are library injection points: `openAgent`
-takes them ([embedding](embedding.md)).
+The instance's storage and harness settings are library injection points: `openAgent` takes them
+([the parts of `openServing`](api-reference.md#the-parts-of-openserving)).

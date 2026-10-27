@@ -204,7 +204,7 @@ Check:
 - the bot is allowed to message the chat,
 - group messages match the route policy (private chat, reply to bot, or `@botname` mention by default),
 - model credentials are configured,
-- the operator log for a `failed` event or Bot API error.
+- the operator log for a failed turn or Bot API error.
 
 ## Slack requests return 401 or no events arrive
 

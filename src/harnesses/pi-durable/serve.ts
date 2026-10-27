@@ -42,7 +42,8 @@ export interface OpenedServing {
   models: ModelEnvironment;
   /** What the agent works on and knows, resolved for this instance. */
   content: readonly ResolvedContent[];
-  agentDir: string /** Where the instance's state is: its storage, its channels' and schedules' state, its wake-ups. */;
+  agentDir: string;
+  /** Where the instance's state is: its storage, its channels' and schedules' state, its wake-ups. */
   stateRoot: string;
   /** The definition's channels and schedules, as `mountAgentService` serves them: `mountAgentService(opened)`. */
   channels: BuiltDefinition["channels"];

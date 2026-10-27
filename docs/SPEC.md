@@ -330,9 +330,10 @@ a storage that is gone answers `not_found` (or `undefined`), never another sessi
   history up to `entryId`, or all of it. A fork shares that history, not messages: its history begins with the
   source's entries themselves, the same ids and the same data, and what it writes afterwards is its own; the source's
   messages, queued or done, stay the source's, and when the source is busy only its recorded entries are shared. An
-  unknown source or entry answers `not_found`. `context: "recent"` shares the same history but gives the model only
-  its recent part, as a long session is bounded; a `compaction` entry may record the bound. A chat thread starting from its room is the use: it knows
-  what the room knew without paying for all of it.
+  unknown source or entry answers `not_found`. `context: "recent"` is to share the same history but give the model
+  only its recent part, as a long session is bounded, with a `compaction` entry recording the bound. It is not
+  implemented yet: a fork with it is refused `invalid_request`, and `"full"`, the default, is the only context a fork
+  has.
   `model` and `thinkingLevel` select the new session's settings, as pi-durable's creation options do, stored in the
   same commit as the session. A fork inherits its source's settings as of the fork entry (the current settings of an
   empty source), with each supplied field overriding the inherited one, without changing the source. An unset field

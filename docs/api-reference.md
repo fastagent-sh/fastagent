@@ -221,7 +221,11 @@ function contentAbsentHere(declaration: ContentDeclaration): BoundContent[]; // 
 function cloneContent(
   entry: ResolvedContent & { kind: "github" },
 ): Promise<{ outcome: "cloned" | "updated" | "current" } | { outcome: "kept"; reason: string }>;
-function readContentSource(source: string, cwd: string, options?: SourceOptions): Promise<ContentAddition>;
+function readContentSource(
+  source: string,
+  cwd: string,
+  options?: SourceOptions,
+): { addition: ContentAddition; notes: string[] };
 
 type ContentEntry = { github: string; ref?: string; readonly?: boolean; description?: string }; // in context.json
 type ContentBinding = { path: string; readonly?: boolean; description?: string }; // in context.local.json

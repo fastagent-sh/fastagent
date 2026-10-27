@@ -114,7 +114,7 @@ const { agent } = await openServing("./agent", { model: "openai-codex/gpt-5.5" }
 const created = await agent.createSession();
 if (!created.ok) throw new Error(created.error.message);
 const result = await stream(agent, { sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
-if (result.ok) for await (const event of result.events) if (event.type === "message_delta") render(event.delta);
+if (result.ok) for await (const event of result.events) if (event.type === "message_delta" && event.channel === "text") render(event.delta);
 ```
 
 `mountAgentService(await openServing(dir))` adds the agent's channels and schedules to your app: a Fetch handler for

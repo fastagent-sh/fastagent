@@ -403,11 +403,11 @@ Two audiences, like the Telegram channel:
 
 A summon whose whole message is "stop" or "cancel" aborts the session's active turn instead of
 becoming a turn (queued asks keep running). No configuration is needed: stopping the running turn is
-part of serving, not part of `/control/*`.
+part of serving.
 
 ## Files and images
 
-Message payloads are resolved by the channel before the agent turn runs — all as **primary** inputs (a load failure becomes a `failed` event, never a silent drop):
+Message payloads are resolved by the channel before the agent turn runs — all as **primary** inputs (a load failure ends the turn with a visible error, never a silent drop):
 
 - images (`image` messages, or images inside a rich-text `post`) are downloaded and passed as `prompt.images` — the selected model must support vision,
 - files / audio / video are downloaded to `<state root>/channels/<kind>/files/c-<chat>/` — `c-` plus the URL-encoded chat id, so a thread id keeps its `:` and `/` as one directory (`oc_x:thread/1` → `c-oc_x%3Athread%2F1`) — and listed in the prompt so the agent reads them with its tools,
