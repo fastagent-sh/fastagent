@@ -324,6 +324,7 @@ describe("the contracts depend on nothing", () => {
       "effect/Clock",
       "effect/Context",
       "effect/Deferred",
+      "effect/Duration",
       "effect/Effect",
       "effect/Exit",
       "effect/Fiber",
@@ -347,6 +348,7 @@ describe("the contracts depend on nothing", () => {
     expect(pkgs).toEqual([
       "@hono/node-server",
       "effect/Context",
+      "effect/Duration",
       "effect/Effect",
       "effect/Exit",
       "effect/Layer",

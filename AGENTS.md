@@ -97,7 +97,8 @@ src/
 ├── channels/
 │   ├── router.ts           # how route tables become ONE Fetch handler: the path rule and dispatch, no guard of its
 │   │                       # own (every route verifies its caller). Fetch-only: /core serves through it
-│   ├── serve.ts            # the node:http binding of a Fetch handler, behind the totality boundary
+│   ├── serve.ts            # the server a Fetch handler is served on (Effect's, on Node's or Bun's own), behind the
+│   │                       # totality boundary; and `nodeListener`, the bridge an app's own node:http server mounts
 │   ├── agentcore-service.ts # the AgentCore serving assembly (same product as service.ts, built for that
 │   │                       # host): channels discovered on trusted ingress, the whole definition opened
 │   │                       # on the first envelope, an external clock, no resident connections

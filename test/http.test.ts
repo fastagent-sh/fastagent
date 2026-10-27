@@ -90,9 +90,16 @@ describe.each(Object.entries(bridges))("%s: bridging a Fetch handler", (_, servi
     }
   });
 
-  it("a client that disconnects cancels the response stream", async () => {
+  it("a client that disconnects cancels the response stream, aborts the request's signal, and is no failure", async () => {
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
     const cancelled = Promise.withResolvers<void>();
-    const srv = await serving(async () => {
+    const aborted = Promise.withResolvers<void>();
+    const srv = await serving(async (req) => {
+      // A channel that streams unsubscribes on its request's signal: it must fire after the handler has returned.
+      req.signal.addEventListener("abort", () => aborted.resolve());
       const encoder = new TextEncoder();
       let timer: ReturnType<typeof setInterval> | undefined;
       return new Response(
@@ -117,6 +124,12 @@ describe.each(Object.entries(bridges))("%s: bridging a Fetch handler", (_, servi
         cancelled.promise,
         new Promise((_, reject) => setTimeout(() => reject(new Error("the stream was never cancelled")), 3000)),
       ]);
+      await Promise.race([
+        aborted.promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("the request's signal never aborted")), 3000)),
+      ]);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(errs.filter((e) => /failed/.test(e))).toEqual([]);
     } finally {
       await srv.close();
     }
@@ -228,24 +241,21 @@ describe("nodeListener: a body upstream middleware already read", () => {
       await new Promise<void>((r) => server.close(() => r()));
     }
   });
+});
 
-  it("the SERVING path has the same boundary: a throwing handler is logged, and says nothing else", async () => {
-    // Not a duplicate of the nodeListener case: `dev`/`start` reach the socket through serveNode, so
-    // wiring the boundary into only the exported listener would leave the path that actually serves
-    // users failing silently — which is how it was first written.
+describe.each(Object.entries(bridges))("%s: the host survives arbitrary channel code", (_, serving) => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("a throwing handler is logged, and says nothing else", async () => {
     const errs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m) => {
       errs.push(String(m));
     });
-    const host = serveNode(
-      async () => {
-        throw new Error("boom /etc/secret-path");
-      },
-      { port: 0 },
-    );
-    const port = await host.listening;
+    const host = await serving(async () => {
+      throw new Error("boom /etc/secret-path");
+    });
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/x`);
+      const res = await fetch(`http://127.0.0.1:${host.port}/x`);
       expect(res.status).toBe(500);
       const body = await res.text();
       expect(errs.some((e) => /request failed.*boom/.test(e))).toBe(true); // visible in the log
@@ -254,10 +264,26 @@ describe("nodeListener: a body upstream middleware already read", () => {
       await host.close();
     }
   });
-});
 
-describe.each(Object.entries(bridges))("%s: the host survives arbitrary channel code", (_, serving) => {
-  afterEach(() => vi.restoreAllMocks());
+  it("a handler that returns a Response whose body it already read is a 500 the log explains", async () => {
+    // A channel that read its own Response, or returns one Response it built once for every request.
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...args) => {
+      errs.push(args.map(String).join(" "));
+    });
+    const host = await serving(async () => {
+      const read = new Response("once");
+      await read.text();
+      return read;
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${host.port}/x`);
+      expect(res.status).toBe(500);
+      expect(errs.join("\n")).toMatch(/locked|unusable|disturbed|already/i);
+    } finally {
+      await host.close();
+    }
+  });
 
   it("a client that disconnects mid-handler leaves the server serving the next request", async () => {
     // The dead-socket case: the client is gone before the handler resolves. Writing to that socket

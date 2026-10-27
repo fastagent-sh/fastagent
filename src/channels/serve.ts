@@ -2,6 +2,7 @@
 import { getRequestListener } from "@hono/node-server";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -12,13 +13,16 @@ import type { ChannelHandler } from "../channel.ts";
 import { log } from "../log.ts";
 import { text } from "./respond.ts";
 
-/** The totality boundary every serving path shares. */
-function totalFetch(handler: ChannelHandler): (req: Request) => Promise<Response> {
+/** The totality boundary every serving path shares; `prepare` shapes the handler's response inside it. */
+function totalFetch(
+  handler: ChannelHandler,
+  prepare: (response: Response) => Response = (response) => response,
+): (req: Request) => Promise<Response> {
   return async (req) => {
     try {
       const response = await handler(req);
       if (!(response instanceof Response)) throw new TypeError("handler did not return a Response");
-      return response;
+      return prepare(response);
     } catch (error) {
       log.error(`[serve] request failed: ${String(error)}`);
       return text("internal error\n", 500);
@@ -55,23 +59,31 @@ export function nodeListener(handler: ChannelHandler): (req: IncomingMessage, re
 
 /**
  * A response whose body fails mid-flight, said in the log. Once the headers are out the failure can only cut the body
- * short, and the server this binds to reports nothing of it; the client sees a truncated body and nothing more.
+ * short, and the server this binds to reports nothing of it; the client sees a truncated body and nothing more. A
+ * client that leaves is not a failure: the server cancels the body, which ends the read in progress and calls `left`.
  */
-function watchedBody(response: Response): Response {
+function watchedBody(response: Response, left: () => void): Response {
   if (response.body === null) return response;
   const reader = response.body.getReader();
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
+      let next: Awaited<ReturnType<typeof reader.read>>;
       try {
-        const { done, value } = await reader.read();
-        if (done) controller.close();
-        else controller.enqueue(value);
+        next = await reader.read();
       } catch (error) {
         log.error(`[serve] a response body failed mid-flight: ${String(error)}`);
         controller.error(error);
+        return;
       }
+      // Outside the try: when the client left, the read in progress ends `done` on a body already cancelled, and
+      // closing it throws; that is not the body failing.
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
     },
-    cancel: (reason) => reader.cancel(reason),
+    cancel(reason) {
+      left();
+      return reader.cancel(reason);
+    },
   });
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
@@ -79,10 +91,11 @@ function watchedBody(response: Response): Response {
 const isBun = typeof process.versions.bun === "string";
 
 /**
- * How long `close()` waits for requests in flight before interrupting them. `dev` and `start` force their connections
- * shut right after (`closeAllConnections`), so this bounds only Bun, which gives no handle to do that.
+ * How long Bun's `close()` waits for requests in flight before interrupting them: Bun's server gives no handle to
+ * force a connection shut, so this is what bounds a close there, inside the CLI's shutdown deadline. On Node `close()`
+ * waits for them, as a Node server does, and `closeAllConnections()` is what cuts it short.
  */
-const GRACEFUL_SHUTDOWN = "500 millis";
+const BUN_GRACEFUL_SHUTDOWN = "500 millis";
 
 /** The server this runtime serves on: Node's, around an `http.Server` we keep to force connections shut; Bun's own. */
 async function serverLayer(
@@ -94,14 +107,14 @@ async function serverLayer(
     return layer({
       port: options.port,
       ...(options.host === undefined ? {} : { hostname: options.host }),
-      gracefulShutdownTimeout: GRACEFUL_SHUTDOWN,
+      gracefulShutdownTimeout: BUN_GRACEFUL_SHUTDOWN,
     });
   }
   const { layer } = await import("@effect/platform-node/NodeHttpServer");
   return layer(() => nodeServer, {
     port: options.port,
     ...(options.host === undefined ? {} : { host: options.host }),
-    gracefulShutdownTimeout: GRACEFUL_SHUTDOWN,
+    gracefulShutdownTimeout: Duration.infinity,
   });
 }
 
@@ -117,14 +130,23 @@ export function serveNode(
 ): { listening: Promise<number>; close: () => Promise<void>; closeAllConnections: () => void } {
   const nodeServer = isBun ? undefined : createServer();
   const scope = Scope.makeUnsafe();
+  let closed = false;
   // A server runs each request uninterruptibly unless told otherwise; a request that has not answered when the server
   // closes must be interruptible, or closing waits on it forever.
-  const total = totalFetch(handler);
-  const app = Effect.interruptible(HttpEffect.fromWebHandler(async (request) => watchedBody(await total(request))));
+  const app = Effect.interruptible(
+    HttpEffect.fromWebHandler((request) => {
+      // The handler's `signal` follows its client to the end of the response, as a Node server's request does: this
+      // server aborts it only while the handler runs, so a body cancelled because the client left aborts it too.
+      const left = new AbortController();
+      const followed = new Request(request, { signal: AbortSignal.any([request.signal, left.signal]) });
+      return totalFetch(handler, (response) => watchedBody(response, () => left.abort()))(followed);
+    }),
+  );
   const listening = serverLayer(options, nodeServer)
-    .then((server) =>
-      Effect.runPromise(Layer.buildWithScope(HttpServer.serve(app).pipe(Layer.provideMerge(server)), scope)),
-    )
+    .then((server) => {
+      if (closed) throw new Error("the server was closed before it listened");
+      return Effect.runPromise(Layer.buildWithScope(HttpServer.serve(app).pipe(Layer.provideMerge(server)), scope));
+    })
     .then(
       (context) => (Context.get(context, HttpServer.HttpServer).address as NetAddress.InetAddress).port,
       (error: unknown) => {
@@ -133,7 +155,15 @@ export function serveNode(
     );
   return {
     listening,
-    close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
+    async close() {
+      closed = true;
+      // A bind in progress finishes first, so what it bound is released here; how it ended is `listening`'s to say.
+      await listening.then(
+        () => undefined,
+        () => undefined,
+      );
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+    },
     closeAllConnections: () => nodeServer?.closeAllConnections(),
   };
 }

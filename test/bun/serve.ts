@@ -76,6 +76,16 @@ function check(label: string, pass: boolean, detail: string): void {
   );
 }
 
+{
+  const host = serveNode(() => new Response("ok"), { port: 0 });
+  await host.close();
+  const outcome = await host.listening.then(
+    (port) => `listened on ${port}`,
+    (error: Error) => error.message,
+  );
+  check("closing before it listened binds nothing", /closed before it listened/.test(outcome), outcome);
+}
+
 if (failures.length > 0) {
   console.error(`${failures.length} of the host contract failed on Bun ${process.versions.bun}`);
   process.exit(1);

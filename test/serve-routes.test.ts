@@ -184,6 +184,32 @@ describe("serve: serveNode", () => {
     await host.close();
   });
 
+  it("closing before it listened binds nothing, and says so through `listening`", async () => {
+    const host = serveNode(() => new Response("ok"), { port: 0 });
+    await host.close();
+    await expect(host.listening).rejects.toThrow(/closed before it listened/);
+  });
+
+  it("closing alone waits for a request in flight, as a Node server does", async () => {
+    let entered!: () => void;
+    const handling = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const host = serveNode(
+      async () => {
+        entered();
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        return new Response("done");
+      },
+      { port: 0 },
+    );
+    const port = await host.listening;
+    const request = fetch(`http://127.0.0.1:${port}/slow`).then(async (res) => `${res.status} ${await res.text()}`);
+    await handling;
+    await host.close();
+    expect(await request).toBe("200 done");
+  });
+
   it("can force-close an active request instead of waiting for the handler to drain", async () => {
     let entered!: () => void;
     const handling = new Promise<void>((resolve) => {
