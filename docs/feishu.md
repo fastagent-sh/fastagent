@@ -5,7 +5,7 @@ status: current
 
 # Feishu channel (Lark compatibility)
 
-These channels turn a Feishu/Lark `im.message.receive_v1` event—received by webhook or WebSocket long connection—into an agent turn and send the reply back to the chat.
+These channels turn a Feishu/Lark `im.message.receive_v1` event—received by webhook or WebSocket long connection—into a message to the agent and send the reply back to the chat.
 
 Feishu and Lark international are **one protocol on two clouds**—and each remains its own channel kind, the unit of ingress identity, env namespace, state home, and onboarding:
 
@@ -19,7 +19,7 @@ Feishu and Lark international are **one protocol on two clouds**—and each rema
 | Webhook only | `FEISHU_VERIFICATION_TOKEN`; optional `FEISHU_ENCRYPT_KEY` | `LARK_VERIFICATION_TOKEN`; optional `LARK_ENCRYPT_KEY` |
 | State home | `<state root>/channels/feishu/` | `<state root>/channels/lark/` |
 | Prompt envelope tag | `[feishu: chat …]` | `[lark: chat …]` |
-| Send tool | `tools/feishu-send.ts` | `tools/lark-send.ts` |
+| Send tool | `src/tools/feishu-send.ts` | `src/tools/lark-send.ts` |
 
 **Feishu is the reference implementation.** Lark international reuses Feishu's event format, crypto,
 cards, and turn engine through a compatibility profile, while degrading control-plane capabilities
@@ -103,8 +103,9 @@ than creating or attaching a different app.
 This creates (for the feishu kind; lark mirrors it):
 
 ```txt
-channels/feishu.ts      # inbound event adapter + routing policy
-tools/feishu-send.ts    # optional outbound send tool for the agent (text or markdown card)
+src/channels/feishu.ts        # inbound event adapter + routing policy
+src/tools/feishu-send.ts      # optional outbound send tool for the agent (text or markdown card)
+src/tools/feishu-threads.ts   # reads the threads of the group a message was asked in
 ```
 
 It also appends the required env vars to `.env.example` when possible.
@@ -169,40 +170,43 @@ FEISHU_ENCRYPT_KEY=...   # optional but recommended; must match the console exac
 
 ## Scaffolded channel
 
-The scaffold (`channels/feishu.ts`; the lark kind mirrors it with `larkChannel`, `larkIngress` and
+The scaffold (`src/channels/feishu.ts`; the lark kind mirrors it with `larkChannel`, `larkIngress` and
 `larkWebSocketChannel` from `@fastagent-sh/fastagent/lark`, and `LARK_*` vars) picks its factory with
 `feishuIngress()`, so one file serves `dev`'s WebSocket and a deployment's webhook:
 
 ```ts
+import { needs } from "@fastagent-sh/fastagent";
 import {
   type FeishuChannelOptions,
   feishuChannel,
   feishuIngress,
   feishuWebSocketChannel,
 } from "@fastagent-sh/fastagent/feishu";
-import { defineChannel } from "@fastagent-sh/fastagent";
 
 const policy: Pick<FeishuChannelOptions, "onError" | "route"> = {
   onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
 };
 
 export default feishuIngress() === "webhook"
-  ? defineChannel({
-      secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
-      channel: (secrets) =>
+  ? needs(
+      [
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "FEISHU_VERIFICATION_TOKEN",
+        { name: "FEISHU_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
+      ],
+      (secrets) =>
         feishuChannel({
           appId: secrets.FEISHU_APP_ID,
           appSecret: secrets.FEISHU_APP_SECRET,
           verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
-          encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
+          encryptKey: secrets.FEISHU_ENCRYPT_KEY,
           ...policy,
         }),
-    })
-  : defineChannel({
-      secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
-      channel: (secrets) =>
-        feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
-    });
+    )
+  : needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
+      feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
+    );
 ```
 
 The webhook form declares the Verification Token, the WebSocket form does not, so `dev` never asks for a token
@@ -257,7 +261,7 @@ Override `route(event)` to customise; it returns:
 
 ```ts
 type FeishuRoute = {
-  session?: string;
+  conversation?: string; // which conversation, and so which session; default: the place
   chatId?: string;
   text?: string;
 } | null;
@@ -265,7 +269,7 @@ type FeishuRoute = {
 
 Return `null` to ignore the event. Omitted fields default from the message. A custom route is
 authoritative: its `null` does not fall through to the built-in thread rule, and a routed turn reads no place
-history (the router decides what a session's place is). The canonical `feishuEnvelope(event)` builds the default prompt envelope (chat/sender metadata, group note, reply
+history (the router decides what a conversation's place is). The canonical `feishuEnvelope(event)` builds the default prompt envelope (chat/sender metadata, group note, reply
 marker, decoded body) for custom Feishu routes. The Lark subpath exposes `larkEnvelope(event)`, which
 reuses that builder with the `[lark: …]` compatibility tag.
 
@@ -306,7 +310,7 @@ schedule for example, stays, labelled `you`, so a later "what did point 3 mean?"
 
 ### Reading threads
 
-`fastagent add feishu` (lark: `add lark`) also scaffolds `tools/feishu-threads.ts` (`tools/lark-threads.ts`). In a
+`fastagent add feishu` (lark: `add lark`) also scaffolds `src/tools/feishu-threads.ts` (`src/tools/lark-threads.ts`). In a
 group turn, the agent calls it with no arguments to list the group's recent threads, and with a thread id to read one.
 That is how a question in the group about a topic ("was the deploy failure resolved?") reaches what a person wrote
 in that topic.
@@ -321,24 +325,24 @@ in that topic.
 - An agent created before this release gets the tool with `fastagent add feishu --no-onboard`: it keeps the channel
   file and writes the package's tools.
 
-## Threads and sessions
+## Threads and conversations
 
 The Agent behaves as a participant in the room, so where it answers and what it remembers follow the
 place rather than the individual ask ([design note](design/participant-model.md)):
 
-| Place | Session | Where the answer appears | Bare messages (no @) |
+| Place | Conversation | Where the answer appears | Bare messages (no @) |
 |---|---|---|---|
 | Direct message | `<kind>:<chat_id>` | in the chat, unquoted | always answered |
 | Group main timeline | `<kind>:<chat_id>` | in the room, quoting the ask | never — mention the bot |
 | Group thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | answered while the Agent takes part and no second human has been heard |
 | Direct-message thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | always answered — a p2p chat has one human, so there is nothing to disambiguate and no participation is recorded |
 
-There are no session modes to choose. A room has one memory that everyone in it shares, so a colleague
-can follow up on someone else's question; a thread is a separate place with its own — **started from
-what the room knew**: a new thread's session inherits the room's recent history (up to the message the
-thread branched from, windowed to the newest ≈50 exchanges), including images and tool results. The
-inheritance happens once, when the thread's session is created; after that the two places are
-independent, and the room never sees what the thread discusses.
+Each conversation has its own session, which the channel creates the first time it is asked there and records in
+`<state root>/channels/<kind>/sessions.json`. There are no session modes to choose. A room has one memory that
+everyone in it shares, so a colleague can follow up on someone else's question; a thread is a separate place with its
+own — **started from what the room knew**: a new thread's session is a fork of the room's, up to the message the
+thread branched from, including images and tool results. The fork happens once, when the thread's session is created;
+after that the two places are independent, and the room never sees what the thread discusses.
 
 Discussion the room heard but never answered has not entered its session yet, so the fork cannot
 carry it — the thread's first turn reads that pending discussion instead, attachments included.
@@ -359,12 +363,12 @@ knowing: a thread where several people are present but only one has spoken *whil
 listening* counts as two-party.
 
 The thread's identity is `thread_id`. Feishu's `root_id` is NOT stable within a thread — it tracks the
-reply chain and can differ between messages of one thread — so it is used for neither the session key
+reply chain and can differ between messages of one thread — so it is used for neither the conversation key
 nor the context bucket. A message that quotes another always loads it as referenced input,
 inside a thread or out of it — a quote is the user pointing at something that may predate the session.
 An unreadable referent degrades to a marker instead of failing the turn.
 
-Turns are serialized per session (FIFO). Since the session is
+Turns are serialized per conversation (FIFO). Since the conversation is
 the place, **a whole group room is one queue**: a second person's `@Agent` in a busy room waits behind
 an unrelated multi-minute turn (they see the "⏳ Queued" card). Different places
 run concurrently, which is why a thread is the way to start work that should not queue behind the
@@ -425,25 +429,23 @@ The seen ring is best-effort dedup, not exactly-once: a crash between writes, a 
 older than the cap can still re-run a turn. Interrupted-turn recovery is at-least-once and can repeat tool side
 effects.
 
-The state home lives under `.state/`, which the agent `.gitignore` excludes. Single-process semantics: two processes must not share a state dir.
+The state home lives under `.state/`, which the agent `.gitignore` excludes. One process owns the state root: a second `dev` or `start` of the same agent is refused.
 
 ## Sending messages back (`feishu-send` / `lark-send`)
 
-`fastagent add feishu` also scaffolds `tools/feishu-send.ts` (lark: `tools/lark-send.ts`): the agent can send plain text or a Markdown card to any chat by id. It is the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up; those turns have no `[feishu: chat …]` envelope line, so the schedule's prompt must name the target chat id.
+`fastagent add feishu` also scaffolds `src/tools/feishu-send.ts` (lark: `src/tools/lark-send.ts`): the agent can send plain text or a Markdown card to any chat by id. It is the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up; those turns have no `[feishu: chat …]` envelope line, so the schedule's prompt must name the target chat id.
 
 **Use it for proactive delivery only.** The channel delivers the current turn's reply; calling the tool
 as well posts it twice.
 
-The tools use `feishuTransport(ctx.cwd)` / `larkTransport(ctx.cwd)` from their respective package
-subpaths. Within a serving process, they share the mounted channel's credentials, custom gateway,
-token cache, bounded retries, and UTF-8 text splitting. Feishu and Lark remain isolated even in one
-agent. With no channel mounted (`invoke`, `tool`, or an embedded agent), the transport
-reads the matching `FEISHU_*` / `LARK_*` environment credentials and uses that cloud's default gateway.
-Standalone sending requires no `fastagent.config.ts`: the transport is keyed to the state root of the tool's `cwd`,
-the agent directory.
+The tools use `feishuTransport({ appId, appSecret })` / `larkTransport(…)` from their respective package
+subpaths, with the app credentials the tool declares through `needs`. Within a serving process, they share the
+mounted channel's client for that app: its custom gateway, token cache, bounded retries, and UTF-8 text splitting.
+Feishu and Lark remain isolated even in one agent. With no channel mounted (`fastagent invoke`, or an embedded agent
+with no channels mounted), the transport is built from those credentials against that cloud's default gateway.
 
-`tools/feishu-send.ts` / `tools/lark-send.ts` are the package's, not authored glue: re-running
-`fastagent add feishu|lark` rewrites the tool, keeps `channels/<kind>.ts` and the credentials already in
+`src/tools/feishu-send.ts` / `src/tools/lark-send.ts` are the package's, not authored glue: re-running
+`fastagent add feishu|lark` rewrites the tool, keeps `src/channels/<kind>.ts` and the credentials already in
 `.env`, and re-checks the app's permissions. That is how an agent scaffolded by an earlier release
 picks up the current tool.
 
@@ -465,7 +467,7 @@ picks up the current tool.
   Token + Subscription mode/URL only on an explicit route-level 404.
 - Without the sensitive `im:message.group_msg` scope the platform never delivers unsummoned messages, so only @mentions summon.
 - A read of a place's history adds about 300–400 ms before a group turn starts.
-- Sessions are one per chat and one per thread, with no TTL or GC, so session storage grows with the number of chats and threads the Agent has taken part in. Thread participation is capped and evicts BYSTANDER threads first (ones the Agent only listened to — losing one costs nothing, since the summon rule refuses such a thread anyway); age decides only among threads it takes part in. The rest is unbounded.
+- Sessions are one per chat and one per thread, never deleted, so the instance's storage grows with the number of chats and threads the Agent has taken part in. Thread participation is capped and evicts BYSTANDER threads first (ones the Agent only listened to — losing one costs nothing, since the summon rule refuses such a thread anyway); age decides only among threads it takes part in. The rest is unbounded.
 - `feishu-send` / `lark-send` currently target only `chatId`; schedules and wake-ups cannot select a thread until those tools accept a reply target plus `reply_in_thread`.
 - The sender in events carries only ids (no display name), so the ask's own envelope attributes it as `user <open_id>`; only the discussion read from history is named. A custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds in either mode. The channel persists/enqueues synchronously;
