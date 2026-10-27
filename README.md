@@ -16,12 +16,12 @@
   <sub>— the agent harness &amp; multi-provider LLM API under the hood</sub>
 </p>
 
-A file-defined agent directory can become a live service. FastAgent takes it out of the terminal and serves it in your Next/Astro app, Telegram, Slack, Feishu, an API endpoint, or your own channel.
+A file-defined agent directory can become a live service. FastAgent takes it out of the terminal and serves it in your Next/Astro app, Telegram, Slack, Feishu, on a clock, or behind your own channel.
 
 Leave the terminal. Become a live service.
 
 - **Add it to your app** — one route, your auth, your database, your host.
-- **Run it as a live service** — Telegram, Slack or Feishu bot, webhook handler, API endpoint, or custom channel.
+- **Run it as a live service** — Telegram, Slack or Feishu bot, webhook handler, schedule, or custom channel.
 
 FastAgent is not a new agent-authoring DSL. You bring the existing definition and project layout; FastAgent provides the serving runtime and adapters around it.
 
@@ -31,26 +31,27 @@ FastAgent is not a new agent-authoring DSL. You bring the existing definition an
 
 ## Why FastAgent
 
-Coding agents made it cheap to vibe useful agent directories. The hard part is the next step: local agents live in terminals, but real services receive webhooks, join Telegram, serve product users, and expose stable APIs.
+Coding agents made it cheap to vibe useful agent directories. The hard part is the next step: local agents live in terminals, but real services receive webhooks, join chats, run on a clock, and keep their conversations across restarts.
 
 FastAgent is the missing bridge from local agent directory to live service.
 
 ## Features
 
-- **Vibe first — an agent is a directory of its own.** Markdown instructions, reusable skills, and TypeScript tools stay as files you inspect, edit, and commit — no new DSL, no framework rewrite. The projects it works on are declared beside it as its content, which it reads and changes but which never becomes part of its definition.
-- **Channels.** Serve the same agent as a Telegram bot, a Slack app, a Feishu or Lark bot, an HTTP/SSE endpoint, or your own adapter: verified webhooks, streaming replies, group-aware.
-- **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` at any depth (named by `defineTool`, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
-- **App embedding — your stack, we plug in.** Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler, or call `invoke` like any function from your own code — your auth, your database, your infra. FastAgent composes with your app, never owns it.
+- **Vibe first — an agent is a directory of its own.** A `SYSTEM.md` prompt, reusable skills, and TypeScript tools stay as files you inspect, edit, and commit — no new DSL, no framework rewrite. The projects it works on are declared beside it as its content, which it reads and changes but which never becomes part of its definition.
+- **Channels.** Serve the same agent as a Telegram bot, a Slack app, a Feishu or Lark bot, or your own adapter: verified webhooks, streaming replies, group-aware.
+- **Durable by default.** Every conversation lives in the instance's storage, and an accepted message is answered after a restart. Built on the open-source [pi](https://github.com/earendil-works/pi) durable harness.
+- **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key, plus your own providers in code; typed tools in `src/tools/` (TypeBox-validated); Agent Skills loaded on demand.
+- **App embedding — your stack, we plug in.** Open the agent in your own process and call it like any function, behind your auth, with your database and infra; mount its channels in your Next / Astro / Hono / Bun / Node app with one handler. FastAgent composes with your app, never owns it.
 - **Deploy anywhere.** No application build step — the directory is the deployable unit. `fastagent deploy docker|fly|railway|agentcore` generates the container + target config and a runbook (`--run` drives it to completion). Local Docker gets user-owned Compose + durable state; optional `--tunnel` adds an ephemeral Quick Tunnel service for webhook channels; AWS Bedrock AgentCore gets a one-stack CloudFormation topology (webhooks via a forwarder Lambda, schedules via EventBridge). Durable ingress remains yours.
 
 ## Design philosophy
 
 FastAgent is built around a small serving contract, app-owned runtime concerns, typed boundaries, and composable adapters.
 
-- **Small serving core** — `invoke` decouples channels, agents, harnesses, and infra.
+- **One API, in process** — the [Agent API](docs/SPEC.md) is what every channel, schedule and app calls.
 - **App-owned runtime** — no takeover of your auth, database, routes, or deployment.
 - **Typed edges** — typed tools, explicit events, boundary validation.
-- **Agent-native shape** — the directory is the deployable unit, and channels drive the same contract.
+- **Agent-native shape** — the directory is the deployable unit, and every check is a command a coding agent can run.
 
 Read the [Design principles](https://fastagent.sh/docs/principles/) for the full rationale.
 
@@ -59,9 +60,10 @@ Read the [Design principles](https://fastagent.sh/docs/principles/) for the full
 FastAgent stays a small serving layer, so it never dictates your stack. Capabilities other agent frameworks bake into a platform, we leave to your app, your infra, or the agent itself — composed in, not locked in.
 
 - **No platform to move to.** No dashboard, no control plane, no runtime you deploy *into* — run it locally, embed it in your app, or ship the directory anywhere.
-- **No new format or DSL.** `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE — FastAgent consumes the standards you already use instead of a parallel ecosystem.
-- **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, call `invoke` from your own queue or workflow.
-- **No model or cloud lock-in.** The Agent Handler contract is harness-neutral, with [pi](https://pi.dev) as the built-in harness; bring your own harness and every channel keeps working unchanged.
+- **No new format or DSL.** `AGENTS.md`, Agent Skills, TypeScript modules — FastAgent consumes the standards you already use instead of a parallel ecosystem.
+- **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, send messages from your own queue or workflow.
+- **No HTTP API to secure.** A served agent answers only its channels, each of which verifies its platform; an app that wants it on its network writes its own routes, behind its own auth.
+- **No model or cloud lock-in.** Any provider pi-ai supports, or your own; any host that runs a container.
 
 ## Install
 
@@ -88,12 +90,10 @@ cd my-agent
 fastagent dev
 ```
 
-Then send a local test turn:
+Then send it a message:
 
 ```bash
-curl -N -X POST localhost:8787/invoke \
-  -H 'content-type: application/json' \
-  -d '{"sessionId":"s1","prompt":{"text":"hello"}}'
+fastagent invoke "hello"
 ```
 
 For production-style local serving:
@@ -107,37 +107,18 @@ There is no FastAgent build step: the agent folder is the deployable unit.
 ## Embed in an app
 
 ```ts
-import { createAgentHandler, createPiAgentFromDefinition } from "@fastagent-sh/fastagent";
+import { openServing, stream } from "@fastagent-sh/fastagent";
 
-const { agent } = await createPiAgentFromDefinition("./agent", {
-  model: "openai-codex/gpt-5.5",
-});
+const { agent } = await openServing("./agent", { model: "openai-codex/gpt-5.5" });
 
-// A Fetch handler for the agent's API: POST /invoke, /sessions/*, /agent/*. Mount it where its paths are the
-// request's (docs/embedding.md shows each framework).
-export const handler = createAgentHandler(agent);
+const created = await agent.createSession();
+if (!created.ok) throw new Error(created.error.message);
+const result = await stream(agent, { sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
+if (result.ok) for await (const event of result.events) if (event.type === "message_delta") render(event.delta);
 ```
 
-No directory? Assemble from typed parts:
-
-```ts
-import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent";
-
-const lookupOrder = defineTool({
-  name: "lookup-order",
-  description: "Look up an order by id.",
-  input: z.object({ orderId: z.string() }),
-  async execute({ orderId }) {
-    return await db.find(orderId);
-  },
-});
-
-const agent = createPiAgent({
-  model: "openai-codex/gpt-5.5",
-  instructions: "You are a support assistant. Use lookup-order for order questions.",
-  tools: [lookupOrder],
-});
-```
+`mountAgentService(await openServing(dir))` adds the agent's channels and schedules to your app: a Fetch handler for
+its webhooks, mounted where your framework routes them ([Embedding](docs/embedding.md)).
 
 ## Documentation
 
@@ -156,42 +137,38 @@ const agent = createPiAgent({
 | [Channel development](https://fastagent.sh/docs/channel-development/) | Build custom channel adapters |
 | [API reference](https://fastagent.sh/docs/api-reference/) | Public TypeScript API reference |
 | [Troubleshooting](https://fastagent.sh/docs/troubleshooting/) | Common setup/runtime issues |
-| [Agent Handler SPEC](https://fastagent.sh/docs/spec/) | Agent Handler protocol v1 |
+| [Agent API SPEC](https://fastagent.sh/docs/spec/) | The Agent API every Caller uses |
 | [Core design](https://fastagent.sh/docs/design/core/) | Maintainer architecture notes |
 
 ## Public API surface & stability
 
-The root export intentionally contains the supported surface only.
+The root export intentionally contains the supported surface only. The entries are layered by what each costs to
+import, and every layer's dependency list is asserted in CI:
 
-Harness-neutral and runtime-neutral are different properties, and the entries are layered by them —
-each layer drops one, and every layer's dependency list is asserted in CI:
-
-| | harness-neutral | runtime-neutral | costs |
+| | Harness-neutral | Runtime-neutral | Costs |
 |---|---|---|---|
-| `/core`, `/session` | yes | yes | nothing |
-| `/node` | yes | no (filesystem, clock, environment) | `@hono/node-server`, `croner` |
-| `/pi` | no | no | the pi runtime |
-
-`Provider` and `ProviderAuth` are exported as types because our options name them; the factory that
-builds one, `createProvider`, comes from `@earendil-works/pi-ai` — add it as a direct dependency when
-you register a custom provider.
+| `/core` | yes | yes | Effect only |
+| `/node` | yes | no (filesystem, clock, environment) | `@hono/node-server`, `croner`, `proper-lockfile` |
+| `/pi` | no | no | pi-durable and pi-ai |
 
 | Area | Examples | Stability |
 |---|---|---|
-| Contract | `Agent`, `InvokeEvent`, `collect` ([SPEC v1](docs/SPEC.md)) | Stable within SPEC v1 |
-| Directory → service | `createAgentService` (pi opener), `mountAgentService` + `MountableAgent` (neutral assembly), `AgentService` | The supported way to mount an agent directory in an app |
-| Serving and calling | `createAgentHandler`, `connectAgent`, `Routes`, `ChannelHandler` | Reference implementation, pre-1.0 |
-| Node binding | `nodeListener`, `serveNode` (from `/node`) | The one runtime-specific piece; see below |
-| pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
-| Tool/channel authoring | `defineTool`, `z`, `ChannelModule` | Usable now, may tighten before 1.0 |
-| Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Provider` | Public because options reference them |
-| Not exported | The assembly's parts — `router`, `protocolHttp`, `loadTools`/`loadChannels`/`loadSchedules`, `createScheduler` — and prompt/config internals | `createAgentService` does this; no compatibility promise |
+| The Agent API | `Agent`, `stream`, `AgentRejection` ([SPEC](docs/SPEC.md)) | Stable within the SPEC's version |
+| Directory → agent | `openServing`, `openAgent` and its parts | Usable now, may tighten before 1.0 |
+| Directory → service | `mountAgentService` + `MountableAgent`, `AgentService` | The supported way to serve an agent's channels in an app |
+| Node binding | `nodeListener`, `serveNode`, `secretEquals` (from `/node`) | The one runtime-specific piece |
+| Authoring | `defineAgent`, `needs`, `defineSchedule`, `sessionIdOf`, `ChannelModule` | Usable now, may tighten before 1.0 |
+| Models and sign-in | `modelEnvironment`, `login`, `fastagentCredentialStore` | Usable now, may tighten before 1.0 |
+| Not exported | The assembly's parts (`router`, `createScheduler`) and harness internals | No compatibility promise |
+
+A tool or an extension is pi-durable's own (`defineTool`, `defineExtension` from `@earendil-works/pi-durable`), and a
+custom provider is pi-ai's (`createProvider` from `@earendil-works/pi-ai`): `init` adds both packages to the agent.
 
 Subpath entry points (`./package.json` is also exported, for tools that read the version):
 
-- `@fastagent-sh/fastagent/core` — the harness-neutral protocol, `collect`, the agent's API as a handler (`createAgentHandler`) and as a client (`connectAgent`), the channel kit and schedules. **No package beyond Effect and no Node built-in**, enforced by test;
-- `@fastagent-sh/fastagent/node` — the harness-neutral pieces that need a Node runtime: `mountAgentService` (the assembly), `serveNode` / `nodeListener` (the `node:http` ↔ Fetch binding);
-- `@fastagent-sh/fastagent/pi` — the pi reference implementation;
+- `@fastagent-sh/fastagent/core` — the Agent API's types, `stream`, the channel kit. **No package beyond Effect and no Node built-in**, enforced by test;
+- `@fastagent-sh/fastagent/node` — `mountAgentService`, `serveNode` / `nodeListener`, content and authoring;
+- `@fastagent-sh/fastagent/pi` — what an author writes, opening a definition, the model environment;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
 - `@fastagent-sh/fastagent/slack` — Slack Events API bot channel;
 - `@fastagent-sh/fastagent/feishu` — canonical Feishu bot channel (飞书, open.feishu.cn);
@@ -201,7 +178,7 @@ Subpath entry points (`./package.json` is also exported, for tools that read the
 
 ```txt
 src/     the npm package: CLI, library API, reference implementation
-test/    vitest suite (faux models by default) + reusable SPEC conformance
+test/    vitest suite (faux models by default) + the Agent API's conformance suite
 docs/    user docs, SPEC, and maintainer design notes
 ```
 
@@ -209,16 +186,16 @@ One package; subpath exports are the module boundary.
 
 ## Status
 
-FastAgent is pre-1.0. The stable design center is the Agent Handler contract in `docs/SPEC.md`; the package API may still tighten before 1.0. Notable changes are recorded in the [GitHub Releases](https://github.com/fastagent-sh/fastagent/releases).
+FastAgent is pre-1.0. The stable design center is the Agent API in `docs/SPEC.md`; the package API may still tighten before 1.0. Notable changes are recorded in the [GitHub Releases](https://github.com/fastagent-sh/fastagent/releases).
 
 ## Designed for more
 
-The neutral contract leaves room for capabilities that are not complete product features yet:
+The Agent API leaves room for capabilities that are not complete product features yet:
 
-- **Durable execution**: Telegram, Slack, and Feishu/Lark accepted turns replay at least once today; general durability and exactly-once execution remain future backend work.
-- **Sandboxed execution** — all seven coding tools, ② project context, channels, and author-written `tools/` reach the local process directly; a sandbox around the complete agent process is future work.
-- **Observability export** — leveled logs and per-turn traces exist today; an OpenTelemetry exporter does not.
-- **More harness bindings and channels** — pi is the built-in harness; another harness can implement the Agent contract, and community channels can use the channel kit.
+- **Scale-out**: one process holds an instance's storage today; spreading one instance over several processes is future work.
+- **Sandboxed execution** — the coding tools, channels, and author-written code reach the local process directly; a sandbox around the complete agent process is future work.
+- **Observability export** — leveled logs exist today; an OpenTelemetry exporter does not.
+- **More channels and connectors** — community channels can use the channel kit; MCP servers as connectors are planned.
 - **More deploy targets** — local Docker, Fly, Railway, and AWS Bedrock AgentCore ship today; the generated container is the portable path for other hosts.
 
 See [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md) if one of these is the problem you want to work on.
@@ -232,9 +209,9 @@ See [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUT
 
 ## Acknowledgements
 
-FastAgent stands on open source. The built-in harness is **[pi](https://github.com/earendil-works/pi)** ([pi.dev](https://pi.dev)) — its agent loop, multi-provider LLM API, and the interactive TUI that `fastagent chat` drives.
+FastAgent stands on open source. The harness is **[pi](https://github.com/earendil-works/pi)** ([pi.dev](https://pi.dev)) — pi-durable's durable agent loop and pi-ai's multi-provider LLM API.
 
-It also depends on, and is grateful to, [zod](https://github.com/colinhacks/zod), [undici](https://github.com/nodejs/undici), [chokidar](https://github.com/paulmillr/chokidar), [giget](https://github.com/unjs/giget), [@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore), and [octokit/webhooks](https://github.com/octokit/webhooks).
+It also depends on, and is grateful to, [Effect](https://github.com/Effect-TS/effect), [undici](https://github.com/nodejs/undici), [chokidar](https://github.com/paulmillr/chokidar), [giget](https://github.com/unjs/giget), [@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore), and [croner](https://github.com/Hexagon/croner).
 
 The scaffolded `writing-great-skills` skill is vendored from [mattpocock/skills](https://github.com/mattpocock/skills), with its license included.
 
