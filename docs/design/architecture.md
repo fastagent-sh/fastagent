@@ -43,9 +43,9 @@ goal needs.
 | Decision | Why |
 |---|---|
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
-| **One API of our own: the consumer [Agent API](../SPEC.md)**, bound in TypeScript, in process | Every consumer, ours included (channels, schedules, wake-ups, `fastagent invoke`), needs the same ten operations, and every one runs in the process that runs the agent, as does an app that embeds it. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
+| **One API of our own: the consumer [Agent API](../SPEC.md)**, bound in TypeScript in process and, from v2 ([proposed](agent-api.md)), over HTTP | Every consumer, ours included (channels, schedules, wake-ups, `fastagent invoke`), needs the same operations, and so does a program that calls a deployed agent the way it calls any service. One model with two bindings, the same names and objects in both, lets a Caller move between an agent it opens and one it reaches over HTTP by changing one line. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
 | **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (its definition, compaction, inspecting sessions) has one implementation; wrapping it would only rename it. A session's model and thinking level are a consumer's choice, at creation, at a fork, or later with `configure`, which is pi-durable's `configure()` with those two fields: a Caller who may use a session may choose what it answers with |
-| **An instance is one trust domain, and serves nothing that does not verify its caller** | Whoever holds the Agent can do everything it can, every session and the agent's tools included, so FastAgent serves the API on no network ([Agent API](../SPEC.md) §8, §10). A deployment's routes are its channels', which MUST verify that a request comes from their platform, and its host's own (AgentCore's, behind IAM); an app that embeds the agent serves its own routes behind its own authentication. A platform's signature proves the platform, not the person: everyone who can message a channel's bot is inside the trust domain, and can ask the agent for anything its tools reach, every other chat's conversation included. None of FastAgent's own Callers needs the API over a network: channels, schedules, wake-ups, `fastagent invoke` and an embedding app call it in process. What called it remotely before (an outside clock in place of a schedule, a deploy's smoke test, `curl`, `connectAgent`) went or was replaced (§5), and the remote needs that remain, duang's online agents and agents calling agents (§4.4), are not built, so a binding is designed when one is, with its requirements. People who must not read each other's conversations are kept apart by giving each an instance, not inside one: the agent's tools reach every session of their instance, whichever session asked, so a check on session ids would not keep them apart. A session id is a name, not a credential |
+| **An instance is one trust domain, and serves nothing that does not verify its caller** | Whoever holds the Agent can do everything it can, every session and the agent's tools included. A deployment's routes are its channels', which MUST verify that a request comes from their platform; its host's own (AgentCore's, behind IAM); and, from v2, the HTTP API, which verifies an API key ([agent-api.md](agent-api.md) §9). The key keeps everyone but the instance's customer out; it does not divide an instance. A platform's signature proves the platform, not the person: everyone who can message a channel's bot is inside the trust domain, and can ask the agent for anything its tools reach, every other chat's conversation included. People who must not read each other's conversations are kept apart by giving each an instance, not inside one: the agent's tools reach every session of their instance, whichever session asked, so a check on session ids would not keep them apart. A session id is a name, not a credential |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
 | **Sessions are listed, most recently active first; none is deleted** | A client shows an agent's conversations whatever started them: duang's sidebar lists the ones a channel or a schedule started too, which no list a Caller keeps could hold. An instance is one trust domain, so a list shows nothing its Caller could not already read. Within one storage the order needs no clock: pi-durable gives sessions, messages and entries their ids from one counter, so a session's newest id is its latest activity. Several storages behind one instance compare activity by time, designed with them (#788, scale-out on AgentCore). pi-durable has no deletion |
@@ -273,8 +273,8 @@ standing NAT, or a backend of our own, for a failure not yet seen.
 ### 4.4 Later: shared contexts and agents working together
 
 Several agents using one context package share its declaration, not its data. Sharing data that is being written needs
-a context service. An agent calling another, in another instance, is a remote Caller: the API has no network binding
-(§2), so that binding, or A2A, which AgentCore can host, is designed when this is built, with its requirements. Both
+a context service. An agent calling another, in another instance, is a remote Caller: it calls the other's HTTP API
+([agent-api.md](agent-api.md) §9), or an A2A binding of it, which AgentCore can host, designed when this is built. Both
 wait for the steps above.
 
 ## 5. What went
@@ -306,9 +306,10 @@ What the previous design had, and what took its place:
 2. **Done** ([#788](https://github.com/fastagent-sh/fastagent/issues/788)). The Agent on pi-durable, with the
    conformance suite in process; channels, schedules, wake-ups, the CLI and AgentCore moved onto it; the previous
    protocol, its HTTP API, `LoopPort` and the pi-coding-agent harness deleted.
-3. The artifact: `fastagent build`, and `deploy` from it.
-4. Context packages.
-5. Shared contexts and agents working together.
+3. The Agent API v2 ([proposed](agent-api.md)): one model, in process and over HTTP with an API key.
+4. The artifact: `fastagent build`, and `deploy` from it.
+5. Context packages.
+6. Shared contexts and agents working together.
 
 ### 6.1 What the spike measured
 
@@ -367,10 +368,10 @@ joined mid-way (as ACP's resume and OpenAI's sequence numbers allow).
 It did not take: a run, turn or task as a first-class id (messages are the unit); history owned by the client and sent
 with each run (AG-UI; here the Agent owns it); shared-state JSON patches, plans and modes (agent-specific, so prefixed
 custom events); a file system and terminal the client provides (ACP; this agent runs server-side in its own
-environment); closing and deleting sessions, and a tenant field; a wire transport of its own (it is TypeScript in
-process, and an app that puts it on a network chooses how). Asking the user, a webhook when a message ends (A2A, OpenAI's background mode) and a live
-notice event (ACP) can be added later under the API's rules for extending, without breaking a Caller. Bindings to
-those protocols are outside the product's goals.
+environment); closing and deleting sessions, and a tenant field. Asking the user, a webhook when a message ends (A2A, OpenAI's background mode) and a live
+notice event (ACP) can be added later under the API's rules for extending, without breaking a Caller. Its HTTP binding is
+its own ([agent-api.md](agent-api.md) §9); A2A and MCP bindings map onto the same model and are designed when a Caller
+needs one.
 
 ## 8. Settled in the move
 
