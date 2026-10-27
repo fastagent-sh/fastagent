@@ -5,7 +5,7 @@
  */
 import { existsSync } from "node:fs";
 import { writeFileAtomic } from "../../atomic-write.ts";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CredentialStore, ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
 import {
@@ -130,7 +130,10 @@ export function modelSpecFor(
 }
 
 /** Read the agent package in `dir`: `fastagent.config.ts` (optional) and `.fastagent/registry.ts`, generated first. */
-export async function loadDefinition(dir: string): Promise<AgentDefinition> {
+export async function loadDefinition(directory: string): Promise<AgentDefinition> {
+  // Absolute, since the prompt names the definition's files by it and the agent's tools resolve a relative path against
+  // the agent's own working directory, which is this one.
+  const dir = resolve(directory);
   const config = await loadConfig(dir);
   const registryPath = join(dir, GENERATED_DIR, REGISTRY_FILE);
   if (!existsSync(registryPath)) {

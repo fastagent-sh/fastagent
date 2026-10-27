@@ -105,8 +105,9 @@ function openStorage(stateRoot: string, storage: ServingStorage): Promise<Storag
   return openLockedStorage(instanceStorageFile(stateRoot), storage.instance, INSTANCE_HOLDERS);
 }
 
-export async function openServing(dir: string, options: OpenServingOptions = {}): Promise<OpenedServing> {
-  const definition = await prepareDefinition(dir);
+export async function openServing(directory: string, options: OpenServingOptions = {}): Promise<OpenedServing> {
+  const definition = await prepareDefinition(directory);
+  const { dir } = definition;
   const code = buildDefinition(definition);
   // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
   await enterEnvironment(dir);
