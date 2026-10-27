@@ -6,27 +6,26 @@ status: current
 
 # Overview
 
-**Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, Slack or Feishu, handle webhook events, expose it as an API endpoint, or put it behind your own channel.
+**Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, Slack or Feishu, handle webhook events, or put it behind your own channel.
 
-It does not ask you to rewrite an agent into a framework-specific project. An agent is a directory of its own, and a git repository from the start (`fastagent init`): grow it with `APPEND_SYSTEM.md`, `AGENTS.md`, `skills/`, `tools/`, channels and schedules, declare the projects it works on and knows as its content, and FastAgent serves it as a live service. The agent can change itself the same way: what it writes into its prompt files and skills takes effect on its next turn.
+It does not ask you to rewrite an agent into a framework-specific project. An agent is a directory of its own, and a git repository from the start (`fastagent init`): grow it with `SYSTEM.md`, `AGENTS.md`, `skills/` and code under `src/` (tools, channels, schedules), declare the projects it works on and knows as its content, and FastAgent serves it as a live service. The agent can change itself the same way: what it writes into its prompt files and skills takes effect on its next message.
 
-Coding agents made it cheap to vibe useful agent directories. The next gap is serving: local agents live in terminals, but real services receive webhooks, join Telegram, serve product users, and expose stable APIs. FastAgent connects those directories to real triggers and runtimes.
+Coding agents made it cheap to vibe useful agent directories. The next gap is serving: local agents live in terminals, but real services receive webhooks, join chats, run on a clock and keep their conversations across restarts. FastAgent connects those directories to real triggers and runtimes.
 
 ```txt
 reviewer/                   # the agent, its working directory, and a git repository
-├── fastagent.config.ts     # the marker, plus deployment choices
-├── context.json            # its content: the repositories it works on and knows, shared with the agent
+├── fastagent.config.ts     # the marker: defineAgent({ model, providers, … })
+├── context.json            # its content and environment: the repositories it works on and knows, the commands it runs
 ├── context.local.json      # this machine's directories it is bound to (kept out of git and of every image)
-├── APPEND_SYSTEM.md        # optional standing instructions (SYSTEM.md replaces pi's default prompt)
-├── AGENTS.md               # optional: how this agent is built and changed, loaded every turn
+├── SYSTEM.md               # the system prompt
+├── AGENTS.md               # optional: how this agent is built and changed, a section of every prompt
 ├── skills/  prompts/       # optional skills; prompt templates (run as /<name>)
-├── tools/                  # optional code tools
-├── channels/               # optional webhook/bot adapters
-├── schedules/              # optional prompts run on a cron (<name>.md)
-├── extensions/             # optional pi extension modules (see configuration.md)
+├── src/tools/              # optional code tools
+├── src/channels/           # optional webhook/bot adapters
+├── src/schedules/          # optional prompts run on a cron
 ├── reference.md            # optional reference material the agent reads (any file layout)
 ├── content/handbook/       # a clone fastagent makes of each repository with no checkout bound here
-└── .state/ .secrets/       # this machine's instance: sessions, credentials (kept out of git, except .secrets/.env.example)
+└── .state/ .secrets/       # this machine's instance: its storage, credentials (kept out of git, except .secrets/.env.example)
 
 ~/code/app/                 # a checkout of acme/app, declared in context.json and bound here
 └── AGENTS.md               # the project's own: a file the agent reads there, never part of its prompt
@@ -38,23 +37,23 @@ machine has is bound in `context.local.json` alone: it stays here, and a deploym
 
 ## What FastAgent provides
 
-1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`, `AGENTS.md`), `skills/`, `tools/`, `channels/`, `schedules/` and reference material as files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as its [content](configuration.md#content): files the agent reads and changes there, none of which becomes part of its prompt.
-2. **A contract** — [Agent Handler SPEC v1](SPEC.md): `invoke(request) => AsyncIterable<InvokeEvent>`, and sessions whose messages outlive their callers.
-3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md` / `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
-4. **Developer workflow** — `init`, `info`, `content`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`.
-5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
-6. **Clients** — the agent's HTTP API on every serve ([SPEC v1](SPEC.md): runs, session history, live events, abort; [`http.api`](configuration.md#config-file)), plus an opt-in control plane (`/control/*`: rename, reconfigure, delete; `http.control`). Both are unauthenticated, so bind loopback or put a gateway in front, and an [authoring API](api-reference.md#content) (`createAgent`, `addContent`, `removeContent`) for clients such as a desktop app, to create agents and edit their content under the same rules as the CLI.
-7. **Time triggers** — schedules (`schedules/<name>.md`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
+1. **The agent is a directory**: its prompt files (`SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`, its code under `src/` and reference material are files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as its [content](configuration.md#content): files the agent reads and changes there, none of which becomes part of its prompt.
+2. **One API**: the [Agent API](SPEC.md), in process: sessions the Agent names, messages whose outcome outlives whoever sent them, and a durable history every Caller reads the same way.
+3. **One harness**: [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable), which keeps every conversation in the instance's storage and answers an accepted message after a restart. Models come from pi-ai, with your own providers in code.
+4. **Developer workflow**: `init`, `info`, `content`, `env`, `dev`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`. Every check is a command a coding agent can run and read.
+5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, and a small public kit for your own channels.
+6. **Time triggers**: schedules (`src/schedules/`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
+7. **An authoring API** ([`createAgent`, `addContent`, `removeContent`](api-reference.md#content)) for clients such as a desktop app, to create agents and edit their content under the same rules as the CLI.
 
 ## Design choices
 
 FastAgent deliberately keeps the serving layer small and composable:
 
-- **Handler contract** — `invoke` is the internal seam between triggers, agents, harnesses, and hosts.
-- **Small core** — the stable center is the Agent Handler contract, not a platform runtime.
-- **App-owned runtime** — your app keeps auth, users, database, routes, deployment, and policy.
-- **Typed edges** — tools, events, and request bodies are explicit and validated at boundaries.
-- **Filesystem truth** — the deployable definition is the directory, not ambient machine state.
+- **One API, in process**: every Caller (a channel, a schedule, `invoke`, your app) uses the Agent API; FastAgent puts it on no network.
+- **Small core**: the stable center is the Agent API, not a platform runtime.
+- **App-owned runtime**: your app keeps auth, users, database, routes, deployment, and policy.
+- **Typed edges**: tools, events, and request bodies are explicit and validated at boundaries.
+- **Filesystem truth**: the deployable definition is the directory, not ambient machine state.
 
 See [Design principles](principles.md) for the full rationale and non-goals.
 
@@ -62,28 +61,26 @@ See [Design principles](principles.md) for the full rationale and non-goals.
 
 FastAgent stays a small serving layer, so it never dictates your stack. Capabilities other agent frameworks bake into a platform, we leave to your app, your host, or the agent itself — composed in, not locked in.
 
-- **No platform to move to** — no dashboard, no hosted control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
-- **No new format or DSL** — `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE; FastAgent consumes the standards you already use, not a parallel ecosystem.
-- **No workflow engine** — the agent decides its own steps; for deterministic orchestration, call `invoke` from your own queue or workflow.
-- **Harness-neutral contract; pi reference implementation** — channels depend on `Agent`, while the included assembly uses pi; models and hosts remain replaceable runtime choices.
+- **No platform to move to**: no dashboard, no hosted control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
+- **No new format or DSL**: `AGENTS.md`, Agent Skills, TypeScript modules; FastAgent consumes the standards you already use, not a parallel ecosystem.
+- **No workflow engine**: the agent decides its own steps; for deterministic orchestration, send messages from your own queue or workflow.
+- **No HTTP API of its own**: a served agent answers only its channels, which verify their platform. An app that wants the agent on its network writes routes over the Agent API, behind its own authentication.
 
 ## Two main use cases
 
 ### Embed an agent in an existing app
 
-Use FastAgent as a library, then mount the agent in your own route:
+Use FastAgent as a library and call the agent in process:
 
 ```ts
-import { createAgentHandler, createPiAgentFromDefinition } from "@fastagent-sh/fastagent";
+import { openServing } from "@fastagent-sh/fastagent";
 
-const { agent } = await createPiAgentFromDefinition("./agent", {
-  model: "openai-codex/gpt-5.5",
-});
-
-export const handler = createAgentHandler(agent); // POST /invoke, /sessions/*, /agent/*
+const { agent } = await openServing("./agent", { model: "openai-codex/gpt-5.5" });
+const created = await agent.createSession();
+// agent.invoke({ sessionId, content }) → wait() for the answer, or stream() it as it is written
 ```
 
-Your app still owns auth, database, routing, and deployment.
+Your app still owns auth, database, routing, and deployment. See [Embedding](embedding.md).
 
 ### Run it for Telegram, Slack, or Feishu
 
@@ -123,25 +120,24 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 | Build a channel adapter | [Channel development](channel-development.md) |
 | Look up public TypeScript exports | [API reference](api-reference.md) |
 | Fix common issues | [Troubleshooting](troubleshooting.md) |
-| Implement or review the contract | [Agent Handler SPEC](SPEC.md) |
+| Look up the Agent API | [Agent API SPEC](SPEC.md) |
 | Understand implementation tradeoffs | [Design notes](design/README.md) |
 
 ## Current status
 
 Implemented today:
 
-- Agent Handler v1 reference implementation over pi.
-- Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md` / `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
+- The Agent API on pi-durable, with one SQLite storage per instance (`.state/agent.sqlite`).
+- Directory assembly from `SYSTEM.md` / `AGENTS.md`, `skills/`, `prompts/`, `src/` and `fastagent.config.ts`, with secrets declared by the code that reads them (`needs`).
 - Content: local directories and GitHub repositories (here, a checkout `local` names, used as it is, otherwise a clone; on a host, always a clone; a clone is brought up to date in place at each start).
-- The agent's HTTP API (the user plane, and the opt-in `/control` plane) and the authoring API for clients.
-- HTTP/SSE invoke channel.
 - Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
-- Schedules (`schedules/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
-- `dev`, `chat`, `invoke`, `tool`, `info`, `schedules`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
-- jsonl session persistence with restart continuity.
+- Schedules (`src/schedules/`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
+- `dev`, `invoke`, `info`, `schedules`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
 - CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
+- An authoring API for clients.
 
 Not implemented yet:
 
-- Multi-instance session/lease/auth backends out of the box (the single-machine tier is the shipped scope).
-- Additional harness reference bindings beyond pi.
+- An npm package as the deployable artifact, and context packages ([architecture.md](design/architecture.md) §4).
+- MCP servers as connectors ([#678](https://github.com/fastagent-sh/fastagent/issues/678)).
+- One instance spread over several processes (one process holds an instance's storage).
