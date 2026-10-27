@@ -1,7 +1,10 @@
-/** Render one message's answer, as `stream()` reads it, to two sinks plus an exit code: 0 only for `completed`. */
+/** Render one message's answer, as `stream()` reads it, plus an exit code: 0 only for `completed`. */
 import type { Outcome } from "../agent-api.ts";
 import type { StreamResult } from "../agent-api-stream.ts";
 import { answerText } from "../answer-text.ts";
+
+/** A command that sends a message exits 0 only when it completed. */
+export const exitCodeOf = (outcome: Outcome): number => (outcome.status === "completed" ? 0 : 1);
 
 function failure(outcome: Outcome): string | undefined {
   switch (outcome.status) {
@@ -14,6 +17,7 @@ function failure(outcome: Outcome): string | undefined {
   }
 }
 
+/** The answer as text on `out`, what the tools did and why it failed on `err`. */
 export async function runInvokeStream(
   result: StreamResult,
   out: (text: string) => void,
@@ -55,13 +59,38 @@ export async function runInvokeStream(
       }
       case "done": {
         const failed = failure(event.message.outcome);
-        if (failed === undefined) return 0;
-        err(`[fastagent] failed: ${failed}`);
-        return 1;
+        if (failed !== undefined) err(`[fastagent] failed: ${failed}`);
+        return exitCodeOf(event.message.outcome);
       }
     }
   }
   err("[fastagent] the stream ended before the message did");
+  return 1;
+}
+
+/**
+ * The answer as JSON lines, for a program to read: the receipt (`{ "type": "receipt", sessionId, message, duplicate }`),
+ * then the message's events as the Agent API has them, through its `done`. A message that ends no other way ends with
+ * the line that says why: the invoke's `rejected` (as `resume` has it) or `unknown`, a `serving_error` event, or
+ * `unfinished` when the events end first.
+ */
+export async function runInvokeJson(result: StreamResult, line: (json: string) => void): Promise<number> {
+  if (!result.ok) {
+    line(
+      JSON.stringify(
+        "error" in result ? { type: "rejected", error: result.error } : { type: "unknown", ...result.unknown },
+      ),
+    );
+    return 1;
+  }
+  const { ok: _, events, ...receipt } = result;
+  line(JSON.stringify({ type: "receipt", ...receipt }));
+  for await (const event of events) {
+    line(JSON.stringify(event));
+    if (event.type === "serving_error") return 1;
+    if (event.type === "done") return exitCodeOf(event.message.outcome);
+  }
+  line(JSON.stringify({ type: "unfinished", reason: "the stream ended before the message did" }));
   return 1;
 }
 

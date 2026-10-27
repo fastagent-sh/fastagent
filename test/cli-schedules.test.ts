@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { agentWorkspace, run } from "./cli-run.ts";
+import { resolveStateRoot } from "../src/paths.ts";
+import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
+import { agentWorkspace, fauxAgent as agent, killWhileLingering, lingered, run, whileServed } from "./cli-run.ts";
 
 /** A schedule module as `defineSchedule` returns it, so the fixture needs no package of its own. */
 const schedule = (cron: string, extra = "") =>
@@ -91,5 +93,74 @@ describe("cli: schedules", () => {
     expect(unreadable.stdout).toBe("");
     expect(unreadable.stderr).toMatch(/the fire history of "daily" is unreadable/);
     expect(unreadable.stderr).not.toMatch(/at listClaims/); // no stack
+  });
+});
+
+const scheduleOf = (prompt: string) =>
+  `export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: ${JSON.stringify(prompt)} };\n`;
+const SCHEDULE = scheduleOf("write the digest");
+
+describe("cli: schedules run and unwake", () => {
+  it("schedules run fires a schedule in its own session with its claim recorded, and only when no serve runs", async () => {
+    const dir = await agent("fa-schedules-run-", { "src/schedules/digest.ts": SCHEDULE });
+    const refused = await whileServed(dir, () => run(["schedules", "run", "digest", dir]));
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("another `fastagent dev`, `start` or `schedules` command of this agent");
+
+    // A fire a stopped serve claimed and never reported is accounted for first, as a serve's boot does.
+    const claims = join(resolveStateRoot(dir), "schedule", "claims", "digest");
+    await mkdir(claims, { recursive: true });
+    await writeFile(join(claims, "2026-01-01T09-00-00-000Z"), JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z" }));
+
+    const first = await run(["schedules", "run", "digest", dir]);
+    expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
+    const second = await run(["schedules", "run", "digest", dir]);
+    expect([second.code, second.stdout.trim()], second.stderr).toEqual([0, "seen 2"]);
+    const listed = JSON.parse((await run(["schedules", "list", "--json", dir])).stdout) as {
+      schedules: { name: string; session: string | null; fires: { outcome?: string }[] }[];
+    };
+    expect(listed.schedules[0]?.session).toEqual(expect.any(String));
+    expect(listed.schedules[0]?.fires.map((fire) => fire.outcome)).toEqual(["interrupted", "completed", "completed"]);
+
+    const unknown = await run(["schedules", "run", "weekly", dir]);
+    expect(unknown.code).toBe(1);
+    expect(unknown.stderr).toMatch(/no schedule "weekly" in .*src\/schedules\/ \(declared: digest\)/);
+  });
+
+  it("schedules run exits 1 on a cut-off answer, and refuses work a stopped process left unfinished", async () => {
+    const dir = await agent("fa-schedules-unfinished-", {
+      "src/schedules/clipped.ts": scheduleOf("cut it short"),
+      "src/schedules/slow.ts": scheduleOf("linger over it"),
+    });
+    // The claim counts a cut-off answer as completed; a check does not.
+    const clipped = await run(["schedules", "run", "clipped", dir]);
+    expect([clipped.code, clipped.stdout.trim()], clipped.stderr).toEqual([1, "cut sho"]);
+    expect(clipped.stderr).toContain("clipped: its answer was cut off (max_tokens)");
+
+    await killWhileLingering(["schedules", "run", "slow", dir], dir);
+    const refused = await run(["schedules", "run", "clipped", dir]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/the storage holds 1 message\(s\) an earlier process accepted and stopped before/);
+    expect(await lingered(dir)).toBe(1);
+  });
+
+  it("schedules unwake cancels a wake-up whatever session set it, and only when no serve runs", async () => {
+    const dir = await agent("fa-schedules-unwake-");
+    const stateRoot = resolveStateRoot(dir);
+    const added = addWakeup(stateRoot, { session: "a schedule's own", prompt: "check", cron: "0 * * * *" });
+    if (!added.ok) throw new Error(added.error);
+
+    const refused = await whileServed(dir, () => run(["schedules", "unwake", added.id, dir]));
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("is held by another process");
+    expect(listWakeups(stateRoot).map((w) => w.id)).toEqual([added.id]);
+
+    const removed = await run(["schedules", "unwake", added.id, dir]);
+    expect(removed.code, removed.stderr).toBe(0);
+    expect(removed.stdout).toContain(`removed wake ${added.id}`);
+    expect(listWakeups(stateRoot)).toEqual([]);
+    const again = await run(["schedules", "unwake", added.id, dir]);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain(`no pending wake-up ${added.id}`);
   });
 });

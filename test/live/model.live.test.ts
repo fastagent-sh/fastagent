@@ -58,7 +58,7 @@ async function agentDirectory(config: string, files: Record<string, string> = {}
 const modelConfig = (model: string) => `export default { model: ${JSON.stringify(model)} };\n`;
 
 /** The directory opened the product's way; closed when the file is done. */
-async function open(dir: string, options: OpenServingOptions = { locking: "memory" }) {
+async function open(dir: string, options: OpenServingOptions = { storage: "memory" }) {
   const opened = await openServing(dir, options);
   cleanups.push(() => opened.agent.close());
   return opened;

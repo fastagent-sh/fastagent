@@ -507,8 +507,8 @@ export default defineSchedule({
   into a recurring EventBridge schedule, which fires it on EventBridge's own clock and wakes the container, once an
   envelope has reached it through the forwarder after a deploy (`deploy --run` probes it). A schedule keeps one Fly or
   Railway machine running.
-- **It is code**: a change takes effect at the next start or release. To try a schedule's prompt now, send it with
-  `fastagent invoke`.
+- **It is code**: a change takes effect at the next start or release. To fire one now, as its clock would,
+  `fastagent schedules run <name>`.
 
 `fastagent schedules list` shows each schedule's next instant, how its last run ended and its session, and the
 agent's own pending wake-ups. A wake-up is work the agent schedules for itself with the `wake` tool, on every serve

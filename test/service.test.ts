@@ -21,7 +21,7 @@ afterAll(async () => {
 
 /** The directory opened as a serve opens it, with no storage of its own, and mounted. */
 async function createAgentService(dir: string, options: MountAgentServiceOptions = {}) {
-  const served = await openServing(dir, { locking: "memory" });
+  const served = await openServing(dir, { storage: "memory" });
   opened.push(served.agent);
   return mountAgentService(served, options);
 }

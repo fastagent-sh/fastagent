@@ -25,8 +25,10 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `models [search]` | List the model specs the agent can name. |
 | `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
 | `dev [agent]` | Serve locally, restarting on code edits. |
-| `invoke <message> [agent]` | Send one message in a new session, print its answer, and exit. |
+| `invoke <message> [agent]` | Send one message, print its answer (`--json`: its events), and exit; `--session <id>` continues an earlier run's session. |
 | `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
+| `schedules run <name> [agent]` | Fire one schedule now, as its clock would. |
+| `schedules unwake <id> [agent]` | Cancel a pending wake-up, whatever session set it. |
 | `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. With `--no-onboard`, each writes only the channel (if missing) and its tools, which is how an existing agent picks up a new tool. |
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). `--tunnel --run` also starts a Quick Tunnel and registers webhooks. |
@@ -232,13 +234,27 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 ## `fastagent invoke`
 
 ```bash
-fastagent invoke <message> [agent] [--model provider/modelId] [--no-input]
+fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--json] [--session <id>]
 ```
 
-Sends one message in a new session and exits: the answer text to stdout, tool and diagnostic lines to stderr, and a
-non-zero exit unless the message completed. It opens the agent on storage of its own, in memory, so it runs beside a
-`dev` or `start` of the same agent and leaves no session behind; it has no `wake` tool, since nothing would fire it.
-This is the check a coding agent runs: one message, its answer, and an exit code.
+Sends one message and exits: the answer text to stdout, tool and diagnostic lines to stderr, and a non-zero exit
+unless the message completed. This is the check a coding agent runs: one message, its answer, and an exit code.
+
+- **`--json`** prints JSON lines on stdout instead: first the receipt, `{"type": "receipt", "sessionId", "message",
+  "duplicate"}`, then the message's events as the [Agent API](SPEC.md) §6 has them (`entry`, `message_delta`,
+  `tool_started`, ...), ending with its `done`. A message that ends another way ends with the line that says why:
+  `{"type": "rejected", "error"}`, `{"type": "unknown", "reason"}` (whether it was taken is not known), a
+  `serving_error` event, or `{"type": "unfinished", "reason"}`. The exit code is the same as without `--json`.
+- **`--session <id>`** sends the message into a session an earlier run created, continuing it. Every run prints its
+  session's id on stderr (`[fastagent] session <id> …`), and `--json`'s receipt carries it as `sessionId`; without
+  `--session`, a run starts a new session. Each run answers with the model it resolves (`--model`,
+  `FASTAGENT_MODEL`, the config), a continued session included.
+
+`invoke` keeps its sessions in `<stateRoot>/invoke.sqlite`, never the instance's storage, so it runs beside a `dev`
+or `start` of the same agent. One `invoke` of an agent runs at a time: a second one while the first runs is refused.
+A message whose `invoke` was stopped (Ctrl-C, a timeout) is not run again: the next `invoke` ends it, aborted, and
+says so on stderr. It has no `wake` tool, since no clock fires for its sessions. The file keeps every session it was
+given and grows with them; delete it, while no `invoke` runs, to start from none.
 
 ## `fastagent schedules list`
 
@@ -258,8 +274,36 @@ one-shot or cron, session, prompt). `--json` adds each schedule's retained fire 
 | `unreported` | Still running, or not settled yet: the next start settles it from what became of its message. |
 
 What the agent said is in the schedule's session, in the instance's storage. A failure before the model was reached
-(credentials, model) is only in the logs, under the host's retention. The agent cancels its own wake-ups with
-`unwake({ id })`, from the session that set them.
+(credentials, model) is only in the logs, under the host's retention.
+
+## `fastagent schedules run`
+
+```bash
+fastagent schedules run <name> [agent] [--model provider/modelId] [--no-input]
+```
+
+Fires the schedule `<name>` now, the way its clock would: in the schedule's own session, with its claim and its
+outcome recorded, so `schedules list` shows the fire. A fire a stopped serve claimed and never reported is settled
+first, as a serve's start settles it. The answer goes to stdout and the fire's log to stderr; the exit is non-zero
+unless its message completed, as `invoke`'s: a cut-off answer (`max_tokens`) exits 1, though the claim records it
+`completed`. `--model` is the default model, as for `dev`: a schedule's session takes it at its first fire and keeps
+it after that.
+
+It opens the instance's storage, so it is refused while `dev` or `start` serves the agent, and they are refused while
+it runs. It is refused too while the storage holds messages a stopped serve left unfinished: it would run them, with
+no channel to deliver their answers, and cut them off when it exits. `dev` runs them on; stop it once they end. It
+fires a schedule of this machine's instance; a deployed one keeps its own state.
+
+## `fastagent schedules unwake`
+
+```bash
+fastagent schedules unwake <id> [agent]
+```
+
+Cancels the pending wake-up `<id>` (`schedules list` shows the ids), whatever session set it. The agent cancels its
+own with `unwake({ id })` from the session that set them; this command is the way to one set where nobody can message
+the agent, such as during a schedule's fire, in the schedule's own session. A serve's clock writes the same store, so
+it is refused while `dev` or `start` serves the agent.
 
 ## `fastagent add telegram|slack|feishu|lark`
 
@@ -326,9 +370,9 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
+| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
-| `--json` | `info`, `schedules list`, `content list` | Machine-readable output. |
+| `--json` | `info`, `invoke`, `schedules list`, `content list` | Machine-readable output. |
 
 ## Exit codes
 

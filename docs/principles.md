@@ -30,7 +30,7 @@ The design choices are deliberate:
 | **The machine lends an environment, not an identity** | An agent inherits the box it runs on the way `bash` inherits the `PATH`: the commands its environment does not declare. Its prompt, skills and templates come from the definition alone, since a prompt from someone's machine would make the agent theirs. |
 | **One path from dev to serve** | `info`, `dev`, `invoke`, and `start` open the same directory the same way, so local behavior matches served behavior. |
 | **Visible failures** | A message that cannot be answered ends with its outcome saying why, and a refusal is a value; silent fallback is worse than a clear error. |
-| **Agent-first checks** | An agent is developed in a coding environment, often by a coding agent, so every check is a command it can run and read: `info --json`, `invoke` with an exit code. |
+| **Agent-first checks** | An agent is developed in a coding environment, often by a coding agent, so every check is a command it can run and read: `info --json`, `invoke` with an exit code (and `--json` for its events), `schedules run`. |
 
 ## Concept → primitive → implementation
 

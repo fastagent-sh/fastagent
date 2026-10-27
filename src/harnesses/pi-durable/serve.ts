@@ -6,7 +6,7 @@
 import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
 import { loadContent } from "../../content/file.ts";
@@ -20,20 +20,31 @@ import {
 import { enterEnvironment } from "../../environment/mise.ts";
 import { log } from "../../log.ts";
 import { resolveStateRoot } from "../../paths.ts";
-import type { DurableAgent } from "./agent.ts";
+import type { DurableAgent, Unfinished } from "./agent.ts";
 import { type AgentDefinition, type BuiltDefinition, buildDefinition, openAgent, prepareDefinition } from "./open.ts";
-import { type StorageLocking, openInstanceStorage } from "./storage.ts";
+import { type StorageLocking, openLockedStorage } from "./storage.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   /**
-   * How the storage keeps a second opener out (storage.ts). Default: SQLite's own locks. `"memory"`: no storage of the
-   * instance's at all, for a one-shot message that must not meet the storage a serve of the same directory holds.
+   * Where the Agent keeps its sessions. Default `{ instance: "posix" }`: the instance's `agent.sqlite`, which one process
+   * holds at a time (storage.ts), with `wake` and `unwake`, since a serve's clock fires the wake-ups they keep. The other
+   * two never meet the storage a serve of the same directory holds, and have no `wake`, since no clock fires for them:
+   * `{ file }` is a database of the caller's own, held the same way (`holders`, when given, names in the refusal of a
+   * second opener what else opens it), and `"memory"` keeps nothing.
    */
-  locking?: StorageLocking | "memory";
+  storage?: ServingStorage;
+  /** What becomes of the messages an earlier process left unfinished in the storage. Default `"resume"`. */
+  unfinished?: Unfinished;
 }
+
+type ServingStorage = { instance: StorageLocking } | { file: string; holders?: string } | "memory";
+
+/** Who opens the instance's storage, for the refusal of a second opener. */
+const INSTANCE_HOLDERS =
+  "another `fastagent dev`, `start` or `schedules` command of this agent (or of another agent with the same state root)";
 
 export interface OpenedServing {
   agent: DurableAgent;
@@ -73,7 +84,26 @@ async function contentForThisRun(dir: string): Promise<ResolvedContent[]> {
 }
 
 /** The instance's database, under its state root. */
-const STORAGE_FILE = "agent.sqlite";
+const instanceStorageFile = (stateRoot: string) => join(stateRoot, "agent.sqlite");
+
+/**
+ * Run `work` holding the instance's storage, so no serve of the instance runs meanwhile: how a command changes the
+ * instance's state outside a serve without losing a write to a serve's own.
+ */
+export async function holdingInstance<T>(stateRoot: string, work: () => T): Promise<T> {
+  const storage = await openLockedStorage(instanceStorageFile(stateRoot), "posix", INSTANCE_HOLDERS);
+  try {
+    return work();
+  } finally {
+    await storage.close(BACKGROUND_CONTEXT);
+  }
+}
+
+function openStorage(stateRoot: string, storage: ServingStorage): Promise<Storage> | Storage {
+  if (storage === "memory") return new MemoryStorage();
+  if ("file" in storage) return openLockedStorage(storage.file, "posix", storage.holders);
+  return openLockedStorage(instanceStorageFile(stateRoot), storage.instance, INSTANCE_HOLDERS);
+}
 
 export async function openServing(dir: string, options: OpenServingOptions = {}): Promise<OpenedServing> {
   const definition = await prepareDefinition(dir);
@@ -90,18 +120,17 @@ export async function openServing(dir: string, options: OpenServingOptions = {})
     code.providers,
   );
   const stateRoot = resolveStateRoot(dir);
-  const locking = options.locking ?? "posix";
-  const storage =
-    locking === "memory" ? new MemoryStorage() : await openInstanceStorage(join(stateRoot, STORAGE_FILE), locking);
+  const chosen = options.storage ?? { instance: "posix" };
+  const storage = await openStorage(stateRoot, chosen);
   const agent = await openAgent(definition, {
     storage,
     code,
     content,
     credentials: models.credentials,
-    // A serve's clock fires the wake-ups `wake` keeps; a one-shot message has none.
-    ...(locking === "memory" ? {} : { stateRoot }),
+    ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
+    ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
   }).catch(async (error: unknown) => {
     // An Agent that did not open does not own the storage, and its lock would refuse this process's next attempt.
     await storage.close(BACKGROUND_CONTEXT);

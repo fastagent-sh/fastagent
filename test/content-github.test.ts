@@ -22,7 +22,7 @@ import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 
 /** The agent in `dir` as a serve opens it, with no storage of its own: what its content resolves to. */
 async function openedContent(dir: string) {
-  const opened = await openServing(dir, { locking: "memory" });
+  const opened = await openServing(dir, { storage: "memory" });
   await opened.agent.close();
   return opened.content;
 }

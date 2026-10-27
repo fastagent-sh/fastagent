@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runInvokeStream } from "../src/cli/invoke-stream.ts";
+import { runInvokeJson, runInvokeStream } from "../src/cli/invoke-stream.ts";
 import type { Json, Outcome, SessionEvent } from "../src/agent-api.ts";
 import type { StreamResult } from "../src/agent-api-stream.ts";
 
@@ -117,5 +117,48 @@ describe("runInvokeStream", () => {
     const s = sinks();
     await runInvokeStream(stream(started("t1", "lookup"), result("t1", false), ended()), s.outFn, s.errFn);
     expect(s.err.join("\n")).not.toMatch(/failed/);
+  });
+});
+
+describe("runInvokeJson", () => {
+  const lines = async (from: StreamResult) => {
+    const written: string[] = [];
+    const code = await runInvokeJson(from, (line) => written.push(line));
+    return { code, parsed: written.map((line) => JSON.parse(line) as { type: string }) };
+  };
+
+  it("prints the receipt, then every event as the Agent API has it, through done", async () => {
+    const events = [started("t1", "read", { path: "SYSTEM.md" }), result("t1", false), delta("ok"), ended()];
+    const { code, parsed } = await lines(stream(...events));
+    expect(code).toBe(0);
+    expect(parsed).toEqual([
+      { type: "receipt", sessionId: "s", message: { messageId, status: "queued", position: 0 }, duplicate: false },
+      ...events,
+    ]);
+  });
+
+  it("exits 1 for every end but completed, its last line saying why", async () => {
+    const error = { code: "model_error", message: "boom", retryable: true };
+    expect((await lines(stream(ended({ status: "max_tokens" })))).code).toBe(1);
+    const failed = await lines(stream(ended({ status: "failed", error })));
+    expect([failed.code, failed.parsed.at(-1)]).toEqual([1, ended({ status: "failed", error })]);
+    const rejected = await lines({ ok: false, error: { code: "busy", message: "busy", retryable: true } });
+    expect([rejected.code, rejected.parsed]).toEqual([
+      1,
+      [{ type: "rejected", error: { code: "busy", message: "busy", retryable: true } }],
+    ]);
+    const unknown = await lines({ ok: false, unknown: { reason: "the disk is gone", sessionId: "s" } });
+    expect([unknown.code, unknown.parsed]).toEqual([
+      1,
+      [{ type: "unknown", reason: "the disk is gone", sessionId: "s" }],
+    ]);
+    const serving = { type: "serving_error", error: { code: "internal", message: "lost", retryable: false } } as const;
+    const broken = await lines(stream(delta("x"), serving, ended()));
+    expect([broken.code, broken.parsed.at(-1)]).toEqual([1, serving]);
+    const cut = await lines(stream(delta("x")));
+    expect([cut.code, cut.parsed.at(-1)]).toEqual([
+      1,
+      { type: "unfinished", reason: "the stream ended before the message did" },
+    ]);
   });
 });

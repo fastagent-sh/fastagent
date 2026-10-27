@@ -116,16 +116,30 @@ const invoke: CommandSpec = {
   name: "invoke",
   summary: "send ONE message to the agent and exit",
   description:
-    "Send ONE message to the agent, in a new conversation, and exit — no server. The answer streams to " +
-    "stdout, tool/diagnostics to stderr, a message that does not complete exits non-zero. For CI smoke and " +
-    "quick checks. Same model resolution as dev.",
+    "Send ONE message to the agent and exit — no server. The answer streams to stdout, tool/diagnostics to " +
+    "stderr; --json prints the receipt and the message's events as JSON lines instead. A message that does not " +
+    "complete exits non-zero. Each run starts a new session and prints its id on stderr; --session <id> sends " +
+    "the message into that session instead, continuing it. Sessions are kept in <state>/invoke.sqlite, apart " +
+    "from the storage a serve holds, so it runs beside `dev`; one invoke of an agent runs at a time. Same model " +
+    "resolution as dev, a continued session included. For CI smoke and quick checks, by a person or a coding agent.",
   args: [{ name: "<message>", description: "the message to send" }, AGENT_ARG],
-  flags: [MODEL, NO_INPUT],
-  examples: [{ cmd: `fastagent invoke "summarize today's inbox"` }],
+  flags: [
+    MODEL,
+    NO_INPUT,
+    { flags: "--json", description: "the receipt and the message's events as JSON lines on stdout" },
+    { flags: "--session <id>", description: "continue the session an earlier invoke printed" },
+  ],
+  examples: [
+    { cmd: `fastagent invoke "summarize today's inbox"` },
+    { cmd: `fastagent invoke "remember 42"`, note: "prints its session's id" },
+    { cmd: `fastagent invoke --session <id> "which number?"` },
+  ],
   run: async (args, f) =>
     (await import("./commands/invoke.ts")).runInvoke(args[0] as string, args[1] as string, {
       model: f.model as string | undefined,
       input: f.input !== false,
+      json: f.json === true,
+      ...(typeof f.session === "string" ? { session: f.session } : {}),
     }),
 };
 
@@ -492,7 +506,7 @@ const content: CommandSpec = {
 
 const schedules: CommandSpec = {
   name: "schedules",
-  summary: "list what will wake this agent up: its schedules and its own wake-ups",
+  summary: "what will wake this agent up: list, run a schedule now, cancel a wake-up",
   subcommands: [
     {
       name: "list",
@@ -500,14 +514,51 @@ const schedules: CommandSpec = {
       description:
         "List the schedules this definition declares (defineSchedule in src/schedules/<name>.ts): the next cron " +
         "instant, how the last run ended and the session its runs continue. The agent's own pending wake-ups are listed too, prefixed " +
-        "`wake`: a different owner (the STATE, not the definition), and only the agent cancels them (the `unwake` " +
-        "tool). --json adds each schedule's retained fire history. It changes no state; like every command that reads " +
-        "the definition, it regenerates .fastagent/.",
+        "`wake`: a different owner (the STATE, not the definition), cancelled by the agent's `unwake` tool or " +
+        "`schedules unwake`. --json adds each schedule's retained fire history. It changes no state; like every " +
+        "command that reads the definition, it regenerates .fastagent/.",
       args: [AGENT_ARG],
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent schedules list" }],
       run: async (args, flags) =>
         (await import("./commands/schedules.ts")).runSchedulesList(args[0] as string, flags.json === true),
+    },
+    {
+      name: "run",
+      summary: "fire one schedule now, as its clock would",
+      description:
+        "Fire the schedule <name> now, the way its clock would: in its own session, with its claim and outcome " +
+        "recorded (`schedules list` shows them). The answer goes to stdout, the fire's log to stderr; it exits " +
+        "non-zero unless its message completed. It opens the instance's storage, so it is refused while `dev` or " +
+        "`start` serves this agent, and they are refused while it runs; it is refused too while the instance holds " +
+        "messages a stopped serve left unfinished, which it would run and cut off: serve them to their end first.",
+      args: [{ name: "<name>", description: "the schedule, as src/schedules/<name>.ts names it" }, AGENT_ARG],
+      flags: [
+        {
+          flags: MODEL.flags,
+          description:
+            "the default model, as for dev: the schedule's session takes it at its first fire, and keeps the one " +
+            "it took after that",
+        },
+        NO_INPUT,
+      ],
+      examples: [{ cmd: "fastagent schedules run daily-digest" }],
+      run: async (args, f) =>
+        (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, args[1] as string, {
+          model: f.model as string | undefined,
+          input: f.input !== false,
+        }),
+    },
+    {
+      name: "unwake",
+      summary: "cancel one of the agent's pending wake-ups",
+      description:
+        "Cancel the pending wake-up <id> (`schedules list` shows the ids), whatever session set it: the way to " +
+        "one set where nobody can message the agent, such as a schedule's own session. It is refused while `dev` " +
+        "or `start` serves this agent, since a serve's clock writes the same store.",
+      args: [{ name: "<id>", description: "the wake-up's id" }, AGENT_ARG],
+      examples: [{ cmd: "fastagent schedules unwake 3f1c…" }],
+      run: async (args) => (await import("./commands/schedules.ts")).runUnwake(args[0] as string, args[1] as string),
     },
   ],
 };

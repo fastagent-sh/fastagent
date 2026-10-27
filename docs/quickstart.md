@@ -171,8 +171,8 @@ fire continues the schedule's own session, so the agent sees what its earlier ru
 
 On resident hosts, the cron fires while `dev`/`start` is serving; keep the process running.
 [AgentCore](deploy.md#aws-bedrock-agentcore) instead uses EventBridge and supports scale-to-zero.
-`fastagent schedules list` shows when each schedule runs next and how its last run ended. To try the prompt now,
-`fastagent invoke` it. Agents can also schedule **themselves** with the built-in `wake` tool ("check the deploy in
+`fastagent schedules list` shows when each schedule runs next and how its last run ended. To try one now, as its
+clock would fire it, `fastagent schedules run <name>`. Agents can also schedule **themselves** with the built-in `wake` tool ("check the deploy in
 10 minutes"), on every serve. See [Schedules](configuration.md#schedules).
 
 ## Where next

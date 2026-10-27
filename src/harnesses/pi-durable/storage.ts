@@ -1,11 +1,12 @@
 /**
- * The instance's storage: one SQLite database, opened by the one process that owns the instance (architecture.md
- * §4.3). pi-durable does no cross-process locking of its own, and in WAL mode SQLite lets a second process open and
- * write the same file, which would resume and run the same messages twice. So the database is opened in EXCLUSIVE
- * locking mode: the first access takes the file's lock and keeps it until the process closes it or dies, and a second
- * opener is refused. Locally that is SQLite's own POSIX lock. On a file system where those fail (AgentCore's session
- * storage), the database locks by a `<path>.lock` directory instead, which outlives a stopped microVM: the process
- * that holds the deployment's lease knows such a lock is a dead process's, removes it, and says so.
+ * A storage only one process opens: the instance's SQLite database, held by the one process that owns the instance
+ * (architecture.md §4.3), and `fastagent invoke`'s own. pi-durable does no cross-process locking of its own, and in
+ * WAL mode SQLite lets a second process open and write the same file, which would resume and run the same messages
+ * twice. So the database is opened in EXCLUSIVE locking mode: the first access takes the file's lock and keeps it
+ * until the process closes it or dies, and a second opener is refused. Locally that is SQLite's own POSIX lock. On a
+ * file system where those fail (AgentCore's session storage), the database locks by a `<path>.lock` directory
+ * instead, which outlives a stopped microVM: the process that holds the deployment's lease knows such a lock is a dead
+ * process's, removes it, and says so.
  */
 import { existsSync, mkdirSync, rmdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -21,7 +22,8 @@ export type StorageLocking = "posix" | "leased-dotfile";
 const BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY = 5;
 
-export async function openInstanceStorage(path: string, locking: StorageLocking): Promise<Storage> {
+/** Open the database at `path`, or refuse, naming `holders` (what else opens it) when given. */
+export async function openLockedStorage(path: string, locking: StorageLocking, holders?: string): Promise<Storage> {
   mkdirSync(dirname(path), { recursive: true });
   if (locking === "leased-dotfile") breakStaleLock(`${path}.lock`);
   const location = locking === "posix" ? path : `file:${path}?vfs=unix-dotfile`;
@@ -37,11 +39,8 @@ export async function openInstanceStorage(path: string, locking: StorageLocking)
     // The connection only: the adapter's close checkpoints first, which a refused opener cannot do.
     database.close();
     if ((error as { errcode?: unknown }).errcode !== SQLITE_BUSY) throw error;
-    throw new Error(
-      `the storage ${path} is held by another process: another \`fastagent dev\` or \`start\` serves this agent ` +
-        "(or another agent with the same state root). Stop that one first",
-      { cause: error },
-    );
+    const who = holders === undefined ? "" : `: ${holders} is running`;
+    throw new Error(`the storage ${path} is held by another process${who}. Stop that one first`, { cause: error });
   }
 }
 

@@ -242,6 +242,29 @@ export function fireScheduleOnce(opts: {
 }
 
 /**
+ * Fire `schedule` once, now, outside its clock (`fastagent schedules run`), the way its clock would: a newest claim no
+ * fire reported is accounted for first, as a boot does, then this instant is the slot, claimed and settled as any.
+ */
+export function fireScheduleNow(opts: {
+  agent: ScheduledAgent;
+  stateRoot: string;
+  schedule: Schedule;
+}): Effect.Effect<ScheduleFireOutcome & { slot: Date }, PortFailure> {
+  return Effect.gen(function* () {
+    const { agent, stateRoot, schedule } = opts;
+    const fire = yield* Effect.try({
+      try: () => latestFire(stateRoot, schedule.name),
+      catch: (cause) => new PortFailure(cause),
+    });
+    if (fire !== undefined && fire.outcome === undefined) {
+      yield* accountForUnreportedFire(agent, stateRoot, schedule.name, fire);
+    }
+    const slot = new Date((yield* Clock.Clock).currentTimeMillisUnsafe());
+    return { slot, ...(yield* fireScheduleOnce({ agent, stateRoot, schedule, slot })) };
+  });
+}
+
+/**
  * Account for a claim whose fire never reported: the slot is claimed BEFORE its message is sent, and shutdown does not
  * wait for the message (see `AgentService.close`), so a restart landing mid-fire leaves a claim nothing settled — the
  * exact silence the history exists to prevent. Read once, at the next boot. The claim is the ONE record here: it IS

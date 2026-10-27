@@ -162,9 +162,10 @@ Fixes depend on the caller:
 
 ## `the storage … is held by another process`
 
-One process holds an agent's storage (`<state root>/agent.sqlite`) at a time: another `dev` or `start` of the same agent
-is running, or another agent shares its state root (`FASTAGENT_STATE_DIR`). Stop that one first. `fastagent invoke`
-uses storage of its own and runs beside them.
+One process holds an agent's storage (`<state root>/agent.sqlite`) at a time: another `dev`, `start`, `schedules run`
+or `schedules unwake` of the same agent is running, or another agent shares its state root (`FASTAGENT_STATE_DIR`).
+Stop that one first. `fastagent invoke` uses storage of its own (`<state root>/invoke.sqlite`) and runs beside them;
+one `invoke` of an agent runs at a time.
 
 ## A channel or schedule is disabled
 

@@ -85,7 +85,7 @@ describe("a caller's credential store replaces the credentials file", () => {
     const { agent } = await agentWorkspace();
     const store = await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } });
 
-    const opened = await openServing(agent, { credentialStore: store, locking: "memory" });
+    const opened = await openServing(agent, { credentialStore: store, storage: "memory" });
     try {
       expect(opened.models.auth).toBeUndefined(); // no file is in use, so none is reported
       expect((await opened.models.authStatus("anthropic")).source).toBe("stored credential");
@@ -184,7 +184,7 @@ describe("a caller's credential store replaces the credentials file", () => {
   it("refuses both sources, and a login with neither", async () => {
     const { host, agent } = await agentWorkspace();
     const both = { authPath: join(host, "auth.json"), credentialStore: await recordingStore() };
-    await expect(openServing(agent, { ...both, locking: "memory" })).rejects.toThrow(/not both/);
+    await expect(openServing(agent, { ...both, storage: "memory" })).rejects.toThrow(/not both/);
     expect(() => createPiModels(both)).toThrow(/not both/);
     const interaction = { signal: new AbortController().signal, notify: () => {}, prompt: async () => "" };
     // A JavaScript caller can pass either shape the types forbid.

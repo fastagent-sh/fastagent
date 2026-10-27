@@ -416,20 +416,20 @@ describe("environment: entered by a process that runs the agent", () => {
 
   it("requires the variables context.json declares before the agent runs, naming the file", async () => {
     const dir = await agentDir({ variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } } });
-    const open = () => openServing(dir, { locking: "memory" });
+    const open = () => openServing(dir, { storage: "memory" });
     await expect(open()).rejects.toThrow(/missing required secrets: FA_TEST_HOST \(context\.json\)/);
     process.env.FA_TEST_HOST = "github.example.com";
     await (await open()).agent.close();
   });
 
   it("is entered as the agent opens, so every process that opens it has it", async () => {
-    await expect(openServing(await agentDir({ packages: { gh: "2" } }), { locking: "memory" })).rejects.toThrow(
+    await expect(openServing(await agentDir({ packages: { gh: "2" } }), { storage: "memory" })).rejects.toThrow(
       /the agent has no mise installed/,
     );
     const dir = await agentDir({ packages: { gh: "2" } });
     await fakeMise(dir);
     vi.spyOn(log, "info").mockImplementation(() => {});
-    await (await openServing(dir, { locking: "memory" })).agent.close();
+    await (await openServing(dir, { storage: "memory" })).agent.close();
     expect((process.env.PATH ?? "").split(delimiter)[0]).toBe("/fake/tools");
   });
 });
