@@ -541,6 +541,7 @@ the one map a channel needs and the platform's message id as `idempotencyKey` ke
 |---|---|---|
 | `GET /v1/agent` | `info` | `AgentInfo` |
 | `GET /v1/usage` | `usage` | `Usage` |
+| `GET /v1/openapi.json` | — | This API as an OpenAPI 3.1 document, generated from the contract the server and `connectAgent` are built from, so it cannot describe another API than the one served |
 | `POST /v1/sessions` | `sessions.create` | `201` `Session` |
 | `GET /v1/sessions?limit&after` | `sessions.list` | `Page<Session>` |
 | `GET /v1/sessions/{sessionId}` | `sessions.get` | `Session` |
@@ -671,6 +672,7 @@ bindings answer the same way. It checks:
 | — | `sessions.compact` | A Caller may compact a long session |
 | `attachment` answers base64, or `undefined` | `sessions.attachment` answers bytes, or rejects `not_found` | Bytes are what HTTP sends |
 | — | `usage()`, `info().models`, `info().tools`, `defaultModel` | Spend, and what a session may be set to |
+| — | `GET /v1/openapi.json` | A Caller in another language generates its client from it |
 | `user_message`, `assistant_message`, `message_delta`, `retry_scheduled` | `user`, `assistant`, `delta`, `retrying` | "Message" means only what a Caller sends |
 | `serving_error` | `stream_error` | Says what it ends; not `error`, which `EventSource` gives to its connection listener |
 | The `assistant` entry's `outcome` (`failed`, `aborted`, `truncated`) | Its `stop` (`failed`, `aborted`, `max_tokens`) and `error` | The message's status is the outcome; an entry says how its reply stopped |
