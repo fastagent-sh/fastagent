@@ -543,7 +543,7 @@ function durableAgent(
     settle(
       Effect.gen(function* () {
         const decoded = yield* decode(SessionChanges, changes, "sessions.update");
-        if (Object.keys(decoded).length === 0) {
+        if (Object.values(decoded).every((value) => value === undefined)) {
           return yield* agentError(
             "invalid_request",
             "Nothing to update: give a model, a thinking level, instructions or tools",
@@ -568,7 +568,7 @@ function durableAgent(
         const rest = position === undefined ? ordered : ordered.filter(({ activity }) => activity < position);
         const page = rest.slice(0, limit);
         const last = page.at(-1);
-        const data = yield* Effect.forEach(page, ({ conversationId }) => reads.session({ id: conversationId }));
+        const data = yield* reads.sessionsOf(page.map(({ conversationId }) => conversationId));
         return {
           data,
           ...(rest.length > limit && last !== undefined ? { next: ids.encodeCursor(last.activity) } : {}),
@@ -643,7 +643,7 @@ function durableAgent(
             abortFailed = error;
             if (!closing) log.warn(`[fastagent] stopping session ${sessionId} failed: ${String(error)}`);
           });
-          return harness.commit(async (tx) => {
+          const check = harness.commit(async (tx) => {
             const { run, queued } = await before;
             const task = run === undefined ? undefined : await tx.task(run.taskId);
             const stillQueued = new Set(queuedInputs(await tx.doc(InboxDoc, conversation.id)));
@@ -654,6 +654,9 @@ function durableAgent(
               stopped: [...(run?.inputs ?? []), ...queued],
             };
           }, context);
+          // Both, so a harness that refuses every commit (closing, or its storage failed) fails this cancel once,
+          // leaving neither refusal unheard: the check's callback, which awaits the read, never runs then.
+          return Promise.all([before, check]).then(([, checked]) => checked);
         });
         if (!recorded.marked) {
           throw new Error(

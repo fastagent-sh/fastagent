@@ -2133,7 +2133,7 @@ describe("telegram /stop command", () => {
   it("answers an addressed group stop with whatever happened", async () => {
     for (const [label, result, expected] of [
       ["nothing is running", "idle", "Nothing is running."],
-      ["the agent refuses the abort", "unavailable", "\u26a0\ufe0f Could not stop (unavailable)."],
+      ["the agent refuses the stop", "internal", "\u26a0\ufe0f Could not stop (internal)."],
     ] as const) {
       const fetchMock = okFetch();
       vi.stubGlobal("fetch", fetchMock);

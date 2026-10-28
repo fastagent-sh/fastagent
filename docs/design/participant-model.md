@@ -244,11 +244,11 @@ cannot read the session).
 **Rungs 3 and 4 are one mechanism with two parameters, implemented as a fork of the room's session.** The
 channel knows which place this one branched from and the reply chain the thread starts under (the referent,
 then each message it replies to, nearest first). When the thread has no session yet, the channel
-creates one with `createSession({ from: { sessionId: <the room's>, entryId } })` ([Agent API](../SPEC.md) §5) and
+creates one with `sessions.create({ forkFrom: { sessionId: <the room's>, entryId } })` ([Agent API](agent-api.md) §4) and
 records it in its map, inside the per-place turn queue, in the order session, record, message
 ([architecture.md](architecture.md) §2): the record is the decision, so there is no marker to persist and no decision
 to retry. The branch point is the first message of the room's that the chain names (`kit/thread-fork.ts`): a channel
-sends with the platform's message id as the `idempotencyKey`, so `getMessage(room, { idempotencyKey })` finds the
+sends with the platform's message id as the `idempotencyKey`, so `messages.get({ sessionId: room, idempotencyKey })` finds the
 message a user's chat message became, and the thread forks at its answer, at its own entry when it has none, and at
 the room's present when nothing in the chain names one (a chat message the agent was not asked about, or one it
 posted itself) or it is still queued. A chat message the channel posted for an answer does not name it yet

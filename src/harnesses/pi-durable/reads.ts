@@ -123,20 +123,30 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
 
   const inbox = (conversation: Conversation) => port(() => harness.snapshot(InboxDoc, conversation.id, context));
 
-  /** One commit's reads, so the session's status, reply and settings are of one moment. */
-  const session = (conversation: Pick<Conversation, "id">): Effect.Effect<Session, PortFailure> =>
+  /**
+   * The sessions as they are now, in one commit: each one's status, reply and settings of one moment, and a page of
+   * them one turn on pi-durable's commit line, which every running session writes through too.
+   */
+  const sessionsOf = (conversations: readonly ConversationId[]): Effect.Effect<Session[], PortFailure> =>
     port(() =>
-      harness.commit(
-        async (tx) =>
-          sessionOf(
-            ids.encode(conversation.id),
-            await tx.doc(LiveDoc, conversation.id),
-            await tx.doc(UsageDoc, conversation.id),
-            await tx.doc(AgentDoc, conversation.id),
-          ),
-        context,
-      ),
+      harness.commit(async (tx) => {
+        const read: Session[] = [];
+        for (const id of conversations) {
+          read.push(
+            sessionOf(
+              ids.encode(id),
+              await tx.doc(LiveDoc, id),
+              await tx.doc(UsageDoc, id),
+              await tx.doc(AgentDoc, id),
+            ),
+          );
+        }
+        return read;
+      }, context),
     );
+
+  const session = (conversation: Pick<Conversation, "id">): Effect.Effect<Session, PortFailure> =>
+    sessionsOf([conversation.id]).pipe(Effect.map((read) => read[0] as Session));
 
   return {
     conversation,
@@ -151,5 +161,6 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
     submissionByKey,
     inbox,
     session,
+    sessionsOf,
   };
 }

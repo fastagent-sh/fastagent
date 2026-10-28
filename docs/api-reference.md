@@ -11,62 +11,66 @@ by what each costs to import:
 
 | | Harness-neutral | Runtime-neutral | Holds |
 |---|---|---|---|
-| `/core` | yes | yes | The Agent API's types, `stream()`, the channel contract. Effect only, no Node built-in |
+| `/core` | yes | yes | The Agent API's types and `AgentError`, the channel contract. Effect only, no Node built-in |
 | `/node` | yes | no | Serving a definition's channels and schedules, the Node HTTP bridge, content and authoring |
 | `/pi` | no | no | What an author writes, opening a definition as an Agent, the model environment and sign-in |
 
 The channel subpaths (`/telegram`, `/slack`, `/feishu`, `/lark`) hold each first-party channel. FastAgent is pre-1.0;
-the [Agent API](SPEC.md) is the stable design center.
+the [Agent API](design/agent-api.md) is the stable design center.
 
 ## The Agent API
 
 Every Caller (a channel, a schedule, `fastagent invoke`, an app that embeds the agent) uses one interface, in process.
-The [SPEC](SPEC.md) is normative; this is its shape:
+[agent-api.md](design/agent-api.md) is normative (v2; its HTTP binding is not served yet); this is its shape:
 
 ```ts
 interface Agent {
-  info(): AgentInfo; // name, description, the content types it takes, its commands
-  invoke(request: InvokeRequest): Promise<InvokeResult>; // a receipt, then wait() for the end
-  getMessage(sessionId: string, key: { messageId: string } | { idempotencyKey: string }): Promise<MessageStatus | undefined>;
-  createSession(options?: { from?: { sessionId: string; entryId?: string }; model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevel }): Promise<CreateSessionResult>;
-  configure(sessionId: string, settings: SessionSettings): Promise<ConfigureResult>;
-  read(sessionId: string, options?: { after?: string; before?: string; limit?: number }): Promise<ReadResult>;
-  resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
-  abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
-  attachment(sessionId: string, ref: string): Promise<Attachment | undefined>;
-  listSessions(options?: { before?: string; limit?: number }): Promise<ListResult>;
+  info(): Promise<AgentInfo>; // name, description, commands, the tools and models a session may name
+  usage(): Promise<Usage>; // what the instance has spent
+  sessions: {
+    create(options?: SessionSettings & { forkFrom?: { sessionId: string; entryId?: string } }): Promise<Session>;
+    get(sessionId: string): Promise<Session>;
+    list(options?: { limit?: number; after?: string }): Promise<Page<Session>>; // most recently active first
+    update(sessionId: string, changes: SessionChanges): Promise<Session>; // model, thinkingLevel, instructions, tools
+    entries(sessionId: string, options?: { after?: string; before?: string; limit?: number }): Promise<Page<Entry>>;
+    events(sessionId: string, options?: { after?: string; signal?: AbortSignal }): AsyncIterable<SessionEvent>;
+    cancel(sessionId: string): Promise<{ stopped: string[] }>; // once the stop is recorded
+    compact(sessionId: string, options?: { instructions?: string }): Promise<void>;
+    attachment(sessionId: string, ref: string): Promise<{ mimeType: string; data: Uint8Array }>;
+  };
+  messages: {
+    send(request: SendRequest, options?: { wait?: number; signal?: AbortSignal }): Promise<Message>;
+    stream(request: SendRequest, options?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent>;
+    get(key: MessageKey, options?: { wait?: number; signal?: AbortSignal }): Promise<Message>; // by id or by key
+  };
 }
 
-interface InvokeRequest {
-  sessionId?: string; // absent: a new session, named in the receipt
-  content: ContentPart[]; // text and images
+interface SendRequest {
+  sessionId: string;
+  content: string | ContentPart[]; // a string is one text part; text and images
   idempotencyKey?: string; // a resend with the same key returns the same message
   whenBusy?: "queue" | "steer" | "reject"; // default "queue"
 }
 ```
 
-Failures are values: an operation answers `{ ok: false, error }`, and an `AgentError` carries `code`, `message` and
-`retryable`. `getMessage` and `attachment`, which have no failure value, reject with an `AgentRejection` when the
-storage cannot answer. `LIMITS` holds the API's limits.
+Every operation resolves with what it names or rejects with an `AgentError` (`code`, `message`, `retryable`,
+`details`); `instanceof AgentError` tells one apart. A message is `queued` or `running` until it ends `completed`,
+`incomplete` (cut off at its token limit), `failed` (its `error` says why) or `canceled`; `hasEnded(message)` says
+whether it has. `wait` is in seconds: `send` and `get` answer once the message has ended, or with it as it is then. A
+`signal` lets go of a wait or a stream, and the message goes on; only `sessions.cancel` stops it. `LIMITS` holds the
+API's limits.
 
 ```ts
-const sent = await agent.invoke({ sessionId, content: [{ type: "text", text: "Summarize the inbox" }] });
-if (!sent.ok) throw new Error("error" in sent ? sent.error.message : sent.unknown.reason);
-const end = await sent.wait(); // { ok: true, message: DoneMessage } or { ok: false, unfinished }
-if (end.ok && end.message.outcome.status === "completed") console.log(end.message.answer?.text);
+const session = await agent.sessions.create();
+const message = await agent.messages.send({ sessionId: session.id, content: "Summarize the inbox" }, { wait: 120 });
+if (message.status === "completed") console.log(message.answer?.text);
 ```
 
-### `stream`
-
-```ts
-function stream(agent: Agent, request: InvokeRequest & { sessionId: string }): Promise<StreamResult>;
-type StreamResult = ({ ok: true } & Receipt & { events: AsyncIterable<SessionEvent> }) | { ok: false; error } | { ok: false; unknown };
-```
-
-Sends a message and reads its answer as it is written: the receipt, then the message's own events from its
-`user_message` entry through its `done`, only its own even when it queued behind another. It is a Caller of the API
-over any `Agent`, adding nothing to it; it is what a channel's live preview reads. Leaving the iteration detaches;
-the message goes on.
+`messages.stream` sends a message and delivers it as it is written: first a `message` event with it as recorded, then
+its session's events from its own `user` entry through its `done` (`delta`, `tool_started`, `tool_progress`,
+`retrying`, `entry`), only its own even when it queued behind another; a send whose key the session has seen delivers
+that message from wherever it is. A refused send rejects the first read; a stream that cannot go on after that ends
+with a `stream_error` event. It is what a channel's live preview reads.
 
 ## Serving a definition
 
@@ -114,7 +118,7 @@ before anything runs, as `fastagent invoke` does with what a stopped `invoke` le
 their sessions, as `fastagent schedules run` does.
 
 The default model is optional here: without one the agent opens, and a message to a session with no model of its own
-ends refused `missing_model` until the session is given one (`configure`).
+is refused `missing_model` until the session is given one (`sessions.update`).
 
 ```ts
 // From `@fastagent-sh/fastagent/node`.
@@ -324,7 +328,7 @@ Every serve (`dev`, `start`, `mountAgentService` over the instance's storage, no
 ## Subpath exports
 
 ```ts
-import { type Agent, stream, AgentRejection } from "@fastagent-sh/fastagent/core";
+import { type Agent, AgentError, hasEnded } from "@fastagent-sh/fastagent/core";
 import { mountAgentService, nodeListener, secretEquals } from "@fastagent-sh/fastagent/node";
 import { defineAgent, defineSchedule, needs, openServing, sessionIdOf } from "@fastagent-sh/fastagent/pi";
 import { telegramChannel, telegramTransport } from "@fastagent-sh/fastagent/telegram";

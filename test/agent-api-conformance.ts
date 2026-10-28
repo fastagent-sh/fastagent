@@ -165,6 +165,28 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(await agent.sessions.get(sessionId)).toMatchObject({ status: "idle" });
       });
 
+      it("reads a field given as undefined as one left out, as a TypeScript Caller writes it", async () => {
+        const unset = undefined as string | undefined;
+        const sessionId = (await agent.sessions.create({ model: undefined, forkFrom: undefined })).id;
+        const message = await send(
+          { sessionId, content: "hi", idempotencyKey: unset, whenBusy: undefined },
+          { wait: WAIT, signal: undefined },
+        );
+        expect(message).toMatchObject({ status: "completed", answer: { text: "answer: hi" } });
+        expect(message).not.toHaveProperty("idempotencyKey");
+        expect(
+          (await agent.sessions.entries(sessionId, { before: unset, after: unset, limit: undefined })).data,
+        ).toHaveLength(2);
+        expect((await agent.sessions.list({ after: unset })).data.map(({ id }) => id)).toContain(sessionId);
+        expect(await agent.sessions.update(sessionId, { thinkingLevel: "high", model: undefined })).toMatchObject({
+          thinkingLevel: "high",
+        });
+        await expect(agent.sessions.update(sessionId, { model: undefined })).rejects.toMatchObject({
+          code: "invalid_request",
+        });
+        await agent.sessions.compact(sessionId, { instructions: unset });
+      });
+
       it("takes a string as one text part, and text and images", async () => {
         const sessionId = await newSession(agent);
         expect((await ended(agent, await send({ sessionId, content: "hi" }))).answer?.text).toBe("answer: hi");

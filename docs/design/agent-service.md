@@ -157,14 +157,14 @@ what the agent changes there is kept is designed later (§2).
 ### 3.5 Sessions and triggers
 
 A **session** is a conversation's continuity: the messages of one session share its history. The Agent names it, and
-it may start as a fork of another session ([Agent API](../SPEC.md) §5). A session is the agent's working memory of a
+it may start as a fork of another session ([Agent API](agent-api.md) §4). A session is the agent's working memory of a
 conversation: what should outlast it belongs in content, and a chat place's own history is the platform's
 ([place-history.md](place-history.md)).
 
 A session's history is a list of entries in the instance's storage: the messages (the asks, the answers with their
 usage, the tool calls and results), compactions, and FastAgent's own entries, which the model never sees. A fork shares
-the entries it inherited. The live events (`message_delta`, `tool_*`) are not stored: a Caller that reconnects resumes
-after its last entry (`resume`, [Agent API](../SPEC.md) §5.1). What the service prints is its own log, kept by the
+the entries it inherited. The live events (`delta`, `tool_*`) are not stored: a Caller that reconnects continues
+after its last entry (`sessions.events`, [Agent API](agent-api.md) §6.1). What the service prints is its own log, kept by the
 host.
 
 A **trigger** is where an invoke comes from: a request (HTTP, another agent), a message (a channel), an event (a

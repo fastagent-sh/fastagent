@@ -9,10 +9,10 @@ updated: 2026-10-26
 
 # Agent API — Specification v1
 
-> **Status: current.** This is the API a served agent offers its consumers, and what the code implements
-> (`src/agent-api.ts`). Changing its semantics needs an explicit decision. Why it has this shape is
-> [architecture.md](design/architecture.md). Its successor, one model in process and over HTTP, is proposed in
-> [design/agent-api.md](design/agent-api.md) and replaces this document when implemented.
+> **Status: superseded in code.** The code now implements its successor in process, the Agent API v2
+> ([design/agent-api.md](design/agent-api.md)): read that one for what `src/agent-api.ts` offers. This document
+> describes v1 until v2's HTTP binding lands and v2 replaces it here. Why the API has this shape is
+> [architecture.md](design/architecture.md).
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
 

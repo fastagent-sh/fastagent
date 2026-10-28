@@ -70,20 +70,25 @@ export type AgentErrorData = typeof AgentErrorData.Type;
 /** What every operation rejects with (§7). */
 export class AgentError extends Schema.Error<AgentError>("AgentError")(AgentErrorData) {}
 
-const SettingsFields = {
-  model: Schema.optionalKey(ModelRef),
-  thinkingLevel: Schema.optionalKey(ThinkingLevel),
+/**
+ * A session's settings. An object the Agent answers with leaves out what it does not name (`optionalKey`); what a Caller
+ * sends may also give a field as `undefined`, which is the same as leaving it out (`optional`), as a TypeScript Caller
+ * without `exactOptionalPropertyTypes` writes it.
+ */
+const settingsFields = <O extends typeof Schema.optionalKey | typeof Schema.optional>(optional: O) => ({
+  model: optional(ModelRef),
+  thinkingLevel: optional(ThinkingLevel),
   /** Text added at the end of the agent's system prompt for this session. */
-  instructions: Schema.optionalKey(Schema.String),
+  instructions: optional(Schema.String),
   /** The tools the session enables, each among `info().tools`. */
-  tools: Schema.optionalKey(Schema.Array(Schema.String)),
-};
+  tools: optional(Schema.Array(Schema.String)),
+});
 
 export class Session extends Schema.Opaque<Session>()(
   Schema.Struct({
     id: Schema.String,
     status: Schema.Literals(["idle", "running"]),
-    ...SettingsFields,
+    ...settingsFields(Schema.optionalKey),
     /** The agent's reply being written, as written so far: present only while one is. */
     reply: Schema.optionalKey(Schema.Struct({ text: Schema.String, thinking: Schema.optionalKey(Schema.String) })),
     usage: Usage,
@@ -164,34 +169,34 @@ export type MessageStreamEvent = typeof MessageStreamEvent.Type;
 const Limit = (max: number) => Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: max }));
 const Seconds = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
 
-export const SessionSettings = Schema.Struct(SettingsFields);
+export const SessionSettings = Schema.Struct(settingsFields(Schema.optional));
 export type SessionSettings = typeof SessionSettings.Type;
 
 export const CreateSessionOptions = Schema.Struct({
-  ...SettingsFields,
-  forkFrom: Schema.optionalKey(Schema.Struct({ sessionId: Schema.String, entryId: Schema.optionalKey(Schema.String) })),
+  ...settingsFields(Schema.optional),
+  forkFrom: Schema.optional(Schema.Struct({ sessionId: Schema.String, entryId: Schema.optional(Schema.String) })),
 });
 export type CreateSessionOptions = typeof CreateSessionOptions.Type;
 
 /** `null` clears a field back to the deployment's. */
 export const SessionChanges = Schema.Struct({
-  model: Schema.optionalKey(Schema.NullOr(ModelRef)),
-  thinkingLevel: Schema.optionalKey(Schema.NullOr(ThinkingLevel)),
-  instructions: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  tools: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+  model: Schema.optional(Schema.NullOr(ModelRef)),
+  thinkingLevel: Schema.optional(Schema.NullOr(ThinkingLevel)),
+  instructions: Schema.optional(Schema.NullOr(Schema.String)),
+  tools: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
 });
 export type SessionChanges = typeof SessionChanges.Type;
 
 export const ListOptions = Schema.Struct({
-  limit: Schema.optionalKey(Limit(500)),
-  after: Schema.optionalKey(Schema.String),
+  limit: Schema.optional(Limit(500)),
+  after: Schema.optional(Schema.String),
 });
 export type ListOptions = typeof ListOptions.Type;
 
 export const EntriesOptions = Schema.Struct({
-  after: Schema.optionalKey(Schema.String),
-  before: Schema.optionalKey(Schema.String),
-  limit: Schema.optionalKey(Limit(500)),
+  after: Schema.optional(Schema.String),
+  before: Schema.optional(Schema.String),
+  limit: Schema.optional(Limit(500)),
 });
 export type EntriesOptions = typeof EntriesOptions.Type;
 
@@ -205,9 +210,9 @@ export const SendRequest = Schema.Struct({
     Schema.Array(Schema.Union([TextPart, ImagePart])).check(Schema.isMinLength(1)),
   ]),
   /** The Caller's key for this message, unique within the session (§5.2). */
-  idempotencyKey: Schema.optionalKey(IdempotencyKey),
+  idempotencyKey: Schema.optional(IdempotencyKey),
   /** What the message is when the session is busy with another (§5.3). Default: "queue". */
-  whenBusy: Schema.optionalKey(Schema.Literals(["queue", "steer", "reject"])),
+  whenBusy: Schema.optional(Schema.Literals(["queue", "steer", "reject"])),
 });
 export type SendRequest = typeof SendRequest.Type;
 
@@ -221,7 +226,7 @@ export const MessageKey = Schema.Union([
 ]);
 export type MessageKey = typeof MessageKey.Type;
 
-export const CompactOptions = Schema.Struct({ instructions: Schema.optionalKey(Schema.String) });
+export const CompactOptions = Schema.Struct({ instructions: Schema.optional(Schema.String) });
 export type CompactOptions = typeof CompactOptions.Type;
 
 export interface WaitOptions {

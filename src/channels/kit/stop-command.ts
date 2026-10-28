@@ -12,6 +12,7 @@ export function isStopText(text: string): boolean {
 
 const STOPPED_NOTICE = "⏹ Stopped.";
 const NOTHING_RUNNING_NOTICE = "Nothing is running.";
+const UNKNOWN_NOTICE = "⚠️ Could not tell whether it stopped — check again in a moment.";
 
 /**
  * Dispatch `cancel` for the place's session (none: nothing was ever said there) and map its answer to the
@@ -28,10 +29,12 @@ export async function dispatchStop(
     return stopped.length > 0 ? STOPPED_NOTICE : NOTHING_RUNNING_NOTICE;
   } catch (error) {
     if (error instanceof AgentError && error.code === "not_found") return NOTHING_RUNNING_NOTICE;
-    const code = error instanceof AgentError ? error.code : "internal";
+    const code = error instanceof AgentError ? error.code : undefined;
     log.warn(
-      `${label} stop failed for ${sessionId}: ${code} — ${error instanceof Error ? error.message : String(error)}`,
+      `${label} stop failed for ${sessionId}: ${code ?? "error"} — ${error instanceof Error ? error.message : String(error)}`,
     );
+    // The storage could not answer, or the call broke: the stop may have been recorded all the same (agent-api.md §4).
+    if (code === undefined || code === "unavailable") return UNKNOWN_NOTICE;
     return `⚠️ Could not stop (${code}).`;
   }
 }

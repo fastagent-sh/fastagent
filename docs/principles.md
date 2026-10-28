@@ -23,7 +23,7 @@ The design choices are deliberate:
 |---|---|
 | **An agent beside your project** | `fastagent init <dir> --content <project>` creates the agent in a directory of its own and declares the project as what it works on; add `SYSTEM.md`, `skills/` and code under `src/` there as needed. The project gets no writes, and its `AGENTS.md` stays one of its files, read by the agent when it works there. |
 | **Concepts before features** | Define the few primitives authors need to understand — definition, session, message, entry, tool, skill, channel — before adding knobs. |
-| **Small core, clear seams** | The stable center is the [Agent API](SPEC.md): ten operations, in process, not a dashboard, cloud, or monolithic runtime. |
+| **Small core, clear seams** | The stable center is the [Agent API](SPEC.md): sessions and messages, not a dashboard, cloud, or monolithic runtime. |
 | **App ownership** | Your app keeps auth, users, database, routes, deployment, and policy. FastAgent composes with it. |
 | **Typed edges** | Tools use TypeBox schemas, events have a closed shape, and invalid inputs fail at the boundary instead of becoming hidden prompt bugs. |
 | **Filesystem as source of truth** | The deployable definition is the directory: identity, skills, tools, channels and schedules. No hidden registry dependency, no builder-machine state baked into the artifact. |

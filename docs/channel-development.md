@@ -47,9 +47,11 @@ const channel: ChannelModule = ({ agent, stateRoot }) => ({
 export default channel;
 ```
 
-The mount context's `agent` is the [Agent API](SPEC.md), in process: besides `invoke`, a channel reads a session
-(`read`, `resume`), finds the message a platform message became (`getMessage` by `idempotencyKey`), forks a thread from
-its room (`createSession({ from })`) and stops the agent (`abort`: the built-in channels map a user's "stop" onto it).
+The mount context's `agent` is the [Agent API](design/agent-api.md), in process: besides `messages.send` and
+`messages.stream`, a channel reads a session (`sessions.entries`, `sessions.events`), finds the message a platform
+message became (`messages.get` by `idempotencyKey`), forks a thread from its room
+(`sessions.create({ forkFrom })`) and stops the agent (`sessions.cancel`: the built-in channels map a user's "stop"
+onto it).
 
 A function export is called with the context and must return a non-empty `Routes` object; an object export must
 implement `{ name, connect(ctx, signal) }` and return `{ ready, closed }`. `ready` settles once the first usable
@@ -99,8 +101,8 @@ A channel adapter depends on the harness-neutral `@fastagent-sh/fastagent/core` 
 
 | Export | Use |
 |---|---|
-| `Agent`, `InvokeRequest`, `SessionEvent`, `Entry`, `Outcome`, `DoneMessage` | the Agent API ([SPEC](SPEC.md)) |
-| `stream` | send a message and read its answer as it is written |
+| `Agent`, `SendRequest`, `Message`, `MessageStreamEvent`, `SessionEvent`, `Entry` | the Agent API ([agent-api.md](design/agent-api.md)) |
+| `AgentError`, `hasEnded` | what every operation rejects with; whether a message has ended |
 | `ChannelModule`, `ChannelContext`, `Routes`, `ChannelHandler` | HTTP route module and route types |
 | `LongConnectionChannelModule`, `LongConnection` | long-connection module and lifecycle types |
 | `readBodyCapped` | read a request body with a byte cap |
@@ -114,7 +116,7 @@ built-in.
 
 The Agent names sessions; a channel keeps which session each of its conversations talks in (a chat, a thread, an
 issue), in its own state under `ctx.stateRoot`. Create a conversation's session in one order: the session
-(`createSession`), then the record in your map, then the message. A crash between the first two leaves a session
+(`sessions.create`), then the record in your map, then the message. A crash between the first two leaves a session
 nothing refers to, which the retry does not reuse; no message is answered twice, since it is sent only once its
 session is recorded.
 
@@ -162,21 +164,14 @@ export function acmeChannel(options: AcmeChannelOptions): ChannelModule {
         const intent = options.on(event);
         if (!intent) return new Response(null, { status: 204 });
 
-        const sessionId = await sessions.of(intent.conversation, async () => {
-          const created = await agent.createSession();
-          if (!created.ok) throw new Error(created.error.message);
-          return created.sessionId;
-        });
+        const sessionId = await sessions.of(intent.conversation, async () => (await agent.sessions.create()).id);
         // The delivery id as the idempotency key: a platform's redelivery returns the same message, not a second one.
-        const sent = await agent.invoke({
-          sessionId,
-          content: [{ type: "text", text: intent.text }],
-          idempotencyKey: intent.deliveryId,
-        });
-        if (!sent.ok) return Response.json(sent, { status: 503 });
-        const end = await sent.wait();
-        if (!end.ok || end.message.outcome.status !== "completed") return Response.json(end, { status: 502 });
-        return Response.json({ text: end.message.answer?.text ?? "" });
+        const message = await agent.messages.send(
+          { sessionId, content: intent.text, idempotencyKey: intent.deliveryId },
+          { wait: 120 },
+        );
+        if (message.status !== "completed") return Response.json(message, { status: 502 });
+        return Response.json({ text: message.answer?.text ?? "" });
       },
     };
   };
@@ -190,14 +185,12 @@ This request/reply shape is appropriate when the external system expects the res
 Many webhook providers require a quick ACK. In that case, send the message, return 2xx, and wait for its end apart:
 
 ```ts
-const sent = await agent.invoke({ sessionId, content: [{ type: "text", text }], idempotencyKey: deliveryId });
-if (sent.ok) {
-  void sent.wait().then(
-    (end) => console.error(`[acme] message ended: ${end.ok ? end.message.outcome.status : end.unfinished.reason}`),
-    (error) => console.error(`[acme] waiting failed: ${String(error)}`),
-  );
-}
-return new Response(null, { status: sent.ok ? 202 : 503 });
+const message = await agent.messages.send({ sessionId, content: text, idempotencyKey: deliveryId });
+void agent.messages.get({ sessionId, messageId: message.id }, { wait: Number.POSITIVE_INFINITY }).then(
+  (end) => console.error(`[acme] message ended: ${end.status}`),
+  (error) => console.error(`[acme] waiting failed: ${String(error)}`),
+);
+return new Response(null, { status: 202 });
 ```
 
 An accepted message is durable: the agent answers it after a restart too. What happens after it (delivering the answer
@@ -206,23 +199,21 @@ deliver the answer of a turn recovered after a restart.
 
 ## Streaming adapters
 
-For chat systems, read the answer as it is written with `stream`:
+For chat systems, read the answer as it is written with `messages.stream`. A refused send rejects its first read:
 
 ```ts
-import { stream } from "@fastagent-sh/fastagent/core";
-
-const result = await stream(agent, { sessionId, content: [{ type: "text", text }], idempotencyKey: deliveryId });
-if (!result.ok) return sendError("error" in result ? result.error.message : result.unknown.reason);
 let answer = "";
-for await (const event of result.events) {
-  if (event.type === "message_delta" && event.channel === "text") {
-    answer += event.delta;
+for await (const event of agent.messages.stream({ sessionId, content: text, idempotencyKey: deliveryId })) {
+  if (event.type === "delta" && event.channel === "text") {
+    answer += event.text;
     await updateLivePreview(answer);
   } else if (event.type === "tool_started") {
     await updateLivePreview(`Running ${event.name}…`);
+  } else if (event.type === "stream_error") {
+    return sendError(event.error.message); // the message goes on; `messages.get` says how it ended
   } else if (event.type === "done") {
-    const { outcome, answer: settled } = event.message;
-    return outcome.status === "completed" ? sendFinal(settled?.text ?? answer) : sendError(`it ended ${outcome.status}`);
+    const { status, answer: settled } = event.message;
+    return status === "completed" ? sendFinal(settled?.text ?? answer) : sendError(`it ended ${status}`);
   }
 }
 ```
@@ -241,8 +232,8 @@ A channel adapter should:
 - send each message with the platform's delivery id as its `idempotencyKey`,
 - keep its conversation → session map in its own state, created in the order session, record, message,
 - surface post-ACK failures in operator logs,
-- handle every message outcome, not only `completed`,
-- stop work it no longer wants with `abort`: a Caller that stops waiting only detaches,
+- handle every way a message ends, not only `completed`,
+- stop work it no longer wants with `sessions.cancel`: a Caller that stops waiting only detaches,
 - avoid importing harness-specific code,
 - keep provider SDK dependencies out of `@fastagent-sh/fastagent` unless the adapter is first-party and lightweight.
 

@@ -28,6 +28,13 @@ export interface StreamSource {
 const messageOf = (entry: Entry): string | undefined =>
   entry.kind === "user" ? (entry.data as { messageId?: string }).messageId : undefined;
 
+/**
+ * The next of `events`, a read that failed as the `stream_error` it is once the message has been delivered: a session
+ * watched again cannot reject the stream then, or a Caller would take a message already recorded for one refused.
+ */
+const nextOf = (events: AsyncIterator<SessionEvent>): Promise<IteratorResult<SessionEvent>> =>
+  events.next().catch((error: unknown) => ({ done: false, value: failedRead(error) }));
+
 const failedRead = (error: unknown): SessionEvent => ({
   type: "stream_error",
   error: errorData(
@@ -82,7 +89,7 @@ export function messageStream(
     }
     const after = follow(message.entryId);
     const held: SessionEvent[] = [];
-    for (let next = await after.next(); !next.done; next = await after.next()) {
+    for (let next = await nextOf(after); !next.done; next = await nextOf(after)) {
       const event = next.value;
       if (event.type === "stream_error") return yield event;
       if (event.type !== "state") {
@@ -102,7 +109,7 @@ export function messageStream(
       yield { type: "entry", entry: opening };
       yield* held;
       yield event;
-      for (let next = await after.next(); !next.done; next = await after.next()) {
+      for (let next = await nextOf(after); !next.done; next = await nextOf(after)) {
         const event = next.value;
         yield event;
         if (event.type === "stream_error") return;

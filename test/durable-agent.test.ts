@@ -432,6 +432,36 @@ describe("the Agent on pi-durable", () => {
     }
   });
 
+  it("rejects a cancel when the harness refuses its commits, leaving no refusal unheard", async () => {
+    const subject = durableSubject();
+    const agent = (await subject.start()) as DurableAgent;
+    const { harness } = agent;
+    const commit = harness.commit;
+    try {
+      const sessionId = (await agent.sessions.create()).id;
+      // What pi-durable does once it is closing or its storage failed: every commit is refused before it runs. Not a
+      // spy, which handles each rejection it returns to record it: a rejection nobody heard must reach vitest.
+      harness.commit = () => Promise.reject(new Error("Session is closed"));
+      await expect(agent.sessions.cancel(sessionId)).rejects.toMatchObject({ code: "internal" });
+    } finally {
+      harness.commit = commit;
+      await subject.stop();
+    }
+  });
+
+  it("reads a page of sessions in one commit, one turn on the line every running session writes through", async () => {
+    const subject = durableSubject();
+    const agent = (await subject.start()) as DurableAgent;
+    try {
+      for (let i = 0; i < 5; i++) await agent.sessions.create();
+      const commits = vi.spyOn(agent.harness, "commit");
+      expect((await agent.sessions.list()).data).toHaveLength(5);
+      expect(commits).toHaveBeenCalledOnce();
+    } finally {
+      await subject.stop();
+    }
+  });
+
   it("records nothing when expanding a command fails", async () => {
     const { models, model } = fauxModels();
     const storage = await openNodeSqliteStorage(temporaryStorage());
