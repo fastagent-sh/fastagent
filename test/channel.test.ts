@@ -203,6 +203,7 @@ describe("channelContext: what a channel is handed", () => {
     release();
     await vi.waitFor(() => expect(activeWork()).toBe(base));
     expect(order).toEqual(["other place", "first", "second"]);
-    expect(errors.join("\n")).toContain("the reply could not be posted");
+    expect(errors.join("\n")).toContain("[acme] turn failed (place=chat-1): Error: the reply could not be posted");
+    expect(errors.join("\n")).not.toContain("run()");
   });
 });

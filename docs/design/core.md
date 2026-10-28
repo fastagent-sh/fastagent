@@ -280,10 +280,11 @@ sandbox would go.
 
 ## 6. Sessions and concurrency
 
-The Agent names sessions; a Caller maps its own conversations onto them (`conversation-sessions.ts`). A channel keeps
-its map in `<stateRoot>/channels/<kind>/sessions.json` (a chat, a thread), the schedules theirs in
-`<stateRoot>/schedule/sessions.json` (one session per schedule). The map is read once per process and written whole
-when a conversation gets a session, in one order (architecture.md §2): the session, then the record, then the message.
+The Agent names sessions; a Caller maps its own conversations onto them (`conversation-sessions.ts`). A channel's map
+is its `sessionFor`, kept in `<stateRoot>/channels/<the channel file's name>/sessions.json` (a chat, a thread), the
+schedules' in `<stateRoot>/schedule/sessions.json` (one session per schedule). The map is read once per process, takes
+one conversation's calls one at a time, and is written whole when a conversation gets a session, in one order
+(architecture.md §2): the session, then the record, then the message.
 A crash between the session and the record leaves a session nothing refers to, which the retry does not reuse; no
 message is answered twice, since a message is sent only once its session is recorded. A recorded session the storage no
 longer holds (it was reset, or restored from an older copy) is replaced, and the log says so.
@@ -300,11 +301,16 @@ around one:
 
 ```ts
 // An HTTP route channel
-(ctx: { agent, stateRoot }) => Routes
+(ctx: { agent, sessionFor, recordedSession, turn, stateDir }) => Routes
 
 // A long-connection channel
 { name: string, connect(ctx, signal): { ready: Promise<void>, closed: Promise<void> } }
 ```
+
+Both forms get the same context (`channels/context.ts`, [agent-api.md](agent-api.md) §8.1): the Agent, the
+channel's conversation-to-session map (`sessionFor`, and `recordedSession` to read it without making one), a per-place
+queue for work after the route has answered (`turn`), and `stateDir`, `<stateRoot>/channels/<the file's name>/`, made
+at the mount. The first-party channels are written against it like any other.
 
 The distinction is structural: a function is a route channel, an object with `connect` is a
 `LongConnectionChannelModule`. Reading its shape builds the module without calling it (`channelIngress`), so `deploy`
@@ -625,7 +631,7 @@ is due when a request next wakes it.
 <stateRoot>/                # <agent dir>/.state, .state/production for start (FASTAGENT_STATE_DIR overrides)
 ├── agent.sqlite            # the instance's storage: sessions, messages, entries (pi-durable)
 ├── invoke.sqlite           # `fastagent invoke`'s sessions, apart from the instance's
-├── channels/<kind>/        # sessions.json, turns, history cursors, dedup; files/ holds inbound attachments
+├── channels/<name>/        # one per channel file: sessions.json, turns, history cursors, dedup; files/ holds inbound attachments
 └── schedule/               # sessions.json, claims/, wakeups.json
 ```
 

@@ -7,7 +7,9 @@ import { isAbsolute, join } from "node:path";
 import type { Agent } from "../agent-api.ts";
 import type { ChannelContext } from "../channel.ts";
 import { conversationSessions, forkedSession } from "../conversation-sessions.ts";
-import { portJoin } from "../effect-port.ts";
+import * as Effect from "effect/Effect";
+import { portError, portJoin } from "../effect-port.ts";
+import { log } from "../log.ts";
 import { ensureStateHome } from "../state-file.ts";
 import { createTurnQueue } from "./turn-queue.ts";
 
@@ -19,7 +21,13 @@ export function channelContext(agent: Agent, stateRoot: string, name: string): C
   const sessions = conversationSessions(join(stateDir, "sessions.json"));
   const turns = createTurnQueue<{ conversation: string; work: () => Promise<void> }>({
     label: `[${name}]`,
-    run: ({ work }) => portJoin(work),
+    // The channel's own failure surface: `turn` promises a failed one goes to the log, said as the author wrote it.
+    run: ({ conversation, work }) =>
+      portJoin(work).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => log.error(`[${name}] turn failed (place=${conversation}): ${String(portError(cause))}`)),
+        ),
+      ),
   });
   return {
     agent,

@@ -184,7 +184,7 @@ The unit of concurrency is the session, and the session is the place:
 - one conversation is sequential: people take turns, and an answer may depend on the previous one;
 - separate conversations are parallel: threads proceed independently.
 
-Two turns in one place serialize (`channels/kit/turn-queue.ts` FIFO, and a session takes one message at a time,
+Two turns in one place serialize (`channels/turn-queue.ts` FIFO, and a session takes one message at a time,
 [Agent API](../SPEC.md) §3.2). Two turns in different places run concurrently.
 
 Finer-grained concurrency (parallel turns *inside* one session) is rejected: a conversation needs

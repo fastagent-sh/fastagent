@@ -8,8 +8,7 @@
  * answered twice, since a message is sent only once its session is recorded.
  */
 import { dirname } from "node:path";
-import { type Agent, AgentError } from "./agent-api.ts";
-import type { ForkSource } from "./channel.ts";
+import { type Agent, AgentError, type CreateSessionOptions } from "./agent-api.ts";
 import { log } from "./log.ts";
 import { ensureStateHome, loadStateFile, saveStateFile } from "./state-file.ts";
 
@@ -26,7 +25,7 @@ export async function newSession(agent: SessionsAgent): Promise<string> {
 }
 
 /** A new session forked from `from`, or an empty one when there is nothing to fork. */
-export async function forkedSession(agent: SessionsAgent, from: ForkSource): Promise<string> {
+export async function forkedSession(agent: SessionsAgent, from: CreateSessionOptions["forkFrom"]): Promise<string> {
   if (from === undefined) return newSession(agent);
   const created = await agent.sessions.create({ forkFrom: from }).catch((error: unknown) => {
     if (!(error instanceof AgentError)) throw error;

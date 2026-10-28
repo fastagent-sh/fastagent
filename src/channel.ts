@@ -2,7 +2,7 @@
  * The Channel contract: how a channel is mounted beside the Agent it talks to (agent-api.ts, agent-api.md §8.1), and
  * `defineChannel`, which types a channel file's export. Importing a host, a framework, or a harness here is forbidden.
  */
-import type { Agent } from "./agent-api.ts";
+import type { Agent, CreateSessionOptions } from "./agent-api.ts";
 
 /** A mounted request handler (a channel's fetch, or a plain route like health). */
 export type ChannelHandler = (req: Request) => Response | Promise<Response>;
@@ -10,8 +10,8 @@ export type ChannelHandler = (req: Request) => Response | Promise<Response>;
 /** This deployment's HTTP surface: route key → handler. */
 export type Routes = Record<string, ChannelHandler>;
 
-/** The session a new conversation forks from; `undefined` starts it empty. */
-export type ForkSource = { sessionId: string; entryId?: string } | undefined;
+/** The session a new conversation forks from, as `sessions.create` takes it; `undefined` starts it empty. */
+export type ForkSource = CreateSessionOptions["forkFrom"];
 
 /** What a channel is handed when it is mounted, and all it is handed. */
 export interface ChannelContext {

@@ -372,7 +372,7 @@ out (WebSocket) are reachable by whoever can message the bot, whatever the bind.
 ## Machinery: `.state/`, `.secrets/` and `content/`
 
 - `<agent dir>/.state/` — the instance's state: its storage (`agent.sqlite`: sessions, messages, entries), channel
-  state (`channels/<kind>/`) and schedule state (`schedule/`). One process holds it at a time; point it at a volume in
+  state (`channels/<name>/`, one per channel file) and schedule state (`schedule/`). One process holds it at a time; point it at a volume in
   a container.
 - `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `device.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
