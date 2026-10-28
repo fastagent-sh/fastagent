@@ -24,13 +24,13 @@ import type { Message } from "../../src/agent-api.ts";
 import { dotEnvPath } from "../../src/env.ts";
 import { environmentAuth } from "../../src/harnesses/models/models.ts";
 import { openServing } from "../../src/harnesses/pi-durable/serve.ts";
-import { type AgentService, mountAgentService } from "../../src/service.ts";
+import { type ServedAgent, serveAgent } from "../../src/service.ts";
 import { fastagentVersion } from "../../src/version.ts";
 import { TARBALL_ENV } from "./pack.ts";
-/** The agent in `dir`, opened and mounted as `start` does it (with no storage of its own): what a probe binds. */
-export async function serveDirectory(dir: string): Promise<{ service: AgentService; close(): Promise<void> }> {
+/** The agent in `dir`, opened and served as `start` does it (with no storage of its own): what a probe listens on. */
+export async function serveDirectory(dir: string): Promise<{ service: ServedAgent; close(): Promise<void> }> {
   const opened = await openServing(dir, { storage: "memory" });
-  const service = await mountAgentService(opened);
+  const service = await serveAgent(opened);
   return {
     service,
     close: async () => {

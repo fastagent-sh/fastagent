@@ -570,11 +570,4 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
 
     expect(warn.mock.calls.filter(([m]) => /corrupt auth file/.test(String(m)))).toHaveLength(1);
   });
-
-  it("is public from the pi entry point", async () => {
-    const pi = await import("../src/pi.ts");
-    expect(typeof pi.login).toBe("function");
-    expect(typeof pi.loginOptions).toBe("function");
-    expect(new pi.LoginCancelled("x")).toBeInstanceOf(Error);
-  });
 });

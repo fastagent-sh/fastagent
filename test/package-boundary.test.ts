@@ -41,6 +41,9 @@ function staticPackageGraph(entryRel: string, builtins = false): Set<string> {
 
 const CLI_ONLY = ["@clack/prompts", "undici", "chokidar", "giget", "commander"];
 
+/** What the package exports: its one entry, and each first-party channel's. */
+const PUBLIC_ENTRIES = ["index.ts", "telegram.ts", "slack.ts", "feishu.ts", "lark.ts"];
+
 describe("package boundary: embed entry stays free of CLI-only dependencies", () => {
   it("index.ts does not statically load any CLI-only dep", () => {
     const pkgs = staticPackageGraph("index.ts");
@@ -87,11 +90,10 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
   });
 });
 
-describe("harness neutrality: the core subpath + channel spine import no harness package", () => {
-  // The neutral layer (the contract and the N-side that consumes only the contract) must never pull
-  // `@earendil-works/*` — that coupling belongs only in the pi reference implementation.
+describe("harness neutrality: the contracts and the channel spine import no harness package", () => {
+  // The contract and the N-side that consumes only the contract must never pull `@earendil-works/*`: that coupling
+  // belongs only in the harness (src/harnesses/), which the root entry opens.
   const neutral = [
-    "core.ts",
     "agent-api.ts",
     "channels/router.ts",
     "cli/invoke-stream.ts",
@@ -110,8 +112,8 @@ describe("harness neutrality: the core subpath + channel spine import no harness
     expect(offenders).toEqual([]);
   });
 
-  it("pi.ts is the explicit reference-runtime boundary (the guard has teeth)", () => {
-    expect([...staticPackageGraph("pi.ts")].some((p) => p.startsWith("@earendil-works/"))).toBe(true);
+  it("the root entry opens an agent on the harness (the guard has teeth)", () => {
+    expect([...staticPackageGraph("index.ts")].some((p) => p.startsWith("@earendil-works/"))).toBe(true);
   });
 });
 
@@ -136,7 +138,7 @@ describe("the public subpaths do not reach into the CLI", () => {
     return seen;
   };
   it("no public entry reaches a cli/ module", () => {
-    const offenders = ["index.ts", "core.ts", "pi.ts"].flatMap((entry) =>
+    const offenders = PUBLIC_ENTRIES.flatMap((entry) =>
       [...relativeGraph(entry)]
         .filter((f) => f.includes(`${srcDir}/cli/`))
         .map((f) => `${entry} → ${f.replace(`${srcDir}/`, "")}`),
@@ -197,28 +199,22 @@ describe("the assembly's parts stay out of the public surface", () => {
   // arrives here unnoticed, and what remains is a line somebody wrote on purpose.
   const ORPHAN_TYPES = ["ChannelCollision", "Scheduler", "SchedulerOptions"];
 
-  it("the curated entries name every export, so nothing rides in behind a wildcard", () => {
+  it("the entries name every export, so nothing rides in behind a wildcard", () => {
     // This is what makes the two checks below sufficient. A `export *` — or `export type *`, which
     // leaves no runtime trace at all — would re-export whatever its target grows next, and neither a
     // name list nor a module import can see that coming.
-    for (const entry of ["core.ts", "node.ts", "pi.ts"]) {
+    for (const entry of PUBLIC_ENTRIES) {
       expect(readFileSync(resolve(srcDir, entry), "utf8"), entry).not.toMatch(/export\s+(?:type\s+)?\*/);
     }
-    // The root is the all-in-one, and may forward the curated three — but only those.
-    const index = readFileSync(resolve(srcDir, "index.ts"), "utf8");
-    const targets = [...index.matchAll(/export\s+(?:type\s+)?\*\s+from\s+"([^"]+)"/g)].map((m) => m[1]);
-    expect(targets.sort()).toEqual(["./core.ts", "./node.ts", "./pi.ts"]);
   });
 
-  const ENTRIES = ["core.ts", "pi.ts", "index.ts"];
+  const ENTRIES = ["index.ts"];
 
   it("every failure a caller must tell apart is exported as a VALUE", async () => {
     // Every operation rejects with it, and a caller branches on it with `instanceof`: a type-only export would leave
     // nothing to test against.
-    const core = (await import(resolve(srcDir, "core.ts"))) as Record<string, unknown>;
-    expect(typeof core.AgentError).toBe("function");
     const index = (await import(resolve(srcDir, "index.ts"))) as Record<string, unknown>;
-    expect(index.AgentError).toBe(core.AgentError);
+    expect(typeof index.AgentError).toBe("function");
   });
 
   it("no entry exports an assembly part", async () => {
@@ -304,47 +300,13 @@ describe("the contracts depend on nothing", () => {
     expect([...staticPackageGraph("channel.ts")]).toEqual([]);
   });
 
-  it("the three neutral layers each cost exactly what their name promises", () => {
-    // Harness-neutral and runtime-neutral are DIFFERENT properties, and the entries are layered by
-    // them: /core has both, /node drops the second (a filesystem, a clock, an environment), /pi
-    // drops both. Each layer's package list is that statement, checkable. /core may use Effect, and nothing else: no
-    // other package, and no Node built-in.
-    expect([...staticPackageGraph("core.ts")].filter((p) => !p.startsWith("effect/"))).toEqual([]);
-    expect([...staticPackageGraph("core.ts", true)]).toEqual([]);
-    // Service lifecycle management uses Effect; channel and agent contracts remain dependency-free.
-    expect([...staticPackageGraph("node.ts")].sort()).toEqual([
-      "@hono/node-server",
-      "croner",
-      "effect/Cause",
-      "effect/Clock",
-      "effect/Context",
-      "effect/Deferred",
-      "effect/Duration",
-      "effect/Effect",
-      "effect/Exit",
-      "effect/Fiber",
-      "effect/Layer",
-      "effect/Result",
-      "effect/Schema",
-      "effect/Scope",
-      "effect/http",
-      "proper-lockfile",
-    ]);
-    // ...and neither neutral layer names a harness (the harness-neutrality suite above covers this
-    // for core; node now carries the assembly, so it needs the same bar).
-    expect([...staticPackageGraph("node.ts")].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
-  });
-
-  it("...and the mechanism that serves them depends on Effect's HTTP server, and one bridge", () => {
+  it("...and the mechanism that serves them depends on Effect's HTTP server alone", () => {
     // The guard has teeth: serving pulls packages, contracts pull none. What it pulls is Effect's HTTP server, whose
     // runtime's own server (@effect/platform-node or -bun) is imported when a serve starts, so neither is in the static
-    // graph; and the node:http↔Fetch adapter `nodeListener` bridges an app's own server through. Dispatch itself is a
-    // Map lookup over literal paths, so no routing library is in the graph.
+    // graph. Dispatch itself is a Map lookup over literal paths, so no routing library is in the graph.
     const pkgs = [...staticPackageGraph("channels/serve.ts")].sort();
     expect(pkgs).toEqual([
-      "@hono/node-server",
       "effect/Context",
-      "effect/Duration",
       "effect/Effect",
       "effect/Exit",
       "effect/Layer",

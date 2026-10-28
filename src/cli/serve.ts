@@ -1,8 +1,6 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
 import { answersLocalhost, bindLabel, classifyBind } from "../bind.ts";
-import type { ChannelHandler } from "../channel.ts";
-import type { AgentService, MountAgentServiceOptions } from "../service.ts";
-import { serveNode } from "../channels/serve.ts";
+import type { ServedAgent, ServeOptions, Service } from "../service.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { declaredChannels } from "../channels/discover.ts";
@@ -18,7 +16,7 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean):
 }
 
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
-export function cliMountOptions(): MountAgentServiceOptions {
+export function cliMountOptions(): ServeOptions {
   return {
     closeTimeoutMs: SHUTDOWN_GRACE_MS,
     onChannelClosed: (name, error) =>
@@ -31,24 +29,20 @@ export function cliMountOptions(): MountAgentServiceOptions {
  * share once the service is assembled.
  */
 export function serveService(
-  service: AgentService,
+  service: ServedAgent,
   bind: { port: number; host?: string },
   posture: { tunnel: boolean; agentDir: string; stateRoot: string },
 ): void {
   const { host } = bind;
   const { tunnel, agentDir, stateRoot } = posture;
-  serve(service.handler, bind, {
-    ready: service.ready,
-    onListening: (p) => {
-      reportServing(service, host, p);
-      maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
-    },
-    onShutdown: () => service.close(),
+  serve(service, bind, (p) => {
+    reportServing(service, host, p);
+    maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
   });
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
-export function reportServing(service: AgentService, host: string | undefined, boundPort: number): void {
+export function reportServing(service: ServedAgent, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
   log.info(bindLine(host, boundPort));
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
@@ -62,23 +56,20 @@ export function bindLine(host: string | undefined, boundPort: number): string {
   return `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`;
 }
 
-/** What the CLI gives a service to stop in, and the hard exit that follows it. */
+/**
+ * What the CLI gives a long connection to stop in, and the hard exit that follows the whole close: the server's own
+ * grace for requests in flight (500 ms, channels/serve.ts), then the channels'.
+ */
 const SHUTDOWN_GRACE_MS = 800;
 const FORCED_EXIT_MS = 1_500;
 
-/** Bind HTTP and report ready — but only once the SERVICE is, which is not the same moment. */
+/** Listen, and report ready — but only once the SERVICE is, which is not the same moment — until a signal closes it. */
 export function serve(
-  handler: ChannelHandler,
+  service: Service,
   bind: { port: number; host?: string },
-  hooks: {
-    /** Awaited before anything is reported ready — see the listening handler. */
-    ready?: Promise<void>;
-    onListening?: (boundPort: number) => void;
-    onShutdown?: () => Promise<void> | void;
-  } = {},
+  onListening?: (boundPort: number) => void,
 ): void {
   const { port, host } = bind;
-  const hosted = serveNode(handler, { port, host });
   let stopping = false;
   const stop = (exitCode: number): void => {
     if (stopping) return;
@@ -88,33 +79,30 @@ export function serve(
       log.error(`[fastagent] shutdown did not finish within ${FORCED_EXIT_MS}ms; exiting`);
       process.exit(1);
     }, FORCED_EXIT_MS);
-    // Stop accepting FIRST, before anything is awaited.
-    const closingServer = hosted.close();
-    hosted.closeAllConnections();
     // A cleanup that failed is not a clean exit.
-    void Promise.allSettled([closingServer, Promise.resolve(hooks.onShutdown?.())]).then((outcomes) => {
-      let code = exitCode;
-      for (const outcome of outcomes) {
-        if (outcome.status === "rejected") {
-          log.error(`[fastagent] shutdown failed: ${String(outcome.reason)}`);
-          code = 1;
-        }
-      }
-      clearTimeout(deadline);
-      process.exit(code);
-    });
+    void service.close().then(
+      () => {
+        clearTimeout(deadline);
+        process.exit(exitCode);
+      },
+      (error: unknown) => {
+        log.error(`[fastagent] shutdown failed: ${String(error)}`);
+        clearTimeout(deadline);
+        process.exit(1);
+      },
+    );
   };
   process.once("SIGINT", () => stop(0));
   process.once("SIGTERM", () => stop(0));
-  hosted.listening.then(
+  service.listen(port, host).then(
     async (boundPort) => {
       try {
         // A bound socket is NOT a serving agent: a declared socket-mode channel still has to come up, and reporting
         // ready before it does tells the supervisor (and --tunnel, and the operator) that a surface is live while a
         // channel is dead.
-        await hooks.ready;
+        await service.ready;
         if (stopping) return;
-        hooks.onListening?.(boundPort);
+        onListening?.(boundPort);
       } catch (error) {
         failStartup(error);
       }

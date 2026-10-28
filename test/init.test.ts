@@ -21,7 +21,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { InMemoryCredentialStore, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { buildDefinition, openAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../src/harnesses/pi-durable/text.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
@@ -142,7 +142,7 @@ describe("init: scaffoldAgent", () => {
       },
     ]);
     const definition = await prepareDefinition(dir);
-    const agent = await openAgent(definition, {
+    const agent = await assembleAgent(definition, {
       storage: new MemoryStorage(),
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
       credentials: new InMemoryCredentialStore(),

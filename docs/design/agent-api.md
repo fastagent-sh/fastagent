@@ -9,9 +9,9 @@ updated: 2026-10-28
 
 # Agent API v2
 
-> **Status: in progress.** The code implements the in-process binding (§8's interface; the entry points of §8 and the
-> HTTP binding of §9 are not yet). When it is all implemented, this replaces `docs/SPEC.md`, which still describes
-> v1. Changing its semantics before then is a review of this draft.
+> **Status: in progress.** The code implements the in-process binding (§8, `connectAgent` and `/client` aside); the
+> HTTP binding of §9 is not yet. When it is all implemented, this replaces `docs/SPEC.md`, which still describes v1.
+> Changing its semantics before then is a review of this draft.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
 
@@ -438,9 +438,10 @@ interface LocalAgent extends Agent {
 interface Service {
   /** For an app's own server to route to. */
   fetch(request: Request): Promise<Response>;
-  /** Or a server of its own: the one way to start one. */
-  listen(port: number, host?: string): Promise<void>;
+  /** Or a server of its own, Node's `http` server or `Bun.serve`: the one way to start one. Answers the port it bound. */
+  listen(port: number, host?: string): Promise<number>;
   ready: Promise<void>;
+  /** Stops the server, giving requests in flight 500 ms before it ends them, then the channels and schedules. */
   close(): Promise<void>;
 }
 ```
@@ -488,8 +489,9 @@ const service = await agent.serve();
 app.mount("/agent", service.fetch);
 ```
 
-On a server that does not take a Fetch handler (Express, a plain `node:http` one), `getRequestListener(service.fetch)`
-from `@hono/node-server` is the listener to mount: the package FastAgent's own `listen` serves through.
+On a server that does not take a Fetch handler (Express, a plain `node:http` one), the app bridges `service.fetch`
+itself, with `getRequestListener(service.fetch, { overrideGlobalObjects: false })` from `@hono/node-server`, say;
+FastAgent ships no bridge of its own.
 
 A custom channel, from the agent's `src/channels/`:
 

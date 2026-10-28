@@ -40,7 +40,7 @@ src/channels/
 A route channel default-exports a `ChannelModule`:
 
 ```ts
-import type { ChannelModule } from "@fastagent-sh/fastagent/core";
+import type { ChannelModule } from "@fastagent-sh/fastagent";
 
 const channel: ChannelModule = ({ agent, sessionFor, turn, stateDir }) => ({
   "POST /webhook": async (req) => {
@@ -56,7 +56,7 @@ export default channel;
 A long-connection channel instead exports a `LongConnectionChannelModule` object:
 
 ```ts
-import type { LongConnectionChannelModule } from "@fastagent-sh/fastagent/core";
+import type { LongConnectionChannelModule } from "@fastagent-sh/fastagent";
 
 const channel: LongConnectionChannelModule = {
   name: "acme websocket",

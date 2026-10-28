@@ -9,6 +9,7 @@ import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { type AnyChannelModule, type LoadedLongConnectionChannel, mountChannels } from "./channels/discover.ts";
 import { text } from "./channels/respond.ts";
 import { parseRouteKey, router } from "./channels/router.ts";
+import { serveHandler, totalFetch } from "./channels/serve.ts";
 import { log } from "./log.ts";
 import { once } from "./once.ts";
 import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
@@ -113,34 +114,69 @@ export function startSchedules(
   return scheduler;
 }
 
-export interface AgentService {
-  /** The assembled Fetch handler: channel routes and health. */
-  handler: ChannelHandler;
-  /** The agent behind it, in process. */
-  agent: Agent;
-  /** The literal routes `handler` was composed from — for a startup line naming what is served. */
-  routes: Routes;
-  agentDir: string;
-  /** What actually mounted, for a startup line: channels serving routes, and long connections. */
-  channels: { routes: string[]; longConnections: string[] };
-  schedules: readonly Schedule[];
-  /** Settles when every long connection is up — immediately when there are none. */
+/** What `serve()` answers (agent-api.md §8): the agent's channels, schedules and wake-ups, and `GET /health`. */
+export interface Service {
+  /** For an app's own server to route to. */
+  fetch(request: Request): Promise<Response>;
+  /** Or a server of its own, on this runtime's server: the one way to start one. Answers the port it bound. */
+  listen(port: number, host?: string): Promise<number>;
+  /** Settles when every long connection is up: immediately when there are none. */
   ready: Promise<void>;
   /**
-   * Stop long connections and schedules. It does NOT drain the agent's messages: one takes seconds to minutes, and
-   * the deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What
-   * makes that safe is that they are durable: an accepted message is answered after the restart, and a chat turn's
-   * intent is durable before it is accepted (`channels/kit/turn-store.ts`). A schedule fire's claim is written before
-   * its message: the next boot writes back the end of a message the agent took, and records one it never took as
-   * `interrupted`.
+   * Stop the server, giving the requests in flight a moment before ending them, then long connections and schedules.
+   * It does NOT drain the agent's messages: one takes seconds to minutes, and the deployment wants the old process gone
+   * in under a second. What makes that safe is that they are durable: an accepted message is answered after the
+   * restart, and a chat turn's intent is durable before it is accepted (`channels/kit/turn-store.ts`). A schedule
+   * fire's claim is written before its message: the next boot writes back the end of a message the agent took, and
+   * records one it never took as `interrupted`.
    */
   close(): Promise<void>;
 }
 
-/** What {@link mountAgentService} needs beyond an opened agent. */
-export interface MountAgentServiceOptions {
-  /** Aborting this closes the service, exactly like calling {@link AgentService.close}. */
-  signal?: AbortSignal;
+/** A serve as the CLI reports it: what it serves, beside the Service itself. */
+export interface ServedAgent extends Service {
+  /** The literal routes the service answers, for a startup line naming them. */
+  routes: Routes;
+  agentDir: string;
+  /** What actually mounted: channels serving routes, and long connections. */
+  channels: { routes: string[]; longConnections: string[] };
+  schedules: readonly Schedule[];
+}
+
+/** A Service over `handler`: answered in process, or served on a server of its own; `shutdown` stops the rest. */
+export function serviceOver(handler: ChannelHandler, ready: Promise<void>, shutdown: () => Promise<void>): Service {
+  let listener: ReturnType<typeof serveHandler> | undefined;
+  let closing: Promise<void> | undefined;
+  const fetch = totalFetch(handler);
+  return {
+    fetch,
+    listen(port, host) {
+      if (closing !== undefined) return Promise.reject(new Error("the service is closed"));
+      if (listener !== undefined) return Promise.reject(new Error("the service is already listening"));
+      listener = serveHandler(handler, { port, ...(host === undefined ? {} : { host }) });
+      return listener.listening;
+    },
+    ready,
+    close() {
+      closing ??= (async () => {
+        // The server first, so nothing new reaches what stops after it; each step runs, and every failure is said.
+        const failures: unknown[] = [];
+        for (const step of [() => listener?.close(), shutdown]) {
+          await Promise.resolve()
+            .then(step)
+            .catch((error: unknown) => failures.push(error));
+        }
+        if (failures.length > 0) {
+          throw failures.length === 1 ? failures[0] : new AggregateError(failures, "the service did not close cleanly");
+        }
+      })();
+      return closing;
+    },
+  };
+}
+
+/** What {@link serveAgent} needs beyond an opened agent. */
+export interface ServeOptions {
   /** Called when a long connection ends on its own — a dropped socket-mode channel, say. */
   onChannelClosed?: (name: string, error?: unknown) => void;
   /** How long `close()` waits for a channel to stop before reporting it stuck (default 5s). */
@@ -148,7 +184,7 @@ export interface MountAgentServiceOptions {
 }
 
 /** What the assembly serves. */
-export interface MountableAgent {
+export interface ServableAgent {
   agent: Agent;
   /** The definition's directory: the agent's working directory. */
   agentDir: string;
@@ -159,10 +195,7 @@ export interface MountableAgent {
 }
 
 /** The assembly itself: channels, schedules and long connections, composed into one handler. */
-export async function mountAgentService(
-  opened: MountableAgent,
-  options: MountAgentServiceOptions = {},
-): Promise<AgentService> {
+export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
   const { agent, agentDir, stateRoot, schedules } = opened;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
   const routed = routesFor(agent, stateRoot, opened.channels);
@@ -205,10 +238,6 @@ export async function mountAgentService(
           ),
         ),
       );
-      const onAbort = (): void => {
-        void close().catch((error: unknown) => log.error(`[fastagent] service close failed: ${String(error)}`));
-      };
-
       return yield* Effect.gen(function* () {
         // Registered first, so subscriptions and schedule timers stop before waiting for transports.
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
@@ -265,13 +294,6 @@ export async function mountAgentService(
           }),
         );
 
-        if (options.signal?.aborted) yield* shutdown;
-        else
-          yield* Effect.acquireRelease(
-            Effect.sync(() => options.signal?.addEventListener("abort", onAbort, { once: true })),
-            () => Effect.sync(() => options.signal?.removeEventListener("abort", onAbort)),
-          );
-
         // The public readiness waiter lives outside the scope it may roll back.
         const ready = Effect.runPromise(
           Effect.gen(function* () {
@@ -292,17 +314,11 @@ export async function mountAgentService(
         ready.catch(() => {});
 
         return {
-          handler,
-          agent,
+          ...serviceOver(handler, ready, close),
           routes: routed.routes,
           agentDir,
-          channels: {
-            routes: routed.routeChannels,
-            longConnections: names,
-          },
+          channels: { routes: routed.routeChannels, longConnections: names },
           schedules,
-          ready,
-          close,
         };
       }).pipe(
         Scope.provide(lifetime),

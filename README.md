@@ -107,9 +107,9 @@ There is no FastAgent build step: the agent folder is the deployable unit.
 ## Embed in an app
 
 ```ts
-import { openServing } from "@fastagent-sh/fastagent";
+import { openAgent } from "@fastagent-sh/fastagent";
 
-const { agent } = await openServing("./agent", { model: "openai-codex/gpt-5.5" });
+const agent = await openAgent("./agent", { model: "openai-codex/gpt-5.5" });
 
 const session = await agent.sessions.create();
 for await (const event of agent.messages.stream({ sessionId: session.id, content: "hi" })) {
@@ -117,8 +117,8 @@ for await (const event of agent.messages.stream({ sessionId: session.id, content
 }
 ```
 
-`mountAgentService(await openServing(dir))` adds the agent's channels and schedules to your app: a Fetch handler for
-its webhooks, mounted where your framework routes them ([Embedding](docs/embedding.md)).
+`await agent.serve()` adds the agent's channels and schedules to your app: a Fetch handler for its webhooks, mounted
+where your framework routes them, or a server of its own (`listen`) ([Embedding](docs/embedding.md)).
 
 ## Documentation
 
@@ -142,33 +142,22 @@ its webhooks, mounted where your framework routes them ([Embedding](docs/embeddi
 
 ## Public API surface & stability
 
-The root export intentionally contains the supported surface only. The entries are layered by what each costs to
-import, and every layer's static dependency list is asserted in CI:
-
-| | Harness-neutral | Runtime-neutral | Costs |
-|---|---|---|---|
-| `/core` | yes | yes | Effect only |
-| `/node` | yes | no (filesystem, clock, environment) | Effect, `@hono/node-server`, `croner`, `proper-lockfile`; serving imports `@effect/platform-node` on Node or `@effect/platform-bun` on Bun when it starts |
-| `/pi` | no | no | pi-durable and pi-ai |
+The package exports the supported surface only, from one entry per kind of user, and names every export (no
+`export *`), which CI asserts:
 
 | Area | Examples | Stability |
 |---|---|---|
 | The Agent API | `Agent`, `AgentError` ([Agent API](docs/design/agent-api.md)) | Stable within its version |
-| Directory → agent | `openServing`, `openAgent` and its parts | Usable now, may tighten before 1.0 |
-| Directory → service | `mountAgentService` + `MountableAgent`, `AgentService` | The supported way to serve an agent's channels in an app |
-| Node binding | `nodeListener`, `serveNode`, `secretEquals` (from `/node`) | The one runtime-specific piece |
-| Authoring | `defineAgent`, `needs`, `defineSchedule`, `sessionIdOf`, `ChannelModule` | Usable now, may tighten before 1.0 |
-| Models and sign-in | `modelEnvironment`, `login`, `fastagentCredentialStore` | Usable now, may tighten before 1.0 |
-| Not exported | The assembly's parts (`router`, `createScheduler`) and harness internals | No compatibility promise |
+| Directory → agent → service | `openAgent`, `LocalAgent`, `serve()`'s `Service` (`fetch`, `listen`) | Usable now, may tighten before 1.0 |
+| Authoring | `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, `readBodyCapped`, `text`, `secretEquals` | Usable now, may tighten before 1.0 |
+| Not exported | The assembly's parts (`router`, `createScheduler`), content, models and sign-in (the CLI's), harness internals | No compatibility promise |
 
 A tool or an extension is pi-durable's own (`defineTool`, `defineExtension` from `@earendil-works/pi-durable`), and a
 custom provider is pi-ai's (`createProvider` from `@earendil-works/pi-ai`): `init` adds both packages to the agent.
 
-Subpath entry points (`./package.json` is also exported, for tools that read the version):
+Entry points (`./package.json` is also exported, for tools that read the version):
 
-- `@fastagent-sh/fastagent/core` — the Agent API's types, `stream`, the channel kit. **No package beyond Effect and no Node built-in**, enforced by test;
-- `@fastagent-sh/fastagent/node` — `mountAgentService`, `serveNode` / `nodeListener`, content and authoring;
-- `@fastagent-sh/fastagent/pi` — what an author writes, opening a definition, the model environment;
+- `@fastagent-sh/fastagent` — the Agent API, `openAgent`, and what an author writes;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
 - `@fastagent-sh/fastagent/slack` — Slack Events API bot channel;
 - `@fastagent-sh/fastagent/feishu` — canonical Feishu bot channel (飞书, open.feishu.cn);

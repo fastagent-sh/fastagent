@@ -18,10 +18,10 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { afterAll, describe, expect, it } from "vitest";
 import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import {
-  type OpenAgentOptions,
+  type AssembleAgentOptions,
   buildDefinition,
   loadDefinition,
-  openAgent,
+  assembleAgent,
   prepareDefinition,
   secretsManifest,
 } from "../src/harnesses/pi-durable/open.ts";
@@ -234,11 +234,11 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       for (const agent of opened) await agent.close();
     });
 
-    async function open(files = FILES, options: Partial<OpenAgentOptions> = {}, opening = (dir: string) => dir) {
+    async function open(files = FILES, options: Partial<AssembleAgentOptions> = {}, opening = (dir: string) => dir) {
       const dir = agentPackage(files);
       const definition = await prepareDefinition(opening(dir));
       const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
-      const agent = await openAgent(definition, {
+      const agent = await assembleAgent(definition, {
         storage: new MemoryStorage(),
         credentials: new InMemoryCredentialStore(),
         code: buildDefinition(definition, ENV),

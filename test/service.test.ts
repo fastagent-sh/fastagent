@@ -7,12 +7,11 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { getEventListeners } from "node:events";
 import { log } from "../src/log.ts";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
-import { openServing } from "../src/harnesses/pi-durable/serve.ts";
-import { type MountAgentServiceOptions, mountAgentService } from "../src/service.ts";
+import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { type ServeOptions, serveAgent } from "../src/service.ts";
 
 const opened: DurableAgent[] = [];
 afterAll(async () => {
@@ -20,10 +19,10 @@ afterAll(async () => {
 });
 
 /** The directory opened as a serve opens it, with no storage of its own, and mounted. */
-async function createAgentService(dir: string, options: MountAgentServiceOptions = {}) {
+async function createAgentService(dir: string, options: ServeOptions = {}) {
   const served = await openServing(dir, { storage: "memory" });
   opened.push(served.agent);
-  return mountAgentService(served, options);
+  return serveAgent(served, options);
 }
 
 async function agentDir(
@@ -40,7 +39,7 @@ async function agentDir(
   return dir;
 }
 
-describe("mountAgentService over an opened directory", () => {
+describe("serveAgent over an opened directory", () => {
   it("opens a directory named by a relative path at its absolute location", async () => {
     // The prompt names the agent's files and working directory by these, and its tools resolve a relative one
     // against that working directory.
@@ -56,10 +55,8 @@ describe("mountAgentService over an opened directory", () => {
     });
     const service = await createAgentService(dir);
     try {
-      expect(await (await service.handler(new Request("http://h/hook", { method: "POST" }))).text()).toBe(
-        "from-channel",
-      );
-      expect((await service.handler(new Request("http://h/health"))).status).toBe(200);
+      expect(await (await service.fetch(new Request("http://h/hook", { method: "POST" }))).text()).toBe("from-channel");
+      expect((await service.fetch(new Request("http://h/health"))).status).toBe(200);
       expect(service.channels.routes).toEqual(["hook"]);
       // Only routes that verify their caller are served: the agent has no network binding of its own.
       expect(Object.keys(service.routes).sort()).toEqual(["GET /health", "POST /hook"]);
@@ -96,10 +93,10 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
     const service = await createAgentService(dir, { onChannelClosed: () => {} });
     try {
       await service.ready;
-      expect((await service.handler(new Request("http://h/health"))).status).toBe(200);
+      expect((await service.fetch(new Request("http://h/health"))).status).toBe(200);
       (globalThis as unknown as { __faDropSock?: () => void }).__faDropSock?.(); // the channel drops
       await new Promise((r) => setTimeout(r, 20));
-      expect((await service.handler(new Request("http://h/health"))).status).toBe(503);
+      expect((await service.fetch(new Request("http://h/health"))).status).toBe(503);
     } finally {
       await service.close();
     }
@@ -122,7 +119,7 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
       await new Promise((r) => setTimeout(r, 20)); // let "dies" report closed
       (globalThis as unknown as { __faSlowReady?: () => void }).__faSlowReady?.();
       await expect(service.ready).rejects.toThrow(/closed before startup completed/);
-      expect((await service.handler(new Request("http://h/health"))).status).toBe(503);
+      expect((await service.fetch(new Request("http://h/health"))).status).toBe(503);
     } finally {
       await service.close();
     }
@@ -209,47 +206,8 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
     }
   });
 
-  it("close() detaches from the caller's signal", async () => {
-    // A host that opens and closes surfaces while holding one long-lived signal would otherwise
-    // accumulate listeners, each pinning a whole closed surface through its closure.
-    const controller = new AbortController();
-    const before = getEventListeners(controller.signal, "abort").length;
-    const service = await createAgentService(await agentDir(), { signal: controller.signal });
-    expect(getEventListeners(controller.signal, "abort").length).toBe(before + 1);
-    await service.close();
-    expect(getEventListeners(controller.signal, "abort").length).toBe(before);
-  });
-
-  it("an already-aborted signal closes the surface before open() returns", async () => {
-    (globalThis as Record<string, unknown>).__faAbortedClosed = false;
-    const dir = await agentDir({
-      "src/channels/sock.mjs": `export default {
-        name: "sock",
-        connect: (ctx, signal) => ({
-          ready: Promise.resolve(),
-          closed: new Promise((resolve) => signal.addEventListener("abort", () => {
-            globalThis.__faAbortedClosed = true; resolve();
-          }, { once: true })),
-        }),
-      };`,
-    });
-    // A listener added to an already-aborted signal never fires, so the surface would stay open with
-    // its connections and scheduler running behind a caller who believes it is shut.
-    const service = await createAgentService(dir, { signal: AbortSignal.abort() });
-    expect((globalThis as Record<string, unknown>).__faAbortedClosed).toBe(true);
-    await service.close();
-  });
-
-  it("an already-aborted signal rejects readiness without long connections", async () => {
-    const service = await createAgentService(await agentDir(), { signal: AbortSignal.abort() });
-    await expect(service.ready).rejects.toThrow("service closed before it became ready");
-    await service.close();
-  });
-
-  it("closes on its own signal, and close() is idempotent", async () => {
-    const controller = new AbortController();
-    const service = await createAgentService(await agentDir(), { signal: controller.signal });
-    controller.abort();
+  it("close() is idempotent", async () => {
+    const service = await createAgentService(await agentDir());
     await expect(service.close()).resolves.toBeUndefined();
     await expect(service.close()).resolves.toBeUndefined();
   });
@@ -274,7 +232,7 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
     await expect(service.ready).rejects.toThrow(/dial refused/);
     expect((globalThis as Record<string, unknown>).__faFailClosed).toBe(true); // torn down, not left up
     // Health never flipped to 200: the surface must not advertise itself as serving.
-    expect((await service.handler(new Request("http://h/health"))).status).toBe(503);
+    expect((await service.fetch(new Request("http://h/health"))).status).toBe(503);
   });
 
   it("a connection that dies while dialling fails startup instead of hanging it", async () => {
@@ -357,7 +315,7 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
         },
       });
       await expect(service.ready).rejects.toThrow("sock closed before it was ready");
-      expect((await service.handler(new Request("http://h/health"))).status).toBe(503);
+      expect((await service.fetch(new Request("http://h/health"))).status).toBe(503);
       expect(logged).toHaveBeenCalledWith(expect.stringContaining("callback broke"));
       await service.close();
     } finally {
@@ -453,7 +411,7 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
     const service = await createAgentService(await agentDir());
     try {
       await expect(service.ready).resolves.toBeUndefined();
-      expect((await service.handler(new Request("http://h/health"))).status).toBe(200);
+      expect((await service.fetch(new Request("http://h/health"))).status).toBe(200);
     } finally {
       await service.close();
     }
@@ -478,5 +436,30 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
       const dir = await agentDir({ [file]: `throw new Error("boom at import");` });
       await expect(createAgentService(dir), file).rejects.toThrow(/loading src\/ through .*boom at import/);
     }
+  });
+});
+
+describe("openAgent: an agent directory opened in an app", () => {
+  it("serves its routes in process and on a server of its own, and closes both before it lets the storage go", async () => {
+    const dir = await agentDir();
+    const agent = await openAgent(dir);
+    const session = await agent.sessions.create();
+    expect(await agent.sessions.get(session.id)).toMatchObject({ id: session.id, status: "idle" });
+
+    const service = await agent.serve();
+    expect((await service.fetch(new Request("http://app/health"))).status).toBe(200);
+    expect((await service.fetch(new Request("http://app/nope"))).status).toBe(404);
+    await expect(agent.serve()).rejects.toThrow("this agent is already served");
+
+    const port = await service.listen(0, "127.0.0.1");
+    expect((await fetch(`http://127.0.0.1:${port}/health`)).status).toBe(200);
+    await expect(service.listen(0, "127.0.0.1")).rejects.toThrow("the service is already listening");
+
+    await agent.close();
+    await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
+    // The instance's storage is free again: another process (here, another open) may hold it.
+    const again = await openAgent(dir);
+    expect(await again.sessions.get(session.id)).toMatchObject({ id: session.id });
+    await again.close();
   });
 });

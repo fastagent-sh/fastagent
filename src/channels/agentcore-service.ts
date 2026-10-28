@@ -1,10 +1,17 @@
-/** The AgentCore serving assembly — the same product as `mountAgentService`, built differently because the host is. */
+/** The AgentCore serving assembly — the same product as `serveAgent`, built differently because the host is. */
 import type { Agent } from "../agent-api.ts";
 import { fromForwarder } from "./agentcore-protocol.ts";
 import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
 import type { Schedule } from "../schedule/schedule.ts";
-import { type AgentService, type MountableAgent, routesFor, startSchedules } from "../service.ts";
+import {
+  type ServableAgent,
+  type ServedAgent,
+  type Service,
+  routesFor,
+  serviceOver,
+  startSchedules,
+} from "../service.ts";
 import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./agentcore.ts";
 import * as Effect from "effect/Effect";
 import { fireScheduleOnce } from "../schedule/scheduler.ts";
@@ -24,18 +31,15 @@ import { MAX_ENVELOPE_BYTES } from "./agentcore-limits.ts";
  */
 export function deferAgentcoreService<T>(stages: {
   prepare: () => Promise<T>;
-  assemble: (prepared: T) => Promise<AgentService>;
-}): {
-  handler: ChannelHandler;
-  close: () => Promise<void>;
-} {
-  let service: AgentService | undefined;
+  assemble: (prepared: T) => Promise<ServedAgent>;
+}): Service {
+  let service: ServedAgent | undefined;
   let prepared: Promise<T> | undefined;
-  let assembling: Promise<AgentService> | undefined;
+  let assembling: Promise<ServedAgent> | undefined;
   let closed = false;
   let closing: Promise<void> | undefined;
   const ping = agentcorePing(() => activeWork() > 0);
-  const initialize = async (): Promise<AgentService> => {
+  const initialize = async (): Promise<ServedAgent> => {
     const done = beginWork();
     try {
       prepared ??= stages.prepare().catch((error: unknown) => {
@@ -52,49 +56,48 @@ export function deferAgentcoreService<T>(stages: {
       done();
     }
   };
-  return {
-    handler: async (request) => {
-      if (closed) return new Response("service closed\n", { status: 503 });
-      if (service) return service.handler(request);
-      const path = new URL(request.url).pathname;
-      if (path === "/ping" && request.method === "GET") return ping(request);
-      if (path !== "/invocations" || request.method !== "POST") return new Response("not found\n", { status: 404 });
-      let ready: AgentService;
-      // Only the INITIALIZATION is caught here.
-      try {
-        ready = await initialize();
-      } catch (error) {
-        const message = `initialization failed: ${String(error)}`;
-        log.error(`[agentcore] ${message}`);
-        const body = await readBodyCapped(request, MAX_ENVELOPE_BYTES);
-        if (!("tooLarge" in body)) {
-          let envelope: { kind?: unknown; auth?: unknown } | undefined;
-          try {
-            envelope = JSON.parse(body.text);
-          } catch {
-            // Invalid envelopes retain the initialization error.
-          }
-          if (envelope?.kind === "probe" && fromForwarder(envelope, process.env.FASTAGENT_INGRESS_SECRET)) {
-            return Response.json({ ok: false, error: message });
-          }
+  const handler: ChannelHandler = async (request) => {
+    if (closed) return new Response("service closed\n", { status: 503 });
+    if (service) return service.fetch(request);
+    const path = new URL(request.url).pathname;
+    if (path === "/ping" && request.method === "GET") return ping(request);
+    if (path !== "/invocations" || request.method !== "POST") return new Response("not found\n", { status: 404 });
+    let ready: ServedAgent;
+    // Only the INITIALIZATION is caught here.
+    try {
+      ready = await initialize();
+    } catch (error) {
+      const message = `initialization failed: ${String(error)}`;
+      log.error(`[agentcore] ${message}`);
+      const body = await readBodyCapped(request, MAX_ENVELOPE_BYTES);
+      if (!("tooLarge" in body)) {
+        let envelope: { kind?: unknown; auth?: unknown } | undefined;
+        try {
+          envelope = JSON.parse(body.text);
+        } catch {
+          // Invalid envelopes retain the initialization error.
         }
-        return new Response(`${message}\n`, { status: 503 });
+        if (envelope?.kind === "probe" && fromForwarder(envelope, process.env.FASTAGENT_INGRESS_SECRET)) {
+          return Response.json({ ok: false, error: message });
+        }
       }
-      if (closed) return new Response("service closed\n", { status: 503 });
-      return ready.handler(request);
-    },
-    close() {
-      closed = true;
-      closing ??= (async () => {
-        // A failed assembly already reached its caller.
-        await (await assembling?.catch(() => undefined))?.close();
-      })();
-      return closing;
-    },
+      return new Response(`${message}\n`, { status: 503 });
+    }
+    if (closed) return new Response("service closed\n", { status: 503 });
+    return ready.fetch(request);
   };
+  // Nothing to wait for before the first envelope: the definition opens on it.
+  return serviceOver(handler, Promise.resolve(), () => {
+    closed = true;
+    closing ??= (async () => {
+      // A failed assembly already reached its caller.
+      await (await assembling?.catch(() => undefined))?.close();
+    })();
+    return closing;
+  });
 }
 
-export async function mountAgentcoreService(opened: MountableAgent): Promise<AgentService> {
+export async function mountAgentcoreService(opened: ServableAgent): Promise<ServedAgent> {
   const { agent, agentDir, stateRoot, schedules } = opened;
 
   // The only public way in is the forwarder's Function URL, which relays an arbitrary `rawPath` verbatim as a webhook
@@ -129,18 +132,14 @@ export async function mountAgentcoreService(opened: MountableAgent): Promise<Age
   log.info(`[fastagent] agentcore: serving POST /invocations + GET /ping (FASTAGENT_AGENTCORE=1)`);
 
   return {
-    handler,
-    agent,
+    // Nothing to open: no port of its own, no resident connections.
+    ...serviceOver(handler, Promise.resolve(), async () => scheduled.stop()),
     // The adapter IS the surface here; the channel routes arrive lazily BEHIND it.
     routes: adapterRoutes,
     agentDir,
     // Channels remain lazy until the adapter receives trusted ingress.
     channels: { routes: [], longConnections: [] },
     schedules,
-    ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
-    async close() {
-      scheduled.stop();
-    },
   };
 }
 

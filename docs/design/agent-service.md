@@ -261,7 +261,7 @@ platform. The author never writes mise's files.
   `context.json` under the lock content edits take, applying the change to it as it is by then, so two edits at once
   keep both. `remove` and `list` complete it; `install` installs every package at its newest release, adding mise to
   `package.json` when it is missing; `exec -- <command>` runs a command in the environment. Every process that opens
-  the agent (`dev`, `start`, `invoke`, an embedder's `openServing`) installs what is missing and puts the packages
+  the agent (`dev`, `start`, `invoke`, an app's `openAgent`) installs what is missing and puts the packages
   first on the `PATH` their commands inherit. A change to `context.json` restarts `dev`.
 - **The image installs every package when it is built.** It installs `aptPackages` in its apt layer, with what
   FastAgent needs there (git, CA certificates, curl for rust), then copies `fastagent.packages`, the list every

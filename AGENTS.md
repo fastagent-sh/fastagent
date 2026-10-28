@@ -35,14 +35,14 @@ src/
 │                           # ChannelModule / Routes / LongConnection*, and defineChannel
 ├── conversation-sessions.ts # which Agent session each of a Caller's conversations talks in (a channel's chats and
 │                           # threads, a schedule's runs), and the order a new one is created in
-├── service.ts              # THE PRODUCT AS ONE CALL — an opened agent becomes a live service (mountAgentService),
-│                           # plus the assembly parts dev/start share: routesFor / startSchedules
+├── service.ts              # THE PRODUCT AS ONE CALL — an opened agent becomes a live service (serveAgent: what
+│                           # `agent.serve()` answers, `Service` with fetch/listen/ready/close), plus the parts
+│                           # dev/start/AgentCore share: serviceOver / routesFor / startSchedules
 ├── effect-port.ts          # the ONE crossing from a Promise-shaped port into Effect: port / portJoin / portAbort /
 │                           # portRequest / portCleanup / PortFailure
 ├── once.ts                 # work that runs once per process, its outcome shared (shutdown, AgentCore activation)
-├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + Effect only, no Node /
-│                           # harness-neutral but needs Node / names the harness. Asserted in package-boundary.test.ts
-├── index.ts                # supported all-in-one entry (re-exports core + node + pi)
+├── index.ts                # the package's one entry: the Agent API, openAgent, what an author writes; every export
+│                           # named. Asserted in package-boundary.test.ts
 ├── cli.ts                  # the THIN entry (import-free; lazy-loads cli/program.ts)
 ├── cli/                    # the CLI, built on clig.dev
 │   ├── kernel.ts           # CommandSpec-as-data + the commander adapter (commander appears ONLY here); exit 0/1/2
@@ -96,9 +96,9 @@ src/
 ├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
 │   ├── router.ts           # how route tables become ONE Fetch handler: the path rule and dispatch, no guard of its
-│   │                       # own (every route verifies its caller). Fetch-only: /core serves through it
+│   │                       # own (every route verifies its caller). Fetch-only
 │   ├── serve.ts            # the server a Fetch handler is served on (Effect's, on Node's or Bun's own), behind the
-│   │                       # totality boundary; and `nodeListener`, the bridge an app's own node:http server mounts
+│   │                       # totality boundary every serving path shares
 │   ├── agentcore-service.ts # the AgentCore serving assembly (same product as service.ts, built for that
 │   │                       # host): channels discovered on trusted ingress, the whole definition opened
 │   │                       # on the first envelope, an external clock, no resident connections
@@ -226,9 +226,10 @@ src/
     ├── pi-durable/         # the Agent API on pi-durable, in process
     │   ├── open.ts         # a definition (config + generated registry) assembled into an Agent; the secrets
     │   │                   # gate and manifest; pi-ai's built-in models with the definition's providers
-    │   ├── serve.ts        # openServing: a directory opened to be served (definition, code, models, content,
-    │   │                   # storage, Agent) — what dev, start, AgentCore and an embedder open through; holding
-    │   │                   # the instance for a command that writes its state outside a serve
+    │   ├── serve.ts        # openAgent (an app's: LocalAgent, served with `serve()`) over openServing, a directory
+    │   │                   # opened (definition, code, models, content, storage, Agent), which dev, start,
+    │   │                   # AgentCore, invoke and `schedules run` call with their storage; holding the instance for
+    │   │                   # a command that writes its state outside a serve
     │   ├── storage.ts      # a SQLite database one process holds (the instance's, `invoke`'s), and its lock
     │   │                   # where SQLite's own locks fail
     │   ├── define.ts       # what an author writes: defineAgent, needs (secrets beside the code that reads them),
@@ -283,7 +284,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **The API imports no harness.** `src/agent-api.ts` must not import any harness (`@earendil-works/pi-*` only under `src/harnesses/`): the consumer API is the layer that keeps a harness's changes away from clients, and keeping FastAgent's own harness code in one directory bounds what replacing the harness costs FastAgent. It does not bound what it costs an author: an agent's tools and extensions are pi-durable code, an accepted trade-off ([architecture.md](docs/design/architecture.md) §2).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. A message that cannot be answered ends `failed` with its `error` saying why, and a refused operation rejects with an `AgentError` (docs/design/agent-api.md §7). A stream is refused on its first read; once it has delivered anything, a failure ends it with a `stream_error` event, never a rejection a Caller would take for a refusal.
 - **One process owns an instance's state.** Durable state is the instance's storage (pi-durable's SQLite: sessions, messages, entries) and each Caller's own files under the state root (a channel's session map and turn records, the schedules' claims, wake-ups). One process opens a storage at a time, so a deployment routes every session of one storage to one process ([architecture.md](docs/design/architecture.md) §4.3). The process holds the open Agent and each Caller's queues; what a caller reads afterwards is durable before it is reported.
-- **Public surface is scoped on purpose.** `src/core.ts` is harness- and runtime-neutral (no package but `effect`, no Node built-in; `src/agent-api.ts` itself imports only `effect/Schema`, and `src/channel.ts` nothing), `src/node.ts` is harness-neutral but needs a Node runtime, `src/pi.ts` names the harness, and `src/index.ts` combines all of them. Internals (`openDurableAgent`, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Public surface is scoped on purpose.** `src/index.ts` is the one entry, one per kind of user beside the channel subpaths (agent-api.md §8): the Agent API, `openAgent`, and what an author writes, every export named. The contracts stay neutral: `src/agent-api.ts` imports only `effect/Schema` and `src/channel.ts` nothing. Internals (`openServing`, `serveAgent`, `openDurableAgent`, content, models and sign-in, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **Effect first.** Write with Effect, and with what Effect gives you, rather than hand-rolled async plumbing or a thin wrapper over it.
 - **Learn Effect from its source, not from guesses.** The installed `effect@4` ships uncompiled source and its own agent guide: read `node_modules/effect/AGENTS.md` before writing Effect code, and the relevant module under `node_modules/effect/src/` for how an API is actually used ([why](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive)). Prefer it over an invented API, a stale memory, or a web search. Read-only reference: never edit it, never import from a path inside it.
 - **A finalizer does not fail.** Since effect 4.0.6, a defect in a combined cause turns every typed failure in it into a defect (`causeElectDefects` in `node_modules/effect/src/internal/effect.ts`): a finalizer that dies takes the body's typed failure with it, and the `catchTag("PortFailure")` waiting for that failure never runs. A finalizer says its own failure in the log, or leaves it to an explicit call in the body (`serialWriter`'s `finish`); it dies only where the defect is the point (`service.ts`'s close of a connection that will not stop).
