@@ -2,7 +2,7 @@
  * Canonical Feishu bot-channel engine: verified webhook or official-SDK WebSocket → dedup → route → persist → enqueue
  * → stream a live card.
  */
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { Effect } from "effect";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../channel.ts";
 import { log } from "../../log.ts";
@@ -12,12 +12,11 @@ import { secretEquals } from "../secret.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
-import { ensureStateHome, loadStateFile, saveStateFile } from "../../state-file.ts";
+import { loadStateFile, saveStateFile } from "../../state-file.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
-import { conversationSessions, newSession } from "../../conversation-sessions.ts";
-import { forkThread } from "../kit/thread-fork.ts";
+import { threadForkSource } from "../kit/thread-fork.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { portJoin } from "../../effect-port.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
@@ -266,17 +265,12 @@ function createFeishuRuntimeFactory(
   const baseUrl = opts.apiBaseUrl ?? profile.apiBase;
   const { kind } = profile;
   const label = `[${kind}]`;
-  return ({ agent, stateRoot }) => {
+  return ({ agent, sessionFor, recordedSession, stateDir: stateHome }) => {
     // Credential checks run when serving starts, not while the authored module is imported.
     if (!appId || !appSecret) {
       throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
     }
     const formatError = onError ?? defaultErrorMessage;
-    if (!isAbsolute(stateRoot)) {
-      throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
-    }
-    const stateHome = join(stateRoot, "channels", kind);
-    ensureStateHome(stateHome); // the files below may carry chat content; the agent .gitignore covers .state/
     // Shared with the send tools (registered below). A turn's own posts go through `placeApi`.
     const api = createFeishuApi({ kind, baseUrl, appId, appSecret });
 
@@ -302,7 +296,6 @@ function createFeishuRuntimeFactory(
     // The SAME identity the session uses (`placeKey`) — a thread's place.
     const threadKey = (chatId: string, threadId: string): string =>
       placeKey(kind, { chat_id: chatId, thread_id: threadId });
-    const sessions = conversationSessions(join(stateRoot, "channels", kind, "sessions.json"));
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
       isRecord: isStoredFeishuTurn,
@@ -325,7 +318,7 @@ function createFeishuRuntimeFactory(
         (await history.snapshot(feishuHistoryKey({ chatId, threadId }))).text ||
         `(thread ${threadId} shows no messages)`,
     });
-    registerRoomThreads(kind, stateRoot, rooms);
+    registerRoomThreads(kind, stateHome, rooms);
     /**
      * The client a turn posts through: what it posts into its place (answer, queue notice, stop feedback) is in the
      * session already, so the place records it and its next read leaves it out. The send tools use the plain client,
@@ -440,11 +433,13 @@ function createFeishuRuntimeFactory(
                 agent,
                 {
                   session: (chain) =>
-                    sessions.of(rec.conversation, agent, () =>
-                      parent === undefined
-                        ? newSession(agent)
-                        : forkThread(agent, { room: sessions.get(parent), chain }),
-                    ),
+                    sessionFor(rec.conversation, {
+                      forkFrom: async () => {
+                        // A thread of a room nothing was said in starts empty: there is nothing to fork.
+                        const room = parent === undefined ? undefined : recordedSession(parent);
+                        return room === undefined ? undefined : threadForkSource(agent, room, chain);
+                      },
+                    }),
                   ...(threadsRoom === undefined
                     ? {}
                     : { enter: (sessionId: string) => rooms.enter(sessionId, threadsRoom) }),
@@ -559,7 +554,7 @@ function createFeishuRuntimeFactory(
       if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
         seen.add(m.message_id);
         sideTasks.track(
-          dispatchStop(agent, sessions.get(conversation), label)
+          dispatchStop(agent, recordedSession(conversation), label)
             .then((feedback) =>
               placeApi(historyKey)
                 .sendText({ chatId, replyTo, replyInThread }, feedback)

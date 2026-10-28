@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { channelContext } from "../src/channels/context.ts";
 import type { Needs } from "../src/harnesses/pi-durable/define.ts";
 import { slackChannel } from "../src/slack.ts";
 import { scriptedAgent } from "./scripted-agent.ts";
@@ -52,10 +53,13 @@ const send = async (token: string) => {
 describe("Slack proactive delivery rides the channel's transport", () => {
   it("sends through the mounted channel of the bot its token signs in as, at that channel's API base", async () => {
     const calls = fakeSlack();
-    slackChannel({ botToken: "xoxb-channel", signingSecret: "s", apiBaseUrl: "https://slack.test/api" })({
-      stateRoot: stateRoot(),
-      agent: scriptedAgent(() => []),
-    });
+    slackChannel({ botToken: "xoxb-channel", signingSecret: "s", apiBaseUrl: "https://slack.test/api" })(
+      channelContext(
+        scriptedAgent(() => []),
+        stateRoot(),
+        "slack",
+      ),
+    );
 
     await expect(send("xoxb-channel")).resolves.toBe("sent message to Slack channel C1 (ts 1.0)");
     expect(calls.at(-1)).toEqual({

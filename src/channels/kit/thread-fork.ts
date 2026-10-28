@@ -9,6 +9,7 @@
  * when it is still queued, or was never taken, since it is not in the history.
  */
 import { type Agent, AgentError, type Message } from "../../agent-api.ts";
+import type { ForkSource } from "../../channel.ts";
 
 /** A reply chain is ids walked from the platform, each one a `messages.get`: bounded like ids, not payloads. */
 const MAX_CHAIN = 16;
@@ -35,23 +36,10 @@ async function branchPoint(agent: Agent, room: string, chain: readonly string[])
 }
 
 /**
- * A new thread's session: a fork of its room's session at the message the thread's reply chain names, or at the room's
- * present when nothing in it names one; an empty session when the room has none, since nothing was said there yet.
+ * Where a new thread's session forks from: its room's session at the message the thread's reply chain names, or at the
+ * room's present when nothing in it names one. What `sessionFor`'s `forkFrom` answers for a thread.
  */
-export async function forkThread(
-  agent: Agent,
-  thread: { room: string | undefined; chain: readonly string[] },
-): Promise<string> {
-  const { room, chain } = thread;
-  const at = room === undefined ? undefined : await branchPoint(agent, room, chain);
-  const created = await agent.sessions
-    .create(room === undefined ? {} : { forkFrom: { sessionId: room, ...(at === undefined ? {} : { entryId: at }) } })
-    .catch((error: unknown) => {
-      if (!(error instanceof AgentError)) throw error;
-      throw new AgentError({
-        ...error,
-        message: `starting a thread${room === undefined ? "" : ` from ${room}`} failed: ${error.message}`,
-      });
-    });
-  return created.id;
+export async function threadForkSource(agent: Agent, room: string, chain: readonly string[]): Promise<ForkSource> {
+  const at = await branchPoint(agent, room, chain);
+  return { sessionId: room, ...(at === undefined ? {} : { entryId: at }) };
 }

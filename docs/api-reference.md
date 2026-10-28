@@ -283,9 +283,13 @@ in it, and makes the agent a git repository; `repository` says so, or why not, a
 // From `@fastagent-sh/fastagent/core`.
 interface ChannelContext {
   agent: Agent;
-  stateRoot: string; // the resolved state root, absolute
+  sessionFor(key: string, options?: { forkFrom?: () => Promise<ForkSource> }): Promise<string>;
+  recordedSession(key: string): string | undefined;
+  turn(place: string, work: () => Promise<void>): void;
+  stateDir: string; // `<state root>/channels/<the channel file's name>`, made at the mount
 }
 type ChannelModule = (ctx: ChannelContext) => Routes;
+function defineChannel<T extends ChannelModule | LongConnectionChannelModule>(channel: T): T;
 type Routes = Record<string, (req: Request) => Response | Promise<Response>>;
 interface LongConnectionChannelModule {
   name: string;
@@ -304,7 +308,8 @@ A channel is a module of `src/channels/` that default-exports one of the two for
 Route keys are `"/path"` (any method) or `"METHOD /path"`; the path is a literal. A path that exists under another
 method answers 405, an unknown one 404. **A channel MUST verify that a request comes from its platform**, with the
 credential the platform issued: nothing else in front of it does ([security boundary](design/security-boundary.md)).
-A channel that keeps state derives its home from `ctx.stateRoot` (`<stateRoot>/channels/<kind>`). See
+A channel is handed `{ agent, sessionFor, recordedSession, turn, stateDir }`: the conversation-to-session map, a
+per-place queue that runs work after the route has answered, and a directory of its own. See
 [Channel development](channel-development.md).
 
 ## Schedules

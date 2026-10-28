@@ -5,7 +5,7 @@ import type * as Scope from "effect/Scope";
 import { log } from "../../log.ts";
 import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
 import type { DiscussionSource } from "./place-history.ts";
-import { createTurnQueue } from "./turn-queue.ts";
+import { createTurnQueue } from "../turn-queue.ts";
 import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-store.ts";
 
 /**

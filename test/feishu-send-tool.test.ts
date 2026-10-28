@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { channelContext } from "../src/channels/context.ts";
 import { feishuChannel } from "../src/feishu.ts";
 import type { Needs } from "../src/harnesses/pi-durable/define.ts";
 import { larkChannel } from "../src/lark.ts";
@@ -97,15 +98,15 @@ describe.each([
 
   it("sends through the mounted channel of its app, at that channel's gateway, keeping both clouds isolated", async () => {
     const calls = stubOpenApi();
-    const ctx = { stateRoot: join(fx.cwd, ".state"), agent: agent };
+    const stateRoot = join(fx.cwd, ".state");
     channel({
       appId: "cli_channel",
       appSecret: "channel-secret",
       verificationToken: "v",
       apiBaseUrl: `https://${kind}.test`,
-    })(ctx);
+    })(channelContext(agent, stateRoot, kind));
     other({ appId: "cli_other", appSecret: "other-secret", verificationToken: "v", apiBaseUrl: "https://other.test" })(
-      ctx,
+      channelContext(agent, stateRoot, "other"),
     );
     // Wait for the channel's startup identity/scope requests before checking the tool's send.
     await vi.waitFor(() => expect(calls.filter((call) => call.url.endsWith("/application/v6/scopes"))).toHaveLength(2));

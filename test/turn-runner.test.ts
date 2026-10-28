@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ContextBuffer, createContextBuffer } from "../src/channels/kit/context-buffer.ts";
 import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/channels/kit/turn-runner.ts";
 import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
-import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
+import { createTurnQueue } from "../src/channels/turn-queue.ts";
 import { portJoin } from "../src/effect-port.ts";
 import { activeWork } from "../src/channels/busy.ts";
 import * as atomic from "../src/atomic-write.ts";

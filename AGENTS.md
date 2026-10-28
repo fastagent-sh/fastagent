@@ -31,7 +31,8 @@ src/
 ├── agent-api.ts            # the Agent API (docs/design/agent-api.md) as Effect Schemas: its objects, requests,
 │                           # errors and limits; imports only effect/Schema
 ├── answer-text.ts          # a message's answer text as it streams: its deltas, plus entry text no delta carried
-├── channel.ts              # the Channel contract: ChannelModule / Routes / ChannelHandler / LongConnection*
+├── channel.ts              # the Channel contract: ChannelContext (agent, sessionFor, recordedSession, turn, stateDir),
+│                           # ChannelModule / Routes / LongConnection*, and defineChannel
 ├── conversation-sessions.ts # which Agent session each of a Caller's conversations talks in (a channel's chats and
 │                           # threads, a schedule's runs), and the order a new one is created in
 ├── service.ts              # THE PRODUCT AS ONE CALL — an opened agent becomes a live service (mountAgentService),
@@ -108,6 +109,8 @@ src/
 │   ├── busy.ts             # the process's work in flight (every unsettled message, channel and schedule work not
 │   │                       # yet at one), read by /ping (HealthyBusy) and by `dev` before it restarts
 │   ├── discover.ts         # a definition's built channels, mounted: route channels' routes, long connections bound
+│   ├── context.ts          # what a channel is handed: its stateDir, sessionFor over conversation-sessions.ts, turn
+│   ├── turn-queue.ts       # per-place FIFO root fibers; queued work counts busy and survives ingress ACK
 │   ├── body.ts, respond.ts # channel-authoring kit (body cap, responses)
 │   ├── secret.ts           # the ONE constant-time comparison every shared-secret gate reads through
 │   ├── wait-health.ts      # readiness probe for a server THIS process reaches directly (not a public URL)
@@ -121,7 +124,6 @@ src/
 │   │   ├── invoke-turn-kit.ts # prepare inputs → one keyed, queued message; the prompt manifest wording
 │   │   ├── transport.ts    # whether a call is worth waiting out a rate limit for (DROPPABLE_FRAME, CONTEXT_READ)
 │   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + discussion source
-│   │   ├── turn-queue.ts   # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
 │   │   ├── turn-store.ts   # generic durable turn intent + the answer owed to it (record shape/validator/order injected)
 │   │   ├── room-threads.ts # what a thread-reading tool may read: its turn's room (registered by the turn runner),
 │   │   │                   # never one it is told; the thread list's format and bound
@@ -135,7 +137,7 @@ src/
 │   │   ├── text.ts         # Unicode-safe code-point slicing
 │   │   ├── attachment-path.ts # where an attachment lands (the conversation id encoded into a directory)
 │   │   ├── stop-command.ts # the shared /stop parsing every chat channel accepts, and the abort it dispatches
-│   │   └── thread-fork.ts  # a new thread starts as a fork of its room at the message its reply chain names (by key)
+│   │   └── thread-fork.ts  # where a new thread forks from: its room at the message its reply chain names (by key)
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts     # ingress + per-turn lifecycle + composition
 │   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy

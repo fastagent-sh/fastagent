@@ -13,6 +13,7 @@ import { ev } from "./scripted-run.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { channelContext } from "../src/channels/context.ts";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { type Agent, type ErrorCode, agentError } from "../src/agent-api.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
@@ -208,7 +209,7 @@ function buildChannel(
     verificationToken: TOKEN,
     apiBaseUrl: BASE,
     ...channelOpts,
-  })({ agent: protocol, stateRoot: root });
+  })(channelContext(protocol, root, "feishu"));
   const handler = routes["POST /feishu"];
   if (!handler) throw new Error("expected POST /feishu");
   const maybeIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
@@ -299,10 +300,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({
-      agent: agent,
-      stateRoot: root,
-    });
+    })(channelContext(agent, root, "feishu"));
     const handler = routes["POST /feishu"];
     if (!handler) throw new Error("expected POST /feishu");
     const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
@@ -444,7 +442,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
 
 describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
-    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-construction" };
+    const ctx = channelContext({} as Agent, "/tmp/unused-feishu-construction", "feishu");
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
     // `start` with nothing set reaches this through the scaffold: the error names both ways out.
     expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
@@ -453,17 +451,6 @@ describe("construction fails closed", () => {
     expect(() => larkChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
       /LARK_VERIFICATION_TOKEN.*LARK_INGRESS=websocket/,
     );
-  });
-
-  it("rejects a relative ctx.stateRoot (fail visibly, never a silent cwd re-anchor)", () => {
-    feishuFetch();
-    const { agent } = replyingAgent();
-    expect(() =>
-      buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "t" })({
-        agent: agent,
-        stateRoot: "rel",
-      }),
-    ).toThrow(/stateRoot/);
   });
 });
 
@@ -666,7 +653,7 @@ describe("turn flow", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent: restarted.agent, stateRoot: first.root });
+    })(channelContext(restarted.agent, first.root, "feishu"));
     const again = routes["POST /feishu"];
     if (!again) throw new Error("expected POST /feishu");
     const idleAgain = (again as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
@@ -841,10 +828,7 @@ describe("turn flow", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({
-      agent: agent,
-      stateRoot: join(agentDir, ".state"),
-    })["POST /feishu"];
+    })(channelContext(agent, join(agentDir, ".state"), "feishu"))["POST /feishu"];
     if (!handler) throw new Error("expected POST /feishu");
     const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
     channelIdles.add(idle);
@@ -2542,10 +2526,9 @@ describe("turn flow", () => {
       }),
     );
     const { agent, calls } = replyingAgent("recovered");
-    const handler = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, apiBaseUrl: BASE })({
-      agent: agent,
-      stateRoot: root,
-    })["POST /feishu"];
+    const handler = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, apiBaseUrl: BASE })(
+      channelContext(agent, root, "feishu"),
+    )["POST /feishu"];
     const idle = (handler as unknown as { turnsIdle?: () => Promise<void> })?.turnsIdle;
     if (idle) channelIdles.add(idle);
     await idle?.();
@@ -2652,7 +2635,7 @@ describe("the Lark compatibility profile", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent: agent, stateRoot: root });
+    })(channelContext(agent, root, "lark"));
     expect(routes["POST /feishu"]).toBeUndefined();
     const handler = routes["POST /lark"];
     if (!handler) throw new Error("expected POST /lark");
@@ -2675,7 +2658,7 @@ describe("the Lark compatibility profile", () => {
   });
 
   it("mount failures name each public factory", () => {
-    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-factory-name" };
+    const ctx = channelContext({} as Agent, "/tmp/unused-feishu-factory-name", "feishu");
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(
       /feishuChannel/,
     );

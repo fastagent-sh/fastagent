@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { channelContext } from "../src/channels/context.ts";
 import { type Agent, type ErrorCode, agentError } from "../src/agent-api.ts";
 import { mentionsSlackUser } from "../src/channels/slack/parse.ts";
 import {
@@ -217,7 +218,7 @@ function mount(
     signingSecret: SECRET,
     apiBaseUrl: API,
     ...options,
-  })({ agent: stopped ? withStop(agent, stopped) : agent, stateRoot })["POST /slack"]!;
+  })(channelContext(stopped ? withStop(agent, stopped) : agent, stateRoot, "slack"))["POST /slack"]!;
   const turnsIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
   idles.add(turnsIdle);
   return { handler, stateRoot, turnsIdle };
@@ -365,10 +366,9 @@ describe("Slack first-run welcome", () => {
 describe("Slack channel construction", () => {
   it("refuses a rotating bot token at startup, naming the upgrade, instead of failing 12 hours later", () => {
     expect(() =>
-      slackChannel({ botToken: "xoxe.xoxb-rotating", signingSecret: SECRET })({
-        agent: replyingAgent().agent,
-        stateRoot: root(),
-      }),
+      slackChannel({ botToken: "xoxe.xoxb-rotating", signingSecret: SECRET })(
+        channelContext(replyingAgent().agent, root(), "slack"),
+      ),
     ).toThrow(/rotating Slack bot token.*If token rotation is on/);
   });
 });
