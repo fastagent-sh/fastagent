@@ -1,6 +1,7 @@
 /**
- * A caller's own credential store (#652): a desktop client keeps model credentials in its keychain, so every rung that
- * takes `authPath` also takes `credentialStore`, and then reads and writes ONLY that store. The failure this guards is
+ * A caller's own credential store (#652): an app keeps model credentials in its keychain (`openAgent`'s
+ * `credentials`), so every rung that takes `authPath` also takes `credentialStore`, and then reads and writes ONLY that
+ * store. The failure this guards is
  * silent: a path that still builds `fastagentCredentialStore` would put a credential back into a plain JSON file, or
  * read a login the caller never gave.
  */

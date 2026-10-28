@@ -462,4 +462,46 @@ describe("openAgent: an agent directory opened in an app", () => {
     expect(await again.sessions.get(session.id)).toMatchObject({ id: session.id });
     await again.close();
   });
+
+  it("refuses to serve once it is closed, or while it closes: nothing would close that service", async () => {
+    const dir = await agentDir();
+    const closed = await openAgent(dir);
+    await closed.close();
+    await expect(closed.serve()).rejects.toThrow("this agent is closed");
+    const closing = await openAgent(dir);
+    const going = closing.close();
+    await expect(closing.serve()).rejects.toThrow("this agent is closed");
+    await going;
+  });
+
+  it("serves again after a serve that failed to start, and listens again after a bind that failed", async () => {
+    const flag = globalThis as Record<string, unknown>;
+    flag.__faFailServe = true;
+    const agent = await openAgent(
+      await agentDir({
+        "src/channels/flaky.mjs": `export default () => {
+          if (globalThis.__faFailServe) throw new Error("dial refused");
+          return { "POST /flaky": () => new Response("ok") };
+        };`,
+      }),
+    );
+    try {
+      await expect(agent.serve()).rejects.toThrow("dial refused");
+      flag.__faFailServe = false;
+      const service = await agent.serve();
+      const taken = await service.listen(0, "127.0.0.1");
+      const other = await openAgent(await agentDir());
+      try {
+        const second = await other.serve();
+        await expect(second.listen(taken, "127.0.0.1")).rejects.toMatchObject({ code: "EADDRINUSE" });
+        const port = await second.listen(0, "127.0.0.1");
+        expect((await fetch(`http://127.0.0.1:${port}/health`)).status).toBe(200);
+      } finally {
+        await other.close();
+      }
+    } finally {
+      delete flag.__faFailServe;
+      await agent.close();
+    }
+  });
 });

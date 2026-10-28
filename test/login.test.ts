@@ -299,7 +299,7 @@ describe("loginFlow", () => {
   });
 });
 
-describe("login (the entry point a GUI client drives with pi-ai's AuthInteraction)", () => {
+describe("login (the entry point any front end drives with pi-ai's AuthInteraction)", () => {
   afterEach(() => vi.restoreAllMocks());
   /** A client: answers prompts from a script, records what it was shown and told. */
   function client(answers: string[], signal?: AbortSignal) {

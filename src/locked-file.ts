@@ -1,9 +1,9 @@
 /**
  * The one cross-process read-modify-write for a file several processes share: fastagent's credentials file, and
- * `context.json` when an agent's content is edited (the CLI and a desktop client). It takes
- * the lock pi takes for the same files (pi-coding-agent's `FileAuthStorageBackend`), so a fastagent writer and a pi
- * writer queue behind each other, and it REPLACES the file rather than rewriting it in place, which is what lets every
- * reader of these files read without the lock: a reader sees the old file or the new one, never one cut short.
+ * `context.json` when an agent's content or environment is edited (`fastagent content` and `fastagent env` at once). It
+ * takes the lock pi takes for the same files (pi-coding-agent's `FileAuthStorageBackend`), so a fastagent writer and a
+ * pi writer queue behind each other, and it REPLACES the file rather than rewriting it in place, which is what lets
+ * every reader of these files read without the lock: a reader sees the old file or the new one, never one cut short.
  */
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

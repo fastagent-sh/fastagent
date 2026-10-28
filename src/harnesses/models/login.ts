@@ -2,7 +2,8 @@
  * Signing in to a MODEL PROVIDER, for any front end: {@link login} runs one provider's flow over pi-ai's own
  * `AuthInteraction` and persists the credential through the same {@link fastagentCredentialStore} the runtime reads
  * (one writer, one lock/corruption semantics); {@link loginOptions} is the list a picker offers. `fastagent login` is
- * one front end ({@link loginFlow}: terminal menus, then {@link login}); a GUI client is another.
+ * one front end ({@link loginFlow}: terminal menus, then {@link login}); `login --deployment` drives the same flow on a
+ * deployed box over a relay (cli/login-relay.ts).
  */
 import {
   type AuthEvent,

@@ -153,8 +153,14 @@ export function serviceOver(handler: ChannelHandler, ready: Promise<void>, shutd
     listen(port, host) {
       if (closing !== undefined) return Promise.reject(new Error("the service is closed"));
       if (listener !== undefined) return Promise.reject(new Error("the service is already listening"));
-      listener = serveHandler(handler, { port, ...(host === undefined ? {} : { host }) });
-      return listener.listening;
+      const current = serveHandler(handler, { port, ...(host === undefined ? {} : { host }) });
+      listener = current;
+      return current.listening.catch(async (error: unknown) => {
+        // A bind that failed holds nothing once its scope is closed, so the service may listen again, elsewhere.
+        if (listener === current) listener = undefined;
+        await current.close();
+        throw error;
+      });
     },
     ready,
     close() {

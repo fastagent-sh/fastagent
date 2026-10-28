@@ -188,6 +188,7 @@ export async function openAgent(dir: string, options: OpenAgentOptions = {}): Pr
   });
   const { agent } = opened;
   let served: Promise<Service> | undefined;
+  let closing: Promise<void> | undefined;
   return {
     info: agent.info,
     usage: agent.usage,
@@ -195,19 +196,29 @@ export async function openAgent(dir: string, options: OpenAgentOptions = {}): Pr
     messages: agent.messages,
     harness: agent.harness,
     serve() {
+      // Its storage is let go, or about to be: a service now would run channels and schedules nobody closes.
+      if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
-      served = serveAgent(opened);
-      return served;
+      const serving = serveAgent(opened);
+      served = serving;
+      // A serve that failed to start rolled itself back, so the agent may be served again.
+      serving.catch(() => {
+        if (served === serving) served = undefined;
+      });
+      return serving;
     },
-    async close() {
-      // A serve that never started has nothing to close; its failure reached the caller of `serve`.
-      const service = await served?.catch(() => undefined);
-      const failures: unknown[] = [];
-      await service?.close().catch((error: unknown) => failures.push(error));
-      await agent.close().catch((error: unknown) => failures.push(error));
-      if (failures.length > 0) {
-        throw failures.length === 1 ? failures[0] : new AggregateError(failures, "the agent did not close cleanly");
-      }
+    close() {
+      closing ??= (async () => {
+        // A serve that never started has nothing to close; its failure reached the caller of `serve`.
+        const service = await served?.catch(() => undefined);
+        const failures: unknown[] = [];
+        await service?.close().catch((error: unknown) => failures.push(error));
+        await agent.close().catch((error: unknown) => failures.push(error));
+        if (failures.length > 0) {
+          throw failures.length === 1 ? failures[0] : new AggregateError(failures, "the agent did not close cleanly");
+        }
+      })();
+      return closing;
     },
   };
 }
