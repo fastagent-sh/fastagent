@@ -12,7 +12,7 @@ import * as Stream from "effect/Stream";
 import * as Sse from "effect/encoding/Sse";
 import { HttpIncomingMessage, HttpRouter, HttpServer, HttpServerError, HttpServerResponse } from "effect/http";
 import { HttpApiBuilder, HttpApiError, OpenApi } from "effect/http-api";
-import { type Agent, AgentError, LIMITS, agentError, errorData } from "../agent-api.ts";
+import { type Agent, AgentError, LIMITS, type SessionEvent, agentError, errorData } from "../agent-api.ts";
 import type { ChannelHandler } from "../channel.ts";
 import { secretEquals } from "../channels/secret.ts";
 import { PortFailure, port, portAbort } from "../effect-port.ts";
@@ -88,8 +88,9 @@ const json = (status: number, error: AgentError) =>
   HttpServerResponse.jsonUnsafe({ error: errorData(error) }, { status });
 
 /**
- * What the contract cannot say itself: a body over the limit and a route it does not have, answered as refusals like
- * any other, and `Retry-After` on every refusal a Caller may send again later.
+ * What the contract cannot say itself: a body over the limit, a body that is not JSON (which the contract answers 415
+ * with a line of text) and a route it does not have, answered as refusals like any other, and `Retry-After` on every
+ * refusal a Caller may send again later.
  */
 const Edges = HttpRouter.middleware(
   (app) =>
@@ -108,11 +109,17 @@ const Edges = HttpRouter.middleware(
         }
         return Effect.failCause(cause);
       }),
-      Effect.map((response) =>
-        response.status === 429 || response.status === 503
+      Effect.map((response) => {
+        if (response.status === 415) {
+          return json(
+            400,
+            agentError("invalid_request", "a request body is JSON: send Content-Type: application/json"),
+          );
+        }
+        return response.status === 429 || response.status === 503
           ? HttpServerResponse.setHeader(response, "retry-after", RETRY_AFTER_SECONDS)
-          : response,
-      ),
+          : response;
+      }),
     ),
   { global: true },
 );
@@ -153,24 +160,22 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
         Effect.mapError(refusal(operation)),
       );
       const rest = Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => iterator }, (error) => error);
+      const written = (event: { readonly type: string }) =>
+        Schema.encodeEffect(frame)(event).pipe(
+          Effect.map(({ id, event, data }) => Sse.encoder.write({ _tag: "Event", id, event, data })),
+        );
+      const endedWith = (error: AgentError) =>
+        Stream.fromEffect(Effect.orDie(written({ type: "stream_error", error: errorData(error) } as SessionEvent)));
       const events = (first.done ? Stream.empty : Stream.concat(Stream.make(first.value), rest)).pipe(
-        Stream.catchCause((cause) => {
-          const error = refusal(operation)(new PortFailure(Cause.squash(cause)));
-          return Stream.make({ type: "stream_error", error: errorData(error) } as unknown as E);
-        }),
+        // Written before a failure is caught, so an event the API cannot send ends the stream as what it is.
+        Stream.mapEffect(written),
+        Stream.catchCause((cause) => endedWith(refusal(operation)(new PortFailure(Cause.squash(cause))))),
         Stream.interruptWhen(closed),
         Stream.concat(
           Stream.suspend(() =>
-            closing.signal.aborted
-              ? Stream.make({
-                  type: "stream_error",
-                  error: errorData(agentError("unavailable", "the service is closing")),
-                } as unknown as E)
-              : Stream.empty,
+            closing.signal.aborted ? endedWith(agentError("unavailable", "the service is closing")) : Stream.empty,
           ),
         ),
-        Stream.mapEffect((event) => Effect.orDie(Schema.encodeEffect(frame)(event))),
-        Stream.map(({ id, event, data }) => Sse.encoder.write({ _tag: "Event", id, event, data })),
       );
       let ended!: () => void;
       const done = new Promise<void>((resolve) => {
@@ -252,11 +257,17 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
         : Effect.fail(agentError("unauthorized", "the request has no key this instance holds"));
     },
   });
+  // The middleware wraps the whole handler, so it also sees the answer failing to encode: the server's fault, not the
+  // Caller's, said in the log and answered `internal`, as Effect itself tells the two apart.
   const malformed = Layer.succeed(Malformed)((effect) =>
     Effect.catchIf(effect, HttpApiError.HttpApiSchemaError.is, (error) => {
       // The middleware's own error type hides what it is; the guard above said.
       const { kind, cause } = error as unknown as HttpApiError.HttpApiSchemaError;
-      return Effect.fail(agentError("invalid_request", `${kind}: ${cause.message}`));
+      if (kind !== "Body" && kind !== "ResponseHeaders") {
+        return Effect.fail(agentError("invalid_request", `${kind}: ${cause.message}`));
+      }
+      log.error(`[api] an answer did not match the Agent API: ${cause.message}`);
+      return Effect.fail(agentError("internal", `the agent's answer did not match the Agent API: ${cause.message}`));
     }),
   );
 

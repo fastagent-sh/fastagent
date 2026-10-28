@@ -25,6 +25,7 @@ export type {
   SessionChanges,
   SessionEvent,
   SessionSettings,
+  SessionStatus,
   ThinkingLevel,
   Tokens,
   Usage,

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type Agent,
   AgentError,
@@ -10,6 +10,7 @@ import {
 import { serveHandler } from "../src/channels/serve.ts";
 import { connectAgent } from "../src/http/client.ts";
 import { statusOf } from "../src/http/contract.ts";
+import { log } from "../src/log.ts";
 import { agentApiConformance } from "./agent-api-conformance.ts";
 import { durableSubject } from "./durable-subject.ts";
 import { KEY, type Served, httpSubject, served } from "./http-subject.ts";
@@ -81,6 +82,27 @@ describe("the Agent API over HTTP", () => {
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({ error: { code: "invalid_request" } });
     }
+    const badKey = await fetch(`${server.url}/v1/sessions/${id}/messages`, {
+      method: "POST",
+      headers: { ...auth(), "idempotency-key": "100%" },
+      body: JSON.stringify({ content: "hi" }),
+    });
+    expect([badKey.status, await badKey.json()]).toEqual([
+      400,
+      { error: expect.objectContaining({ code: "invalid_request" }) },
+    ]);
+    // curl's -d sends a form unless told otherwise.
+    for (const type of ["application/x-www-form-urlencoded", "text/plain"]) {
+      const response = await fetch(`${server.url}/v1/sessions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${KEY}`, "content-type": type },
+        body: "{}",
+      });
+      expect([response.status, await response.json()]).toEqual([
+        400,
+        { error: expect.objectContaining({ code: "invalid_request" }) },
+      ]);
+    }
     const large = await post(JSON.stringify({ content: "x".repeat(33 << 20) }));
     expect(large.status).toBe(413);
     expect(await large.json()).toMatchObject({ error: { code: "invalid_request", details: { reason: "too_large" } } });
@@ -88,14 +110,6 @@ describe("the Agent API over HTTP", () => {
     expect(missing.status).toBe(404);
     expect(await missing.json()).toMatchObject({ error: { code: "not_found" } });
     expect((await agent.sessions.entries(id)).data).toEqual([]);
-  });
-
-  it("finds a message by a key that is not a path segment as it stands", async () => {
-    const { id: sessionId } = await agent.sessions.create();
-    const client = connectAgent(server.url, { apiKey: KEY });
-    const idempotencyKey = "chat/42 #7?x=1%";
-    const sent = await client.messages.send({ sessionId, content: "hi", idempotencyKey });
-    expect(await client.messages.get({ sessionId, idempotencyKey })).toMatchObject({ id: sent.id, idempotencyKey });
   });
 
   it("gives an entry event its id and no other event one, and continues from Last-Event-ID over ?after=start", async () => {
@@ -154,6 +168,30 @@ describe("the Agent API's HTTP limits", () => {
     }
   });
 
+  it("rejects a send whose wait past the cap failed unconfirmed with its message, as in process", async () => {
+    const agent = await subject.start();
+    const server = await served(agent, {
+      waitCapSeconds: 0.1,
+      // The first request is the send; the storage is gone by the one that asks again.
+      heard: (request) => {
+        if (request.method === "GET") subject.failStorage();
+      },
+    });
+    try {
+      const { id: sessionId } = await agent.sessions.create();
+      const error = await connectAgent(server.url, { apiKey: KEY })
+        .messages.send({ sessionId, content: "hold", idempotencyKey: "k" }, { wait: 5 })
+        .catch((rejection: unknown) => rejection);
+      expect(error).toMatchObject({
+        code: "unconfirmed",
+        retryable: false,
+        details: { sessionId, messageId: expect.any(String), idempotencyKey: "k" },
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("says a quiet event stream is open with a comment", async () => {
     const agent = await subject.start();
     const server = await served(agent, { keepAliveMs: 50 });
@@ -171,6 +209,8 @@ describe("the Agent API's HTTP limits", () => {
 });
 
 describe("refusals over HTTP", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("answers each code with the status §7 names", () => {
     const cases: [ErrorCode | "a_later_code", unknown, number][] = [
       ["invalid_request", undefined, 400],
@@ -190,6 +230,56 @@ describe("refusals over HTTP", () => {
     for (const [code, details, status] of cases) {
       const error = { code, message: code, retryable: false, ...(details === undefined ? {} : { details }) };
       expect([code, statusOf(error as AgentErrorData)]).toEqual([code, status]);
+    }
+  });
+
+  it("answers an answer of its own that does not match the API internal, said in the log, not invalid_request", async () => {
+    const said = vi.spyOn(log, "error").mockImplementation(() => {});
+    const scripted = scriptedAgent((request) => scriptedRun(request));
+    const agent: Agent = {
+      ...scripted,
+      sessions: {
+        ...scripted.sessions,
+        get: async (id) => ({ id, status: "idle", thinkingLevel: "ultra" as never, usage: { models: {}, tools: {} } }),
+      },
+    };
+    const server = await served(agent);
+    try {
+      const response = await fetch(`${server.url}/v1/sessions/s`, { headers: auth() });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toMatchObject({ error: { code: "internal", retryable: false } });
+      expect(said).toHaveBeenCalledWith(expect.stringContaining("[api] an answer did not match the Agent API"));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("ends an event stream whose next event the API cannot send with stream_error internal, said in the log", async () => {
+    const said = vi.spyOn(log, "error").mockImplementation(() => {});
+    const scripted = scriptedAgent((request) => scriptedRun(request));
+    const session = { id: "s", status: "idle", usage: { models: {}, tools: {} } };
+    const agent: Agent = {
+      ...scripted,
+      sessions: {
+        ...scripted.sessions,
+        events: () =>
+          (async function* () {
+            yield { type: "state" as const, session };
+            yield { type: "entry" as const, entry: { id: 7 } as never };
+          })(),
+      },
+    };
+    const server = await served(agent);
+    try {
+      const events = connectAgent(server.url, { apiKey: KEY }).sessions.events("s")[Symbol.asyncIterator]();
+      expect((await events.next()).value).toMatchObject({ type: "state" });
+      expect((await events.next()).value).toMatchObject({
+        type: "stream_error",
+        error: { code: "internal", retryable: false },
+      });
+      expect(said).toHaveBeenCalledWith(expect.stringContaining("[api] sessions.events failed"));
+    } finally {
+      await server.close();
     }
   });
 
@@ -226,22 +316,34 @@ describe("refusals over HTTP", () => {
 });
 
 describe("connectAgent", () => {
-  it("takes an error code and an event type it does not know (§7.1)", async () => {
-    const server = await fakeServer((request) =>
-      new URL(request.url).pathname.endsWith("/events")
-        ? new Response(
-            'event: fastagent.plan\ndata: {"type":"fastagent.plan"}\n\n' +
-              'event: state\ndata: {"type":"state","session":{"id":"s","status":"idle","usage":{"models":{},"tools":{}}}}\n\n',
-            { headers: { "content-type": "text/event-stream" } },
-          )
-        : Response.json({ error: { code: "a_later_code", message: "new", retryable: true } }, { status: 409 }),
-    );
+  it("takes an error code, an event type and a status it does not know (§7.1)", async () => {
+    let asked = 0;
+    const server = await fakeServer((request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/events")) {
+        return new Response(
+          'event: fastagent.plan\ndata: {"type":"fastagent.plan"}\n\n' +
+            'event: state\ndata: {"type":"state","session":{"id":"s","status":"paused","usage":{"models":{},"tools":{}}}}\n\n',
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      if (path.includes("/messages/")) {
+        asked++;
+        return Response.json({ id: "m", sessionId: "s", status: "waiting" });
+      }
+      return Response.json({ error: { code: "a_later_code", message: "new", retryable: true } }, { status: 409 });
+    });
     try {
       const agent = connectAgent(server.url, { apiKey: KEY });
       await expect(agent.sessions.get("s")).rejects.toMatchObject({ code: "a_later_code", retryable: true });
+      // A status it does not know is a message that has not ended: it is waited for, and asked after again.
+      expect(await agent.messages.get({ sessionId: "s", messageId: "m" }, { wait: 0.3 })).toMatchObject({
+        status: "waiting",
+      });
+      expect(asked).toBeGreaterThanOrEqual(2);
       const events = agent.sessions.events("s")[Symbol.asyncIterator]();
       const first = (await events.next()).value;
-      expect(first, JSON.stringify(first)).toMatchObject({ type: "state" });
+      expect(first, JSON.stringify(first)).toMatchObject({ type: "state", session: { status: "paused" } });
       await events.return?.();
     } finally {
       await server.close();
@@ -259,6 +361,11 @@ describe("connectAgent", () => {
     const keyed = await agent.messages.send({ sessionId: "s", content: "hi" }).catch((error: unknown) => error);
     expect(keyed).toMatchObject({ code: "unconfirmed", details: { idempotencyKey: expect.any(String) } });
     await expect(agent.sessions.get("s")).rejects.toMatchObject({ code: "unavailable", retryable: true });
+    const streamed = agent.messages.stream({ sessionId: "s", content: "hi" })[Symbol.asyncIterator]();
+    await expect(streamed.next()).rejects.toMatchObject({
+      code: "unconfirmed",
+      details: { sessionId: "s", idempotencyKey: expect.any(String) },
+    });
   });
 
   it("ends a stream whose connection ends early with stream_error, never a rejection", async () => {

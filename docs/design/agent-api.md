@@ -95,7 +95,8 @@ interface AgentInfo {
 
 interface Session {
   id: string;
-  status: "idle" | "running";
+  /** Or a status a later version adds, which a Caller takes for busy (§7.1). */
+  status: "idle" | "running" | (string & {});
   /** Its settings, as set at creation or by `update`; a field it does not name follows the deployment. */
   model?: { provider: string; modelId: string };
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -111,8 +112,11 @@ interface Message {
   id: string;
   sessionId: string;
   idempotencyKey?: string;
-  /** `queued` and `running` until it ends; then one of the four ends, which are all its ends (§5.4, §7.1). */
-  status: "queued" | "running" | "completed" | "incomplete" | "failed" | "canceled";
+  /**
+   * `queued` and `running` until it ends; then one of the four ends, which are all its ends (§5.4, §7.1). A status a
+   * later version adds is one it has not ended in.
+   */
+  status: "queued" | "running" | "completed" | "incomplete" | "failed" | "canceled" | (string & {});
   /** Its `user` entry, once the agent took it. */
   entryId?: string;
   /** The `assistant` entry the agent stopped on for it: present when `completed`, and when `incomplete`. */
@@ -547,8 +551,8 @@ same context as any other.
 - **No CORS**: the key is a credential for the whole instance, so a browser never holds it. A browser app calls its own
   backend, which calls the agent.
 - A request body over 32 MiB is `413`, `invalid_request` with `details.reason: "too_large"`. A request the API
-  cannot read (its path, query, headers or body) is `400 invalid_request`, and a route it does not have is
-  `404 not_found`.
+  cannot read (its path, query, headers or body, or a body sent as another type than `application/json`) is
+  `400 invalid_request`, and a route it does not have is `404 not_found`.
 
 ### 9.2 Routes
 
@@ -573,7 +577,8 @@ same context as any other.
 `POST …/messages` takes the `SendRequest` without its `sessionId`, which is in the path, plus `wait` (§4's option)
 and `stream: true` for `messages.stream`: `{ content, whenBusy?, wait?, stream? }`; a streamed message is watched,
 so `wait` beside `stream: true` is refused, `invalid_request`. Its key is the `Idempotency-Key`
-header, percent-encoded in the `by-key` path. A send whose key the session has seen answers with that message, as
+header, percent-encoded there as in the `by-key` path, since a header holds neither every character a key may have
+nor the spaces around it (a key of letters, digits and `-_.~` reads the same either way). A send whose key the session has seen answers with that message, as
 §5.2 says. Every `wait` is in seconds, and the server waits at most 60 (§7).
 
 ### 9.3 Event streams
@@ -591,10 +596,12 @@ A refused request answers the status §7 gives its code, with `{ "error": AgentE
 `429` and `503` answers §7 names.
 
 ```bash
-curl -s https://support.example.com/v1/sessions -H "Authorization: Bearer $KEY" -d '{}'
+curl -s https://support.example.com/v1/sessions -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d '{}'
 SEND=$(uuidgen)   # one key per message: running the next line again is the same message
 curl -s https://support.example.com/v1/sessions/$SESSION/messages -H "Authorization: Bearer $KEY" \
-  -H "Idempotency-Key: $SEND" -d '{"content": "Where is order 9231?", "wait": 60}'
+  -H "Content-Type: application/json" -H "Idempotency-Key: $SEND" \
+  -d '{"content": "Where is order 9231?", "wait": 60}'
 ```
 
 ### 9.5 Where it is served

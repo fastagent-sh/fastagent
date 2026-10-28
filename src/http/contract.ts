@@ -157,6 +157,12 @@ const SendBody = Schema.Struct({
   stream: Schema.optional(Schema.Boolean),
 });
 
+/**
+ * A key as a header carries it: percent-encoded, as in the `by-key` path, since a header holds only Latin-1 and loses
+ * the spaces around a value, while a key may be any 1 to 256 characters (§9.2).
+ */
+const KeyHeader = Schema.String.pipe(Schema.decodeTo(IdempotencyKey, SchemaTransformation.stringFromUriComponent));
+
 const WaitQuery = { wait: Schema.optional(Schema.NumberFromString.check(Schema.isGreaterThanOrEqualTo(0))) };
 
 const AgentGroup = HttpApiGroup.make("agent")
@@ -216,7 +222,7 @@ const AgentGroup = HttpApiGroup.make("agent")
     }),
     HttpApiEndpoint.post("send", "/sessions/:sessionId/messages", {
       params: sessionPath,
-      headers: { "idempotency-key": Schema.optional(IdempotencyKey) },
+      headers: { "idempotency-key": Schema.optional(KeyHeader) },
       payload: SendBody,
       success: [Message, HttpApiSchema.StreamSse({ events: MessageStreamEventFrame })],
       error: Refused,

@@ -84,10 +84,19 @@ const settingsFields = <O extends typeof Schema.optionalKey | typeof Schema.opti
   tools: optional(Schema.Array(Schema.String)),
 });
 
+/**
+ * A status as a field: the values this version defines, and any other, since a later version may add one and a Caller
+ * reads it the way §7.1 says (an unknown session status is busy, an unknown message status has not ended).
+ */
+const open = <S extends Schema.Top>(known: S) => Schema.Union([known, Schema.String]);
+
+export const SessionStatus = Schema.Literals(["idle", "running"]);
+export type SessionStatus = typeof SessionStatus.Type;
+
 export class Session extends Schema.Opaque<Session>()(
   Schema.Struct({
     id: Schema.String,
-    status: Schema.Literals(["idle", "running"]),
+    status: open(SessionStatus),
     ...settingsFields(Schema.optionalKey),
     /** The agent's reply being written, as written so far: present only while one is. */
     reply: Schema.optionalKey(Schema.Struct({ text: Schema.String, thinking: Schema.optionalKey(Schema.String) })),
@@ -104,7 +113,7 @@ export class Message extends Schema.Opaque<Message>()(
     id: Schema.String,
     sessionId: Schema.String,
     idempotencyKey: Schema.optionalKey(Schema.String),
-    status: MessageStatus,
+    status: open(MessageStatus),
     /** Its `user` entry, once the agent took it. */
     entryId: Schema.optionalKey(Schema.String),
     /** The `assistant` entry the agent stopped on for it: when `completed`, and when `incomplete`. */

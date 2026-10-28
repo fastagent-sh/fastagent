@@ -114,11 +114,12 @@ function connectAgent(url: string, options: { apiKey: string }): Agent;
 
 The same interface over HTTP, from `@fastagent-sh/fastagent/client`: an agent served with a key, by `start`, a
 deployment or an app's `serve()`, is called the way an opened one is, from a backend (the key is a credential for the
-whole instance, so a browser never holds it). A `wait` over 60 seconds is several requests of at most 60. A send
-without an `idempotencyKey` gets one of its own, so a send whose answer was lost rejects `unconfirmed` with that key in
-`details`, and `messages.get` by key finds what became of it; a read that could not reach the agent rejects
-`unavailable`. An event type or error code from a later server that this client does not know is skipped, or kept as
-the code it is.
+whole instance, so a browser never holds it). A `wait` over 60 seconds is several requests of at most 60. A send or a
+stream without an `idempotencyKey` gets one of its own, so one whose answer was lost rejects `unconfirmed` with that key
+in `details`, and `messages.get` by key finds what became of it; so does a send whose wait failed once the message was
+recorded, with its `messageId`, as in process. A read that could not reach the agent rejects `unavailable`. An event
+type, a status or an error code from a later server that this client does not know is skipped, kept as the status it is
+(a message in one has not ended), or kept as the code it is.
 
 ## What an author writes
 

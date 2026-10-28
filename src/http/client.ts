@@ -105,8 +105,15 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     throw failureOf(exit.cause, lost);
   };
 
-  /** Asks again until the message ends or the Caller's `wait` is over: a request waits at most a minute (§7). */
-  const waited = async (first: (wait: number | undefined) => Promise<Message>, options?: WaitOptions) => {
+  /**
+   * Asks again until the message ends or the Caller's `wait` is over: a request waits at most a minute (§7). A request
+   * after the first that fails is `failedAfter`'s to say, since for a send the message is recorded by then.
+   */
+  const waited = async (
+    first: (wait: number | undefined) => Promise<Message>,
+    options: WaitOptions | undefined,
+    failedAfter: (message: Message, error: unknown) => unknown = (_, error) => error,
+  ) => {
     const wait = options?.wait === undefined ? undefined : checked(Wait, options.wait, "wait");
     const deadline = wait === undefined ? undefined : Date.now() + wait * 1000;
     const remaining = () => (deadline === undefined ? 0 : Math.max(0, deadline - Date.now()) / 1000);
@@ -114,10 +121,16 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     let message = await first(wait === undefined ? undefined : capped());
     while (!hasEnded(message) && remaining() > 0) {
       const { sessionId, id: messageId } = message;
-      message = await request(
-        client.getMessage({ params: { sessionId, messageId }, query: { wait: capped() } }),
-        options?.signal,
-      );
+      try {
+        message = await request(
+          client.getMessage({ params: { sessionId, messageId }, query: { wait: capped() } }),
+          options?.signal,
+        );
+      } catch (error) {
+        // A Caller that let go is told its signal's reason, as it is.
+        if (options?.signal?.aborted) throw error;
+        throw failedAfter(message, error);
+      }
     }
     return message;
   };
@@ -263,6 +276,13 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
               lost,
             ),
           sendOptions,
+          // Recorded, as the in-process send says of a wait that failed (agent-api.md §5.2).
+          (message, error) =>
+            agentError(
+              "unconfirmed",
+              `The message was recorded, and waiting for it failed: ${error instanceof Error ? error.message : String(error)}`,
+              { sessionId, messageId: message.id, idempotencyKey: key },
+            ),
         );
       },
       stream: (sendRequest, streamOptions) => {
@@ -270,13 +290,17 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
         return watched<MessageStreamEvent>(
           // Checked on the first read, which a refusal rejects (§6.2).
           Effect.try({ try: () => keyed(sendRequest, "messages.stream"), catch: (error) => error }).pipe(
-            Effect.flatMap(
-              ({ sessionId, key, body }) =>
+            Effect.flatMap(({ sessionId, key, body, lost }) =>
+              (
                 client.send({
                   params: { sessionId },
                   headers: { "idempotency-key": key },
                   payload: { ...body, stream: true },
-                }) as Effect.Effect<Stream.Stream<{ readonly type: string }, unknown>, unknown>,
+                }) as Effect.Effect<Stream.Stream<{ readonly type: string }, unknown>, unknown>
+              ).pipe(
+                // The answer begins once the message is recorded, so one that never came may have been (§5.2).
+                Effect.mapError((error) => failureOf(Cause.fail(error), lost)),
+              ),
             ),
           ),
           MESSAGE_STREAM_EVENT_TYPES,

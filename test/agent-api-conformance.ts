@@ -384,6 +384,16 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
     });
 
     describe("Idempotency", () => {
+      it("keeps a key as it was given, whatever its characters", async () => {
+        const sessionId = await newSession(agent);
+        for (const idempotencyKey of ["订单-1", " padded ", "chat/42 #7?x=1%", "100%"]) {
+          const sent = await send({ sessionId, content: "hi", idempotencyKey });
+          expect(sent.idempotencyKey).toBe(idempotencyKey);
+          expect(await agent.messages.get({ sessionId, idempotencyKey })).toMatchObject({ id: sent.id });
+          expect(await send({ sessionId, content: "again", idempotencyKey })).toMatchObject({ id: sent.id });
+        }
+      });
+
       it("returns a key's message while it is queued, running and ended, recording it once", async () => {
         const sessionId = await newSession(agent);
         const running = await send({ sessionId, content: "hold", idempotencyKey: "first" });
