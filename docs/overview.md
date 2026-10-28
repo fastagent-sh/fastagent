@@ -76,8 +76,8 @@ Use FastAgent as a library and call the agent in process:
 import { openServing } from "@fastagent-sh/fastagent";
 
 const { agent } = await openServing("./agent", { model: "openai-codex/gpt-5.5" });
-const created = await agent.createSession();
-// agent.invoke({ sessionId, content }) → wait() for the answer, or stream() it as it is written
+const session = await agent.sessions.create();
+// agent.messages.send({ sessionId: session.id, content }, { wait }) for the answer, or messages.stream() as written
 ```
 
 Your app still owns auth, database, routing, and deployment. See [Embedding](embedding.md).

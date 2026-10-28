@@ -10,7 +10,7 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, expectTypeOf, it, vi } from "vitest";
-import type { InvokeRequest } from "../src/agent-api.ts";
+import type { SendRequest } from "../src/agent-api.ts";
 import type { TurnEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { scriptedRun } from "./scripted-run.ts";
 import { scriptedAgent } from "./scripted-agent.ts";
@@ -54,7 +54,7 @@ const lastFire = (stateRoot: string, name: string): string | undefined => readFi
 afterEach(() => vi.restoreAllMocks());
 
 /** An agent that runs `script` for each message it is sent; `sent` lists each message's session. */
-const agentRunning = (script: (request: InvokeRequest & { sessionId: string }) => AsyncIterable<TurnEvent>) => {
+const agentRunning = (script: (request: SendRequest) => AsyncIterable<TurnEvent>) => {
   const agent = scriptedAgent(script);
   return { agent, sent: () => agent.sent.map((request) => request.sessionId) };
 };
@@ -78,12 +78,15 @@ it("two SCHEDULERS over one state root fire a cron slot exactly once", async () 
           `
           import * as Effect from "effect/Effect";
           const { fireScheduleOnce } = await import(${JSON.stringify(source)});
+          const message = { id: "m", sessionId: "s", status: "completed" };
           const agent = {
-            async createSession() { return { ok: true, sessionId: "s" }; },
-            async invoke() {
-              await new Promise((r) => setTimeout(r, 150));
-              const message = { messageId: "m", status: "done", outcome: { status: "completed" } };
-              return { ok: true, sessionId: "s", message, duplicate: false, wait: async () => ({ ok: true, message }) };
+            sessions: { async create() { return { id: "s" }; } },
+            messages: {
+              async send() {
+                await new Promise((r) => setTimeout(r, 150));
+                return message;
+              },
+              async get() { return message; },
             },
           };
           const outcome = await Effect.runPromise(fireScheduleOnce({
@@ -135,8 +138,8 @@ it.each(["cron", "one-shot", "recurring"] as const)(
     const { stateRoot, schedules, now } = JSON.parse(process.argv[2]);
     process.on("message", () => {});
     const agent = {
-      async createSession() { return { ok: true, sessionId: "s" }; },
-      async invoke() { process.send("running"); await new Promise(() => {}); },
+      sessions: { async create() { return { id: "s" }; } },
+      messages: { async send() { process.send("running"); await new Promise(() => {}); } },
     };
     Effect.runSync(createScheduler({ agent, stateRoot, schedules, now: () => new Date(now) })).start();
   `,
@@ -180,7 +183,7 @@ it.each(["cron", "one-shot", "recurring"] as const)(
       // The claim the killed process left is not replayed, and this boot puts it on the record. A wake-up has no
       // such claim to reconcile — it leaves the store before its turn starts, so the killed occurrence is simply
       // gone (`next` above is the SECOND wake-up, not a replay of the killed one).
-      expect(outcomes(stateRoot)).toEqual(kind === "cron" ? ["completed", "interrupted"] : []);
+      await vi.waitFor(() => expect(outcomes(stateRoot)).toEqual(kind === "cron" ? ["completed", "interrupted"] : []));
       if (kind === "cron") {
         expect(readFires(stateRoot, "job").at(-1)).toMatchObject({
           outcome: "interrupted",
@@ -298,16 +301,16 @@ it("publishes the running loop before an agent callback re-enters stop", async (
   let s: Scheduler;
   const scripted = scriptedAgent((request) => scriptedRun(request));
   // The first thing a fire asks of the agent, synchronously: its schedule's session.
-  const createSession = vi.fn((options?: Parameters<typeof scripted.createSession>[0]) => {
+  const create = vi.fn((options?: Parameters<typeof scripted.sessions.create>[0]) => {
     s.stop();
-    return scripted.createSession(options);
+    return scripted.sessions.create(options);
   });
-  const invoke = vi.fn(scripted.invoke);
+  const send = vi.fn(scripted.messages.send);
   await Effect.runPromise(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW.getTime());
       s = yield* createScheduler({
-        agent: { ...scripted, createSession, invoke },
+        agent: { sessions: { ...scripted.sessions, create }, messages: { ...scripted.messages, send } },
         stateRoot,
         schedules: [hourly("a"), hourly("b")],
       });
@@ -316,7 +319,7 @@ it("publishes the running loop before an agent callback re-enters stop", async (
         yield* Effect.promise(tick);
         yield* TestClock.adjust(2 * 60 * 60_000);
         yield* Effect.promise(tick);
-        expect(invoke).toHaveBeenCalledOnce();
+        expect(send).toHaveBeenCalledOnce();
         expect(outcomes(stateRoot, "a")).toEqual(["completed", "completed"]); // the seeded prior fire, then this one
         expect(lastFire(stateRoot, "b")).toBe("2026-07-07T08:00:00Z");
       } finally {
@@ -476,14 +479,9 @@ it("stopping the scheduler detaches from a running fire, and the message goes on
     expect(subject.held()).toBe(1);
     subject.release();
     const sessionId = sessionOf(stateRoot, "job") as string;
-    await vi.waitFor(async () => {
-      const read = await agent.read(sessionId, { limit: 1 });
-      expect(read.ok && read.state.status).toBe("idle");
-    });
-    expect(await agent.getMessage(sessionId, { idempotencyKey: "2026-07-07T10:00:00.000Z" })).toMatchObject({
-      status: "done",
-      outcome: { status: "completed" },
-    });
+    expect(
+      await agent.messages.get({ sessionId, idempotencyKey: "2026-07-07T10:00:00.000Z" }, { wait: 30 }),
+    ).toMatchObject({ status: "completed" });
   } finally {
     await subject.stop();
   }
@@ -495,15 +493,17 @@ it("a schedule's occurrence on a busy session is skipped, not queued behind the 
     const agent = await subject.start();
     const stateRoot = await freshRoot();
     const sessionId = await scheduleSessions(stateRoot).of("job", agent);
-    const running = await agent.invoke({ sessionId, content: [{ type: "text", text: "hold" }] });
-    expect(running.ok).toBe(true);
+    await agent.messages.send({ sessionId, content: "hold" });
     await vi.waitFor(() => expect(subject.held()).toBe(1));
     const outcome = await Effect.runPromise(
       fireScheduleOnce({ agent, stateRoot, schedule: hourly(), slot: NOW, now: () => NOW }),
     );
     expect(outcome).toMatchObject({ fired: false, skipped: true });
-    const state = await agent.read(sessionId, { limit: 1 });
-    expect(state.ok && state.state.queued).toEqual([]);
+    const asked = (await agent.sessions.entries(sessionId)).data.filter((entry) => entry.kind === "user");
+    expect(asked).toHaveLength(1);
+    await expect(agent.messages.get({ sessionId, idempotencyKey: NOW.toISOString() })).rejects.toMatchObject({
+      code: "not_found",
+    });
   } finally {
     await subject.stop();
   }

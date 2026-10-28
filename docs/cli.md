@@ -240,13 +240,13 @@ fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--js
 Sends one message and exits: the answer text to stdout, tool and diagnostic lines to stderr, and a non-zero exit
 unless the message completed. This is the check a coding agent runs: one message, its answer, and an exit code.
 
-- **`--json`** prints JSON lines on stdout instead: first the receipt, `{"type": "receipt", "sessionId", "message",
-  "duplicate"}`, then the message's events as the [Agent API](SPEC.md) §6 has them (`entry`, `message_delta`,
-  `tool_started`, ...), ending with its `done`. A message that ends another way ends with the line that says why:
-  `{"type": "rejected", "error"}`, `{"type": "unknown", "reason"}` (whether it was taken is not known), a
-  `serving_error` event, or `{"type": "unfinished", "reason"}`. The exit code is the same as without `--json`.
+- **`--json`** prints JSON lines on stdout instead: the message's events as the
+  [Agent API](design/agent-api.md) §6.2 delivers them, first `{"type": "message", "message"}` as it was recorded,
+  then `entry`, `delta`, `tool_started`, ..., ending with its `done`. A message that ends another way ends with the
+  line that says why: `{"type": "rejected", "error"}` when the agent refused it, a `stream_error` event, or
+  `{"type": "unfinished", "reason"}`. The exit code is the same as without `--json`.
 - **`--session <id>`** sends the message into a session an earlier run created, continuing it. Every run prints its
-  session's id on stderr (`[fastagent] session <id> …`), and `--json`'s receipt carries it as `sessionId`; without
+  session's id on stderr (`[fastagent] session <id> …`), and `--json`'s first line carries it as `sessionId`; without
   `--session`, a run starts a new session. Each run answers with the model it resolves (`--model`,
   `FASTAGENT_MODEL`, the config), a continued session included.
 
@@ -285,7 +285,7 @@ fastagent schedules run <name> [agent] [--model provider/modelId] [--no-input]
 Fires the schedule `<name>` now, the way its clock would: in the schedule's own session, with its claim and its
 outcome recorded, so `schedules list` shows the fire. A fire a stopped serve claimed and never reported is settled
 first, as a serve's start settles it. The answer goes to stdout and the fire's log to stderr; the exit is non-zero
-unless its message completed, as `invoke`'s: a cut-off answer (`max_tokens`) exits 1, though the claim records it
+unless its message completed, as `invoke`'s: a cut-off answer (`incomplete`) exits 1, though the claim records it
 `completed`. `--model` is the default model, as for `dev`: a schedule's session takes it at its first fire and keeps
 it after that.
 

@@ -1,7 +1,7 @@
 /**
  * What the Agent reads from pi-durable, as Effects: a session's conversation, its published entries in either
- * direction, a message's status and end, and the session's state. The operations and `resume` share them, so a
- * Caller reads the same facts through each.
+ * direction, a message as it is now, and the session. The operations and the event streams share them, so a Caller
+ * reads the same facts through each.
  */
 import type { Context } from "@earendil-works/chord/context";
 import {
@@ -13,27 +13,17 @@ import {
   type Harness,
   InboxDoc,
   LiveDoc,
-  type Submission,
   UsageDoc,
 } from "@earendil-works/pi-durable";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import type { DoneMessage, Entry, MessageStatus, SessionState } from "../../agent-api.ts";
+import type { Entry, Message, Session } from "../../agent-api.ts";
 import { type PortFailure, port } from "../../effect-port.ts";
 import { isPublished, publishEntry, requestIdOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
 import type { Sessions } from "./sessions.ts";
-import {
-  type EndedRecord,
-  type InputRecord,
-  doneMessage,
-  idempotencyKeyOf,
-  isInput,
-  messageStatus,
-  queuedInputs,
-  sessionState,
-} from "./messages.ts";
+import { type InputRecord, isInput, messageOf, sessionOf } from "./messages.ts";
 
 const SCAN_PAGE = 100;
 
@@ -84,8 +74,8 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
       Effect.map((head) => Option.getOrUndefined(head)?.id),
     );
 
-  /** `records`, published oldest first, each the parent of the next; `parent` is the first one's. */
-  const publish = (records: readonly EntryRecord[], parent: number | undefined): Effect.Effect<Entry[], PortFailure> =>
+  /** `records` as published, each user entry naming the message it took. */
+  const publish = (records: readonly EntryRecord[]): Effect.Effect<Entry[], PortFailure> =>
     Effect.gen(function* () {
       const asked = records.flatMap((record) => {
         const requestId = requestIdOf(record);
@@ -103,52 +93,19 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
                 return records;
               }, context),
             );
-      const messages = new Map(asked.map(({ record }, index) => [record.id as number, found[index]]));
-      let previous = parent;
-      return records.map((record) => {
-        const submission = messages.get(record.id);
-        const key = idempotencyKeyOf(submission?.requestId);
-        const entry = publishEntry(record, {
-          ids,
-          parent: previous,
-          ...(submission === undefined
-            ? {}
-            : { message: { messageId: submission.id, ...(key === undefined ? {} : { idempotencyKey: key }) } }),
-        });
-        previous = record.id;
-        return entry;
-      });
+      const messages = new Map(asked.map(({ record }, index) => [record.id as number, found[index]?.id]));
+      return records.map((record) => publishEntry(record, ids, messages.get(record.id)));
     });
 
   const entryById = (id: number) => port(() => harness.commit((tx) => tx.entry(id as EntryRecord["id"]), context));
 
-  const done = (record: EndedRecord, known: readonly EntryRecord[] = []): Effect.Effect<DoneMessage, PortFailure> =>
+  /** The message `record` is; an answered one reads its answer entry, from `known` when it is there. */
+  const message = (record: InputRecord, known: readonly EntryRecord[] = []): Effect.Effect<Message, PortFailure> =>
     Effect.gen(function* () {
-      if (record.status !== "done") return doneMessage(record, ids, undefined);
+      if (record.status !== "done") return messageOf(record, ids);
       const answer = known.find((entry) => entry.id === record.answer) ?? (yield* entryById(record.answer));
-      return doneMessage(record, ids, answer);
+      return messageOf(record, ids, answer);
     });
-
-  const status = (record: InputRecord): Effect.Effect<MessageStatus, PortFailure> => {
-    switch (record.status) {
-      case "queued":
-        return port(() => harness.snapshot(InboxDoc, record.conversationId, context)).pipe(
-          Effect.flatMap((inbox) =>
-            queuedInputs(inbox).includes(record.id)
-              ? Effect.succeed(messageStatus(record, ids, { ...(inbox === undefined ? {} : { inbox }) }))
-              : // Taken or withdrawn between the two reads: a race no test can time, so this branch is untested.
-                port(() => harness.submission(record.id, context)).pipe(
-                  Effect.flatMap((handle) => port(() => (handle as Submission).status(context))),
-                  Effect.flatMap((current) => status(current as InputRecord)),
-                ),
-          ),
-        );
-      case "placed":
-        return Effect.succeed(messageStatus(record, ids, {}));
-      default:
-        return done(record);
-    }
-  };
 
   const submission = (messageId: string) => {
     const id = ids.decode(messageId);
@@ -166,21 +123,30 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
 
   const inbox = (conversation: Conversation) => port(() => harness.snapshot(InboxDoc, conversation.id, context));
 
-  /** One commit's reads, so a message moving from the inbox into the run is in `queued` or in `taken`, never neither. */
-  const state = (conversation: Conversation): Effect.Effect<SessionState, PortFailure> =>
+  /**
+   * The sessions as they are now, in one commit: each one's status, reply and settings of one moment, and a page of
+   * them one turn on pi-durable's commit line, which every running session writes through too.
+   */
+  const sessionsOf = (conversations: readonly ConversationId[]): Effect.Effect<Session[], PortFailure> =>
     port(() =>
-      harness.commit(
-        async (tx) =>
-          sessionState(
-            await tx.doc(LiveDoc, conversation.id),
-            await tx.doc(InboxDoc, conversation.id),
-            await tx.doc(UsageDoc, conversation.id),
-            await tx.doc(AgentDoc, conversation.id),
-            ids,
-          ),
-        context,
-      ),
+      harness.commit(async (tx) => {
+        const read: Session[] = [];
+        for (const id of conversations) {
+          read.push(
+            sessionOf(
+              ids.encode(id),
+              await tx.doc(LiveDoc, id),
+              await tx.doc(UsageDoc, id),
+              await tx.doc(AgentDoc, id),
+            ),
+          );
+        }
+        return read;
+      }, context),
     );
+
+  const session = (conversation: Pick<Conversation, "id">): Effect.Effect<Session, PortFailure> =>
+    sessionsOf([conversation.id]).pipe(Effect.map((read) => read[0] as Session));
 
   return {
     conversation,
@@ -190,11 +156,11 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
     visibleEntry,
     newestPublished,
     publish,
-    done,
-    status,
+    message,
     submission,
     submissionByKey,
     inbox,
-    state,
+    session,
+    sessionsOf,
   };
 }

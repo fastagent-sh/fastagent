@@ -2,7 +2,7 @@
  * external-upload protocol. */
 import { mkdir, open, stat, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
-import type { Attachment as ImageRef } from "../../agent-api.ts";
+import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
 import { attachmentPath } from "../kit/attachment-path.ts";
 import type { CallOptions } from "../kit/transport.ts";
 import { codePointPrefix } from "../kit/text.ts";

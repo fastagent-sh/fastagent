@@ -1,7 +1,7 @@
 /**
- * Which conversations are sessions, and each one's latest activity (SPEC.md §5), kept in memory as a cache of the
- * storage: read once when the Agent opens, then moved forward by every commit, so `listSessions` reads no storage and
- * every operation asks the same question `listSessions` answers.
+ * Which conversations are sessions, and each one's latest activity (agent-api.md §4), kept in memory as a cache of the
+ * storage: read once when the Agent opens, then moved forward by every commit, so `sessions.list` orders without
+ * reading the storage and every operation asks the same question `sessions.list` answers.
  *
  * pi-durable mints every record's id from one counter that grows across reopen (`Storage.mintId`), so a session's
  * latest activity is the newest of its own ids: its creation, its newest message, its newest entry. No clock is

@@ -1,6 +1,6 @@
 /** Where a new thread starts from: a fork of its room at the message its reply chain names. */
 import { afterEach, describe, expect, it } from "vitest";
-import type { Agent, MessageStatus } from "../src/agent-api.ts";
+import type { Agent, Message } from "../src/agent-api.ts";
 import { forkThread } from "../src/channels/kit/thread-fork.ts";
 import { newSession } from "../src/conversation-sessions.ts";
 import { durableSubject } from "./durable-subject.ts";
@@ -14,18 +14,15 @@ const roomWith = async (asks: [key: string, text: string][]) => {
   const agent = await subject.start();
   const room = await newSession(agent);
   for (const [idempotencyKey, text] of asks) {
-    const sent = await agent.invoke({ sessionId: room, idempotencyKey, content: [{ type: "text", text }] });
-    if (!sent.ok) throw new Error("not sent");
-    await sent.wait();
+    await agent.messages.send({ sessionId: room, idempotencyKey, content: text }, { wait: 30 });
   }
   return { agent, room };
 };
 
 const said = async (agent: Agent, sessionId: string) => {
-  const page = await agent.read(sessionId);
-  if (!page.ok) throw new Error(page.error.message);
-  return page.entries
-    .filter((e) => e.kind === "user_message")
+  const page = await agent.sessions.entries(sessionId);
+  return page.data
+    .filter((e) => e.kind === "user")
     .map((e) => (e.data as { content: { text: string }[] }).content[0]?.text);
 };
 
@@ -57,17 +54,23 @@ describe("forkThread", () => {
   });
 
   it("a message without an answer forks at its own entry; a queued one at the present", async () => {
-    const forked = async (message: MessageStatus) => {
+    const forked = async (message: Message) => {
       const agent = scriptedAgent(() => []);
       const room = await newSession(agent);
-      await forkThread({ ...agent, getMessage: async () => message }, { room, chain: ["m1"] });
+      await forkThread(
+        { ...agent, messages: { ...agent.messages, get: async () => message } },
+        { room, chain: ["m1"] },
+      );
       return agent.forks.at(-1);
     };
-    expect(await forked({ messageId: "m", entryId: "asked", status: "taken" })).toEqual({
-      from: { sessionId: "session-1", entryId: "asked" },
+    expect(await forked({ id: "m", sessionId: "session-1", entryId: "asked", status: "running" })).toEqual({
+      forkFrom: { sessionId: "session-1", entryId: "asked" },
     });
-    expect(await forked({ messageId: "m", status: "queued", position: 0 })).toEqual({
-      from: { sessionId: "session-1" },
+    expect(await forked({ id: "m", sessionId: "session-1", entryId: "asked", status: "failed" })).toEqual({
+      forkFrom: { sessionId: "session-1", entryId: "asked" },
+    });
+    expect(await forked({ id: "m", sessionId: "session-1", status: "queued" })).toEqual({
+      forkFrom: { sessionId: "session-1" },
     });
   });
 

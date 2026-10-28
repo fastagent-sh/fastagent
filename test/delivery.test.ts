@@ -251,7 +251,7 @@ it("preserves a source OR completed failure without duplicate terminal delivery"
           renderReply(
             phase === "source"
               ? Stream.fail(new PortFailure(primary))
-              : Stream.fromIterable([ev.accepted(), ev.ended()]),
+              : Stream.fromIterable([ev.message(), ev.ended()]),
             {
               label: "[test]",
               finish: Effect.void,
@@ -280,10 +280,10 @@ it("a stream that ends on a serving error tells the asker it was temporary, and 
       Effect.scoped(
         renderReply(
           Stream.fromIterable([
-            ev.accepted(),
+            ev.message(),
             ev.text("part"),
             {
-              type: "serving_error",
+              type: "stream_error",
               error: { code: "internal", message: "the run's end could not be recorded: ENOSPC", retryable: true },
             } as InvokeEvent,
           ]),
@@ -303,7 +303,7 @@ it("a stream that ends on a serving error tells the asker it was temporary, and 
     ),
   ).rejects.toThrow("agent failed: the run's end could not be recorded: ENOSPC (retryable=true)");
   expect(failures).toEqual([
-    { details: "the run's end could not be recorded: ENOSPC", retryable: true, code: "serving_error" },
+    { details: "the run's end could not be recorded: ENOSPC", retryable: true, code: "stream_error" },
   ]);
   expect(settle).toHaveBeenCalledExactlyOnceWith("temporary");
 });
@@ -316,7 +316,7 @@ it("a failed answer hand-over stops the turn before it delivers anything", async
   await expect(
     run(
       Effect.scoped(
-        renderReply(Stream.fromIterable([ev.accepted(), ev.ended()]), {
+        renderReply(Stream.fromIterable([ev.message(), ev.ended()]), {
           label: "[test]",
           finish: Effect.void,
           onEvent: () => {},
@@ -354,15 +354,13 @@ it("turnEnd: a refusal or the turn's own done ends the turn, and says how", () =
   expect(turnEnd(ev.rejected("busy"), undefined)).toMatchObject({ failure: { code: "busy" } });
   expect(turnEnd(ev.ended(), run)).toEqual({ answered: true });
   // Stopped at its output limit: still an answer, with whatever it wrote.
-  expect(turnEnd(ev.ended({ status: "max_tokens" }), run)).toEqual({ answered: true });
+  expect(turnEnd(ev.ended({ status: "incomplete" }), run)).toEqual({ answered: true });
   expect(turnEnd(ev.failed("boom", { retryable: true }), run)).toEqual({
     failure: { details: "boom", retryable: true, code: "model_error" },
   });
   expect(turnEnd(ev.ended({ status: "canceled" }), run)).toMatchObject({
     failure: { retryable: false, code: "canceled" },
   });
-  // Whether the message was taken is not known: the same key finds it again.
-  expect(turnEnd(ev.unknown(), undefined)).toMatchObject({ failure: { retryable: true, code: "unknown" } });
   // Another message's ending, or anything else, is not this turn's.
   expect(turnEnd(ev.ended({ status: "completed" }, "other"), run)).toBeUndefined();
   expect(turnEnd(ev.text("x"), run)).toBeUndefined();

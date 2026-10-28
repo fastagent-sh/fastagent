@@ -20,7 +20,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { Agent, DoneMessage } from "../../src/agent-api.ts";
+import { type Agent, type Message, hasEnded } from "../../src/agent-api.ts";
 import { type OpenServingOptions, openServing } from "../../src/harnesses/pi-durable/serve.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { requireEnv } from "./env.ts";
@@ -65,15 +65,11 @@ async function open(dir: string, options: OpenServingOptions = { storage: "memor
 }
 
 /** Send one message in `sessionId` (a new session without one) and wait for how it ended. */
-async function ask(agent: Agent, text: string, sessionId?: string): Promise<DoneMessage & { sessionId: string }> {
-  const session = sessionId ?? (await agent.createSession());
-  const id = typeof session === "string" ? session : session.ok ? session.sessionId : undefined;
-  if (id === undefined) throw new Error(`no session: ${JSON.stringify(session)}`);
-  const sent = await agent.invoke({ sessionId: id, content: [{ type: "text", text }] });
-  if (!sent.ok) throw new Error(`not sent: ${JSON.stringify(sent)}`);
-  const end = await sent.wait();
-  if (!end.ok) throw new Error(`the wait ended first: ${end.unfinished.reason}`);
-  return { ...end.message, sessionId: id };
+async function ask(agent: Agent, text: string, sessionId?: string): Promise<Message> {
+  const id = sessionId ?? (await agent.sessions.create()).id;
+  const end = await agent.messages.send({ sessionId: id, content: text }, { wait: 600 });
+  if (!hasEnded(end)) throw new Error(`the wait ended first: ${JSON.stringify(end)}`);
+  return end;
 }
 
 /** A definition whose provider points at a local endpoint that answers 400 to every request. */
@@ -113,7 +109,7 @@ describe(`live model: ${MODEL}`, () => {
   it("a real stream reaches a completed message with an answer", async () => {
     const { agent } = await open(await agentDirectory(modelConfig(MODEL)));
     const end = await ask(agent, "Reply with just: ok");
-    expect(end.outcome, JSON.stringify(end.outcome)).toEqual({ status: "completed" });
+    expect(end.status, JSON.stringify(end)).toBe("completed");
     expect(end.answer?.text.trim()).not.toBe("");
   });
 
@@ -177,6 +173,6 @@ export default defineTool({
     // `retryable` is what a caller branches on. This is the half a faux provider cannot settle: the shape of a real
     // provider error as it travels through pi's stack into our classifier.
     const end = await ask(agent, "go");
-    expect(end.outcome, JSON.stringify(end.outcome)).toMatchObject({ status: "failed", error: { retryable: false } });
+    expect(end, JSON.stringify(end)).toMatchObject({ status: "failed", error: { retryable: false } });
   });
 });

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { AgentRejection, failure } from "../src/agent-api.ts";
+import { AgentError, agentError } from "../src/agent-api.ts";
 import { conversationSessions } from "../src/conversation-sessions.ts";
 import * as stateFile from "../src/state-file.ts";
 import { scriptedAgent } from "./scripted-agent.ts";
@@ -24,13 +24,12 @@ const recordedIn = async (file: string) => JSON.parse(await readFile(file, "utf8
 
 it("reads its file once: a turn of a known conversation reads no file that grows with every conversation", async () => {
   const subject = agent();
-  const created = await subject.createSession();
-  if (!created.ok) throw new Error("no session");
-  const file = await mapFile({ room: created.sessionId });
+  const created = await subject.sessions.create();
+  const file = await mapFile({ room: created.id });
   const sessions = conversationSessions(file);
   const reads = vi.mocked(stateFile.loadStateFile);
   reads.mockClear();
-  for (let i = 0; i < 3; i++) expect(await sessions.of("room", subject)).toBe(created.sessionId);
+  for (let i = 0; i < 3; i++) expect(await sessions.of("room", subject)).toBe(created.id);
   await sessions.of("another", subject);
   expect(sessions.get("another")).toBeDefined();
   expect(reads).toHaveBeenCalledTimes(1);
@@ -50,10 +49,19 @@ it("a recorded session the Agent no longer holds is replaced and recorded, and s
 });
 
 it("a storage that cannot answer is the turn's refusal, with its retryable, never a replacement", async () => {
-  const unavailable = { ...agent(), read: async () => failure("unavailable", "storage is down") };
+  const base = agent();
+  const unavailable = {
+    ...base,
+    sessions: {
+      ...base.sessions,
+      get: async () => {
+        throw agentError("unavailable", "storage is down");
+      },
+    },
+  };
   const file = await mapFile({ room: "kept" });
   const refused = conversationSessions(file).of("room", unavailable);
-  await expect(refused).rejects.toBeInstanceOf(AgentRejection);
+  await expect(refused).rejects.toBeInstanceOf(AgentError);
   await expect(refused).rejects.toMatchObject({ code: "unavailable", retryable: true });
   expect(await recordedIn(file)).toEqual({ room: "kept" });
 });

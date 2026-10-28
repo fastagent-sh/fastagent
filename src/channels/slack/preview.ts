@@ -164,8 +164,7 @@ export async function settleSlackPreview(
 
 /** Whether an event carries answer text: a text delta, or the settled message it adds up to. */
 const isAnswerText = (event: TurnEvent): boolean =>
-  (event.type === "message_delta" && event.channel === "text") ||
-  (event.type === "entry" && event.entry.kind === "assistant_message");
+  (event.type === "delta" && event.channel === "text") || (event.type === "entry" && event.entry.kind === "assistant");
 
 function streamClassicSlackReply(
   events: Stream.Stream<TurnEvent, PortFailure>,
@@ -463,7 +462,7 @@ function streamNativeSlackReply(
     });
 
     let messageId: string | undefined;
-    let servingError: string | undefined;
+    let streamError: string | undefined;
     const textOf = answerText();
     /** An ending that is a failure: its notice woven into the stream, then the turn fails with it. */
     const failWith = (failure: SlackFailure) =>
@@ -496,19 +495,19 @@ function streamNativeSlackReply(
     };
     yield* Stream.runForEachWhile(events, (event) =>
       Effect.gen(function* () {
-        if (event.type !== "retry_scheduled" && retryStatusShown) {
+        if (event.type !== "retrying" && retryStatusShown) {
           // Progress after a retry notice: restore the normal working status so the stale line doesn't
           // contradict a visibly streaming answer.
           retryStatusShown = false;
           setStatus(WORKING_STATUS);
         }
-        if (event.type === "accepted") messageId = event.message.messageId;
-        if (event.type === "serving_error") servingError = event.error.message;
+        if (event.type === "message") messageId = event.message.id;
+        if (event.type === "stream_error") streamError = event.error.message;
         const end = turnEnd(event, messageId);
         if (end === undefined) {
           // Slack's native loading status represents private reasoning (`thinking` deltas) without exposing it.
-          if (event.type === "message_delta" && event.channel === "text") appendAnswer(textOf(event));
-          else if (event.type === "retry_scheduled") {
+          if (event.type === "delta" && event.channel === "text") appendAnswer(textOf(event));
+          else if (event.type === "retrying") {
             // A summarization retry backoff pauses the stream (~14s worst case). Channels have no per-message
             // status surface in native mode; DMs get the explicit Agent status line, restored on progress.
             if (target.channelId.startsWith("D")) {
@@ -520,7 +519,7 @@ function streamNativeSlackReply(
             toolTraces.set(event.toolCallId, trace);
             sendToolTrace(nativeToolLine(trace));
           } else if (event.type === "entry") {
-            if (event.entry.kind === "assistant_message") appendAnswer(textOf(event));
+            if (event.entry.kind === "assistant") appendAnswer(textOf(event));
             if (event.entry.kind === "tool_result") {
               const data = event.entry.data as { toolCallId?: string; isError?: boolean };
               const trace = (data.toolCallId && toolTraces.get(data.toolCallId)) || { label: "Tool" };
@@ -545,7 +544,7 @@ function streamNativeSlackReply(
       }).pipe(Effect.uninterruptible),
     );
     if (finalized) return;
-    const unfinished = unfinishedTurn(servingError);
+    const unfinished = unfinishedTurn(streamError);
     if (unfinished === undefined) {
       return yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
     }

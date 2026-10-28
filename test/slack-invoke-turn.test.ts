@@ -3,8 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
-import type { ContentPart } from "../src/agent-api.ts";
-import { scriptedAgent } from "./scripted-agent.ts";
+import type { SendRequest } from "../src/agent-api.ts";
+import { promptOf, scriptedAgent } from "./scripted-agent.ts";
 import { scriptedRun } from "./scripted-run.ts";
 import { slackTurnStream } from "../src/channels/slack/invoke-turn.ts";
 import { run } from "./channel-effects.ts";
@@ -45,12 +45,10 @@ function fakeApi(overrides: Partial<SlackApi> = {}): SlackApi {
   };
 }
 
-const textOf = (content: ContentPart[] | undefined) =>
-  content?.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
-const imagesOf = (content: ContentPart[] | undefined) =>
-  content?.flatMap((part) =>
-    part.type === "image" ? [{ mimeType: part.mimeType, data: (part as { data: string }).data }] : [],
-  );
+const textOf = (content: SendRequest["content"] | undefined) =>
+  content === undefined ? undefined : promptOf({ content }).text;
+const imagesOf = (content: SendRequest["content"] | undefined) =>
+  content === undefined ? undefined : (promptOf({ content }).images ?? []);
 
 describe("Slack turn attachment resolution", () => {
   it.each([false, true])("cancellation joins input loading without starting the model (reject=%s)", async (reject) => {

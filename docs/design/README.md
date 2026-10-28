@@ -12,7 +12,7 @@ This directory contains maintainer-facing design material. It is intentionally k
 
 | Source | Status |
 |---|---|
-| [Agent API SPEC](../SPEC.md) | The normative contract, which the code implements: the consumer Agent API, ten operations, in process, with no network binding. Changes require explicit review. |
+| [Agent API SPEC](../SPEC.md) | The Agent API v1. The code has moved to v2 in process ([agent-api.md](agent-api.md)); v2 replaces this once its HTTP binding lands. Changes require explicit review. |
 | Code in `src/` | Implementation source of truth. |
 | User docs in `docs/` | Product behavior and supported usage. |
 | Documents in `docs/design/` | Explanatory architecture notes. They clarify why the code is shaped the way it is, but they are not a public compatibility promise. |
@@ -31,7 +31,7 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 
 | Document | Purpose |
 |---|---|
-| [agent-api.md](agent-api.md) | **Proposed.** The Agent API v2: one model of sessions, messages and entries, bound in process in TypeScript and over HTTP with an API key. Replaces the [SPEC](../SPEC.md) when implemented. |
+| [agent-api.md](agent-api.md) | **In progress.** The Agent API v2: one model of sessions, messages and entries, bound in process in TypeScript and over HTTP with an API key. The code implements its in-process binding; it replaces the [SPEC](../SPEC.md) once the HTTP binding lands. |
 | [architecture.md](architecture.md) | **Decided; implemented through its §6 step 2.** What FastAgent is for, and the shape that follows: pi-durable as the only harness, the consumer [Agent API](../SPEC.md) as the one API of our own, the definition and its assembly, an npm package as the artifact, context packages, and hosts that keep state off the box. |
 | [agent-model.md](agent-model.md) | **Implemented.** What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, the content it works on and knows, its types, and the vocabulary later designs build on. |
 | [agent-service.md](agent-service.md) | **Partly implemented.** Agents a team builds, runs and uses together as cloud services: who it is for, the product loop, what an agent works with (content, connectors and environment; the environment under `environment` in `context.json`, installed by mise), and credentials. |

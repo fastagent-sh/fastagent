@@ -6,7 +6,7 @@ import * as Result from "effect/Result";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import { join } from "node:path";
-import type { Agent, InvokeRequest, Outcome } from "../agent-api.ts";
+import { type Agent, AgentError, type Message, type SendRequest } from "../agent-api.ts";
 import { conversationSessions } from "../conversation-sessions.ts";
 import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
@@ -24,7 +24,10 @@ export interface Scheduler {
 }
 
 /** All the scheduler asks of the agent. */
-export type ScheduledAgent = Pick<Agent, "invoke" | "createSession" | "getMessage" | "read">;
+export type ScheduledAgent = {
+  sessions: Pick<Agent["sessions"], "get" | "create">;
+  messages: Pick<Agent["messages"], "send" | "get">;
+};
 
 export interface SchedulerOptions {
   agent: ScheduledAgent;
@@ -70,42 +73,53 @@ function oneLine(text: string): string {
 }
 
 /**
- * How one invoke went: refused before it ran (or not known to be taken), the message's outcome, or a wait that ended
- * before its message did, with why.
+ * How one send went: refused before it ran, the message as it ended, or a wait that ended before its message did,
+ * with why.
  */
-type InvokeEnd = { refused: string; busy: boolean } | { outcome: Outcome } | { unfinished: string };
+type SendEnd = { refused: string; busy: boolean } | { ended: Message } | { unfinished: string };
 
-/**
- * Send one message and wait for its end; `onAccepted` hears the receipt. Interrupted, it stops waiting, and the agent
- * goes on: a Caller that stops waiting only detaches (SPEC.md §3.1).
- */
-async function readInvoke(
-  agent: ScheduledAgent,
-  request: InvokeRequest,
-  onAccepted: () => void,
-  signal: AbortSignal,
-): Promise<InvokeEnd> {
-  const receipt = await agent.invoke(request);
-  if (!receipt.ok) {
-    return "error" in receipt
-      ? { refused: receipt.error.message, busy: receipt.error.code === "busy" }
-      : { unfinished: `whether the message was taken is not known: ${receipt.unknown.reason}` };
-  }
-  onAccepted();
-  const end = await receipt.wait({ signal });
-  return end.ok ? { outcome: end.message.outcome } : { unfinished: end.unfinished.reason };
+/** What a wait for a message's end gave instead of its end, as the one line this log says it with. */
+async function untilEnded(agent: ScheduledAgent, key: Parameters<Agent["messages"]["get"]>[0], signal: AbortSignal) {
+  return agent.messages.get(key, { wait: Number.POSITIVE_INFINITY, signal }).then(
+    (message): SendEnd => ({ ended: message }),
+    (error: unknown): SendEnd => ({
+      unfinished: `waiting for its end failed: ${error instanceof Error ? error.message : String(error)}`,
+    }),
+  );
 }
 
-/** A message's outcome as the one word a claim keeps, and the detail worth a log line. */
-function settled(outcome: Outcome): { fire: "completed" | "failed"; detail?: string } {
-  switch (outcome.status) {
+/**
+ * Send one message and wait for its end; `onAccepted` hears that it was recorded. Interrupted, it stops waiting, and
+ * the agent goes on: a Caller that stops waiting only lets go (agent-api.md §4).
+ */
+async function sendAndWait(
+  agent: ScheduledAgent,
+  request: SendRequest,
+  onAccepted: () => void,
+  signal: AbortSignal,
+): Promise<SendEnd> {
+  let message: Message;
+  try {
+    message = await agent.messages.send(request);
+  } catch (error) {
+    if (!(error instanceof AgentError)) throw error;
+    if (error.code === "unconfirmed") return { unfinished: `whether it was recorded is not known: ${error.message}` };
+    return { refused: error.message, busy: error.code === "busy" };
+  }
+  onAccepted();
+  return untilEnded(agent, { sessionId: message.sessionId, messageId: message.id }, signal);
+}
+
+/** How a message ended, as the one word a claim keeps, and the detail worth a log line. */
+function settled(message: Message): { fire: "completed" | "failed"; detail?: string } {
+  switch (message.status) {
     case "completed":
-    case "max_tokens":
+    case "incomplete":
       return { fire: "completed" };
     case "canceled":
       return { fire: "failed", detail: "canceled" };
-    case "failed":
-      return { fire: "failed", detail: outcome.error.message };
+    default:
+      return { fire: "failed", detail: message.error?.message ?? `the message ended ${message.status}` };
   }
 }
 
@@ -117,19 +131,19 @@ function settled(outcome: Outcome): { fire: "completed" | "failed"; detail?: str
  * Copying the reply into the log would be a second store of the same text, unstructured, in a stream with a wider
  * audience and a bound that differs per host.
  */
-function runTurn(agent: ScheduledAgent, label: string, request: InvokeRequest, onAccepted: () => void = () => {}) {
+function runTurn(agent: ScheduledAgent, label: string, request: SendRequest, onAccepted: () => void = () => {}) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const startedAt = clock.currentTimeMillisUnsafe();
     const elapsed = () => clock.currentTimeMillisUnsafe() - startedAt;
     log.info(`[schedule] ${label} firing (session=${request.sessionId})`);
     const read = yield* Effect.tryPromise({
-      try: (signal) => readInvoke(agent, request, onAccepted, signal),
+      try: (signal) => sendAndWait(agent, request, onAccepted, signal),
       catch: (cause) => new PortFailure(cause),
     }).pipe(Effect.result);
     const ms = elapsed();
     if (Result.isFailure(read)) {
-      // A call that throws breaks the API (failures are values), so it is this fire's failure, never a refusal.
+      // Not an AgentError: a fault of the agent's, so this fire's failure, never a refusal.
       const failed = String(read.failure.cause);
       log.error(`[schedule] ${label} errored (${ms}ms)${oneLine(failed)}`);
       return { fire: "failed" as const, busy: false, failed, ms };
@@ -145,7 +159,7 @@ function runTurn(agent: ScheduledAgent, label: string, request: InvokeRequest, o
       else log.error(`[schedule] ${label} refused (${ms}ms)${oneLine(end.refused)}`);
       return { fire: "failed" as const, busy: end.busy, failed: end.refused, ms };
     }
-    const { fire, detail } = settled(end.outcome);
+    const { fire, detail } = settled(end.ended);
     if (fire === "completed") log.info(`[schedule] ${label} completed (${ms}ms)`);
     else log.error(`[schedule] ${label} ${fire} (${ms}ms)${oneLine(detail ?? "")}`);
     return { fire, busy: false, failed: fire === "completed" ? undefined : detail, ms };
@@ -294,7 +308,11 @@ function accountForUnreportedFire(
       sessionId === undefined
         ? undefined
         : yield* Effect.tryPromise({
-            try: () => agent.getMessage(sessionId, { idempotencyKey: key }),
+            try: () =>
+              agent.messages.get({ sessionId, idempotencyKey: key }).catch((error: unknown) => {
+                if (error instanceof AgentError && error.code === "not_found") return undefined;
+                throw error;
+              }),
             catch: (cause) => new PortFailure(cause),
           });
     if (sessionId === undefined || taken === undefined) {
@@ -307,24 +325,18 @@ function accountForUnreportedFire(
       return;
     }
     log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} was taken before a restart — reading its end`);
-    // The key alone names the message, so this sends nothing: its receipt is the one the fire had (SPEC.md §3.3).
-    const request: InvokeRequest = {
-      sessionId,
-      content: [{ type: "text", text: "(the scheduled message this key names)" }],
-      idempotencyKey: key,
-    };
     const end = yield* Effect.tryPromise({
-      try: (signal) => readInvoke(agent, request, () => {}, signal),
+      try: (signal) => untilEnded(agent, { sessionId, idempotencyKey: key }, signal),
       catch: (cause) => new PortFailure(cause),
     });
-    if (!("outcome" in end)) {
+    if (!("ended" in end)) {
       // Unsettled still, so the next boot reads it again.
       log.warn(
         `[schedule] ${name}: the end of the fire claimed at ${fire.firedAt} is not known yet${oneLine("refused" in end ? end.refused : end.unfinished)}`,
       );
       return;
     }
-    const { fire: outcome, detail } = settled(end.outcome);
+    const { fire: outcome, detail } = settled(end.ended);
     if (outcome === "completed") log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} completed`);
     else log.error(`[schedule] ${name}: the fire claimed at ${fire.firedAt} ${outcome}${oneLine(detail ?? "")}`);
     // No duration either: only its end was seen here.
@@ -420,7 +432,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       });
       if (!w) return false;
       const label = `wake ${w.id.slice(0, 8)}`;
-      const request: InvokeRequest = {
+      const request: SendRequest = {
         sessionId: w.session,
         content: [{ type: "text", text: wakeEnvelope(w) }],
         whenBusy: "queue",

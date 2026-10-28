@@ -25,7 +25,7 @@ that talks to it calls the consumer [Agent API](../SPEC.md), in process:
 
 The Agent API is the one API of our own; operating the agent (its definition, compaction, inspecting a session) is
 pi-durable's own API (`agent.harness`). The public surface is three layers, by what each costs to import: `/core` (the
-Agent API's types, `stream()`, the channel contract; Effect and nothing else), `/node` (the service assembly, content
+Agent API's types and `AgentError`, the channel contract; Effect and nothing else), `/node` (the service assembly, content
 and authoring; needs Node), and `/pi` (what an author writes, opening a definition, the model environment; names the
 harness). `package-boundary.test.ts` asserts it.
 
@@ -221,21 +221,24 @@ If the Agent does not open, the storage is closed before the failure is thrown, 
 
 ## 4. Messages and sessions on pi-durable
 
-The ten operations of the Agent API are read from and submitted to pi-durable (`harnesses/pi-durable/`):
+The operations of the Agent API ([agent-api.md](agent-api.md)) are read from and submitted to pi-durable
+(`harnesses/pi-durable/`):
 
 | Module | Owns |
 |---|---|
 | `agent.ts` | The operations. Admission (a key's lookup, the limits and the submission) is one step per process, since one process owns a storage |
-| `ids.ts` | Every id handed out: the storage's incarnation, then pi-durable's id, so an id kept from a storage that is gone is `not_found` rather than someone else's (architecture.md §2); `listSessions`' cursors; the session id a tool runs in (`sessionIdOf`) |
-| `messages.ts` | pi-durable's input submissions as messages: the request id carries the Caller's key, the settlement is the outcome |
+| `ids.ts` | Every id handed out: the storage's incarnation, then pi-durable's id, so an id kept from a storage that is gone is `not_found` rather than someone else's (architecture.md §2); `sessions.list`' cursors; the session id a tool runs in (`sessionIdOf`) |
+| `messages.ts` | pi-durable's input submissions as messages: the request id carries the Caller's key, the settlement is how the message ended; the session as the API has it |
 | `entries.ts` | Which entries are published (messages, tool results, compactions) and which are the harness's own |
-| `reads.ts`, `resume.ts` | What the operations read; `resume` as replay, a `state` snapshot, then what each commit adds |
-| `sessions.ts` | Which conversations are sessions (a subagent's is not) and each one's latest activity, its newest own id: a cache read at open and moved by every commit, which `listSessions` reads |
+| `reads.ts`, `events.ts` | What the operations read; `sessions.events` as replay, a `state` snapshot, then what each commit adds |
+| `stream.ts` | `messages.stream`: a message sent and delivered from wherever it is, new, queued, running or ended |
+| `sessions.ts` | Which conversations are sessions (a subagent's is not) and each one's latest activity, its newest own id: a cache read at open and moved by every commit, which `sessions.list` orders by |
 | `defaults.ts` | The deployment's default model and thinking level, written into a conversation that names none when a message is admitted |
 | `release.ts` | Temporary: places the messages a run that did not answer left waiting, until pi-durable does it itself |
 
-`abort` waits until the messages it stopped have ended, so a channel's `/stop` runs off the path that acknowledges its
-platform's webhook (`kit/stop-command.ts`). The Agent API's conformance suite (`test/agent-api-conformance.ts`) runs
+`sessions.cancel` answers once its stop is recorded, not once what it stopped has ended: pi-durable runs commits one at
+a time in the order they are called, so a read before the abort and a check after it bracket the stop's commit. A
+channel's `/stop` maps it onto a user's "stop" (`kit/stop-command.ts`). The Agent API's conformance suite (`test/agent-api-conformance.ts`) runs
 against this Agent in process, on memory and SQLite storage.
 
 ## 5. Tools, skills, and execution environment
@@ -354,7 +357,7 @@ intent before committing the exact discussion snapshot consumed (a buffer's entr
 cursor); later discussion waits for the next answered turn. Effect
 interruption and process termination preserve unfinished intent for recovery.
 
-A turn is one message (`invoke-turn-kit.ts` `turnStream`, over `stream()`): `whenBusy: "queue"`, so a collision with
+A turn is one message (`invoke-turn-kit.ts` `turnStream`, over `messages.stream`): `whenBusy: "queue"`, so a collision with
 work the channel did not start (a wake-up, a schedule) waits behind it, and `idempotencyKey` set to the turn's platform
 message id, so a turn the store replays after a restart is the message it already sent: one that ended is read back,
 answer included. The channel's own queue still serializes its turns, because

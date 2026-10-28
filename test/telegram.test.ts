@@ -12,7 +12,7 @@ import {
   telegramEnvelope,
   telegramTransport,
 } from "../src/telegram.ts";
-import { type AbortResult, type Agent, type ErrorCode, failure } from "../src/agent-api.ts";
+import { type Agent, type ErrorCode, agentError } from "../src/agent-api.ts";
 import { registerTelegramTransport } from "../src/channels/telegram/shared-api.ts";
 import { log } from "../src/log.ts";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -22,7 +22,7 @@ import { fauxDurableAgent } from "./faux.ts";
 function replyingAgent(reply = "") {
   const calls: Prompt[] = [];
   const agent = scriptedAgent(async function* (request) {
-    yield ev.accepted();
+    yield ev.message();
     calls.push(promptOf(request));
     if (reply !== "") yield ev.text(reply);
     yield ev.ended();
@@ -122,7 +122,7 @@ const telegramChannel = (
     stateDir,
     stopped,
     ...opts
-  }: TelegramChannelOptions & { stateDir?: string; stopped?: (session: string) => AbortResult },
+  }: TelegramChannelOptions & { stateDir?: string; stopped?: (session: string) => { stopped: string[] } },
 ) => {
   const home = stateDir ?? freshStateDir();
   const root = rootOfHome.get(home);
@@ -179,8 +179,7 @@ describe("durable group buffer (single-process restarts)", () => {
       expect(sawDiscussion).toBe(true);
       expect(Object.keys(JSON.parse(readFileSync(join(state, "turns.json"), "utf8")))).toHaveLength(1);
       const sessionId = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))["-100"];
-      const running = await agent.read(sessionId, { limit: 1 });
-      expect(running.ok && running.state.status).toBe("running");
+      expect((await agent.sessions.get(sessionId)).status).toBe("running");
       await channel(tgRequest(group(3, "later arrival")));
     } finally {
       finish.resolve();
@@ -191,8 +190,7 @@ describe("durable group buffer (single-process restarts)", () => {
     expect(buffered).toContain("later arrival");
     expect(buffered).not.toContain("earlier discussion");
     const sessionId = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))["-100"];
-    const after = await agent.read(sessionId, { limit: 1 });
-    expect(after.ok && after.state.status).toBe("idle");
+    expect((await agent.sessions.get(sessionId)).status).toBe("idle");
     await agent.close();
   });
 
@@ -247,7 +245,7 @@ describe("durable group buffer (single-process restarts)", () => {
     let fail = true;
     const calls: Prompt[] = [];
     const agent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       calls.push(promptOf(request));
       if (fail) {
         yield ev.failed("boom", { retryable: true });
@@ -291,7 +289,7 @@ describe("durable turn intent (crash recovery)", () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       await gate; // hang so the intent is observably on disk while the turn is in flight
       yield ev.ended();
     });
@@ -831,7 +829,7 @@ describe("queue feedback (⏳ while a session is busy)", () => {
     });
     let call = 0;
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       if (++call === 1) {
         await gate;
         yield ev.ended();
@@ -863,7 +861,7 @@ describe("queue feedback (⏳ while a session is busy)", () => {
     });
     let call = 0;
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       if (++call === 1) {
         await gate;
       }
@@ -1220,7 +1218,7 @@ describe("telegram channel", () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.thinking("weighing options");
       yield ev.toolStarted("t1", "word-count", { text: "the quick brown fox" });
       yield ev.toolResult("t1");
@@ -1331,7 +1329,7 @@ describe("telegram channel", () => {
       release1 = r;
     });
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       const id = ++started;
       inFlight++;
       maxInFlight = Math.max(maxInFlight, inFlight);
@@ -1374,7 +1372,7 @@ describe("telegram channel", () => {
       release = r;
     });
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       inFlight++;
       maxInFlight = Math.max(maxInFlight, inFlight);
       await gate; // both turns park here at once iff they run concurrently
@@ -1816,7 +1814,7 @@ describe("telegram channel", () => {
     vi.stubGlobal("fetch", fetchMock);
     let invoked = false;
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       invoked = true;
       yield ev.ended();
     });
@@ -1861,7 +1859,7 @@ describe("telegram channel", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.text("final");
       await new Promise((r) => setTimeout(r, 2000)); // a gap so the next content update can enter live preview
       yield ev.text(" answer");
@@ -1892,7 +1890,7 @@ describe("telegram channel", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.thinking("a");
       await new Promise((r) => setTimeout(r, 2000)); // a gap so the pump would retry preview writes
       yield ev.text("done");
@@ -1915,7 +1913,7 @@ describe("telegram channel", () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.failed("boom", { retryable: false });
     });
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
@@ -1942,7 +1940,7 @@ describe("telegram channel", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.failed("boom", { retryable: false });
     });
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
@@ -1958,7 +1956,7 @@ describe("telegram channel", () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.failed("boom", { retryable: false });
     });
     const ch = telegramChannel(agent, {
@@ -1997,7 +1995,7 @@ describe("telegram channel", () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.toolStarted("t1", "noop");
       yield ev.toolResult("t1");
       yield ev.ended(); // completed, but no text was ever produced
@@ -2016,11 +2014,11 @@ describe("telegram /stop command", () => {
   /** What `abort` answers: a run it stopped, nothing running, or a refusal. */
   const fakeStop = (result: "stopped" | "idle" | ErrorCode) => {
     const aborted: string[] = [];
-    const stopped = (session: string): AbortResult => {
+    const stopped = (session: string): { stopped: string[] } => {
       aborted.push(session);
       if (result === "stopped") return stoppedRun;
-      if (result === "idle") return { ok: true, stopped: { taken: [], queued: [] } };
-      return failure(result, "no run");
+      if (result === "idle") return { stopped: [] };
+      throw agentError(result, "no run");
     };
     return { stopped, aborted };
   };
@@ -2030,7 +2028,7 @@ describe("telegram /stop command", () => {
   });
   const invoked: string[] = [];
   const agent = scriptedAgent(async function* (request) {
-    yield ev.accepted();
+    yield ev.message();
     invoked.push(promptOf(request).text);
     yield ev.ended();
   });
@@ -2135,7 +2133,7 @@ describe("telegram /stop command", () => {
   it("answers an addressed group stop with whatever happened", async () => {
     for (const [label, result, expected] of [
       ["nothing is running", "idle", "Nothing is running."],
-      ["the agent refuses the abort", "unavailable", "\u26a0\ufe0f Could not stop (unavailable)."],
+      ["the agent refuses the stop", "internal", "\u26a0\ufe0f Could not stop (internal)."],
     ] as const) {
       const fetchMock = okFetch();
       vi.stubGlobal("fetch", fetchMock);

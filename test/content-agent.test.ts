@@ -27,9 +27,7 @@ async function askOnce(agentDir: string, provider: Provider, content?: readonly 
     ...(content === undefined ? {} : { content }),
   });
   try {
-    const sent = await agent.invoke({ content: [{ type: "text", text: "hi" }] });
-    if (!sent.ok) throw new Error("not sent");
-    await sent.wait();
+    await agent.messages.send({ sessionId: (await agent.sessions.create()).id, content: "hi" }, { wait: 30 });
   } finally {
     await agent.close();
   }

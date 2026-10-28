@@ -249,11 +249,7 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
     }
 
     async function ask(agent: DurableAgent, text: string) {
-      const receipt = await agent.invoke({ content: [{ type: "text", text }] });
-      if (!receipt.ok) throw new Error(JSON.stringify(receipt));
-      const end = await receipt.wait();
-      if (!end.ok) throw new Error(end.unfinished.reason);
-      return end.message;
+      return agent.messages.send({ sessionId: (await agent.sessions.create()).id, content: text }, { wait: 30 });
     }
 
     it("renders SYSTEM.md, AGENTS.md, the skills it may load and its extensions' sections, read for each request", async () => {
@@ -333,7 +329,7 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       const { dir, agent, faux } = await open();
       // A skill linked in from elsewhere whose target is gone is skipped, not a failure of every request.
       symlinkSync(join(dir, "nowhere"), join(dir, "skills/ghost"));
-      expect(agent.info()).toMatchObject({
+      expect(await agent.info()).toMatchObject({
         name: "support",
         commands: [
           { name: "review", description: "Review something" },
@@ -357,9 +353,8 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
     });
 
     const offered = async (agent: DurableAgent) => {
-      const created = await agent.createSession();
-      if (!created.ok) throw new Error(JSON.stringify(created));
-      const conversation = await agent.conversation(created.sessionId);
+      const created = await agent.sessions.create();
+      const conversation = await agent.conversation(created.id);
       if (conversation === undefined) throw new Error("the new session has no conversation");
       return (await conversation.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name);
     };
@@ -394,24 +389,17 @@ export default defineTool({
         () => toolCall("wake", { in: "30m", prompt: "check the deploy" }),
         (context) => fauxAssistantMessage(lastToolResult(context)),
       ]);
-      const receipt = await agent.invoke({ content: [{ type: "text", text: "remind me" }] });
-      if (!receipt.ok) throw new Error(JSON.stringify(receipt));
-      await receipt.wait();
+      const sessionId = (await agent.sessions.create()).id;
+      await agent.messages.send({ sessionId, content: "remind me" }, { wait: 30 });
       const [wakeup] = listWakeups(stateRoot);
       if (wakeup === undefined) throw new Error("wake kept no wake-up");
-      expect(wakeup).toMatchObject({ session: receipt.sessionId, prompt: "check the deploy" });
+      expect(wakeup).toMatchObject({ session: sessionId, prompt: "check the deploy" });
       faux.setResponses([
         () => toolCall("unwake", { id: wakeup.id }),
         (context) => fauxAssistantMessage(lastToolResult(context)),
       ]);
-      const again = await agent.invoke({
-        sessionId: receipt.sessionId,
-        content: [{ type: "text", text: "never mind" }],
-      });
-      if (!again.ok) throw new Error(JSON.stringify(again));
-      expect(await again.wait()).toMatchObject({
-        ok: true,
-        message: { answer: { text: `OK — wake-up ${wakeup.id} cancelled.` } },
+      expect(await agent.messages.send({ sessionId, content: "never mind" }, { wait: 30 })).toMatchObject({
+        answer: { text: `OK — wake-up ${wakeup.id} cancelled.` },
       });
       expect(listWakeups(stateRoot)).toEqual([]);
     });

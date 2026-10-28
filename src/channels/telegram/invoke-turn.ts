@@ -4,7 +4,8 @@
  * Split from parse.ts because this half touches the Bot API + disk; split from telegram.ts so the
  * factory keeps only wiring and the per-turn lifecycle.
  */
-import type { Agent, Attachment as ImageRef } from "../../agent-api.ts";
+import type { Agent } from "../../agent-api.ts";
+import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import {

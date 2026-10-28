@@ -63,6 +63,7 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
         "effect/Fiber",
         "effect/Queue",
         "effect/Result",
+        "effect/Schema",
         "effect/Stream",
       ]);
       expect(
@@ -92,7 +93,6 @@ describe("harness neutrality: the core subpath + channel spine import no harness
   const neutral = [
     "core.ts",
     "agent-api.ts",
-    "agent-api-stream.ts",
     "channels/router.ts",
     "cli/invoke-stream.ts",
     "channels/body.ts",
@@ -213,12 +213,12 @@ describe("the assembly's parts stay out of the public surface", () => {
   const ENTRIES = ["core.ts", "pi.ts", "index.ts"];
 
   it("every failure a caller must tell apart is exported as a VALUE", async () => {
-    // `getMessage` and `attachment` reject with it when the storage cannot answer, and a caller branches on it with
-    // `instanceof`: a type-only export would leave nothing to test against.
+    // Every operation rejects with it, and a caller branches on it with `instanceof`: a type-only export would leave
+    // nothing to test against.
     const core = (await import(resolve(srcDir, "core.ts"))) as Record<string, unknown>;
-    expect(typeof core.AgentRejection).toBe("function");
+    expect(typeof core.AgentError).toBe("function");
     const index = (await import(resolve(srcDir, "index.ts"))) as Record<string, unknown>;
-    expect(index.AgentRejection).toBe(core.AgentRejection);
+    expect(index.AgentError).toBe(core.AgentError);
   });
 
   it("no entry exports an assembly part", async () => {
@@ -294,16 +294,14 @@ describe("channels/kit is defined by who imports it", () => {
 });
 
 describe("the contracts depend on nothing", () => {
-  // agent-api.ts (what every caller speaks) and channel.ts (what a trigger implements) are the product contracts —
-  // pure types, zero packages. The bar is
-  // ZERO rather than "no harness": an agent directory's hand-written channel imports ChannelModule,
-  // and the day that type drags in an HTTP framework, every such file inherits it. This is the check
+  // agent-api.ts (what every caller speaks) and channel.ts (what a trigger implements) are the product contracts. The
+  // bar is Effect's Schema for the first, in which the Agent API is written so that its HTTP binding is built from the
+  // same schemas, and ZERO for the second rather than "no harness": an agent directory's hand-written channel imports
+  // ChannelModule, and the day that type drags in an HTTP framework, every such file inherits it. This is the check
   // that keeps the split honest, and it is why serving lives in channels/serve.ts instead.
-  it("each of them pulls no package at all", () => {
-    const offenders = ["agent-api.ts", "channel.ts"].flatMap((contract) =>
-      [...staticPackageGraph(contract)].map((p) => `${contract} → ${p}`),
-    );
-    expect(offenders).toEqual([]);
+  it("each of them pulls no package but the Agent API's Schema", () => {
+    expect([...staticPackageGraph("agent-api.ts")]).toEqual(["effect/Schema"]);
+    expect([...staticPackageGraph("channel.ts")]).toEqual([]);
   });
 
   it("the three neutral layers each cost exactly what their name promises", () => {
@@ -313,9 +311,6 @@ describe("the contracts depend on nothing", () => {
     // other package, and no Node built-in.
     expect([...staticPackageGraph("core.ts")].filter((p) => !p.startsWith("effect/"))).toEqual([]);
     expect([...staticPackageGraph("core.ts", true)]).toEqual([]);
-    // Reading a message's answer as it is written imports nothing at all: any Caller may pull it in.
-    expect([...staticPackageGraph("agent-api-stream.ts")]).toEqual([]);
-    expect([...staticPackageGraph("agent-api-stream.ts", true)]).toEqual([]);
     // Service lifecycle management uses Effect; channel and agent contracts remain dependency-free.
     expect([...staticPackageGraph("node.ts")].sort()).toEqual([
       "@hono/node-server",
@@ -330,6 +325,7 @@ describe("the contracts depend on nothing", () => {
       "effect/Fiber",
       "effect/Layer",
       "effect/Result",
+      "effect/Schema",
       "effect/Scope",
       "effect/http",
       "proper-lockfile",

@@ -65,7 +65,7 @@ describe("Feishu/Lark WebSocket ingress", () => {
         },
       );
       const agent = scriptedAgent(async function* (_request) {
-        yield ev.accepted();
+        yield ev.message();
         yield ev.ended();
       });
       const run = module.connect({ agent: agent, stateRoot: root }, new AbortController().signal);
@@ -99,7 +99,7 @@ describe("Feishu/Lark WebSocket ingress", () => {
       },
     );
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.ended();
     });
     module.connect({ agent: agent, stateRoot: root }, new AbortController().signal);

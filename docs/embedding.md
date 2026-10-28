@@ -21,27 +21,26 @@ both run the **same** agent.
 
 ## The one mental model
 
-An agent is the [Agent API](SPEC.md): sessions the Agent names, messages whose outcome outlives whoever sent them,
-and a durable history of entries. It is TypeScript, in process; FastAgent puts it on no network.
+An agent is the [Agent API](design/agent-api.md): sessions the Agent names, messages whose end outlives whoever sent
+them, and a durable history of entries. It is TypeScript, in process; its HTTP binding is not served yet.
 
 ```ts
 interface Agent {
-  invoke(request: { sessionId?: string; content: ContentPart[]; idempotencyKey?: string; whenBusy?: "queue" | "steer" | "reject" }): Promise<InvokeResult>;
-  createSession(options?): Promise<CreateSessionResult>;
-  getMessage(sessionId, key): Promise<MessageStatus | undefined>;
-  read(sessionId, options?): Promise<ReadResult>; // state and a page of entries
-  resume(sessionId, options?): AsyncIterable<ResumeEvent>; // replay, a snapshot, then live events
-  abort(sessionId): Promise<AbortResult>;
-  configure(sessionId, settings): Promise<ConfigureResult>; // a session's model and thinking level
-  listSessions(options?): Promise<ListResult>; // most recently active first
-  attachment(sessionId, ref): Promise<Attachment | undefined>;
-  info(): AgentInfo;
+  info(): Promise<AgentInfo>;
+  usage(): Promise<Usage>;
+  sessions: { create, get, list, update, entries, events, cancel, compact, attachment };
+  messages: {
+    send(request: { sessionId: string; content: string | ContentPart[]; idempotencyKey?: string; whenBusy?: "queue" | "steer" | "reject" },
+         options?: { wait?: number; signal?: AbortSignal }): Promise<Message>;
+    stream(request, options?): AsyncIterable<MessageStreamEvent>; // the message, then its events through its done
+    get(key, options?): Promise<Message>; // by its id or its key, with `wait` too
+  };
 }
 ```
 
-`invoke` answers with a receipt; `wait()` on it resolves with the message's end, its outcome and its answer. A message
-for a busy session queues behind the ones before it. Failures are values (`{ ok: false, error }`). See the
-[API reference](api-reference.md#the-agent-api).
+`send` answers once the message is recorded, and with `wait` (seconds) once it has ended: its `status`, and its
+`answer`. A message for a busy session queues behind the ones before it. A refused operation rejects with an
+`AgentError`. See the [API reference](api-reference.md#the-agent-api).
 
 ## 1. Open the agent
 
@@ -59,7 +58,7 @@ await agent.close(); // on shutdown: releases the instance's storage
 [environment](configuration.md#environment) where it has no install yet and puts it first on this process's `PATH`,
 clones its content, and opens the instance's storage (`<agent dir>/.state/agent.sqlite`), which one process holds at a
 time. Without a `model`, the config's is the default; with none at all the agent still opens, and a session needs a
-model of its own (`createSession({ model })`, `configure`) before a message is answered.
+model of its own (`sessions.create({ model })`, `sessions.update`) before a message is answered.
 
 A definition is always a directory: the prompt is its `SYSTEM.md`, and its tools are modules of `src/tools/`. To
 assemble one in code, write the directory.
@@ -68,41 +67,38 @@ assemble one in code, write the directory.
 
 ```ts
 // One question, one answer.
-const created = await agent.createSession();
-if (!created.ok) throw new Error(created.error.message);
-const sent = await agent.invoke({ sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
-if (!sent.ok) throw new Error("error" in sent ? sent.error.message : sent.unknown.reason);
-const end = await sent.wait();
-if (end.ok && end.message.outcome.status === "completed") reply(end.message.answer?.text);
+const session = await agent.sessions.create();
+const message = await agent.messages.send({ sessionId: session.id, content: "hi" }, { wait: 120 });
+if (message.status === "completed") reply(message.answer?.text);
 
 // Its answer as it is written.
-import { stream } from "@fastagent-sh/fastagent";
-const result = await stream(agent, { sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
-if (result.ok) {
-  for await (const event of result.events) {
-    if (event.type === "message_delta" && event.channel === "text") render(event.delta);
-    if (event.type === "done") finish(event.message);
-  }
+for await (const event of agent.messages.stream({ sessionId: session.id, content: "hi" })) {
+  if (event.type === "delta" && event.channel === "text") render(event.text);
+  if (event.type === "done") finish(event.message);
 }
 ```
 
-Keep the `sessionId` to continue the conversation. An `idempotencyKey` (your request's id) makes a resend return the
-same message rather than a second one. Leaving the iteration detaches; the agent goes on, and `agent.abort(sessionId)`
-stops it.
+Keep the session's `id` to continue the conversation. An `idempotencyKey` (your request's id) makes a resend return the
+same message rather than a second one. Leaving the iteration detaches; the agent goes on, and
+`agent.sessions.cancel(sessionId)` stops it.
 
 ### Putting it on your network
 
-There is no HTTP API to mount. To give a browser or another service the agent, write the routes your product needs
-over these calls, behind your own authentication. Every result and event is JSON, so you can send them on as they are,
-for example as Server-Sent Events:
+The Agent API's HTTP binding is not served yet. To give a browser or another service the agent, write the routes your
+product needs over these calls, behind your own authentication. Every result and event is JSON, so you can send them on
+as they are, for example as Server-Sent Events:
 
 ```ts
 app.post("/chat/:session", requireUser, async (req, res) => {
   const sessionId = await sessionOfUser(req.user, req.params.session); // yours: which session this user may use
-  const result = await stream(agent, { sessionId, content: [{ type: "text", text: req.body.text }] });
-  if (!result.ok) return res.status(409).json(result);
+  const events = agent.messages.stream({ sessionId, content: req.body.text })[Symbol.asyncIterator]();
+  // A refused send rejects the first read: answer it before the stream starts.
+  const first = await events.next().catch((error: unknown) => error);
+  if (first instanceof AgentError) return res.status(409).json(first);
   res.setHeader("content-type", "text/event-stream");
-  for await (const event of result.events) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  for (let next = first as IteratorResult<MessageStreamEvent>; !next.done; next = await events.next()) {
+    res.write(`data: ${JSON.stringify(next.value)}\n\n`);
+  }
   res.end();
 });
 ```
@@ -210,13 +206,13 @@ Its `auth.apiKey.resolve()` runs per request, which is where a token you mint or
 `fastagent dev` / `start` are `openServing` plus `mountAgentService` plus process concerns (`.env`, the proxy, the dev
 watcher, the port, the signal handlers). The agent they serve is the one `openServing` returns to your app.
 
-Subpaths: `/core` (the Agent API's types, `stream`, the channel contract), `/node` (`mountAgentService`, `serveNode`,
+Subpaths: `/core` (the Agent API's types and `AgentError`, the channel contract), `/node` (`mountAgentService`, `serveNode`,
 `nodeListener`, content and authoring), `/pi` (`openServing`, `defineAgent`, the model environment). The root entry
 re-exports all of them.
 
 ## Where next
 
-- [SPEC](SPEC.md): the Agent API the whole thing rests on.
+- [Agent API](design/agent-api.md): the API the whole thing rests on.
 - [API reference](api-reference.md): every export.
 - [quickstart](quickstart.md): the CLI path (`init` / `dev` / `start`).
 - [core design](design/core.md): how a directory is opened onto pi-durable.

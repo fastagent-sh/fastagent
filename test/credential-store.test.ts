@@ -133,9 +133,10 @@ describe("a caller's credential store replaces the credentials file", () => {
       model: { provider: "faux", modelId: "faux-1" },
     });
     try {
-      const sent = await agent.invoke({ content: [{ type: "text", text: "hi" }] });
-      if (!sent.ok) throw new Error("not sent");
-      expect(await sent.wait()).toMatchObject({ ok: true, message: { answer: { text: "ok" } } });
+      const sessionId = (await agent.sessions.create()).id;
+      expect(await agent.messages.send({ sessionId, content: "hi" }, { wait: 30 })).toMatchObject({
+        answer: { text: "ok" },
+      });
       expect(store.calls).toContain("read faux");
     } finally {
       await agent.close();

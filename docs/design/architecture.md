@@ -43,10 +43,10 @@ goal needs.
 | Decision | Why |
 |---|---|
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
-| **One API of our own: the consumer [Agent API](../SPEC.md)**, bound in TypeScript in process and, from v2 ([proposed](agent-api.md)), over HTTP | Every consumer, ours included (channels, schedules, wake-ups, `fastagent invoke`), needs the same operations, and so does a program that calls a deployed agent the way it calls any service. One model with two bindings, the same names and objects in both, lets a Caller move between an agent it opens and one it reaches over HTTP by changing one line. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
-| **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (its definition, inspecting sessions) has one implementation; wrapping it would only rename it. A session's model and thinking level are a consumer's choice, at creation, at a fork, or later with `configure`, which is pi-durable's `configure()` with those two fields: a Caller who may use a session may choose what it answers with. From v2 ([proposed](agent-api.md)), a Caller also sets a session's `instructions` and `tools` (chosen among the agent's own) and compacts it; its working directory and extensions stay the definition's |
+| **One API of our own: the consumer [Agent API](../SPEC.md)**, bound in TypeScript in process and, from v2 ([in progress](agent-api.md): in process now), over HTTP | Every consumer, ours included (channels, schedules, wake-ups, `fastagent invoke`), needs the same operations, and so does a program that calls a deployed agent the way it calls any service. One model with two bindings, the same names and objects in both, lets a Caller move between an agent it opens and one it reaches over HTTP by changing one line. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
+| **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (its definition, inspecting sessions) has one implementation; wrapping it would only rename it. A session's settings are a consumer's choice, at creation, at a fork, or later with `sessions.update`, which is pi-durable's `configure()`: a Caller who may use a session may choose what it answers with, its model, thinking level, `instructions` and `tools` (chosen among the agent's own), and compacts it; its working directory and extensions stay the definition's |
 | **An instance is one trust domain, and serves nothing that does not verify its caller** | Whoever holds the Agent can do everything it can, every session and the agent's tools included. A deployment's routes are its channels', which MUST verify that a request comes from their platform; its host's own (AgentCore's, behind IAM); and, from v2, the HTTP API, which verifies an API key ([agent-api.md](agent-api.md) §9). The key keeps everyone but the instance's customer out; it does not divide an instance. A platform's signature proves the platform, not the person: everyone who can message a channel's bot is inside the trust domain, and can ask the agent for anything its tools reach, every other chat's conversation included. People who must not read each other's conversations are kept apart by giving each an instance, not inside one: the agent's tools reach every session of their instance, whichever session asked, so a check on session ids would not keep them apart. A session id is a name, not a credential |
-| **HTTP on Effect's own stack** (from v2, [proposed](agent-api.md)): an `effect/http-api` contract, served by `@effect/platform-node` on Node and `@effect/platform-bun` on Bun, every route on one `HttpRouter` | One contract written in Effect Schema gives the server's request decoding, its errors, `/v1/openapi.json` and the typed client `connectAgent` is built on, so none of them can describe another API than the one served. Each runtime serves on its own server, and a client that leaves interrupts its request's fiber, which is how a stream is cleaned up. Channels keep their Fetch handlers on the same router, and `HttpRouter.toWebHandler` is `service.fetch` for an app's own server. Hono and `@hono/node-server` go with it. Measured in §6.1, with what it costs: the modules are marked unstable, so `effect` and every `@effect/platform-*` package are pinned to one version and upgraded together; Bun's idle timeout is raised above the keep-alive interval; and `close()` ends the open streams before it stops the server |
+| **HTTP on Effect's own stack** (from v2's HTTP binding, [agent-api.md](agent-api.md) §9): an `effect/http-api` contract, served by `@effect/platform-node` on Node and `@effect/platform-bun` on Bun, every route on one `HttpRouter` | One contract written in Effect Schema gives the server's request decoding, its errors, `/v1/openapi.json` and the typed client `connectAgent` is built on, so none of them can describe another API than the one served. Each runtime serves on its own server, and a client that leaves interrupts its request's fiber, which is how a stream is cleaned up. Channels keep their Fetch handlers on the same router, and `HttpRouter.toWebHandler` is `service.fetch` for an app's own server. Hono and `@hono/node-server` go with it. Measured in §6.1, with what it costs: the modules are marked unstable, so `effect` and every `@effect/platform-*` package are pinned to one version and upgraded together; Bun's idle timeout is raised above the keep-alive interval; and `close()` ends the open streams before it stops the server |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
 | **Sessions are listed, most recently active first; none is deleted** | A client shows an agent's conversations whatever started them: duang's sidebar lists the ones a channel or a schedule started too, which no list a Caller keeps could hold. An instance is one trust domain, so a list shows nothing its Caller could not already read. Within one storage the order needs no clock: pi-durable gives sessions, messages and entries their ids from one counter, so a session's newest id is its latest activity. Several storages behind one instance compare activity by time, designed with them (#788, scale-out on AgentCore). pi-durable has no deletion |
@@ -69,13 +69,13 @@ safe only where it is serialized:
    messages arriving at once for a new place, or a redelivery of the first, run one after the other, and the second
    finds the mapping the first wrote. Across processes, one process owns an instance's state at a time (the serving
    process's lease), so there is one writer.
-2. **Session, then record, then message.** `createSession` (a fork, for a thread), then the mapping written durably,
-   then the invoke into the mapped session with the platform's message id as its `idempotencyKey`. A channel never
-   invokes without `sessionId`, since such an invoke cannot carry a key.
+2. **Session, then record, then message.** `sessions.create` (a fork, for a thread), then the mapping written
+   durably, then the send into the mapped session with the platform's message id as its `idempotencyKey`. A message
+   always names its session, and so its key is always the session's.
 
-A crash after `createSession` and before the record leaves a session nothing refers to, empty or a fork, which the
+A crash after `sessions.create` and before the record leaves a session nothing refers to, empty or a fork, which the
 retry does not reuse and nothing deletes; no message is answered twice, since a message is only sent once its session
-is recorded. A crash after the record is a redelivery that finds it, and the key makes the invoke a duplicate.
+is recorded. A crash after the record is a redelivery that finds it, and the key makes the send return that message.
 
 The previous design's pi-coding-agent harness went with it: pi's `extensions/` and `.pi/`, `APPEND_SYSTEM.md`, the
 `chat` TUI, and the skills and prompt templates a machine lends from `~/.pi/agent`. Nothing interactive replaces
@@ -83,11 +83,11 @@ The previous design's pi-coding-agent harness went with it: pi's `extensions/` a
 is a command a coding agent can run and read: `fastagent info --json` for what the definition opened as, and
 `fastagent invoke` for one message, its answer and an exit code.
 
-A consumer may choose a session's model and thinking level with `createSession({ model, thinkingLevel, from? })`,
-passed to pi-durable's creation options in the same commit. A fork inherits the settings at its branch point and
-applies the supplied overrides. `configure` changes them later, from the session's next model request, and the
-session's state reads them back. `invoke` uses those settings and accepts no per-message model choice. v2 adds
-`instructions` and `tools` to the settings a Caller chooses ([agent-api.md](agent-api.md) §4). A session that
+A consumer may choose a session's settings with `sessions.create({ model, thinkingLevel, instructions, tools,
+forkFrom? })`, passed to pi-durable's creation options in the same commit. A fork inherits the settings at its branch
+point and applies the supplied overrides. `sessions.update` changes them later, from the session's next model request,
+and the session reads them back. `messages.send` uses those settings and accepts no per-message model choice
+([agent-api.md](agent-api.md) §4). A session that
 names a model keeps it; FastAgent never replaces it automatically when it becomes unavailable, and a Caller moves it
 to another with `configure`.
 
@@ -293,7 +293,7 @@ What the previous design had, and what took its place:
 | `fastagent.config.ts`'s `FastagentConfig`, and `APPEND_SYSTEM.md` | `defineAgent()`, every field optional; `SYSTEM.md` alone |
 | Extensions an agent writes for itself, live on its next session | A build and a deployment, as for any code (§3) |
 | Schedules an agent writes for itself, live within 30 seconds | `wake`'s recurring form, kept in the instance's state (§3) |
-| A thread's Caller-named session, whose existence records that the room was forked ([participant-model.md](participant-model.md) rungs 3 and 4) | The thread's session id, recorded in the channel's state after `createSession` forks the room, in the order and place of §2. The branch point is still found by key (`getMessage` with the platform's message id) |
+| A thread's Caller-named session, whose existence records that the room was forked ([participant-model.md](participant-model.md) rungs 3 and 4) | The thread's session id, recorded in the channel's state after `sessions.create` forks the room, in the order and place of §2. The branch point is still found by key (`messages.get` with the platform's message id) |
 | The served HTTP API (`/invoke`, `/sessions`, `/agent`, `/control`), `http.api`, `http.control`, `http.cors`, `--no-api`, `connectAgent` and `createAgentHandler`, AgentCore's `api` envelope | Nothing: a deployment serves its channels and its host's routes, and an embedding app calls the Agent API in process (§2). What used them went with them or moved, by the list below |
 | An outside clock (Fly's Cron Manager, a Railway cron service, a CI job) calling `POST /invoke` in place of a schedule, so a host can scale to zero; `deploy`'s pre-flight offering it | Gone. A schedule keeps its machine resident, except on AgentCore, whose EventBridge alarms wake the container through its own envelope. A clock that must wake a scaled-to-zero machine is a channel its author writes, which verifies the clock's call |
 | The AgentCore runbook's smoke test, a turn sent as an `api` envelope | A `probe` envelope, which says whether the definition opened; a turn is tried through a channel or a schedule |
@@ -308,7 +308,7 @@ What the previous design had, and what took its place:
 2. **Done** ([#788](https://github.com/fastagent-sh/fastagent/issues/788)). The Agent on pi-durable, with the
    conformance suite in process; channels, schedules, wake-ups, the CLI and AgentCore moved onto it; the previous
    protocol, its HTTP API, `LoopPort` and the pi-coding-agent harness deleted.
-3. The Agent API v2 ([proposed](agent-api.md)): one model, in process and over HTTP with an API key.
+3. The Agent API v2 ([agent-api.md](agent-api.md)): one model, in process and over HTTP with an API key. In process: done.
 4. The artifact: `fastagent build`, and `deploy` from it.
 5. Context packages.
 6. Shared contexts and agents working together.
@@ -320,9 +320,9 @@ On pi-durable 1.3.0 with pi-ai's faux model, in process, against memory and SQLi
 | Question | Measured | So the implementation |
 |---|---|---|
 | The definition rendered | `SYSTEM.md`, `AGENTS.md` and the skill list render as an extension's prompt sections, and pi-durable adds no prompt of its own; a tool made by `needs([...])` around pi-durable's `defineTool` receives its secret | Installs one extension of FastAgent's own with those sections, beside the agent's tools and extensions |
-| A command kept as sent | An input submitted with the expanded text as `content` and `entry: { kind: "fastagent.user", data: { content: <as sent> } }` is recorded with that kind and data, while the model sees `content` | Submits every message that way, and publishes `fastagent.user` as `user_message` |
-| Images | Stored inline, as base64, in the entry's model message; there is no separate blob store | `attachment(ref)` reads from the entry: a ref names the entry and the part. Images grow the storage |
-| An answer being written | Its text so far is in `pi.live.generation.message`, and in a new `watchEvents` stream's snapshot, with its attempt number; its entry gets an id only when the answer is complete | `state.reply` is that text and `message_delta` carries no entry id ([Agent API](../SPEC.md) §6) |
+| A command kept as sent | An input submitted with the expanded text as `content` and `entry: { kind: "fastagent.user", data: { content: <as sent> } }` is recorded with that kind and data, while the model sees `content` | Submits every message that way, and publishes `fastagent.user` as `user` |
+| Images | Stored inline, as base64, in the entry's model message; there is no separate blob store | `sessions.attachment(ref)` reads from the entry: a ref names the entry and the part. Images grow the storage |
+| An answer being written | Its text so far is in `pi.live.generation.message`, and in a new `watchEvents` stream's snapshot, with its attempt number; its entry gets an id only when the answer is complete | `Session.reply` is that text and `delta` carries no entry id ([agent-api.md](agent-api.md) §6.1) |
 | A fork's history | Shares the source's entries: the same ids, with the source's `conversationId` | Publishes `Entry.sessionId` from it |
 | The queue after a run that did not answer | Waits, after a model failure and across a restart (the inbox persists with no run live); a write submission of FastAgent's kind `fastagent.release` with `edits: []` places it (the conversation takes the inputs waiting in its inbox), and lands as an entry | Submits that write after each run that did not answer and at the first open of a conversation whose inbox waits with no run live, and never publishes the entry |
 | Abort | `conversation.abort()` ends the running message and withdraws the queued ones, and a message sent after it settles is taken; but one sent while the aborted run is still settling waits in the inbox, and `abort()` itself waits for a running tool that ignores its signal | Calls `conversation.abort()` and answers `abort` when it returns, as the Agent API's `abort` does (§5 there). The `fastagent.release` write follows the end of the stopped run, as after any run that did not answer, whether or not the `abort` call is still waiting: its Caller may have stopped waiting |
@@ -377,16 +377,16 @@ Responses and Conversations APIs.
 |---|---|---|---|---|---|
 | Session id | The Agent's | The agent's | `contextId` | `threadId`, from the client | The server's |
 | The unit a caller holds | A message | `session/prompt` answers a `messageId` once the message is in the conversation | A Task or a Message | A run | A response |
-| Its status by id | `getMessage` | None | `GetTask` | None | `GET /responses/{id}` |
-| Reconnecting | `resume`: replay, snapshot, live | `session/resume` with `replayFrom`, then a current-state snapshot | `SubscribeToTask` | Snapshot events | `starting_after` a sequence number |
-| Stopping | `abort`, the whole session | `session/cancel`, the whole session | `CancelTask` | None | One response |
+| Its status by id | `messages.get` | None | `GetTask` | None | `GET /responses/{id}` |
+| Reconnecting | `sessions.events`: replay, snapshot, live | `session/resume` with `replayFrom`, then a current-state snapshot | `SubscribeToTask` | Snapshot events | `starting_after` a sequence number |
+| Stopping | `sessions.cancel`, the whole session | `session/cancel`, the whole session | `CancelTask` | None | One response |
 | Deduplication | `idempotencyKey`, per session | None | Optional, by the client's `messageId` | None | None |
 | A busy session | `queue`, `steer`, `reject` | Not required | None | None | None |
 | Asking the user | Not yet | Permission requests, elicitation | `input-required` | Interrupts | None |
 
 ACP v2 arrived independently at the same model: the agent names sessions, a prompt is answered once its message is in
 the conversation, no turn id is exposed, stopping is per session, the state is `idle` or `running`, and a client
-resumes from a cursor and is then told the current state. From the comparison the Agent API took `getMessage` (A2A,
+resumes from a cursor and is then told the current state. From the comparison the Agent API took `messages.get` (A2A,
 OpenAI), the snapshot after a replay (ACP), content parts (ACP, A2A, OpenAI), the accepted inputs in `info` (ACP's
 negotiated prompt capabilities), open value sets with prefixed extensions (ACP's `_` names), and an answer that can be
 joined mid-way (as ACP's resume and OpenAI's sequence numbers allow).

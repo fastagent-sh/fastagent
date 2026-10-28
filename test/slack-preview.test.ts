@@ -42,7 +42,7 @@ function fakeApi(): SlackApi {
 }
 
 async function* quickClassicTurn(): AsyncIterable<InvokeEvent> {
-  yield ev.accepted();
+  yield ev.message();
   yield ev.thinking("private reasoning");
   yield ev.text("**answer**");
   yield ev.ended();
@@ -51,12 +51,12 @@ async function* quickClassicTurn(): AsyncIterable<InvokeEvent> {
 /** A push-based event source, so the TEST BODY advances timers — a generator that advances them
  *  while the test body is already inside `advanceTimersByTimeAsync` deadlocks. */
 function pushSource() {
-  const queue: InvokeEvent[] = [ev.accepted()];
+  const queue: InvokeEvent[] = [ev.message()];
   let notify: (() => void) | undefined;
   let ended = false;
   return {
     iterable: (async function* (): AsyncIterable<InvokeEvent> {
-      yield ev.accepted();
+      yield ev.message();
       for (;;) {
         if (queue.length > 0) {
           yield queue.shift() as InvokeEvent;
@@ -90,7 +90,7 @@ describe("Slack reply rendering", () => {
     const api = fakeApi();
     const warning = vi.spyOn(console, "error").mockImplementation(() => {});
     const events = (async function* (): AsyncIterable<InvokeEvent> {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.toolStarted("t", "read");
       yield ev.failed("model failed", { retryable: false });
     })();
@@ -112,10 +112,10 @@ describe("Slack reply rendering", () => {
     const api = fakeApi();
     const failures: unknown[] = [];
     const events = (async function* (): AsyncIterable<InvokeEvent> {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.text("part");
       yield {
-        type: "serving_error",
+        type: "stream_error",
         error: { code: "internal", message: "missed events could not be read back", retryable: true },
       } as InvokeEvent;
     })();
@@ -128,7 +128,7 @@ describe("Slack reply rendering", () => {
       ),
     ).rejects.toThrow("agent failed: missed events could not be read back (retryable=true)");
     expect(failures).toEqual([
-      { details: "missed events could not be read back", retryable: true, code: "serving_error" },
+      { details: "missed events could not be read back", retryable: true, code: "stream_error" },
     ]);
     expect(api.stopStream).toHaveBeenCalledOnce();
   });
@@ -216,7 +216,7 @@ describe("Slack reply rendering", () => {
       slackReply(
         stream(
           (async function* (): AsyncIterable<InvokeEvent> {
-            yield ev.accepted();
+            yield ev.message();
             yield ev.toolStarted("t", "read");
             // Past the mutation interval, so the pump writes a real frame before the answer settles.
             await vi.advanceTimersByTimeAsync(3_500);
@@ -246,7 +246,7 @@ describe("Slack reply rendering", () => {
       slackReply(
         stream(
           (async function* (): AsyncIterable<InvokeEvent> {
-            yield ev.accepted();
+            yield ev.message();
             yield ev.toolStarted("t", "bash", { command: "echo <!here>" });
             yield ev.toolProgress("t", "<!channel> deploy done");
             // Past the mutation interval, so the pump writes a frame while the tool still runs.
@@ -307,7 +307,7 @@ it("uses the turn clock for append pacing and preserves split mention sanitizati
           }),
         ),
       );
-      yield* Queue.offer(queue, ev.accepted());
+      yield* Queue.offer(queue, ev.message());
       yield* Queue.offer(queue, ev.text("ping <"));
       yield* TestClock.adjust(0);
       expect(sleep).toHaveBeenCalled();
@@ -335,7 +335,7 @@ describe("native Slack tool traces", () => {
   it("shows the bounded invoked operation and states a failure without its output", async () => {
     const api = fakeApi();
     const events = (async function* (): AsyncIterable<InvokeEvent> {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.toolStarted("tool-1", "bash", { command: `npm test <!channel> ${"🐍".repeat(80)}` });
       yield ev.toolResult("tool-1", true);
       yield ev.text("Recovered.");
@@ -364,7 +364,7 @@ describe("native Slack tool traces", () => {
   it("separates a trace from the text around it without splitting the answer", async () => {
     const api = fakeApi();
     const events = (async function* (): AsyncIterable<InvokeEvent> {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.text("Checking.");
       yield ev.toolStarted("tool-1", "read", { path: "AGENTS.md" });
       yield ev.toolResult("tool-1");
@@ -390,7 +390,7 @@ describe("native Slack tool traces", () => {
   it("keeps an untrusted name or argument from breaking the surrounding Markdown", async () => {
     const api = fakeApi();
     const events = (async function* (): AsyncIterable<InvokeEvent> {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.toolStarted("tool-1", "_", { command: "echo **b** _c_" });
       yield ev.toolStarted("tool-2", "bash", { command: "`x`" });
       yield ev.ended();
@@ -418,7 +418,7 @@ describe("native Slack tool traces", () => {
     // A channel knows no tool schemas, so the summary cannot tell a query from a credential. This is
     // the boundary docs/slack.md discloses; changing WHICH field is picked has to break a test.
     const events = (async function* (): AsyncIterable<InvokeEvent> {
-      yield ev.accepted();
+      yield ev.message();
       yield ev.toolStarted("tool-1", "deploy", { token: "sk-live-secret", env: "prod" });
       yield ev.ended();
     })();
@@ -436,7 +436,7 @@ describe("native Slack tool traces", () => {
 
 describe("native DM Agent status around a retry backoff", () => {
   function eventSource() {
-    const queue: InvokeEvent[] = [ev.accepted()];
+    const queue: InvokeEvent[] = [ev.message()];
     let notify: (() => void) | undefined;
     let done = false;
     return {
@@ -449,7 +449,7 @@ describe("native DM Agent status around a retry backoff", () => {
         notify?.();
       },
       iterable: (async function* (): AsyncIterable<InvokeEvent> {
-        yield ev.accepted();
+        yield ev.message();
         while (true) {
           const next = queue.shift();
           if (next) {

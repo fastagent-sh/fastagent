@@ -107,14 +107,14 @@ There is no FastAgent build step: the agent folder is the deployable unit.
 ## Embed in an app
 
 ```ts
-import { openServing, stream } from "@fastagent-sh/fastagent";
+import { openServing } from "@fastagent-sh/fastagent";
 
 const { agent } = await openServing("./agent", { model: "openai-codex/gpt-5.5" });
 
-const created = await agent.createSession();
-if (!created.ok) throw new Error(created.error.message);
-const result = await stream(agent, { sessionId: created.sessionId, content: [{ type: "text", text: "hi" }] });
-if (result.ok) for await (const event of result.events) if (event.type === "message_delta" && event.channel === "text") render(event.delta);
+const session = await agent.sessions.create();
+for await (const event of agent.messages.stream({ sessionId: session.id, content: "hi" })) {
+  if (event.type === "delta" && event.channel === "text") render(event.text);
+}
 ```
 
 `mountAgentService(await openServing(dir))` adds the agent's channels and schedules to your app: a Fetch handler for
@@ -153,7 +153,7 @@ import, and every layer's static dependency list is asserted in CI:
 
 | Area | Examples | Stability |
 |---|---|---|
-| The Agent API | `Agent`, `stream`, `AgentRejection` ([SPEC](docs/SPEC.md)) | Stable within the SPEC's version |
+| The Agent API | `Agent`, `AgentError` ([Agent API](docs/design/agent-api.md)) | Stable within its version |
 | Directory → agent | `openServing`, `openAgent` and its parts | Usable now, may tighten before 1.0 |
 | Directory → service | `mountAgentService` + `MountableAgent`, `AgentService` | The supported way to serve an agent's channels in an app |
 | Node binding | `nodeListener`, `serveNode`, `secretEquals` (from `/node`) | The one runtime-specific piece |

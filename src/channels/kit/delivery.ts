@@ -15,37 +15,41 @@ import { PortFailure, portError, portJoin } from "../../effect-port.ts";
 export type TurnEnd = { answered: true } | { failure: ChannelFailure };
 
 /**
- * Whether this event ends the turn, and how: the message was refused (nothing was recorded), not known to be taken
- * (the same key finds it again, so it is worth another try), or the turn's message ended. A message the agent stopped
- * answering at its output limit still answers with what was written.
+ * Whether this event ends the turn, and how: the message was refused, or the turn's message ended. A message the
+ * agent stopped answering at its output limit still answers with what was written.
  */
 export function turnEnd(event: TurnEvent, messageId: string | undefined): TurnEnd | undefined {
   if (event.type === "rejected") {
     const { code, message, retryable } = event.error;
     return { failure: { details: message, retryable, code } };
   }
-  if (event.type === "unknown") return { failure: { details: event.reason, retryable: true, code: "unknown" } };
-  if (event.type !== "done" || event.message.messageId !== messageId) return undefined;
-  const { outcome } = event.message;
-  switch (outcome.status) {
+  if (event.type !== "done" || event.message.id !== messageId) return undefined;
+  const { status, error } = event.message;
+  switch (status) {
     case "completed":
-    case "max_tokens":
+    case "incomplete":
       return { answered: true };
     case "failed":
       return {
-        failure: { details: outcome.error.message, retryable: outcome.error.retryable, code: outcome.error.code },
+        failure: {
+          details: error?.message ?? "the message failed",
+          retryable: error?.retryable ?? false,
+          code: error?.code ?? "failed",
+        },
       };
     case "canceled":
       return { failure: { details: "the message was canceled", retryable: false, code: "canceled" } };
+    default:
+      return undefined;
   }
 }
 
 /**
- * A turn whose stream ended before its message did, after the agent said why (`serving_error`: the message's end could
+ * A turn whose stream ended before its message did, after the agent said why (`stream_error`: the message's end could
  * not be recorded, or missed events could not be read back): a failure worth trying again. Undefined when nothing was said.
  */
-export function unfinishedTurn(servingError: string | undefined): ChannelFailure | undefined {
-  return servingError === undefined ? undefined : { details: servingError, retryable: true, code: "serving_error" };
+export function unfinishedTurn(streamError: string | undefined): ChannelFailure | undefined {
+  return streamError === undefined ? undefined : { details: streamError, retryable: true, code: "stream_error" };
 }
 
 /** Snapshot/edit renderers share terminal ownership; platform-specific settle policies stay injected. */
@@ -79,7 +83,7 @@ export function renderReply(
       }),
     );
     let messageId: string | undefined;
-    let servingError: string | undefined;
+    let streamError: string | undefined;
     const failWith = (failure: ChannelFailure) =>
       Effect.gen(function* () {
         yield* notify(failure, "agent-failure");
@@ -88,8 +92,8 @@ export function renderReply(
         );
       });
     yield* Stream.runForEachWhile(events, (event) => {
-      if (event.type === "accepted") messageId = event.message.messageId;
-      if (event.type === "serving_error") servingError = event.error.message;
+      if (event.type === "message") messageId = event.message.id;
+      if (event.type === "stream_error") streamError = event.error.message;
       const end = turnEnd(event, messageId);
       if (end === undefined) {
         return Effect.try({
@@ -117,7 +121,7 @@ export function renderReply(
       }).pipe(Effect.uninterruptible);
     });
     if (finalized) return;
-    const unfinished = unfinishedTurn(servingError);
+    const unfinished = unfinishedTurn(streamError);
     if (unfinished === undefined) {
       return yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
     }

@@ -68,7 +68,7 @@ export function createTurnView(): TurnView {
 
 /** Fold one event of a turn's invoke into its view; true when what a renderer shows changed. */
 export function applyTurnEvent(view: TurnView, e: TurnEvent, now = Date.now()): boolean {
-  const closedRetry = view.retrying && e.type !== "retry_scheduled";
+  const closedRetry = view.retrying && e.type !== "retrying";
   if (closedRetry) view.retrying = false;
   const appended = (text: string): boolean => {
     if (text === "") return closedRetry;
@@ -77,9 +77,9 @@ export function applyTurnEvent(view: TurnView, e: TurnEvent, now = Date.now()): 
     return true;
   };
   switch (e.type) {
-    case "message_delta":
+    case "delta":
       if (e.channel === "text") return appended(view.textOf(e));
-      view.thinking += e.delta;
+      view.thinking += e.text;
       return true;
     case "tool_started": {
       const arg = summarizeToolArgs(e.args);
@@ -96,7 +96,7 @@ export function applyTurnEvent(view: TurnView, e: TurnEvent, now = Date.now()): 
       return true;
     }
     case "entry": {
-      if (e.entry.kind === "assistant_message") return appended(view.textOf(e));
+      if (e.entry.kind === "assistant") return appended(view.textOf(e));
       if (e.entry.kind !== "tool_result") return closedRetry;
       const data = e.entry.data as { toolCallId?: string; isError?: boolean };
       const line = data.toolCallId === undefined ? undefined : view.toolById.get(data.toolCallId);
@@ -104,7 +104,7 @@ export function applyTurnEvent(view: TurnView, e: TurnEvent, now = Date.now()): 
       line.status = data.isError === true ? "error" : "ok";
       return true;
     }
-    case "retry_scheduled":
+    case "retrying":
       view.retrying = true;
       return true;
     default:

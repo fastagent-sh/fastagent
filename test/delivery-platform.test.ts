@@ -104,7 +104,7 @@ it.each(platforms)(
     await Effect.runPromise(
       Effect.gen(function* () {
         const events = Stream.fromIterable<InvokeEvent>([
-          ev.accepted(),
+          ev.message(),
           ev.thinking("working"),
           ev.toolStarted("t1", "read"),
         ]).pipe(Stream.concat(Stream.never));
@@ -146,21 +146,24 @@ it.each(platforms)(
     const releaseFinal = Promise.withResolvers<void>();
     const committed = vi.fn();
     let sourceClosed = false;
-    const scripted = scriptedAgent(() => [ev.accepted(), ev.text("answer"), ev.ended()]);
-    // The turn's source is its session's events: closed when the turn lets go of them.
+    const scripted = scriptedAgent(() => [ev.message(), ev.text("answer"), ev.ended()]);
+    // The turn's source is its message's stream: closed when the turn lets go of it.
     const agent: Agent = {
       ...scripted,
-      resume: (sessionId, options) => {
-        const events = scripted.resume(sessionId, options)[Symbol.asyncIterator]();
-        return {
-          [Symbol.asyncIterator]: () => ({
-            next: () => events.next(),
-            return: async () => {
-              sourceClosed = true;
-              return (await events.return?.()) ?? { done: true, value: undefined };
-            },
-          }),
-        };
+      messages: {
+        ...scripted.messages,
+        stream: (request, options) => {
+          const events = scripted.messages.stream(request, options)[Symbol.asyncIterator]();
+          return {
+            [Symbol.asyncIterator]: () => ({
+              next: () => events.next(),
+              return: async () => {
+                sourceClosed = true;
+                return (await events.return?.()) ?? { done: true, value: undefined };
+              },
+            }),
+          };
+        },
       },
     };
     const render = renderer(

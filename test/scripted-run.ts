@@ -1,60 +1,56 @@
 /**
- * One message's events, scripted: what an Agent answers, without an Agent. A message is its receipt, the live text and
- * the agent's settled answer when it says something, and its `done`; a refusal is the one `rejected`. The message's own
- * `user_message` entry is the Agent's to write (scripted-agent.ts), since `stream` reads only what follows it.
+ * One message's events, scripted: what an Agent answers, without an Agent. A message is the message as recorded, the
+ * live text and the agent's settled answer when it says something, and its `done`; a refusal is the one `rejected`.
+ * The message's own `user` entry is the Agent's to write (scripted-agent.ts).
  */
 import {
-  type AgentError,
-  type DoneMessage,
+  type AgentErrorData,
   type ErrorCode,
-  type InvokeRequest,
-  type Outcome,
+  type Message,
+  type SendRequest,
   agentError,
+  errorData,
 } from "../src/agent-api.ts";
 import type { TurnEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 
-export type RunScript = { outcome?: Outcome; text?: string } | { rejected: AgentError };
+/** How a scripted message ends. */
+export type Ending = { status: "completed" | "incomplete" | "canceled" } | { status: "failed"; error: AgentErrorData };
+
+export type RunScript = { ending?: Ending; text?: string } | { rejected: AgentErrorData };
 
 let messages = 0;
 
 export const refused = (code: ErrorCode, message: string = code): RunScript => ({
-  rejected: agentError(code, message),
+  rejected: errorData(agentError(code, message)),
 });
 
 export const failed = (message: string, code: ErrorCode = "model_error"): RunScript => ({
-  outcome: { status: "failed", error: agentError(code, message) },
+  ending: { status: "failed", error: errorData(agentError(code, message)) },
 });
 
-const done = (messageId: string, outcome: Outcome, answer?: { entryId: string; text: string }): TurnEvent => ({
+const done = (id: string, ending: Ending, answer?: { entryId: string; text: string }): TurnEvent => ({
   type: "done",
-  message: { messageId, status: "done", outcome, ...(answer ? { answer } : {}) } satisfies DoneMessage,
+  message: { id, sessionId: "s", ...ending, ...(answer ? { answer } : {}) } satisfies Message,
 });
 
-export function scriptedRun(request: InvokeRequest, script: RunScript = {}): TurnEvent[] {
+export function scriptedRun(request: SendRequest, script: RunScript = {}): TurnEvent[] {
   if ("rejected" in script) return [{ type: "rejected", error: script.rejected }];
-  const messageId = `message-${++messages}`;
-  const sessionId = request.sessionId ?? `session-${messageId}`;
+  const id = `message-${++messages}`;
   const answer =
     script.text === undefined
       ? undefined
       : ({
           type: "entry",
-          entry: {
-            id: `${messageId}-answer`,
-            sessionId,
-            timestamp: Date.now(),
-            kind: "assistant_message",
-            data: { text: script.text },
-          },
+          entry: { id: `${id}-answer`, timestamp: Date.now(), kind: "assistant", data: { text: script.text } },
         } satisfies TurnEvent);
   return [
-    { type: "accepted", sessionId, message: { messageId, status: "queued", position: 0 }, duplicate: false },
+    { type: "message", message: { id, sessionId: request.sessionId, status: "queued" } },
     ...(answer === undefined || script.text === undefined
       ? []
-      : [{ type: "message_delta", channel: "text", delta: script.text } satisfies TurnEvent, answer]),
+      : [{ type: "delta", channel: "text", text: script.text } satisfies TurnEvent, answer]),
     done(
-      messageId,
-      script.outcome ?? { status: "completed" },
+      id,
+      script.ending ?? { status: "completed" },
       answer && script.text !== undefined ? { entryId: answer.entry.id, text: script.text } : undefined,
     ),
   ];
@@ -65,21 +61,19 @@ const MESSAGE = "message";
 let built = 0;
 const entryOf = (kind: string, data: Record<string, unknown>): TurnEvent => ({
   type: "entry",
-  entry: { id: `e${++built}`, sessionId: "s", timestamp: 0, kind, data: data as never },
+  entry: { id: `e${++built}`, timestamp: 0, kind, data: data as never },
 });
 
 /** One event at a time, for a test that scripts a stream by hand. */
 export const ev = {
-  accepted: (messageId = MESSAGE, sessionId = "s"): TurnEvent => ({
-    type: "accepted",
-    sessionId,
-    message: { messageId, status: "queued", position: 0 },
-    duplicate: false,
+  message: (id = MESSAGE, sessionId = "s"): TurnEvent => ({
+    type: "message",
+    message: { id, sessionId, status: "queued" },
   }),
-  text: (delta: string): TurnEvent => ({ type: "message_delta", channel: "text", delta }),
-  thinking: (delta: string): TurnEvent => ({ type: "message_delta", channel: "thinking", delta }),
-  /** The settled message the deltas add up to. */
-  answer: (text: string): TurnEvent => entryOf("assistant_message", { text }),
+  text: (text: string): TurnEvent => ({ type: "delta", channel: "text", text }),
+  thinking: (text: string): TurnEvent => ({ type: "delta", channel: "thinking", text }),
+  /** The settled reply the deltas add up to. */
+  answer: (text: string): TurnEvent => entryOf("assistant", { text }),
   toolStarted: (toolCallId: string, name: string, args: Record<string, unknown> = {}): TurnEvent => ({
     type: "tool_started",
     toolCallId,
@@ -89,16 +83,18 @@ export const ev = {
   toolProgress: (toolCallId: string, text: string): TurnEvent => ({ type: "tool_progress", toolCallId, text }),
   toolResult: (toolCallId: string, isError = false): TurnEvent =>
     entryOf("tool_result", { toolCallId, isError, text: "" }),
-  retrying: (): TurnEvent => ({ type: "retry_scheduled", attempt: 1, maxAttempts: 4, delayMs: 1000, reason: "503" }),
-  ended: (outcome: Outcome = { status: "completed" }, messageId = MESSAGE): TurnEvent => done(messageId, outcome),
-  failed: (message: string, options: { retryable?: boolean; code?: ErrorCode } = {}, messageId = MESSAGE): TurnEvent =>
-    done(messageId, {
+  retrying: (): TurnEvent => ({ type: "retrying", attempt: 1, maxAttempts: 4, delayMs: 1000, reason: "503" }),
+  ended: (ending: Ending = { status: "completed" }, id = MESSAGE): TurnEvent => done(id, ending),
+  failed: (message: string, options: { retryable?: boolean; code?: ErrorCode } = {}, id = MESSAGE): TurnEvent =>
+    done(id, {
       status: "failed",
-      error: { ...agentError(options.code ?? "model_error", message), retryable: options.retryable ?? false },
+      error: {
+        ...errorData(agentError(options.code ?? "model_error", message)),
+        retryable: options.retryable ?? false,
+      },
     }),
   rejected: (code: ErrorCode, message: string = code): TurnEvent => ({
     type: "rejected",
-    error: agentError(code, message),
+    error: errorData(agentError(code, message)),
   }),
-  unknown: (reason = "the storage did not answer"): TurnEvent => ({ type: "unknown", reason }),
 };

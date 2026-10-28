@@ -106,8 +106,11 @@ describe("schedules: a cron fire reaches the agent, its session, and its claim",
     // The regression this guards is a completed turn that ANSWERED NOTHING: the claim would still say `completed`
     // while the conversation holds only the prompt. So the answer is read from the message the fire sent, never
     // from text the scheduler itself wrote.
-    const message = await agent.getMessage(sessionId as string, { idempotencyKey: fires[0]?.slot as string });
-    const answer = message?.status === "done" ? message.answer?.text : undefined;
+    const message = await agent.messages.get({
+      sessionId: sessionId as string,
+      idempotencyKey: fires[0]?.slot as string,
+    });
+    const answer = message.answer?.text;
     expect(answer, `the turn completed without answering: ${JSON.stringify(message)}`).toMatch(/tick/i);
   });
 });

@@ -135,7 +135,7 @@ describe("cli: schedules run and unwake", () => {
     // The claim counts a cut-off answer as completed; a check does not.
     const clipped = await run(["schedules", "run", "clipped", dir]);
     expect([clipped.code, clipped.stdout.trim()], clipped.stderr).toEqual([1, "cut sho"]);
-    expect(clipped.stderr).toContain("clipped: its answer was cut off (max_tokens)");
+    expect(clipped.stderr).toContain("clipped: its answer was cut off (incomplete)");
 
     await killWhileLingering(["schedules", "run", "slow", dir], dir);
     const refused = await run(["schedules", "run", "clipped", dir]);

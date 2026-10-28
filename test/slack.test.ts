@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type AbortResult, type Agent, type ErrorCode, failure } from "../src/agent-api.ts";
+import { type Agent, type ErrorCode, agentError } from "../src/agent-api.ts";
 import { mentionsSlackUser } from "../src/channels/slack/parse.ts";
 import {
   type SlackChannelOptions,
@@ -78,7 +78,7 @@ function platformRead(url: URL): Response {
 function replyingAgent(reply = "done") {
   const calls: Asked[] = [];
   const agent = scriptedAgent(async function* (request) {
-    yield ev.accepted();
+    yield ev.message();
     calls.push(asked(request));
     if (reply) yield ev.text(reply);
     yield ev.ended();
@@ -210,7 +210,7 @@ function mount(
   agent: Agent,
   options: Partial<SlackChannelOptions> = {},
   stateRoot = root(),
-  stopped?: (session: string) => AbortResult,
+  stopped?: (session: string) => { stopped: string[] },
 ) {
   const handler = slackChannel({
     botToken: "xoxb-test",
@@ -472,7 +472,7 @@ describe("Slack sessions, context, and thread participation", () => {
     vi.stubGlobal("fetch", fetchMock);
     let prompt: Prompt | undefined;
     const agent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       prompt = promptOf(request);
       yield ev.thinking("private chain of thought: launch-code");
       yield ev.toolStarted("t1", "search", { query: "public docs" });
@@ -573,7 +573,7 @@ describe("Slack sessions, context, and thread participation", () => {
     const cwd = root();
     const seen: string[] = [];
     const agent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       // As the scaffolded tool calls it: inside an async execute, where a refusal is the tool's error.
       const list = async () => slackThreads(request.sessionId).list();
       seen.push(await list().catch((error: Error) => `refused: ${error.message}`));
@@ -796,7 +796,7 @@ describe("Slack sessions, context, and thread participation", () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     const agent = scriptedAgent(async function* (_request) {
-      yield ev.accepted();
+      yield ev.message();
       await gate;
       yield ev.ended();
     });
@@ -822,7 +822,7 @@ describe("Slack sessions, context, and thread participation", () => {
     const gate = new Promise<void>((resolve) => (release = resolve));
     const firstCalls: Asked[] = [];
     const interruptedAgent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       firstCalls.push(asked(request));
       await gate;
       yield ev.ended();
@@ -862,7 +862,7 @@ describe("Slack sessions, context, and thread participation", () => {
     const calls: Asked[] = [];
     let invocation = 0;
     const agent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       calls.push(asked(request));
       if (++invocation === 1) await gate;
       yield ev.ended();
@@ -934,7 +934,7 @@ describe("Slack sessions, context, and thread participation", () => {
     const gate = new Promise<void>((resolve) => (release = resolve));
     const calls: Prompt[] = [];
     const agent = scriptedAgent(async function* (request) {
-      yield ev.accepted();
+      yield ev.message();
       calls.push(promptOf(request));
       await gate;
       yield ev.ended();
@@ -1005,17 +1005,17 @@ describe("Slack stop command", () => {
   /** What `abort` answers: a run it stopped, nothing running, or a refusal. */
   const fakeStop = (result: "stopped" | "idle" | ErrorCode) => {
     const aborted: string[] = [];
-    const stopped = (session: string): AbortResult => {
+    const stopped = (session: string): { stopped: string[] } => {
       aborted.push(session);
       if (result === "stopped") return stoppedRun;
-      if (result === "idle") return { ok: true, stopped: { taken: [], queued: [] } };
-      return failure(result, "no run");
+      if (result === "idle") return { stopped: [] };
+      throw agentError(result, "no run");
     };
     return { stopped, aborted };
   };
   const invoked: string[] = [];
   const agent = scriptedAgent(async function* (request) {
-    yield ev.accepted();
+    yield ev.message();
     invoked.push(promptOf(request).text);
     yield ev.ended();
   });

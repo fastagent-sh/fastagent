@@ -56,8 +56,8 @@ credential. So a check on session ids does not keep users apart, and FastAgent d
   code keeps.
 - An app that embeds the agent and serves it to its own users writes its own routes over the Agent API, behind its own
   authentication. It can keep its users apart by session only for an agent whose tools reach neither the instance's
-  storage nor its files, and it must check every session id a request names: the one an invoke goes to, and the
-  source of a fork (`createSession({ from })`), which is how a user would read a session that is not theirs.
+  storage nor its files, and it must check every session id a request names: the one a message is sent to, and the
+  source of a fork (`sessions.create({ forkFrom })`), which is how a user would read a session that is not theirs.
 
 Nothing in the process is a sandbox: the coding tools act with the process's authority
 ([core design](core.md#5-tools-skills-and-execution-environment)).
