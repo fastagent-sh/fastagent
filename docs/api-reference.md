@@ -1,22 +1,19 @@
 ---
 title: API reference
-description: "The public TypeScript surface of @fastagent-sh/fastagent: the Agent API, opening and serving a definition, what an author writes, the model environment, content, and the channel kit."
+description: "The public TypeScript surface of @fastagent-sh/fastagent: the Agent API, opening and serving an agent directory, what an author writes, and the channel kit."
 status: current
 ---
 
 # API reference
 
-A compact reference for the all-in-one `@fastagent-sh/fastagent` entry. The same exports are layered across subpaths
-by what each costs to import:
+A compact reference for `@fastagent-sh/fastagent`. The package has one entry per kind of user:
 
-| | Harness-neutral | Runtime-neutral | Holds |
-|---|---|---|---|
-| `/core` | yes | yes | The Agent API's types and `AgentError`, the channel contract. Effect only, no Node built-in |
-| `/node` | yes | no | Serving a definition's channels and schedules, the Node HTTP bridge, content and authoring |
-| `/pi` | no | no | What an author writes, opening a definition as an Agent, the model environment and sign-in |
+| Import | Holds |
+|---|---|
+| `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, and what an author writes: `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, and a channel's helpers |
+| `@fastagent-sh/fastagent/telegram`, `/slack`, `/feishu`, `/lark` | Each first-party channel, and the transport and thread reader its tools use |
 
-The channel subpaths (`/telegram`, `/slack`, `/feishu`, `/lark`) hold each first-party channel. FastAgent is pre-1.0;
-the [Agent API](design/agent-api.md) is the stable design center.
+FastAgent is pre-1.0; the [Agent API](design/agent-api.md) is the stable design center.
 
 ## The Agent API
 
@@ -72,120 +69,42 @@ its session's events from its own `user` entry through its `done` (`delta`, `too
 that message from wherever it is. A refused send rejects the first read; a stream that cannot go on after that ends
 with a `stream_error` event. It is what a channel's live preview reads.
 
-## Serving a definition
+## Opening and serving an agent directory
 
 ```ts
-// From `@fastagent-sh/fastagent/pi`.
-function openServing(dir: string, options?: OpenServingOptions): Promise<OpenedServing>;
+function openAgent(dir: string, options?: { model?: string; credentials?: CredentialStore }): Promise<LocalAgent>;
 
-interface OpenServingOptions {
-  model?: string; // "provider/modelId", over the config's
-  thinkingLevel?: ThinkingLevel;  storage?: { instance: "posix" | "leased-dotfile" } | { file: string; holders?: string } | "memory"; // default below
-  unfinished?: "resume" | "abort" | "refuse"; // what an earlier process left unfinished in it; default "resume"
-  authPath?: string; // the credentials file (default: the agent's own, layered over the machine's)
-  credentialStore?: CredentialStore; // or a store of your own (an OS keychain); not with authPath
+interface LocalAgent extends Agent {
+  serve(): Promise<Service>; // channels, schedules and wake-ups, and GET /health
+  readonly harness: Harness; // pi-durable's own API, for operating the agent
+  close(): Promise<void>; // closes what `serve` started, then releases the instance's storage
 }
 
-interface OpenedServing {
-  agent: DurableAgent; // the Agent API, plus `harness` (pi-durable's own API) and `close()`
-  definition: AgentDefinition;
-  code: BuiltDefinition; // tools, extensions, providers, channels, schedules
-  models: ModelEnvironment;
-  content: ResolvedContent[];
-  agentDir: string;
-  stateRoot: string;
-  channels: Map<string, ChannelModule | LongConnectionChannelModule>;
-  schedules: Schedule[];
-}
-```
-
-`openServing` opens a directory the way `dev` and `start` do: it generates `.fastagent/` from `src/`, builds the code
-with the secrets it declares (a required one without a value refuses, naming where it is declared), enters the
-declared environment, clones the content, builds the model environment, opens the instance's storage, and opens the
-Agent on it. The storage is held until `agent.close()`; if the Agent does not open, it is released before the
-failure is thrown. `storage` says which one:
-
-| `storage` | What the Agent keeps its sessions in |
-|---|---|
-| `{ instance: "posix" }` (default) | The instance's `<stateRoot>/agent.sqlite`, which one process holds at a time: a second opener is refused. The agent gets `wake` and `unwake` |
-| `{ instance: "leased-dotfile" }` | The same, locked by a `<path>.lock` directory, for a file system whose POSIX locks fail (AgentCore's session storage) |
-| `{ file, holders? }` | A database of your own at `file`, held the same way; `holders`, when given, names in the refusal what else opens it. No `wake`: no clock fires for it. `fastagent invoke` uses one, `<stateRoot>/invoke.sqlite` |
-| `"memory"` | Nothing kept. No `wake` |
-
-`unfinished` says what becomes of the messages an earlier process accepted and stopped before they ended (it was
-killed, or closed mid-answer): `"resume"` runs them on in this process, as a serve does; `"abort"` ends them, aborted,
-before anything runs, as `fastagent invoke` does with what a stopped `invoke` left; `"refuse"` fails the open, naming
-their sessions, as `fastagent schedules run` does.
-
-The default model is optional here: without one the agent opens, and a message to a session with no model of its own
-is refused `missing_model` until the session is given one (`sessions.update`).
-
-```ts
-// From `@fastagent-sh/fastagent/node`.
-function mountAgentService(opened: MountableAgent, options?: MountAgentServiceOptions): Promise<AgentService>;
-
-interface AgentService {
-  handler: (req: Request) => Promise<Response>; // the channels' routes and GET /health
-  agent: Agent;
+interface Service {
+  fetch(request: Request): Promise<Response>; // for an app's own server to route to
+  listen(port: number, host?: string): Promise<number>; // or a server of its own; answers the port it bound
   ready: Promise<void>; // every long connection is up
-  close(): Promise<void>; // stops long connections and schedules; the agent's messages are durable and go on
-  routes: Routes;
-  agentDir: string;
-  channels: { routes: string[]; longConnections: string[] };
-  schedules: readonly Schedule[];
-}
-interface MountAgentServiceOptions {
-  signal?: AbortSignal; // aborting it closes the service
-  onChannelClosed?: (name: string, error?: unknown) => void;
-  closeTimeoutMs?: number;
-}
-```
-
-`mountAgentService(await openServing(dir))` is what `start` serves: the channels' routes, `GET /health` (503 until
-every long connection is ready), the long connections, the schedules and the wake-up poll. Closing it does not close
-the agent: call `agent.close()` after it.
-
-```ts
-// From `@fastagent-sh/fastagent/node`: the Node HTTP bridge.
-function nodeListener(handler: ChannelHandler): (req: IncomingMessage, res: ServerResponse) => void;
-function serveNode(handler: ChannelHandler, options: { port: number; host?: string }): {
-  listening: Promise<number>;
   close(): Promise<void>;
-  closeAllConnections(): void;
-};
-```
-
-`host` is the bind address; unset binds all interfaces. Mount `nodeListener` before any body parser: a webhook's
-signature is computed over the raw body ([Embedding](embedding.md)).
-
-### The parts of `openServing`
-
-```ts
-// From `@fastagent-sh/fastagent/pi`.
-function prepareDefinition(dir: string): Promise<AgentDefinition>; // generate .fastagent/, import config and code
-function loadDefinition(dir: string): Promise<AgentDefinition>; // import them, without generating
-function buildDefinition(definition: AgentDefinition, env?: NodeJS.ProcessEnv): BuiltDefinition;
-function secretsManifest(definition: AgentDefinition): DeclaredSecret[];
-function openAgent(definition: AgentDefinition, options: OpenAgentOptions): Promise<DurableAgent>;
-
-interface OpenAgentOptions {
-  storage: Storage; // pi-durable's: MemoryStorage, SQLite, or your own
-  code: BuiltDefinition;
-  credentials: CredentialStore;
-  content?: ResolvedContent[];
-  model?: string;
-  thinkingLevel?: ThinkingLevel;
-  settings?: HarnessSettings; // pi-durable's harness settings: compaction, retries
-  stateRoot?: string; // given: the agent gets `wake` and `unwake`, kept there
 }
 ```
 
-An app that keeps its own storage or harness settings composes these itself.
+`openAgent` opens a directory the way `dev` and `start` do: it generates `.fastagent/` from `src/`, builds the code with
+the secrets it declares (a required one without a value refuses, naming where it is declared), enters the declared
+environment, clones the content, builds the model environment over the agent's credentials (`.secrets/auth.json` over
+the machine's, or `credentials`), and opens the instance's storage, `<state root>/agent.sqlite`, which one process holds
+at a time: a second opener is refused. `model` is the default for a session that names none; without one anywhere, a
+message is refused `missing_model` until its session is given one (`sessions.update`). Nothing reaches the agent until
+`serve`.
+
+`serve()` is what `start` serves: the channels' routes and `GET /health` (503 until every long connection is ready), the
+long connections, the schedules and the wake-up poll. Use `fetch` from the app's own server, or `listen` for a server
+of the agent's own on Node's `http` server or `Bun.serve`; `host` is the bind address, unset binds all interfaces.
+`close()` stops the server, giving the requests in flight 500 ms before it ends them, then the long connections and the
+schedules; the agent's messages are durable and go on after a restart. An agent is served once.
 
 ## What an author writes
 
 ```ts
-// From `@fastagent-sh/fastagent` (or `/pi`).
 function defineAgent(config: AgentConfig): AgentConfig; // fastagent.config.ts
 function defineSchedule(config: { cron: string; tz?: string; prompt: string | ((fire: { at: Date }) => string | Promise<string>) }): DefinedSchedule;
 function needs<const S extends readonly SecretSpec[], T>(secrets: S, build: (values: SecretValues<S>) => T): Needs<T>;
@@ -201,86 +120,9 @@ function sessionIdOf(api: ToolExecutionApi, context: Context): Promise<string | 
 - `sessionIdOf(api, context)`, inside a tool's `execute`, is the id of the session the tool runs in, as the Agent
   hands it out: what a channel's map records, and what `*Threads` takes (below).
 
-## Models and sign-in
-
-```ts
-// From `@fastagent-sh/fastagent/pi`.
-function modelEnvironment(agentDir: string | undefined, source?: { authPath?: string; credentialStore?: CredentialStore }, providers?: readonly Provider[]): ModelEnvironment;
-interface ModelEnvironment {
-  models: Models; // pi-ai's built-ins and the given providers, over the credentials
-  credentials: CredentialStore;
-  authStatus(provider: string, modelId?: string): Promise<{ source?: string; error?: string; path?: string; stored?: string; shadowed?: string }>;
-}
-function createPiModels(options?: { authPath?: string; credentialStore?: CredentialStore; providers?: Provider[] }): Models;
-function fastagentCredentialStore(path?: string): CredentialStore; // a credentials file, locked as pi locks it
-const GLOBAL_AUTH_PATH: string; // ~/.fastagent/.secrets/auth.json
-function probeAuthSource(models: Models, spec: string): Promise<string | undefined>;
-
-function login(request: LoginRequest): Promise<LoginResult>; // one provider's sign-in, persisted
-function loginOptions(credentials: string | CredentialStore): Promise<LoginOption[]>; // what a picker offers
-class LoginCancelled extends Error {}
-```
-
-`modelEnvironment` is the one model environment every reader builds: the credential layers (the agent's file, then
-the machine's, per provider), pi-ai's models over them, and the definition's providers. `authStatus` answers what
-authenticates a provider, resolved as a message would. `login` runs a provider's flow over pi-ai's `AuthInteraction`
-(OAuth or an API key, which it checks with one request before storing) and writes it through the same store the
-runtime reads. A GUI client passes its own `interaction` and `credentialStore`.
-
-## Content
-
-```ts
-// From `@fastagent-sh/fastagent/node`.
-function loadContent(agentDir: string): ContentDeclaration; // context.json and context.local.json, read and checked
-function resolveContent(agentDir: string, declaration: ContentDeclaration): ResolvedContent[];
-function contentAbsentHere(declaration: ContentDeclaration): BoundContent[]; // bound here, gone: left out
-function cloneContent(
-  entry: ResolvedContent & { kind: "github" },
-): Promise<{ outcome: "cloned" | "updated" | "current" } | { outcome: "kept"; reason: string }>;
-function readContentSource(
-  source: string,
-  cwd: string,
-  options?: SourceOptions,
-): { addition: ContentAddition; notes: string[] };
-
-type ContentEntry = { github: string; ref?: string; readonly?: boolean; description?: string }; // in context.json
-type ContentBinding = { path: string; readonly?: boolean; description?: string }; // in context.local.json
-type ResolvedContent = {
-  name: string;
-  readonly: boolean;
-  description?: string;
-  location: string; // where the agent reaches it here, absolute
-  notices: string[]; // a checkout off its ref, a clone not made yet
-} & ({ kind: "local" } | { kind: "github"; repo: string; ref?: string; clone: boolean });
-```
-
-The one resolution every reader uses: the prompt, `info`, `fastagent content list` and `openServing`. `loadContent`
-refuses a malformed file, naming it and the entry. `resolveContent` refuses a binding to a file, to a directory that
-contains the agent directory or sits inside it, or, for a declared repository, to anything but the root of a checkout
-of it ([Configuration](configuration.md#content)); it reads the disk and git, never the network, and writes nothing.
-`cloneContent` makes a repository's clone at `content/<name>`, or brings it up to date in place by git's rules, which
-never overwrite the agent's work (`kept`, with the `reason`). `readContentSource` reads a directory or
-`github:owner/repo` the way `init --content` does.
-
-```ts
-// From `@fastagent-sh/fastagent/node`: what `fastagent init` and `fastagent content` run.
-function createAgent(dir: string, options?: { content?: ContentAddition[]; install?: (dir: string) => Promise<void> }): Promise<CreatedAgent>;
-function listContent(agentDir: string): Promise<{ content: ResolvedContent[]; absent: BoundContent[] }>;
-function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit>;
-function removeContent(agentDir: string, name: string): Promise<ContentEdit>;
-class ContentNameError extends Error {}
-```
-
-The commands are thin wrappers over these, so a client and the CLI apply the same rules. Nothing prints or exits:
-every refusal is thrown with the message the CLI shows. `createAgent` checks every entry before it writes, removes the
-scaffold again when writing the content fails, runs `install` (when given) before the first commit so the lockfile is
-in it, and makes the agent a git repository; `repository` says so, or why not, as a sentence to show. `addContent` and
-`removeContent` edit both files under one lock; a name that is taken or not the agent's is a `ContentNameError`.
-
 ## Channel authoring
 
 ```ts
-// From `@fastagent-sh/fastagent/core`.
 interface ChannelContext {
   agent: Agent;
   sessionFor(key: string, options?: { forkFrom?: () => Promise<ForkSource> }): Promise<string>;
@@ -297,10 +139,7 @@ interface LongConnectionChannelModule {
 }
 
 function readBodyCapped(req: Request, max: number): Promise<{ text: string } | { tooLarge: true }>;
-function text(body: string, status: number): Response;
-const textHeaders: { readonly "content-type": "text/plain" };
-
-// From `@fastagent-sh/fastagent/node`.
+function text(body: string, status: number): Response; // a text/plain response
 function secretEquals(given: unknown, expected: string | undefined): boolean; // constant-time
 ```
 
@@ -315,12 +154,11 @@ per-place queue that runs work after the route has answered, and a directory of 
 ## Schedules
 
 A schedule is a module of `src/schedules/` default-exporting `defineSchedule({ cron, tz?, prompt })`
-([Configuration](configuration.md#schedules)). `AgentService.schedules` lists what the service armed.
-`fastagent schedules run <name>` fires one now, as its clock would.
+([Configuration](configuration.md#schedules)). `fastagent schedules run <name>` fires one now, as its clock would.
 
 ### Self-scheduling
 
-Every serve (`dev`, `start`, `mountAgentService` over the instance's storage, not `fastagent invoke`) gives the agent the
+Every serve (`dev`, `start`, an app's `serve()`; not `fastagent invoke`) gives the agent the
 **`wake`** and **`unwake`** tools:
 
 - `wake({ in: "30m", prompt })` records a one-shot wake-up; `wake({ cron: "0 9 * * *", tz?, prompt })` a recurring
@@ -330,12 +168,10 @@ Every serve (`dev`, `start`, `mountAgentService` over the instance's storage, no
 - `unwake({ id })` cancels one, from the session that set it. `fastagent schedules unwake <id>` cancels any, while
   no serve runs.
 
-## Subpath exports
+## Imports
 
 ```ts
-import { type Agent, AgentError, hasEnded } from "@fastagent-sh/fastagent/core";
-import { mountAgentService, nodeListener, secretEquals } from "@fastagent-sh/fastagent/node";
-import { defineAgent, defineSchedule, needs, openServing, sessionIdOf } from "@fastagent-sh/fastagent/pi";
+import { AgentError, defineAgent, defineChannel, defineSchedule, needs, openAgent, sessionIdOf } from "@fastagent-sh/fastagent";
 import { telegramChannel, telegramTransport } from "@fastagent-sh/fastagent/telegram";
 import { slackChannel, slackThreads, slackTransport } from "@fastagent-sh/fastagent/slack";
 import { feishuChannel, feishuThreads, feishuTransport } from "@fastagent-sh/fastagent/feishu";

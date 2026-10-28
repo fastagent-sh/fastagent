@@ -3,7 +3,7 @@
  * that no fake can stand in for, because Telegram itself decides it: `setWebhook` VERIFIES the URL
  * (DNS, TLS, reachability) before it stores it. A mocked Bot API always says yes.
  *
- * The chain, all product entries: `openServing` + `mountAgentService` compose the surface → `serveNode` binds it →
+ * The chain, all product entries: `openServing` + `serveAgent` compose the surface → `listen` binds it →
  * `startCloudflareTunnel` publishes it → `registerTelegramWebhook` calls `setWebhook`, retrying while
  * Telegram reports it cannot reach the URL → Telegram's own `getWebhookInfo` is asked whether it kept
  * what we sent.
@@ -21,7 +21,6 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { serveNode } from "../../src/channels/serve.ts";
 import { registerTelegramWebhook } from "../../src/channels/telegram/register-webhook.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { startCloudflareTunnel } from "../../src/tunnel.ts";
@@ -80,9 +79,7 @@ describe("telegram: registering a webhook against a live tunnel", () => {
 
     const { service, close } = await serveDirectory(dir);
     cleanups.push(close);
-    const server = serveNode(service.handler, { port: 0, host: "127.0.0.1" });
-    cleanups.push(() => server.close());
-    const port = await server.listening;
+    const port = await service.listen(0, "127.0.0.1");
 
     const tunnel = await startCloudflareTunnel(port);
     expect(tunnel, "cloudflared did not yield a quick-tunnel URL").toBeDefined();

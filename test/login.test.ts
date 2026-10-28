@@ -299,7 +299,7 @@ describe("loginFlow", () => {
   });
 });
 
-describe("login (the entry point a GUI client drives with pi-ai's AuthInteraction)", () => {
+describe("login (the entry point any front end drives with pi-ai's AuthInteraction)", () => {
   afterEach(() => vi.restoreAllMocks());
   /** A client: answers prompts from a script, records what it was shown and told. */
   function client(answers: string[], signal?: AbortSignal) {
@@ -569,12 +569,5 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     await loginOptions(authPath);
 
     expect(warn.mock.calls.filter(([m]) => /corrupt auth file/.test(String(m)))).toHaveLength(1);
-  });
-
-  it("is public from the pi entry point", async () => {
-    const pi = await import("../src/pi.ts");
-    expect(typeof pi.login).toBe("function");
-    expect(typeof pi.loginOptions).toBe("function");
-    expect(new pi.LoginCancelled("x")).toBeInstanceOf(Error);
   });
 });

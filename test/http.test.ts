@@ -1,10 +1,6 @@
-/**
- * The node:http binding of a Fetch handler (channels/serve.ts): the bridge itself, whatever handler it serves.
- */
+/** The server a Fetch handler is served on (channels/serve.ts), whatever handler it serves. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createServer } from "node:http";
-import { connect, type AddressInfo } from "node:net";
-import { nodeListener, serveNode } from "../src/index.ts";
+import { serveHandler } from "../src/channels/serve.ts";
 
 type Handler = (req: Request) => Promise<Response>;
 interface Served {
@@ -13,41 +9,14 @@ interface Served {
   close(): Promise<void>;
 }
 
-/**
- * The two ways a Fetch handler reaches a socket: an app's own `node:http` server through `nodeListener`, and the
- * server `dev`, `start` and AgentCore serve on (`serveNode`). The host contract below holds for both, through a real
- * socket, so it survives swapping either bridge.
- */
-const bridges: Record<string, (handler: Handler) => Promise<Served>> = {
-  nodeListener: async (handler) => {
-    const server = createServer(nodeListener(handler));
-    await new Promise<void>((r) => server.listen(0, r));
-    const port = (server.address() as AddressInfo).port;
-    return {
-      url: `http://localhost:${port}`,
-      port,
-      async close() {
-        server.closeAllConnections();
-        await new Promise<void>((r) => server.close(() => r()));
-      },
-    };
-  },
-  serveNode: async (handler) => {
-    const host = serveNode(handler, { port: 0 });
-    const port = await host.listening;
-    return {
-      url: `http://localhost:${port}`,
-      port,
-      async close() {
-        const closing = host.close();
-        host.closeAllConnections();
-        await closing;
-      },
-    };
-  },
+/** The server `listen`, `dev`, `start` and AgentCore serve on, through a real socket. */
+const serving = async (handler: Handler): Promise<Served> => {
+  const host = serveHandler(handler, { port: 0 });
+  const port = await host.listening;
+  return { url: `http://localhost:${port}`, port, close: () => host.close() };
 };
 
-describe.each(Object.entries(bridges))("%s: bridging a Fetch handler", (_, serving) => {
+describe("serving a Fetch handler", () => {
   it("bridges a streamed response chunk by chunk, with the request's method, path and body", async () => {
     const srv = await serving(async (req) => {
       const url = new URL(req.url);
@@ -136,114 +105,7 @@ describe.each(Object.entries(bridges))("%s: bridging a Fetch handler", (_, servi
   });
 });
 
-describe("nodeListener: a body upstream middleware already read", () => {
-  afterEach(() => vi.restoreAllMocks());
-  const serving = bridges.nodeListener as (handler: Handler) => Promise<Served>;
-
-  it("a drained body is diagnosed with its fix, not with 'Body is unusable'", async () => {
-    // The embedding trap: `app.use(express.json())` ahead of the mount eats the one-shot stream.
-    // Simulated without a framework — draining `req` first is exactly what a body parser does.
-    // What is asserted is the DIAGNOSIS: the adapter's native error names only the symptom, and a
-    // webhook channel failing this way looks like a broken integration with a retrying platform.
-    const errs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((m) => {
-      errs.push(String(m));
-    });
-    const listener = nodeListener(async (req) => new Response(await req.text()));
-    const server = createServer(async (req, res) => {
-      await new Promise<void>((r) => {
-        req.resume();
-        req.on("end", r);
-      });
-      listener(req, res);
-    });
-    await new Promise<void>((r) => server.listen(0, r));
-    const port = (server.address() as AddressInfo).port;
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/hook`, { method: "POST", body: '{"a":1}' });
-      expect(res.status).toBe(500);
-      const logged = errs.join("\n");
-      expect(logged).toMatch(/already read by upstream middleware/);
-      expect(logged).toMatch(/mount fastagent BEFORE the body parser/); // the fix, not just the fault
-      expect(await res.text()).not.toMatch(/express|middleware/); // internals stay internal
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((r) => server.close(() => r()));
-    }
-  });
-
-  it("a body that was NOT read still reaches the handler (the check must not misfire)", async () => {
-    const host = await serving(async (req) => new Response(`got:${await req.text()}`));
-    try {
-      const res = await fetch(`http://127.0.0.1:${host.port}/hook`, { method: "POST", body: "payload" });
-      expect(await res.text()).toBe("got:payload");
-      // ...and a GET, whose body is absent rather than eaten, must not trip it either.
-      expect((await fetch(`http://127.0.0.1:${host.port}/plain`)).status).toBe(200);
-    } finally {
-      await host.close();
-    }
-  });
-
-  it("an empty CHUNKED post behind middleware is not mistaken for an eaten one", async () => {
-    // Chunked framing says nothing about content: an empty chunked body is legal, arrives already
-    // drained, and looks exactly like an eaten one. The guard must stay quiet rather than reject a
-    // valid request — being wrong here turns a diagnostic into the outage.
-    const listener = nodeListener(async (req) => new Response(`ok:[${await req.text()}]`));
-    const server = createServer(async (req, res) => {
-      await new Promise<void>((r) => {
-        req.resume();
-        req.on("end", r);
-      });
-      listener(req, res);
-    });
-    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-    const port = (server.address() as AddressInfo).port;
-    try {
-      const raw = await new Promise<string>((resolve) => {
-        const sock = connect(port, "127.0.0.1", () => {
-          sock.write("POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
-        });
-        let out = "";
-        sock.on("data", (d) => {
-          out += String(d);
-        });
-        setTimeout(() => {
-          sock.destroy();
-          resolve(out);
-        }, 250);
-      });
-      expect(raw.split("\r\n")[0]).toMatch(/200 OK/);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((r) => server.close(() => r()));
-    }
-  });
-
-  it("an EMPTY post behind middleware is not mistaken for an eaten one", async () => {
-    // `content-length: 0` plus a drained stream looks identical to the eaten case on the two signals
-    // the guard reads — but nothing was lost, and rejecting it would make the guard the outage.
-    const listener = nodeListener(async (req) => new Response(`ok:[${await req.text()}]`));
-    const server = createServer(async (req, res) => {
-      await new Promise<void>((r) => {
-        req.resume();
-        req.on("end", r);
-      });
-      listener(req, res);
-    });
-    await new Promise<void>((r) => server.listen(0, r));
-    const port = (server.address() as AddressInfo).port;
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/x`, { method: "POST" });
-      expect(res.status).toBe(200);
-      expect(await res.text()).toBe("ok:[]");
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((r) => server.close(() => r()));
-    }
-  });
-});
-
-describe.each(Object.entries(bridges))("%s: the host survives arbitrary channel code", (_, serving) => {
+describe("the server survives arbitrary channel code", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("a throwing handler is logged, and says nothing else", async () => {

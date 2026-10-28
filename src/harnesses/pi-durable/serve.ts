@@ -1,12 +1,13 @@
 /**
- * An agent package opened to be served: its definition prepared (the registry generated, the secrets manifest
- * written), its code built with its secrets, its model environment, its storage, and the Agent over them. `dev`,
- * `start`, AgentCore and an embedder that serves channels open it through this one function.
+ * An agent package opened: its definition prepared (the registry generated, the secrets manifest written), its code
+ * built with its secrets, its model environment, its storage, and the Agent over them. `openAgent` is how an app opens
+ * one (agent-api.md §8); `dev`, `start`, AgentCore, `invoke` and `schedules run` open it through `openServing`, which
+ * also takes where the Agent keeps its sessions and what becomes of an earlier process's messages.
  */
 import { join } from "node:path";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { CredentialStore, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
+import { type Harness, MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
 import { loadContent } from "../../content/file.ts";
@@ -19,9 +20,17 @@ import {
 } from "../../content/resolve.ts";
 import { enterEnvironment } from "../../environment/mise.ts";
 import { log } from "../../log.ts";
+import type { Agent } from "../../agent-api.ts";
 import { resolveStateRoot } from "../../paths.ts";
+import { type Service, serveAgent } from "../../service.ts";
 import type { DurableAgent, Unfinished } from "./agent.ts";
-import { type AgentDefinition, type BuiltDefinition, buildDefinition, openAgent, prepareDefinition } from "./open.ts";
+import {
+  type AgentDefinition,
+  type BuiltDefinition,
+  buildDefinition,
+  assembleAgent,
+  prepareDefinition,
+} from "./open.ts";
 import { type StorageLocking, openLockedStorage } from "./storage.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
@@ -56,7 +65,7 @@ export interface OpenedServing {
   agentDir: string;
   /** Where the instance's state is: its storage, its channels' and schedules' state, its wake-ups. */
   stateRoot: string;
-  /** The definition's channels and schedules, as `mountAgentService` serves them: `mountAgentService(opened)`. */
+  /** The definition's channels and schedules, as `serveAgent` serves them: `serveAgent(opened)`. */
   channels: BuiltDefinition["channels"];
   schedules: BuiltDefinition["schedules"];
 }
@@ -123,7 +132,7 @@ export async function openServing(directory: string, options: OpenServingOptions
   const stateRoot = resolveStateRoot(dir);
   const chosen = options.storage ?? { instance: "posix" };
   const storage = await openStorage(stateRoot, chosen);
-  const agent = await openAgent(definition, {
+  const agent = await assembleAgent(definition, {
     storage,
     code,
     content,
@@ -147,5 +156,69 @@ export async function openServing(directory: string, options: OpenServingOptions
     stateRoot,
     channels: code.channels,
     schedules: code.schedules,
+  };
+}
+
+/** An agent opened in this process (agent-api.md §8): the Agent API, and how it is served and operated. */
+export interface LocalAgent extends Agent {
+  /** Channels, schedules and wake-ups, and `/health`: a Fetch handler, or a server of its own (`listen`). */
+  serve(): Promise<Service>;
+  /** pi-durable's own API, for operating the agent. */
+  readonly harness: Harness;
+  /** Close what `serve` started, then release the instance's storage. */
+  close(): Promise<void>;
+}
+
+export interface OpenAgentOptions {
+  /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
+  model?: string;
+  /** Where provider credentials are kept, instead of the agent's own `.secrets/auth.json` over the machine's. */
+  credentials?: CredentialStore;
+}
+
+/**
+ * Open the agent directory `dir` the way `dev` and `start` do before they serve: its definition, its code built with
+ * the secrets it declares, its environment, its content and the instance's storage, which one process holds at a time.
+ * Nothing reaches the agent until `serve`.
+ */
+export async function openAgent(dir: string, options: OpenAgentOptions = {}): Promise<LocalAgent> {
+  const opened = await openServing(dir, {
+    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.credentials === undefined ? {} : { credentialStore: options.credentials }),
+  });
+  const { agent } = opened;
+  let served: Promise<Service> | undefined;
+  let closing: Promise<void> | undefined;
+  return {
+    info: agent.info,
+    usage: agent.usage,
+    sessions: agent.sessions,
+    messages: agent.messages,
+    harness: agent.harness,
+    serve() {
+      // Its storage is let go, or about to be: a service now would run channels and schedules nobody closes.
+      if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
+      if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
+      const serving = serveAgent(opened);
+      served = serving;
+      // A serve that failed to start rolled itself back, so the agent may be served again.
+      serving.catch(() => {
+        if (served === serving) served = undefined;
+      });
+      return serving;
+    },
+    close() {
+      closing ??= (async () => {
+        // A serve that never started has nothing to close; its failure reached the caller of `serve`.
+        const service = await served?.catch(() => undefined);
+        const failures: unknown[] = [];
+        await service?.close().catch((error: unknown) => failures.push(error));
+        await agent.close().catch((error: unknown) => failures.push(error));
+        if (failures.length > 0) {
+          throw failures.length === 1 ? failures[0] : new AggregateError(failures, "the agent did not close cleanly");
+        }
+      })();
+      return closing;
+    },
   };
 }

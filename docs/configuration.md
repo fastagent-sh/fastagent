@@ -54,9 +54,9 @@ With none set, a serving command (`dev` / `start` / `invoke`) in a terminal show
 credentials first; picking one that needs auth runs `login` inline), uses the pick for this run, and prints the line
 to put in the config. Non-interactive runs fail with `missing model`.
 
-The default is optional for an app embedding the agent (`openServing`): without one the agent still opens, a session
+The default is optional for an app embedding the agent (`openAgent`): without one the agent still opens, a session
 created with its own model runs on it, and a message to a session with no model is refused `missing_model` until the
-session is given one (`configure`).
+session is given one (`sessions.update`).
 
 ```bash
 fastagent dev --model openai-codex/gpt-5.5
@@ -253,7 +253,7 @@ needs, installed on every machine that runs it and in its image:
   declares the secrets it reads with `needs`. Their values come from the environment, never from `context.json`: `.secrets/.env` here,
   and `.secrets/production/.env` for a deployment, the one file `deploy` reads and carries (a variable exported where
   you run `deploy` does not reach the deployment). A process you start yourself also reads the variables it is started
-  with. Every declared variable is required: `dev`, `start`, `invoke` and an embedder's `openServing` refuse to
+  with. Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
   start without its value and name `context.json`, `deploy` refuses before it changes anything and lists each
   with its description, and `info` and `fastagent env list` say which have a value here. A value you would share across
   stages, like an enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template.
@@ -266,7 +266,7 @@ for Windows, so an agent that declares packages does not run there.
 
 **Nothing is locked.** A package is a release the agent uses, as a CLI you install on your own machine is: each place
 installs the newest release its declared version allows when it first needs the package, and keeps it. `dev`,
-`start`, `invoke` and an embedder's [`openServing`](embedding.md) install the declared packages that have no install matching them here yet, and put them first on the agent's `PATH`; one already
+`start`, `invoke` and an app's [`openAgent`](embedding.md) install the declared packages that have no install matching them here yet, and put them first on the agent's `PATH`; one already
 installed is kept, so a start needs no network. `fastagent env install` installs the newest release of each again.
 A change to `context.json` restarts `dev`. A package is installed into mise's data directory on this machine
 (`~/.local/share/mise`), which other mise projects share.
@@ -343,7 +343,7 @@ export default needs(
 ```
 
 `needs` hands the code exactly the values it declared, typed. A required one without a value refuses the start
-(`dev`, `start`, an embedder's `openServing`), naming the file that declared it; `deploy` refuses before its first
+(`dev`, `start`, an app's `openAgent`), naming the file that declared it; `deploy` refuses before its first
 side effect. Every declaration is written into `.fastagent/secrets.json`, which `info`, `deploy` and runbooks read.
 The same works around a tool, an extension, a channel, a schedule or a provider.
 
@@ -528,5 +528,5 @@ A real environment variable wins over the file.
 
 ## Not config
 
-The instance's storage and harness settings are library injection points: `openAgent` takes them
-([the parts of `openServing`](api-reference.md#the-parts-of-openserving)).
+The instance's storage is not configured: a serve, and an app's `openAgent`, keep the agent's sessions in
+`<state root>/agent.sqlite`.

@@ -1,8 +1,6 @@
 /** The server a Fetch handler is served on, behind the totality boundary every serving path shares. */
-import { getRequestListener } from "@hono/node-server";
-import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { createServer } from "node:http";
 import * as Context from "effect/Context";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -14,7 +12,7 @@ import { log } from "../log.ts";
 import { text } from "./respond.ts";
 
 /** The totality boundary every serving path shares; `prepare` shapes the handler's response inside it. */
-function totalFetch(
+export function totalFetch(
   handler: ChannelHandler,
   prepare: (response: Response) => Response = (response) => response,
 ): (req: Request) => Promise<Response> {
@@ -27,33 +25,6 @@ function totalFetch(
       log.error(`[serve] request failed: ${String(error)}`);
       return text("internal error\n", 500);
     }
-  };
-}
-
-/** Has upstream middleware already drained the request body? */
-function bodyAlreadyRead(req: IncomingMessage): boolean {
-  const length = Number(req.headers["content-length"]);
-  return Number.isFinite(length) && length > 0 && req.readableEnded;
-}
-
-/**
- * The node:http adapter for a Fetch handler — the embedded server uses it, and an embedder mounting fastagent on its
- * OWN node:http server can too.
- */
-export function nodeListener(handler: ChannelHandler): (req: IncomingMessage, res: ServerResponse) => void {
-  const listener = getRequestListener(totalFetch(handler), { overrideGlobalObjects: false });
-  return (req, res) => {
-    if (bodyAlreadyRead(req)) {
-      log.error(
-        `[serve] ${req.method} ${req.url}: the request body was already read by upstream middleware ` +
-          `(e.g. express.json()) — mount fastagent BEFORE the body parser, or scope the parser away ` +
-          `from this route. Channels that verify webhook signatures need the RAW body.`,
-      );
-      res.writeHead(500, { "content-type": "text/plain" });
-      res.end("internal error\n");
-      return;
-    }
-    listener(req, res);
   };
 }
 
@@ -91,30 +62,29 @@ function watchedBody(response: Response, left: () => void): Response {
 const isBun = typeof process.versions.bun === "string";
 
 /**
- * How long Bun's `close()` waits for requests in flight before interrupting them: Bun's server gives no handle to
- * force a connection shut, so this is what bounds a close there, inside the CLI's shutdown deadline. On Node `close()`
- * waits for them, as a Node server does, and `closeAllConnections()` is what cuts it short.
+ * How long `close()` gives the requests in flight before it ends them, on either runtime: a webhook is answered in
+ * milliseconds, and a close must fit the CLI's shutdown deadline (`FORCED_EXIT_MS` in `src/cli/serve.ts`).
  */
-const BUN_GRACEFUL_SHUTDOWN = "500 millis";
+const GRACEFUL_SHUTDOWN = "500 millis";
 
-/** The server this runtime serves on: Node's, around an `http.Server` we keep to force connections shut; Bun's own. */
-async function serverLayer(
-  options: { port: number; host?: string },
-  nodeServer: Server | undefined,
-): Promise<Layer.Layer<HttpServer.HttpServer, HttpServerError.ServeError>> {
-  if (nodeServer === undefined) {
+/** The server this runtime serves on: Node's `http.Server`, or `Bun.serve`. */
+async function serverLayer(options: {
+  port: number;
+  host?: string;
+}): Promise<Layer.Layer<HttpServer.HttpServer, HttpServerError.ServeError>> {
+  if (isBun) {
     const { layer } = await import("@effect/platform-bun/BunHttpServer");
     return layer({
       port: options.port,
       ...(options.host === undefined ? {} : { hostname: options.host }),
-      gracefulShutdownTimeout: BUN_GRACEFUL_SHUTDOWN,
+      gracefulShutdownTimeout: GRACEFUL_SHUTDOWN,
     });
   }
   const { layer } = await import("@effect/platform-node/NodeHttpServer");
-  return layer(() => nodeServer, {
+  return layer(() => createServer(), {
     port: options.port,
     ...(options.host === undefined ? {} : { host: options.host }),
-    gracefulShutdownTimeout: Duration.infinity,
+    gracefulShutdownTimeout: GRACEFUL_SHUTDOWN,
   });
 }
 
@@ -124,11 +94,10 @@ function bindFailure(error: unknown): unknown {
 }
 
 /** Serve `handler` on this runtime's own server: Node's `http.Server`, or `Bun.serve`. */
-export function serveNode(
+export function serveHandler(
   handler: ChannelHandler,
   options: { port: number; host?: string },
-): { listening: Promise<number>; close: () => Promise<void>; closeAllConnections: () => void } {
-  const nodeServer = isBun ? undefined : createServer();
+): { listening: Promise<number>; close: () => Promise<void> } {
   const scope = Scope.makeUnsafe();
   let closed = false;
   // A server runs each request uninterruptibly unless told otherwise; a request that has not answered when the server
@@ -142,7 +111,7 @@ export function serveNode(
       return totalFetch(handler, (response) => watchedBody(response, () => left.abort()))(followed);
     }),
   );
-  const listening = serverLayer(options, nodeServer)
+  const listening = serverLayer(options)
     .then((server) => {
       if (closed) throw new Error("the server was closed before it listened");
       return Effect.runPromise(Layer.buildWithScope(HttpServer.serve(app).pipe(Layer.provideMerge(server)), scope));
@@ -164,6 +133,5 @@ export function serveNode(
       );
       await Effect.runPromise(Scope.close(scope, Exit.void));
     },
-    closeAllConnections: () => nodeServer?.closeAllConnections(),
   };
 }

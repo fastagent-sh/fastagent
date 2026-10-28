@@ -43,7 +43,6 @@ machine has is bound in `context.local.json` alone: it stays here, and a deploym
 4. **Developer workflow**: `init`, `info`, `content`, `env`, `dev`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`. Every check is a command a coding agent can run and read.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, and a small public kit for your own channels.
 6. **Time triggers**: schedules (`src/schedules/`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
-7. **An authoring API** ([`createAgent`, `addContent`, `removeContent`](api-reference.md#content)) for clients such as a desktop app, to create agents and edit their content under the same rules as the CLI.
 
 ## Design choices
 
@@ -73,9 +72,9 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 Use FastAgent as a library and call the agent in process:
 
 ```ts
-import { openServing } from "@fastagent-sh/fastagent";
+import { openAgent } from "@fastagent-sh/fastagent";
 
-const { agent } = await openServing("./agent", { model: "openai-codex/gpt-5.5" });
+const agent = await openAgent("./agent", { model: "openai-codex/gpt-5.5" });
 const session = await agent.sessions.create();
 // agent.messages.send({ sessionId: session.id, content }, { wait }) for the answer, or messages.stream() as written
 ```
@@ -134,7 +133,7 @@ Implemented today:
 - Schedules (`src/schedules/`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
 - `dev`, `invoke`, `info`, `schedules`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
 - CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
-- An authoring API for clients.
+- `openAgent` and its `serve()`: an agent directory opened and served inside an app.
 
 Not implemented yet:
 

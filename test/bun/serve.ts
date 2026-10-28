@@ -1,9 +1,9 @@
 /**
- * `serveNode`'s host contract on Bun, where vitest does not run: CI's Bun job runs this file (`bun test/bun/serve.ts`),
- * and test/serve-routes.test.ts holds the same contract on Node. Bun serves on its own server, which gives no handle
- * to force a connection shut, so what bounds a close there is the server's graceful-shutdown timeout alone.
+ * `serveHandler`'s host contract on Bun, where vitest does not run: CI's Bun job runs this file
+ * (`bun test/bun/serve.ts`), and test/serve-routes.test.ts holds the same contract on Node. What bounds a close on
+ * either runtime is the server's graceful-shutdown timeout.
  */
-import { serveNode } from "../../src/channels/serve.ts";
+import { serveHandler } from "../../src/channels/serve.ts";
 
 if (typeof process.versions.bun !== "string") throw new Error("run this with bun: bun test/bun/serve.ts");
 
@@ -15,7 +15,7 @@ function check(label: string, pass: boolean, detail: string): void {
 
 {
   const NativeResponse = globalThis.Response;
-  const host = serveNode(async () => new NativeResponse("held"), { port: 0 });
+  const host = serveHandler(async () => new NativeResponse("held"), { port: 0 });
   const port = await host.listening;
   const res = await fetch(`http://127.0.0.1:${port}/x`);
   const body = await res.text();
@@ -23,9 +23,9 @@ function check(label: string, pass: boolean, detail: string): void {
   await host.close();
 }
 {
-  const first = serveNode(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
+  const first = serveHandler(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
   const taken = await first.listening;
-  const second = serveNode(() => new Response("ok"), { port: taken, host: "127.0.0.1" });
+  const second = serveHandler(() => new Response("ok"), { port: taken, host: "127.0.0.1" });
   const outcome = await second.listening.then(
     () => "it listened",
     (error: NodeJS.ErrnoException) => `${error.code ?? ""} ${error.message}`,
@@ -34,7 +34,7 @@ function check(label: string, pass: boolean, detail: string): void {
   await first.close();
 }
 {
-  const host = serveNode(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
+  const host = serveHandler(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
   const port = await host.listening;
   const other = await fetch(`http://127.0.0.2:${port}/`, { signal: AbortSignal.timeout(2000) }).then(
     () => "served",
@@ -48,7 +48,7 @@ function check(label: string, pass: boolean, detail: string): void {
   const handling = new Promise<void>((resolve) => {
     entered = resolve;
   });
-  const host = serveNode(
+  const host = serveHandler(
     async () => {
       entered();
       await new Promise<never>(() => {});
@@ -64,7 +64,6 @@ function check(label: string, pass: boolean, detail: string): void {
   await handling;
   const started = Date.now();
   const closing = host.close().then(() => `closed in ${Date.now() - started}ms`);
-  host.closeAllConnections();
   const closed = await Promise.race([
     closing,
     new Promise<string>((resolve) => setTimeout(() => resolve("still closing after 2 s"), 2000)),
@@ -77,7 +76,7 @@ function check(label: string, pass: boolean, detail: string): void {
 }
 
 {
-  const host = serveNode(() => new Response("ok"), { port: 0 });
+  const host = serveHandler(() => new Response("ok"), { port: 0 });
   await host.close();
   const outcome = await host.listening.then(
     (port) => `listened on ${port}`,

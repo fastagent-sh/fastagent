@@ -45,20 +45,20 @@ interface Agent {
 ## 1. Open the agent
 
 ```ts
-import { openServing } from "@fastagent-sh/fastagent";
+import { openAgent } from "@fastagent-sh/fastagent";
 
-const opened = await openServing("./my-agent", { model: "openai-codex/gpt-5.5" });
-const { agent } = opened;
+const agent = await openAgent("./my-agent", { model: "openai-codex/gpt-5.5" });
 // ...
 await agent.close(); // on shutdown: releases the instance's storage
 ```
 
-`openServing` is what `dev` and `start` run: it reads the definition (`SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`,
-`src/`, `fastagent.config.ts`), builds its code with the secrets it declares, installs its declared
-[environment](configuration.md#environment) where it has no install yet and puts it first on this process's `PATH`,
-clones its content, and opens the instance's storage (`<agent dir>/.state/agent.sqlite`), which one process holds at a
-time. Without a `model`, the config's is the default; with none at all the agent still opens, and a session needs a
-model of its own (`sessions.create({ model })`, `sessions.update`) before a message is answered.
+`openAgent` is what `dev` and `start` run before they serve: it reads the definition (`SYSTEM.md`, `AGENTS.md`,
+`skills/`, `prompts/`, `src/`, `fastagent.config.ts`), builds its code with the secrets it declares, installs its
+declared [environment](configuration.md#environment) where it has no install yet and puts it first on this process's
+`PATH`, clones its content, and opens the instance's storage (`<agent dir>/.state/agent.sqlite`), which one process
+holds at a time. Without a `model`, the config's is the default; with none at all the agent still opens, and a session
+needs a model of its own (`sessions.create({ model })`, `sessions.update`) before a message is answered. Nothing reaches
+the agent until `serve`.
 
 A definition is always a directory: the prompt is its `SYSTEM.md`, and its tools are modules of `src/tools/`. To
 assemble one in code, write the directory.
@@ -110,42 +110,40 @@ who must not see each other's conversations get an instance each
 
 ## 3. The whole agent, as a service
 
-To serve the agent's channels and schedules from your app too, mount it:
+To serve the agent's channels, schedules and wake-ups from your app too, serve it:
 
 ```ts
-import { mountAgentService, nodeListener, openServing } from "@fastagent-sh/fastagent";
-
-const opened = await openServing("./my-agent");
-const service = await mountAgentService(opened);
-app.use("/agent", nodeListener(service.handler)); // the channels' routes + GET /health
+const service = await agent.serve();
 await service.ready; // long connections up; rejects if one cannot come up
+// mount service.fetch in your app (below), or give it a server of its own:
+const port = await service.listen(8787);
 // ...
-await service.close(); // stops long connections and schedules
-await opened.agent.close();
+await agent.close(); // closes the service, then releases the storage
 ```
 
-`mountAgentService` is the assembly `dev`/`start` perform, minus the process: no port is bound, no signal handlers are
-installed, nothing calls `process.exit`. Its handler answers only the channels' routes, each of which verifies its
-platform, and `GET /health`. Pass `{ signal }` to bind its lifetime to something you already own.
+`serve()` is the assembly `dev`/`start` perform, minus the process: no signal handlers are installed, nothing calls
+`process.exit`. Its `fetch` answers only the channels' routes, each of which verifies its platform, and `GET /health`.
+`listen` starts a server of its own, on Node's `http` server or `Bun.serve`; `close()` gives the requests in flight
+500 ms, then ends them and stops the channels and schedules.
 
-### Mounting a handler
+### Mounting `fetch` in your app
 
-The Fetch handler mounts wherever your host speaks `(Request) => Response`, and `nodeListener` bridges hosts that speak
-Node's `(req, res)`. It does not start a server: your app keeps its own. It routes on the request's path (`/telegram`,
-`/health`), so mount it under a prefix your host strips, or strip it yourself.
+`service.fetch` mounts wherever your host speaks `(Request) => Response`. On a host that speaks Node's `(req, res)`,
+`getRequestListener` from `@hono/node-server` (`npm i @hono/node-server`) bridges it. It routes on the request's path
+(`/telegram`, `/health`), so mount it under a prefix your host strips, or strip it yourself.
 
 > **Mount before your body parser.** A body parser registered ahead of the mount consumes the request stream, and
 > webhook channels verify signatures over the raw body:
 >
 > ```ts
-> app.use("/agent", nodeListener(service.handler)); // first: fastagent takes these requests
+> app.use("/agent", getRequestListener(service.fetch, { overrideGlobalObjects: false })); // first
 > app.use(express.json()); // then: parses everything else as usual
 > ```
 >
-> Scoping the parser (`app.use("/other", express.json())`) works too. Getting it wrong is logged with this fix.
+> Scoping the parser (`app.use("/other", express.json())`) works too.
 
 ```ts
-const { handler } = service;
+const { fetch: handler } = service;
 
 // Next.js App Router — app/agent/[...path]/route.ts: strip the prefix the route lives under
 const toAgent = (req: Request) => {
@@ -158,42 +156,32 @@ export { toAgent as GET, toAgent as POST };
 // Hono — mount strips the prefix
 app.mount("/agent", handler);
 
-// Express — nodeListener bridges (req, res) to the Fetch handler, and app.use strips the prefix. It reads the RAW
-// body stream, so mount it BEFORE any body parser (see the note above).
-app.use("/agent", nodeListener(handler));
+// Express — getRequestListener bridges (req, res) to the Fetch handler, and app.use strips the prefix. It reads the RAW
+// body stream, so mount it BEFORE any body parser (see the note above). `overrideGlobalObjects: false` leaves this
+// process's global Request and Response alone.
+import { getRequestListener } from "@hono/node-server";
+app.use("/agent", getRequestListener(handler, { overrideGlobalObjects: false }));
 
-// Fastify — same bridge on the raw req/res: keep the body stream unread, hijack the reply, strip the prefix
+// Fastify — the same bridge on the raw req/res: keep the body stream unread, hijack the reply, strip the prefix
+const listener = getRequestListener(handler, { overrideGlobalObjects: false });
 app.register(async (scope) => {
   scope.removeAllContentTypeParsers();
   scope.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
   scope.all("/agent/*", (req, reply) => {
     reply.hijack();
     req.raw.url = req.raw.url!.slice("/agent".length);
-    nodeListener(handler)(req.raw, reply.raw);
+    listener(req.raw, reply.raw);
   });
 });
-
-// Bun — the handler is the whole server
-Bun.serve({ port: 8787, fetch: handler });
-
-// Plain Node — the built-in server
-import { serveNode } from "@fastagent-sh/fastagent";
-serveNode(handler, { port: 8787 });
 ```
 
 ## 4. Auth
 
-`openServing` reads the agent's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's environment
+`openAgent` reads the agent's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's environment
 variable, and then the global `~/.fastagent/.secrets/auth.json` for a provider the agent authenticates no other way
-([order](configuration.md#auth-and-secrets)).
-
-- `authPath` names the one credentials file to read instead.
-- `credentialStore` is a store of your own (an OS keychain, Electron `safeStorage`), which replaces the credentials
-  files, refreshes included. Environment variables and a provider's own auth still apply.
-- `opened.models.authStatus("openai-codex")` says what authenticates a provider, resolved as a message would:
-  `{ source: "OAuth" }`, an environment variable's name, or no `source` with the `error` when resolving failed.
-- `login({ provider, method, authPath | credentialStore, interaction })` signs a provider in from your own UI
-  ([API reference](api-reference.md#models-and-sign-in)).
+([order](configuration.md#auth-and-secrets)). `credentials` is a store of your own (an OS keychain, Electron
+`safeStorage`, pi-ai's `CredentialStore`), which replaces the credentials files, refreshes included; environment
+variables and a provider's own auth still apply. `fastagent login` in the agent directory signs a provider in.
 
 ## 5. Your own model source
 
@@ -203,12 +191,8 @@ Its `auth.apiKey.resolve()` runs per request, which is where a token you mint or
 
 ## How embed and CLI relate
 
-`fastagent dev` / `start` are `openServing` plus `mountAgentService` plus process concerns (`.env`, the proxy, the dev
-watcher, the port, the signal handlers). The agent they serve is the one `openServing` returns to your app.
-
-Subpaths: `/core` (the Agent API's types and `AgentError`, the channel contract), `/node` (`mountAgentService`, `serveNode`,
-`nodeListener`, content and authoring), `/pi` (`openServing`, `defineAgent`, the model environment). The root entry
-re-exports all of them.
+`fastagent dev` / `start` are `openAgent` plus `serve()` and `listen` plus process concerns (`.env`, the proxy, the
+dev watcher, the port, the signal handlers). The agent they serve is the one `openAgent` returns to your app.
 
 ## Where next
 

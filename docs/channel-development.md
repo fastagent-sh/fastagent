@@ -35,7 +35,7 @@ An agent channel is a module of `src/channels/`, named by its file, that default
 form:
 
 ```ts
-import { defineChannel } from "@fastagent-sh/fastagent/core";
+import { defineChannel } from "@fastagent-sh/fastagent";
 
 export default defineChannel(({ agent, sessionFor, turn }) => ({
   "POST /acme": async (req) => {
@@ -96,7 +96,7 @@ a serve has no authentication of its own, and its routes are the channels' ([sec
 A channel that verifies nothing lets anyone who finds its URL send the agent a message, with the agent's full tools.
 
 - Verify before parsing any field you trust.
-- Compare secrets in constant time: `secretEquals(given, expected)` from `@fastagent-sh/fastagent/node`.
+- Compare secrets in constant time: `secretEquals(given, expected)` from `@fastagent-sh/fastagent`.
 - Bound replays: a signed timestamp outside a few minutes is refused.
 - Fail closed: a missing credential refuses the start (declare it with `needs`), never a request let through.
 
@@ -105,7 +105,7 @@ trust domain.
 
 ## Public channel-authoring kit
 
-A channel adapter depends on the harness-neutral `@fastagent-sh/fastagent/core` subpath:
+A channel adapter imports from `@fastagent-sh/fastagent`:
 
 | Export | Use |
 |---|---|
@@ -114,11 +114,11 @@ A channel adapter depends on the harness-neutral `@fastagent-sh/fastagent/core` 
 | `defineChannel`, `ChannelModule`, `ChannelContext`, `Routes`, `ChannelHandler` | a channel's export, and the HTTP route types |
 | `LongConnectionChannelModule`, `LongConnection` | long-connection module and lifecycle types |
 | `readBodyCapped` | read a request body with a byte cap |
-| `text`, `textHeaders` | build plain status/error responses |
+| `text` | build plain status/error responses |
+| `secretEquals` | compare a platform's secret in constant time |
 
-`secretEquals` is in `/node`, since it uses Node's constant-time comparison. Do not import from `src/harnesses/*`,
-`@earendil-works/*`, or the `/pi` subpath in a channel package: `/core` loads no package beyond Effect and no Node
-built-in.
+Do not import from `src/harnesses/*` or `@earendil-works/*` in a channel package: a channel talks to the agent through
+the Agent API alone.
 
 ## Sessions: the channel's map
 
@@ -143,7 +143,7 @@ delivery id as its `idempotencyKey`, so a redelivery returns the message already
 A reusable adapter is usually shaped like this:
 
 ```ts
-import { type ChannelModule, readBodyCapped, text } from "@fastagent-sh/fastagent/core";
+import { type ChannelModule, readBodyCapped, text } from "@fastagent-sh/fastagent";
 
 export interface AcmeChannelOptions {
   secret: string;

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentService } from "../src/service.ts";
+import type { ServedAgent } from "../src/service.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
 import { openPreparedStartService } from "../src/cli/commands/start.ts";
@@ -25,7 +25,7 @@ const DIGEST = `import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({ cron: "0 9 * * *", prompt: "hi" });\n`;
 
 /** A deferred service whose stages are scripted: `prepare` takes the workspace, `assemble` runs in it. */
-const deferred = (assemble: () => Promise<AgentService>, prepare: () => Promise<void> = async () => {}) =>
+const deferred = (assemble: () => Promise<ServedAgent>, prepare: () => Promise<void> = async () => {}) =>
   deferAgentcoreService({ prepare, assemble: () => assemble() });
 const invocation = () => new Request("http://h/invocations", { method: "POST", body: "{}" });
 
@@ -64,7 +64,7 @@ describe("deferred AgentCore initialization", () => {
         },
       });
       for (const auth of ["trusted-probe", "wrong"]) {
-        const r = await deferred.handler(
+        const r = await deferred.fetch(
           new Request("http://h/invocations", {
             method: "POST",
             body: JSON.stringify({ kind: "probe", auth }),
@@ -80,11 +80,11 @@ describe("deferred AgentCore initialization", () => {
   });
   it("opens only on invocation and shares one initialization across concurrent requests", async () => {
     const close = vi.fn(async () => {});
-    const open = vi.fn(async () => ({ handler: () => new Response("ready"), close }) as unknown as AgentService);
+    const open = vi.fn(async () => ({ fetch: async () => new Response("ready"), close }) as unknown as ServedAgent);
     const service = deferred(open);
-    expect((await service.handler(new Request("http://h/ping"))).status).toBe(200);
+    expect((await service.fetch(new Request("http://h/ping"))).status).toBe(200);
     expect(open).not.toHaveBeenCalled();
-    const responses = await Promise.all([service.handler(invocation()), service.handler(invocation())]);
+    const responses = await Promise.all([service.fetch(invocation()), service.fetch(invocation())]);
     expect(await Promise.all(responses.map((r) => r.text()))).toEqual(["ready", "ready"]);
     expect(open).toHaveBeenCalledOnce();
     await service.close();
@@ -92,12 +92,12 @@ describe("deferred AgentCore initialization", () => {
     expect(close).toHaveBeenCalledOnce();
   });
   it("caches an assembly failure rather than reading an empty workspace or starting a second scheduler", async () => {
-    const open = vi.fn(async (): Promise<AgentService> => {
+    const open = vi.fn(async (): Promise<ServedAgent> => {
       throw new Error("channels/lark.ts is broken");
     });
     const service = deferred(open);
     for (let i = 0; i < 2; i++) {
-      const r = await service.handler(invocation());
+      const r = await service.fetch(invocation());
       expect(r.status).toBe(503);
       expect(await r.text()).toContain("channels/lark.ts is broken");
     }
@@ -108,11 +108,11 @@ describe("deferred AgentCore initialization", () => {
     // volume). close() has already run by the time prepare settles, so assembling here would start
     // channels and a scheduler with no one left to close them.
     const open = vi.fn(
-      async () => ({ handler: () => new Response("ready"), close: async () => {} }) as unknown as AgentService,
+      async () => ({ fetch: async () => new Response("ready"), close: async () => {} }) as unknown as ServedAgent,
     );
     let release = (): void => {};
     const service = deferred(open, () => new Promise<void>((r) => (release = r)));
-    const pending = service.handler(invocation());
+    const pending = service.fetch(invocation());
     await service.close();
     release();
     expect((await pending).status).toBe(503);
@@ -121,20 +121,20 @@ describe("deferred AgentCore initialization", () => {
 
   it("retries a failed prepare on the next envelope — it took no lease and started no timers", async () => {
     const close = vi.fn(async () => {});
-    const open = vi.fn(async () => ({ handler: () => new Response("ready"), close }) as unknown as AgentService);
+    const open = vi.fn(async () => ({ fetch: async () => new Response("ready"), close }) as unknown as ServedAgent);
     let attempts = 0;
     const service = deferred(open, async () => {
       if (++attempts < 3) throw new Error("could not acquire workspace lease at /mnt/data/.deployment");
     });
     for (let i = 0; i < 2; i++) {
-      const r = await service.handler(invocation());
+      const r = await service.fetch(invocation());
       expect(r.status).toBe(503);
       expect(await r.text()).toContain("could not acquire workspace lease");
     }
     expect(open).not.toHaveBeenCalled(); // nothing assembles over a workspace this process never took
-    expect(await (await service.handler(invocation())).text()).toBe("ready");
+    expect(await (await service.fetch(invocation())).text()).toBe("ready");
     // Concurrent envelopes share one attempt, and a taken workspace is never taken twice.
-    await Promise.all([service.handler(invocation()), service.handler(invocation())]);
+    await Promise.all([service.fetch(invocation()), service.fetch(invocation())]);
     expect(attempts).toBe(3);
     expect(open).toHaveBeenCalledOnce();
   });
@@ -155,8 +155,8 @@ describe("mountAgentcoreService", () => {
     });
     const service = await mountAgentcoreService(await open(dir));
     try {
-      expect((await service.handler(new Request("http://h/ping"))).status).toBe(200);
-      expect((await service.handler(new Request("http://h/hook", { method: "POST" }))).status).toBe(404);
+      expect((await service.fetch(new Request("http://h/ping"))).status).toBe(200);
+      expect((await service.fetch(new Request("http://h/hook", { method: "POST" }))).status).toBe(404);
       // What the startup line reports must be what is served — the adapter paths, not nothing.
       expect(Object.keys(service.routes).sort()).toEqual(["GET /ping", "POST /invocations"]);
     } finally {
@@ -190,7 +190,7 @@ describe("mountAgentcoreService", () => {
     try {
       /** What the forwarder sends for ANY public request to the Function URL. */
       const relay = (path: string, method = "GET") =>
-        service.handler(
+        service.fetch(
           new Request("http://h/invocations", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -206,7 +206,7 @@ describe("mountAgentcoreService", () => {
         expect({ path, status: relayed.status }).toEqual({ path, status: 404 });
       }
       // …and not on the outer surface either, which is what the Runtime itself dials.
-      expect((await service.handler(new Request("http://h/control/sessions/s1"))).status).toBe(404);
+      expect((await service.fetch(new Request("http://h/control/sessions/s1"))).status).toBe(404);
     } finally {
       delete process.env.FASTAGENT_INGRESS_SECRET;
       await service.close();
@@ -221,7 +221,7 @@ describe("mountAgentcoreService", () => {
     const service = await mountAgentcoreService(await open(dir));
     const occurrence = "2026-07-07T09:00:00.000Z";
     const fire = () =>
-      service.handler(
+      service.fetch(
         new Request("http://h/invocations", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -242,7 +242,7 @@ describe("mountAgentcoreService", () => {
       expect(readFires(resolveStateRoot(dir), "digest").map((f) => f.slot)).toEqual([occurrence]);
 
       // An alarm for a schedule since removed: answered as skipped, never as an error EventBridge would retry.
-      const unknown = await service.handler(
+      const unknown = await service.fetch(
         new Request("http://h/invocations", {
           method: "POST",
           headers: { "content-type": "application/json" },

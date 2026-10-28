@@ -377,7 +377,7 @@ that set it; `fastagent schedules unwake <id>` cancels any, such as one set duri
 
 | Execution posture | Clock and persistence requirements |
 |---|---|
-| Resident `dev` / `start`, or an app's `mountAgentService` | The process runs the scheduler, with durable state; a sleeping or stopped process cannot fire timers. Fly/Railway deployment gates account for time triggers. |
+| Resident `dev` / `start`, or an app's `serve()` | The process runs the scheduler, with durable state; a sleeping or stopped process cannot fire timers. Fly/Railway deployment gates account for time triggers. |
 | AgentCore | The container mirrors each schedule into a recurring EventBridge schedule and each wake-up into a one-shot, which wake it. Scale-to-zero is supported on this path; no resident timer is required. Its storage resets on deploy. |
 
 See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and
@@ -388,12 +388,11 @@ See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and
 Install FastAgent in the application package that imports it as well as in the agent package that imports it; keep
 package versions aligned.
 
-- To call the agent from the app, open it with `openServing(agentDir)` and use the [Agent API](design/agent-api.md)
-  on `opened.agent`: `sessions.create`, then `messages.send` with `wait`, or `messages.stream` for an answer as it is
-  written. To serve it to
-  the app's own users, write the routes the product needs over these calls, behind the app's authentication.
-- To serve the agent's channels and schedules from the app too, `mountAgentService(opened)`, mount its Fetch
-  `handler`, await `ready`, and close the service and then the agent on shutdown.
+- To call the agent from the app, open it with `openAgent(agentDir)` and use the [Agent API](design/agent-api.md) on
+  it: `sessions.create`, then `messages.send` with `wait`, or `messages.stream` for an answer as it is written. To serve
+  it to the app's own users, write the routes the product needs over these calls, behind the app's authentication.
+- To serve the agent's channels and schedules from the app too, `await agent.serve()`, mount its `fetch` (or `listen`
+  on a port of its own), await `ready`, and `agent.close()` on shutdown.
 
 The application owns authentication, users, database, and deployment. Preserve raw webhook bodies when mounting under
 a framework. Follow [Embedding](embedding.md) rather than rebuilding the service assembly, Slack transport, or a

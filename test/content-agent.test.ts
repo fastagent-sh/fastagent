@@ -12,14 +12,14 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import { type ResolvedContent, resolveContent } from "../src/content/resolve.ts";
 import { type ContentBinding, declareBindings } from "../src/content/declare.ts";
-import { buildDefinition, openAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 
 /** Send one message to the agent in `agentDir`, opened on `provider` with `content`. */
 async function askOnce(agentDir: string, provider: Provider, content?: readonly ResolvedContent[]): Promise<void> {
   const definition = await prepareDefinition(agentDir);
-  const agent = await openAgent(definition, {
+  const agent = await assembleAgent(definition, {
     storage: new MemoryStorage(),
     code: { ...buildDefinition(definition, {}), providers: [provider] },
     credentials: new InMemoryCredentialStore(),

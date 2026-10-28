@@ -7,7 +7,7 @@ import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
-import { DEFAULT_HTTP_PORT, mountAgentService } from "../../service.ts";
+import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
@@ -60,7 +60,7 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   assertTunnelBindable(host, tunnel);
   const opened = await openServing(agentDir, { model: modelSpec }).catch(failStartup);
   await reportAssembly(opened, modelSpec);
-  const service = await mountAgentService(opened, cliMountOptions()).catch(failStartup);
+  const service = await serveAgent(opened, cliMountOptions()).catch(failStartup);
   serveService(
     service,
     { port: portFlag ?? opened.definition.config.http?.port ?? DEFAULT_HTTP_PORT, host },

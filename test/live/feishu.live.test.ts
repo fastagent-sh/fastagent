@@ -4,8 +4,8 @@
  * back. That is a real inbound round trip — platform → our route → platform — which is one step past
  * what the telegram probe can reach (Telegram only checks that the URL answers).
  *
- * The chain is all product entries: `openServing` + `mountAgentService` mount `src/channels/feishu.ts` at `POST /feishu`
- * → `serveNode` binds it → `startCloudflareTunnel` publishes it → `registerFeishuWebhook` PATCHes the
+ * The chain is all product entries: `openServing` + `serveAgent` mount `src/channels/feishu.ts` at `POST /feishu`
+ * → `listen` binds it → `startCloudflareTunnel` publishes it → `registerFeishuWebhook` PATCHes the
  * subscription, retrying while the platform reports it could not verify the URL, and reports what it
  * answered. A `registered` outcome IS the platform's verdict on that round trip.
  *
@@ -24,7 +24,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { serveNode } from "../../src/channels/serve.ts";
 import { registerFeishuWebhook } from "../../src/channels/feishu/register-webhook.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { startCloudflareTunnel } from "../../src/tunnel.ts";
@@ -85,9 +84,7 @@ describe("feishu: registering an event URL the platform verifies by calling it",
     // names. The platform is about to call this path, so assert the path.
     expect(Object.keys(service.routes), "src/channels/feishu.ts did not mount POST /feishu").toContain("POST /feishu");
 
-    const server = serveNode(service.handler, { port: 0, host: "127.0.0.1" });
-    cleanups.push(() => server.close());
-    const port = await server.listening;
+    const port = await service.listen(0, "127.0.0.1");
 
     const tunnel = await startCloudflareTunnel(port);
     expect(tunnel, "cloudflared did not yield a quick-tunnel URL").toBeDefined();

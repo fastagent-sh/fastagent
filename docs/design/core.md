@@ -24,10 +24,9 @@ that talks to it calls the consumer [Agent API](../SPEC.md), in process:
 | Where it runs | A host, which supplies the process, the storage, the credentials and the deployment (§9) |
 
 The Agent API is the one API of our own; operating the agent (its definition, compaction, inspecting a session) is
-pi-durable's own API (`agent.harness`). The public surface is three layers, by what each costs to import: `/core` (the
-Agent API's types and `AgentError`, the channel contract; Effect and nothing else), `/node` (the service assembly, content
-and authoring; needs Node), and `/pi` (what an author writes, opening a definition, the model environment; names the
-harness). `package-boundary.test.ts` asserts it.
+pi-durable's own API (`agent.harness`). The public surface is one entry (`src/index.ts`: the Agent API, `openAgent`,
+what an author writes) and one per first-party channel, each naming every export; `package-boundary.test.ts` asserts it,
+and that the contracts (`agent-api.ts`, `channel.ts`) and the channel spine import no harness.
 
 ## 2. Agent shape, content and prompt
 
@@ -186,8 +185,9 @@ join-on-interrupt combinator that differed only in the word before `Failure`.
 
 ## 3. Assembly: the definition onto pi-durable
 
-`openServing(dir, options)` (`harnesses/pi-durable/serve.ts`) opens a directory to be served. `dev`, `start`, `invoke`,
-AgentCore and an embedder call it, and it works in this order:
+`openServing(dir, options)` (`harnesses/pi-durable/serve.ts`) opens a directory. `dev`, `start`, `invoke`,
+`schedules run` and AgentCore call it, with where the Agent keeps its sessions and what becomes of an earlier process's
+messages; an app calls `openAgent(dir)`, which is it with a serve's defaults. It works in this order:
 
 1. **The definition** (`prepareDefinition`, `open.ts`): the registry is generated (`.fastagent/registry.ts`, plain
    imports of every module of `src/`), the configuration and the registry are imported, the configuration's keys are
@@ -321,18 +321,19 @@ inbound endpoint must not silently disappear.
 
 **Every route verifies its caller** ([security boundary](security-boundary.md)): a channel verifies its platform's
 signature, so the router (`channels/router.ts`) adds no guard of its own; it dispatches literal paths and answers 404
-and 405. `mountAgentService` (`service.ts`) mounts the channels' routes beside `GET /health`, starts long connections,
-schedules and the wake-up poll, and owns their shutdown. There is no HTTP Agent API. AgentCore serves the Runtime's own
-`/invocations` and `/ping` instead (§9). Health returns 503 until every long connection is ready, and again if one
-closes unexpectedly. The CLI binds the service's handler through `channels/serve.ts` and exits on unexpected channel
-closure; its SIGINT/SIGTERM handler closes the service and listener and bounds shutdown time. It does not drain the
-agent's messages: they are durable, and answered after a restart.
+and 405. `serveAgent` (`service.ts`, an app's `agent.serve()`) mounts the channels' routes beside `GET /health`,
+starts long connections, schedules and the wake-up poll, and owns their shutdown; its `Service` answers in process
+(`fetch`) or on a server of its own (`listen`, `channels/serve.ts`: Node's `http` server or `Bun.serve`). There is no
+HTTP Agent API yet. AgentCore serves the Runtime's own `/invocations` and `/ping` instead (§9). Health returns 503 until
+every long connection is ready, and again if one closes unexpectedly. The CLI listens through the same `Service` and
+exits on unexpected channel closure; its SIGINT/SIGTERM handler closes the service, which stops the server first
+(giving requests in flight 500 ms), and bounds shutdown time. It does not drain the agent's messages: they are durable,
+and answered after a restart.
 
-The resident service lifecycle uses an Effect scope for scheduler cleanup, connection readiness and closure observers,
-and the caller's abort listener. Shutdown broadcasts the transport abort before closing the scope, then waits for all
-connections under one deadline; its result is cached so concurrent and repeated `close()` calls wait for the same
-completion or failure. Startup rollback uses that same shutdown. `/core` stays free of Node and of every package but
-Effect, and exposes no Effect types.
+The resident service lifecycle uses an Effect scope for scheduler cleanup, connection readiness and closure observers.
+Shutdown broadcasts the transport abort before closing the scope, then waits for all connections under one deadline;
+its result is cached so concurrent and repeated `close()` calls wait for the same completion or failure. Startup
+rollback uses that same shutdown.
 
 ### Shared chat execution
 

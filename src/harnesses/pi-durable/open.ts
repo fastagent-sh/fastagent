@@ -341,7 +341,7 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
   }
 }
 
-export interface OpenAgentOptions {
+export interface AssembleAgentOptions {
   storage: Storage;
   /** What the agent works on and knows (`context.json`'s content), resolved for this instance. */
   content?: readonly ResolvedContent[];
@@ -359,7 +359,7 @@ export interface OpenAgentOptions {
 }
 
 /** Open the definition as an Agent: pi-ai's built-in models and the definition's providers, the coding tools, then its own. */
-export async function openAgent(definition: AgentDefinition, options: OpenAgentOptions): Promise<DurableAgent> {
+export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
   const { dir, config } = definition;
   const { code } = options;
   const models = modelsOver(options.credentials, code.providers);

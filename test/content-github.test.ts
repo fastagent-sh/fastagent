@@ -17,7 +17,7 @@ import { type ContentEntry, declareBindings, declareContent } from "../src/conte
 import { githubRepoOf } from "../src/content/git.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { buildDefinition, openAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 
 /** The agent in `dir` as a serve opens it, with no storage of its own: what its content resolves to. */
@@ -426,7 +426,7 @@ describe("github content: what runs the agent clones, what reports on it does no
       },
     ]);
     const definition = await prepareDefinition(agentDir);
-    const running = await openAgent(definition, {
+    const running = await assembleAgent(definition, {
       storage: new MemoryStorage(),
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
       credentials: new InMemoryCredentialStore(),

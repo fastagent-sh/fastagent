@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Routes } from "../src/channel.ts";
 import { assertRouteKey, parseRouteKey, routeKeysConflict, router } from "../src/channels/router.ts";
-import { serveNode } from "../src/channels/serve.ts";
+import { serveHandler } from "../src/channels/serve.ts";
 
 describe("serve: router", () => {
   const routes: Routes = {
@@ -131,14 +131,14 @@ describe("serve: the route path language", () => {
   });
 });
 
-describe("serve: serveNode", () => {
+describe("serve: serveHandler", () => {
   it("serving does not swap the process's global Request/Response", async () => {
     // fastagent is EMBEDDED: the host may not reshape the globals of the app it is mounted in. The
     // failure is not hypothetical either — a channel holding a Response captured before mount would
     // fail an `instanceof` against a swapped constructor and be answered 500.
     const NativeResponse = globalThis.Response;
     const NativeRequest = globalThis.Request;
-    const host = serveNode(async () => new NativeResponse("held-from-before-mount"), { port: 0 });
+    const host = serveHandler(async () => new NativeResponse("held-from-before-mount"), { port: 0 });
     const port = await host.listening;
     try {
       expect(globalThis.Response).toBe(NativeResponse);
@@ -152,10 +152,10 @@ describe("serve: serveNode", () => {
   });
 
   it("a bind failure rejects `listening` instead of hanging", async () => {
-    const first = serveNode(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
+    const first = serveHandler(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
     const taken = await first.listening;
     try {
-      const second = serveNode(() => new Response("ok"), { port: taken, host: "127.0.0.1" });
+      const second = serveHandler(() => new Response("ok"), { port: taken, host: "127.0.0.1" });
       await expect(second.listening).rejects.toThrow(/EADDRINUSE/);
     } finally {
       await first.close();
@@ -163,7 +163,7 @@ describe("serve: serveNode", () => {
   });
 
   it("binds a handler, serves it over HTTP, and closes the socket", async () => {
-    const host = serveNode((req) => new Response(`hi ${new URL(req.url).pathname}`), { port: 0 });
+    const host = serveHandler((req) => new Response(`hi ${new URL(req.url).pathname}`), { port: 0 });
     const port = await host.listening;
     const res = await fetch(`http://127.0.0.1:${port}/x`, { method: "POST" });
     expect(res.status).toBe(200);
@@ -172,7 +172,7 @@ describe("serve: serveNode", () => {
   });
 
   it("binds only the given host, leaving every other address unserved", async () => {
-    const host = serveNode(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
+    const host = serveHandler(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
     const port = await host.listening;
     expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
     // The negative goes to a second LOOPBACK alias, not to a LAN address: `127.0.0.2` is the whole
@@ -185,51 +185,41 @@ describe("serve: serveNode", () => {
   });
 
   it("closing before it listened binds nothing, and says so through `listening`", async () => {
-    const host = serveNode(() => new Response("ok"), { port: 0 });
+    const host = serveHandler(() => new Response("ok"), { port: 0 });
     await host.close();
     await expect(host.listening).rejects.toThrow(/closed before it listened/);
   });
 
-  it("closing alone waits for a request in flight, as a Node server does", async () => {
+  it("closing gives a request in flight a moment, and ends one that takes longer", async () => {
     let entered!: () => void;
     const handling = new Promise<void>((resolve) => {
       entered = resolve;
     });
-    const host = serveNode(
-      async () => {
-        entered();
-        await new Promise((resolve) => setTimeout(resolve, 800));
-        return new Response("done");
-      },
-      { port: 0 },
-    );
-    const port = await host.listening;
-    const request = fetch(`http://127.0.0.1:${port}/slow`).then(async (res) => `${res.status} ${await res.text()}`);
-    await handling;
-    await host.close();
-    expect(await request).toBe("200 done");
-  });
-
-  it("can force-close an active request instead of waiting for the handler to drain", async () => {
-    let entered!: () => void;
-    const handling = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const host = serveNode(
-      async () => {
-        entered();
+    const host = serveHandler(
+      async (req) => {
+        if (new URL(req.url).pathname === "/quick") {
+          entered();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return new Response("done");
+        }
         await new Promise<never>(() => {});
         return new Response();
       },
       { port: 0 },
     );
     const port = await host.listening;
-    const request = fetch(`http://127.0.0.1:${port}/stream`).catch((error: unknown) => error);
+    const answer = (path: string) =>
+      fetch(`http://127.0.0.1:${port}${path}`).then(
+        async (res) => `${res.status} ${await res.text()}`,
+        (error: unknown) => error,
+      );
+    const never = answer("/never");
+    const quick = answer("/quick");
     await handling;
-
-    const closing = host.close();
-    host.closeAllConnections();
-    await expect(closing).resolves.toBeUndefined();
-    await expect(request).resolves.toBeInstanceOf(Error);
+    const started = Date.now();
+    await host.close();
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(await quick).toBe("200 done");
+    expect(await never).toMatch(/^503/);
   });
 });

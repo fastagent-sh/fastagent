@@ -5,7 +5,7 @@ import { chmod, lstat, mkdtemp, readFile, stat, symlink, writeFile } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fastagentCredentialStore } from "../src/index.ts";
+import { fastagentCredentialStore } from "../src/harnesses/models/credentials.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
