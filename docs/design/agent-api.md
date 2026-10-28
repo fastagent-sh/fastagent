@@ -573,8 +573,8 @@ same context as any other.
 `POST …/messages` takes the `SendRequest` without its `sessionId`, which is in the path, plus `wait` (§4's option)
 and `stream: true` for `messages.stream`: `{ content, whenBusy?, wait?, stream? }`; a streamed message is watched,
 so `wait` beside `stream: true` is refused, `invalid_request`. Its key is the `Idempotency-Key`
-header, percent-encoded in the `by-key` path. A send whose key the session has seen answers with that message and
-`Idempotent-Replayed: true`. Every `wait` is in seconds, and the server waits at most 60 (§7).
+header, percent-encoded in the `by-key` path. A send whose key the session has seen answers with that message, as
+§5.2 says. Every `wait` is in seconds, and the server waits at most 60 (§7).
 
 ### 9.3 Event streams
 
