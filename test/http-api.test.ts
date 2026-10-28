@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   type Agent,
   AgentError,
   type AgentErrorData,
   type ErrorCode,
+  type Message,
+  type MessageStatus,
+  type Session,
   agentError,
   errorData,
 } from "../src/agent-api.ts";
@@ -336,6 +339,9 @@ describe("connectAgent", () => {
     try {
       const agent = connectAgent(server.url, { apiKey: KEY });
       await expect(agent.sessions.get("s")).rejects.toMatchObject({ code: "a_later_code", retryable: true });
+      // As types, the statuses still name the known values, beside any other.
+      expectTypeOf<Session["status"]>().toEqualTypeOf<"idle" | "running" | (string & {})>();
+      expectTypeOf<Message["status"]>().toEqualTypeOf<MessageStatus | (string & {})>();
       // A status it does not know is a message that has not ended: it is waited for, and asked after again.
       expect(await agent.messages.get({ sessionId: "s", messageId: "m" }, { wait: 0.3 })).toMatchObject({
         status: "waiting",
@@ -345,6 +351,44 @@ describe("connectAgent", () => {
       const first = (await events.next()).value;
       expect(first, JSON.stringify(first)).toMatchObject({ type: "state", session: { status: "paused" } });
       await events.return?.();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reads a refusal at a status it does not declare from its body, as a later server sends one (§7.1)", async () => {
+    const server = await fakeServer(() =>
+      Response.json({ error: { code: "quota_exceeded", message: "over", retryable: true } }, { status: 402 }),
+    );
+    try {
+      const agent = connectAgent(server.url, { apiKey: KEY });
+      const refusal = { code: "quota_exceeded", retryable: true };
+      await expect(agent.sessions.get("s")).rejects.toMatchObject(refusal);
+      await expect(agent.messages.send({ sessionId: "s", content: "hi" })).rejects.toMatchObject(refusal);
+      await expect(
+        agent.messages.stream({ sessionId: "s", content: "hi" })[Symbol.asyncIterator]().next(),
+      ).rejects.toMatchObject(refusal);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("takes an answer it cannot read, a proxy's page say, for a send that may have been recorded", async () => {
+    let answer = () => new Response("<html>bad gateway</html>", { status: 520 });
+    const server = await fakeServer(() => answer());
+    try {
+      const agent = connectAgent(server.url, { apiKey: KEY });
+      const lost = { code: "unconfirmed", details: { sessionId: "s", idempotencyKey: expect.any(String) } };
+      await expect(agent.messages.send({ sessionId: "s", content: "hi" })).rejects.toMatchObject(lost);
+      await expect(
+        agent.messages.stream({ sessionId: "s", content: "hi" })[Symbol.asyncIterator]().next(),
+      ).rejects.toMatchObject(lost);
+      // A read may be asked again after a server's error, and is the server's fault otherwise.
+      await expect(agent.sessions.get("s")).rejects.toMatchObject({ code: "unavailable", retryable: true });
+      answer = () => new Response("<html>not here</html>", { status: 404 });
+      await expect(agent.sessions.get("s")).rejects.toMatchObject({ code: "internal", retryable: false });
+      answer = () => new Response("{ not json", { status: 200, headers: { "content-type": "application/json" } });
+      await expect(agent.messages.send({ sessionId: "s", content: "hi" })).rejects.toMatchObject(lost);
     } finally {
       await server.close();
     }

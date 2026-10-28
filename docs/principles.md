@@ -55,7 +55,7 @@ One API can collapse an integration matrix. FastAgent's channels, schedules and 
 
 The product restraint is intentional:
 
-- **One obvious boundary.** The Agent API, in process. FastAgent puts it on no network.
+- **One obvious boundary.** The Agent API, in process or over HTTP, the same in both; on the network only behind the instance's key.
 - **No ownership of your whole application.** FastAgent does not take over auth, database models, queueing, deployment layout, or frontend framework.
 - **Extensions by composition.** Channels, tools, extensions and providers plug into clear seams instead of requiring a new platform.
 - **Local-first ergonomics.** You should be able to run the thing, inspect the thing, and debug the thing without a hosted control plane.
@@ -75,7 +75,7 @@ Typed boundaries are product UX, not ceremony. FastAgent applies them where agen
 |---|---|---|
 | Existing agent directories | A new framework-only agent format | The fastest path is serving the directory authors already have. |
 | Agent-as-a-feature | Agent-as-a-platform | The common job is adding an agent to a product or channel the user already has, not adopting a second framework. |
-| One API in process | An HTTP API on every serve | Every Caller runs in the process that runs the agent, and an instance is one trust domain: an API on the network would be a remote control nobody authenticates. An app that needs one writes its routes, behind its own auth. |
+| One API, in process and over HTTP behind a key | An HTTP API on every serve, or none | A Caller that opens the agent and one that calls a deployed agent use the same interface. An instance is one trust domain, so the API is on the network only when a key is set, a key for the whole instance; an app that serves users from a browser writes its routes, behind its own auth. |
 | One harness | A neutral layer over several | The part harnesses differ on most is the part a neutral layer would standardize; one harness's own guarantees (durable messages, continuation after a restart) are worth more. |
 | Channel adapters | One-off webhook/bot implementations | Channel code should translate events, not duplicate the agent loop. |
 | The agent's own reasoning as control flow | A bundled workflow/orchestration engine | The agent decides its steps; deterministic multi-step orchestration is the app's job — send messages from your queue or workflow. |

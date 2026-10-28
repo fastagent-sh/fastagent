@@ -64,6 +64,17 @@ export function statusOf(error: AgentErrorData): number {
 
 const isAgentError = Schema.declare((u): u is AgentError => u instanceof AgentError);
 
+/** A refusal's body, `{ error }`, as the `AgentError` it carries: what a client reads at any status. */
+export const Refusal = Schema.Struct({ error: AgentErrorData }).pipe(
+  Schema.decodeTo(
+    isAgentError,
+    SchemaTransformation.transform({
+      decode: ({ error }) => new AgentError(error),
+      encode: (error) => ({ error: errorData(error) }),
+    }),
+  ),
+);
+
 /**
  * `{ error }` at `status`. Encoding takes only an error whose status this is, which is how the server's answer gets its
  * status; decoding takes any code, since a later server may answer with one this client does not know (§7.1).

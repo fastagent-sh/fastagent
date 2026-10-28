@@ -48,7 +48,7 @@ machine has is bound in `context.local.json` alone: it stays here, and a deploym
 
 FastAgent deliberately keeps the serving layer small and composable:
 
-- **One API, in process**: every Caller (a channel, a schedule, `invoke`, your app) uses the Agent API; FastAgent puts it on no network.
+- **One API, in process and over HTTP**: every Caller (a channel, a schedule, `invoke`, your app, a service that calls a deployed agent) uses the Agent API; on the network only behind the instance's key.
 - **Small core**: the stable center is the Agent API, not a platform runtime.
 - **App-owned runtime**: your app keeps auth, users, database, routes, deployment, and policy.
 - **Typed edges**: tools, events, and request bodies are explicit and validated at boundaries.
@@ -63,7 +63,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 - **No platform to move to**: no dashboard, no hosted control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
 - **No new format or DSL**: `AGENTS.md`, Agent Skills, TypeScript modules; FastAgent consumes the standards you already use, not a parallel ecosystem.
 - **No workflow engine**: the agent decides its own steps; for deterministic orchestration, send messages from your own queue or workflow.
-- **No HTTP API of its own**: a served agent answers only its channels, which verify their platform. An app that wants the agent on its network writes routes over the Agent API, behind its own authentication.
+- **One key, no auth system**: a served agent answers its channels, which verify their platform, and, given `FASTAGENT_API_KEY`, the Agent API under `/v1`, behind one key for the whole instance that keeps everyone but its customer out. Users, roles and per-session access are the app's, in its own routes over the Agent API ([security boundary](design/security-boundary.md)).
 
 ## Two main use cases
 

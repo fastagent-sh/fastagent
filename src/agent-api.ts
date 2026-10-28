@@ -88,7 +88,9 @@ const settingsFields = <O extends typeof Schema.optionalKey | typeof Schema.opti
  * A status as a field: the values this version defines, and any other, since a later version may add one and a Caller
  * reads it the way §7.1 says (an unknown session status is busy, an unknown message status has not ended).
  */
-const open = <S extends Schema.Top>(known: S) => Schema.Union([known, Schema.String]);
+const open = <S extends Schema.Top>(known: S) =>
+  // As a type, the known values and any string, so an editor still offers them (`string & {}` does not absorb them).
+  Schema.Union([known, Schema.String]) as unknown as Schema.Codec<S["Type"] | (string & {}), string>;
 
 export const SessionStatus = Schema.Literals(["idle", "running"]);
 export type SessionStatus = typeof SessionStatus.Type;

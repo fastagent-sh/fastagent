@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import {
   type Agent,
@@ -30,7 +30,7 @@ import {
   errorData,
   hasEnded,
 } from "../agent-api.ts";
-import { AgentHttpApi, MESSAGE_STREAM_EVENT_TYPES, SESSION_EVENT_TYPES } from "./contract.ts";
+import { AgentHttpApi, MESSAGE_STREAM_EVENT_TYPES, Refusal, SESSION_EVENT_TYPES } from "./contract.ts";
 
 export interface ConnectOptions {
   /** One of the keys the instance holds (`FASTAGENT_API_KEY` where it runs). */
@@ -72,37 +72,55 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
   ).agent;
 
   /**
-   * A failure as the Agent API's. A refusal the agent answered is decoded as it was sent; a request that got no
-   * answer it can read is `lost`'s to say, since only the operation knows whether it may have been carried out.
+   * A failure as the Agent API's. A refusal the agent answered is as it was sent. A request that went out and got no
+   * answer this client can read is `lost`'s to say for a send, which may have been recorded (§5.2); for the rest, one
+   * that could not get through or met a server's error may be tried again, and anything else is the server's fault.
    */
-  const failureOf = (cause: Cause.Cause<unknown>, lost: (why: string) => AgentError): unknown => {
-    const error = Cause.squash(cause);
+  const failureOf = (error: unknown, lost?: (why: string) => AgentError): AgentError => {
     if (error instanceof AgentError) return error;
     const reason = (error as { reason?: { _tag?: string; response?: { status: number } } }).reason;
-    if (reason?._tag === "TransportError") return lost(`could not reach the agent at ${baseUrl}: ${String(error)}`);
-    const status = reason?.response?.status;
-    if (status === 502 || status === 503 || status === 504) {
-      return lost(`the agent at ${baseUrl} is not answering (${status})`);
+    if (reason?._tag === "EncodeError" || reason?._tag === "InvalidUrlError") {
+      return agentError("internal", `this client could not make a request of ${baseUrl}: ${String(error)}`);
     }
-    return agentError("internal", `the agent at ${baseUrl} answered what this client cannot read: ${String(error)}`);
+    const unreached = reason?._tag === "TransportError";
+    const why = unreached
+      ? `could not reach the agent at ${baseUrl}: ${String(error)}`
+      : `the agent at ${baseUrl} answered what this client cannot read: ${String(error)}`;
+    if (lost !== undefined) return lost(why);
+    const status = reason?.response?.status;
+    return unreached || (status !== undefined && status >= 500) ? unavailable(why) : agentError("internal", why);
   };
   const unavailable = (why: string) => agentError("unavailable", why);
+
+  /**
+   * A refusal at a status the contract does not declare, a later server's: its body says what it is, as any refusal's
+   * does (§7.1). A body that is not one (a proxy's page) leaves the failure the request met.
+   */
+  const refusalIn = (error: unknown): Effect.Effect<never, unknown> => {
+    const response = (error as { reason?: { response?: HttpClientResponse.HttpClientResponse } }).reason?.response;
+    if (response === undefined || response.status < 400) return Effect.fail(error);
+    return response.json.pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(Refusal)),
+      Effect.matchEffect({ onSuccess: Effect.fail, onFailure: () => Effect.fail(error) }),
+    );
+  };
 
   /** A request: rejected with its signal's reason once its Caller lets go, and with an `AgentError` otherwise. */
   const request = async <A>(
     effect: Effect.Effect<A, unknown>,
     signal?: AbortSignal,
-    lost: (why: string) => AgentError = unavailable,
+    lost?: (why: string) => AgentError,
   ): Promise<A> => {
     if (signal?.aborted) throw signal.reason;
+    const answered = effect.pipe(Effect.catch(refusalIn));
     const exit = await Effect.runPromiseExit(
-      (signal === undefined ? effect : Effect.raceFirst(effect, rejected(signal))).pipe(
+      (signal === undefined ? answered : Effect.raceFirst(answered, rejected(signal))).pipe(
         Effect.provideService(HttpClient.TracerPropagationEnabled, false),
       ),
     );
     if (Exit.isSuccess(exit)) return exit.value;
     if (signal?.aborted) throw signal.reason;
-    throw failureOf(exit.cause, lost);
+    throw failureOf(Cause.squash(exit.cause), lost);
   };
 
   /**
@@ -151,7 +169,8 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     const events = Stream.unwrap(
       opened.pipe(
         Effect.provideService(HttpClient.TracerPropagationEnabled, false),
-        Effect.mapError((error) => failureOf(Cause.fail(error), unavailable)),
+        Effect.catch(refusalIn),
+        Effect.mapError((error) => failureOf(error)),
         Effect.map((stream) =>
           stream.pipe(
             // A type a later server sends is not one this Caller can be handed (§7.1).
@@ -299,7 +318,8 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
                 }) as Effect.Effect<Stream.Stream<{ readonly type: string }, unknown>, unknown>
               ).pipe(
                 // The answer begins once the message is recorded, so one that never came may have been (§5.2).
-                Effect.mapError((error) => failureOf(Cause.fail(error), lost)),
+                Effect.catch(refusalIn),
+                Effect.mapError((error) => failureOf(error, lost)),
               ),
             ),
           ),

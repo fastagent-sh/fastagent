@@ -473,6 +473,12 @@ describe("openAgent: an agent directory opened in an app", () => {
       error: { code: "unavailable", message: "the service is closing" },
     });
 
+    const unset = await openAgent(dir);
+    await expect(unset.serve({ apiKeys: [process.env.FASTAGENT_TEST_UNSET_KEY ?? ""] })).rejects.toThrow(
+      "the Agent API needs at least one key, and no key may be empty",
+    );
+    await unset.close();
+
     const claiming = await openAgent(
       await agentDir({
         "src/channels/claims.mjs": `export default () => ({ "POST /v1/hook": () => new Response("ok") });`,

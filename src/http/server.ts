@@ -125,7 +125,10 @@ const Edges = HttpRouter.middleware(
 );
 
 export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
-  if (options.keys.length === 0) throw new Error("the Agent API needs at least one key");
+  // An empty key matches nothing (secretEquals), so serving with one would refuse every Caller without a word.
+  if (options.keys.length === 0 || options.keys.some((key) => key.trim() === "")) {
+    throw new Error("the Agent API needs at least one key, and no key may be empty");
+  }
   const keys = [...options.keys];
   const waitCap = options.waitCapSeconds ?? LIMITS.httpWaitSeconds;
   const keepAlive = options.keepAliveMs ?? KEEP_ALIVE_MS;

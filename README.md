@@ -62,7 +62,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 - **No platform to move to.** No dashboard, no control plane, no runtime you deploy *into* — run it locally, embed it in your app, or ship the directory anywhere.
 - **No new format or DSL.** `AGENTS.md`, Agent Skills, TypeScript modules — FastAgent consumes the standards you already use instead of a parallel ecosystem.
 - **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, send messages from your own queue or workflow.
-- **No HTTP API to secure.** A served agent answers only its channels, each of which verifies its platform; an app that wants it on its network writes its own routes, behind its own auth.
+- **One key, no auth system.** A served agent answers its channels, each of which verifies its platform, and, given `FASTAGENT_API_KEY`, the Agent API under `/v1`: one key for the whole instance, kept on a server, that keeps everyone but its customer out. Users, roles and per-session access are your app's, in front of it.
 - **No model or cloud lock-in.** Any provider pi-ai supports, or your own; any host that runs a container.
 
 ## Install
