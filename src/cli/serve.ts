@@ -1,6 +1,8 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
 import { answersLocalhost, bindLabel, classifyBind } from "../bind.ts";
 import type { ServedAgent, ServeOptions, Service } from "../service.ts";
+import { API_PREFIX } from "../http/contract.ts";
+import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { declaredChannels } from "../channels/discover.ts";
@@ -15,9 +17,10 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean):
   );
 }
 
-/** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
+/** What the CLI adds to the assembly: its shutdown grace, exit on a connection that drops, and the API's keys. */
 export function cliMountOptions(): ServeOptions {
   return {
+    apiKeys: apiKeysFrom(process.env[API_KEY_VARIABLE]),
     closeTimeoutMs: SHUTDOWN_GRACE_MS,
     onChannelClosed: (name, error) =>
       failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
@@ -46,6 +49,11 @@ export function reportServing(service: ServedAgent, host: string | undefined, bo
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
   log.info(bindLine(host, boundPort));
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
+  log.info(
+    service.api
+      ? `[fastagent] Agent API: ${API_PREFIX} (keys from ${API_KEY_VARIABLE})`
+      : `[fastagent] Agent API: not served — set ${API_KEY_VARIABLE} to serve it under ${API_PREFIX}`,
+  );
   if (service.channels.longConnections.length > 0) {
     log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);
   }

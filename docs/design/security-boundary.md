@@ -1,6 +1,6 @@
 ---
 title: Security boundary
-description: "Why FastAgent serves no API and authenticates no caller of its own, what a serve does expose (routes that verify their caller), and why an instance is one trust domain, so people who must be kept apart get an instance each."
+description: "What a serve exposes (routes that verify their caller, and the Agent API behind the instance's keys), why its one credential of its own is a key for the whole instance, and why an instance is one trust domain, so people who must be kept apart get an instance each."
 type: design-doc
 status: current
 ---
@@ -8,23 +8,26 @@ status: current
 # Security boundary
 
 An instance is one trust domain. Whoever holds its Agent can do everything the agent can: every session, and
-everything its tools reach ([Agent API](../SPEC.md) §8). So FastAgent puts the Agent API on no network
-([architecture.md](architecture.md) §2, [Agent API](../SPEC.md) §10). A serve answers only routes that verify their
-caller, and everyone they let in is inside the trust domain.
+everything its tools reach ([Agent API](agent-api.md) §10). A serve answers only routes that verify their caller, and
+everyone they let in is inside the trust domain.
 
-## 1. Why FastAgent authenticates no caller of its own
+## 1. One key for the instance, and no policy of FastAgent's
 
-A scheme the framework owns is one it owns badly. One was considered, and once shipped: a bearer token the serve
-mints at boot.
+FastAgent's one credential of its own is the Agent API's key ([Agent API](agent-api.md) §9.1): a key for the whole
+instance, which keeps everyone but the instance's customer out. It expresses no policy (per user, per session, observe
+versus write), and does not try to: one instance serves one customer, and people who must be kept apart get an
+instance each (§3). An earlier bearer token, minted at boot and checked by each route by hand, was removed for what it
+got wrong, and the key is shaped by that:
 
-- It is deployment-wide and all-or-nothing, so it expresses no policy a real deployment needs (per user, per session,
-  observe versus write).
-- It is enforced per route, by hand. A rule each new route must remember is one some route will forget, and the
-  failure is silent.
-- At the one boundary that matters, a public URL guarded by a secret every caller holds is a public URL.
+- It is the deployment's, set in its values (`FASTAGENT_API_KEY`), several at once so one is replaced without a gap;
+  not minted where nobody could hand it on.
+- It is checked once, by the middleware of the API's one contract (`http/contract.ts`, `http/server.ts`), on every
+  route of it: no route can forget it. Without a key, the API is not served at all.
+- It is a credential for a server. There is no CORS, so a browser page cannot call the API, and an app that serves
+  users from a browser calls it from its backend.
 
-What does authenticate a caller is whoever already knows who it is: a chat platform, which signs what it delivers,
-and a host's own identity system (AgentCore's IAM).
+Whoever else calls an agent is authenticated by whoever already knows who it is: a chat platform, which signs what it
+delivers, and a host's own identity system (AgentCore's IAM).
 
 ## 2. What a serve exposes
 
@@ -32,6 +35,7 @@ and a host's own identity system (AgentCore's IAM).
 |---|---|
 | A channel's routes (`POST /telegram`, `/slack`, `/feishu`, …) | The platform, proven by its own credential: Telegram's secret token, Slack's `v0` HMAC over the body with a five-minute window, Feishu's verification token and, with an Encrypt Key, its signature. Each comparison is constant-time (`channels/secret.ts`) |
 | `GET /health` | Anyone; it answers liveness and nothing else |
+| The Agent API under `/v1` | Whoever presents one of the instance's keys (`Authorization: Bearer`), compared in constant time. Not served without a key, and not served on AgentCore |
 | AgentCore's `POST /invocations` and `GET /ping` | Two doors. The forwarder's Function URL is `AuthType: NONE`, since a platform's webhook cannot sign with SigV4; it relays any path and attaches the ingress secret, which the container checks, so it reaches only the channels' routes, which verify their callers. The Runtime's own `InvokeAgentRuntime` is IAM-gated, and the only envelope it accepts is `probe`, which answers whether the definition opened (`channels/agentcore.ts`) |
 
 - **A custom channel MUST verify its caller.** The router cannot check that a route verifies anything: verifying is
@@ -44,7 +48,8 @@ and a host's own identity system (AgentCore's IAM).
   a container needs; `--tunnel` publishes the port on a public URL.
 
 There is no JSON body gate and no CORS policy: they guarded routes that verified nothing, and no route is like that
-now. A page in a browser cannot forge a platform's signature, and cannot read what a webhook answers.
+now. A page in a browser cannot forge a platform's signature, cannot read what a webhook answers, and is not let call
+the API.
 
 ## 3. People who must be kept apart
 

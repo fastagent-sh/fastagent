@@ -161,12 +161,20 @@ export async function openServing(directory: string, options: OpenServingOptions
 
 /** An agent opened in this process (agent-api.md §8): the Agent API, and how it is served and operated. */
 export interface LocalAgent extends Agent {
-  /** Channels, schedules and wake-ups, and `/health`: a Fetch handler, or a server of its own (`listen`). */
-  serve(): Promise<Service>;
+  /**
+   * Channels, schedules and wake-ups, `/health`, and the Agent API under `/v1` when `apiKeys` holds a key: a Fetch
+   * handler, or a server of its own (`listen`).
+   */
+  serve(options?: ServeAgentOptions): Promise<Service>;
   /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
   /** Close what `serve` started, then release the instance's storage. */
   close(): Promise<void>;
+}
+
+export interface ServeAgentOptions {
+  /** The keys a Caller of the Agent API may present (agent-api.md §9.1). */
+  apiKeys?: readonly string[];
 }
 
 export interface OpenAgentOptions {
@@ -195,11 +203,11 @@ export async function openAgent(dir: string, options: OpenAgentOptions = {}): Pr
     sessions: agent.sessions,
     messages: agent.messages,
     harness: agent.harness,
-    serve() {
+    serve(serveOptions = {}) {
       // Its storage is let go, or about to be: a service now would run channels and schedules nobody closes.
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
-      const serving = serveAgent(opened);
+      const serving = serveAgent(opened, serveOptions);
       served = serving;
       // A serve that failed to start rolled itself back, so the agent may be served again.
       serving.catch(() => {

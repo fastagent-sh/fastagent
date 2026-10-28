@@ -200,7 +200,7 @@ export const EntriesOptions = Schema.Struct({
 });
 export type EntriesOptions = typeof EntriesOptions.Type;
 
-const IdempotencyKey = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
+export const IdempotencyKey = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
 
 export const SendRequest = Schema.Struct({
   sessionId: Schema.String,
@@ -273,6 +273,8 @@ export const LIMITS = {
   inFlightPerProcess: 100,
   pageDefault: 100,
   pageBytes: 4 << 20,
+  /** The longest one HTTP request waits for a message; `connectAgent` asks again until its Caller's `wait` is met. */
+  httpWaitSeconds: 60,
 } as const;
 
 const RETRYABLE_CODES: ReadonlySet<string> = new Set<ErrorCode>(["busy", "unavailable"]);

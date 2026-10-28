@@ -435,8 +435,9 @@ model without an API key there (an OAuth subscription) is logged in on the deplo
 command ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
-host. A deployed agent is reached through its channels and schedules only: there is no HTTP API, and a deploy with
-neither is warned about. AgentCore's public webhook URL belongs to its forwarder; its IAM-gated door takes only the
+host. A deployed agent is reached through its channels and schedules, and through the Agent API under `/v1` when
+`FASTAGENT_API_KEY` is among its values ([Configuration](configuration.md#the-agent-api-over-http)); a deploy with
+neither a channel nor a schedule is warned about. AgentCore's public webhook URL belongs to its forwarder; its IAM-gated door takes only the
 deploy's `probe`.
 `fastagent logs agentcore --follow` reads runtime logs; `--source forwarder` selects ingress logs.
 

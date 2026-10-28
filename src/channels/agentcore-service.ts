@@ -140,6 +140,8 @@ export async function mountAgentcoreService(opened: ServableAgent): Promise<Serv
     // Channels remain lazy until the adapter receives trusted ingress.
     channels: { routes: [], longConnections: [] },
     schedules,
+    // Reached only through /invocations here (agent-api.md §9.5).
+    api: false,
   };
 }
 

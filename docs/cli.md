@@ -351,8 +351,9 @@ from the machine's skill directories. `--update` overwrites an existing one.
 fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
 ```
 
-Serves without watching. Binds all interfaces by default. A serve answers only its channels' routes and `GET /health`:
-there is no HTTP API ([security boundary](design/security-boundary.md)).
+Serves without watching. Binds all interfaces by default. A serve answers its channels' routes, `GET /health`, and
+the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key; the startup report says whether it does
+([Configuration](configuration.md#the-agent-api-over-http)).
 
 ```txt
 port:     --port > PORT > fastagent.config.ts http.port > 8787

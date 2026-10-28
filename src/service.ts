@@ -10,6 +10,9 @@ import { type AnyChannelModule, type LoadedLongConnectionChannel, mountChannels 
 import { text } from "./channels/respond.ts";
 import { parseRouteKey, router } from "./channels/router.ts";
 import { serveHandler, totalFetch } from "./channels/serve.ts";
+import { portCleanup } from "./effect-port.ts";
+import { API_PREFIX } from "./http/contract.ts";
+import { apiHandler, isApiPath } from "./http/server.ts";
 import { log } from "./log.ts";
 import { once } from "./once.ts";
 import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
@@ -77,6 +80,11 @@ export function routesFor(
   channels: ReadonlyMap<string, AnyChannelModule>,
 ): ServingSurface {
   const { routes, longConnections, routeChannels } = mountChannels(channels, agent, stateRoot);
+  for (const key of Object.keys(routes)) {
+    if (isApiPath(parseRouteKey(key).path)) {
+      throw new Error(`route "${key}" is under ${API_PREFIX}, which the Agent API serves — move it`);
+    }
+  }
   let ready = longConnections.length === 0;
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
   const probed = Object.keys(routes).some((key) => {
@@ -141,10 +149,20 @@ export interface ServedAgent extends Service {
   /** What actually mounted: channels serving routes, and long connections. */
   channels: { routes: string[]; longConnections: string[] };
   schedules: readonly Schedule[];
+  /** Whether the Agent API is served, under `/v1`: only with a key (agent-api.md §9.1). */
+  api: boolean;
 }
 
-/** A Service over `handler`: answered in process, or served on a server of its own; `shutdown` stops the rest. */
-export function serviceOver(handler: ChannelHandler, ready: Promise<void>, shutdown: () => Promise<void>): Service {
+/**
+ * A Service over `handler`: answered in process, or served on a server of its own. `endStreams` ends what would hold
+ * the server's close open (a Caller watching events), and `shutdown` stops the rest once the server has.
+ */
+export function serviceOver(
+  handler: ChannelHandler,
+  ready: Promise<void>,
+  shutdown: () => Promise<void>,
+  endStreams: () => Promise<void> = async () => {},
+): Service {
   let listener: ReturnType<typeof serveHandler> | undefined;
   let closing: Promise<void> | undefined;
   const fetch = totalFetch(handler);
@@ -167,7 +185,7 @@ export function serviceOver(handler: ChannelHandler, ready: Promise<void>, shutd
       closing ??= (async () => {
         // The server first, so nothing new reaches what stops after it; each step runs, and every failure is said.
         const failures: unknown[] = [];
-        for (const step of [() => listener?.close(), shutdown]) {
+        for (const step of [endStreams, () => listener?.close(), shutdown]) {
           await Promise.resolve()
             .then(step)
             .catch((error: unknown) => failures.push(error));
@@ -187,6 +205,8 @@ export interface ServeOptions {
   onChannelClosed?: (name: string, error?: unknown) => void;
   /** How long `close()` waits for a channel to stop before reporting it stuck (default 5s). */
   closeTimeoutMs?: number;
+  /** The keys the Agent API takes; without one it is not served (agent-api.md §9.1). */
+  apiKeys?: readonly string[];
 }
 
 /** What the assembly serves. */
@@ -206,7 +226,10 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
   const routed = routesFor(agent, stateRoot, opened.channels);
   // Composed BEFORE anything starts.
-  const handler = router(routed.routes);
+  const channels = router(routed.routes);
+  const api = options.apiKeys?.length ? apiHandler(agent, { keys: options.apiKeys }) : undefined;
+  const handler: ChannelHandler =
+    api === undefined ? channels : (req) => (isApiPath(new URL(req.url).pathname) ? api.fetch(req) : channels(req));
   return Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Scope.make();
@@ -245,6 +268,7 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
         ),
       );
       return yield* Effect.gen(function* () {
+        if (api !== undefined) yield* Effect.addFinalizer(() => portCleanup("closing the Agent API", api.dispose));
         // Registered first, so subscriptions and schedule timers stop before waiting for transports.
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         yield* Effect.acquireRelease(
@@ -320,11 +344,12 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
         ready.catch(() => {});
 
         return {
-          ...serviceOver(handler, ready, close),
+          ...serviceOver(handler, ready, close, async () => api?.endStreams()),
           routes: routed.routes,
           agentDir,
           channels: { routes: routed.routeChannels, longConnections: names },
           schedules,
+          api: api !== undefined,
         };
       }).pipe(
         Scope.provide(lifetime),

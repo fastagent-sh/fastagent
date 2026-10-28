@@ -242,7 +242,8 @@ crashes on boot.
 
 A clock that must wake a scaled-to-zero machine is a channel of your own: a route the clock calls (Fly Cron Manager, a
 Railway cron service, a CI job), which verifies the clock's call (a shared secret compared with `secretEquals`) and
-sends the agent its message. There is no HTTP API to call instead.
+sends the agent its message, or the Agent API, called with a key (`POST /v1/sessions/{sessionId}/messages`) when the
+deployment serves it ([Configuration](configuration.md#the-agent-api-over-http)).
 
 The generated `fly.toml` and the Railway runbook follow this table. If a kept `fly.toml` scales to zero where it
 should not, `deploy` warns and `--run` refuses until you raise it.

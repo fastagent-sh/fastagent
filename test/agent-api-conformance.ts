@@ -42,6 +42,8 @@ export interface AgentApiSubject {
   effects(): number;
   /** The storage fails every call from now on. */
   failStorage(): void;
+  /** Whether a send without a key is given one: `connectAgent` keys its own, so that a lost answer can be found. */
+  keysSends?: boolean;
   stop(): Promise<void>;
 }
 
@@ -173,7 +175,8 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           { wait: WAIT, signal: undefined },
         );
         expect(message).toMatchObject({ status: "completed", answer: { text: "answer: hi" } });
-        expect(message).not.toHaveProperty("idempotencyKey");
+        if (subject.keysSends) expect(message.idempotencyKey).toEqual(expect.any(String));
+        else expect(message).not.toHaveProperty("idempotencyKey");
         expect(
           (await agent.sessions.entries(sessionId, { before: unset, after: unset, limit: undefined })).data,
         ).toHaveLength(2);
@@ -906,8 +909,13 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           [Symbol.asyncIterator]();
         const first = await iterator.next();
         expect(first.value).toMatchObject({ type: "message", message: { status: "running" } });
-        subject.release();
         const events: MessageStreamEvent[] = [first.value as MessageStreamEvent];
+        // Released once its state is out: one that ended before the replay was read is delivered as ended.
+        for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
+          events.push(next.value);
+          if (next.value.type === "state") break;
+        }
+        subject.release();
         for (let next = await iterator.next(); !next.done; next = await iterator.next()) events.push(next.value);
         expect(replies(events)).toEqual(["user:", "assistant:", "tool_result:", "assistant:answer: hold"]);
         expect(events.filter((event) => event.type === "state")).toHaveLength(1);

@@ -9,9 +9,9 @@ updated: 2026-10-28
 
 # Agent API v2
 
-> **Status: in progress.** The code implements the in-process binding (§8, `connectAgent` and `/client` aside); the
-> HTTP binding of §9 is not yet. When it is all implemented, this replaces `docs/SPEC.md`, which still describes v1.
-> Changing its semantics before then is a review of this draft.
+> **Status: in progress.** The code implements both bindings (§8, §9), and §9.6's commands are not yet. When they
+> are, this replaces `docs/SPEC.md`, which still describes v1. Changing its semantics before then is a review of this
+> draft.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
 
@@ -441,7 +441,10 @@ interface Service {
   /** Or a server of its own, Node's `http` server or `Bun.serve`: the one way to start one. Answers the port it bound. */
   listen(port: number, host?: string): Promise<number>;
   ready: Promise<void>;
-  /** Stops the server, giving requests in flight 500 ms before it ends them, then the channels and schedules. */
+  /**
+   * Ends the API's event streams, each with a `stream_error`, then stops the server, giving requests in flight 500 ms
+   * before it ends them, then the channels and schedules.
+   */
   close(): Promise<void>;
 }
 ```
@@ -543,7 +546,9 @@ same context as any other.
   are outside the API and unchanged: each channel verifies its platform.
 - **No CORS**: the key is a credential for the whole instance, so a browser never holds it. A browser app calls its own
   backend, which calls the agent.
-- A request body over 32 MiB is `413`, `invalid_request` with `details.reason: "too_large"`.
+- A request body over 32 MiB is `413`, `invalid_request` with `details.reason: "too_large"`. A request the API
+  cannot read (its path, query, headers or body) is `400 invalid_request`, and a route it does not have is
+  `404 not_found`.
 
 ### 9.2 Routes
 
@@ -566,7 +571,8 @@ same context as any other.
 | `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | `messages.get` by key | `Message`; `404` when the session has seen no such key |
 
 `POST …/messages` takes the `SendRequest` without its `sessionId`, which is in the path, plus `wait` (§4's option)
-and `stream: true` for `messages.stream`: `{ content, whenBusy?, wait?, stream? }`. Its key is the `Idempotency-Key`
+and `stream: true` for `messages.stream`: `{ content, whenBusy?, wait?, stream? }`; a streamed message is watched,
+so `wait` beside `stream: true` is refused, `invalid_request`. Its key is the `Idempotency-Key`
 header, percent-encoded in the `by-key` path. A send whose key the session has seen answers with that message and
 `Idempotent-Replayed: true`. Every `wait` is in seconds, and the server waits at most 60 (§7).
 

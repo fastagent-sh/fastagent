@@ -11,14 +11,16 @@ A compact reference for `@fastagent-sh/fastagent`. The package has one entry per
 | Import | Holds |
 |---|---|
 | `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, and what an author writes: `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, and a channel's helpers |
+| `@fastagent-sh/fastagent/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers) |
 | `@fastagent-sh/fastagent/telegram`, `/slack`, `/feishu`, `/lark` | Each first-party channel, and the transport and thread reader its tools use |
 
 FastAgent is pre-1.0; the [Agent API](design/agent-api.md) is the stable design center.
 
 ## The Agent API
 
-Every Caller (a channel, a schedule, `fastagent invoke`, an app that embeds the agent) uses one interface, in process.
-[agent-api.md](design/agent-api.md) is normative (v2; its HTTP binding is not served yet); this is its shape:
+Every Caller (a channel, a schedule, `fastagent invoke`, an app that embeds the agent, a program that calls a served
+one) uses one interface, in process or over HTTP. [agent-api.md](design/agent-api.md) is normative (v2); this is its
+shape:
 
 ```ts
 interface Agent {
@@ -75,7 +77,7 @@ with a `stream_error` event. It is what a channel's live preview reads.
 function openAgent(dir: string, options?: { model?: string; credentials?: CredentialStore }): Promise<LocalAgent>;
 
 interface LocalAgent extends Agent {
-  serve(): Promise<Service>; // channels, schedules and wake-ups, and GET /health
+  serve(options?: { apiKeys?: string[] }): Promise<Service>; // channels, schedules, wake-ups, /health, and /v1 with a key
   readonly harness: Harness; // pi-durable's own API, for operating the agent
   close(): Promise<void>; // closes what `serve` started, then releases the instance's storage
 }
@@ -97,10 +99,26 @@ message is refused `missing_model` until its session is given one (`sessions.upd
 `serve`.
 
 `serve()` is what `start` serves: the channels' routes and `GET /health` (503 until every long connection is ready), the
-long connections, the schedules and the wake-up poll. Use `fetch` from the app's own server, or `listen` for a server
-of the agent's own on Node's `http` server or `Bun.serve`; `host` is the bind address, unset binds all interfaces.
-`close()` stops the server, giving the requests in flight 500 ms before it ends them, then the long connections and the
-schedules; the agent's messages are durable and go on after a restart. An agent is served once.
+long connections, the schedules and the wake-up poll, and, when `apiKeys` holds a key, the Agent API over HTTP under
+`/v1` ([agent-api.md](design/agent-api.md) §9; `dev` and `start` take the keys from `FASTAGENT_API_KEY`). Use `fetch`
+from the app's own server, or `listen` for a server of the agent's own on Node's `http` server or `Bun.serve`; `host`
+is the bind address, unset binds all interfaces. `close()` ends the API's event streams, stops the server, giving the
+requests in flight 500 ms before it ends them, then the long connections and the schedules; the agent's messages are
+durable and go on after a restart. An agent is served once; a `serve` that failed to start may be tried again.
+
+## Calling a served agent
+
+```ts
+function connectAgent(url: string, options: { apiKey: string }): Agent;
+```
+
+The same interface over HTTP, from `@fastagent-sh/fastagent/client`: an agent served with a key, by `start`, a
+deployment or an app's `serve()`, is called the way an opened one is, from a backend (the key is a credential for the
+whole instance, so a browser never holds it). A `wait` over 60 seconds is several requests of at most 60. A send
+without an `idempotencyKey` gets one of its own, so a send whose answer was lost rejects `unconfirmed` with that key in
+`details`, and `messages.get` by key finds what became of it; a read that could not reach the agent rejects
+`unavailable`. An event type or error code from a later server that this client does not know is skipped, or kept as
+the code it is.
 
 ## What an author writes
 

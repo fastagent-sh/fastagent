@@ -83,9 +83,9 @@ fastagent dev
 ```
 
 `dev` serves the agent locally: its channels, schedules and wake-ups. Edits to `SYSTEM.md`, `AGENTS.md`, `skills/` and
-`prompts/` apply on the next message; code edits (`src/`, config) restart the worker. There is no HTTP API: the agent
-is reached through its channels (step 7) and its schedules (step 8), and from an app that embeds it
-([Embedding](embedding.md)). Its sessions persist in `<state root>/agent.sqlite` (default `.state/` in the agent
+`prompts/` apply on the next message; code edits (`src/`, config) restart the worker. The agent is reached through its
+channels (step 7) and its schedules (step 8), from an app that embeds it ([Embedding](embedding.md)), and, with
+`FASTAGENT_API_KEY` in `.secrets/.env`, over HTTP under `/v1` ([Configuration](configuration.md#the-agent-api-over-http)). Its sessions persist in `<state root>/agent.sqlite` (default `.state/` in the agent
 directory), so a restart keeps conversation history.
 
 ## 5. Add a tool
