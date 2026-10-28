@@ -1,6 +1,6 @@
 /** First-party Slack HTTP Events API channel: signed ingress, durable turns/context, files, and edited previews. */
 import { createHmac } from "node:crypto";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import type { ChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
@@ -14,11 +14,9 @@ import * as Exit from "effect/Exit";
 import { portJoin } from "../../effect-port.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
-import { ensureStateHome } from "../../state-file.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
-import { conversationSessions } from "../../conversation-sessions.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -256,16 +254,13 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
   }
   const reactionEmojis = resolveReactionEmojis(reactionAck);
 
-  return ({ agent, stateRoot }) => {
+  return ({ agent, sessionFor, recordedSession, stateDir: stateHome }) => {
     if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
     if (!signingSecret)
       throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
-    if (!isAbsolute(stateRoot)) throw new Error(`slackChannel requires an absolute ctx.stateRoot, got "${stateRoot}"`);
 
     const label = "[slack]";
     const formatError = onError ?? defaultErrorMessage;
-    const stateHome = join(stateRoot, "channels", "slack");
-    ensureStateHome(stateHome);
     const api = createSlackApi({ botToken, baseUrl: apiBaseUrl });
     registerSlackApi(botToken, api); // the send tool delivers through this one (shared-api.ts)
     const auth = createSlackAuthentication(api, label);
@@ -307,7 +302,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         return (await history.snapshot(key)).text || `(thread ${threadTs} shows no messages)`;
       },
     });
-    registerRoomThreads("slack", stateRoot, rooms);
+    registerRoomThreads("slack", stateHome, rooms);
     /**
      * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the session already,
      * so the place it LANDS in records it, and that place's next read leaves it out — an answer to a channel's
@@ -324,7 +319,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       order: (a, b) => a.seq - b.seq,
     });
     const decide = route ?? defaultSlackRoute;
-    const sessions = conversationSessions(join(stateRoot, "channels", "slack", "sessions.json"));
     /** A channel turn under the default routing reads its channel's threads; a DM has none to read. */
     const enterRoom = (turn: PendingSlackTurn): { enter?: (sessionId: string) => () => void } => {
       if (!turn.group || turn.historyKey === undefined) return {};
@@ -445,7 +439,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
                 slackTurnStream(
                   agent,
                   {
-                    session: () => sessions.of(turn.conversation, agent),
+                    session: () => sessionFor(turn.conversation),
                     ...enterRoom(turn),
                     key: turn.id,
                     text: `${discussionBlock(discussion.text)}${turn.baseText}`,
@@ -559,7 +553,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         seen.add(logicalId);
         const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
         sideTasks.track(
-          dispatchStop(agent, sessions.get(routed.conversation ?? defaultConversation), label)
+          dispatchStop(agent, recordedSession(routed.conversation ?? defaultConversation), label)
             .then((feedback) =>
               placeApi({ historyKey, teamId })
                 .postMessage(target, feedback)

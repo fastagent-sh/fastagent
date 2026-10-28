@@ -3,8 +3,9 @@
  * modules are what the definition built (`BuiltDefinition.channels`); a channel's shape is checked there, by
  * {@link channelModuleProblem}, and its routes here, where it is first called.
  */
-import { isAbsolute } from "node:path";
-import type { ChannelContext, ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
+import type { Agent } from "../agent-api.ts";
+import type { ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
+import { channelContext } from "./context.ts";
 import { assertRouteKey, routeKeysConflict } from "./router.ts";
 
 export type AnyChannelModule = ChannelModule | LongConnectionChannelModule;
@@ -64,20 +65,22 @@ function validateRoutes(value: unknown, label: string): [string, (req: Request) 
   return routes;
 }
 
-/** Mount the channels: every route of every route channel (two claiming one route is refused), and the connections. */
+/**
+ * Mount the channels, each with its own context (context.ts): every route of every route channel (two claiming one
+ * route is refused), and the connections.
+ */
 export function mountChannels(
   modules: ReadonlyMap<string, AnyChannelModule>,
-  ctx: ChannelContext,
+  agent: Agent,
+  stateRoot: string,
 ): { routes: Routes; longConnections: LoadedLongConnectionChannel[]; routeChannels: string[] } {
-  if (!isAbsolute(ctx.stateRoot)) {
-    throw new Error(`ChannelContext.stateRoot must be absolute, got "${ctx.stateRoot}"`);
-  }
   const routes: Routes = {};
   const owners = new Map<string, string>();
   const longConnections: LoadedLongConnectionChannel[] = [];
   const routeChannels: string[] = [];
   for (const [name, module] of modules) {
     const label = `src/channels/${name}`;
+    const ctx = channelContext(agent, stateRoot, name);
     if (typeof module !== "function") {
       longConnections.push({ name: module.name, connect: (signal) => module.connect(ctx, signal) });
       continue;

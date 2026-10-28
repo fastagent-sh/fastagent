@@ -42,10 +42,10 @@ A route channel default-exports a `ChannelModule`:
 ```ts
 import type { ChannelModule } from "@fastagent-sh/fastagent/core";
 
-const channel: ChannelModule = ({ agent, stateRoot }) => ({
+const channel: ChannelModule = ({ agent, sessionFor, turn, stateDir }) => ({
   "POST /webhook": async (req) => {
-    // verify the platform, parse, send the agent a message, return a Response; durable channel state goes under
-    // `${stateRoot}/channels/<kind>` (never process.cwd())
+    // verify the platform, parse, answer at once, and send the agent a message in a `turn`; what the channel must
+    // keep goes under `stateDir` (never process.cwd())
     return new Response(null, { status: 204 });
   },
 });
@@ -60,7 +60,7 @@ import type { LongConnectionChannelModule } from "@fastagent-sh/fastagent/core";
 
 const channel: LongConnectionChannelModule = {
   name: "acme websocket",
-  connect({ agent, stateRoot }, signal) {
+  connect({ agent, sessionFor, stateDir }, signal) {
     // Start the connection. Translate signal abort into the transport's close operation.
     return { ready, closed };
   },
@@ -70,7 +70,8 @@ export default channel;
 ```
 
 `fastagent dev` and `fastagent start` mount every channel: function exports contribute route tables to the HTTP
-server; object exports open long connections. Both receive the agent and the resolved state root. Long-connection
+server; object exports open long connections. Both receive the agent, `sessionFor`, `recordedSession`, `turn` and a
+directory of their own ([Channel development](channel-development.md#discovery)). Long-connection
 adapters own reconnects, observe shutdown through `AbortSignal`, and report first readiness plus terminal closure
 through the two promises.
 

@@ -4,7 +4,7 @@ import { newSession } from "../src/conversation-sessions.ts";
 import { durableSubject } from "./durable-subject.ts";
 import { portJoin } from "../src/effect-port.ts";
 import { createTaskTracker } from "../src/channels/kit/tasks.ts";
-import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
+import { createTurnQueue } from "../src/channels/turn-queue.ts";
 
 /** Wait until `cond` holds (settlement callbacks run on the microtask queue). */
 const until = async (cond: () => boolean): Promise<void> => {

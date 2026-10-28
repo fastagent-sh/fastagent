@@ -31,10 +31,12 @@ export type {
 export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 export { readBodyCapped } from "./channels/body.ts";
 export { text, textHeaders } from "./channels/respond.ts";
+export { defineChannel } from "./channel.ts";
 export type {
   ChannelContext,
   ChannelHandler,
   ChannelModule,
+  ForkSource,
   LongConnection,
   LongConnectionChannelModule,
   Routes,

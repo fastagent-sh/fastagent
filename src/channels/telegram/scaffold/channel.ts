@@ -3,7 +3,7 @@ import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
 
 // A channel = a third-party ADAPTER (telegramChannel: verify + run + reply) configured with YOUR policy.
 // fastagent registers this file from src/channels/, mounts POST /telegram, and hands the adapter the
-// agent and its state root; this file holds only policy. Setup:
+// agent, its sessions and a directory of its own; this file holds only policy. Setup:
 //   1. @BotFather → /newbot → put the bot token in TELEGRAM_BOT_TOKEN
 //   2. pick a random TELEGRAM_SECRET_TOKEN (verifies that inbound updates really come from Telegram)
 //   3. register the webhook once, pointing Telegram at POST /telegram with that secret:

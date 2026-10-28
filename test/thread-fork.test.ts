@@ -1,8 +1,8 @@
 /** Where a new thread starts from: a fork of its room at the message its reply chain names. */
 import { afterEach, describe, expect, it } from "vitest";
 import type { Agent, Message } from "../src/agent-api.ts";
-import { forkThread } from "../src/channels/kit/thread-fork.ts";
-import { newSession } from "../src/conversation-sessions.ts";
+import { threadForkSource } from "../src/channels/kit/thread-fork.ts";
+import { forkedSession, newSession } from "../src/conversation-sessions.ts";
 import { durableSubject } from "./durable-subject.ts";
 import { scriptedAgent } from "./scripted-agent.ts";
 
@@ -26,7 +26,11 @@ const said = async (agent: Agent, sessionId: string) => {
     .map((e) => (e.data as { content: { text: string }[] }).content[0]?.text);
 };
 
-describe("forkThread", () => {
+/** A thread's session as a channel's `sessionFor` makes it: forked from what `threadForkSource` answers. */
+const thread = async (agent: Agent, room: string, chain: readonly string[]) =>
+  forkedSession(agent, await threadForkSource(agent, room, chain));
+
+describe("threadForkSource", () => {
   it("forks at the answer of the first message its chain names, nearest first", async () => {
     const { agent, room } = await roomWith([
       ["m1", "first"],
@@ -34,8 +38,7 @@ describe("forkThread", () => {
       ["m3", "third"],
     ]);
     // "card" is no message the channel sent with (the agent posted it), so the next one up names one.
-    const thread = await forkThread(agent, { room, chain: ["card", "m2", "m1"] });
-    expect(await said(agent, thread)).toEqual(["first", "second"]);
+    expect(await said(agent, await thread(agent, room, ["card", "m2", "m1"]))).toEqual(["first", "second"]);
   });
 
   it("forks at the room's present when nothing in its chain names a message", async () => {
@@ -43,41 +46,38 @@ describe("forkThread", () => {
       ["m1", "first"],
       ["m2", "second"],
     ]);
-    const thread = await forkThread(agent, { room, chain: ["someone-else"] });
-    expect(await said(agent, thread)).toEqual(["first", "second"]);
-  });
-
-  it("starts empty when its room has no session, since nothing was said there yet", async () => {
-    const { agent } = await roomWith([]);
-    const thread = await forkThread(agent, { room: undefined, chain: ["m1"] });
-    expect(await said(agent, thread)).toEqual([]);
+    expect(await said(agent, await thread(agent, room, ["someone-else"]))).toEqual(["first", "second"]);
   });
 
   it("a message without an answer forks at its own entry; a queued one at the present", async () => {
-    const forked = async (message: Message) => {
+    const source = async (message: Message) => {
       const agent = scriptedAgent(() => []);
-      const room = await newSession(agent);
-      await forkThread(
-        { ...agent, messages: { ...agent.messages, get: async () => message } },
-        { room, chain: ["m1"] },
-      );
-      return agent.forks.at(-1);
+      return threadForkSource({ ...agent, messages: { ...agent.messages, get: async () => message } }, "room", ["m1"]);
     };
-    expect(await forked({ id: "m", sessionId: "session-1", entryId: "asked", status: "running" })).toEqual({
-      forkFrom: { sessionId: "session-1", entryId: "asked" },
+    expect(await source({ id: "m", sessionId: "room", entryId: "asked", status: "running" })).toEqual({
+      sessionId: "room",
+      entryId: "asked",
     });
-    expect(await forked({ id: "m", sessionId: "session-1", entryId: "asked", status: "failed" })).toEqual({
-      forkFrom: { sessionId: "session-1", entryId: "asked" },
+    expect(await source({ id: "m", sessionId: "room", entryId: "asked", status: "failed" })).toEqual({
+      sessionId: "room",
+      entryId: "asked",
     });
-    expect(await forked({ id: "m", sessionId: "session-1", status: "queued" })).toEqual({
-      forkFrom: { sessionId: "session-1" },
-    });
+    expect(await source({ id: "m", sessionId: "room", status: "queued" })).toEqual({ sessionId: "room" });
+  });
+});
+
+describe("forkedSession", () => {
+  it("starts empty when there is nothing to fork, since nothing was said there yet", async () => {
+    const { agent } = await roomWith([]);
+    expect(await said(agent, await forkedSession(agent, undefined))).toEqual([]);
   });
 
-  it("a fork the agent refuses is an error naming the room", async () => {
-    const agent = scriptedAgent(() => []);
-    await expect(forkThread(agent, { room: "gone", chain: [] })).rejects.toThrow(
-      "starting a thread from gone failed: No session gone",
-    );
+  it("a fork the agent refuses is an error naming its source", async () => {
+    await expect(
+      forkedSession(
+        scriptedAgent(() => []),
+        { sessionId: "gone" },
+      ),
+    ).rejects.toThrow("starting a session forked from gone failed: No session gone");
   });
 });

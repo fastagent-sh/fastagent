@@ -2,9 +2,9 @@
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
-import { log } from "../../log.ts";
-import { beginWork } from "../busy.ts";
-import { portError } from "../../effect-port.ts";
+import { log } from "../log.ts";
+import { beginWork } from "./busy.ts";
+import { portError } from "../effect-port.ts";
 
 export interface TurnQueue<T> {
   accept(rec: T): void;

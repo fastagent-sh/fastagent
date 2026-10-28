@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activeWork } from "../src/channels/busy.ts";
-import { type TurnQueue, createTurnQueue } from "../src/channels/kit/turn-queue.ts";
+import { type TurnQueue, createTurnQueue } from "../src/channels/turn-queue.ts";
 import { log } from "../src/log.ts";
 import { portJoin } from "../src/effect-port.ts";
 

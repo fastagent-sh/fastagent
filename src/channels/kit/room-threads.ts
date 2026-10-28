@@ -41,15 +41,16 @@ export function createRoomThreads(reader: ThreadReader): RoomThreads {
 }
 
 /**
- * Per channel kind, per agent state root: the mounted channel's rooms. A remount replaces the entry. A session id
- * names its storage, so it finds its agent's channel among every agent's of one kind in the process.
+ * Per channel kind, per mounted channel (its `stateDir`): that channel's rooms. A remount of the channel replaces its
+ * entry, and two channel files of one kind keep one each. A session id names its storage, and a room is entered by the
+ * turn that runs in it, so a tool's session finds its own channel among every one of its kind in the process.
  */
 const mounted = new Map<string, Map<string, RoomThreads>>();
 
-export function registerRoomThreads(kind: string, stateRoot: string, rooms: RoomThreads): void {
-  const byRoot = mounted.get(kind) ?? new Map<string, RoomThreads>();
-  byRoot.set(stateRoot, rooms);
-  mounted.set(kind, byRoot);
+export function registerRoomThreads(kind: string, stateDir: string, rooms: RoomThreads): void {
+  const byChannel = mounted.get(kind) ?? new Map<string, RoomThreads>();
+  byChannel.set(stateDir, rooms);
+  mounted.set(kind, byChannel);
 }
 
 /** The threads the turn running in `sessionId` may read, from the `kind` channel it was asked through. */

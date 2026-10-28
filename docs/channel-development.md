@@ -31,27 +31,35 @@ keep the user's glue in their agent.
 ## Discovery
 
 An agent channel is a module of `src/channels/`, named by its file, that default-exports either a route
-`ChannelModule` or a `LongConnectionChannelModule`, or `needs([...])` around one. Route form:
+`ChannelModule` or a `LongConnectionChannelModule` (`defineChannel` types either), or `needs([...])` around one. Route
+form:
 
 ```ts
-import type { ChannelModule } from "@fastagent-sh/fastagent/core";
+import { defineChannel } from "@fastagent-sh/fastagent/core";
 
-const channel: ChannelModule = ({ agent, stateRoot }) => ({
+export default defineChannel(({ agent, sessionFor, turn }) => ({
   "POST /acme": async (req) => {
-    // verify, parse, send the agent a message, return a response; durable channel state goes under
-    // `${stateRoot}/channels/<kind>` (never process.cwd())
+    const { chatId, text, messageId } = await verifyAndParse(req); // the platform's signature, checked first
+    // Answered at once: a platform redelivers a webhook that gets no answer within seconds.
+    turn(chatId, async () => {
+      const sessionId = await sessionFor(chatId);
+      const message = await agent.messages.send({ sessionId, content: text, idempotencyKey: messageId }, { wait: 600 });
+      await replyTo(chatId, message.answer?.text ?? "Sorry, that did not work.");
+    });
     return new Response(null, { status: 204 });
   },
-});
-
-export default channel;
+}));
 ```
 
-The mount context's `agent` is the [Agent API](design/agent-api.md), in process: besides `messages.send` and
-`messages.stream`, a channel reads a session (`sessions.entries`, `sessions.events`), finds the message a platform
-message became (`messages.get` by `idempotencyKey`), forks a thread from its room
-(`sessions.create({ forkFrom })`) and stops the agent (`sessions.cancel`: the built-in channels map a user's "stop"
-onto it).
+What a channel is handed when it is mounted, and all it is handed:
+
+| | |
+|---|---|
+| `agent` | The [Agent API](design/agent-api.md), in process: besides `messages.send` and `messages.stream`, a channel reads a session (`sessions.entries`, `sessions.events`), finds the message a platform message became (`messages.get` by `idempotencyKey`) and stops the agent (`sessions.cancel`: the built-in channels map a user's "stop" onto it) |
+| `sessionFor(key, { forkFrom? })` | The session the conversation `key` talks in: the one recorded, or a new one, created and recorded before it is returned. `forkFrom` answers what a new one forks from (a thread's room, say), asked only when `key` has no session yet. Calls for one key are taken one at a time, so two first messages of a new conversation get one session |
+| `recordedSession(key)` | The session recorded for `key`, without making one: what a stop command asks of a place nothing was said in |
+| `turn(place, work)` | `work` run after the route has answered, one at a time per place (a chat, a thread) in the order they arrived, and counted as work in flight, which `dev`'s restart and AgentCore's `/ping` wait for. It keeps no record: a turn the process stops before it runs is lost unless the platform delivers its event again, which the platform's message id as `idempotencyKey` makes safe |
+| `stateDir` | The channel's own directory, `<state root>/channels/<the file's name>`, made at the mount, for what it must keep (the first-party channels keep each turn there before they answer the platform, so none is lost) |
 
 A function export is called with the context and must return a non-empty `Routes` object; an object export must
 implement `{ name, connect(ctx, signal) }` and return `{ ready, closed }`. `ready` settles once the first usable
@@ -103,7 +111,7 @@ A channel adapter depends on the harness-neutral `@fastagent-sh/fastagent/core` 
 |---|---|
 | `Agent`, `SendRequest`, `Message`, `MessageStreamEvent`, `SessionEvent`, `Entry` | the Agent API ([agent-api.md](design/agent-api.md)) |
 | `AgentError`, `hasEnded` | what every operation rejects with; whether a message has ended |
-| `ChannelModule`, `ChannelContext`, `Routes`, `ChannelHandler` | HTTP route module and route types |
+| `defineChannel`, `ChannelModule`, `ChannelContext`, `Routes`, `ChannelHandler` | a channel's export, and the HTTP route types |
 | `LongConnectionChannelModule`, `LongConnection` | long-connection module and lifecycle types |
 | `readBodyCapped` | read a request body with a byte cap |
 | `text`, `textHeaders` | build plain status/error responses |
@@ -114,11 +122,10 @@ built-in.
 
 ## Sessions: the channel's map
 
-The Agent names sessions; a channel keeps which session each of its conversations talks in (a chat, a thread, an
-issue), in its own state under `ctx.stateRoot`. Create a conversation's session in one order: the session
-(`sessions.create`), then the record in your map, then the message. A crash between the first two leaves a session
-nothing refers to, which the retry does not reuse; no message is answered twice, since it is sent only once its
-session is recorded.
+The Agent names sessions; a channel's `sessionFor` keeps which session each of its conversations talks in (a chat, a
+thread, an issue), in `<stateDir>/sessions.json`. It creates a conversation's session in one order: the session, then
+the record, then the message the channel sends. A crash between the first two leaves a session nothing refers to, which
+the retry does not reuse; no message is answered twice, since it is sent only once its session is recorded.
 
 | Channel type | Typical conversation |
 |---|---|
@@ -143,12 +150,11 @@ export interface AcmeChannelOptions {
   on(event: AcmeEvent): { conversation: string; text: string; deliveryId: string } | null;
 }
 
-// Policy options in, a ChannelModule out: the framework (or an embedder) supplies { agent, stateRoot }.
+// Policy options in, a ChannelModule out: the mount supplies its context.
 export function acmeChannel(options: AcmeChannelOptions): ChannelModule {
   if (!options.secret) throw new Error("acmeChannel requires a non-empty secret");
 
-  return ({ agent, stateRoot }) => {
-    const sessions = sessionMap(`${stateRoot}/channels/acme/sessions.json`); // yours: conversation → session id
+  return ({ agent, sessionFor }) => {
     return {
       "POST /acme": async (req) => {
         const body = await readBodyCapped(req, 1 << 20);
@@ -164,7 +170,7 @@ export function acmeChannel(options: AcmeChannelOptions): ChannelModule {
         const intent = options.on(event);
         if (!intent) return new Response(null, { status: 204 });
 
-        const sessionId = await sessions.of(intent.conversation, async () => (await agent.sessions.create()).id);
+        const sessionId = await sessionFor(intent.conversation);
         // The delivery id as the idempotency key: a platform's redelivery returns the same message, not a second one.
         const message = await agent.messages.send(
           { sessionId, content: intent.text, idempotencyKey: intent.deliveryId },
@@ -182,20 +188,21 @@ This request/reply shape is appropriate when the external system expects the res
 
 ## Fire-and-forget adapters
 
-Many webhook providers require a quick ACK. In that case, send the message, return 2xx, and wait for its end apart:
+Many webhook providers require a quick ACK. In that case, answer at once and do the rest as the place's `turn`:
 
 ```ts
-const message = await agent.messages.send({ sessionId, content: text, idempotencyKey: deliveryId });
-void agent.messages.get({ sessionId, messageId: message.id }, { wait: Number.POSITIVE_INFINITY }).then(
-  (end) => console.error(`[acme] message ended: ${end.status}`),
-  (error) => console.error(`[acme] waiting failed: ${String(error)}`),
-);
+turn(conversation, async () => {
+  const sessionId = await sessionFor(conversation);
+  const message = await agent.messages.send({ sessionId, content: text, idempotencyKey: deliveryId }, { wait: 600 });
+  await postReply(conversation, message.answer?.text ?? `it ended ${message.status}`);
+});
 return new Response(null, { status: 202 });
 ```
 
-An accepted message is durable: the agent answers it after a restart too. What happens after it (delivering the answer
-back to the platform) is yours to make durable: the first-party channels record each turn's intent before the ACK and
-deliver the answer of a turn recovered after a restart.
+An accepted message is durable: the agent answers it after a restart too. A `turn` is not: one the process stops
+before it sends is lost unless the platform delivers its event again. What must not be lost is yours to keep in
+`stateDir`: the first-party channels record each turn's intent before the ACK and deliver the answer of a turn
+recovered after a restart.
 
 ## Streaming adapters
 
@@ -230,7 +237,7 @@ A channel adapter should:
 - cap request bodies by bytes, not `Content-Length`,
 - return explicit 4xx responses for invalid input,
 - send each message with the platform's delivery id as its `idempotencyKey`,
-- keep its conversation → session map in its own state, created in the order session, record, message,
+- take each conversation's session from `sessionFor`, and keep what it must not lose in `stateDir`,
 - surface post-ACK failures in operator logs,
 - handle every way a message ends, not only `completed`,
 - stop work it no longer wants with `sessions.cancel`: a Caller that stops waiting only detaches,

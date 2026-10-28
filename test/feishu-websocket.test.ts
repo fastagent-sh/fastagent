@@ -4,6 +4,7 @@ import { ev } from "./scripted-run.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { channelContext } from "../src/channels/context.ts";
 import { FEISHU_CLOUD, LARK_COMPAT_CLOUD } from "../src/channels/feishu/cloud.ts";
 import { buildFeishuWebSocketChannel, feishuChannel, feishuWebSocketChannel } from "../src/channels/feishu/feishu.ts";
 import { larkChannel, larkWebSocketChannel } from "../src/channels/lark/lark.ts";
@@ -68,7 +69,7 @@ describe("Feishu/Lark WebSocket ingress", () => {
         yield ev.message();
         yield ev.ended();
       });
-      const run = module.connect({ agent: agent, stateRoot: root }, new AbortController().signal);
+      const run = module.connect(channelContext(agent, root, profile.kind), new AbortController().signal);
       await run.ready;
       expect(accepted).toBeTypeOf("function");
       await accepted?.(event);
@@ -102,7 +103,7 @@ describe("Feishu/Lark WebSocket ingress", () => {
       yield ev.message();
       yield ev.ended();
     });
-    module.connect({ agent: agent, stateRoot: root }, new AbortController().signal);
+    module.connect(channelContext(agent, root, "feishu"), new AbortController().signal);
     const home = join(root, "channels", "feishu");
     await mkdir(join(home, "turns.json.tmp")); // saveStateFile(writeFile) fails with EISDIR before the ACK
 

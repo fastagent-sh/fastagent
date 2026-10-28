@@ -75,7 +75,7 @@ export function routesFor(
   stateRoot: string,
   channels: ReadonlyMap<string, AnyChannelModule>,
 ): ServingSurface {
-  const { routes, longConnections, routeChannels } = mountChannels(channels, { agent, stateRoot });
+  const { routes, longConnections, routeChannels } = mountChannels(channels, agent, stateRoot);
   let ready = longConnections.length === 0;
   const health = (): Response => (ready ? text("ok\n", 200) : text("starting\n", 503));
   const probed = Object.keys(routes).some((key) => {

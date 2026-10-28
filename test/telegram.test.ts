@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { channelContext } from "../src/channels/context.ts";
 import { type Asked, type Prompt, asked, promptOf, scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
 import { ev, scriptedRun } from "./scripted-run.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -127,10 +128,9 @@ const telegramChannel = (
   const home = stateDir ?? freshStateDir();
   const root = rootOfHome.get(home);
   if (!root) throw new Error("test stateDir must come from freshStateDir()");
-  const handler = buildTelegramChannel(opts)({
-    agent: stopped ? withStop(agent, stopped) : agent,
-    stateRoot: root,
-  })["POST /telegram"]!;
+  const handler = buildTelegramChannel(opts)(
+    channelContext(stopped ? withStop(agent, stopped) : agent, root, "telegram"),
+  )["POST /telegram"]!;
   // Register the turn-queue idle so flush() awaits this channel's fire-and-forget turns deterministically.
   const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
   if (idle) channelIdles.add(idle);
@@ -217,26 +217,15 @@ describe("durable group buffer (single-process restarts)", () => {
     const root = mkdtempSync(join(tmpdir(), "tg-root-"));
     stateDirs.push(root);
     const { agent } = replyingAgent("ok");
-    const ch = buildTelegramChannel({ secretToken: SECRET, botToken: "1:A", route })({
-      agent,
-      stateRoot: root,
-    })["POST /telegram"]!;
+    const ch = buildTelegramChannel({ secretToken: SECRET, botToken: "1:A", route })(
+      channelContext(agent, root, "telegram"),
+    )["POST /telegram"]!;
     expect((await ch(tgRequest(group(1, "hello state root")))).status).toBe(200);
     // The buffer landed under the DERIVED channel home, not the root itself and not process.cwd().
     const home = join(root, "channels", "telegram");
     const onDisk = JSON.parse(readFileSync(join(home, "buffers.json"), "utf8")) as Record<string, unknown[]>;
     expect(onDisk["-100"]?.length).toBe(1);
     expect(existsSync(join(root, "buffers.json"))).toBe(false);
-  });
-
-  it("rejects a relative ctx.stateRoot for embedders that mount without loadChannels (fail visibly)", () => {
-    const { agent } = replyingAgent("ok");
-    expect(() =>
-      buildTelegramChannel({ secretToken: SECRET, botToken: "1:A" })({
-        agent,
-        stateRoot: "rel",
-      }),
-    ).toThrow(/stateRoot/);
   });
 
   it("a FAILED turn keeps the folded discussion — the next summon re-folds it (commit on completed only)", async () => {

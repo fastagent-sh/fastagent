@@ -2,7 +2,7 @@
  * Telegram bot channel: verify the webhook secret token → decide via `route(update)` → run the turn → stream the
  * agent's reply back to the chat, ACK 200.
  */
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import type { ChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
@@ -30,8 +30,6 @@ import {
 import { registerTelegramTransport } from "./shared-api.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
-import { ensureStateHome } from "../../state-file.ts";
-import { conversationSessions } from "../../conversation-sessions.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
@@ -77,7 +75,7 @@ export function telegramChannel({
   botUsername,
   apiBaseUrl = "https://api.telegram.org",
 }: TelegramChannelOptions): ChannelModule {
-  return ({ agent, stateRoot }) => {
+  return ({ agent, sessionFor, recordedSession, stateDir: stateHome }) => {
     // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
     if (!secretToken) {
       throw new Error(
@@ -119,13 +117,6 @@ export function telegramChannel({
     const decide =
       route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
 
-    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/telegram` (harness state at
-    // the root, channel state under `channels/<kind>/`).
-    if (!isAbsolute(stateRoot)) {
-      throw new Error(`telegramChannel requires an absolute ctx.stateRoot, got "${stateRoot}"`);
-    }
-    const stateHome = join(stateRoot, "channels", "telegram");
-    ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     const buffer = createContextBuffer(join(stateHome, "buffers.json"));
     // The send tool rides this channel's token, and what it sends lands in this buffer (shared-api.ts says why).
     registerTelegramTransport({
@@ -136,7 +127,6 @@ export function telegramChannel({
     // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
     // replay on the next start.
     const store = createTurnStore(join(stateHome, "turns.json"));
-    const sessions = conversationSessions(join(stateRoot, "channels", "telegram", "sessions.json"));
     const sideTasks = createTaskTracker("[telegram]");
     const targetOf = (r: PendingTurn): Target => ({ chatId: r.chatId, threadId: r.threadId, replyTo: r.replyTo });
 
@@ -197,7 +187,7 @@ export function telegramChannel({
           telegramTurnStream(
             agent,
             {
-              session: () => sessions.of(rec.conversation, agent),
+              session: () => sessionFor(rec.conversation),
               key: rec.id,
               text: `${discussionBlock(discussion.text)}${rec.baseText}`,
             },
@@ -274,7 +264,7 @@ export function telegramChannel({
       // `abort` waits until what it stopped has ended, so the update is acknowledged first.
       if (telegramStop(update, { botUsername: mentionName, botId })) {
         sideTasks.track(
-          dispatchStop(agent, sessions.get(conversation), "[telegram]")
+          dispatchStop(agent, recordedSession(conversation), "[telegram]")
             .then((feedback) =>
               sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }),
             )

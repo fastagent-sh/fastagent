@@ -510,18 +510,24 @@ export default defineChannel(({ agent, sessionFor, turn }) => ({
 }));
 ```
 
-What a channel is handed beside the agent, and all it is handed: no directory of its own, since `sessionFor` keeps
-the one map a channel needs and the platform's message id as `idempotencyKey` keeps a redelivery from running twice.
+What a channel is handed beside the agent, and all it is handed. The first-party channels are written against the
+same context as any other.
 
 - **`turn(place, work)`** runs `work` after the route has answered, one at a time per place (a chat, a thread) in the
   order they arrived, and counts it as work in flight, which `dev`'s restart and AgentCore's `/ping` wait for. It
   keeps no record: a turn the process stops before it runs is lost unless the platform delivers its event again, which
-  the platform's message id as `idempotencyKey` makes safe. A channel that must not lose one keeps its own record, as
-  the first-party channels do.
+  the platform's message id as `idempotencyKey` makes safe. A channel that must not lose one keeps its own record in
+  `stateDir`, as the first-party channels do.
 - **`sessionFor(key, { forkFrom? })`** is the session the conversation `key` talks in, from the channel's own map of
-  conversations to sessions: the one recorded, or a new one (a fork with `forkFrom`, for a thread) created and recorded
-  before it is returned, so that a message is sent only into a recorded session. Calls for one key are taken one at a
-  time, so two first messages of a new conversation get one session.
+  conversations to sessions: the one recorded, or a new one created and recorded before it is returned, so that a
+  message is sent only into a recorded session. `forkFrom` answers what a new one forks from (`{ sessionId, entryId? }`,
+  or nothing for an empty one), and is asked only when `key` has no session yet, since finding a thread's branch point
+  reads the room's messages. Calls for one key are taken one at a time, so two first messages of a new conversation
+  get one session.
+- **`recordedSession(key)`** is the session recorded for `key`, without making one: what a stop command asks of a
+  place nothing was said in.
+- **`stateDir`** is the channel's own directory, `<state root>/channels/<its file's name>`, made at the mount, for the
+  records it must keep (a turn's intent before it answers the platform, the platform events it has seen).
 
 ## 9. HTTP
 
