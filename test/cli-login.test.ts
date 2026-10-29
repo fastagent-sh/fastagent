@@ -76,7 +76,7 @@ describe("cli: login and models", () => {
     const listed = await run(["models", "gw/"], dir, env);
     expect([listed.code, listed.stdout.trim()], listed.stderr).toEqual([0, "gw/m1"]);
     const json = await run(["models", "gw/", "--json"], dir, env);
-    expect(JSON.parse(json.stdout)).toEqual([{ spec: "gw/m1", provider: "gw", id: "m1" }]);
+    expect(JSON.parse(json.stdout)).toEqual([{ spec: "gw/m1", provider: "gw", id: "m1", name: "m1" }]);
   });
 
   it("FASTAGENT_AUTH_PATH at the user-global credential is the documented sharing path, not a leak", async () => {

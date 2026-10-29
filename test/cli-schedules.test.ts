@@ -121,11 +121,21 @@ describe("cli: schedules run and unwake", () => {
     };
     expect(listed.schedules[0]?.session).toEqual(expect.any(String));
     expect(listed.schedules[0]?.fires.map((fire) => fire.outcome)).toEqual(["interrupted", "completed", "completed"]);
+  });
 
-    // Checked before the model a fire needs: a script that names no schedule learns which there are.
-    const unknown = await run(["schedules", "run", "weekly", dir], undefined, { ...process.env, FASTAGENT_MODEL: "" });
-    expect(unknown.code).toBe(2);
-    expect(unknown.stderr).toMatch(/no schedule "weekly" in .*src\/schedules\/ \(declared: digest\)/);
+  it("schedules run checks the schedule's name before the model a fire needs: both are choices, exit 2", async () => {
+    // No model anywhere: agentWorkspace's config names none, and the environment holds none.
+    const dir = await agentWorkspace("fa-schedules-unknown-", { "src/schedules/digest.ts": schedule("0 9 * * *") });
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.FASTAGENT_MODEL;
+    const unknown = await run(["schedules", "run", "weekly", dir], undefined, env);
+    expect([unknown.code, unknown.stderr]).toEqual([
+      2,
+      expect.stringMatching(/no schedule "weekly" in .*src\/schedules\/ \(declared: digest\)/),
+    ]);
+    expect(unknown.stderr).not.toMatch(/missing model/);
+    const known = await run(["schedules", "run", "digest", dir], undefined, env);
+    expect([known.code, known.stderr]).toEqual([2, expect.stringMatching(/missing model/)]);
   });
 
   it("schedules run exits 1 on a cut-off answer, and refuses work a stopped process left unfinished", async () => {

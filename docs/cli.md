@@ -155,7 +155,8 @@ fastagent env exec -- gh --version
 - **`list`** prints each package with its declared version, and each declared variable with whether it has a value
   here (never the value) and what it is for. It warns about what `deploy` would refuse (a refused backend, a PyPI
   package's undeclared runtime) and about a variable `dev` would refuse to start without. Variables are declared in
-  `context.json` by hand: there is no command for them.
+  `context.json` by hand: there is no command for them. `--json` prints `{packages: [{name, version}], apt: [name],
+  variables: [{name, description, set}]}`, the warnings still on stderr.
 - **`install`** installs mise (adding it to `package.json` when it is not there), then every declared package at the
   newest release its version allows, a newer one where one is out. Day to day it is not needed, since `add` installs
   what it adds and every start installs what is missing: it is for newer releases, and for a clone that has not
@@ -183,6 +184,9 @@ built-in providers with the models pi's published catalog adds to them ([model l
 and the providers its `fastagent.config.ts` declares ([custom models](configuration.md#custom-models)). It needs none
 of the secrets the agent declares. Outside an agent, or with `-g`, it lists the built-ins alone, without the agent's
 providers. Inside an agent's subdirectory it refuses (as `login` does): `cd` to the agent, or pass `-g`.
+
+`--json` prints the same list as an array of `{spec, provider, id, name}` (`name` is the model's display name, its
+`id` when it has none), in the same order.
 
 `--refresh` fetches the lists now, however recently they were fetched: for a model released in the last 4 hours. When
 it cannot, `FASTAGENT_OFFLINE=1` included, it prints the lists it has, warns why, and exits 1.
@@ -458,7 +462,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 |---|---|
 | `0` | Success (including help and version). |
 | `1` | Runtime failure: a message that did not complete, a definition that does not open, a deploy gate, an unsupported runtime, invalid configuration. |
-| `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags. A mistyped command suggests the nearest one. |
+| `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags, or a choice a terminal would have asked for (a default model, a provider to sign in to) with none there to ask. A mistyped command suggests the nearest one. |
 
 ## Scripts and coding agents
 

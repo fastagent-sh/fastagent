@@ -38,8 +38,7 @@ export async function runModels(
     const models = lines.map((spec) => {
       const provider = providerOf(spec);
       const id = spec.slice(provider.length + 1);
-      const name = environment.models.getModel(provider, id)?.name;
-      return { spec, provider, id, ...(name !== undefined && name !== id ? { name } : {}) };
+      return { spec, provider, id, name: environment.models.getModel(provider, id)?.name ?? id };
     });
     console.log(JSON.stringify(models, null, 2));
   } else {

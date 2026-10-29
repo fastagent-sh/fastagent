@@ -29,35 +29,37 @@ export interface EnteredAgent {
 /**
  * How a command enters its agent directory, in the one order that works: the directory, the agent's environment, then
  * the first-run model picker. Returns the default model that then resolves, if any. `deploy` uses this directly: it
- * gates a missing model itself, by what will ship.
+ * gates a missing model itself, by what will ship. `before`: what the command checks of the directory before a model
+ * is asked for (`schedules run`: that the schedule it names exists).
  */
 export async function enterAgentDirectory(
   dirArg: string,
   opts: { model?: string; input?: boolean },
+  before?: (agentDir: string) => Promise<void>,
 ): Promise<EnteredAgent> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir);
+  await before?.(agentDir);
   const modelSpec = await resolveFirstRunModel(agentDir, opts);
   return { agentDir, ...(modelSpec ? { modelSpec } : {}) };
 }
 
 /**
- * How every command that RUNS the agent on this machine enters it (dev, start, invoke):
+ * How every command that RUNS the agent on this machine enters it (dev, start, invoke, schedules run):
  * {@link enterAgentDirectory}, plus a default model. The agent opens without one, but a process here would then fail
- * every new conversation, so it stops at startup with {@link missingDefaultModel} instead.
+ * every new conversation, so it stops at startup instead: exit 2, the choice a terminal's picker would have asked for.
  */
 export async function enterAgentCommand(
   dirArg: string,
   opts: { model?: string; input?: boolean },
+  before?: (agentDir: string) => Promise<void>,
 ): Promise<Required<EnteredAgent>> {
-  const entered = await enterAgentDirectory(dirArg, opts);
+  const entered = await enterAgentDirectory(dirArg, opts, before);
   const { modelSpec } = entered;
   if (!modelSpec) {
-    failStartup(
-      new Error(
-        `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai/gpt-5.5"; ` +
-          "`fastagent models` lists them)",
-      ),
+    failUsage(
+      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai/gpt-5.5"; ` +
+        "`fastagent models` lists them)",
     );
   }
   return { ...entered, modelSpec };

@@ -164,7 +164,7 @@ const models: CommandSpec = {
   flags: [
     { flags: "-g, --global", description: "the built-ins, without the agent's providers" },
     { flags: "--refresh", description: "fetch the model lists now, even when the kept ones are fresh" },
-    { flags: "--json", description: "the specs as JSON: spec, provider, id and name of each" },
+    { flags: "--json", description: "the specs as JSON: spec, provider, id and name of each (its id, unnamed)" },
   ],
   examples: [
     { cmd: "fastagent models", note: "all specs" },
