@@ -8,12 +8,21 @@ import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../harnesses/models/creden
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { findAgentDir, globalHome, selectAgentEnvironment } from "../../paths.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../../harnesses/models/login.ts";
-import { environmentAuth } from "../../harnesses/models/models.ts";
-import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
+import {
+  LoginCancelled,
+  type LoginIO,
+  type LoginMethod,
+  LoginRefused,
+  PI_DEFAULT_MODELS,
+  loginFlow,
+} from "../../harnesses/models/login.ts";
+import { environmentAuth, loginProviders } from "../../harnesses/models/models.ts";
+import { definitionProviders, loadConfig, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { loginOnBox } from "../box-login.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";
+import { openExternalUrl } from "../../open-url.ts";
+import { LoginNeedsAnswer, scriptedLoginIO } from "../scripted-login.ts";
 import { isInteractive, terminalLoginIO } from "../shared.ts";
 import { HOSTS } from "./deploy.ts";
 
@@ -22,6 +31,12 @@ export interface LoginOptions {
   global?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
+  /** `--method account|api-key`: how to sign in, for a provider that offers both. */
+  method?: string;
+  /** `--json`: what the sign-in says, and how it ended, as JSON lines on stdout. */
+  json?: boolean;
+  /** `--timeout <seconds>`: how long the whole sign-in may take. */
+  timeout?: string;
   /** `--deployment <host>`: log in this agent's deployment on that host. */
   deployment?: string;
   /** `--stdio`: the box's half of `--deployment` — the flow speaks the relay wire on stdin/stdout. */
@@ -30,9 +45,19 @@ export interface LoginOptions {
   ifMissing?: boolean;
 }
 
+/** Without a terminal, a sign-in waiting on a browser or stdin gives up after this long. */
+const UNATTENDED_TIMEOUT_SECONDS = 300;
+
+/** How a login run ends, as `--json` prints it last; its exit code follows from `reason`. */
+type LoginEnd =
+  | { ok: true; provider: string; method: LoginMethod; path: string; model?: string }
+  | { ok: false; reason: "cancelled" | "refused" | "failed"; message: string };
+
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.stdio) return runStdioLogin(provider, opts);
   if (opts.deployment !== undefined) return runDeploymentLogin(provider, opts);
+  const method = opts.method === undefined ? undefined : methodOf(opts.method);
+  const givenTimeout = opts.timeout === undefined ? undefined : secondsOf(opts.timeout);
   // "Outside an agent" must mean exactly that: inside one is refused (findAgentDir), never a global login.
   const agentDir = optionalAgentDirOrExit(process.cwd());
   // Outside any agent the target is the user-global machinery home — handed over explicitly, so the path resolvers
@@ -59,30 +84,68 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
         `you want; \`cd\` into an agent to give that one its own account instead.`,
     );
   }
-  // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or prompts for a
-  // key).
-  if (opts.input === false || !isInteractive()) {
-    failStartup(
-      new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
-    );
-  }
+  const menus = opts.input !== false && opts.json !== true && isInteractive();
+  const timeoutSeconds = givenTimeout ?? (menus ? undefined : UNATTENDED_TIMEOUT_SECONDS);
+  const timeout = timeoutSeconds === undefined ? undefined : AbortSignal.timeout(timeoutSeconds * 1000);
+  const end = (outcome: LoginEnd): void => {
+    if (opts.json) console.log(JSON.stringify({ type: "result", ...outcome }));
+  };
+  const io = menus
+    ? terminalLoginIO()
+    : scriptedLoginIO(process.stdin, (notice) => {
+        if (opts.json) console.log(JSON.stringify(notice));
+        else console.error(`[fastagent] ${notice.type === "note" ? notice.message : `opening ${notice.url}`}`);
+        // A person signs in in the browser, which may well be on this machine.
+        if (notice.type === "open") openExternalUrl(notice.url);
+      });
   // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint. Not for
   // `-g`: the global file serves every agent on this machine, so no one agent's providers decide what it holds.
   const providers = agentDir && !opts.global ? await definitionProviders(agentDir).catch(failStartup) : [];
+  // What the agent reads, its file over the global one, is what authenticates each provider for it now.
+  const agentReads =
+    agentDir && !opts.global ? (await modelEnvironment(agentDir, {}, providers)).credentials : undefined;
   // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
-  const result = await loginFlow(terminalLoginIO(), {
+  const result = await loginFlow(io, {
     authPath,
     providers,
+    menus,
+    ...(agentReads ? { statusFrom: agentReads } : {}),
     ...(provider ? { provider } : {}),
-  }).catch((error: unknown) => {
+    ...(method ? { method } : {}),
+    ...(timeout ? { signal: timeout } : {}),
+  }).catch((error: unknown): never => {
+    const message = (error as Error).message;
+    if (timeout?.aborted) {
+      const timedOut = `login timed out after ${timeoutSeconds}s (--timeout)`;
+      end({ ok: false, reason: "failed", message: timedOut });
+      failStartup(new Error(timedOut));
+    }
     if (error instanceof LoginCancelled) {
       // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
+      end({ ok: false, reason: "cancelled", message: "login cancelled" });
       console.error(`[fastagent] login cancelled`);
       process.exit(1);
     }
-    failStartup(error);
+    if (error instanceof LoginRefused || error instanceof LoginNeedsAnswer) {
+      end({ ok: false, reason: "refused", message });
+      failUsage(message);
+    }
+    end({ ok: false, reason: "failed", message });
+    failStartup(new Error(message));
   });
-  console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
+  const name = loginProviders(providers).find((p) => p.id === result.provider)?.name ?? result.provider;
+  const model = agentDir && !opts.global ? await defaultModelHint(agentDir, result.provider) : undefined;
+  end({ ok: true, provider: result.provider, method: result.method, path: authPath, ...(model ? { model } : {}) });
+  console.error(
+    result.method === "oauth"
+      ? `[fastagent] logged in to ${name} — saved to ${authPath}`
+      : `[fastagent] saved the API key for ${name} to ${authPath}`,
+  );
+  if (model !== undefined) {
+    console.error(
+      `[fastagent] this agent has no model: \`model: "${model}"\` in fastagent.config.ts uses ${name}'s default`,
+    );
+  }
   // The environment outranks the global file for every agent, so a global login it shadows would sit unused while
   // agents run on, say, an API key billed per request, with only a startup line to show it.
   const shadowedBy =
@@ -94,6 +157,31 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     );
   }
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
+}
+
+/** `--method`'s words, pi's: an account (OAuth) or an API key. */
+function methodOf(value: string): LoginMethod {
+  if (value === "account") return "oauth";
+  if (value === "api-key") return "api_key";
+  return failUsage(`--method must be account or api-key, not "${value}"`);
+}
+
+function secondsOf(value: string): number {
+  const seconds = Number(value);
+  if (!Number.isInteger(seconds) || seconds <= 0)
+    failUsage(`--timeout must be a whole number of seconds, not "${value}"`);
+  return seconds;
+}
+
+/**
+ * pi's default model for `provider`, when the agent in `agentDir` has no model of its own: what pi starts on after a
+ * sign-in. Printed, never written: the model belongs in the author's own config.
+ */
+async function defaultModelHint(agentDir: string, provider: string): Promise<string | undefined> {
+  const config = await loadConfig(agentDir).catch(failStartup);
+  if (modelSpecFor(config, undefined) !== undefined) return undefined;
+  const modelId = PI_DEFAULT_MODELS[provider];
+  return modelId === undefined ? undefined : `${provider}/${modelId}`;
 }
 
 /**

@@ -20,31 +20,45 @@ import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { assertOneCredentialSource, fastagentCredentialStore } from "./credentials.ts";
-import { interactiveAuth, loginProviders, modelsOver, probeApiKey } from "./models.ts";
+import { UNNAMED_AUTH_SOURCE, interactiveAuth, loginProviders, modelsOver, probeApiKey } from "./models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
 
 /** The user backed out of a prompt/menu, or the flow was aborted — a decision, not a failure. */
 export class LoginCancelled extends Error {}
 
-/** One provider sign-in a picker can offer. */
+/** A sign-in that cannot start as asked: an unknown provider, or a choice a caller without menus did not make. */
+export class LoginRefused extends Error {}
+
+/** One provider sign-in a picker can offer, as pi's `/login` offers it. */
 export interface LoginOption {
   provider: string;
+  /** The provider's name, as pi lists it: "OpenAI", "OpenAI Codex (legacy)". */
+  name: string;
   method: LoginMethod;
-  /** The method's own name, e.g. "Anthropic (Claude Pro/Max)" or "Anthropic API key". */
+  /** What signing in this way is called: the provider's own label ("Sign in with ChatGPT"), else pi's. */
   label: string;
   /** An OAuth login backed by a provider subscription. */
   subscription: boolean;
+  /** Its key comes from the environment, never from a sign-in: picking it says so. */
+  external: boolean;
   /**
-   * What the store holds for this provider now. It keeps ONE credential per provider, so signing in with the other
-   * method replaces it — worth a warning in a client.
+   * What authenticates the provider now: the kind of credential, and `OAuth`, `stored credential` or an env variable
+   * such as `OPENAI_API_KEY`. The store keeps ONE credential per provider, so signing in with the other method
+   * replaces a stored one, which a picker shows.
    */
-  stored?: LoginMethod;
+  status?: { type: LoginMethod; source: string };
+  /** Why checking what authenticates it failed, when it did. */
+  problem?: string;
 }
 
+const ACCOUNT_LABEL = "Sign in with an account";
+const API_KEY_LABEL = "Sign in with an API key";
+
 /**
- * Every interactive sign-in of pi's built-in providers, with what `credentials` (a credentials file, or the caller's
- * own store) already holds for each. A provider whose key can only come from its env var offers none and is left out.
+ * Every sign-in of pi's built-in providers, sorted by name as pi's `/login` lists them, with what authenticates each
+ * one here: a credential `credentials` (a credentials file, or the caller's own store) holds, else this process's
+ * environment, which a stored credential outranks.
  */
 export function loginOptions(credentials: string | CredentialStore): Promise<LoginOption[]> {
   return loginOptionsOver(credentials);
@@ -62,22 +76,59 @@ export async function loginOptionsOver(
   // ONE read of the store: `list` is metadata only, and reading per provider would repeat a corrupt file's warning for
   // every provider.
   const held = new Map((await storeOf(credentials).list()).map((info) => [info.providerId, info.type] as const));
+  // The environment alone, over no store: what authenticates a provider nothing is stored for.
+  const environment = modelsOver(new InMemoryCredentialStore(), providers);
   const offered: LoginOption[] = [];
   for (const provider of loginProviders(providers)) {
-    const methods = (["oauth", "api_key"] as const).filter((method) => interactiveAuth(provider, method));
+    const methods = (["oauth", "api_key"] as const).filter(
+      (method) => provider.auth[method === "oauth" ? "oauth" : "apiKey"],
+    );
     if (methods.length === 0) continue;
     const stored = held.get(provider.id);
+    let status: LoginOption["status"];
+    let problem: string | undefined;
+    if (stored !== undefined) {
+      status = { type: stored, source: stored === "oauth" ? "OAuth" : "stored credential" };
+    } else {
+      try {
+        const found = await environment.checkAuth(provider.id);
+        if (found !== undefined) status = { type: found.type, source: found.source ?? UNNAMED_AUTH_SOURCE };
+      } catch (error) {
+        problem = (error as Error).message;
+      }
+    }
     for (const method of methods) {
       offered.push({
         provider: provider.id,
+        name: provider.name,
         method,
-        label: interactiveAuth(provider, method)?.name ?? provider.name,
+        label: method === "oauth" ? (provider.auth.oauth?.loginLabel ?? ACCOUNT_LABEL) : API_KEY_LABEL,
         subscription: method === "oauth" && provider.auth.oauth?.isSubscription === true,
-        ...(stored ? { stored } : {}),
+        external: interactiveAuth(provider, method) === undefined,
+        ...(status ? { status } : {}),
+        ...(problem ? { problem } : {}),
       });
     }
   }
-  return offered;
+  return offered.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** What a credential of `type` is called beside a provider's sign-in, as pi's picker calls it. */
+function credentialKind(type: LoginMethod, subscription: boolean): string {
+  if (type === "api_key") return "API key";
+  return subscription ? "subscription" : "account";
+}
+
+/** An option's status as pi's picker writes it after the provider's name. */
+export function loginStatusText(option: LoginOption): string {
+  if (option.problem !== undefined) return `auth check failed: ${option.problem}`;
+  const { status } = option;
+  if (status === undefined) return "not configured";
+  if (status.type !== option.method) return `${credentialKind(status.type, option.subscription)} configured`;
+  if (status.source === "OAuth" || status.source === "stored credential") return "✓ configured";
+  return /^[A-Z][A-Z0-9_]*(?:, [A-Z][A-Z0-9_]*)*$/.test(status.source)
+    ? `✓ env: ${status.source}`
+    : `✓ ${status.source}`;
 }
 
 export type LoginRequest = {
@@ -149,11 +200,16 @@ export interface LoginInternals {
    * is used, then its first. On one registry, any of a provider's models answers the 401 question.
    */
   verifyWith?: string;
+  /**
+   * false: a key the provider rejects fails the sign-in, rather than its key flow running again for someone to retype
+   * it; for a caller with no one to retype it. Default true.
+   */
+  askAgain?: boolean;
 }
 
 /** {@link login}, plus {@link LoginInternals}. */
 export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<LoginResult> {
-  const { providers, verifyWith } = internals;
+  const { providers, verifyWith, askAgain = true } = internals;
   const { method, interaction } = request;
   assertOneCredentialSource(request);
   if (request.credentialStore === undefined && typeof request.authPath !== "string") {
@@ -183,7 +239,7 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
     let verified: LoginResult["verified"] = "n/a";
     if (models) {
       await trial.modify(provider.id, async () => credential);
-      const verdict = await verifyApiKey(models, provider.id, verifyWith, notify, signal);
+      const verdict = await verifyApiKey(models, provider.id, verifyWith, notify, signal, askAgain);
       if (signal.aborted) throw new LoginCancelled("cancelled");
       if (verdict === "rejected") continue;
       verified = verdict;
@@ -307,6 +363,7 @@ async function verifyApiKey(
   verifyWith: string | undefined,
   notify: (event: AuthEvent) => void,
   signal: AbortSignal,
+  askAgain: boolean,
 ): Promise<"ok" | "rejected" | "unknown"> {
   const chosen = verifyWith?.startsWith(`${providerId}/`)
     ? models.getModel(providerId, verifyWith.slice(providerId.length + 1))
@@ -332,6 +389,7 @@ async function verifyApiKey(
   if (probe.state === "ok") {
     notify({ type: "info", message: `key verified — ${label} responded` });
   } else if (probe.state === "rejected") {
+    if (!askAgain) throw new Error(`${providerId} rejected the API key (HTTP 401): ${probe.message}`);
     notify({
       type: "info",
       message: `${providerId} rejected the API key (HTTP 401): ${probe.message} — enter it again (or cancel)`,
@@ -358,8 +416,14 @@ export interface IoOption {
 export interface LoginIO {
   /** Single-choice picker. */
   select(message: string, options: IoOption[]): Promise<string | undefined>;
-  /** Free-text or hidden input. */
-  prompt(message: string, opts?: { hidden?: boolean; signal?: AbortSignal }): Promise<string | undefined>;
+  /**
+   * Free-text or hidden input. `manual`: the code or address a browser's sign-in ends on, which the provider's own
+   * callback usually brings first, aborting `signal`.
+   */
+  prompt(
+    message: string,
+    opts?: { hidden?: boolean; manual?: boolean; signal?: AbortSignal },
+  ): Promise<string | undefined>;
   /** Print an informational line (auth URL, device code, progress). */
   note(message: string): void;
   /** Best-effort open a URL in the browser (printed regardless). */
@@ -382,7 +446,11 @@ function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): Auth
                 ...(o.description ? { hint: o.description } : {}),
               })),
             )
-          : await io.prompt(p.message, { hidden: p.type === "secret", ...(p.signal ? { signal: p.signal } : {}) });
+          : await io.prompt(p.message, {
+              hidden: p.type === "secret",
+              manual: p.type === "manual_code",
+              ...(p.signal ? { signal: p.signal } : {}),
+            });
       if (v === undefined) throw new LoginCancelled("cancelled");
       return v;
     },
@@ -401,18 +469,10 @@ function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): Auth
   };
 }
 
-async function selectMethod(io: LoginIO): Promise<LoginMethod> {
-  const v = await io.select("Authentication method", [
-    { value: "oauth", label: "Use a subscription (OAuth)" },
-    { value: "api_key", label: "Use an API key" },
-  ]);
-  if (v !== "oauth" && v !== "api_key") throw new LoginCancelled("no authentication method selected");
-  return v;
-}
-
 /**
- * `fastagent login`: ask only what was not given (method, then provider, from {@link loginOptions} with each one's
- * stored credential), then {@link login}.
+ * `fastagent login`: ask only what was not given, as pi's `/login` asks it (how to sign in, then the provider; a
+ * provider named by its id or its name, then how, when it offers both), then {@link login}. Without `menus`, a choice
+ * not given refuses ({@link LoginRefused}) naming how to give it; what the provider's own flow asks still goes to `io`.
  */
 export async function loginFlow(
   io: LoginIO,
@@ -422,49 +482,116 @@ export async function loginFlow(
     method?: LoginMethod;
     providers?: readonly Provider[];
     signal?: AbortSignal;
+    /** false: no menu is shown for a choice not given. Default true. */
+    menus?: boolean;
+    /**
+     * Where the menus read what authenticates each provider now: the credentials the agent reads (its file over the
+     * global one), which can hold more than the file a sign-in writes. Default that file.
+     */
+    statusFrom?: CredentialStore;
     /** {@link LoginInternals.verifyWith}. */
     verifyWith?: string;
   },
 ): Promise<LoginResult> {
-  const offered = await loginOptionsOver(options.authPath, options.providers);
-  let provider = options.provider;
-  let method = options.method;
-  if (provider) {
-    const methods = offered.filter((o) => o.provider === provider).map((o) => o.method);
-    if (methods.length === 0) {
-      const known = loginProviders(options.providers).some((p) => p.id === provider);
-      throw new Error(
-        known
-          ? `provider "${provider}" has no interactive login — set its API key via the provider's env var`
-          : `unknown provider "${provider}"`,
-      );
-    }
-    method ??= methods.length > 1 ? await selectMethod(io) : methods[0];
-  } else {
-    const chosenMethod = method ?? (await selectMethod(io));
-    method = chosenMethod;
-    const candidates = offered.filter((o) => o.method === chosenMethod);
-    if (candidates.length === 0) throw new Error(`no provider supports ${chosenMethod} login`);
-    provider = await io.select(
-      "Select a provider",
-      candidates.map((o) => ({
-        value: o.provider,
-        label: o.label,
-        ...(o.stored ? { hint: `configured (${o.stored})` } : {}),
-      })),
-    );
-    if (!candidates.some((o) => o.provider === provider)) throw new LoginCancelled("no provider selected");
+  const offered = await loginOptionsOver(options.statusFrom ?? options.authPath, options.providers);
+  const choice = await chooseLogin(offered, options, options.menus === false ? undefined : io);
+  if (choice.external) {
+    throw new LoginRefused(`${choice.name} is configured outside fastagent: set its key in the environment`);
   }
   return loginOver(
     {
-      provider: provider as string,
-      method: method as LoginMethod,
+      provider: choice.provider,
+      method: choice.method,
       authPath: options.authPath,
       interaction: terminalInteraction(io, options.signal),
     },
     {
       ...(options.providers ? { providers: options.providers } : {}),
       ...(options.verifyWith ? { verifyWith: options.verifyWith } : {}),
+      askAgain: options.menus !== false,
     },
   );
+}
+
+/** The flag that gives a method, as a refusal names it. */
+const METHOD_FLAGS = "--method account or --method api-key";
+
+/** The sign-in `given` names, or, with `menus`, the one a person picks; otherwise a refusal naming what to pass. */
+async function chooseLogin(
+  offered: readonly LoginOption[],
+  given: { provider?: string; method?: LoginMethod },
+  menus: LoginIO | undefined,
+): Promise<LoginOption> {
+  const picked = async (
+    message: string,
+    options: IoOption[],
+    from: readonly LoginOption[],
+    by: (o: LoginOption) => string,
+  ) => {
+    const value = await (menus as LoginIO).select(message, options);
+    const option = from.find((o) => by(o) === value);
+    if (option === undefined) throw new LoginCancelled("nothing selected");
+    return option;
+  };
+  if (given.provider !== undefined) {
+    const named = given.provider.trim().toLowerCase();
+    const ofProvider = offered.filter((o) => o.provider.toLowerCase() === named || o.name.toLowerCase() === named);
+    if (ofProvider.length === 0) {
+      throw new LoginRefused(`unknown provider "${given.provider}": ${providerIds(offered)}`);
+    }
+    const name = (ofProvider[0] as LoginOption).name;
+    const ofMethod = given.method === undefined ? ofProvider : ofProvider.filter((o) => o.method === given.method);
+    if (ofMethod.length === 0) {
+      const only = (ofProvider[0] as LoginOption).method === "oauth" ? "an account" : "an API key";
+      throw new LoginRefused(`${name} signs in only with ${only}`);
+    }
+    if (ofMethod.length === 1) return ofMethod[0] as LoginOption;
+    if (menus === undefined)
+      throw new LoginRefused(`${name} signs in with an account or an API key: pass ${METHOD_FLAGS}`);
+    return picked(
+      `Select authentication method for ${name}:`,
+      ofMethod.map((o) => ({ value: o.method, label: o.label })),
+      ofMethod,
+      (o) => o.method,
+    );
+  }
+  if (menus === undefined) {
+    throw new LoginRefused(
+      `name the provider to sign in to (${providerIds(offered)}), and ${METHOD_FLAGS} for one that offers both`,
+    );
+  }
+  let method = given.method;
+  if (method === undefined) {
+    // pi offers its own gateway beside the two ways of signing in.
+    const radius = offered.find((o) => o.provider === "radius" && o.method === "oauth");
+    const ways: IoOption[] = [
+      ...(offered.some((o) => o.method === "oauth") ? [{ value: "oauth", label: ACCOUNT_LABEL }] : []),
+      ...(offered.some((o) => o.method === "api_key") ? [{ value: "api_key", label: API_KEY_LABEL }] : []),
+      ...(radius ? [{ value: "radius", label: `Sign in with ${radius.name}${statusSuffix(radius)}` }] : []),
+    ];
+    const way = await menus.select("Select authentication method:", ways);
+    if (way === "radius" && radius) return radius;
+    if (way !== "oauth" && way !== "api_key") throw new LoginCancelled("no authentication method selected");
+    method = way;
+  }
+  const candidates = offered.filter((o) => o.method === method);
+  if (candidates.length === 0)
+    throw new LoginRefused(`no provider signs in with ${method === "oauth" ? "an account" : "an API key"}`);
+  return picked(
+    "Select provider to configure:",
+    candidates.map((o) => ({ value: o.provider, label: `${o.name}${statusSuffix(o)}` })),
+    candidates,
+    (o) => o.provider,
+  );
+}
+
+/** An option's status after its name on every row, as pi's picker writes it: ` ✓ configured`, ` • not configured`. */
+function statusSuffix(option: LoginOption): string {
+  const text = loginStatusText(option);
+  return text.startsWith("✓") ? ` ${text}` : ` • ${text}`;
+}
+
+/** Every provider id a sign-in can name, for a refusal that must say which. */
+function providerIds(offered: readonly LoginOption[]): string {
+  return `one of ${[...new Set(offered.map((o) => o.provider))].sort().join(", ")}`;
 }

@@ -257,9 +257,17 @@ permissions before relying on it. See [CLI reference](cli.md).
 
 Choose a provider and model with the owner. `fastagent models` lists available specifications, the providers
 `fastagent.config.ts` declares included ([custom models](configuration.md#custom-models)).
-Ask the owner to run `fastagent login` in the agent directory, or have them configure an approved
-provider key in `.secrets/.env`. Keep credentials out of chat transcripts, issue comments,
-source files, and logs. The CLI reads the agent's `.secrets/.env`, not a `.env` at its root.
+`fastagent auth check --provider <id>` says whether the provider is ready (`ready`, exit 0). When it is not:
+
+- An account (ChatGPT for `openai`, a Claude subscription for `anthropic`): run
+  `fastagent login <provider> --method account --json`. It prints the address to open as an `open` line; give it
+  to the owner, who signs in in the browser, and the command ends with a `result` line once they have.
+- An API key: the owner sets it in `.secrets/.env`, or pipes it in themselves
+  (`printf %s "$KEY" | fastagent login <provider> --method api-key`). The owner can also run `fastagent login` in a
+  terminal, which asks for everything.
+
+Keep credentials out of chat transcripts, issue comments, source files, and logs. The CLI reads the agent's
+`.secrets/.env`, not a `.env` at its root.
 
 Set `model: "provider/model-id"` in the existing `fastagent.config.ts`, preserving its export. A terminal
 picker can also set the model; unattended invocations require an explicit model. A deployment resolves

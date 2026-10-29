@@ -90,11 +90,30 @@ describe("cli: login and models", () => {
     expect(stderr).not.toMatch(/cannot be committed/);
   });
 
-  it("login fails fast in a non-TTY (a pipe/CI) instead of hanging on the interactive menu", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "fa-login-tty-"));
-    const { code, stderr } = await run(["login", "openai-codex"], cwd); // run() pipes stdio → not a TTY
-    expect(code).toBe(1);
-    expect(stderr).toMatch(/login is interactive.*run it in a terminal/);
+  it("without a terminal login asks nothing: what it was not given is refused (exit 2), naming how to give it", async () => {
+    // run() pipes stdio, as a coding agent's shell does: no terminal, and stdin ends after `input`.
+    const cwd = await agentWorkspace("fa-login-agent-");
+    const unnamed = await run(["login"], cwd);
+    expect(unnamed.code).toBe(2);
+    expect(unnamed.stderr).toMatch(/name the provider to sign in to \(one of .*openai-codex.*\)/);
+    const both = await run(["login", "OpenAI"], cwd);
+    expect(both.code).toBe(2);
+    expect(both.stderr).toMatch(
+      /OpenAI signs in with an account or an API key: pass --method account or --method api-key/,
+    );
+    // The provider's own question has no line on stdin to answer it.
+    const unanswered = await run(["login", "openai", "--method", "api-key", "--json"], cwd);
+    expect(unanswered.code).toBe(2);
+    const end = JSON.parse(unanswered.stdout.trim().split("\n").at(-1) as string);
+    expect(end).toEqual({
+      type: "result",
+      ok: false,
+      reason: "refused",
+      message: 'the sign-in asks "Enter OpenAI API key": pass the answer on stdin, one line per question',
+    });
+    expect((await run(["login", "openai", "--method", "key"], cwd)).stderr).toMatch(
+      /--method must be account or api-key/,
+    );
   });
 
   it("login from $HOME does NOT self-ignore the HOME-global ~/.fastagent (a dotfiles repo may track it)", async () => {

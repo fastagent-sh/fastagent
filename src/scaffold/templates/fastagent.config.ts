@@ -13,7 +13,7 @@
 import type { AgentConfig } from "@fastagent-sh/fastagent";
 
 export default {
-  // model: "openai-codex/gpt-5.5",
+  // model: "openai/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max)
   http: {
     port: 8787, // the port a serve listens on, for its channels' webhooks and its health check
