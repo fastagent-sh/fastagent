@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import { catalogsIn } from "../src/harnesses/models/catalog.ts";
 import { listModels, modelsOver } from "../src/harnesses/models/models.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { resolveStateRoot } from "../src/paths.ts";
+import { PI_AI_VERSION, keepCatalog } from "./kept-catalog.ts";
 
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 
@@ -22,14 +23,18 @@ interface Answer {
   body?: unknown;
   lastModified?: Date;
   etag?: string;
+  /** pi.dev's `x-pi-model-catalog-minimum-version`: the oldest pi-ai the catalog is for. */
+  minimumVersion?: string;
 }
 
 /** pi.dev's catalog as a local server: each request answers with `answer()`, or never when it returns undefined. */
 async function catalogServer(answer: (request: IncomingMessage) => Answer | undefined) {
-  const requests: { types: string | null; validator: string | undefined }[] = [];
+  const requests: { types: string | null; piVersion: string | null; validator: string | undefined }[] = [];
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    const query = new URL(request.url ?? "", "http://x").searchParams;
     requests.push({
-      types: new URL(request.url ?? "", "http://x").searchParams.get("types"),
+      types: query.get("types"),
+      piVersion: query.get("pi-version"),
       validator: request.headers["if-none-match"],
     });
     const answered = answer(request);
@@ -38,6 +43,7 @@ async function catalogServer(answer: (request: IncomingMessage) => Answer | unde
       "content-type": "application/json",
       ...(answered.lastModified ? { "last-modified": answered.lastModified.toUTCString() } : {}),
       ...(answered.etag ? { etag: answered.etag } : {}),
+      ...(answered.minimumVersion ? { "x-pi-model-catalog-minimum-version": answered.minimumVersion } : {}),
     });
     response.end(answered.body === undefined ? undefined : JSON.stringify(answered.body));
   });
@@ -66,6 +72,7 @@ describe("model catalogs", () => {
   });
 
   it("lists what pi's published catalog adds, and keeps it for a start without the network", async () => {
+    vi.stubEnv("FASTAGENT_OFFLINE", "0"); // only `1` is offline
     const radius = { ...builtIn, id: "radius-published", provider: "radius" };
     const video = { ...builtIn, id: "gpt-video", type: "video" };
     const pi = await catalogServer(() => ({
@@ -82,13 +89,40 @@ describe("model catalogs", () => {
     expect(first.models.getAllModels("openai").map(({ id }) => id)).not.toContain("gpt-video");
     // Radius fetches its gateway's own list; pi's published one is not its gateway's.
     expect(first.models.getModel("radius", "radius-published")).toBeUndefined();
-    expect(pi.requests).toEqual([{ types: "chat,image,classifier", validator: undefined }]);
+    expect(pi.requests).toEqual([{ types: "chat,image,classifier", piVersion: PI_AI_VERSION, validator: undefined }]);
 
     vi.stubEnv("FASTAGENT_OFFLINE", "1");
     const next = opened(dir, pi.url);
-    expect(await next.refresh(true)).toBeUndefined();
+    expect(await next.refresh()).toBeUndefined();
     expect(listModels(next.models)).toContain("openai/gpt-released");
+    // Asked for by name, a refresh FASTAGENT_OFFLINE stops is one that did not happen.
+    expect(await next.refresh(true)).toBe(
+      "model lists not refreshed (FASTAGENT_OFFLINE=1 is set): each lists what it last had",
+    );
     expect(pi.requests).toHaveLength(1);
+  });
+
+  it("takes only a catalog for the pi-ai it runs: a newer pi-ai's is refused, and one kept for another ignored", async () => {
+    const pi = await catalogServer(() => ({
+      status: 200,
+      body: { openai: [released] },
+      lastModified: newer(),
+      minimumVersion: "99.0.0",
+    }));
+    const newerPiAi = opened(stateDir(), pi.url);
+    expect(await newerPiAi.refresh()).toMatch(
+      new RegExp(
+        `pi's published catalog: .* answered a catalog for pi-ai 99\\.0\\.0 or later, and this is ${PI_AI_VERSION}`,
+      ),
+    );
+    expect(newerPiAi.models.getModel("openai", "gpt-released")).toBeUndefined();
+
+    vi.stubEnv("FASTAGENT_OFFLINE", "1");
+    const dir = stateDir();
+    keepCatalog(dir, [released], "0.0.1");
+    const other = opened(dir, pi.url);
+    expect(await other.refresh()).toBeUndefined();
+    expect(other.models.getModel("openai", "gpt-released")).toBeUndefined();
   });
 
   it("adds nothing from a catalog no newer than this pi-ai's own data", async () => {
@@ -174,12 +208,22 @@ describe("model catalogs", () => {
     expect(models.getModel("own", "own-1")).toBeDefined();
     expect(existsSync(join(dir, "providers", "own.json"))).toBe(true);
 
-    vi.stubEnv("FASTAGENT_OFFLINE", "1");
-    const next = catalogsIn(dir, { url: pi.url });
-    const restored = modelsOver(new InMemoryCredentialStore(), [own], next);
-    await next.refresh(restored);
-    expect(restored.getModel("own", "own-1")).toBeDefined();
+    const reopen = () => {
+      const next = catalogsIn(dir, { url: pi.url });
+      const models = modelsOver(new InMemoryCredentialStore(), [own], next);
+      return { models, refresh: (force?: boolean) => next.refresh(models, force ? { force } : {}) };
+    };
+    // Fetched just now: the next start lists it without asking.
+    const restored = reopen();
+    expect(await restored.refresh()).toBeUndefined();
+    expect(restored.models.getModel("own", "own-1")).toBeDefined();
     expect(fetches).toBe(1);
+    expect(await reopen().refresh(true)).toBeUndefined();
+    expect(fetches).toBe(2);
+
+    writeFileSync(join(dir, "providers", "own.json"), "{");
+    expect(await reopen().refresh()).toMatch(/model lists not refreshed \(own: .*own\.json is not JSON/);
+    expect(fetches).toBe(2);
   });
 
   it("an agent opens on a model only the published catalog has: the Agent reads the lists its report reads", async () => {
@@ -192,6 +236,19 @@ describe("model catalogs", () => {
     } finally {
       await serving.agent.close();
     }
+  });
+
+  it("an agent whose default model only a fetched list has is refused, saying why the list is not there", async () => {
+    const agent = mkdtempSync(join(tmpdir(), "fa-catalog-agent-"));
+    writeFileSync(join(agent, "fastagent.config.ts"), `export default { model: "openai/gpt-released" };\n`);
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      openServing(agent, { storage: "memory", credentialStore: new InMemoryCredentialStore() }),
+    ).rejects.toThrow(
+      `unknown model "openai/gpt-released": no provider "openai" offers "gpt-released", and model lists not ` +
+        `refreshed (pi's published catalog: fetch failed)`,
+    );
   });
 
   it("`models --refresh` asks however fresh the kept lists are, and exits 1, the kept list printed, when it cannot", async () => {
@@ -208,6 +265,11 @@ describe("model catalogs", () => {
       expect([fetched.mock.calls.length, process.exitCode]).toEqual([1, 1]);
       expect(printed).toEqual(["openai/gpt-released", "openai/gpt-released"]);
       expect(warned.join("\n")).toMatch(/model lists not refreshed \(pi's published catalog: fetch failed\)/);
+
+      vi.stubEnv("FASTAGENT_OFFLINE", "1");
+      process.exitCode = undefined;
+      await runModels("gpt-released", { refresh: true });
+      expect([fetched.mock.calls.length, process.exitCode]).toEqual([1, 1]);
     } finally {
       process.exitCode = undefined;
     }
@@ -218,10 +280,7 @@ describe("model catalogs", () => {
 function agentKeeping(model: AnyModel): string {
   const agent = mkdtempSync(join(tmpdir(), "fa-catalog-agent-"));
   writeFileSync(join(agent, "fastagent.config.ts"), `export default { model: "${model.provider}/${model.id}" };\n`);
-  const kept = join(resolveStateRoot(agent), "models");
-  mkdirSync(kept, { recursive: true });
-  const published = { lastModified: Date.now(), checkedAt: Date.now(), models: { [model.provider]: [model] } };
-  writeFileSync(join(kept, "published.json"), JSON.stringify(published));
+  keepCatalog(join(resolveStateRoot(agent), "models"), [model]);
   return agent;
 }
 

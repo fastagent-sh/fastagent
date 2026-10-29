@@ -3,8 +3,10 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { type AnyModel, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { modelsOver } from "../src/harnesses/models/models.ts";
+import { resolveStateRoot } from "../src/paths.ts";
+import { keepCatalog } from "./kept-catalog.ts";
 import type { AgentConfig as FastagentConfig } from "../src/harnesses/pi-durable/define.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 
@@ -89,6 +91,21 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // and it is not a credential, so it stays out of the secret channel and every runbook's required list.
     expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
     expect(pre.declaredSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
+  });
+
+  it("a model only a fetched list has passes, warning that a box with no list kept must fetch it to start", async () => {
+    const dir = await agent();
+    const builtIn = modelsOver(new InMemoryCredentialStore()).getModels("openai")[0] as AnyModel;
+    keepCatalog(join(resolveStateRoot(dir), "models"), [{ ...builtIn, id: "gpt-released" }]);
+    const released = await call(dir, { model: "openai/gpt-released" });
+    if (!released.ok) throw new Error(`preflight gated: ${released.gate}`);
+    expect(released.messages).toContainEqual({
+      level: "warn",
+      text: expect.stringMatching(/^"openai\/gpt-released" is not in the model lists this FastAgent's pi-ai carries/),
+    });
+    const carried = await call(dir, { model: `openai/${builtIn.id}` });
+    if (!carried.ok) throw new Error(`preflight gated: ${carried.gate}`);
+    expect(JSON.stringify(carried.messages)).not.toMatch(/is not in the model lists/);
   });
 
   it("a config model bakes nothing extra — the config is already in the image", async () => {

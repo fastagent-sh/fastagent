@@ -8,7 +8,13 @@ import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
-import { environmentAuth, interactiveLoginKind, loginProviders, providerOf } from "../harnesses/models/models.ts";
+import {
+  environmentAuth,
+  interactiveLoginKind,
+  loginProviders,
+  modelsOver,
+  providerOf,
+} from "../harnesses/models/models.ts";
 import { modelEnvironment } from "../harnesses/models/environment.ts";
 import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
 import {
@@ -459,7 +465,8 @@ function messageOf(error: unknown): string {
 
 /**
  * A model no provider of the deployed agent offers fails every message there. Its lists are this machine's, refreshed
- * as the box refreshes its own when it opens; no credential of this machine's lends a provider a list.
+ * as the box refreshes its own when it opens; no credential of this machine's lends a provider a list. One only a
+ * fetched list has is the box's only once it fetches that list, which a box with nothing kept does as it opens.
  */
 async function checkModelExists(
   agentDir: string,
@@ -468,8 +475,17 @@ async function checkModelExists(
   report: DeployReport,
 ): Promise<void> {
   const provider = providerOf(spec);
+  const modelId = spec.slice(provider.length + 1);
   const { models } = await modelEnvironment(agentDir, { credentialStore: new InMemoryCredentialStore() }, providers);
-  if (models.getModel(provider, spec.slice(provider.length + 1))) return;
+  if (models.getModel(provider, modelId)) {
+    if (modelsOver(new InMemoryCredentialStore(), providers).getModel(provider, modelId)) return;
+    report.warn(
+      `"${spec}" is not in the model lists this FastAgent's pi-ai carries, only in one fetched (pi's published ` +
+        `catalog, or its provider's own list): a box with no list kept, as on a first deploy, fetches it as it ` +
+        `starts, and refuses to start on "${spec}" if it cannot reach it`,
+    );
+    return;
+  }
   report.issue(
     `no provider of the deployed agent offers "${spec}" — pi-ai's built-ins, pi's published catalog and the ` +
       `providers fastagent.config.ts declares are all it has`,

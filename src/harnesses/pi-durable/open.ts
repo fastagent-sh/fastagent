@@ -354,6 +354,8 @@ export interface AssembleAgentOptions {
    * environment's (environment.ts), so the Agent runs on the lists its startup report reads.
    */
   models: Models;
+  /** Why the lists of {@link models} are not current, when they are not: said with a default model none offers. */
+  catalogProblem?: string;
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
@@ -370,7 +372,8 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   const spec = options.model ?? config.model;
   const model = spec === undefined ? undefined : modelRefOf(spec, "the default model");
   if (model !== undefined && models.getModel(model.provider, model.modelId) === undefined) {
-    throw new Error(`unknown model "${spec}": no provider "${model.provider}" offers "${model.modelId}"`);
+    const stale = options.catalogProblem === undefined ? "" : `, and ${options.catalogProblem}`;
+    throw new Error(`unknown model "${spec}": no provider "${model.provider}" offers "${model.modelId}"${stale}`);
   }
   const ownWake = [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].some(({ name }) =>
     WAKE_TOOLS.includes(name),

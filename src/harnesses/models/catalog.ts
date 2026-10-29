@@ -11,7 +11,8 @@
  * anyone logs in on it.
  */
 import { readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   type AnyModel,
   InMemoryModelsStore,
@@ -32,11 +33,16 @@ const MODEL_TYPES = ["chat", "image", "classifier"];
 const FRESH_MS = 4 * 60 * 60 * 1000;
 const TIMEOUT_MS = 5_000;
 
-/** Set to anything: no model list is fetched, and each is the one last kept. */
+/** `1`: no model list is fetched, and each is the one last kept. */
 const OFFLINE_VARIABLE = "FASTAGENT_OFFLINE";
 
 /** pi's published catalog as it was last fetched. */
 interface Published {
+  /**
+   * The pi-ai it was fetched for. pi.dev answers each pi-ai version the newest catalog that version can read, and a
+   * published model replaces the built-in one of its id, so a catalog fetched for another version is not this one's.
+   */
+  piAi: string;
   /** pi.dev's `Last-Modified`: what says whether the catalog is newer than this pi-ai's. */
   lastModified: number;
   etag?: string;
@@ -61,6 +67,7 @@ export interface Catalogs {
 export function catalogsIn(dir: string | undefined, options: { url?: string; timeoutMs?: number } = {}): Catalogs {
   const builtAt = getBuiltinModelDataGeneratedAt();
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
+  const fetched: ModelsStore = dir === undefined ? new InMemoryModelsStore() : providerFiles(join(dir, "providers"));
   const publishedPath = dir === undefined ? undefined : join(dir, "published.json");
   let inMemory: Published | undefined;
   let listed: Record<string, readonly AnyModel[]> = {};
@@ -75,11 +82,14 @@ export function catalogsIn(dir: string | undefined, options: { url?: string; tim
   };
 
   async function refreshPublished(network: boolean, force: boolean, signal: AbortSignal): Promise<void> {
-    const kept = publishedPath === undefined ? inMemory : readJson<Published>(publishedPath);
+    const piAi = piAiVersion();
+    const found = publishedPath === undefined ? inMemory : readJson<Published>(publishedPath);
+    const kept = found?.piAi === piAi ? found : undefined;
     show(kept);
     if (!network || (!force && kept && Date.now() - kept.checkedAt < FRESH_MS)) return;
     const url = new URL(options.url ?? PUBLISHED_URL);
     url.searchParams.set("types", MODEL_TYPES.join(","));
+    url.searchParams.set("pi-version", piAi);
     const validator = kept?.etag;
     const response = await fetch(url, {
       headers: { accept: "application/json", ...(validator === undefined ? {} : { "if-none-match": validator }) },
@@ -90,9 +100,14 @@ export function catalogsIn(dir: string | undefined, options: { url?: string; tim
       return;
     }
     if (!response.ok) throw new Error(`${url.origin} answered ${response.status}`);
+    const needs = response.headers.get("x-pi-model-catalog-minimum-version");
+    if (needs !== null && olderThan(piAi, needs)) {
+      throw new Error(`${url.origin} answered a catalog for pi-ai ${needs} or later, and this is ${piAi}`);
+    }
     const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
     const etag = response.headers.get("etag");
     const published: Published = {
+      piAi,
       models: parseCatalog(await response.json()),
       lastModified: Number.isNaN(lastModified) ? 0 : lastModified,
       ...(etag === null ? {} : { etag }),
@@ -116,31 +131,88 @@ export function catalogsIn(dir: string | undefined, options: { url?: string; tim
         getAllModels: () => merged(provider.getAllModels?.() ?? provider.getModels(), added()),
       } as Provider;
     },
-    fetched: dir === undefined ? new InMemoryModelsStore() : providerFiles(join(dir, "providers")),
+    fetched,
     async refresh(models, { force = false } = {}) {
-      const network = process.env[OFFLINE_VARIABLE] === undefined;
+      const offline = process.env[OFFLINE_VARIABLE] === "1";
       const signal = AbortSignal.timeout(timeoutMs);
       const why = (error: unknown) =>
         signal.aborted ? `no answer within ${timeoutMs / 1000}s` : messageOf(error as Error);
-      const [published, fetched] = await Promise.all([
-        refreshPublished(network, force, signal).then(
+      const [published, own] = await Promise.all([
+        refreshPublished(!offline, force, signal).then(
           () => undefined,
           (error: unknown) => `pi's published catalog: ${why(error)}`,
         ),
-        models.refresh({ allowNetwork: network, force, signal }),
+        refreshOwn(models, !offline, force, signal),
       ]);
       const problems = [
+        ...(offline && force ? [`${OFFLINE_VARIABLE}=1 is set`] : []),
         ...(published === undefined ? [] : [published]),
-        ...[...fetched.errors].map(([provider, error]) => `${provider}: ${messageOf(error)}`),
-        ...(fetched.aborted ? [`the providers that fetch their own: ${why(undefined)}`] : []),
+        ...[...own.errors].map(([provider, error]) => `${provider}: ${messageOf(error)}`),
+        ...(own.aborted ? [`the providers that fetch their own: ${why(undefined)}`] : []),
       ];
       if (problems.length === 0) return undefined;
-      return (
-        `model lists not refreshed (${problems.join("; ")}): each lists what it last had; ` +
-        `${OFFLINE_VARIABLE}=1 skips the refresh`
-      );
+      const skip = offline ? "" : `; ${OFFLINE_VARIABLE}=1 skips the refresh`;
+      return `model lists not refreshed (${problems.join("; ")}): each lists what it last had${skip}`;
     },
   };
+
+  /**
+   * The providers that fetch their own list, each asked only once what it last fetched is {@link FRESH_MS} old: pi-ai
+   * asks every one of them each refresh it allows the network, and keeps when it last did beside the list.
+   */
+  async function refreshOwn(
+    models: Models,
+    network: boolean,
+    force: boolean,
+    signal: AbortSignal,
+  ): Promise<{ aborted: boolean; errors: ReadonlyMap<string, Error> }> {
+    const own = models.getProviders().filter((provider) => provider.refreshModels !== undefined);
+    const stale: string[] = [];
+    const fresh: string[] = [];
+    for (const { id } of own) {
+      // An entry it cannot read counts as stale: pi-ai's refresh reads it again, and reports why it could not.
+      const checkedAt = await fetched.read(id).then(
+        (entry) => entry?.checkedAt,
+        () => undefined,
+      );
+      (force || checkedAt === undefined || Date.now() - checkedAt >= FRESH_MS ? stale : fresh).push(id);
+    }
+    const [restored, asked] = await Promise.all([
+      models.refresh({ allowNetwork: false, providers: fresh, signal }),
+      models.refresh({ allowNetwork: network, providers: stale, force, signal }),
+    ]);
+    return {
+      aborted: restored.aborted || asked.aborted,
+      errors: new Map([...restored.errors, ...asked.errors]),
+    };
+  }
+}
+
+/** The pi-ai this process runs, from its own package.json, which its exports do not reach. */
+function piAiVersion(): string {
+  let dir = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai")));
+  for (;;) {
+    const pkg = readJson<{ name?: unknown; version?: unknown }>(join(dir, "package.json"));
+    if (pkg?.name === "@earendil-works/pi-ai" && typeof pkg.version === "string") return pkg.version;
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error("no package.json of @earendil-works/pi-ai above its entry");
+    dir = parent;
+  }
+}
+
+/** Whether release `version` is older than `than`, by `major.minor.patch`. */
+function olderThan(version: string, than: string): boolean {
+  const parts = (release: string) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)/.exec(release);
+    if (match === null) throw new Error(`"${release}" is not a version`);
+    return match.slice(1).map(Number);
+  };
+  const [ours, theirs] = [parts(version), parts(than)];
+  for (const [index, part] of ours.entries()) {
+    const other = theirs[index] as number;
+    if (part !== other) return part < other;
+  }
+  return false;
 }
 
 /** Published models override built-in ones of the same type and id, as in pi. */

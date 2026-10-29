@@ -137,6 +137,7 @@ export async function openServing(directory: string, options: OpenServingOptions
     code,
     content,
     models: models.models,
+    ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
     ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
