@@ -22,6 +22,7 @@ import {
   type LoginIO,
   LoginRefused,
   PI_DEFAULT_MODELS,
+  chooseLogin,
   login,
   loginFlow,
   loginOptions,
@@ -264,7 +265,7 @@ describe("loginFlow", () => {
     const named = { ...fakeProvider("gw", { apiKeyLogin: true }), name: "My Gateway" } as Provider;
     const authPath = await tmpAuth();
     const { io } = fakeIO({ prompt: ["sk-gw"] });
-    await loginFlow(io, { providers: [named], provider: "my gateway", authPath, menus: false });
+    await loginFlow(io, { providers: [named], provider: "my gateway", authPath });
     expect((await readAuth(authPath)).gw).toEqual({ type: "api_key", key: "sk-gw" });
   });
 
@@ -277,19 +278,31 @@ describe("loginFlow", () => {
     ]);
   });
 
-  it("without menus, a choice not given is refused, naming how to give it", async () => {
-    const authPath = await tmpAuth();
-    const refused = (given: { provider?: string; method?: "oauth" | "api_key" }) =>
-      loginFlow(fakeIO().io, { providers: PROVIDERS, authPath, menus: false, ...given });
-    await expect(refused({})).rejects.toThrow(/^name the provider to sign in to \(one of .*codex.*openai/);
-    await expect(refused({ provider: "anthropic" })).rejects.toThrow(
-      "anthropic signs in with an account or an API key: pass --method account or --method api-key",
+  it("without menus, a choice not given is refused, naming how to give it and the sign-ins to choose from", async () => {
+    const offered = await loginOptionsOver(await tmpAuth(), PROVIDERS);
+    const refused = async (given: { provider?: string; method?: "oauth" | "api_key" }) => {
+      const error = await chooseLogin(offered, given, undefined).then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      );
+      if (!(error instanceof LoginRefused)) throw new Error(`not refused: ${String(error)}`);
+      return { message: error.message, choices: error.choices.map((o) => `${o.provider}:${o.method}`) };
+    };
+    const unnamed = await refused({});
+    expect(unnamed.message).toMatch(/^name the provider to sign in to \(one of .*codex.*openai/);
+    expect(unnamed.choices).toEqual(offered.map((o) => `${o.provider}:${o.method}`));
+    expect(await refused({ provider: "anthropic" })).toEqual({
+      message: "anthropic signs in with an account or an API key: pass --method account or --method api-key",
+      choices: ["anthropic:oauth", "anthropic:api_key"],
+    });
+    expect((await refused({ provider: "nope" })).message).toMatch(/^unknown provider "nope": one of /);
+    expect(await refused({ provider: "codex", method: "api_key" })).toEqual({
+      message: "codex signs in only with an account",
+      choices: ["codex:oauth"],
+    });
+    expect((await refused({ method: "api_key" })).choices).toEqual(
+      offered.filter((o) => o.method === "api_key").map((o) => `${o.provider}:${o.method}`),
     );
-    await expect(refused({ provider: "nope" })).rejects.toThrow(/^unknown provider "nope": one of /);
-    await expect(refused({ provider: "codex", method: "api_key" })).rejects.toThrow(
-      "codex signs in only with an account",
-    );
-    await expect(refused({})).rejects.toThrow(LoginRefused);
   });
 
   it("a provider whose key comes only from the environment says so, and signs in to nothing", async () => {
@@ -538,39 +551,6 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
     expect(result.verified).toBe("ok");
     expect(prompts.filter((p) => p.type === "secret")).toHaveLength(2);
     expect((await readAuth(authPath)).keyed.key).toBe("sk-good"); // the rejected key is not left behind
-  });
-
-  it("with no one to retype it, a key the provider rejects fails the sign-in, and is never stored", async () => {
-    const authPath = await tmpAuth(JSON.stringify({ keyed: { type: "api_key", key: "sk-previous" } }));
-    const rejected = fauxAssistantMessage("", {
-      stopReason: "error",
-      errorMessage: "401 Unauthorized: invalid x-api-key",
-    });
-    const { interaction, prompts } = client(["eu", "sk-bad", "eu", "sk-good"]);
-    await expect(
-      loginOver(
-        { provider: "keyed", method: "api_key", authPath, interaction },
-        { providers: [keyedFaux([rejected, fauxAssistantMessage("pong")], [401, 200])], askAgain: false },
-      ),
-    ).rejects.toThrow(/^keyed rejected the API key \(HTTP 401\): /);
-    expect(prompts.filter((p) => p.type === "secret")).toHaveLength(1);
-    expect((await readAuth(authPath)).keyed.key).toBe("sk-previous");
-  });
-
-  it("a sign-in without menus has no one to retype a rejected key: it fails", async () => {
-    const rejected = fauxAssistantMessage("", {
-      stopReason: "error",
-      errorMessage: "401 Unauthorized: invalid x-api-key",
-    });
-    const { io } = fakeIO({ select: ["eu", "eu"], prompt: ["sk-bad", "sk-good"] });
-    await expect(
-      loginFlow(io, {
-        providers: [keyedFaux([rejected, fauxAssistantMessage("pong")], [401, 200])],
-        provider: "keyed",
-        authPath: await tmpAuth(),
-        menus: false,
-      }),
-    ).rejects.toThrow(/^keyed rejected the API key \(HTTP 401\): /);
   });
 
   it("a rejected key never replaces what the file held, even when the person then cancels", async () => {

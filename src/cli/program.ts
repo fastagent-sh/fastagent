@@ -657,18 +657,26 @@ const login: CommandSpec = {
     "menu; how is asked only when it offers both. An agent READS the global store for a provider it has no other " +
     "credential for (its own file, a provider in its config that authenticates itself, an env variable), so `-g` " +
     "signs in once for every agent on this machine; it warns when an env variable already authenticates the " +
-    "provider. Without a terminal (or with --no-input or --json), nothing is asked: [provider], and --method for a " +
-    "provider that offers both, are required, and what the provider's sign-in asks (an API key, a project) is read " +
-    "from stdin, one line per question; an account's sign-in prints the address to open and waits for the browser.",
+    "provider. Without a terminal (or with --no-input or --json), for a script or a coding agent, nothing is asked " +
+    "and nothing waits: a provider or --method not given is answered with the choices and a command for each (exit " +
+    "2); an account's sign-in starts in a process of its own and the command returns its address and a ticket at " +
+    "once, for the person to sign in at and `login --check <ticket>` to follow; an API key is named, for the person " +
+    "to set in the agent's .secrets/.env themselves.",
   args: [{ name: "[provider]", description: "provider id or name (skip the provider menu)" }],
   flags: [
     GLOBAL_AUTH,
     { flags: "--method <how>", description: "account or api-key, for a provider that offers both" },
-    { flags: "--json", description: "what the sign-in says, then how it ended, as JSON lines on stdout" },
+    { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
+    { flags: "--check <ticket>", description: "where a sign-in started without a terminal stands" },
+    {
+      flags: "--code <address>",
+      description: "with --check: the address the browser ended on, when it could not reach this machine",
+    },
     {
       flags: "--timeout <seconds>",
-      description: "give up on the sign-in after this long (default 300 without a terminal)",
+      description: "how long the sign-in stays open (default 600 without a terminal)",
     },
+    { flags: "--ticket <id>", description: "the process that runs a ticket's sign-in", hidden: true },
     {
       flags: "--deployment <host>",
       description:
@@ -682,13 +690,13 @@ const login: CommandSpec = {
     { cmd: "fastagent login" },
     { cmd: "fastagent login openai", note: "ChatGPT, or an API key" },
     { cmd: "fastagent login openai -g", note: "for every agent here" },
-    { cmd: "fastagent login openai --method account --json", note: "no terminal" },
-    { cmd: "fastagent login openai --method api-key < key", note: "key on stdin" },
+    { cmd: "fastagent login openai --method account --json", note: "an agent" },
+    { cmd: "fastagent login --check 3f9a0c1d2e4b5a67 --json", note: "then" },
     { cmd: "fastagent login openai --deployment fly", note: "on the box" },
   ],
   notes:
-    "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in. Exit status: 0 signed in, " +
-    "1 cancelled or failed, 2 a provider, method or answer not given. " +
+    "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in. Exit status: 0 signed in " +
+    "or waiting on the person (need_user_action), 1 cancelled, failed or expired, 2 a provider or method not given. " +
     "--deployment runs the login on the deployed box through the host's own shell (docker compose exec, fly ssh, " +
     "railway ssh, AgentCore's command shell); this terminal shows it, opens the browser, and catches the browser's " +
     "return to localhost (or asks you to paste that address when its port is taken). The box keeps the credential, " +
@@ -700,6 +708,9 @@ const login: CommandSpec = {
       json: f.json === true,
       ...(f.method !== undefined ? { method: f.method as string } : {}),
       ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
+      ...(f.check !== undefined ? { check: f.check as string } : {}),
+      ...(f.code !== undefined ? { code: f.code as string } : {}),
+      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
       ...(f.deployment !== undefined ? { deployment: f.deployment as string } : {}),
       stdio: f.stdio === true,
       ifMissing: f.ifMissing === true,

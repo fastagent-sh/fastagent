@@ -102,25 +102,4 @@ describe("login: what it says when it is done", () => {
       /no model/,
     );
   });
-
-  it("--json ends with one result line, the default model in it for an agent with none", async () => {
-    vi.stubEnv("FASTAGENT_MODEL", "");
-    const agent = await agentWith("export default {};\n");
-    vi.spyOn(process, "cwd").mockReturnValue(agent);
-    vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const out: string[] = [];
-    vi.spyOn(console, "log").mockImplementation((line: unknown) => void out.push(String(line)));
-    await runLogin(undefined, { json: true });
-    expect(out.map((line) => JSON.parse(line))).toEqual([
-      {
-        type: "result",
-        ok: true,
-        provider: "anthropic",
-        method: "oauth",
-        path: join(agent, ".secrets", "auth.json"),
-        model: "anthropic/claude-opus-4-8",
-      },
-    ]);
-  });
 });

@@ -260,11 +260,11 @@ Choose a provider and model with the owner. `fastagent models` lists available s
 `fastagent auth check --provider <id>` says whether the provider is ready (`ready`, exit 0). When it is not:
 
 - An account (ChatGPT for `openai`, a Claude subscription for `anthropic`): run
-  `fastagent login <provider> --method account --json`. It prints the address to open as an `open` line; give it
-  to the owner, who signs in in the browser, and the command ends with a `result` line once they have.
-- An API key: the owner sets it in `.secrets/.env`, or pipes it in themselves
-  (`printf %s "$KEY" | fastagent login <provider> --method api-key`). The owner can also run `fastagent login` in a
-  terminal, which asks for everything.
+  `fastagent login <provider> --method account --json`. It returns at once with `status: "need_user_action"`, the
+  `url` to give the owner, and a `check_command` to run once they say they have signed in; follow its
+  `agent_next_steps`.
+- An API key: `fastagent login <provider> --method api-key --json` names the variable and the file; the owner sets
+  it there themselves. The owner can also run `fastagent login` in a terminal, which asks for everything.
 
 Keep credentials out of chat transcripts, issue comments, source files, and logs. The CLI reads the agent's
 `.secrets/.env`, not a `.env` at its root.

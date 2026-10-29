@@ -28,7 +28,14 @@ export type LoginMethod = "oauth" | "api_key";
 export class LoginCancelled extends Error {}
 
 /** A sign-in that cannot start as asked: an unknown provider, or a choice a caller without menus did not make. */
-export class LoginRefused extends Error {}
+export class LoginRefused extends Error {
+  /** The sign-ins it could be instead, for a caller to choose from. */
+  readonly choices: readonly LoginOption[];
+  constructor(message: string, choices: readonly LoginOption[]) {
+    super(message);
+    this.choices = choices;
+  }
+}
 
 /** One provider sign-in a picker can offer, as pi's `/login` offers it. */
 export interface LoginOption {
@@ -200,16 +207,11 @@ export interface LoginInternals {
    * is used, then its first. On one registry, any of a provider's models answers the 401 question.
    */
   verifyWith?: string;
-  /**
-   * false: a key the provider rejects fails the sign-in, rather than its key flow running again for someone to retype
-   * it; for a caller with no one to retype it. Default true.
-   */
-  askAgain?: boolean;
 }
 
 /** {@link login}, plus {@link LoginInternals}. */
 export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<LoginResult> {
-  const { providers, verifyWith, askAgain = true } = internals;
+  const { providers, verifyWith } = internals;
   const { method, interaction } = request;
   assertOneCredentialSource(request);
   if (request.credentialStore === undefined && typeof request.authPath !== "string") {
@@ -239,7 +241,7 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
     let verified: LoginResult["verified"] = "n/a";
     if (models) {
       await trial.modify(provider.id, async () => credential);
-      const verdict = await verifyApiKey(models, provider.id, verifyWith, notify, signal, askAgain);
+      const verdict = await verifyApiKey(models, provider.id, verifyWith, notify, signal);
       if (signal.aborted) throw new LoginCancelled("cancelled");
       if (verdict === "rejected") continue;
       verified = verdict;
@@ -363,7 +365,6 @@ async function verifyApiKey(
   verifyWith: string | undefined,
   notify: (event: AuthEvent) => void,
   signal: AbortSignal,
-  askAgain: boolean,
 ): Promise<"ok" | "rejected" | "unknown"> {
   const chosen = verifyWith?.startsWith(`${providerId}/`)
     ? models.getModel(providerId, verifyWith.slice(providerId.length + 1))
@@ -389,7 +390,6 @@ async function verifyApiKey(
   if (probe.state === "ok") {
     notify({ type: "info", message: `key verified — ${label} responded` });
   } else if (probe.state === "rejected") {
-    if (!askAgain) throw new Error(`${providerId} rejected the API key (HTTP 401): ${probe.message}`);
     notify({
       type: "info",
       message: `${providerId} rejected the API key (HTTP 401): ${probe.message} — enter it again (or cancel)`,
@@ -470,9 +470,8 @@ function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): Auth
 }
 
 /**
- * `fastagent login`: ask only what was not given, as pi's `/login` asks it (how to sign in, then the provider; a
- * provider named by its id or its name, then how, when it offers both), then {@link login}. Without `menus`, a choice
- * not given refuses ({@link LoginRefused}) naming how to give it; what the provider's own flow asks still goes to `io`.
+ * `fastagent login` in a terminal: ask only what was not given, as pi's `/login` asks it (how to sign in, then the
+ * provider; a provider named by its id or its name, then how, when it offers both), then {@link login}.
  */
 export async function loginFlow(
   io: LoginIO,
@@ -482,8 +481,6 @@ export async function loginFlow(
     method?: LoginMethod;
     providers?: readonly Provider[];
     signal?: AbortSignal;
-    /** false: no menu is shown for a choice not given. Default true. */
-    menus?: boolean;
     /**
      * Where the menus read what authenticates each provider now: the credentials the agent reads (its file over the
      * global one), which can hold more than the file a sign-in writes. Default that file.
@@ -494,9 +491,9 @@ export async function loginFlow(
   },
 ): Promise<LoginResult> {
   const offered = await loginOptionsOver(options.statusFrom ?? options.authPath, options.providers);
-  const choice = await chooseLogin(offered, options, options.menus === false ? undefined : io);
+  const choice = await chooseLogin(offered, options, io);
   if (choice.external) {
-    throw new LoginRefused(`${choice.name} is configured outside fastagent: set its key in the environment`);
+    throw new LoginRefused(`${choice.name} is configured outside fastagent: set its key in the environment`, []);
   }
   return loginOver(
     {
@@ -508,7 +505,6 @@ export async function loginFlow(
     {
       ...(options.providers ? { providers: options.providers } : {}),
       ...(options.verifyWith ? { verifyWith: options.verifyWith } : {}),
-      askAgain: options.menus !== false,
     },
   );
 }
@@ -516,8 +512,11 @@ export async function loginFlow(
 /** The flag that gives a method, as a refusal names it. */
 const METHOD_FLAGS = "--method account or --method api-key";
 
-/** The sign-in `given` names, or, with `menus`, the one a person picks; otherwise a refusal naming what to pass. */
-async function chooseLogin(
+/**
+ * The sign-in `given` names, or, with `menus`, the one a person picks; without them a choice not given refuses
+ * ({@link LoginRefused}) naming how to give it.
+ */
+export async function chooseLogin(
   offered: readonly LoginOption[],
   given: { provider?: string; method?: LoginMethod },
   menus: LoginIO | undefined,
@@ -537,17 +536,17 @@ async function chooseLogin(
     const named = given.provider.trim().toLowerCase();
     const ofProvider = offered.filter((o) => o.provider.toLowerCase() === named || o.name.toLowerCase() === named);
     if (ofProvider.length === 0) {
-      throw new LoginRefused(`unknown provider "${given.provider}": ${providerIds(offered)}`);
+      throw new LoginRefused(`unknown provider "${given.provider}": ${providerIds(offered)}`, offered);
     }
     const name = (ofProvider[0] as LoginOption).name;
     const ofMethod = given.method === undefined ? ofProvider : ofProvider.filter((o) => o.method === given.method);
     if (ofMethod.length === 0) {
       const only = (ofProvider[0] as LoginOption).method === "oauth" ? "an account" : "an API key";
-      throw new LoginRefused(`${name} signs in only with ${only}`);
+      throw new LoginRefused(`${name} signs in only with ${only}`, ofProvider);
     }
     if (ofMethod.length === 1) return ofMethod[0] as LoginOption;
     if (menus === undefined)
-      throw new LoginRefused(`${name} signs in with an account or an API key: pass ${METHOD_FLAGS}`);
+      throw new LoginRefused(`${name} signs in with an account or an API key: pass ${METHOD_FLAGS}`, ofMethod);
     return picked(
       `Select authentication method for ${name}:`,
       ofMethod.map((o) => ({ value: o.method, label: o.label })),
@@ -558,6 +557,7 @@ async function chooseLogin(
   if (menus === undefined) {
     throw new LoginRefused(
       `name the provider to sign in to (${providerIds(offered)}), and ${METHOD_FLAGS} for one that offers both`,
+      given.method === undefined ? offered : offered.filter((o) => o.method === given.method),
     );
   }
   let method = given.method;
@@ -576,7 +576,7 @@ async function chooseLogin(
   }
   const candidates = offered.filter((o) => o.method === method);
   if (candidates.length === 0)
-    throw new LoginRefused(`no provider signs in with ${method === "oauth" ? "an account" : "an API key"}`);
+    throw new LoginRefused(`no provider signs in with ${method === "oauth" ? "an account" : "an API key"}`, []);
   return picked(
     "Select provider to configure:",
     candidates.map((o) => ({ value: o.provider, label: `${o.name}${statusSuffix(o)}` })),

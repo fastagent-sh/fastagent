@@ -192,6 +192,7 @@ it cannot, `FASTAGENT_OFFLINE=1` included, it prints the lists it has, warns why
 ```bash
 fastagent login [provider] [-g|--global] [--method account|api-key] [--json] [--timeout <seconds>]
                 [--deployment <host>] [--no-input]
+fastagent login --check <ticket> [--code <address>] [--json]
 ```
 
 In a terminal it asks as pi's `/login` does: how to sign in (an account, an API key, or Radius), then the provider,
@@ -201,24 +202,27 @@ which, in its own words (`Sign in with ChatGPT`). `openai-codex` is listed as pi
 a ChatGPT account signs in to `openai`. When the agent has no model, `login` prints the line that would give it pi's
 default for the provider (`model: "openai/gpt-5.5"`); it never edits `fastagent.config.ts`.
 
-Without a terminal, or with `--no-input` or `--json`, nothing is asked, so a script or a coding agent can sign in:
+Without a terminal, or with `--no-input` or `--json`, a script or a coding agent signs in, and nothing is asked or
+waited on. A coding agent works in turns, so each command does its part and says what comes next, as Netlify's
+`login --request`/`--check` and Dosu's login tickets do. With `--json` the outcome is one object on stdout, whose
+`agent_next_steps` says it in a sentence:
 
-- `[provider]` is required, and `--method` too for a provider that offers both. One not given exits 2 naming what to
-  pass (the provider ids, or `--method account` / `--method api-key`).
-- What the provider's sign-in asks is read from stdin, one line per question in the order asked; a choice is
-  answered by its id or its label. A question with no line exits 2 naming it. A key never goes on the command line:
-
-  ```bash
-  printf %s "$OPENAI_API_KEY" | fastagent login openai --method api-key
-  ```
-
-- An account sign-in prints the address to open (a person signs in in the browser), opens it where it can, and waits
-  for the browser's return; a code or redirect address the sign-in ends on is taken from stdin when one comes.
-  `--timeout` (default 300 seconds without a terminal) bounds the whole sign-in.
-- `--json` writes what the sign-in says to stdout as JSON lines (`{"type":"note","message"}`, `{"type":"open","url"}`)
-  and ends with one `{"type":"result","ok":…}` line: `provider`, `method`, `path` and the suggested `model` on
-  success, `reason` (`cancelled`, `refused`, `failed`) and `message` otherwise.
-- Exit status: 0 signed in, 1 cancelled or failed, 2 a provider, method or answer not given.
+- **A choice not given** (no `[provider]`, or no `--method` for a provider that offers both) exits 2 with
+  `"status": "need_choice"` and the `choices`, each with the `command` that makes it.
+- **An account** (`--method account`) starts its sign-in in a process of its own and returns at once, exit 0, with
+  `"status": "need_user_action"`: the `url` for the person to sign in at (and the `code` to enter there, for a device
+  sign-in), a `ticket`, `check_command` and `expires_in`. No browser is opened: the agent hands the address to its
+  person, who may be on another machine. `fastagent login --check <ticket>` then answers `need_user_action` (not
+  finished), `authorized` (with the `path` it was saved to, and the default `model` for an agent with none), `failed`
+  or `expired`. When the person's browser cannot reach this machine, it ends on a page that does not load (an address
+  on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the sign-in.
+  `--timeout` sets how long the sign-in stays open (default 600 seconds).
+- **An API key** (`--method api-key`) is the person's to set where the agent reads it, never typed into the agent's
+  conversation: `"status": "need_user_action"` names the `variables` the provider reads (`OPENAI_API_KEY`) and the
+  agent's `value_file` (`.secrets/.env`), and `check_command` is `fastagent auth check`. When one is set already, the
+  answer is `"status": "ready"`.
+- Exit status: 0 signed in, or waiting on the person; 1 cancelled, failed or expired; 2 a provider or method not
+  given, or a ticket that is not one.
 
 Writes to the selected environment's `auth.json` (default: `<agent dir>/.secrets/auth.json`; overrides:
 `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). Local `start` recovery hints pin `FASTAGENT_AUTH_PATH` to the
