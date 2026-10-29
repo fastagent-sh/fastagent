@@ -18,6 +18,7 @@ import {
 import { displayPath, selectAgentEnvironment } from "../../paths.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
+import { unprotectedSecretsNote } from "../../value-file.ts";
 import { loadConfig } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive } from "../shared.ts";
@@ -174,7 +175,8 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   independentApps(pre.values);
   if (api.served && api.generatesKey) {
     // Past every refusal the pre-flight makes, and read again, so this deploy carries it.
-    await writeApiKey(agentDir).catch(failStartup);
+    const unprotected = await writeApiKey(agentDir).catch(failStartup);
+    if (unprotected !== undefined) console.error(`[fastagent] note: ${unprotectedSecretsNote(unprotected)}`);
     pre = await preflight();
   }
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);

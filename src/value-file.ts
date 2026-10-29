@@ -25,6 +25,14 @@ export interface ValueWriteResult {
   unprotectedSecretsDir?: string;
 }
 
+/** What a command says when it wrote a secret into a secrets directory fastagent does not own and git may track. */
+export function unprotectedSecretsNote(dir: string): string {
+  return (
+    `${dir} (FASTAGENT_SECRETS_DIR) now holds a secret and has no .gitignore — that directory is yours, so ` +
+    "fastagent will not write one into it. Make sure git does not track what is in there."
+  );
+}
+
 /** Whether `.env` content carries a non-empty ACTIVE value for `name`. */
 function hasActiveEnvValue(content: string, name: string): boolean {
   return (parseEnvContent(content).get(name)?.trim() ?? "") !== "";

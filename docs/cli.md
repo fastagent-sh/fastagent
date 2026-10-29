@@ -360,7 +360,8 @@ fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--t
 ```
 
 Serves without watching. Binds all interfaces by default. A serve answers its channels' routes, `GET /health`, and
-the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key; the startup report says whether it does
+the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key and the definition does not say `http: { api: false }`;
+the startup report says whether it does, and why not
 ([Configuration](configuration.md#the-agent-api-over-http)).
 
 ```txt

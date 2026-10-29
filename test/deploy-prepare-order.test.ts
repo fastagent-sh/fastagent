@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { dotEnvPath, loadEnvValues } from "../src/env.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 
 const calls: string[] = [];
@@ -26,7 +27,8 @@ vi.mock("../src/harnesses/pi-durable/open.ts", async (importOriginal) => ({
 }));
 vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/deploy/preflight.ts")>()),
-  preflightDeploy: async () => {
+  // The values as the real pre-flight reads them, the selected value file, over what a test sets in `facts`.
+  preflightDeploy: async ({ agentDir }: { agentDir: string }) => {
     calls.push(
       `preflight dev=${process.env[DEV_SERVE_ENV] ?? "-"} token=${facts.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`,
     );
@@ -34,7 +36,7 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
       ok: true,
       messages: [],
       channels: [{ name: "feishu", ingress: "webhook" }],
-      values: new Map(facts.values),
+      values: new Map([...loadEnvValues(dotEnvPath(agentDir)), ...facts.values]),
       valueFile: ".secrets/production/.env",
       modelAuth: facts.modelAuth,
       declaredSecrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"].map((name) => ({
@@ -53,8 +55,11 @@ vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
     facts.values.set("FEISHU_VERIFICATION_TOKEN", "captured");
   },
 }));
+/** Whether each deploy the host received carries the Agent API's key: what it would set on the host. */
+const carriedKey: boolean[] = [];
 const deployed = vi.fn(async (ctx: { pre: { values: Map<string, string> } }) => {
   calls.push(`host token=${ctx.pre.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`);
+  carriedKey.push(ctx.pre.values.has("FASTAGENT_API_KEY"));
 });
 vi.mock("../src/cli/commands/deploy/fly.ts", () => ({ flyHost: { deploy: deployed, isOurs: () => true } }));
 vi.mock("../src/cli/commands/deploy/docker.ts", () => ({ dockerHost: { deploy: deployed, isOurs: () => true } }));
@@ -65,6 +70,7 @@ let said: string[];
 const production = () => join(dir, ".secrets", "production", ".env");
 beforeEach(async () => {
   calls.length = 0;
+  carriedKey.length = 0;
   interactive = true;
   facts = {
     values: new Map([
@@ -175,6 +181,7 @@ it("gives a deployment its API key once nothing refuses it, and plans again so t
   calls.length = 0;
   await runDeploy("fly", dir, {});
   expect(calls).toEqual(["preflight dev=- token=-", "preflight dev=- token=-", "host token=-"]);
+  expect(carriedKey).toEqual([true]);
   expect(await readFile(production(), "utf8")).toMatch(/^FASTAGENT_API_KEY=[\w-]{43}$/m);
   expect(said.join("\n")).toContain("Agent API: generated FASTAGENT_API_KEY in .secrets/production/.env");
 
@@ -184,6 +191,17 @@ it("gives a deployment its API key once nothing refuses it, and plans again so t
   await runDeploy("fly", dir, {});
   expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
   expect(await readFile(production(), "utf8")).toBe(given);
+});
+
+it("says so when the key went into a secrets directory of the operator's that git may track", async () => {
+  const secrets = await mkdtemp(join(tmpdir(), "fa-deploy-secrets-"));
+  vi.stubEnv("FASTAGENT_SECRETS_DIR", secrets);
+  await runDeploy("fly", dir, {});
+  expect(carriedKey).toEqual([true]);
+  expect(said.join("\n")).toContain(
+    `note: ${secrets} (FASTAGENT_SECRETS_DIR) now holds a secret and has no .gitignore`,
+  );
+  await rm(secrets, { recursive: true, force: true });
 });
 
 it("gives no key to a definition that turns the API off, and says the deployment serves none", async () => {

@@ -13,9 +13,9 @@ import { writeValues } from "../value-file.ts";
 export type DeploymentApi = { served: true; generatesKey: boolean } | { served: false; why: string };
 
 /**
- * Decide the API for one deploy, writing nothing: a deploy refused later must leave the value file as it was. Turned
- * off, it is off on the deployment too, a key the values or the host still hold included: the serve reads the same
- * setting.
+ * Decide the API for one deploy, writing nothing: a deploy the pre-flight refuses leaves the value file as it was.
+ * Turned off, it is off on the deployment too, a key the values or the host still hold included: the serve reads the
+ * same setting.
  */
 export function deploymentApi(input: {
   config: AgentConfig;
@@ -29,16 +29,21 @@ export function deploymentApi(input: {
   return { served: true, generatesKey: apiKeysFrom(values.get(API_KEY_VARIABLE)).length === 0 };
 }
 
-/** Give the deployment its key: into the value file, from which it travels with the other values. */
-export async function writeApiKey(agentDir: string): Promise<void> {
+/**
+ * Give the deployment its key: into the value file, from which it travels with the other values, once the pre-flight
+ * passes (a host's own check may still stop this deploy; the key stays for the next). Answers a secrets directory it
+ * wrote into that git may track.
+ */
+export async function writeApiKey(agentDir: string): Promise<string | undefined> {
   const key = randomBytes(32).toString("base64url");
   // Named in `overwrite`: a line that holds no key (empty, or only commas) is replaced, not kept as set.
-  await writeValues(
+  const { unprotectedSecretsDir } = await writeValues(
     agentDir,
     "Agent API",
-    [{ name: API_KEY_VARIABLE, value: key, hint: "The Agent API's keys, comma-separated; deploy generated this one" }],
+    [{ name: API_KEY_VARIABLE, value: key }],
     [API_KEY_VARIABLE],
   );
+  return unprotectedSecretsDir;
 }
 
 /**

@@ -618,7 +618,7 @@ streaming).
 ### 9.6 Keys and checks, from the CLI
 
 - **`fastagent deploy` gives a deployment a key.** When `.secrets/production/.env` holds no `FASTAGENT_API_KEY`, it
-  writes one, generated there once nothing refuses the deploy, so that what it deploys can be called; its report
+  writes one, generated there once the pre-flight passes, so that what it deploys can be called; its report
   names the API's URL and the command that checks it. The key travels to the host with the other values (`deploy`
   carries the value file), and replacing it is editing that file and deploying again, with both keys listed while the
   Callers move. A definition that serves no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then

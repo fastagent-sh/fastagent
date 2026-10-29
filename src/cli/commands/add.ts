@@ -25,6 +25,7 @@ import {
 } from "../../scaffold/add-channel.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
 import { failStartup, failUsage, agentDirOrExit } from "../fail.ts";
+import { unprotectedSecretsNote } from "../../value-file.ts";
 
 /** `fastagent add <kind> [dir]`: scaffold `src/channels/<kind>.ts`, the adapter configured with a starter policy. */
 export async function runAddChannel(
@@ -127,11 +128,7 @@ export async function runAddChannel(
     ingress,
   ).catch(failStartup);
   if (dotEnv.unprotectedSecretsDir) {
-    console.error(
-      `[fastagent] note: ${dotEnv.unprotectedSecretsDir} (FASTAGENT_SECRETS_DIR) now holds a secret and has ` +
-        `no .gitignore — that directory is yours, so fastagent will not write one into it. Make sure git ` +
-        `does not track what is in there.`,
-    );
+    console.error(`[fastagent] note: ${unprotectedSecretsNote(dotEnv.unprotectedSecretsDir)}`);
   }
   if (dotEnv.written.length > 0) {
     console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to ${envLabel}`);

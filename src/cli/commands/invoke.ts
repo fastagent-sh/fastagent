@@ -11,9 +11,9 @@ import { modelRefOf } from "../../harnesses/pi-durable/open.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { connectAgent } from "../../http/client.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
-import { findAgentDir, resolveStateRoot, selectAgentEnvironment } from "../../paths.ts";
+import { resolveStateRoot, selectAgentEnvironment } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";
-import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
+import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 export interface InvokeOptions {
@@ -89,15 +89,16 @@ function deploymentKey(agentDir: string, url: string): string {
  * the key to call `url` with: `--key`, from anywhere (the ambient environment when no agent is here), or the agent's.
  */
 function enterForUrl(dirArg: string, key: string | undefined, url: string): string {
-  if (key !== undefined) {
-    const agentDir = findAgentDir(resolve(dirArg));
-    if (agentDir === undefined) installProxyFetch();
-    else enterAgentEnv(agentDir);
+  const agentDir = optionalAgentDirOrExit(resolve(dirArg));
+  if (agentDir === undefined) {
+    installProxyFetch();
+    if (key === undefined) {
+      failUsage(`no key to call ${url} with: pass --key, or run this in the agent whose deploy wrote one`);
+    }
     return key;
   }
-  const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir);
-  return deploymentKey(agentDir, url);
+  return key ?? deploymentKey(agentDir, url);
 }
 
 /** `--url`: the message sent to a served agent over its Agent API, in a session there; nothing opens here. */

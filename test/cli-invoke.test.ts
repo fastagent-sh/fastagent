@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { describe, expect, it } from "vitest";
@@ -152,5 +153,16 @@ describe("cli: invoke --url", () => {
     ]);
     const stray = await run(["invoke", "--key", "k", "hello", dir]);
     expect([stray.code, stray.stderr]).toEqual([2, expect.stringContaining("--key is the key --url calls with")]);
+    // Outside any agent there is no value file to read a key from: --key is how one is given.
+    const nowhere = await mkdtemp(join(tmpdir(), "fa-invoke-url-nowhere-"));
+    const outside = await run(["invoke", "--url", "http://127.0.0.1:9", "hello", nowhere]);
+    expect([outside.code, outside.stderr]).toEqual([
+      2,
+      expect.stringContaining("no key to call http://127.0.0.1:9 with: pass --key"),
+    ]);
+    // Inside an agent's subdirectory: refused as every command refuses it, said, not thrown.
+    await mkdir(join(dir, "notes"), { recursive: true });
+    const inside = await run(["invoke", "--url", "http://127.0.0.1:9", "--key", "k", "hello", join(dir, "notes")]);
+    expect([inside.code, inside.stderr.includes("    at ")], inside.stderr).toEqual([1, false]);
   });
 });
