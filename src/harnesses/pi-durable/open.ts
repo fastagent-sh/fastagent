@@ -82,7 +82,10 @@ function checkConfig(config: unknown, file: string): AgentConfig {
     }
   }
   if (deploy !== undefined) {
-    checkKeys(deploy, ["agentcore"], `${file}: "deploy"`);
+    checkKeys(deploy, ["api", "agentcore"], `${file}: "deploy"`);
+    if (deploy.api !== undefined && typeof deploy.api !== "boolean") {
+      throw new Error(`${file}: "deploy.api" must be true or false`);
+    }
     if (deploy.agentcore !== undefined) {
       checkKeys(deploy.agentcore, ["idleTimeoutSeconds"], `${file}: "deploy.agentcore"`);
       // AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is refused by CloudFormation minutes

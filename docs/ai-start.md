@@ -435,9 +435,10 @@ model without an API key there (an OAuth subscription) is logged in on the deplo
 command ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
-host. A deployed agent is reached through its channels and schedules, and through the Agent API under `/v1` when
-`FASTAGENT_API_KEY` is among its values ([Configuration](configuration.md#the-agent-api-over-http)); a deploy with
-neither a channel nor a schedule is warned about. AgentCore's public webhook URL belongs to its forwarder; its IAM-gated door takes only the
+host. A deployed agent is reached through its channels and schedules, and on Docker, Fly and Railway through the
+Agent API under `/v1`, whose key `deploy` writes into `.secrets/production/.env` ([The Agent API](deploy.md#the-agent-api)).
+Check the deployment the way you checked the agent: `fastagent invoke --url <the URL deploy reports> "..."`, with the
+same output and exit code. AgentCore's public webhook URL belongs to its forwarder; its IAM-gated door takes only the
 deploy's `probe`.
 `fastagent logs agentcore --follow` reads runtime logs; `--source forwarder` selects ingress logs.
 
@@ -467,6 +468,7 @@ Keep these checks distinct. Use the smallest relevant ones, and make credentiale
 | URL verification and a real channel conversation | Report registration separately from actual receipt and framework-managed reply delivery. |
 | Proactive message/file and a fired schedule/wake | Verify the intended recipient, observable delivery, and the selected clock path. Check token renewal when applicable. |
 | Generated plan / accepted CloudFormation template | Artifact generation or platform template validation only; neither proves deployed operation. |
+| `invoke --url <deployment>` | The deployed agent answers one message through its Agent API, with the deployment's model and credentials. It does not verify channel ingress or the clock. |
 | Deployment and a real conversation/delivery on that host | Runtime operation on the selected host, beyond creation or health checks. |
 | Controlled restart/redeploy and continued work | The tested session, notes, credentials, and pending work survive that event on that storage path. Obtain approval before interrupting work. |
 

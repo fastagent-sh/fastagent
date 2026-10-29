@@ -121,18 +121,24 @@ const invoke: CommandSpec = {
     "complete exits non-zero. Each run starts a new session and prints its id on stderr; --session <id> sends " +
     "the message into that session instead, continuing it. Sessions are kept in <state>/invoke.sqlite, apart " +
     "from the storage a serve holds, so it runs beside `dev`; one invoke of an agent runs at a time. Same model " +
-    "resolution as dev, a continued session included. For CI smoke and quick checks, by a person or a coding agent.",
+    "resolution as dev, a continued session included. --url <base> sends it to a served agent instead, over its " +
+    "Agent API, with the same output and exit code: a deployment checked as the agent was before it, with the " +
+    "key --key gives or the first FASTAGENT_API_KEY in .secrets/production/.env, which deploy writes. For CI " +
+    "smoke and quick checks, by a person or a coding agent.",
   args: [{ name: "<message>", description: "the message to send" }, AGENT_ARG],
   flags: [
     MODEL,
     NO_INPUT,
     { flags: "--json", description: "the receipt and the message's events as JSON lines on stdout" },
     { flags: "--session <id>", description: "continue the session an earlier invoke printed" },
+    { flags: "--url <base>", description: "send to the agent served at <base>, over its Agent API" },
+    { flags: "--key <key>", description: "the API key for --url (default: the agent's production one)" },
   ],
   examples: [
     { cmd: `fastagent invoke "summarize today's inbox"` },
     { cmd: `fastagent invoke "remember 42"`, note: "prints its session's id" },
     { cmd: `fastagent invoke --session <id> "which number?"` },
+    { cmd: `fastagent invoke --url https://a.fly.dev "hello"`, note: "a deployment" },
   ],
   run: async (args, f) =>
     (await import("./commands/invoke.ts")).runInvoke(args[0] as string, args[1] as string, {
@@ -140,6 +146,8 @@ const invoke: CommandSpec = {
       input: f.input !== false,
       json: f.json === true,
       ...(typeof f.session === "string" ? { session: f.session } : {}),
+      ...(typeof f.url === "string" ? { url: f.url } : {}),
+      ...(typeof f.key === "string" ? { key: f.key } : {}),
     }),
 };
 

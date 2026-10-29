@@ -132,7 +132,7 @@ it("validates the refreshed channel facts after onboarding before handing off to
     changedIngress = true;
     return { appId: "cli_production", appSecret: "secret", tenantBrand: "feishu" };
   });
-  const deploy = vi.spyOn(HOSTS.agentcore, "deploy").mockResolvedValue();
+  const deploy = vi.spyOn(HOSTS.agentcore, "deploy").mockResolvedValue(undefined);
   await expect(runDeploy("agentcore", dir, { run: true })).rejects.toBe(stopped);
   expect(registerFeishuApp).toHaveBeenCalledOnce();
   expect(deploy).not.toHaveBeenCalled();
@@ -141,7 +141,7 @@ it("validates the refreshed channel facts after onboarding before handing off to
 
 it.each(["agentcore", "docker"] as const)("generate-only %s still warns without onboarding", async (host) => {
   const { dir } = await agent("agent", host === "agentcore" ? "FEISHU_INGRESS=websocket\n" : "", host === "docker");
-  const deploy = vi.spyOn(HOSTS[host], "deploy").mockResolvedValue();
+  const deploy = vi.spyOn(HOSTS[host], "deploy").mockResolvedValue(undefined);
   await runDeploy(host, dir, { tunnel: host === "docker" });
   expect(registerFeishuApp).not.toHaveBeenCalled();
   expect(createFeishuApi).not.toHaveBeenCalled();

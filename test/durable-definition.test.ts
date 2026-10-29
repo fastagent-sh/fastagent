@@ -225,6 +225,7 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       '"deploy.agentcore.idleTimeoutSeconds" must be an integer 60-1209600',
     );
     await expect(configured("{ deploy: { fly: {} } }")).rejects.toThrow('"deploy": unknown key "fly"');
+    await expect(configured("{ deploy: { api: 'no' } }")).rejects.toThrow('"deploy.api" must be true or false');
     await expect(loadDefinition(agentPackage({}))).rejects.toThrow(".fastagent/registry.ts is missing");
   });
 

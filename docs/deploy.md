@@ -33,9 +33,25 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
 | **`.secrets/production/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`needs([...])`), the variables `context.json` declares, and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
 | **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable in `.secrets/production/.env` travels, and so does a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
-| **Something reaches it** | A channel or a schedule. A deployment with neither is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
+| **Something reaches it** | A channel, a schedule, or the [Agent API](#the-agent-api). A deployment with none of them is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
 | **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/`, `.secrets/` and `content/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 | **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/production/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` entry stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, outside `content/`, which every release ships; move what it works on and must keep to a repository. |
+
+## The Agent API
+
+Docker, Fly and Railway deployments serve the [Agent API](design/agent-api.md#9-http) under `/v1`, behind
+`FASTAGENT_API_KEY`. When `.secrets/production/.env` holds none, `deploy` generates one there once nothing refuses the
+deploy, and it travels with the other values. The report names the API's URL and the check:
+
+```bash
+fastagent invoke --url https://<app>.fly.dev "hello"
+```
+
+`invoke --url` reads the key from the same file; a program calls the deployment with
+`connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client`. To replace the key, list the new one first
+(`FASTAGENT_API_KEY=new,old`), deploy, move the Callers, then remove the old one and deploy again. A definition whose
+deployments should serve no API says `deploy: { api: false }` in `fastagent.config.ts`: `deploy` then writes no key,
+and refuses to deploy while the value file still holds one. AgentCore serves no API either way.
 
 ## Chat channels
 

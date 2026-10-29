@@ -18,5 +18,6 @@ export default {
   // The port a serve listens on, for its channels' webhooks and its health check.
   http: { port: 8787 },
   // The commands the agent needs (CLIs, runtimes, apt packages) live in context.json: `fastagent env add gh`.
+  // deploy: { api: false }, // a deployment serves no Agent API under /v1 (deploy gives it a key otherwise)
   // deploy: { agentcore: { idleTimeoutSeconds: 180 } }, // `deploy agentcore` only: idle microVM tail, 60–1209600s
 } satisfies AgentConfig;

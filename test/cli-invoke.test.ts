@@ -1,6 +1,8 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { describe, expect, it } from "vitest";
+import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { fauxAgent as agent, killWhileLingering, lingered, run, whileServed } from "./cli-run.ts";
@@ -69,5 +71,86 @@ describe("cli: invoke", () => {
     } finally {
       await held.close(BACKGROUND_CONTEXT);
     }
+  });
+});
+
+describe("cli: invoke --url", () => {
+  it("checks a served agent over its Agent API as invoke checks one here: output, sessions, --json and exit code", async () => {
+    const dir = await agent("fa-invoke-url-");
+    const opened = await openAgent(dir);
+    const service = await opened.serve({ apiKeys: ["the-key", "the-next-key"] });
+    const url = `http://127.0.0.1:${await service.listen(0, "127.0.0.1")}`;
+    try {
+      const first = await run(["invoke", "--url", url, "--key", "the-key", "hello", dir]);
+      expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
+      const sessionId = sessionOf(first.stderr);
+      const switched = await run([
+        "invoke",
+        "--url",
+        url,
+        "--key",
+        "the-key",
+        "--session",
+        sessionId,
+        "--model",
+        "gw/m2",
+        "and",
+        dir,
+      ]);
+      expect([switched.stdout.trim(), sessionOf(switched.stderr)], switched.stderr).toEqual([
+        "seen 2 by m2",
+        sessionId,
+      ]);
+      const json = await run([
+        "invoke",
+        "--url",
+        url,
+        "--key",
+        "the-key",
+        "--json",
+        "--session",
+        sessionId,
+        "again",
+        dir,
+      ]);
+      const lines = json.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type: string });
+      expect([json.code, lines[0]?.type, lines.at(-1)], json.stderr).toEqual([
+        0,
+        "message",
+        expect.objectContaining({ type: "done", message: expect.objectContaining({ status: "completed" }) }),
+      ]);
+
+      // Without --key: the first of the keys deploy wrote into the production values.
+      await mkdir(join(dir, ".secrets", "production"), { recursive: true });
+      await writeFile(join(dir, ".secrets", "production", ".env"), "FASTAGENT_API_KEY=the-next-key, a-retired-key\n");
+      const keyed = await run(["invoke", "--url", url, "hello", dir]);
+      expect([keyed.code, keyed.stdout.trim()], keyed.stderr).toEqual([0, "seen 1"]);
+
+      const refused = await run(["invoke", "--url", url, "--key", "not-a-key", "hello", dir]);
+      expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("unauthorized: ")]);
+      const unknown = await run(["invoke", "--url", url, "--key", "the-key", "--session", "nope", "hi", dir]);
+      expect([unknown.code, unknown.stderr]).toEqual([
+        1,
+        expect.stringContaining(`--session nope: no such session at ${url}`),
+      ]);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it("says where a key comes from when it has none, and takes --key only with --url", async () => {
+    const dir = await agent("fa-invoke-url-nokey-");
+    const keyless = await run(["invoke", "--url", "http://127.0.0.1:9", "hello", dir]);
+    expect([keyless.code, keyless.stderr]).toEqual([
+      2,
+      expect.stringMatching(
+        /no key to call http:\/\/127\.0\.0\.1:9 with: pass --key, or set FASTAGENT_API_KEY in .*\.secrets\/production\/\.env/,
+      ),
+    ]);
+    const stray = await run(["invoke", "--key", "k", "hello", dir]);
+    expect([stray.code, stray.stderr]).toEqual([2, expect.stringContaining("--key is the key --url calls with")]);
   });
 });

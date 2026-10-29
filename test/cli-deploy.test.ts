@@ -99,6 +99,10 @@ describe("cli: deploy", () => {
     const result = await run(["deploy", "fly", dir]);
     expect(result.code).toBe(0);
     expect(result.stderr).toMatch(/baked as the definition/); // the WYSIWYG bake note is stated
+    // Where the Agent API is reached, as Fly names the app, and the command that checks it.
+    expect(result.stderr).toMatch(
+      /Agent API: (https:\/\/[\w-]+\.fly\.dev)\/v1,[^\n]*\n.*check it: fastagent invoke --url \1 /,
+    );
     expect(result.stderr).not.toMatch(/not yet supported/); // no placement gate anywhere
 
     // The retired config key fails visibly — placement is structural now, never configured.
@@ -122,6 +126,8 @@ describe("cli: deploy", () => {
       });
       await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
       const res = await run(["deploy", "railway", dir]);
+      // Railway mints the domain later, so the report says where the API goes on it.
+      expect(res.stderr).toContain("Agent API: <the deployment's URL>/v1");
       return { res, dockerfile: await readFile(join(dir, "Dockerfile"), "utf8") };
     };
 

@@ -22,7 +22,14 @@ export interface AgentConfig {
   /** The port a serve listens on, for its channels' webhooks and its health check. */
   http?: { port?: number };
   /** How the agent is deployed, where a host needs to be told. */
-  deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
+  deploy?: {
+    /**
+     * Whether a deployment serves the Agent API under `/v1` (default true): `deploy` then gives it a key. `false` keeps
+     * it to its channels and schedules. Not served on AgentCore either way.
+     */
+    api?: boolean;
+    agentcore?: { idleTimeoutSeconds?: number };
+  };
 }
 
 /** @public */
