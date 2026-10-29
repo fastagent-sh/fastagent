@@ -75,10 +75,13 @@ function checkConfig(config: unknown, file: string): AgentConfig {
   checkKeys(config, CONFIG_KEYS, file);
   const { model, thinkingLevel, extensions, providers, http, deploy } = config as AgentConfig;
   if (http !== undefined) {
-    checkKeys(http, ["port"], `${file}: "http"`);
+    checkKeys(http, ["port", "api"], `${file}: "http"`);
     const port = http.port;
     if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) {
       throw new Error(`${file}: "http.port" must be an integer 0-65535`);
+    }
+    if (http.api !== undefined && typeof http.api !== "boolean") {
+      throw new Error(`${file}: "http.api" must be true or false`);
     }
   }
   if (deploy !== undefined) {

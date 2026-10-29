@@ -60,10 +60,11 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   assertTunnelBindable(host, tunnel);
   const opened = await openServing(agentDir, { model: modelSpec }).catch(failStartup);
   await reportAssembly(opened, modelSpec);
-  const service = await serveAgent(opened, cliMountOptions()).catch(failStartup);
+  const { config } = opened.definition;
+  const service = await serveAgent(opened, cliMountOptions(config)).catch(failStartup);
   serveService(
     service,
-    { port: portFlag ?? opened.definition.config.http?.port ?? DEFAULT_HTTP_PORT, host },
-    { tunnel, agentDir, stateRoot: opened.stateRoot },
+    { port: portFlag ?? config.http?.port ?? DEFAULT_HTTP_PORT, host },
+    { tunnel, agentDir, stateRoot: opened.stateRoot, config },
   );
 }

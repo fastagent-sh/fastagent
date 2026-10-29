@@ -116,7 +116,7 @@ export const agentcoreHost: HostDeploy = {
       alwaysWrite: [FORWARDER_FILE],
     });
     if (opts.run) {
-      return runDeployAgentcore({
+      await runDeployAgentcore({
         agentDir,
         name: acName,
         modelAuth,
@@ -128,9 +128,10 @@ export const agentcoreHost: HostDeploy = {
         valueFile,
         topology: plan.topology,
       });
+      return undefined;
     }
     console.log(plan.runbook.join("\n"));
-    return;
+    return undefined;
   },
 };
 

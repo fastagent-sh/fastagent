@@ -29,6 +29,16 @@ import {
 /** The instance's keys: several, separated by commas, so a key is replaced without a gap (§9.1). */
 export const API_KEY_VARIABLE = "FASTAGENT_API_KEY";
 
+/**
+ * Whether the definition turns the Agent API off (`http.api: false`): the one reading of it, which every serve the CLI
+ * runs and `deploy` make, so a key a host still holds cannot serve an API the definition turned off.
+ */
+export function apiTurnedOff(config: { http?: { api?: boolean } }): boolean {
+  return config.http?.api === false;
+}
+
+export const API_TURNED_OFF = "fastagent.config.ts says http.api: false";
+
 export function apiKeysFrom(value: string | undefined): string[] {
   return (value ?? "")
     .split(",")

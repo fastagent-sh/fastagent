@@ -109,7 +109,7 @@ export const dockerHost: HostDeploy = {
       );
     }
     console.log(plan.runbook.join("\n"));
-    return;
+    return `http://127.0.0.1:${port}`;
   },
 };
 
@@ -128,7 +128,7 @@ async function runDeployDocker(params: {
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
   valueFile: string;
-}): Promise<void> {
+}): Promise<string | undefined> {
   const { agentDir, composeFile, port, requireTunnel, channels } = params;
   const { secrets, missingSecrets } = assembleSecrets({
     modelAuth: params.modelAuth,
@@ -171,7 +171,7 @@ async function runDeployDocker(params: {
     );
   }
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
-  if (outcome.tunnelUrl) return;
+  if (outcome.tunnelUrl) return outcome.tunnelUrl;
   const paths = webhookPaths(channels);
   if (paths.length > 0) {
     console.error(
@@ -180,6 +180,7 @@ async function runDeployDocker(params: {
         `(or your remapped channel routes) at it`,
     );
   }
+  return outcome.url;
 }
 
 /** `docker compose exec` into the running agent service. */

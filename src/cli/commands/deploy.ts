@@ -15,8 +15,10 @@ import {
   prepareFeishuApps,
   unpreparedFeishuApps,
 } from "../add-feishu.ts";
-import { selectAgentEnvironment } from "../../paths.ts";
+import { displayPath, selectAgentEnvironment } from "../../paths.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
+import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
+import { unprotectedSecretsNote } from "../../value-file.ts";
 import { loadConfig } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive } from "../shared.ts";
@@ -106,6 +108,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }
   };
   independentApps(loadEnvValues(dotEnvPath(agentDir)));
+  const api = deploymentApi({
+    config,
+    hostServes: host !== "agentcore",
+    values: loadEnvValues(dotEnvPath(agentDir)),
+  });
   const target = HOSTS[host];
   const preflight = async () => {
     const facts = await preflightDeploy({
@@ -116,7 +123,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       noResidentProcess: host === "agentcore", // alarms and webhooks wake the container there — no machine to keep up
       // Every AgentCore deployment starts the storage over (core.md §9).
       storageResets: host === "agentcore",
-      servesApi: host !== "agentcore",
+      servesApi: api.served,
     }).catch(failStartup);
     if (!facts.ok) failStartup(new Error(`deploy stopped: ${facts.gate}`));
     target.validate?.({ opts, agentDir, pre: facts });
@@ -166,10 +173,16 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     pre = await preflight();
   }
   independentApps(pre.values);
+  if (api.served && api.generatesKey) {
+    // Past every refusal the pre-flight makes, and read again, so this deploy carries it.
+    const unprotected = await writeApiKey(agentDir).catch(failStartup);
+    if (unprotected !== undefined) console.error(`[fastagent] note: ${unprotectedSecretsNote(unprotected)}`);
+    pre = await preflight();
+  }
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
   const { channels } = pre;
   warnHostOnlyFlags(host, opts);
-  await target.deploy({
+  const reachedAt = await target.deploy({
     opts,
     agentDir,
     config,
@@ -197,4 +210,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       await applyArtifactPlan(plan);
     },
   });
+  const where = { valueFile: pre.valueFile, agentArg: displayPath(process.cwd(), agentDir) };
+  for (const line of apiReport(api, where, reachedAt)) console.error(`[fastagent] ${line}`);
 }

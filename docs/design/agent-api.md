@@ -2,16 +2,16 @@
 title: Agent API v2
 description: "The second version of the Agent API: one model of sessions, messages and entries, bound in process in TypeScript and over HTTP, with an API key that keeps everyone but the instance's customer out."
 type: spec
-status: in progress
-version: 2.0-draft
+status: implemented
+version: "2.0"
 updated: 2026-10-28
 ---
 
 # Agent API v2
 
-> **Status: in progress.** The code implements both bindings (§8, §9), and §9.6's commands are not yet. When they
-> are, this replaces `docs/SPEC.md`, which still describes v1. Changing its semantics before then is a review of this
-> draft.
+> **Status: implemented.** The code implements both bindings (§8, §9) and the CLI's checks (§9.6). `docs/SPEC.md`
+> still describes v1 until this document replaces it there, the documentation change that follows the
+> implementation in #788. Changing its semantics is an explicit decision, as any spec's.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
 
@@ -618,13 +618,17 @@ streaming).
 ### 9.6 Keys and checks, from the CLI
 
 - **`fastagent deploy` gives a deployment a key.** When `.secrets/production/.env` holds no `FASTAGENT_API_KEY`, it
-  writes one, generated there, so that what it deploys can be called; its runbook and report name the API's URL. The
-  key travels to the host with the other values (`deploy` carries the value file), and replacing it is editing that
-  file and deploying again, with both keys listed while the Callers move.
+  writes one, generated there once the pre-flight passes, so that what it deploys can be called; its report
+  names the API's URL and the command that checks it. The key travels to the host with the other values (`deploy`
+  carries the value file), and replacing it is editing that file and deploying again, with both keys listed while the
+  Callers move. A definition that serves no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then
+  writes no key, and no serve answers `/v1`, whatever key its environment holds, one an earlier deploy left on a host
+  included. Not on AgentCore, which serves no API either way (§9.5).
 - **`fastagent invoke --url <base>` checks a deployed agent** the way `invoke` checks a local one: the same message,
-  output, `--json`, `--session` and exit code, over `connectAgent`, with the key from `FASTAGENT_API_KEY` in
-  `.secrets/production/.env` (or `--key`). A coding agent that checked the agent before deploying it checks the
-  deployment with the same command.
+  output, `--json`, `--session` and exit code, over `connectAgent`, with `--key` or the first key of
+  `FASTAGENT_API_KEY` in `.secrets/production/.env`. `--model` sets the session's model there; without it, the
+  deployment's default answers. A coding agent that checked the agent before deploying it checks the deployment with
+  the same command.
 
 ## 10. Security model
 

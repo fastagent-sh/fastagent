@@ -67,8 +67,9 @@ export const flyHost: HostDeploy = {
       ...container,
     });
     await write(plan.artifacts, { force: !!opts.force });
+    const reachedAt = `https://${appName}.fly.dev`;
     if (opts.run) {
-      return runDeployFly({
+      await runDeployFly({
         agentDir,
         appName,
         modelAuth,
@@ -79,8 +80,10 @@ export const flyHost: HostDeploy = {
         values,
         valueFile,
       });
+      return reachedAt;
     }
     console.log(plan.runbook.join("\n"));
+    return reachedAt;
   },
 };
 

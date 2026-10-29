@@ -3,10 +3,11 @@
  * so every refusal that touches nothing comes first. The pre-flight, the host driver and the preparation itself are
  * tested elsewhere; here they are stand-ins that record what reached them.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { dotEnvPath, loadEnvValues } from "../src/env.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 
 const calls: string[] = [];
@@ -19,13 +20,15 @@ vi.mock("../src/cli/shared.ts", async (importOriginal) => ({
   enterAgentDirectory: async (dir: string) => ({ agentDir: dir }),
   isInteractive: () => interactive,
 }));
+let config: Record<string, unknown> = {};
 vi.mock("../src/harnesses/pi-durable/open.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/harnesses/pi-durable/open.ts")>()),
-  loadConfig: async () => ({}),
+  loadConfig: async () => config,
 }));
 vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/deploy/preflight.ts")>()),
-  preflightDeploy: async () => {
+  // The values as the real pre-flight reads them, the selected value file, over what a test sets in `facts`.
+  preflightDeploy: async ({ agentDir }: { agentDir: string }) => {
     calls.push(
       `preflight dev=${process.env[DEV_SERVE_ENV] ?? "-"} token=${facts.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`,
     );
@@ -33,7 +36,7 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
       ok: true,
       messages: [],
       channels: [{ name: "feishu", ingress: "webhook" }],
-      values: new Map(facts.values),
+      values: new Map([...loadEnvValues(dotEnvPath(agentDir)), ...facts.values]),
       valueFile: ".secrets/production/.env",
       modelAuth: facts.modelAuth,
       declaredSecrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"].map((name) => ({
@@ -52,8 +55,11 @@ vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
     facts.values.set("FEISHU_VERIFICATION_TOKEN", "captured");
   },
 }));
+/** Whether each deploy the host received carries the Agent API's key: what it would set on the host. */
+const carriedKey: boolean[] = [];
 const deployed = vi.fn(async (ctx: { pre: { values: Map<string, string> } }) => {
   calls.push(`host token=${ctx.pre.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`);
+  carriedKey.push(ctx.pre.values.has("FASTAGENT_API_KEY"));
 });
 vi.mock("../src/cli/commands/deploy/fly.ts", () => ({ flyHost: { deploy: deployed, isOurs: () => true } }));
 vi.mock("../src/cli/commands/deploy/docker.ts", () => ({ dockerHost: { deploy: deployed, isOurs: () => true } }));
@@ -61,8 +67,10 @@ const { runDeploy } = await import("../src/cli/commands/deploy.ts");
 
 let dir: string;
 let said: string[];
+const production = () => join(dir, ".secrets", "production", ".env");
 beforeEach(async () => {
   calls.length = 0;
+  carriedKey.length = 0;
   interactive = true;
   facts = {
     values: new Map([
@@ -71,8 +79,11 @@ beforeEach(async () => {
     ]),
   };
   dir = join(await mkdtemp(join(tmpdir(), "fa-deploy-order-")), "fastagent");
-  await mkdir(join(dir, ".secrets"), { recursive: true });
+  await mkdir(join(dir, ".secrets", "production"), { recursive: true });
   await writeFile(join(dir, ".secrets", ".env"), "FEISHU_APP_ID=cli_dev\n");
+  // Its key given, so the cases below are about preparing an app; the key's own order is the last cases'.
+  await writeFile(production(), "FASTAGENT_API_KEY=k\n");
+  config = {};
   vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
   vi.stubEnv("FASTAGENT_ENVIRONMENT", "");
   vi.stubEnv("FEISHU_INGRESS", "");
@@ -159,4 +170,45 @@ it("creates an app when all production app values are absent, instead of gating 
 it("generating a plan prepares nothing", async () => {
   await runDeploy("fly", dir, {});
   expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
+});
+
+it("gives a deployment its API key once nothing refuses it, and plans again so that it carries the key", async () => {
+  await rm(production());
+  facts.modelAuth = "OPENAI_API_KEY";
+  await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
+  await expect(readFile(production(), "utf8")).rejects.toThrow("ENOENT");
+
+  calls.length = 0;
+  await runDeploy("fly", dir, {});
+  expect(calls).toEqual(["preflight dev=- token=-", "preflight dev=- token=-", "host token=-"]);
+  expect(carriedKey).toEqual([true]);
+  expect(await readFile(production(), "utf8")).toMatch(/^FASTAGENT_API_KEY=[\w-]{43}$/m);
+  expect(said.join("\n")).toContain("Agent API: generated FASTAGENT_API_KEY in .secrets/production/.env");
+
+  // Given once, kept: the next deploy plans once.
+  const given = await readFile(production(), "utf8");
+  calls.length = 0;
+  await runDeploy("fly", dir, {});
+  expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
+  expect(await readFile(production(), "utf8")).toBe(given);
+});
+
+it("says so when the key went into a secrets directory of the operator's that git may track", async () => {
+  const secrets = await mkdtemp(join(tmpdir(), "fa-deploy-secrets-"));
+  vi.stubEnv("FASTAGENT_SECRETS_DIR", secrets);
+  await runDeploy("fly", dir, {});
+  expect(carriedKey).toEqual([true]);
+  expect(said.join("\n")).toContain(
+    `note: ${secrets} (FASTAGENT_SECRETS_DIR) now holds a secret and has no .gitignore`,
+  );
+  await rm(secrets, { recursive: true, force: true });
+});
+
+it("gives no key to a definition that turns the API off, and says the deployment serves none", async () => {
+  config = { http: { api: false } };
+  await rm(production());
+  await runDeploy("fly", dir, {});
+  expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
+  await expect(readFile(production(), "utf8")).rejects.toThrow("ENOENT");
+  expect(said.join("\n")).toContain("Agent API: not served — fastagent.config.ts says http.api: false");
 });

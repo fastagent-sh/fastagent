@@ -235,6 +235,7 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 
 ```bash
 fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--json] [--session <id>]
+fastagent invoke <message> [agent] --url <base> [--key <key>] [--model provider/modelId] [--json] [--session <id>]
 ```
 
 Sends one message and exits: the answer text to stdout, tool and diagnostic lines to stderr, and a non-zero exit
@@ -249,6 +250,13 @@ unless the message completed. This is the check a coding agent runs: one message
   session's id on stderr (`[fastagent] session <id> …`), and `--json`'s first line carries it as `sessionId`; without
   `--session`, a run starts a new session. Each run answers with the model it resolves (`--model`,
   `FASTAGENT_MODEL`, the config), a continued session included.
+
+**`--url <base>`** sends the message to the agent served at `<base>` instead, over its
+[Agent API](design/agent-api.md#9-http): the same output, `--json`, `--session` and exit code, nothing opened here. It
+calls with `--key`, or the first key of `FASTAGENT_API_KEY` in the agent's `.secrets/production/.env`, which `deploy`
+writes; with neither, it exits 2 and says where a key comes from. `--model` sets that session's model on the
+deployment; without it, the deployment's default answers. A coding agent that checked the agent with `invoke` checks
+its deployment with `invoke --url`, the URL `deploy` reports.
 
 `invoke` keeps its sessions in `<stateRoot>/invoke.sqlite`, never the instance's storage, so it runs beside a `dev`
 or `start` of the same agent. One `invoke` of an agent runs at a time: a second one while the first runs is refused.
@@ -352,7 +360,8 @@ fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--t
 ```
 
 Serves without watching. Binds all interfaces by default. A serve answers its channels' routes, `GET /health`, and
-the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key; the startup report says whether it does
+the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key and the definition does not say `http: { api: false }`;
+the startup report says whether it does, and why not
 ([Configuration](configuration.md#the-agent-api-over-http)).
 
 ```txt

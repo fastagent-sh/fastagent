@@ -1,6 +1,7 @@
 /** Production serving. */
 import { join, resolve } from "node:path";
 import type { Agent } from "../../agent-api.ts";
+import type { AgentConfig } from "../../harnesses/pi-durable/define.ts";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
@@ -30,7 +31,7 @@ export interface StartOptions {
 }
 
 /** What `start` opened and serves: the agent too, for a deployment's own check of what it runs. */
-type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: number };
+type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: number; config: AgentConfig };
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
@@ -71,7 +72,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   serveService(
     service,
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? service.port, host: bindFlag },
-    { tunnel, agentDir: service.agentDir, stateRoot: service.stateRoot },
+    { tunnel, agentDir: service.agentDir, stateRoot: service.stateRoot, config: service.config },
   );
 }
 
@@ -161,6 +162,9 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
       "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
     );
   }
-  const service = await (isAgentcoreRuntime() ? mountAgentcoreService(opened) : serveAgent(opened, cliMountOptions()));
-  return { ...service, agent: opened.agent, stateRoot, port: opened.definition.config.http?.port ?? DEFAULT_HTTP_PORT };
+  const { config } = opened.definition;
+  const service = await (isAgentcoreRuntime()
+    ? mountAgentcoreService(opened)
+    : serveAgent(opened, cliMountOptions(config)));
+  return { ...service, agent: opened.agent, stateRoot, port: config.http?.port ?? DEFAULT_HTTP_PORT, config };
 }

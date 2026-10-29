@@ -46,7 +46,8 @@ export const railwayHost: HostDeploy = {
       });
     }
     console.log(plan.runbook.join("\n"));
-    return;
+    // Railway mints the domain when the runbook's step generates it.
+    return undefined;
   },
 };
 
@@ -64,7 +65,7 @@ async function runDeployRailway(params: {
   values: ReadonlyMap<string, string>;
   valueFile: string;
   intoLinked: boolean;
-}): Promise<void> {
+}): Promise<string> {
   const { agentDir, name, channels, intoLinked } = params;
   const railway = spawnRunner("railway", agentDir);
   // Fail fast if the railway CLI is absent (spawn ENOENT → 127), with the install link.
@@ -95,6 +96,7 @@ async function runDeployRailway(params: {
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);
+  return outcome.url;
 }
 
 /** `railway ssh` into the service, in the project and environment this directory is linked to. */

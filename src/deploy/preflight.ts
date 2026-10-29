@@ -36,8 +36,6 @@ import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
-import { API_PREFIX } from "../http/contract.ts";
-import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";
 import { checkPackages, MISE_PACKAGE_NAMES, miseBinary, packageSpecs } from "../environment/mise.ts";
 
@@ -190,7 +188,7 @@ interface PreflightInput {
    * agent did in it, does not outlive a release. Its own question, apart from {@link noResidentProcess}.
    */
   storageResets?: boolean;
-  /** Does this host serve the Agent API under `/v1` once a key is among the values? Not AgentCore (agent-api.md §9.5). */
+  /** Does this deployment serve the Agent API under `/v1` (deploy/api.ts)? Then a Caller with its key reaches it. */
   servesApi?: boolean;
 }
 
@@ -307,15 +305,11 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       `src/schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron instant).`,
     );
   }
-  const apiServed = servesApi && apiKeysFrom(values.get(API_KEY_VARIABLE)).length > 0;
-  if (code !== undefined && channels.length === 0 && !hasCron && !apiServed) {
+  if (code !== undefined && channels.length === 0 && !hasCron && !servesApi) {
     report.warn(
-      `no channel in src/channels/, no schedule in src/schedules/` +
-        (servesApi ? `, and no ${API_KEY_VARIABLE} in ${valueFile}` : "") +
-        `: nothing reaches the deployed agent but its health check. Add a channel (\`fastagent add ` +
-        `telegram|slack|feishu|lark\`, or your own) or a schedule` +
-        (servesApi ? `, or a key, which serves the Agent API under ${API_PREFIX}` : "") +
-        `; an agent used only from an app is embedded in it (openAgent), not deployed`,
+      `no channel in src/channels/, no schedule in src/schedules/, and no Agent API on this deployment: nothing ` +
+        `reaches it but its health check. Add a channel (\`fastagent add telegram|slack|feishu|lark\`, or your ` +
+        `own) or a schedule; an agent used only from an app is embedded in it (openAgent), not deployed`,
     );
   }
 

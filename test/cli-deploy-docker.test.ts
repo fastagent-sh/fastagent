@@ -13,6 +13,7 @@ describe("cli: deploy docker", () => {
 
     const first = await run(["deploy", "docker", dir]);
     expect(first.code).toBe(0);
+    expect(first.stderr).toContain("Agent API: http://127.0.0.1:8787/v1");
     expect(first.stdout).toContain(
       // One spelling: the generated Compose names the value file itself.
       "docker compose -f fastagent.compose.yml build --pull\ndocker compose -f fastagent.compose.yml up -d\n",

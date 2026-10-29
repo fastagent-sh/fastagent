@@ -59,9 +59,9 @@ export interface HostDeploy {
   validate?(ctx: Pick<DeployContext, "opts" | "agentDir" | "pre">): void;
   /**
    * Plan the artifacts from the pre-flight facts and what is on disk, write them, then either drive the host CLI
-   * (`--run`) or print the runbook.
+   * (`--run`) or print the runbook. Answers the URL the deployment is reached at, when this host knows it.
    */
-  deploy(ctx: DeployContext): Promise<void>;
+  deploy(ctx: DeployContext): Promise<string | undefined>;
 }
 
 /** The registrars every host driver gets. */
