@@ -278,7 +278,7 @@ label misstates the past.
 
 *Rejected: making the room absorb eagerly* — writing each un-summoned message into the room's session
 at ingress. It would delete rung 3 entirely, and it fails on three measured counts: a session takes one
-run at a time (SPEC §3.2), so a write at ingress would wait behind a multi-minute turn; that blocking sits on the PRE-ACK path, where the webhook must answer before the
+run at a time (SPEC §5.3), so a write at ingress would wait behind a multi-minute turn; that blocking sits on the PRE-ACK path, where the webhook must answer before the
 platform re-pushes; and consecutive ambient user entries reach the provider unmerged — Bedrock rejects
 them (`roles must alternate`), and `deploy agentcore` is a shipped host.
 

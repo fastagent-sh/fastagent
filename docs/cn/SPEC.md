@@ -113,7 +113,7 @@ entry 是持久的，在哪里读到都一样。`delta`（回答正在写的部�
 
 - **一份契约。** `src/http/contract.ts` 用 Effect 的 `HttpApi` 从 `src/agent-api.ts` 的 Schema 拼出所有路由；服务端从它回答，
   `connectAgent` 通过它调用，`/v1/openapi.json` 也从它生成，所以三者不可能描述不同的 API。错误的 HTTP 状态码由一个函数
-  `statusOf` 按 §7 的表决定，429 和 503 带 `Retry-After`；解码时接受任意错误码，新服务端加的码旧客户端也能读。
+  `statusOf` 按原文 §7 的表决定，429 和 503 带 `Retry-After`；解码时接受任意错误码，新服务端加的码旧客户端也能读。
 - **key。** `Authorization: Bearer <key>`，key 来自实例环境里的 `FASTAGENT_API_KEY`，逗号分隔可以有多个，用来不中断地换 key。
   没有 key 就不提供 `/v1`，启动报告会说明。没有 CORS：key 是整个实例的凭证，浏览器从来不拿它，浏览器应用调用自己的后端。
   定义里写 `http: { api: false }` 时，任何 serve（`dev`、`start`、每个部署）都不提供 `/v1`，即使环境里还留着 key。

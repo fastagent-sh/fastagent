@@ -72,6 +72,6 @@ These are not required to use FastAgent, but they explain public architecture de
 | [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
 | [Place history](design/place-history.md) | In progress: what a chat place said, read from the platform when a turn needs it instead of copied into a buffer |
 | [Channels across environments](design/channel-environments.md) | A deployment receives Feishu/Lark by webhook by default and `dev` keeps WebSocket (`FEISHU_INGRESS`); one app serves one environment at a time until per-environment apps (#749) |
-| [Security boundary](design/security-boundary.md) | Why a serve publishes no API and every route verifies its caller, and why an instance is one trust domain, so people who must be kept apart get an instance each |
+| [Security boundary](design/security-boundary.md) | What a serve exposes (routes that verify their caller, and the Agent API behind the instance's keys), and why an instance is one trust domain, so people who must be kept apart get an instance each |
 
 For contribution workflow, see [../CONTRIBUTING.md](../CONTRIBUTING.md).

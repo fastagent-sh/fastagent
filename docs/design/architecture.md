@@ -7,7 +7,7 @@ status: implemented in part
 
 # Architecture
 
-**Status: decided; implemented through §6 step 2.** The code serves an agent on pi-durable through the
+**Status: decided; implemented through §6 step 3.** The code serves an agent on pi-durable through the
 [Agent API](../SPEC.md). The artifact (§4.1), context packages (§4.2) and what §4.4 leaves for later are not built yet;
 §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol (never released),
 a harness port, and the conformance levels behind them (§5).

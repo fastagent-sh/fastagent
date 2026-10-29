@@ -14,13 +14,13 @@ file's header says what it owns; user behavior belongs in the other `docs/` guid
 ## 1. Product boundary
 
 FastAgent serves file-defined agents. An agent is a definition assembled onto one harness, pi-durable, and everything
-that talks to it calls the consumer [Agent API](../SPEC.md), in process:
+that talks to it calls the consumer [Agent API](../SPEC.md), in process or over HTTP with the instance's key:
 
 | Concern | FastAgent seam |
 |---|---|
 | What the agent is | The definition: `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/`, `fastagent.config.ts` (§2) |
 | How it runs | pi-durable, behind the Agent API (§3, §4) |
-| What reaches it | Callers in its process: channels (§7), schedules and wake-ups (§8), `fastagent invoke`, an app that embeds it |
+| What reaches it | Callers in its process: channels (§7), schedules and wake-ups (§8), `fastagent invoke`, an app that embeds it; and a program with its key, over HTTP under `/v1` (`connectAgent`, `invoke --url`) |
 | Where it runs | A host, which supplies the process, the storage, the credentials and the deployment (§9) |
 
 The Agent API is the one API of our own; operating the agent (its definition, compaction, inspecting a session) is

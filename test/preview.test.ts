@@ -235,7 +235,7 @@ describe("telegramReply terminal writes (direct)", () => {
     expect(edits.at(-1)).toBe("⚠️ neutral"); // the user was told, in the same message
   });
 
-  it("a stream that ends without a terminal event delivers the neutral notice and throws (SPEC MUST 1)", async () => {
+  it("a stream that ends without a terminal event delivers the neutral notice and throws (SPEC §6.1)", async () => {
     const { sends, edits } = recordingFetch();
     await expect(
       run(telegramReply(stream(events(ev.text("partial…"))), API, "BOT", { chatId: 1 }, neutral)),
