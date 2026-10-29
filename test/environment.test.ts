@@ -546,6 +546,16 @@ describe("environment: `fastagent env`", () => {
         `${join(dir, ".secrets", ".env")}`,
     );
     expect(`${list.stdout}${list.stderr}`).not.toContain("ghp_value");
+    const listed = await cli(["env", "list", "--json"], dir);
+    expect(JSON.parse(listed.stdout)).toEqual({
+      packages: [],
+      apt: [],
+      variables: [
+        { name: "FA_TEST_HOST", description: "the GitHub host", set: false },
+        { name: "FA_TEST_TOKEN", description: "gh's token", set: true },
+      ],
+    });
+    expect(listed.stdout).not.toContain("ghp_value");
   });
 
   it("refuses to edit a context.json whose content is refused, before anything is installed", async () => {

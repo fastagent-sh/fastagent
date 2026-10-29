@@ -20,7 +20,7 @@ import { preflightDeploy } from "../../deploy/preflight.ts";
 import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
 import { unprotectedSecretsNote } from "../../value-file.ts";
 import { loadConfig } from "../../harnesses/pi-durable/open.ts";
-import { failStartup, failUsage } from "../fail.ts";
+import { InputNeeded, failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive } from "../shared.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
@@ -158,7 +158,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }
     if (opts.input === false || !isInteractive()) {
       failStartup(
-        new Error(
+        new InputNeeded(
           `deploy stopped: ${pre.valueFile} has no ${absent.join(", ")}: creating or preparing a separate ` +
             `production app needs a terminal — run this deploy in one${opts.input === false ? " without --no-input" : ""}, ` +
             `or supply these values from a production app in ${pre.valueFile}`,

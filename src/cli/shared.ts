@@ -55,7 +55,8 @@ export async function enterAgentCommand(
   if (!modelSpec) {
     failStartup(
       new Error(
-        `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "anthropic/claude-sonnet-4-5")`,
+        `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai/gpt-5.5"; ` +
+          "`fastagent models` lists them)",
       ),
     );
   }

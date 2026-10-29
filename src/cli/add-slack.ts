@@ -76,13 +76,6 @@ export async function onboardSlackInternalApp(input: {
   /** `--replace-config`: go straight to replacing the local App Configuration token pair. */
   replaceConfig?: boolean;
 }): Promise<void> {
-  if (!(process.stdin.isTTY && process.stdout.isTTY)) {
-    throw new Error(
-      "`add slack` needs an interactive terminal for internal-app creation and OAuth — " +
-        "re-run in a terminal, or pass --no-onboard to scaffold only",
-    );
-  }
-
   let state = readSlackOnboardingState(input.stateRoot);
   const resumed = state !== undefined;
   if (input.replaceConfig && !state) {

@@ -164,6 +164,7 @@ const models: CommandSpec = {
   flags: [
     { flags: "-g, --global", description: "the built-ins, without the agent's providers" },
     { flags: "--refresh", description: "fetch the model lists now, even when the kept ones are fresh" },
+    { flags: "--json", description: "the specs as JSON: spec, provider, id and name of each" },
   ],
   examples: [
     { cmd: "fastagent models", note: "all specs" },
@@ -174,6 +175,7 @@ const models: CommandSpec = {
     (await import("./commands/models.ts")).runModels(args[0] as string | undefined, {
       global: f.global === true,
       refresh: f.refresh === true,
+      json: f.json === true,
     }),
 };
 
@@ -249,9 +251,9 @@ const channelSub = (
   args: [AGENT_ARG],
   flags:
     kind === "feishu" || kind === "lark"
-      ? [CHANNEL_ENVIRONMENT, INGRESS, NO_ONBOARD]
+      ? [CHANNEL_ENVIRONMENT, INGRESS, NO_ONBOARD, NO_INPUT]
       : kind === "slack"
-        ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG]
+        ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG, NO_INPUT]
         : [CHANNEL_ENVIRONMENT],
   examples: [{ cmd: `fastagent add ${kind}` }],
   ...(notes ? { notes } : {}),
@@ -261,6 +263,7 @@ const channelSub = (
       environment: f.env as "dev" | "production" | undefined,
       onboard: f.onboard !== false,
       replaceConfig: f.replaceConfig === true,
+      input: f.input !== false,
     }),
 });
 
@@ -432,8 +435,9 @@ const env: CommandSpec = {
     {
       name: "list",
       summary: "the declared packages and their versions, the variables and whether each has a value",
-      examples: [{ cmd: "fastagent env list" }],
-      run: async () => (await import("./commands/env.ts")).runEnvList(),
+      flags: [{ flags: "--json", description: "the packages, apt packages and variables as JSON" }],
+      examples: [{ cmd: "fastagent env list" }, { cmd: "fastagent env list --json" }],
+      run: async (_args, f) => (await import("./commands/env.ts")).runEnvList({ json: f.json === true }),
     },
     {
       name: "install",

@@ -11,10 +11,17 @@ export function errorPrefix(colors: boolean = stderrHasColors()): string {
 }
 
 /**
+ * Input a run needs and was not given, with no terminal to ask in, or `--no-input`: a usage error wherever it is found,
+ * so {@link failStartup} exits 2 for it, naming what to pass.
+ */
+export class InputNeeded extends Error {}
+
+/**
  * User-fixable startup problems (missing model / bad config / broken definition) are thrown as plain `Error` — print
  * just the message. Anything else (a TypeError, a non-Error throw) is a bug: keep the stack.
  */
 export function failStartup(error: unknown): never {
+  if (error instanceof InputNeeded) failUsage(error.message);
   if (error instanceof Error && error.constructor === Error) console.error(`${errorPrefix()} ${error.message}`);
   else console.error(errorPrefix(), error);
   process.exit(1);

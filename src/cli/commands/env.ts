@@ -69,26 +69,22 @@ export async function runEnvRemove(args: string[]): Promise<void> {
   }).catch(failStartup);
 }
 
-export async function runEnvList(): Promise<void> {
+export async function runEnvList(opts: { json?: boolean } = {}): Promise<void> {
   const agentDir = enterAgentHere();
   const declared = await Promise.resolve()
     .then(() => loadEnvironment(agentDir) ?? NONE)
     .catch(failStartup);
   const variables = declaredVariables(declared);
-  const names = [
-    ...Object.keys(declared.packages),
-    ...declared.aptPackages.map((name) => `apt:${name}`),
-    ...variables.map(({ name }) => name),
-  ];
-  if (names.length === 0) console.log("(none: the agent runs this machine's commands)");
-  const width = Math.max(0, ...names.map((name) => name.length));
-  for (const [name, version] of Object.entries(declared.packages)) {
-    console.log(`${name.padEnd(width)}  ${version}`);
-  }
-  for (const name of declared.aptPackages) console.log(`${`apt:${name}`.padEnd(width)}  (installed by the image)`);
-  // Whether each has a value here, never the value.
-  for (const { name, description } of variables) {
-    console.log(`${name.padEnd(width)}  ${(process.env[name] ? "set" : "not set").padEnd(8)}  ${description}`);
+  if (opts.json) {
+    // Whether each variable has a value here, never the value.
+    const listed = {
+      packages: Object.entries(declared.packages).map(([name, version]) => ({ name, version })),
+      apt: declared.aptPackages,
+      variables: variables.map(({ name, description }) => ({ name, description, set: Boolean(process.env[name]) })),
+    };
+    console.log(JSON.stringify(listed, null, 2));
+  } else {
+    printEnvironment(declared, variables);
   }
   if (Object.keys(declared.packages).length > 0) {
     const bin = miseBinary(agentDir);
@@ -111,6 +107,24 @@ export async function runEnvList(): Promise<void> {
       `[fastagent] no value here for ${unset.join(", ")}: dev and start refuse to run until they have one — set ` +
         `them in ${dotEnvPath(agentDir)}`,
     );
+  }
+}
+
+function printEnvironment(declared: DeclaredEnvironment, variables: ReturnType<typeof declaredVariables>): void {
+  const names = [
+    ...Object.keys(declared.packages),
+    ...declared.aptPackages.map((name) => `apt:${name}`),
+    ...variables.map(({ name }) => name),
+  ];
+  if (names.length === 0) console.log("(none: the agent runs this machine's commands)");
+  const width = Math.max(0, ...names.map((name) => name.length));
+  for (const [name, version] of Object.entries(declared.packages)) {
+    console.log(`${name.padEnd(width)}  ${version}`);
+  }
+  for (const name of declared.aptPackages) console.log(`${`apt:${name}`.padEnd(width)}  (installed by the image)`);
+  // Whether each has a value here, never the value.
+  for (const { name, description } of variables) {
+    console.log(`${name.padEnd(width)}  ${(process.env[name] ? "set" : "not set").padEnd(8)}  ${description}`);
   }
 }
 

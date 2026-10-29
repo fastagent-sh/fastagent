@@ -130,7 +130,7 @@ checkout off its `ref`, a clone not made yet), and each binding whose directory 
 ```bash
 fastagent env add <packages...>       # name[@version], or apt:<name> for the image
 fastagent env remove <packages...>
-fastagent env list
+fastagent env list [--json]
 fastagent env install
 fastagent env exec -- <command...>
 ```
@@ -173,7 +173,7 @@ whose image runs the FastAgent they list.
 ## `fastagent models`
 
 ```bash
-fastagent models [search] [-g|--global] [--refresh]
+fastagent models [search] [-g|--global] [--refresh] [--json]
 ```
 
 Lists the model specs (`provider/modelId`) the agent in the current directory can name, optionally filtered: pi-ai's
@@ -329,6 +329,10 @@ fastagent add lark [agent]     # Lark international: console + credential valida
                              # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding
 ```
 
+Without a terminal (or with `--no-input`), `add slack` refuses before it writes anything, and `add lark` does when its
+app's ID and Secret are not set yet: both set the app up by asking. `add feishu` asks nothing: it prints the link to
+confirm the app at (in Feishu, or as a QR code) and waits for it, so a coding agent can hand the link to the owner.
+
 Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion tools (`src/tools/<kind>-send.ts`, and
 `src/tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), appends variables to
 `.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
@@ -383,9 +387,9 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
+| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `add slack\|feishu\|lark`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
-| `--json` | `info`, `invoke`, `schedules list`, `content list` | Machine-readable output. |
+| `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list` | Machine-readable output. |
 
 ## Exit codes
 
@@ -393,4 +397,17 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 |---|---|
 | `0` | Success (including help and version). |
 | `1` | Runtime failure: a message that did not complete, a definition that does not open, a deploy gate, an unsupported runtime, invalid configuration. |
-| `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags. A mistyped command suggests the nearest one. |
+| `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags, or input a terminal would have asked for and none was there (or `--no-input`). A mistyped command suggests the nearest one. |
+
+## Scripts and coding agents
+
+Every command serves a person at a terminal and a script or coding agent without one, the same way:
+
+- **Nothing waits for an answer without a terminal.** What a terminal would ask has a flag or an argument instead; with
+  no terminal, or with `--no-input`, a question nobody answered exits 2 naming what to pass. `login` reads what a
+  provider's sign-in asks from stdin, one line per question.
+- **Results on stdout, everything else on stderr**: progress, notes, warnings and errors. A command whose result is
+  data has `--json` (`info`, `models`, `content list`, `env list`, `schedules list`, `invoke`).
+- **Exit codes say how it ended**: 0, 1 or 2, as above.
+- **A step only a person can take prints where to take it, and waits**: an account sign-in's address, a Feishu app's
+  confirmation link. A coding agent hands it to the owner.

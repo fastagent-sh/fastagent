@@ -26,6 +26,7 @@ import { onboardLarkApp } from "../channels/lark/onboard.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
 import { dotEnvPath, loadEnvValues, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
+import { InputNeeded } from "./fail.ts";
 import { AGENT_ENVIRONMENT_ENV } from "../paths.ts";
 import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
@@ -100,6 +101,8 @@ export async function onboardFeishuCloudApp(
   ingress: FeishuSubscriptionMode,
   /** The command that continues an interrupted setup: the one that started it. */
   rerun = `fastagent add ${kind}${ingress === "webhook" ? " --ingress webhook" : ""}`,
+  /** A terminal to ask in, and leave to ask (no `--no-input`); Lark's credentials are asked for. */
+  interactive = true,
 ): Promise<Record<string, string> | undefined> {
   const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
@@ -131,12 +134,10 @@ export async function onboardFeishuCloudApp(
   }
 
   // guided-console (lark): the intl cloud cannot complete the bound device flow — collect + validate.
-  if (
-    !(process.stdin.isTTY && process.stdout.isTTY) &&
-    !(existing[`${envPrefix}_APP_ID`] && existing[`${envPrefix}_APP_SECRET`])
-  ) {
-    throw new Error(
-      "`add lark` needs an interactive terminal to onboard the Lark app credentials — re-run it in a terminal",
+  if (!interactive && !(existing[`${envPrefix}_APP_ID`] && existing[`${envPrefix}_APP_SECRET`])) {
+    throw new InputNeeded(
+      `\`add lark\` asks for the Lark app's ID and Secret in a terminal — run it in one, or set ${envPrefix}_APP_ID ` +
+        `and ${envPrefix}_APP_SECRET in ${env} first, or pass --no-onboard to scaffold only`,
     );
   }
   const credentials = await onboardLarkApp(

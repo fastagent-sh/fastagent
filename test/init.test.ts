@@ -13,6 +13,7 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -463,6 +464,19 @@ describe("add: fastagent add <channel>", () => {
     expect(envFile.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1); // replaced, not duplicated
     expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m); // …with a real value in place
     expect(envFile).toContain("OPENAI_API_KEY=sk-x");
+  });
+
+  it("without a terminal, an app that is set up by asking is refused before anything is written (exit 2)", async () => {
+    for (const kind of ["slack", "lark"]) {
+      const dir = await readyAgent();
+      const child = spawn(process.execPath, [CLI, "add", kind], { cwd: dir, env: withIdentity });
+      child.stdin.end();
+      let stderr = "";
+      child.stderr.on("data", (d) => (stderr += String(d)));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      expect([code, stderr], kind).toEqual([2, expect.stringMatching(/--no-onboard/)]);
+      if (kind === "slack") await expect(stat(join(dir, "src", "channels", "slack.ts"))).rejects.toThrow();
+    }
   });
 
   it("--no-onboard upgrades an existing Feishu or Lark agent's tools without touching its app", async () => {

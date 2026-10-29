@@ -25,19 +25,28 @@ import {
 } from "../../scaffold/add-channel.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
 import { failStartup, failUsage, agentDirOrExit } from "../fail.ts";
+import { isInteractive } from "../shared.ts";
 import { unprotectedSecretsNote } from "../../value-file.ts";
 
 /** `fastagent add <kind> [dir]`: scaffold `src/channels/<kind>.ts`, the adapter configured with a starter policy. */
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { ingress?: string; onboard?: boolean; replaceConfig?: boolean; environment?: string },
+  opts: { ingress?: string; onboard?: boolean; replaceConfig?: boolean; environment?: string; input?: boolean },
 ): Promise<void> {
   // The channel (glue + companion tools + secrets) is agent surface: everything lands in the AGENT DIR.
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
   const target = agentDirOrExit(resolve(dirArg));
+  const interactive = opts.input !== false && isInteractive();
+  // Refused before anything is written: Slack's app is created and installed through questions in a terminal.
+  if (channelKind === "slack" && opts.onboard !== false && !interactive) {
+    failUsage(
+      "`add slack` creates and installs the Slack app by asking in a terminal — run it in one, or pass --no-onboard " +
+        "to scaffold only and set the app up yourself",
+    );
+  }
   const environment = opts.environment ?? "dev";
   if (environment !== "dev" && environment !== "production") {
     failUsage(`--env must be "dev" or "production", got "${environment}"`);
@@ -102,7 +111,7 @@ export async function runAddChannel(
       .catch(failStartup);
   } else if ((channelKind === "feishu" || channelKind === "lark") && opts.onboard !== false) {
     const rerun = `fastagent add ${channelKind}${environment === "production" ? " --env production" : ""}${opts.ingress ? ` --ingress ${opts.ingress}` : ""}`;
-    created = await onboardFeishuCloudApp(target, channelKind, ingress, rerun).catch(failStartup);
+    created = await onboardFeishuCloudApp(target, channelKind, ingress, rerun, interactive).catch(failStartup);
   }
   const setup = channelSetup(channelKind, ingress, pinned);
   const env = setup.env;
