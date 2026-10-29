@@ -15,6 +15,7 @@ import {
   modelsOver,
   providerOf,
 } from "../harnesses/models/models.ts";
+import { modelEnvironment } from "../harnesses/models/environment.ts";
 import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
 import {
   type AgentDefinition,
@@ -314,11 +315,16 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
 
   const providers = code?.providers ?? [];
-  if (modelSpec && code) checkModelExists(modelSpec, providers, report);
   const authPath = resolveAuthPath(agentDir);
   const route = modelSpec ? await credentialRoute(modelSpec, values, providers) : {};
   const modelAuth = route.envVar;
   const boxLogin = route.boxLogin;
+  if (modelSpec && code) {
+    await checkModelExists(agentDir, modelSpec, providers, report, {
+      credentialShips: boxLogin === undefined,
+      valueFile,
+    });
+  }
   if (boxLogin !== undefined) {
     if (!hasLogin(boxLogin, providers)) {
       report.issue(
@@ -462,13 +468,45 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** A model no provider of the deployed agent offers fails every message there. */
-function checkModelExists(spec: string, providers: readonly Provider[], report: DeployReport): void {
+/**
+ * A model no provider of the deployed agent offers fails every message there. Its lists are this machine's: what it
+ * kept and what it fetches now, a provider's own list with whatever credential this machine's environment holds. A
+ * model only a fetched list has is the box's only once the box fetches that list, which a box with nothing kept does as
+ * it opens: pi's published catalog with no credential, a provider's own list with the one this deploy carries, since a
+ * login on the box comes after the start it would refuse. Whether a model is only in a provider's own list cannot be
+ * told here: a provider in code keeps what it fetched in its own object, which every `Models` over it then lists.
+ */
+async function checkModelExists(
+  agentDir: string,
+  spec: string,
+  providers: readonly Provider[],
+  report: DeployReport,
+  box: { credentialShips: boolean; valueFile: string },
+): Promise<void> {
   const provider = providerOf(spec);
-  if (modelsOver(new InMemoryCredentialStore(), providers).getModel(provider, spec.slice(provider.length + 1))) return;
+  const modelId = spec.slice(provider.length + 1);
+  const { models } = await modelEnvironment(agentDir, { credentialStore: new InMemoryCredentialStore() }, providers);
+  if (models.getModel(provider, modelId)) {
+    if (models.getProvider(provider)?.refreshModels !== undefined) {
+      if (box.credentialShips) return;
+      report.warn(
+        `provider "${provider}" fetches its own model list, which a box with no list kept, as on a first deploy, ` +
+          `fetches as it starts, with a credential this deploy does not carry (a login on the box comes after the ` +
+          `start): if "${spec}" is only in that list, the box refuses to start on it until ${provider}'s API key is ` +
+          `in ${box.valueFile}`,
+      );
+      return;
+    }
+    if (modelsOver(new InMemoryCredentialStore(), providers).getModel(provider, modelId)) return;
+    report.warn(
+      `"${spec}" is in pi's published catalog, not in the pi-ai this FastAgent carries: a box with no catalog kept, ` +
+        `as on a first deploy, fetches it from pi.dev as it starts, and refuses to start on "${spec}" if it cannot`,
+    );
+    return;
+  }
   report.issue(
-    `no provider of the deployed agent offers "${spec}" — pi-ai's built-ins and the providers fastagent.config.ts ` +
-      `declares are all it has`,
+    `no provider of the deployed agent offers "${spec}" — pi-ai's built-ins, pi's published catalog and the ` +
+      `providers fastagent.config.ts declares are all it has`,
   );
 }
 

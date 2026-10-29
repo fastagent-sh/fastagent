@@ -93,10 +93,12 @@ interface Service {
 `openAgent` opens a directory the way `dev` and `start` do: it generates `.fastagent/` from `src/`, builds the code with
 the secrets it declares (a required one without a value refuses, naming where it is declared), enters the declared
 environment, clones the content, builds the model environment over the agent's credentials (`.secrets/auth.json` over
-the machine's, or `credentials`), and opens the instance's storage, `<state root>/agent.sqlite`, which one process holds
-at a time: a second opener is refused. `model` is the default for a session that names none; without one anywhere, a
-message is refused `missing_model` until its session is given one (`sessions.update`). Nothing reaches the agent until
-`serve`.
+the machine's, or `credentials`) with its [model lists](configuration.md#model-lists) refreshed (a request to
+`https://pi.dev` of at most 5 s, and to a provider that fetches its own list, unless what `<state root>/models/` keeps
+is less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage,
+`<state root>/agent.sqlite`, which one process holds at a time: a second opener is refused. `model` is the default for
+a session that names none; without one anywhere, a message is refused `missing_model` until its session is given one
+(`sessions.update`). Nothing reaches the agent until `serve`.
 
 `serve()` is what `start` serves: the channels' routes and `GET /health` (503 until every long connection is ready), the
 long connections, the schedules and the wake-up poll, and, when `apiKeys` holds a key, the Agent API over HTTP under

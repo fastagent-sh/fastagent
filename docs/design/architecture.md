@@ -139,8 +139,10 @@ of the four directories is a module and default-exports one thing (a tool, an ex
 (the machine's in development, the instance's `.secrets/` when deployed), a pi-durable `Harness` over the instance's
 storage, `SYSTEM.md` and `AGENTS.md` rendered into pi-durable's prompt sections, pi-durable's coding tools, then the
 definition's tools and extensions installed with the secrets they declared, and an execution environment rooted at the
-agent's directory. Model selection is pi-ai's alone: no `models.json`, no model catalog cache, and no per-account
-model list. Skills are loaded as pi loads them (Agent Skills): a prompt section lists each one's name, description and
+agent's directory. Models are pi-ai's: its built-in providers, kept current by pi's published catalog (a model a
+provider releases is offered without a FastAgent release), and the definition's `providers`; a provider that fetches
+its own list (radius, a provider in code with `fetchModels`) fetches it with the instance's credential, and each list
+is kept in the instance's state. There is no `models.json`. Skills are loaded as pi loads them (Agent Skills): a prompt section lists each one's name, description and
 location, the model reads its `SKILL.md` with `read` through the execution environment when a task matches, and
 `/skill:<name>` loads it into the message. Prompt templates are FastAgent's, not the harness's: `invoke` expands a
 message that starts with `/<name>` before pi-durable sees it, with pi's template format (a `description` in the

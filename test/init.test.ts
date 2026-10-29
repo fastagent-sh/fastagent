@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { InMemoryCredentialStore, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { modelsOver } from "../src/harnesses/models/models.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../src/harnesses/pi-durable/text.ts";
@@ -145,7 +146,7 @@ describe("init: scaffoldAgent", () => {
     const agent = await assembleAgent(definition, {
       storage: new MemoryStorage(),
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
-      credentials: new InMemoryCredentialStore(),
+      models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
       model: "faux/faux-1",
     });
     await agent.messages.send({ sessionId: (await agent.sessions.create()).id, content: "hi" }, { wait: 30 });

@@ -158,7 +158,7 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   // The model environment the serving Agent reads (openServing), its definition's providers included, so "logged in"
   // means what the server will use, and a provider only the definition declares can be signed in to.
   const providers = await definitionProviders(agentDir);
-  const models = modelEnvironment(agentDir, {}, providers);
+  const models = await modelEnvironment(agentDir, {}, providers);
   const auth = models.auth as NonNullable<typeof models.auth>;
   if (opts.ifMissing && provider) {
     // The server's own answer (`authStatus`), the one its startup report prints. Known ceiling: nothing is asked of

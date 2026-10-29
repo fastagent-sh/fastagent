@@ -19,7 +19,7 @@ function writeAuth(path: string, key: string): string {
 
 /** The key a message of the agent in `dir` would send to anthropic, if any. */
 async function anthropicKey(dir: string): Promise<string | undefined> {
-  const { models } = modelEnvironment(dir);
+  const { models } = await modelEnvironment(dir);
   const model = models.getProvider("anthropic")?.getModels()[0];
   if (!model) throw new Error("pi-ai has no anthropic model");
   return (await models.getAuth(model))?.auth.apiKey;

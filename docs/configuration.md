@@ -69,6 +69,22 @@ FASTAGENT_MODEL=openai-codex/gpt-5.5 fastagent start
 release manifest (`fastagent.release.json`); a variable already set on the platform wins over it. `deploy` prints the
 effective model and its source.
 
+### Model lists
+
+The built-in providers are pi-ai's, and so are their models, as of the pi-ai release FastAgent ships with. A model a
+provider releases after that is offered anyway: pi publishes every built-in provider's catalog at
+[pi.dev](https://pi.dev/models), the newest one each pi-ai version can read, and when it is newer than pi-ai's own
+data, each provider lists its models too. A [provider in code](#custom-models) that fetches its own list
+(`fetchModels`) is asked for it, with its credential.
+
+Every command that opens the agent (`dev`, `start`, `invoke`, `info`, `models`, a deployed start) refreshes the lists
+before it reads them, asking the network for each at most every 4 hours once one is kept, a failed ask included; with
+none kept, every open asks (`fastagent models --refresh` asks now). What it fetched is kept in `<state root>/models/`,
+so a start without the network has the lists it last had. A refresh that fails is a warning, and each list stays the
+one last kept; a default model only a fetched list has is then refused when no list kept has it, as on a deployed box's
+first start without pi.dev (`deploy` warns of such a model).
+`FASTAGENT_OFFLINE=1` skips the network: each list is the one last kept, or pi-ai's own.
+
 ## Custom models
 
 pi-ai's built-in providers are always available. A self-hosted model (vLLM, SGLang, Ollama, LM Studio) or a gateway
@@ -417,6 +433,7 @@ state root: FASTAGENT_STATE_DIR    > <agent dir>/.state (production: .state/prod
 secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets (production: .secrets/production)
 content:    <agent dir>/content/<name> (a clone), or the directory context.local.json binds
 storage:    <state root>/agent.sqlite
+models:     <state root>/models/
 auth:       FASTAGENT_AUTH_PATH    > <secrets>/auth.json
 ```
 

@@ -16,6 +16,7 @@ import { readContentSource } from "../src/content/source.ts";
 import { type ContentEntry, declareBindings, declareContent } from "../src/content/declare.ts";
 import { githubRepoOf } from "../src/content/git.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { modelsOver } from "../src/harnesses/models/models.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
@@ -429,7 +430,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     const running = await assembleAgent(definition, {
       storage: new MemoryStorage(),
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
-      credentials: new InMemoryCredentialStore(),
+      models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
       model: "faux/faux-1",
       content,
     });

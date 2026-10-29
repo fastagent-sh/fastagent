@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { modelsOver } from "../src/harnesses/models/models.ts";
 import {
   InMemoryCredentialStore,
   type TranscriptContext,
@@ -239,10 +240,11 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       const dir = agentPackage(files);
       const definition = await prepareDefinition(opening(dir));
       const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
+      const code = buildDefinition(definition, ENV);
       const agent = await assembleAgent(definition, {
         storage: new MemoryStorage(),
-        credentials: new InMemoryCredentialStore(),
-        code: buildDefinition(definition, ENV),
+        models: modelsOver(new InMemoryCredentialStore(), code.providers),
+        code,
         ...options,
       });
       opened.push(agent);

@@ -265,6 +265,8 @@ src/
     │   ├── defaults.ts     # the deployment's default model and thinking level, for a conversation that names none
     │   └── release.ts      # temporary: places the messages a run that did not answer left waiting
     └── models/             # the model environment: pi-ai's models, credentials and sign-in
+        ├── catalog.ts      # the model lists a pi-ai release does not carry: pi's published catalog (fetched whatever
+        │                   # the machine authenticates) and the providers that fetch their own, kept in the state root
         ├── models.ts       # pi-ai's model collection as FastAgent composes it (built-ins over a credential store,
         │                   # the definition's providers), and the reads a report, a login or a picker make of it
         ├── credentials.ts  # the credentials file store + which files (layers) an agent reads

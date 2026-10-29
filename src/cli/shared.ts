@@ -156,7 +156,7 @@ async function resolveFirstRunModel(
   if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
   if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
   const providers = await definitionProviders(agentDir).catch(failStartup);
-  const environment = modelEnvironment(agentDir, {}, providers);
+  const environment = await modelEnvironment(agentDir, {}, providers);
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
