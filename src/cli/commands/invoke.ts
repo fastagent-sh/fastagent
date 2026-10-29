@@ -5,12 +5,13 @@
  */
 import { join, relative, resolve } from "node:path";
 import { type Agent, AgentError, type MessageStreamEvent, type SessionSettings } from "../../agent-api.ts";
-import { dotEnvPath, loadEnvValues } from "../../env.ts";
+import { dotEnvPath, enterAgentEnv, loadEnvValues } from "../../env.ts";
+import { installProxyFetch } from "../../proxy.ts";
 import { modelRefOf } from "../../harnesses/pi-durable/open.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { connectAgent } from "../../http/client.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
-import { resolveStateRoot, selectAgentEnvironment } from "../../paths.ts";
+import { findAgentDir, resolveStateRoot, selectAgentEnvironment } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
@@ -70,8 +71,7 @@ async function answer(events: AsyncIterable<MessageStreamEvent>, json: boolean |
  * The key `--url` calls with: `--key`, or the first of `FASTAGENT_API_KEY` in the agent's production values, which
  * `deploy` writes there and carries to the deployment.
  */
-function deploymentKey(dirArg: string, url: string): string {
-  const agentDir = agentDirOrExit(resolve(dirArg));
+function deploymentKey(agentDir: string, url: string): string {
   selectAgentEnvironment("production");
   const file = dotEnvPath(agentDir);
   const [key] = apiKeysFrom(loadEnvValues(file).get(API_KEY_VARIABLE));
@@ -84,6 +84,22 @@ function deploymentKey(dirArg: string, url: string): string {
   return key;
 }
 
+/**
+ * Enter this machine's environment and the proxy it declares, as every command that sends a request does, and answer
+ * the key to call `url` with: `--key`, from anywhere (the ambient environment when no agent is here), or the agent's.
+ */
+function enterForUrl(dirArg: string, key: string | undefined, url: string): string {
+  if (key !== undefined) {
+    const agentDir = findAgentDir(resolve(dirArg));
+    if (agentDir === undefined) installProxyFetch();
+    else enterAgentEnv(agentDir);
+    return key;
+  }
+  const agentDir = agentDirOrExit(resolve(dirArg));
+  enterAgentEnv(agentDir);
+  return deploymentKey(agentDir, url);
+}
+
 /** `--url`: the message sent to a served agent over its Agent API, in a session there; nothing opens here. */
 async function runRemoteInvoke(message: string, dirArg: string, opts: InvokeOptions & { url: string }) {
   const { url } = opts;
@@ -93,7 +109,7 @@ async function runRemoteInvoke(message: string, dirArg: string, opts: InvokeOpti
   } catch (error) {
     failUsage(error instanceof Error ? error.message : String(error));
   }
-  const agent = connectAgent(url, { apiKey: opts.key ?? deploymentKey(dirArg, url) });
+  const agent = connectAgent(url, { apiKey: enterForUrl(dirArg, opts.key, url) });
   console.error(`[fastagent] invoke: ${url}`);
   const sessionId = await remoteSession(agent, opts.session, settings, url).catch((error: unknown) =>
     failStartup(refusal(error)),

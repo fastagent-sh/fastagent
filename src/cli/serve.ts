@@ -2,7 +2,8 @@
 import { answersLocalhost, bindLabel, classifyBind } from "../bind.ts";
 import type { ServedAgent, ServeOptions, Service } from "../service.ts";
 import { API_PREFIX } from "../http/contract.ts";
-import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
+import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
+import { API_KEY_VARIABLE, API_TURNED_OFF, apiKeysFrom, apiTurnedOff } from "../http/server.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { declaredChannels } from "../channels/discover.ts";
@@ -17,10 +18,13 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean):
   );
 }
 
-/** What the CLI adds to the assembly: its shutdown grace, exit on a connection that drops, and the API's keys. */
-export function cliMountOptions(): ServeOptions {
+/**
+ * What the CLI adds to the assembly: its shutdown grace, exit on a connection that drops, and the API's keys, none
+ * when the definition turns the API off, whatever key the environment holds (a host's from an earlier deploy).
+ */
+export function cliMountOptions(config: AgentConfig): ServeOptions {
   return {
-    apiKeys: apiKeysFrom(process.env[API_KEY_VARIABLE]),
+    apiKeys: apiTurnedOff(config) ? [] : apiKeysFrom(process.env[API_KEY_VARIABLE]),
     closeTimeoutMs: SHUTDOWN_GRACE_MS,
     onChannelClosed: (name, error) =>
       failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
@@ -34,25 +38,32 @@ export function cliMountOptions(): ServeOptions {
 export function serveService(
   service: ServedAgent,
   bind: { port: number; host?: string },
-  posture: { tunnel: boolean; agentDir: string; stateRoot: string },
+  posture: { tunnel: boolean; agentDir: string; stateRoot: string; config: AgentConfig },
 ): void {
   const { host } = bind;
-  const { tunnel, agentDir, stateRoot } = posture;
+  const { tunnel, agentDir, stateRoot, config } = posture;
   serve(service, bind, (p) => {
-    reportServing(service, host, p);
+    reportServing(service, host, p, config);
     maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
   });
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
-export function reportServing(service: ServedAgent, host: string | undefined, boundPort: number): void {
+export function reportServing(
+  service: ServedAgent,
+  host: string | undefined,
+  boundPort: number,
+  config: AgentConfig,
+): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
   log.info(bindLine(host, boundPort));
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
   log.info(
     service.api
       ? `[fastagent] Agent API: ${API_PREFIX} (keys from ${API_KEY_VARIABLE})`
-      : `[fastagent] Agent API: not served — set ${API_KEY_VARIABLE} to serve it under ${API_PREFIX}`,
+      : `[fastagent] Agent API: not served — ${
+          apiTurnedOff(config) ? API_TURNED_OFF : `set ${API_KEY_VARIABLE} to serve it under ${API_PREFIX}`
+        }`,
   );
   if (service.channels.longConnections.length > 0) {
     log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);

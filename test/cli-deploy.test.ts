@@ -101,8 +101,10 @@ describe("cli: deploy", () => {
     expect(result.stderr).toMatch(/baked as the definition/); // the WYSIWYG bake note is stated
     // Where the Agent API is reached, as Fly names the app, and the command that checks it.
     expect(result.stderr).toMatch(
-      /Agent API: (https:\/\/[\w-]+\.fly\.dev)\/v1,[^\n]*\n.*check it: fastagent invoke --url \1 /,
+      /Agent API: (https:\/\/[\w-]+\.fly\.dev)\/v1,[^\n]*\n.*check it: fastagent invoke --url \1 "hello" /,
     );
+    // Run from elsewhere, the check names the agent: that is where `invoke --url` finds the key.
+    expect(/check it: .* "hello" (\S+)\n/.exec(result.stderr)?.[1]).toBe(dir);
     expect(result.stderr).not.toMatch(/not yet supported/); // no placement gate anywhere
 
     // The retired config key fails visibly — placement is structural now, never configured.

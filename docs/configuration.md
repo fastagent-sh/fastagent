@@ -38,7 +38,7 @@ included, refuses the start.
 | `providers` | `[]` | Model providers beyond pi-ai's built-ins: a self-hosted endpoint, a gateway ([custom models](#custom-models)). A provider with a built-in's id replaces it. |
 | `extensions` | `[]` | Third-party pi-durable extensions, installed after `src/extensions/` ([extensions](#extensions)). |
 | `http.port` | `8787` | Default port for `dev` / `start`. |
-| `deploy.api` | `true` | Whether a deployment serves the [Agent API](#the-agent-api-over-http) under `/v1`: `deploy` gives it a key. `false` keeps it to its channels and schedules. Not served on AgentCore either way. |
+| `http.api` | `true` | Whether a serve answers the [Agent API](#the-agent-api-over-http) under `/v1` with a key: `dev`, `start` and every deployment, which `deploy` gives a key. `false` keeps them to their channels and schedules, whatever key their environment holds, a host's from an earlier deploy included. Not served on AgentCore either way. |
 | `deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM (60–1209600 s). Memory bills for the idle tail; a session past it cold-starts. Changing it changes the template, so a kept `agentcore.template.yaml` needs `--force`. |
 
 A provider or extension that reads a secret is wrapped in [`needs`](#secrets-in-code), like any module.
@@ -384,7 +384,8 @@ FASTAGENT_API_KEY=$(openssl rand -hex 32)
 
 A program calls it with `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client`, and
 `fastagent invoke --url <url> "hello"` checks it from a terminal. `deploy` writes a key into
-`.secrets/production/.env` when there is none, unless `fastagent.config.ts` says `deploy: { api: false }`.
+`.secrets/production/.env` when there is none, unless `fastagent.config.ts` says `http: { api: false }`, which also
+keeps a serve from answering the API with a key its environment still holds.
 
 ## Machinery: `.state/`, `.secrets/` and `content/`
 

@@ -50,8 +50,9 @@ fastagent invoke --url https://<app>.fly.dev "hello"
 `invoke --url` reads the key from the same file; a program calls the deployment with
 `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client`. To replace the key, list the new one first
 (`FASTAGENT_API_KEY=new,old`), deploy, move the Callers, then remove the old one and deploy again. A definition whose
-deployments should serve no API says `deploy: { api: false }` in `fastagent.config.ts`: `deploy` then writes no key,
-and refuses to deploy while the value file still holds one. AgentCore serves no API either way.
+deployments should serve no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then writes no key,
+and the deployment answers no `/v1` whatever key it holds, one an earlier deploy set on the host included. AgentCore
+serves no API either way.
 
 ## Chat channels
 

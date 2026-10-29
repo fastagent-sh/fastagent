@@ -75,17 +75,17 @@ function checkConfig(config: unknown, file: string): AgentConfig {
   checkKeys(config, CONFIG_KEYS, file);
   const { model, thinkingLevel, extensions, providers, http, deploy } = config as AgentConfig;
   if (http !== undefined) {
-    checkKeys(http, ["port"], `${file}: "http"`);
+    checkKeys(http, ["port", "api"], `${file}: "http"`);
     const port = http.port;
     if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) {
       throw new Error(`${file}: "http.port" must be an integer 0-65535`);
     }
+    if (http.api !== undefined && typeof http.api !== "boolean") {
+      throw new Error(`${file}: "http.api" must be true or false`);
+    }
   }
   if (deploy !== undefined) {
-    checkKeys(deploy, ["api", "agentcore"], `${file}: "deploy"`);
-    if (deploy.api !== undefined && typeof deploy.api !== "boolean") {
-      throw new Error(`${file}: "deploy.api" must be true or false`);
-    }
+    checkKeys(deploy, ["agentcore"], `${file}: "deploy"`);
     if (deploy.agentcore !== undefined) {
       checkKeys(deploy.agentcore, ["idleTimeoutSeconds"], `${file}: "deploy.agentcore"`);
       // AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is refused by CloudFormation minutes

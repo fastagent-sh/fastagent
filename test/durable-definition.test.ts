@@ -219,13 +219,13 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       prepareDefinition(agentPackage({ "fastagent.config.ts": `export default ${config};\n` }));
     await expect(configured("{ modle: 'a/b' }")).rejects.toThrow('unknown key "modle"');
     // Below the top level too: a nested typo is as silent as a top-level one.
-    await expect(configured("{ http: { prot: 80 } }")).rejects.toThrow('"http": unknown key "prot" (keys: port)');
+    await expect(configured("{ http: { prot: 80 } }")).rejects.toThrow('"http": unknown key "prot" (keys: port, api)');
     await expect(configured("{ http: { port: 70000 } }")).rejects.toThrow('"http.port" must be an integer 0-65535');
     await expect(configured("{ deploy: { agentcore: { idleTimeoutSeconds: 30 } } }")).rejects.toThrow(
       '"deploy.agentcore.idleTimeoutSeconds" must be an integer 60-1209600',
     );
     await expect(configured("{ deploy: { fly: {} } }")).rejects.toThrow('"deploy": unknown key "fly"');
-    await expect(configured("{ deploy: { api: 'no' } }")).rejects.toThrow('"deploy.api" must be true or false');
+    await expect(configured("{ http: { api: 'no' } }")).rejects.toThrow('"http.api" must be true or false');
     await expect(loadDefinition(agentPackage({}))).rejects.toThrow(".fastagent/registry.ts is missing");
   });
 

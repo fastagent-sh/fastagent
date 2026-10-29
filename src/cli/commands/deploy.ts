@@ -15,9 +15,9 @@ import {
   prepareFeishuApps,
   unpreparedFeishuApps,
 } from "../add-feishu.ts";
-import { selectAgentEnvironment } from "../../paths.ts";
+import { displayPath, selectAgentEnvironment } from "../../paths.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { type DeploymentApi, apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
+import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
 import { loadConfig } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive } from "../shared.ts";
@@ -107,17 +107,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }
   };
   independentApps(loadEnvValues(dotEnvPath(agentDir)));
-  let api: DeploymentApi;
-  try {
-    api = deploymentApi({
-      config,
-      hostServes: host !== "agentcore",
-      values: loadEnvValues(dotEnvPath(agentDir)),
-      valueFile: relative(agentDir, dotEnvPath(agentDir)),
-    });
-  } catch (error) {
-    failStartup(error);
-  }
+  const api = deploymentApi({
+    config,
+    hostServes: host !== "agentcore",
+    values: loadEnvValues(dotEnvPath(agentDir)),
+  });
   const target = HOSTS[host];
   const preflight = async () => {
     const facts = await preflightDeploy({
@@ -214,5 +208,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       await applyArtifactPlan(plan);
     },
   });
-  for (const line of apiReport(api, pre.valueFile, reachedAt)) console.error(`[fastagent] ${line}`);
+  const where = { valueFile: pre.valueFile, agentArg: displayPath(process.cwd(), agentDir) };
+  for (const line of apiReport(api, where, reachedAt)) console.error(`[fastagent] ${line}`);
 }

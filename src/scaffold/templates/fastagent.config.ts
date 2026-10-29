@@ -15,9 +15,10 @@ import type { AgentConfig } from "@fastagent-sh/fastagent";
 export default {
   // model: "openai-codex/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max)
-  // The port a serve listens on, for its channels' webhooks and its health check.
-  http: { port: 8787 },
+  http: {
+    port: 8787, // the port a serve listens on, for its channels' webhooks and its health check
+    // api: false, // serve no Agent API under /v1, whatever key the environment holds; deploy gives none a key
+  },
   // The commands the agent needs (CLIs, runtimes, apt packages) live in context.json: `fastagent env add gh`.
-  // deploy: { api: false }, // a deployment serves no Agent API under /v1 (deploy gives it a key otherwise)
   // deploy: { agentcore: { idleTimeoutSeconds: 180 } }, // `deploy agentcore` only: idle microVM tail, 60–1209600s
 } satisfies AgentConfig;

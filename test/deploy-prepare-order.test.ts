@@ -186,16 +186,11 @@ it("gives a deployment its API key once nothing refuses it, and plans again so t
   expect(await readFile(production(), "utf8")).toBe(given);
 });
 
-it("refuses before anything a definition that turns the API off while its values still hold a key", async () => {
-  config = { deploy: { api: false } };
-  await expect(runDeploy("fly", dir, {})).rejects.toBe(stopped);
-  expect(calls).toEqual([]);
-  expect(said.join("\n")).toContain("deploy.api: false, and .secrets/production/.env holds FASTAGENT_API_KEY");
-
+it("gives no key to a definition that turns the API off, and says the deployment serves none", async () => {
+  config = { http: { api: false } };
   await rm(production());
-  said.length = 0;
   await runDeploy("fly", dir, {});
   expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
   await expect(readFile(production(), "utf8")).rejects.toThrow("ENOENT");
-  expect(said.join("\n")).toContain("Agent API: not served — fastagent.config.ts says deploy.api: false");
+  expect(said.join("\n")).toContain("Agent API: not served — fastagent.config.ts says http.api: false");
 });

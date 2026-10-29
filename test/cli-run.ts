@@ -102,3 +102,31 @@ export async function whileServed<T>(dir: string, during: () => Promise<T>): Pro
     await held.close(BACKGROUND_CONTEXT);
   }
 }
+
+/**
+ * Run the CLI until its stderr matches `ready`, hand `during` what it said so far, then stop it: a serve, checked
+ * while it serves.
+ */
+export async function whileRunning<T>(
+  args: string[],
+  ready: RegExp,
+  during: (stderr: string) => Promise<T>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<T> {
+  const child = spawn(process.execPath, [CLI, ...args], { env });
+  const closed = new Promise((resolve) => child.on("close", resolve));
+  let stderr = "";
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.stderr.on("data", (d) => {
+        stderr += d;
+        if (ready.test(stderr)) resolve();
+      });
+      child.on("close", (code) => reject(new Error(`the CLI exited ${code} before it was ready:\n${stderr}`)));
+    });
+    return await during(stderr);
+  } finally {
+    child.kill("SIGTERM");
+    await closed;
+  }
+}

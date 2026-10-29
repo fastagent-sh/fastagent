@@ -19,17 +19,17 @@ export interface AgentConfig {
   extensions?: readonly (Extension | Needs<Extension>)[];
   /** Model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
   providers?: readonly (Provider | Needs<Provider>)[];
-  /** The port a serve listens on, for its channels' webhooks and its health check. */
-  http?: { port?: number };
-  /** How the agent is deployed, where a host needs to be told. */
-  deploy?: {
+  http?: {
+    /** The port a serve listens on, for its channels' webhooks and its health check. */
+    port?: number;
     /**
-     * Whether a deployment serves the Agent API under `/v1` (default true): `deploy` then gives it a key. `false` keeps
-     * it to its channels and schedules. Not served on AgentCore either way.
+     * Whether a serve answers the Agent API under `/v1` with a key (default true): `dev`, `start`, and every deployment,
+     * which `deploy` gives a key. `false` keeps it to its channels and schedules, whatever key its environment holds.
      */
     api?: boolean;
-    agentcore?: { idleTimeoutSeconds?: number };
   };
+  /** How the agent is deployed, where a host needs to be told. */
+  deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
 }
 
 /** @public */

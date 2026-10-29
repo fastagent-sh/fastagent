@@ -10,7 +10,7 @@ The design center is decided in `docs/design/architecture.md`: an agent is a def
 
 | Document | Purpose |
 |---|---|
-| `docs/SPEC.md` | The Agent API v1. The code has moved to v2; this is replaced by `docs/design/agent-api.md`. |
+| `docs/SPEC.md` | The Agent API v1, which the code no longer implements: `docs/design/agent-api.md` (v2) replaces it there in the documentation change that follows the implementation (#788). Until then, the guides that point here mean v2. |
 | `docs/design/agent-api.md` | The Agent API v2, in process and over HTTP. The code implements both bindings. Do not change its semantics without an explicit decision. |
 | `docs/design/architecture.md` | The decided architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
 | `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. |
@@ -192,7 +192,7 @@ src/
 │   │                       # to read first
 │   ├── hosts.ts            # DEPLOY_HOSTS, the targets as a value + the add-a-host guide
 │   ├── residency.ts        # what forbids scaling to zero: ONE rule every host that can scale reads
-│   ├── api.ts              # a deployment's Agent API: served or not (deploy.api, the host), its key written once
+│   ├── api.ts              # a deployment's Agent API: served or not (http.api, the host), its key written once
 │   │                       # nothing refuses the deploy, and the report of where it is reached
 │   ├── channel-ingress.ts  # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL, the
 │   │                       # words when nobody can (or when a box's login stopped registration). Consumed by
