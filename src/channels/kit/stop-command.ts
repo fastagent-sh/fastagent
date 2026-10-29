@@ -33,7 +33,7 @@ export async function dispatchStop(
     log.warn(
       `${label} stop failed for ${sessionId}: ${code ?? "error"} — ${error instanceof Error ? error.message : String(error)}`,
     );
-    // The storage could not answer, or the call broke: the stop may have been recorded all the same (agent-api.md §4).
+    // The storage could not answer, or the call broke: the stop may have been recorded all the same (SPEC.md §4).
     if (code === undefined || code === "unavailable") return UNKNOWN_NOTICE;
     return `⚠️ Could not stop (${code}).`;
   }

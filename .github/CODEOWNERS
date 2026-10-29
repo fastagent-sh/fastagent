@@ -7,7 +7,6 @@
 
 # The locked contract and its types.
 /docs/SPEC.md            @kid7st @Sukitly
-/docs/design/agent-api.md @kid7st @Sukitly
 /src/agent-api.ts        @kid7st @Sukitly
 /src/http/contract.ts    @kid7st @Sukitly
 

@@ -1,6 +1,6 @@
 ---
 title: Design principles
-description: "The design choices behind FastAgent: one API in process, one harness, app-owned runtime, typed edges, and the non-goals that keep the serving layer small."
+description: "The design choices behind FastAgent: one API in process and over HTTP, one harness, app-owned runtime, typed edges, and the non-goals that keep the serving layer small."
 status: current
 ---
 
@@ -12,7 +12,7 @@ The design center is **point at directory → live agent capability**. FastAgent
 
 The design choices are deliberate:
 
-- **One API, in process**: every Caller (a channel, a schedule, `fastagent invoke`, your app) uses the same Agent API, in the process that runs the agent.
+- **One API, in process and over HTTP**: every Caller (a channel, a schedule, `fastagent invoke`, your app, a program that calls a deployed agent) uses the same Agent API, in the process that runs the agent or through its key.
 - **One harness**: pi-durable runs the agent and keeps its conversations; FastAgent assembles the definition onto it rather than abstracting over several.
 - **Application composition**: compose with the user's application instead of owning routes, database, auth, deployment, and project layout.
 - **Typed edges**: typed tools, explicit events, and validation at the places where outside input enters the system.
@@ -39,7 +39,7 @@ A feature is not real product surface until users can name it and reason about i
 | Concept | Meaning |
 |---|---|
 | **Agent Definition** | The directory that describes the agent: `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/`, and config, including the content it declares; nothing a content entry holds is part of it. |
-| **Agent** | The [Agent API](SPEC.md): sessions, messages and entries, in process. |
+| **Agent** | The [Agent API](SPEC.md): sessions, messages and entries, in process and over HTTP. |
 | **Message** | One thing a Caller sends into a session, from its acceptance to its outcome, which outlives whoever sent it. |
 | **Entry** | One record in a session's history: a message once taken, the agent's answer, a tool result. |
 | **Tool** | A typed action the model can call, validated before execution. |

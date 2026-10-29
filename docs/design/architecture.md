@@ -7,7 +7,7 @@ status: implemented in part
 
 # Architecture
 
-**Status: decided; implemented through §6 step 2.** The code serves an agent on pi-durable through the
+**Status: decided; implemented through §6 step 3.** The code serves an agent on pi-durable through the
 [Agent API](../SPEC.md). The artifact (§4.1), context packages (§4.2) and what §4.4 leaves for later are not built yet;
 §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol (never released),
 a harness port, and the conformance levels behind them (§5).
@@ -43,10 +43,10 @@ goal needs.
 | Decision | Why |
 |---|---|
 | **One harness: pi-durable.** No harness port, no adapters, no capabilities | It keeps what serving needs natively (admission with `whenBusy`, idempotency by request id, a durable outcome per submission, continuation after a restart) and its storage and execution environment are replaceable, which is what serverless and microVM hosts need. A second harness would cost its own adapter, so neutrality is not designed for in advance |
-| **One API of our own: the consumer [Agent API](../SPEC.md)**, bound in TypeScript in process and, from v2 ([in progress](agent-api.md)), over HTTP | Every consumer, ours included (channels, schedules, wake-ups, `fastagent invoke`), needs the same operations, and so does a program that calls a deployed agent the way it calls any service. One model with two bindings, the same names and objects in both, lets a Caller move between an agent it opens and one it reaches over HTTP by changing one line. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
+| **One API of our own: the consumer [Agent API](../SPEC.md)**, bound in TypeScript in process and, from v2, over HTTP | Every consumer, ours included (channels, schedules, wake-ups, `fastagent invoke`), needs the same operations, and so does a program that calls a deployed agent the way it calls any service. One model with two bindings, the same names and objects in both, lets a Caller move between an agent it opens and one it reaches over HTTP by changing one line. It is also the layer that keeps pi-durable's experimental API and internal entry kinds away from clients |
 | **Everything else is pi-durable's own API**, as `agent.harness` in the process that runs the agent | Operating an agent (its definition, inspecting sessions) has one implementation; wrapping it would only rename it. A session's settings are a consumer's choice, at creation, at a fork, or later with `sessions.update`, which is pi-durable's `configure()`: a Caller who may use a session may choose what it answers with, its model, thinking level, `instructions` and `tools` (chosen among the agent's own), and compacts it; its working directory and extensions stay the definition's |
-| **An instance is one trust domain, and serves nothing that does not verify its caller** | Whoever holds the Agent can do everything it can, every session and the agent's tools included. A deployment's routes are its channels', which MUST verify that a request comes from their platform; its host's own (AgentCore's, behind IAM); and, from v2, the HTTP API, which verifies an API key ([agent-api.md](agent-api.md) §9). The key keeps everyone but the instance's customer out; it does not divide an instance. A platform's signature proves the platform, not the person: everyone who can message a channel's bot is inside the trust domain, and can ask the agent for anything its tools reach, every other chat's conversation included. People who must not read each other's conversations are kept apart by giving each an instance, not inside one: the agent's tools reach every session of their instance, whichever session asked, so a check on session ids would not keep them apart. A session id is a name, not a credential |
-| **HTTP on Effect's own stack** (from v2's HTTP binding, [agent-api.md](agent-api.md) §9): an `effect/http-api` contract, served by `@effect/platform-node` on Node and `@effect/platform-bun` on Bun | One contract written in Effect Schema gives the server's request decoding, its errors, `/v1/openapi.json` and the typed client `connectAgent` is built on, so none of them can describe another API than the one served. Each runtime serves on its own server, and a client that leaves interrupts its request's fiber, which is how a stream is cleaned up. The API is one `HttpRouter`, mounted as a Fetch handler under `/v1` beside the channels' Fetch handlers, so `service.fetch` answers both for an app's own server. Hono and `@hono/node-server` go with it. Measured in §6.1, with what it costs: the modules are marked unstable, so `effect` and every `@effect/platform-*` package take the same caret range, which a fresh install resolves to one version, and the conformance suite over both bindings is what an upgrade passes; Bun's idle timeout is raised above the longest a request waits; and `close()` ends the open streams before it stops the server |
+| **An instance is one trust domain, and serves nothing that does not verify its caller** | Whoever holds the Agent can do everything it can, every session and the agent's tools included. A deployment's routes are its channels', which MUST verify that a request comes from their platform; its host's own (AgentCore's, behind IAM); and, from v2, the HTTP API, which verifies an API key ([SPEC.md](../SPEC.md) §9). The key keeps everyone but the instance's customer out; it does not divide an instance. A platform's signature proves the platform, not the person: everyone who can message a channel's bot is inside the trust domain, and can ask the agent for anything its tools reach, every other chat's conversation included. People who must not read each other's conversations are kept apart by giving each an instance, not inside one: the agent's tools reach every session of their instance, whichever session asked, so a check on session ids would not keep them apart. A session id is a name, not a credential |
+| **HTTP on Effect's own stack** (from v2's HTTP binding, [SPEC.md](../SPEC.md) §9): an `effect/http-api` contract, served by `@effect/platform-node` on Node and `@effect/platform-bun` on Bun | One contract written in Effect Schema gives the server's request decoding, its errors, `/v1/openapi.json` and the typed client `connectAgent` is built on, so none of them can describe another API than the one served. Each runtime serves on its own server, and a client that leaves interrupts its request's fiber, which is how a stream is cleaned up. The API is one `HttpRouter`, mounted as a Fetch handler under `/v1` beside the channels' Fetch handlers, so `service.fetch` answers both for an app's own server. Hono and `@hono/node-server` go with it. Measured in §6.1, with what it costs: the modules are marked unstable, so `effect` and every `@effect/platform-*` package take the same caret range, which a fresh install resolves to one version, and the conformance suite over both bindings is what an upgrade passes; Bun's idle timeout is raised above the longest a request waits; and `close()` ends the open streams before it stops the server |
 | **The Agent names sessions; Callers remember them** | pi-durable mints conversation ids and cannot take a Caller's. A channel or a schedule keeps its own mapping (a chat or a thread to its session, a schedule to its session) in its own state, as it already keeps other state. The rule that keeps a mapping single is below the table |
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
 | **Sessions are listed, most recently active first; none is deleted** | A client shows an agent's conversations whatever started them: duang's sidebar lists the ones a channel or a schedule started too, which no list a Caller keeps could hold. An instance is one trust domain, so a list shows nothing its Caller could not already read. Within one storage the order needs no clock: pi-durable gives sessions, messages and entries their ids from one counter, so a session's newest id is its latest activity. Several storages behind one instance compare activity by time, designed with them (#788, scale-out on AgentCore). pi-durable has no deletion |
@@ -87,7 +87,7 @@ A consumer may choose a session's settings with `sessions.create({ model, thinki
 forkFrom? })`, passed to pi-durable's creation options in the same commit. A fork inherits the settings at its branch
 point and applies the supplied overrides. `sessions.update` changes them later, from the session's next model request,
 and the session reads them back. `messages.send` uses those settings and accepts no per-message model choice
-([agent-api.md](agent-api.md) §4). A session that
+([SPEC.md](../SPEC.md) §4). A session that
 names a model keeps it; FastAgent never replaces it automatically when it becomes unavailable, and a Caller moves it
 to another with `configure`.
 
@@ -145,7 +145,7 @@ location, the model reads its `SKILL.md` with `read` through the execution envir
 `/skill:<name>` loads it into the message. Prompt templates are FastAgent's, not the harness's: `invoke` expands a
 message that starts with `/<name>` before pi-durable sees it, with pi's template format (a `description` in the
 frontmatter, `$1`, `$@` and their default and slice forms for arguments), and `info()` lists them with the skills as
-the agent's commands ([Agent API](../SPEC.md) §3). The result is the Agent
+the agent's commands ([Agent API](../SPEC.md) §5.1). The result is the Agent
 API's `Agent`, plus `harness`. `dev`, `start` and an embedder's process call the same function, so an agent behaves the
 same wherever it runs.
 
@@ -276,7 +276,7 @@ standing NAT, or a backend of our own, for a failure not yet seen.
 
 Several agents using one context package share its declaration, not its data. Sharing data that is being written needs
 a context service. An agent calling another, in another instance, is a remote Caller: it calls the other's HTTP API
-([agent-api.md](agent-api.md) §9), or an A2A binding of it, which AgentCore can host, designed when this is built. Both
+([SPEC.md](../SPEC.md) §9), or an A2A binding of it, which AgentCore can host, designed when this is built. Both
 wait for the steps above.
 
 ## 5. What went
@@ -294,12 +294,12 @@ What the previous design had, and what took its place:
 | Extensions an agent writes for itself, live on its next session | A build and a deployment, as for any code (§3) |
 | Schedules an agent writes for itself, live within 30 seconds | `wake`'s recurring form, kept in the instance's state (§3) |
 | A thread's Caller-named session, whose existence records that the room was forked ([participant-model.md](participant-model.md) rungs 3 and 4) | The thread's session id, recorded in the channel's state after `sessions.create` forks the room, in the order and place of §2. The branch point is still found by key (`messages.get` with the platform's message id) |
-| The served HTTP API (`/invoke`, `/sessions`, `/agent`, `/control`), `http.api`, `http.control`, `http.cors`, `--no-api`, `connectAgent` and `createAgentHandler`, AgentCore's `api` envelope | v2's HTTP API under `/v1`, behind a key and without CORS, and `connectAgent` over it ([agent-api.md](agent-api.md) §8, §9); on AgentCore, nothing yet (§9.5 there). A key serves it, and `deploy` gives every deployment one, so `http.api` is back as the definition's way to turn it off: `false` serves no `/v1` whatever key the environment holds, which a key alone could not say once a host kept one from an earlier deploy (`apiTurnedOff`, read by `deploy` and every serve). What used the old one went with it or moved, by the list below |
+| The served HTTP API (`/invoke`, `/sessions`, `/agent`, `/control`), `http.api`, `http.control`, `http.cors`, `--no-api`, `connectAgent` and `createAgentHandler`, AgentCore's `api` envelope | v2's HTTP API under `/v1`, behind a key and without CORS, and `connectAgent` over it ([SPEC.md](../SPEC.md) §8, §9); on AgentCore, nothing yet (§9.5 there). A key serves it, and `deploy` gives every deployment one, so `http.api` is back as the definition's way to turn it off: `false` serves no `/v1` whatever key the environment holds, which a key alone could not say once a host kept one from an earlier deploy (`apiTurnedOff`, read by `deploy` and every serve). What used the old one went with it or moved, by the list below |
 | An outside clock (Fly's Cron Manager, a Railway cron service, a CI job) calling `POST /invoke` in place of a schedule, so a host can scale to zero; `deploy`'s pre-flight offering it | Gone. A schedule keeps its machine resident, except on AgentCore, whose EventBridge alarms wake the container through its own envelope. A clock that must wake a scaled-to-zero machine is a channel its author writes, which verifies the clock's call |
 | The AgentCore runbook's smoke test, a turn sent as an `api` envelope | A `probe` envelope, which says whether the definition opened; a turn is tried through a channel or a schedule |
 | `start`'s `try it: curl …/invoke` | `fastagent invoke`, in process |
-| `connectAgent` for a web panel, a desktop app or another service | v2's `connectAgent`, from a backend: a browser never holds the key ([agent-api.md](agent-api.md) §9.1) |
-| A deployment with no channel and no schedule, reached through the API | Nothing reaches it but its health check, and `deploy`'s pre-flight says so: such an agent is used by embedding it. v2's HTTP API, behind a key, reaches it on Docker, Fly and Railway ([agent-api.md](agent-api.md) §9.5) |
+| `connectAgent` for a web panel, a desktop app or another service | v2's `connectAgent`, from a backend: a browser never holds the key ([SPEC.md](../SPEC.md) §9.1) |
+| A deployment with no channel and no schedule, reached through the API | v2's HTTP API, behind the key `deploy` gives it, reaches it on Docker, Fly and Railway ([SPEC.md](../SPEC.md) §9.5); one with none of the three is reached by nothing but its health check, and `deploy`'s pre-flight says so |
 | agent-service.md's contexts, serving protocol, architecture and deployment (its §3.6 and §7 to §14), and conformance-levels.md | This note and the Agent API; [agent-service.md](agent-service.md) keeps its §1 to §6 |
 
 ## 6. Order
@@ -308,7 +308,8 @@ What the previous design had, and what took its place:
 2. **Done** ([#788](https://github.com/fastagent-sh/fastagent/issues/788)). The Agent on pi-durable, with the
    conformance suite in process; channels, schedules, wake-ups, the CLI and AgentCore moved onto it; the previous
    protocol, its HTTP API, `LoopPort` and the pi-coding-agent harness deleted.
-3. The Agent API v2 ([agent-api.md](agent-api.md)): one model, in process and over HTTP with an API key. In process: done.
+3. **Done** ([#788](https://github.com/fastagent-sh/fastagent/issues/788)). The Agent API v2 ([SPEC.md](../SPEC.md)):
+   one model, in process and over HTTP with an API key, with `connectAgent`, `deploy`'s key and `invoke --url`.
 4. The artifact: `fastagent build`, and `deploy` from it.
 5. Context packages.
 6. Shared contexts and agents working together.
@@ -322,7 +323,7 @@ On pi-durable 1.3.0 with pi-ai's faux model, in process, against memory and SQLi
 | The definition rendered | `SYSTEM.md`, `AGENTS.md` and the skill list render as an extension's prompt sections, and pi-durable adds no prompt of its own; a tool made by `needs([...])` around pi-durable's `defineTool` receives its secret | Installs one extension of FastAgent's own with those sections, beside the agent's tools and extensions |
 | A command kept as sent | An input submitted with the expanded text as `content` and `entry: { kind: "fastagent.user", data: { content: <as sent> } }` is recorded with that kind and data, while the model sees `content` | Submits every message that way, and publishes `fastagent.user` as `user` |
 | Images | Stored inline, as base64, in the entry's model message; there is no separate blob store | `sessions.attachment(ref)` reads from the entry: a ref names the entry and the part. Images grow the storage |
-| An answer being written | Its text so far is in `pi.live.generation.message`, and in a new `watchEvents` stream's snapshot, with its attempt number; its entry gets an id only when the answer is complete | `Session.reply` is that text and `delta` carries no entry id ([agent-api.md](agent-api.md) §6.1) |
+| An answer being written | Its text so far is in `pi.live.generation.message`, and in a new `watchEvents` stream's snapshot, with its attempt number; its entry gets an id only when the answer is complete | `Session.reply` is that text and `delta` carries no entry id ([SPEC.md](../SPEC.md) §6.1) |
 | A fork's history | Shares the source's entries: the same ids, with the source's `conversationId` | Publishes `Entry.sessionId` from it |
 | The queue after a run that did not answer | Waits, after a model failure and across a restart (the inbox persists with no run live); a write submission of FastAgent's kind `fastagent.release` with `edits: []` places it (the conversation takes the inputs waiting in its inbox), and lands as an entry | Submits that write after each run that did not answer and at the first open of a conversation whose inbox waits with no run live, and never publishes the entry |
 | Abort | `conversation.abort()` ends the running message and withdraws the queued ones, and a message sent after it settles is taken; but one sent while the aborted run is still settling waits in the inbox, and `abort()` itself waits for a running tool that ignores its signal | Calls `conversation.abort()` and answers `abort` when it returns, as the Agent API's `abort` does (§5 there). The `fastagent.release` write follows the end of the stopped run, as after any run that did not answer, whether or not the `abort` call is still waiting: its Caller may have stopped waiting |
@@ -340,7 +341,7 @@ storage at `/mnt/data`, in `ap-southeast-1`:
 | A run cut off by `StopRuntimeSession` | The microVM stops at once (the tool's writes stop); nothing runs while the session is not invoked; the next invocation gets a new microVM in about 2 s with the storage and the incarnation as they were, and pi-durable carries on: the cut-off tool is not run again but answered as interrupted, the message is answered, and the one queued behind it too | Opens the storage and calls `harness.resume()` when each process starts, before it handles the invocation (§4.3) |
 | Idle timeout (120 s) during a 200 s tool | `/ping` answering `HealthyBusy` kept the session: the tool ran to its end on the same microVM | Answers `HealthyBusy` while a run is live |
 
-For the Agent API v2 ([agent-api.md](agent-api.md)), on pi-durable 1.3.0 with pi-ai's faux model, in process and
+For the Agent API v2 ([SPEC.md](../SPEC.md)), on pi-durable 1.3.0 with pi-ai's faux model, in process and
 against SQLite storage in a process killed with `SIGKILL`:
 
 | Question | Measured | So the implementation |
@@ -396,7 +397,7 @@ with each run (AG-UI; here the Agent owns it); shared-state JSON patches, plans 
 custom events); a file system and terminal the client provides (ACP; this agent runs server-side in its own
 environment); closing and deleting sessions, and a tenant field. Asking the user, a webhook when a message ends (A2A, OpenAI's background mode) and a live
 notice event (ACP) can be added later under the API's rules for extending, without breaking a Caller. Its HTTP binding is
-its own ([agent-api.md](agent-api.md) §9); A2A and MCP bindings map onto the same model and are designed when a Caller
+its own ([SPEC.md](../SPEC.md) §9); A2A and MCP bindings map onto the same model and are designed when a Caller
 needs one.
 
 ## 8. Settled in the move

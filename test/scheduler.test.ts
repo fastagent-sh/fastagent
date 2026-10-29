@@ -641,8 +641,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     // The claim file said `skipped` and the reply said `skipped: true`, while `docker logs` /
     // CloudWatch still printed `ERROR [schedule] job failed (1ms): busy`. That line is the first place
     // anyone looks, so until it changed, the distinction this outcome exists for did not exist where
-    // it is used. `failed` rides along on a busy rejection only because that is the SPEC's one
-    // terminal event shape — a wire detail, not a verdict.
+    // it is used.
     const root = await freshRoot();
     const lines: string[] = [];
     // Every level goes through console.error (log.ts); the LEVEL is in the formatted line, which is

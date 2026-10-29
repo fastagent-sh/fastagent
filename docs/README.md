@@ -53,10 +53,10 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 ## Core concepts
 
 - **The agent is a directory of its own.** Runtime behavior comes from the agent directory: `SYSTEM.md` (the prompt), `AGENTS.md`, `skills/`, `prompts/`, code under `src/` (tools, extensions, channels, schedules), and markdown context. What it works on is declared as its content, whose files, `AGENTS.md` included, the agent reads there and never takes into its prompt.
-- **The Agent API is the contract.** Every channel, schedule and app calls the same [Agent API](SPEC.md), in process: sessions the Agent names, messages whose outcome outlives their callers, and a durable history.
+- **The Agent API is the contract.** Every channel, schedule and app calls the same [Agent API](SPEC.md), in process or over HTTP: sessions the Agent names, messages whose outcome outlives their callers, and a durable history.
 - **Channels are adapters.** A channel receives external events (Telegram, Slack, a webhook, …), verifies its platform, sends the agent messages, and returns host-specific responses.
 - **The instance holds the state.** Sessions live in its storage (`.state/agent.sqlite`), credentials in `.secrets/`; neither is part of the agent definition.
-- **Small core, typed edges.** One API in process, app-level composition, and validation at the boundaries.
+- **Small core, typed edges.** One API, in process and over HTTP, app-level composition, and validation at the boundaries.
 
 ## Maintainer notes
 
@@ -72,6 +72,6 @@ These are not required to use FastAgent, but they explain public architecture de
 | [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
 | [Place history](design/place-history.md) | In progress: what a chat place said, read from the platform when a turn needs it instead of copied into a buffer |
 | [Channels across environments](design/channel-environments.md) | A deployment receives Feishu/Lark by webhook by default and `dev` keeps WebSocket (`FEISHU_INGRESS`); one app serves one environment at a time until per-environment apps (#749) |
-| [Security boundary](design/security-boundary.md) | Why a serve publishes no API and every route verifies its caller, and why an instance is one trust domain, so people who must be kept apart get an instance each |
+| [Security boundary](design/security-boundary.md) | What a serve exposes (routes that verify their caller, and the Agent API behind the instance's keys), and why an instance is one trust domain, so people who must be kept apart get an instance each |
 
 For contribution workflow, see [../CONTRIBUTING.md](../CONTRIBUTING.md).

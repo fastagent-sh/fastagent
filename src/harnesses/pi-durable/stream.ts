@@ -1,5 +1,5 @@
 /**
- * `messages.stream` (agent-api.md §6.2): send a message and deliver it as it is written, over the Agent's own reads.
+ * `messages.stream` (SPEC.md §6.2): send a message and deliver it as it is written, over the Agent's own reads.
  * The session is watched before the message is sent, so nothing it writes afterwards is missed; a send whose key the
  * session has seen delivers that message from wherever it is.
  */

@@ -21,7 +21,7 @@ both run the **same** agent.
 
 ## The one mental model
 
-An agent is the [Agent API](design/agent-api.md): sessions the Agent names, messages whose end outlives whoever sent
+An agent is the [Agent API](SPEC.md): sessions the Agent names, messages whose end outlives whoever sent
 them, and a durable history of entries. It is TypeScript, in process, and the same over HTTP (`connectAgent`).
 
 ```ts
@@ -199,7 +199,7 @@ dev watcher, the port, the signal handlers). The agent they serve is the one `op
 
 ## Where next
 
-- [Agent API](design/agent-api.md): the API the whole thing rests on.
+- [Agent API](SPEC.md): the API the whole thing rests on.
 - [API reference](api-reference.md): every export.
 - [quickstart](quickstart.md): the CLI path (`init` / `dev` / `start`).
 - [core design](design/core.md): how a directory is opened onto pi-durable.

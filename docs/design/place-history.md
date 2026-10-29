@@ -24,7 +24,7 @@ Both are the same gap: the place's history is not where the agent looks.
 
 | | What it is | Who keeps it |
 |---|---|---|
-| Session | what the agent saw and said in its own turns | the Agent: durable, in the instance's storage ([Agent API](../SPEC.md) §5) |
+| Session | what the agent saw and said in its own turns | the Agent: durable, in the instance's storage ([Agent API](../SPEC.md) §2) |
 | Place history | everything said in a chat or a thread | the platform, where it can be read; fastagent only where it cannot |
 
 The context buffer (`channels/kit/context-buffer.ts`) is a partial copy of the second:

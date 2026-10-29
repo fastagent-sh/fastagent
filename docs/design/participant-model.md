@@ -185,7 +185,7 @@ The unit of concurrency is the session, and the session is the place:
 - separate conversations are parallel: threads proceed independently.
 
 Two turns in one place serialize (`channels/turn-queue.ts` FIFO, and a session takes one message at a time,
-[Agent API](../SPEC.md) §3.2). Two turns in different places run concurrently.
+[Agent API](../SPEC.md) §5.3). Two turns in different places run concurrently.
 
 Finer-grained concurrency (parallel turns *inside* one session) is rejected: a conversation needs
 convergence, and a tree only provides divergence. Concatenating two independently computed turns
@@ -244,7 +244,7 @@ cannot read the session).
 **Rungs 3 and 4 are one mechanism with two parameters, implemented as a fork of the room's session.** The
 channel knows which place this one branched from and the reply chain the thread starts under (the referent,
 then each message it replies to, nearest first). When the thread has no session yet, the channel
-creates one with `sessions.create({ forkFrom: { sessionId: <the room's>, entryId } })` ([Agent API](agent-api.md) §4) and
+creates one with `sessions.create({ forkFrom: { sessionId: <the room's>, entryId } })` ([Agent API](../SPEC.md) §4) and
 records it in its map, inside the per-place turn queue, in the order session, record, message
 ([architecture.md](architecture.md) §2): the record is the decision, so there is no marker to persist and no decision
 to retry. The branch point is the first message of the room's that the chain names (`kit/thread-fork.ts`): a channel
@@ -278,7 +278,7 @@ label misstates the past.
 
 *Rejected: making the room absorb eagerly* — writing each un-summoned message into the room's session
 at ingress. It would delete rung 3 entirely, and it fails on three measured counts: a session takes one
-run at a time (SPEC §3.2), so a write at ingress would wait behind a multi-minute turn; that blocking sits on the PRE-ACK path, where the webhook must answer before the
+run at a time (SPEC §5.3), so a write at ingress would wait behind a multi-minute turn; that blocking sits on the PRE-ACK path, where the webhook must answer before the
 platform re-pushes; and consecutive ambient user entries reach the provider unmerged — Bedrock rejects
 them (`roles must alternate`), and `deploy agentcore` is a shipped host.
 

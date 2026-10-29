@@ -1,606 +1,711 @@
 ---
-title: Agent API — Specification v1
-description: "The consumer API of a served FastAgent agent: sessions the Agent names, messages whose outcome outlives their callers, durable entries, resumable event streams, in process."
+title: Agent API — Specification v2
+description: "The consumer API of a served FastAgent agent: one model of sessions, messages and entries, bound in process in TypeScript and over HTTP, with an API key that keeps everyone but the instance's customer out."
 type: spec
 status: current
-version: 1.0
-updated: 2026-10-26
+version: "2.0"
+updated: 2026-10-29
 ---
 
-# Agent API — Specification v1
+# Agent API — Specification v2
 
-> **Status: superseded in code.** The code now implements its successor in process, the Agent API v2
-> ([design/agent-api.md](design/agent-api.md)): read that one for what `src/agent-api.ts` offers. This document
-> describes v1 until v2's HTTP binding lands and v2 replaces it here. Why the API has this shape is
-> [architecture.md](design/architecture.md).
+> **Status: current.** What `src/agent-api.ts` (in process) and `src/http/` (over HTTP) implement, and the CLI's
+> checks (§9.6). Why the API has this shape is [architecture.md](design/architecture.md); v1, which it replaces, is
+> in this file's history (§13). Changing its semantics is an explicit decision.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
 
-## 1. Overview
+## 1. What it is for
 
-There are three roles:
+A served agent is called the way any service on the internet is: from a program, over HTTP, with a key. One message
+can take minutes, the network between a Caller and the agent can drop at any point, and the process that runs the
+agent can restart. What the API has to make true is therefore narrow:
 
-- **Agent**: one served agent, the way a bot is one, and one trust domain: whoever holds it can do everything it can
-  (§8).
-- **Caller**: code in the process that runs it: the implementation's own channels, schedules, wake-ups and `invoke` command, and an
-  app that embeds the agent. A front end, a client or another agent reaches it through one of these.
-- **Middleware**: both a Caller and an Agent. It wraps an Agent while exposing the same API, for budgets, logging and
-  the like. The operations carry no caller's identity, so authentication belongs to whatever puts the agent on a
-  network (§8).
+- **One accepted message, one end.** A message is recorded before it is acknowledged, ends exactly once, and survives a
+  restart.
+- **Found again.** A Caller that lost its connection learns what became of its message by id, and its answer.
+- **Retried without running twice.** A Caller that does not know whether a send arrived sends it again with the same
+  key and gets the same message.
+- **Watched as it is written, and picked up again.** A Caller sees the answer as it is written and, after a drop,
+  continues from the last thing it saw.
 
-The API has three concepts:
+Everything else in this document is naming and shape around those four.
 
-| Concept | Is | Exposed as |
+### 1.1 Who calls it
+
+| Caller | Where | What it does |
 |---|---|---|
-| **Session** | A conversation: the messages of one session share its history | An id the Agent names (§5) |
-| **Message** | One message a Caller sends into a session, from its acceptance to its outcome | `messageId`, with a status and an outcome (§4) |
-| **Entry** | One record in a session's history: a user's message once taken, the agent's messages, tool results | An id that is the cursor for reading and resuming, and the point for forking (§6) |
+| An app that embeds the agent | In process | Opens the agent directory and calls it like an SDK |
+| A program elsewhere | HTTP | Sends a message and waits, polls, or streams the answer |
+| A client that shows conversations | HTTP | Lists sessions, reads history, watches a session |
+| A channel (Telegram, Slack, Feishu, custom) | In process | Maps a chat to a session, sends, replies |
+| Schedules, wake-ups, `fastagent invoke` | In process | Send into a session and wait for the end |
 
-A Caller keeps the sessions it uses, and lists every session the Agent holds, most recently active first (§5). How
-the agent answers, in steps, turns or runs, and which messages it handles together, is not part of the API: each
-message's facts are its own.
+### 1.2 One model, two bindings
 
-This is the consumer surface, and only that. A Caller chooses a session's model and thinking level; operating the
-agent (its definition, compaction, inspecting every session) is the harness's own API, used by whoever builds and runs
-the agent (§11).
+The API is one model: an `Agent` with `sessions` and `messages`. It is bound twice, in process as a TypeScript
+interface (§8) and over HTTP (§9), with the same names, the same objects and the same errors. An agent opened from its
+directory and one reached over HTTP are the same interface, so a Caller moves between them by changing the line that
+obtains the agent.
 
-Fields are camelCase; enum values and discriminators are snake_case. A field that refers to another object names its
-kind: `sessionId`, `messageId`, `entryId`, `parentEntryId`. The API is bound in TypeScript, in process (§2); it has
-no network binding (§10).
+## 2. Concepts
 
-## 2. Operations
+| Concept | Is | A Caller |
+|---|---|---|
+| **Agent** | One served agent, one trust domain (§10) | Asks what it accepts and offers (`info`), and what it has spent (`usage`) |
+| **Session** | A conversation: its history of entries, its state, its settings. The Agent names it | Creates, lists, reads, **watches** and configures it; cancels or compacts its work |
+| **Message** | One thing a Caller sends into a session, from its acceptance to its end: a status, and the answer | **Sends** it and **checks** on it |
+| **Entry** | One durable record in a session's history: what the user said, what the agent wrote, what a tool returned, a compaction | Reads it as history, and receives it as it is written |
+
+```
+session s1
+├─ message m1 "Where is order 9231?"   completed, answer = e4
+│    e1 user · e2 assistant (calls a tool) · e3 tool_result · e4 assistant (the answer)
+├─ message m2 "And the refund?"        running
+│    e5 user · …
+└─ message m3 "Thanks"                 queued, behind m2
+```
+
+A session is what a Caller **watches**: one stream of everything that happens in it, picked up again after a drop
+(§6). A message is what a Caller **sends and checks**: it exists because the session cannot say what became of one
+particular send. Several Callers may write into one session (two browser tabs, a channel and a schedule), so a
+session's state says that it is busy, not whether *your* message was answered, and with what.
+
+How the agent answers, in steps, turns or runs, is not part of the API. Two messages the agent handled together may
+share an answer; each message's status and answer are its own.
+
+## 3. Objects
+
+Fields are camelCase; enum values and discriminators are snake_case. An entry's `timestamp` is milliseconds since the
+epoch.
+
+```ts
+interface AgentInfo {
+  name: string;
+  description?: string;
+  /** What a message may start with as `/<name>`: the agent's prompt templates, and `skill:<name>` per skill (§5.1). */
+  commands: { name: string; description?: string }[];
+  /** The tools a session may enable (`tools`, §4). */
+  tools: { name: string; description?: string }[];
+  /** The models a session may name: those whose provider has a credential here. */
+  models: { provider: string; modelId: string; name?: string }[];
+  /** What a session that names no model answers with. */
+  defaultModel?: { provider: string; modelId: string };
+}
+
+interface Session {
+  id: string;
+  /** Or a status a later version adds, which a Caller takes for busy (§7.1). */
+  status: "idle" | "running" | (string & {});
+  /** Its settings, as set at creation or by `update`; a field it does not name follows the deployment. */
+  model?: { provider: string; modelId: string };
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  instructions?: string;
+  /** The tools it enables, as set; a name the agent no longer has refuses its next message (`missing_tool`, §4). */
+  tools?: string[];
+  /** The agent's reply being written, as written so far: present only while one is. */
+  reply?: { text: string; thinking?: string };
+  usage: Usage;
+}
+
+interface Message {
+  id: string;
+  sessionId: string;
+  idempotencyKey?: string;
+  /**
+   * `queued` and `running` until it ends; then one of the four ends, which are all its ends (§5.4, §7.1). A status a
+   * later version adds is one it has not ended in.
+   */
+  status: "queued" | "running" | "completed" | "incomplete" | "failed" | "canceled" | (string & {});
+  /** Its `user` entry, once the agent took it. */
+  entryId?: string;
+  /** The `assistant` entry the agent stopped on for it: present when `completed`, and when `incomplete`. */
+  answer?: { entryId: string; text: string };
+  /** Why it `failed`. */
+  error?: AgentError;
+}
+
+interface Entry {
+  /** The same in every session that shares it: a fork's history begins with its source's entries, ids and all. */
+  id: string;
+  timestamp: number;
+  kind: string;
+  data: Json;
+}
+// user         { content: ContentPart[], messageId? }
+// assistant    { text, thinking?, toolCalls?: { id, name, args }[], stop?: "max_tokens" | "failed" | "aborted", error?, usage }
+// tool_result  { toolCallId, toolName, isError, content: ContentPart[] }
+// compaction   { summary }
+
+/** Spend by `provider/model` for model calls, and by tool name for what tools reported. */
+interface Usage {
+  models: Record<string, Tokens>;
+  tools: Record<string, Tokens>;
+}
+interface Tokens { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; cost?: number }
+
+/** An image in a message carries its bytes; in an entry, a ref (§4's `attachment`). */
+type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; mimeType: string; data: string }   // base64
+  | { type: "image"; mimeType: string; ref: string };
+
+interface AgentError {
+  code: string;
+  message: string;
+  /** Whether the same request may succeed if sent again. */
+  retryable: boolean;
+  details?: Json;
+}
+
+type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
+interface Page<T> { data: T[]; next?: string; prev?: string }
+```
+
+**Usage is counted where pi-durable counts it**: per model response (each `assistant` entry's `usage`), per session
+(`Session.usage`: every model call, failed and aborted attempts and compactions' summaries included, and what its
+tools reported), and for the whole instance (`usage()`, §4). There is no per-message figure: messages the agent
+handles together share the calls that answer them, so a per-message figure would be an estimate. A session's entries
+add up to less than its `usage`, since no entry records a failed attempt or a compaction's summary.
+
+## 4. Operations
 
 ```ts
 interface Agent {
-  info(): AgentInfo;
-  invoke(request: InvokeRequest): Promise<InvokeResult>;
-  getMessage(sessionId: string, key: { messageId: string } | { idempotencyKey: string }): Promise<MessageStatus | undefined>;
-  createSession(options?: CreateSessionOptions): Promise<{ ok: true; sessionId: string } | { ok: false; error: AgentError }>;
-  configure(sessionId: string, settings: SessionSettings): Promise<{ ok: true } | { ok: false; error: AgentError }>;
-  read(sessionId: string, options?: { after?: string; before?: string; limit?: number }): Promise<ReadResult>;
-  resume(sessionId: string, options?: { replayFrom?: ReplayFrom }): AsyncIterable<ResumeEvent>;
-  abort(sessionId: string, options?: { signal?: AbortSignal }): Promise<AbortResult>;
-  attachment(sessionId: string, ref: string): Promise<Attachment | undefined>;
-  listSessions(options?: { before?: string; limit?: number }): Promise<ListResult>;
+  info(): Promise<AgentInfo>;
+  usage(): Promise<Usage>;
+  sessions: {
+    create(options?: SessionSettings & { forkFrom?: { sessionId: string; entryId?: string } }): Promise<Session>;
+    get(sessionId: string): Promise<Session>;
+    list(options?: { limit?: number; after?: string }): Promise<Page<Session>>;
+    update(sessionId: string, changes: SessionChanges): Promise<Session>;
+    entries(sessionId: string, options?: { after?: string; before?: string; limit?: number }): Promise<Page<Entry>>;
+    events(sessionId: string, options?: { after?: string; signal?: AbortSignal }): AsyncIterable<SessionEvent>;
+    cancel(sessionId: string): Promise<{ stopped: string[] }>;
+    compact(sessionId: string, options?: { instructions?: string }): Promise<void>;
+    attachment(sessionId: string, ref: string): Promise<{ mimeType: string; data: Uint8Array }>;
+  };
+  messages: {
+    send(request: SendRequest, options?: { wait?: number; signal?: AbortSignal }): Promise<Message>;
+    stream(request: SendRequest, options?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent>;
+    get(key: { sessionId: string; messageId: string } | { sessionId: string; idempotencyKey: string },
+        options?: { wait?: number; signal?: AbortSignal }): Promise<Message>;
+  };
 }
 
-interface AgentInfo {
-  protocolVersion: "1.0";
-  name: string;
-  description?: string;
-  /** The content part types a prompt may carry; `text` is always among them. */
-  inputs: string[];
-  /** What a Caller may offer as `/<name>`: the agent's prompt templates, and `skill:<name>` for each skill (§3). */
-  commands: { name: string; description?: string }[];
-}
-
-/** The receipt of an accepted message, a refusal that recorded nothing, or why a receipt could not be obtained. */
-type InvokeResult =
-  | ({ ok: true } & Receipt & { wait(options?: { signal?: AbortSignal }): Promise<WaitResult> })
-  | { ok: false; error: AgentError }                     // rejected: nothing was recorded
-  | { ok: false; unknown: { reason: string; sessionId?: string; messageId?: string } }; // no complete receipt
-
-/** The receipt's data: an invoke's answer without its `wait()`. */
-interface Receipt { sessionId: string; message: MessageStatus; duplicate: boolean }
-
-/** A message's end, or why it is not known here. */
-type WaitResult =
-  | { ok: true; message: DoneMessage }
-  | { ok: false; unfinished: { reason: string } };
-
-/** What a session answers with. */
 interface SessionSettings {
   model?: { provider: string; modelId: string };
-  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  thinkingLevel?: Session["thinkingLevel"];
+  instructions?: string;
+  tools?: string[];
 }
+/** `null` clears a field back to the deployment's. */
+type SessionChanges = { [K in keyof SessionSettings]?: SessionSettings[K] | null };
 
-interface CreateSessionOptions extends SessionSettings {
-  from?: ForkSource;
-}
-
-interface ForkSource { sessionId: string; entryId?: string; context?: "full" | "recent" }
-
-type ReplayFrom = { type: "start" } | { type: "after"; entryId: string };
-
-type ReadResult =
-  | { ok: true; state: SessionState; entries: Entry[]; prev?: string; next?: string }
-  | { ok: false; error: AgentError };
-
-type ListResult =
-  | { ok: true; sessions: { sessionId: string }[]; next?: string }
-  | { ok: false; error: AgentError };
-
-type AbortResult =
-  | { ok: true; stopped: { taken: string[]; queued: string[] } }
-  | { ok: false; error: AgentError }
-  | { ok: false; unknown: { reason: string } };           // whether the stop was recorded is not known (§5)
-
-/** A resume that cannot start (an unknown session or cursor) is a single `rejected`. */
-type ResumeEvent = SessionEvent | { type: "rejected"; error: AgentError };
-
-/** What a prompt and the entries carry. An image in a prompt carries its bytes; in an entry, a ref (§6). */
-type ContentPart =
-  | { type: "text"; text: string }
-  | { type: "image"; mimeType: string; data: string }      // base64, in a prompt
-  | { type: "image"; mimeType: string; ref: string };      // in an entry, read with `attachment`
-
-type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
-interface Attachment { mimeType: string; data: string }    // base64
-```
-
-Every operation that returns a `Promise` resolves, and failures are values, not rejections. The exception is
-`getMessage` and `attachment`, whose answers have no failure branch: they MAY reject with an `AgentError` of code
-`unavailable` when the Agent's storage cannot answer, because `undefined` would be a false answer. Every event, entry
-and result's data MUST be JSON-serializable, so that an app can send it on as it is: an invoke's is its `Receipt`, and
-`wait()` is a method beside it, over pi-durable's `Submission.wait()`.
-
-`invoke` answers once the message is recorded, with its receipt, and does not wait for it to be answered. It answers
-`unknown` when submission or obtaining the receipt fails and nothing proves the message was refused. This includes
-a storage failure during submission, a failed status read after the message was recorded, and a duplicate whose
-receipt cannot be read. Only an explicit
-refusal from submission may still be reported as a rejection; a later read failure MUST NOT be.
-
-`unknown` means no complete receipt was obtained, not necessarily that acceptance is unknown: a message id proves
-it was recorded. It MUST include every `sessionId` and `messageId` already known. Once the Agent is available, the
-Caller uses those ids to ask `getMessage`; without a message id it may send again with its key in the same session.
-Without either a message id or a key, the Caller MUST NOT infer refusal or automatically resend.
-
-`wait()` resolves once the message has ended, with its `done` (§4), as pi-durable's `Submission.wait()` does, also
-when the message had ended before `wait()` was called. It resolves `unfinished` when the end is not known from where
-it waits: the Agent's storage failed, or its `signal` was aborted. Aborting the signal ends that wait and releases
-what it held, never the message, as cancelling pi-durable's wait context does. `unfinished` never says the message was refused: a Caller asks `getMessage` later, and does not
-send again without a key. A receipt whose `wait()` is never called holds nothing.
-
-## 3. Invoke
-
-```ts
-interface InvokeRequest {
-  /** The session. Absent: the Agent creates one and names it in the receipt. */
-  sessionId?: string;
-  content: ContentPart[];
-  /** The Caller's key for this message, unique within the session. Requires sessionId. */
+interface SendRequest {
+  sessionId: string;
+  /** A string is one text part. */
+  content: string | ContentPart[];
+  /** The Caller's key for this message, unique within the session (§5.2). */
   idempotencyKey?: string;
-  /** What the message is when the session is busy with another. Default: "queue". */
+  /** What the message is when the session is busy with another (§5.3). Default: "queue". */
   whenBusy?: "queue" | "steer" | "reject";
 }
 ```
 
-`content` holds at least one part. A part whose `type` is not among `info().inputs` is refused with
-`invalid_request`, before anything is recorded.
+Every operation either resolves with what it names or rejects with an `AgentError` (§7). An unknown session, message
+or entry cursor rejects `not_found`.
 
-A message whose text starts with `/<name>`, for a `name` among `info().commands`, is a command: the Agent expands it
+A `signal` lets go of a wait, never of what it waits for. The call rejects with the signal's reason, and what it asked
+for goes on: a send that reached the agent is recorded and answered (with a key, sending again finds it, §5.2). A
+Caller that stops reading `events` or `stream` detaches the same way. Only `cancel` stops the
+agent.
+
+- **`info`** says what the agent accepts and offers.
+- **`usage`** is what the instance has spent, across every session (§3).
+- **`sessions.create`** creates an empty session, or, with `forkFrom`, a fork: the new session's history begins with
+  the source's entries up to `entryId` (all of them without it), the same ids and data, and what it writes afterwards
+  is its own. The source's messages stay the source's. A fork takes its source's settings as of that entry, each
+  supplied field replacing the inherited one. Settings are stored without checking them against the agent: a message
+  into a session whose model the agent does not have is refused `missing_model` (one it has, whose provider has no
+  credential here, is taken and fails `auth_required`), and one whose `tools` names a tool not among `info().tools`
+  (a later deployment removed it) is refused `missing_tool`, naming it, until `update` changes the setting. A session
+  never runs with fewer tools than it names.
+- **`sessions.get`** is the session as it is now.
+- **`sessions.list`** lists every session the instance holds, whoever created it (a channel, a schedule, `invoke`, an
+  app), most recently active first. `next` is the cursor `after` takes for the next page. A session that becomes active
+  while a Caller pages moves to the front, so a later page does not list it. A conversation the harness creates for
+  its own work, such as a subagent's, is not a session: it is not listed, and no operation reaches it.
+- **`sessions.update`** changes a session's settings, used from its next model request: a message being answered
+  continues with them. `instructions` is text added at the end of the agent's system prompt for this session. `tools`
+  enables only the named tools, each among `info().tools`; any other name is `invalid_request`.
+- **`sessions.entries`** is one page of the history, oldest first within the page, after or before an entry cursor.
+  Without a cursor it is the newest page, so a Caller opening a long session shows its latest entries and pages back.
+  `prev` and `next` are the cursors of the adjacent pages, absent at either end.
+- **`sessions.events`** watches the session (§6).
+- **`sessions.cancel`** stops everything the session is doing: the agent answering its running messages, every queued
+  message, and a manual compaction not yet placed. It resolves once the stop is recorded, with the messages it stops
+  (none on an idle session); each ends `canceled`, which `get` and `events` report. The stop holds after a restart. A running tool
+  ends when it honors its abort signal, which a tool must. Messages sent after it are taken as usual.
+- **A `cancel` whose answer did not arrive** (a dropped connection, `unavailable`) may or may not have been recorded,
+  and sending it again is not the way to find out: it would also stop what was sent since. The Caller reads the
+  session (`get`) and the messages it meant to stop, and cancels again only if it still wants everything stopped.
+- **`sessions.compact`** asks the agent to summarize the session's older entries now, with `instructions` for the
+  summary when given. It resolves once the compaction is accepted. The session keeps working meanwhile; the summary is
+  placed at once when the session is idle, otherwise at its next step, and arrives as a `compaction` entry.
+- **`sessions.attachment`** is the image behind a ref an entry of this session published.
+- **`messages.send`** sends a message (§5). It resolves once the message is recorded, with its status as it is then.
+  With `wait`, it resolves once the message has ended, or after `wait` seconds with its status as it is then. Over
+  HTTP a wait is at most 60 seconds; `connectAgent` meets a longer one by asking `get` again with what remains, so the
+  same `wait` means the same in both bindings.
+- **`messages.stream`** sends a message and delivers it as it is written (§6.2).
+- **`messages.get`** is a message's status, by its id or by the key it was sent with. With `wait`, as `send`'s.
+
+## 5. Messages
+
+### 5.1 Content and commands
+
+`content` holds at least one part: text, or an image. A part of another type is `invalid_request`, and nothing is
+recorded. An image sent to a model that takes none reaches it as a placeholder.
+
+A message whose text starts with `/<name>`, for a `name` among `info().commands`, is a command. The agent expands it
 before the model sees it: a prompt template into its text, with the words after the name as its arguments, and
-`/skill:<name>` into that skill's instructions, followed by the words after it as the request. Without a command, the
-model is offered each skill by name and description, and loads one's instructions itself when a task matches it, as
-Agent Skills specifies. The `user_message` entry holds what the Caller sent, so a history shows `/review 123`, not
-the expansion. A `/` followed by a name the Agent does not know is sent to the model as written. A chat client shows
-`commands` as a menu, and a channel can register them as its platform's commands.
+`/skill:<name>` into that skill's instructions, followed by the words after it. The `user` entry holds the message as
+sent (`/review 123`), not the expansion. A `/` followed by a name the agent does not have is sent as written.
 
-### 3.1 The receipt, and watching a message
+### 5.2 Idempotency
 
-- **A rejection** records nothing, so the same request MAY be sent again.
-- **A receipt** names the session and the message, with the message's status as it is now. Sending a message and
-  watching a session are separate: the Caller watches what the agent does by resuming the session (§5.1), and awaits
-  the message's end with `wait()`.
-- **One message's answer** is what follows its `user_message` entry, which names it, in the session's events, up to
-  its `done`; until then the events are another message's. A Caller that wants it as it is written resumes the session
-  before it invokes, which needs the session to exist: a new conversation is created first (`createSession`), and its
-  id kept, before anything is sent into it. A `done`
-  is never replayed (§5.1), so a Caller that resumes only after it invoked reads an end that came before it attached
-  with `getMessage` once the snapshot arrives. `stream(agent, request)` does this over any `Agent`; it is a Caller of
-  this API and adds nothing to it.
-- A Caller that stops waiting or watching **detaches**: the agent goes on. `abort` stops it (§5).
+- A key is unique within its session. A send with a key the session has seen returns that key's message as it is now
+  and records nothing; its content is not compared.
+- Looking up the key, recording the message and queueing it are one step per session, so concurrent sends with one
+  key make one message.
+- A send that may have been recorded and could not be confirmed (the storage failed while recording it, or after)
+  rejects `unconfirmed`, never `unavailable`, with the `sessionId` and any `messageId` already known in `details`.
+  It is not `retryable`: sending again records a second message unless the send carries a key. With a key, the same
+  send is the way to find out; with a `messageId`, `get` is. A dropped connection is the same case, seen from the
+  Caller.
+- `connectAgent` gives a send without a key one of its own, so that one whose answer was lost rejects `unconfirmed`
+  with that key in `details`, which finds it; the Message's `idempotencyKey` shows it. A Caller that retries itself
+  passes its own key.
+- Only a send is idempotent: it is the one request whose repetition does harm (the agent answers it again, its tools
+  act again). A session created twice is an empty session more, which nothing refers to.
 
-**`stream(agent, request)`** sends a message and delivers its answer as it is written:
-
-```ts
-function stream(agent: Agent, request: InvokeRequest & { sessionId: string }): Promise<StreamResult>;
-type StreamResult =
-  | ({ ok: true } & Receipt & { events: AsyncIterable<SessionEvent> })  // after its user_message, through its done
-  | Extract<InvokeResult, { ok: false }>;                            // the invoke's rejection or unknown
-```
-
-The receipt, a rejection and `unknown` are the invoke's own (a channel keys its turn by the receipt's `messageId` and
-tells its user why a message was refused); `events` ends with the message's `done`, or with a `serving_error` when the
-session cannot be followed. It takes a session that exists, since only one can be resumed before the message is sent:
-a Caller with a new conversation creates the session and keeps its id first, which is also what keeps a key's retry in
-one session (§3.3). It resumes the session without replay, invokes once the snapshot arrives, and then, by the
-receipt:
-
-- a new or `queued` message: the events after its `user_message`, which arrives live;
-- a `taken` duplicate, whose `user_message` was written before: it resumes again after that entry
-  (`{ type: "after", entryId: message.entryId }`), holds what that replays, and asks `getMessage` once its snapshot
-  arrives. Still taken, it delivers the held entries and goes on live; done meanwhile, it delivers the held entries
-  through its answer only (none when it has none), since the replay can run on into a message taken after it, and
-  then its `done`;
-- a `done` duplicate: it reads the entries after its `user_message` through its answer (`read`, after
-  `message.entryId`), or none when it has no answer, then delivers its `done`.
-
-### 3.2 A busy session
+### 5.3 A busy session
 
 A session is busy while the agent is answering a message in it. `whenBusy` says what a message that arrives then is:
 
 | `whenBusy` | When the session is busy |
 |---|---|
-| `queue` (default) | Queued. Queued messages are taken in arrival order, each once the agent is done with the one before it, whatever that one's outcome |
-| `steer` | Handed to the agent while it is still busy, to take at its next step (after its current tool round) rather than after it stops. Queued ahead of the messages queued with `queue` until taken; a steer the agent did not take before it stopped is taken no later than them |
-| `reject` | Rejected with `busy` and `details.reason: "running"` |
+| `queue` (default) | Waits, and is taken once the agent is done with the messages before it, whatever their outcome |
+| `steer` | Handed to the agent while it is still busy, to take at its next step (after its current tool calls) rather than after it stops. Ahead of the queued messages until taken |
+| `reject` | Rejected `busy`, `details.reason: "running"` |
 
 An idle session takes a message at once, whatever `whenBusy` says. Until it is taken, a steered message is `queued`
-like any other: it has a `position`, is listed in the session's `queued`, counts toward the queued limit (§7.2), and is
-withdrawn by `abort`. Every message's answer and outcome are its own: two messages the agent handled together may
-share an answer, and nothing more is promised about it.
+like any other.
 
-### 3.3 Sessions and idempotency
+### 5.4 How a message ends
 
-- An invoke without `sessionId` creates a session and names it in the receipt. An invoke into a session the Agent
-  does not hold answers `not_found`: a Caller cannot name a session (§5).
-- An `idempotencyKey` is unique within its session and requires `sessionId` (else `invalid_request`), because a key
-  sent while the session is still unnamed could not find its first message again. A Caller that wants a safe retry of
-  its first message creates the session first (`createSession`).
-- An invoke with a key the session has seen returns that key's message, `duplicate: true`, `message` as it is now,
-  and records nothing new; its `wait()` resolves with the same end. The content is not compared with the first one:
-  the key alone identifies the message.
-- Looking up the key, recording the message and queueing it are one step per session: concurrent invokes with one key
-  produce one message.
+A message ends exactly once, and its end is recorded before it is reported.
 
-### 3.4 Acceptance is durable
-
-Before the receipt is answered, the message MUST be recorded durably with its id and key, so that `getMessage` and a
-duplicate find it after any later restart.
-
-## 4. Messages
-
-```ts
-type MessageStatus =
-  | { messageId: string; idempotencyKey?: string; status: "queued"; position: number }
-  | { messageId: string; idempotencyKey?: string; status: "taken"; entryId: string }
-  | DoneMessage;
-
-interface DoneMessage {
-  messageId: string;
-  idempotencyKey?: string;
-  status: "done";
-  entryId?: string;
-  outcome: Outcome;
-  answer?: { entryId: string; text: string };
-}
-
-type Outcome =
-  | { status: "completed" }
-  | { status: "max_tokens" }
-  | { status: "canceled" }        // withdrawn or stopped by abort
-  | { status: "failed"; error: AgentError };
-
-interface Usage { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; cost?: number }
-```
-
-`entryId` is the message's `user_message` entry, written when it is taken. `answer` is the `assistant_message` the
-agent stopped on for it: present when the outcome is `completed`, or `max_tokens`, where it is the cut-off reply, and
-absent on every other outcome. A reply whose tool calls ran is never an answer. `position` counts from 0 in the order
-the queued messages will be taken, steered ones first.
-
-**`getMessage`** returns a message's status as it is now, by its id or by the key it was sent with, or `undefined`
-for a message the session never accepted or a session the Agent does not hold. A Caller that lost track of a message
-asks it, and resumes the session (§5.1) for what the agent writes. A Caller that keys its messages by
-something of its own, such as a chat platform's message id, finds a message by that key without keeping a map of its
-own.
-
-### 4.1 How a message ends
-
-A message ends exactly once, with one outcome, recorded durably before it is reported.
-
-| What happens | A taken message | A queued message |
+| Status | Means | `answer` |
 |---|---|---|
-| The Caller stops waiting or watching | The agent goes on | Stays queued, and is taken in its turn |
-| `abort` | The agent stops: `canceled` | Withdrawn: `canceled`, without an entry |
-| The process stops | Answered after the restart; `canceled` if an `abort` was stopping it | Stays queued, and is taken in its turn |
+| `completed` | The agent answered it | The `assistant` entry it stopped on |
+| `incomplete` | The agent's answer was cut off at its token limit | The cut-off reply |
+| `failed` | It could not be answered: `error` says why (`missing_model`, `auth_required`, `model_error`, `internal`) | None |
+| `canceled` | `cancel` stopped it, or withdrew it while it was queued | None |
 
-A process that stops does not lose what was accepted: the Agent continues it when it starts again. A tool cut off
-mid-call is not run again unless it declares that a second run is safe; the agent is told it was interrupted and
-carries on. An Agent MUST NOT redo a message on its own.
+A reply whose tool calls ran is never an answer.
 
-These promises, and that an id is never reused (§5), hold as far as the storage the Agent runs on keeps what it was
-given. A host whose storage can lose its newest writes when the machine under it fails can lose the newest accepted
-messages then, and hand out again the ids that went with them: AgentCore's session storage, after a host failure
-([architecture.md](design/architecture.md) §4.3). A Caller that must not lose a message keeps it until it sees its `done`.
+| What happens | A running message | A queued message |
+|---|---|---|
+| The Caller stops waiting or watching | The agent goes on | Stays queued |
+| `cancel` | Stopped: `canceled` | Withdrawn: `canceled`, without an entry |
+| The process stops | Answered after the restart; `canceled` if a `cancel` was stopping it | Stays queued |
 
-## 5. Sessions
+A tool cut off by a restart is not run again unless it declares a second run safe; the agent is told it was
+interrupted and carries on. The Agent never sends a message again on its own. These promises hold as far as the
+storage keeps what it was given: storage that loses its newest writes when its host fails loses the newest messages
+with them ([architecture.md](design/architecture.md) §4.3).
 
-```ts
-/** Its settings are the session's own: a field it does not name yet is absent (§5's `createSession`). */
-interface SessionState extends SessionSettings {
-  status: "idle" | "running";
-  taken: string[];      // the messages the agent is answering
-  queued: string[];     // in the order they will be taken
-  /** The agent's message being written, as written so far: present only while one is. */
-  reply?: { text: string; thinking?: string };
-  /** What the session has spent: its own model calls by `provider/model`, what its tools reported by tool (§6). */
-  usage: { models: Record<string, Usage>; tools: Record<string, Usage> };
-}
-```
+## 6. Watching
 
-The Agent names every session. A Caller gets an id from `createSession` or from the receipt of an invoke without
-`sessionId`, and keeps it, or finds it with `listSessions`. An id is a name, not a credential (§8).
-
-Session, message and entry ids are opaque strings, and the Agent MUST NOT reuse one: within a deployment, an id names
-one thing for as long as the deployment exists, even when its storage is rebuilt from empty. An id a Caller kept from
-a storage that is gone answers `not_found` (or `undefined`), never another session, message or entry.
-
-- **`createSession`** creates an empty session, or, with `from`, a fork: the new session starts with the source's
-  history up to `entryId`, or all of it. A fork shares that history, not messages: its history begins with the
-  source's entries themselves, the same ids and the same data, and what it writes afterwards is its own; the source's
-  messages, queued or done, stay the source's, and when the source is busy only its recorded entries are shared. An
-  unknown source or entry answers `not_found`. `context: "recent"` is to share the same history but give the model
-  only its recent part, as a long session is bounded, with a `compaction` entry recording the bound. It is not
-  implemented yet: a fork with it is refused `invalid_request`, and `"full"`, the default, is the only context a fork
-  has.
-  `model` and `thinkingLevel` select the new session's settings, as pi-durable's creation options do, stored in the
-  same commit as the session. A fork inherits its source's settings as of the fork entry (the current settings of an
-  empty source), with each supplied field overriding the inherited one, without changing the source. An unset field
-  takes the deployment's default when a message is admitted if the session still names none. A model is identified by
-  `{ provider, modelId }`; creation stores the choice without checking availability, as pi-durable does. An invoke
-  whose session names no available model is refused `missing_model` (§7.1). `invoke` itself selects no model or thinking
-  level: it uses the session's settings.
-- **`configure`** changes a session's model, thinking level or both, as pi-durable's `configure()` does: stored in
-  one commit, without checking availability, as at creation, and used from the session's next model request, so a
-  message being answered continues with it. An unknown session answers `not_found`, and settings that name neither
-  field `invalid_request`; neither records anything. The session's `state` carries its settings, so a Caller reads
-  back what it chose, and what the deployment's default filled in once a message was admitted.
-- **`read`** returns the state and one page of entries, after or before an entry cursor, oldest first within the page.
-  Without a cursor it returns the newest page, so a Caller opening a long session shows the latest entries and pages
-  back from there. `prev` and `next` are the cursors of the adjacent pages, absent at either end. `limit: 0` returns
-  the state alone.
-- **`resume`** attaches to the session (§5.1).
-- **`abort`** stops everything the session does: the agent answering its taken messages, and every queued message,
-  steered ones included, as pi-durable's `conversation.abort()` does. It answers once the messages it stopped have
-  ended, each `canceled` with its `done`, and reports them; on an idle session it answers `ok` with nothing stopped.
-  The stop is recorded before it waits, so a Caller that stops waiting loses nothing: the messages still end
-  `canceled`, after a restart too. A running tool ends when it honors its abort signal, which a tool must; until it
-  does, `abort` waits. It reports every message that has not ended and that it stops, one an earlier `abort` is still
-  stopping included. Messages invoked after it are taken as usual.
-- **An `abort` whose answer did not arrive** answers `unknown`: its `signal` was aborted while it waited, or the
-  Agent's storage failed. Whether the stop was recorded is not known, and
-  sending `abort` again is not the way to find out: it would also stop what was sent since, which the first one would
-  have let be. The Caller reads the session's state (`read` with `limit: 0`) and the messages it meant to stop
-  (`getMessage`), and aborts again only if it still wants everything stopped.
-- **`attachment`** returns the bytes behind a ref an entry of this session published, or `undefined`.
-- **`listSessions`** lists the sessions the Agent holds, most recently active first, whoever created them: a channel,
-  a schedule, `invoke` or an app. A session's activity is the newest of its creation, the messages it accepted and the
-  entries it wrote, so one just created or written to leads. A page holds up to `limit` sessions, from 1 (§7.2);
-  `next` is an opaque cursor that `before` takes for the page after it, and a `before` the Agent cannot read as one of
-  its cursors is `invalid_request`. A session that becomes active while a Caller pages moves to the front, so a later
-  page does not list it: a Caller that wants it reads the first page again. What a list shows of each session, its status and its
-  newest entries, is `read`'s. A conversation the harness creates for its own work, such as a subagent's, is not a
-  session: it is not listed, and no operation reaches it.
-
-An unknown session answers `not_found` on every operation, and so does an unknown entry cursor, except `getMessage`
-and `attachment`, which answer `undefined`.
-
-### 5.1 Resuming: replay, snapshot, live
-
-`resume` attaches to the session in three parts:
-
-1. **Replay.** What `replayFrom` asks for: nothing without it, every entry with `{ type: "start" }`, and the entries
-   after `entryId` with `{ type: "after", entryId }`. Replay holds entries only: no live event, and no `state` from
-   the past.
-2. **Snapshot.** Then a `state` event with the session as it is now MUST be sent, even when nothing was replayed. It
-   is the line between the past and the present: a Caller takes the session's status from it, not from the replay,
-   and with `reply` it shows an answer that is being written from where it is.
-3. **Live.** Then live events and new entries, without a gap or a duplicate after the snapshot, and a `done` event for
-   each message that ends. A message's `done` comes before the entries of any message taken after it, also when one
-   commit records both (pi-durable places the next queued message in the commit that ends a run), so a Caller can
-   take a message's events as running from its `user_message` to its `done`. It ends only when the Caller stops
-   reading, or with a `serving_error` (§6).
-
-A Caller coming back to a session it showed before resumes after the last entry it has. One opening a long session
-it never showed reads the newest page and resumes after its last entry.
-
-## 6. Entries and events
+### 6.1 A session's events
 
 ```ts
-interface Entry {
-  id: string;
-  /** The session that wrote it: a fork's history begins with entries its source wrote. */
-  sessionId: string;
-  parentEntryId?: string;
-  timestamp: number;
-  kind: string;
-  data: Json;
-}
-// user_message       { content: ContentPart[], messageId?, idempotencyKey? }
-// assistant_message  { text, thinking?, toolCalls?, outcome?, usage?: Usage }
-// tool_result        { toolCallId, toolName, isError, content: ContentPart[] }
-// compaction         { summary }
-
 type SessionEvent =
   | { type: "entry"; entry: Entry }
-  | { type: "done"; message: DoneMessage }
-  | { type: "state"; state: SessionState }
-  | { type: "message_delta"; channel: "text" | "thinking"; delta: string }
+  | { type: "state"; session: Session }
+  | { type: "delta"; channel: "text" | "thinking"; text: string }
   | { type: "tool_started"; toolCallId: string; name: string; args: Json }
   | { type: "tool_progress"; toolCallId: string; text: string }
-  | { type: "retry_scheduled"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
-  | { type: "serving_error"; error: AgentError };
+  | { type: "retrying"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
+  | { type: "done"; message: Message }
+  | { type: "stream_error"; error: AgentError };
 ```
 
-- Entries are durable, ordered as appended, and each names its parent and the session that wrote it, so a fork shares
-  what it inherited. An entry is the same wherever it is read: the same id and the same data in its session and in
-  every fork that shares it. Its id is the cursor; `timestamp` is milliseconds since the epoch. Images in an entry are refs, read with `attachment`.
-- A `user_message` entry is a message taken, and names it.
-- An `assistant_message` entry is published once it is complete, and gets its id then. While it is being written,
-  `state.reply` holds it as written so far and `message_delta` events add to it. A session writes one agent message at
-  a time, so the deltas need no id: a Caller that attaches mid-answer shows `reply`, appends the deltas that follow,
-  drops what it shows on a `retry_scheduled` (the next attempt starts over), and replaces it with the
-  `assistant_message` entry when that arrives. The deltas can stop short of the entry: its text is the message.
-- An `assistant_message` carries the `usage` of the model response it is. A session's spend is `state.usage` (§5),
-  pi-durable's own ledger of it: every model call it made, failed and aborted attempts and the summaries its
-  compactions wrote included, and what its tools reported. It counts the session's own calls only, and a fork's starts
-  from nothing, so each call counts once across sessions; an entry a fork shares is its source's. No entry records a
-  compaction's summary, so a session's entries add up to less than its `state.usage`.
-- `done` reports a message that has ended.
-- Every other event is live: a Caller that attaches again gets the entries it missed and the snapshot, not the missed
-  deltas.
-- `thinking` is the model's reasoning: a Caller MUST NOT fold it into the answer.
-- `tool_progress` is the current status line of a running tool, each replacing the last; an Agent MAY drop one its
-  Caller has not read. It carries the same trust as the tool's output.
-- `serving_error` is the last event of a `resume` that stops before the Caller does, and says why: the Agent cannot go
-  on serving it (its storage failed: `unavailable`). It ends the stream, not the message, which may still end and be
-  read with `getMessage`; a Caller resumes the session, or asks again, once the Agent is back. No stream stops silently.
-- `retry_scheduled` explains a quiet gap while the agent waits to retry a model call.
+`sessions.events` delivers, in order:
 
-### 6.1 Extending
+1. **Replay**: the entries after the entry `after` names, every entry with `after: "start"`, none without `after`.
+2. **Snapshot**: one `state` event with the session as it is now, even when nothing was replayed. A Caller takes the
+   session's status from it, and with `reply` shows an answer being written from where it is.
+3. **Live**: everything that happens next, with no gap or repeat after the snapshot. A message's `done` comes before
+   the `user` entry of any message taken after it.
 
-Event types, entry kinds, content part types, `info().inputs`, outcome statuses, session statuses and error codes are
-open sets: a later version of this specification may add values. A name this specification defines never contains a
-`.`; a name an implementation adds MUST, under a prefix of its own (`fastagent.plan`). A Caller:
+It ends when the Caller stops reading, or with a `stream_error` event when the Agent cannot go on serving it; that
+ends the stream, not any message. (Not `error`: an `EventSource` delivers an event of that name to the same listener
+as a dropped connection.) A Caller that comes back passes the id of the last entry it received as `after` and continues
+without a gap. What it receives:
 
-- ignores an event type it does not know, and an entry kind or content part type it cannot show;
-- treats a session status it does not know as busy, and an outcome status it does not know as an end that is not
-  `completed`;
-- acts on `retryable` for an error code it does not know.
+- **Entries** are durable: the same id and data wherever they are read, a fork included.
+- **`delta`** adds to the reply being written. Deltas are live only: a Caller that attaches mid-answer shows
+  `state.session.reply`, appends the deltas that follow, drops what it shows on `retrying` (the next attempt starts
+  over), and replaces it with the `assistant` entry when that arrives. `thinking` is the model's reasoning, never part
+  of the answer.
+- **`tool_started`** and **`tool_progress`** are live: a running tool's call, then its current status line, each
+  replacing the last. A `tool_started` may have no `tool_result` when the agent was stopped.
+- **`retrying`** explains a pause while a model call waits to be tried again.
+- **`done`** reports a message that has ended.
 
-## 7. Results, errors and limits
+### 6.2 A message as it is written
 
 ```ts
-interface AgentError {
-  code: string;
-  message: string;
-  retryable: boolean;   // whether the same request may succeed if sent again
-  details?: Json;
-}
+type MessageStreamEvent = { type: "message"; message: Message } | SessionEvent;
 ```
 
-### 7.1 Error codes
+`messages.stream` sends the message and delivers, first, a `message` event with it as recorded, then the session's
+events that belong to it: from its `user` entry, once the agent takes it, through its `done`. A send whose key the
+session has seen delivers that message the same way: one still running, its entries so far, then a `state` event
+whose `reply` holds what is being written, then live; one that has ended, its entries through its answer, then its
+`done`.
 
-| Code | When | `retryable` |
-|---|---|---|
-| `invalid_request` | A malformed request; a content part the Agent does not take; a key without `sessionId`; `limit` above the maximum | false |
-| `not_found` | An unknown session, fork source or entry cursor | false |
-| `busy` | Admission refused; `details.reason` is `running` (`whenBusy: "reject"`), `queue_full` or `capacity` | true |
-| `missing_model` | The session names no model the agent has: a message is refused with it, or, when the model goes before it is answered, ends with it | false |
-| `auth_required` | The model provider has no credential | false |
-| `model_error` | The model call failed | by the provider's answer |
-| `unavailable` | The Agent's storage cannot answer now | true |
-| `internal` | Anything else | false |
+Its entry events carry their ids, so a Caller whose stream dropped continues on the session's events with `after` set
+to the last entry it received, and checks the message's end with `messages.get`.
 
-A message's `failed` outcome carries `missing_model`, `auth_required`, `model_error` or `internal`.
+## 7. Errors and limits
 
-### 7.2 Limits
+| Code | When | `retryable` | HTTP |
+|---|---|---|---|
+| `invalid_request` | A malformed request; a content part or a tool the agent does not take; a limit exceeded. A body over the HTTP limit is this code with `details.reason: "too_large"` | false | 400; 413 for a body too large |
+| `unauthorized` | No key, or a key the instance does not hold (HTTP only) | false | 401 |
+| `not_found` | An unknown session, message, fork source or entry cursor | false | 404 |
+| `busy` | `details.reason: "running"`: refused by a busy session (`whenBusy: "reject"`) | true | 409 |
+| `busy` | `details.reason: "queue_full"`: the session's queue is full | true | 429, with `Retry-After` |
+| `busy` | `details.reason: "capacity"`: the process holds as many messages as it takes | true | 503, with `Retry-After` |
+| `missing_model` | The session names no model the agent has | false | 409 |
+| `missing_tool` | The session's `tools` names a tool the agent no longer has (`details.tools`) | false | 409 |
+| `unconfirmed` | A send may have been recorded and could not be confirmed (§5.2); `details` holds what is known | false | 500 |
+| `unavailable` | The Agent cannot answer now (its storage, or over HTTP the connection or a server on the way), and the same request may be sent again: nothing was recorded, or repeating it does no harm (an update or a cancel again, another compaction, an empty session a lost `create` left behind). A send that may have been recorded is `unconfirmed` instead (§5.2) | true | 503, with `Retry-After` |
+| `internal` | Anything else | false | 500 |
+
+A message's `failed` status carries `missing_model`, `auth_required`, `model_error` (retryable by the provider's
+answer) or `internal` in its `error`.
 
 | Limit | Value |
 |---|---|
-| Queued messages per session, steered ones not yet taken included | 20; the next is rejected `busy` / `queue_full` |
-| Messages in flight per process, queued and taken together | Implementation-defined (the reference implementation: 100); past it, `busy` / `capacity` |
-| `read` and `listSessions` page | `limit` defaults to 100; above 500 is `invalid_request`. A `read` page MAY hold fewer entries than `limit` (the reference implementation stops at 4 MiB of JSON) but holds at least one when any exist past the cursor |
+| Queued messages per session, steered ones not yet taken included | 20, then `busy` / `queue_full` |
+| Messages queued and running per process | 100, then `busy` / `capacity` |
+| A page (`entries`, `list`) | `limit` defaults to 100, at most 500. An `entries` page MAY hold fewer than `limit` (at most 4 MiB of JSON) but holds at least one when any exist; only an absent `next` or `prev` says the history ends there |
 | `idempotencyKey` | 1 to 256 characters |
+| `wait` | In seconds. Over HTTP the server waits at most 60, a larger value included, and answers with the message as it is then; `connectAgent` asks again until the Caller's `wait` is met |
 
-A Caller MUST NOT infer the end of the history from a short page: only an absent `next` (or `prev`) says so.
+### 7.1 Extending
 
-## 8. Security model
+Event types, entry kinds, content part types, statuses and error codes are open sets: a later version may
+add values. A name this specification defines contains no `.`; one an implementation adds MUST, under a prefix of its
+own (`fastagent.plan`). A Caller ignores an event type it does not know and an entry kind it cannot show, treats an
+unknown session status as busy, and acts on `retryable` for an unknown error code.
 
-An Agent is one trust domain. It authenticates no one, and whoever holds it can do everything it can: list, invoke
-into, read, resume, configure, abort and fork every session, with the agent's tools acting with the
-authority of the process it runs in.
+A message's ends are a closed set: `completed`, `incomplete`, `failed` and `canceled`, and no later version adds one.
+Any other status, known or not, is a message that has not ended, which a Caller goes on waiting for or watching. So a
+later version can add a state in which a message waits (for a person's answer, say) without an older Caller taking it
+for an end.
 
-- **The API is not on the network.** Its Callers are code in the process that runs the agent (§10). Whoever puts the
-  agent on a network decides who may reach it, and how: a channel MUST verify that a request comes from its platform,
-  by the platform's signature or token, and an app that embeds the agent serves its own routes behind its own
-  authentication.
-- **Everyone who reaches the agent is inside its trust domain.** A platform's signature proves the platform, not the
-  person: everyone who can message a channel's bot can ask the agent for anything its tools reach, every other chat's
-  conversation included, and so can every user an embedding app lets through. Sessions in one Agent are not kept from
-  each other: the agent's tools reach its storage and its files, whichever session asked them to.
-- **One instance per customer.** People who must not read each other's conversations get an instance each, with its
-  own storage, process and files, or an agent whose tools reach neither ([architecture.md](design/architecture.md) §2). A
-  public bot's users and its owner's other chats are one trust domain unless they are split this way.
-- **A session id is not a credential.** Ids are the Agent's names, and may be sequential.
+## 8. In process (TypeScript)
 
-## 9. Conformance
+The interface is §4's. The package's entry points are one per kind of user:
 
-### Agent MUST
+| Import | For | Holds |
+|---|---|---|
+| `@fastagent-sh/fastagent` | An app or tool on Node or Bun | `openAgent`, the authoring functions (`defineAgent`, `defineChannel`, `defineSchedule`, `needs`), `AgentError` and the types |
+| `@fastagent-sh/fastagent/client` | A program anywhere `fetch` runs (Node, Bun, Deno, Workers) | `connectAgent`, `AgentError` and the types |
+| `@fastagent-sh/fastagent/<channel>` | An agent's channel file | The first-party channels |
 
-1. **One answer, one end.** An invoke answers once: a receipt, a rejection that recorded nothing, or `unknown` when
-   submission or obtaining the receipt failed without proving refusal, with every id already known. A message ends
-   once, and its `wait()` resolves once,
-   with that end or `unfinished`, never as a refusal.
-2. **Failures are values and events.** `invoke`, `wait()` and the other operations resolve rather than reject (§2),
-   and iterating `resume` MUST NOT throw or stop without saying why: a message the agent failed to answer ends with a
-   `failed` outcome, a refusal is a rejection, and a `resume` the Agent cannot go on serving ends with
-   `serving_error`.
-3. **Detaching is not stopping.** When the Caller stops reading a `resume`, or aborts the `signal` of a `wait()` or an
-   `abort`, the Agent MUST release what it held for that call and MUST NOT stop the agent for it. Only `abort` stops
-   it: a recorded stop goes on when its Caller stops waiting.
-4. **Durable messages.** An accepted message is recorded before its receipt (§3.4), ends exactly once, recorded
-   before it is reported, and survives a restart of the process (§4.1). The Agent never redoes a message on its own.
-5. **One present.** A `resume` sends its `state` snapshot after what it replays and before anything live (§5.1).
+```ts
+function openAgent(dir: string, options?: { model?: string; credentials?: CredentialStore }): Promise<LocalAgent>;
+function connectAgent(url: string, options: { apiKey: string }): Agent;
 
-### Caller MUST
+interface LocalAgent extends Agent {
+  /** Channels, schedules and wake-ups, `/health`, and the HTTP API (§9) when a key is configured. */
+  serve(options?: { apiKeys?: string[] }): Promise<Service>;
+  /** pi-durable's own API, for operating the agent. */
+  readonly harness: Harness;
+  close(): Promise<void>;
+}
 
-6. **Forward compatibility.** A Caller MUST handle values it does not know as §6.1 says.
-7. **Relay passthrough.** Middleware that relays a stream MUST pass unknown events through unchanged.
+interface Service {
+  /** For an app's own server to route to. */
+  fetch(request: Request): Promise<Response>;
+  /** Or a server of its own, Node's `http` server or `Bun.serve`: the one way to start one. Answers the port it bound. */
+  listen(port: number, host?: string): Promise<number>;
+  ready: Promise<void>;
+  /**
+   * Ends the API's event streams, each with a `stream_error`, then stops the server, giving requests in flight 500 ms
+   * before it ends them, then the channels and schedules.
+   */
+  close(): Promise<void>;
+}
+```
 
-### Not guaranteed
+`openAgent` does what `fastagent dev` and `start` do before they serve: it reads the definition, builds its code with
+the secrets it declares (a required secret without a value refuses), installs its declared environment, clones its
+content and opens the instance's storage, which one process holds at a time. It resolves `dir` to an absolute path.
+Nothing reaches the agent until `serve`.
 
-- **Atomic messages.** A message that ends `failed` or `canceled` may have recorded entries and run tools with
-  effects. `retryable` says whether sending again may succeed, not that doing so is free of repeated effects.
-- **Paired tools.** A `tool_started` may have no `tool_result` when the agent was stopped.
-- **Grouping.** Which messages the agent answers together, and whether they share an answer.
+### 8.1 Examples
 
-### The conformance suite
+An app that embeds an agent:
 
-One executable suite, run against the Agent, checks:
+```ts
+import { openAgent } from "@fastagent-sh/fastagent";
 
-| Area | Checks |
+const agent = await openAgent("./support-agent");
+const session = await agent.sessions.create();
+const message = await agent.messages.send({ sessionId: session.id, content: "Where is order 9231?" }, { wait: 120 });
+console.log(message.status, message.answer?.text);
+```
+
+The same program against a deployed agent changes one line; its 120-second wait is two requests of 60 (§4):
+
+```ts
+import { connectAgent } from "@fastagent-sh/fastagent/client";
+
+const agent = connectAgent("https://support.example.com", { apiKey: process.env.SUPPORT_AGENT_KEY! });
+```
+
+An answer as it is written:
+
+```ts
+for await (const event of agent.messages.stream({ sessionId, content: "Summarize the ticket" })) {
+  if (event.type === "delta" && event.channel === "text") render(event.text);
+  if (event.type === "done") finish(event.message);
+}
+```
+
+Serving the agent inside an app's own server, on Hono, whose `mount` strips the prefix before the agent's routes
+match:
+
+```ts
+const service = await agent.serve();
+app.mount("/agent", service.fetch);
+```
+
+On a server that does not take a Fetch handler (Express, a plain `node:http` one), the app bridges `service.fetch`
+itself, with `getRequestListener(service.fetch, { overrideGlobalObjects: false })` from `@hono/node-server`, say;
+FastAgent ships no bridge of its own.
+
+A custom channel, from the agent's `src/channels/`:
+
+```ts
+import { defineChannel } from "@fastagent-sh/fastagent";
+
+export default defineChannel(({ agent, sessionFor, turn }) => ({
+  "POST /my-chat": async (request) => {
+    const { chatId, text, messageId } = await verifyAndParse(request); // the platform's signature, checked first
+    // Answered at once: a platform redelivers a webhook that gets no answer within seconds.
+    turn(chatId, async () => {
+      const sessionId = await sessionFor(chatId);
+      const message = await agent.messages.send({ sessionId, content: text, idempotencyKey: messageId }, { wait: 600 });
+      await replyTo(chatId, message.answer?.text ?? "Sorry, that did not work.");
+    });
+    return new Response("ok");
+  },
+}));
+```
+
+What a channel is handed beside the agent, and all it is handed. The first-party channels are written against the
+same context as any other.
+
+- **`turn(place, work)`** runs `work` after the route has answered, one at a time per place (a chat, a thread) in the
+  order they arrived, and counts it as work in flight, which `dev`'s restart and AgentCore's `/ping` wait for. It
+  keeps no record: a turn the process stops before it runs is lost unless the platform delivers its event again, which
+  the platform's message id as `idempotencyKey` makes safe. A channel that must not lose one keeps its own record in
+  `stateDir`, as the first-party channels do.
+- **`sessionFor(key, { forkFrom? })`** is the session the conversation `key` talks in, from the channel's own map of
+  conversations to sessions: the one recorded, or a new one created and recorded before it is returned, so that a
+  message is sent only into a recorded session. `forkFrom` answers what a new one forks from (`{ sessionId, entryId? }`,
+  or nothing for an empty one), and is asked only when `key` has no session yet, since finding a thread's branch point
+  reads the room's messages. Calls for one key are taken one at a time, so two first messages of a new conversation
+  get one session.
+- **`recordedSession(key)`** is the session recorded for `key`, without making one: what a stop command asks of a
+  place nothing was said in.
+- **`stateDir`** is the channel's own directory, `<state root>/channels/<its file's name>`, made at the mount, for the
+  records it must keep (a turn's intent before it answers the platform, the platform events it has seen).
+
+## 9. HTTP
+
+### 9.1 Requests
+
+- The base is the deployment's URL; every route is under `/v1`. Requests and responses are JSON, except a session's
+  or a message's stream (`text/event-stream`) and an attachment (its own type).
+- **Authentication**: `Authorization: Bearer <key>`. The keys are `FASTAGENT_API_KEY` in the instance's environment,
+  several separated by commas so a key can be replaced without a gap. A wrong or missing key is `401 unauthorized`.
+  With no key configured the API is not served, and the startup report says so. `/health` and the channels' routes
+  are outside the API and unchanged: each channel verifies its platform.
+- **No CORS**: the key is a credential for the whole instance, so a browser never holds it. A browser app calls its own
+  backend, which calls the agent.
+- A request body over 32 MiB is `413`, `invalid_request` with `details.reason: "too_large"`. A request the API
+  cannot read (its path, query, headers or body, or a body sent as another type than `application/json`) is
+  `400 invalid_request`, and a route it does not have is `404 not_found`.
+
+### 9.2 Routes
+
+| Method and path | Operation | Answers |
+|---|---|---|
+| `GET /v1/agent` | `info` | `AgentInfo` |
+| `GET /v1/usage` | `usage` | `Usage` |
+| `GET /v1/openapi.json` | — | This API as an OpenAPI 3.1 document, generated from the contract the server and `connectAgent` are built from, so it cannot describe another API than the one served |
+| `POST /v1/sessions` | `sessions.create` | `201` `Session` |
+| `GET /v1/sessions?limit&after` | `sessions.list` | `Page<Session>` |
+| `GET /v1/sessions/{sessionId}` | `sessions.get` | `Session` |
+| `PATCH /v1/sessions/{sessionId}` | `sessions.update` | `Session` |
+| `GET /v1/sessions/{sessionId}/entries?after&before&limit` | `sessions.entries` | `Page<Entry>` |
+| `GET /v1/sessions/{sessionId}/events?after` | `sessions.events` | An event stream (§9.3) |
+| `POST /v1/sessions/{sessionId}/cancel` | `sessions.cancel` | `{ "stopped": [...] }`, once the stop is recorded |
+| `POST /v1/sessions/{sessionId}/compact` | `sessions.compact` | `202` |
+| `GET /v1/sessions/{sessionId}/attachments/{ref}` | `sessions.attachment` | The image's bytes, with its `Content-Type` |
+| `POST /v1/sessions/{sessionId}/messages` | `messages.send`, `messages.stream` | `Message`, or an event stream with `"stream": true` |
+| `GET /v1/sessions/{sessionId}/messages/{messageId}?wait` | `messages.get` | `Message` |
+| `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | `messages.get` by key | `Message`; `404` when the session has seen no such key |
+
+`POST …/messages` takes the `SendRequest` without its `sessionId`, which is in the path, plus `wait` (§4's option)
+and `stream: true` for `messages.stream`: `{ content, whenBusy?, wait?, stream? }`; a streamed message is watched,
+so `wait` beside `stream: true` is refused, `invalid_request`. A request whose options may be left out
+(`POST /v1/sessions`, `…/compact`) may come without a body. Its key is the `Idempotency-Key`
+header, percent-encoded there as in the `by-key` path, since a header holds neither every character a key may have
+nor the spaces around it (a key of letters, digits and `-_.~` reads the same either way). A send whose key the session has seen answers with that message, as
+§5.2 says. Every `wait` is in seconds, and the server waits at most 60 (§7).
+
+### 9.3 Event streams
+
+Server-sent events. Each event is `event: <type>` and `data: <the event as JSON>`. An `entry` event also carries
+`id: <entry id>`, and only entry events do, so a client's `Last-Event-ID` is the last entry it received, and
+reconnecting `GET …/events` with that header continues without a gap. A `Last-Event-ID` header takes precedence over
+`?after=`: an `EventSource` reconnects to the URL it opened, `?after=start` included, and adds the header, and the
+header is where it got to. `?after=start` replays the whole history. The server sends a comment line at least every
+15 seconds so that proxies keep the connection open.
+
+### 9.4 Errors
+
+A refused request answers the status §7 gives its code, with `{ "error": AgentError }`. `Retry-After` is on the
+`429` and `503` answers §7 names.
+
+```bash
+curl -s https://support.example.com/v1/sessions -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d '{}'
+SEND=$(uuidgen)   # one key per message: running the next line again is the same message
+curl -s https://support.example.com/v1/sessions/$SESSION/messages -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -H "Idempotency-Key: $SEND" \
+  -d '{"content": "Where is order 9231?", "wait": 60}'
+```
+
+### 9.5 Where it is served
+
+Wherever the agent is served on a port of its own: `fastagent dev` and `start`, and the Docker, Fly and Railway
+deployments, beside the channels' routes and `/health`. Not on AgentCore in this version: its runtime is reached only
+through `/invocations`, and the API there needs its own design (a route through the forwarder Lambda, with response
+streaming).
+
+### 9.6 Keys and checks, from the CLI
+
+- **`fastagent deploy` gives a deployment a key.** When `.secrets/production/.env` holds no `FASTAGENT_API_KEY`, it
+  writes one, generated there once the pre-flight passes, so that what it deploys can be called; its report
+  names the API's URL and the command that checks it. The key travels to the host with the other values (`deploy`
+  carries the value file), and replacing it is editing that file and deploying again, with both keys listed while the
+  Callers move. A definition that serves no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then
+  writes no key, and no serve answers `/v1`, whatever key its environment holds, one an earlier deploy left on a host
+  included. Not on AgentCore, which serves no API either way (§9.5).
+- **`fastagent invoke --url <base>` checks a deployed agent** the way `invoke` checks a local one: the same message,
+  output, `--json`, `--session` and exit code, over `connectAgent`, with `--key` or the first key of
+  `FASTAGENT_API_KEY` in `.secrets/production/.env`. `--model` sets the session's model there; without it, the
+  deployment's default answers. A coding agent that checked the agent before deploying it checks the deployment with
+  the same command.
+
+## 10. Security model
+
+- **One instance is one trust domain.** Whoever holds a key can do everything the API can, in every session, and the
+  agent's tools act with the authority of the process that runs them. Sessions in one instance are not kept from each
+  other.
+- **One instance per customer.** People who must not read each other's conversations get an instance each. The key
+  keeps everyone else out; it does not divide an instance.
+- **A key is a credential for the instance**, kept server-side, sent only over HTTPS, and replaced by adding the new
+  one, moving the Callers, and removing the old.
+- **Everyone a channel lets through is inside the trust domain.** A platform's signature proves the platform, not the
+  person: everyone who can message a channel's bot can ask the agent for anything its tools reach.
+- **A session id is a name, not a credential.**
+
+## 11. Conformance
+
+One executable suite runs against the in-process `Agent` and against `connectAgent` over a served one, so both
+bindings answer the same way. It checks:
+
+- acceptance before the answer; a refusal the Agent answers records nothing, every one but `unconfirmed`; a send whose storage
+  fails once it is recorded rejects `unconfirmed` with its `messageId`, never `unavailable`;
+- one end per message, kept across a restart, with no tool run twice; idempotent sends, concurrent ones included, and
+  `connectAgent`'s own key on a send without one;
+- `whenBusy`; `cancel` answering once its stop is recorded, and its effect on running and queued messages;
+- `get` by id and by key, with `wait`, a `wait` over 60 seconds included, which ends the same way in both bindings;
+- a `signal` ending a wait or a stream and leaving the message going on;
+- the three parts of `events`, and a reconnect without a gap, by `after` and by `Last-Event-ID` over a URL that says
+  `?after=start`;
+- `stream` for a new, a queued, a running (its `state` before live) and an ended message;
+- `entries` paging; forks and their settings; `update`, `compact` and `list`; a session whose `tools` names a tool the
+  agent lacks refusing `missing_tool`;
+- the errors and limits of §7; and over HTTP, the key, each code's status, and the event stream's ids.
+
+## 12. Out of scope
+
+| | Why |
 |---|---|
-| Invoke | An invoke answers with a receipt once the message is recorded, without waiting for it to be answered; a rejection records nothing; an invoke whose submission fails without proving refusal, or whose status cannot be read after acceptance, answers `unknown`, never a rejection, carrying every known id; a duplicate whose receipt cannot be read does the same; after reopening the storage, querying by id or retrying with the same key finds one message and produces no repeated tool effect; an invoke without `sessionId` gets a new session, and one into an unknown session is `not_found`; a content part outside `info().inputs` is `invalid_request`; a `/<name>` among `info().commands` is expanded for the model while its `user_message` holds the text as sent, and an unknown `/<name>` is sent as written; `wait()` resolves with the message's `done`, also when it is called after the message ended, and with `unfinished`, never a rejection, when the storage fails or its `signal` is aborted, which leaves the message going on; a receipt whose `wait()` is never called holds nothing; every result's data and every event is JSON |
-| Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is `queued` at position 0 until taken, then taken while the session is still busy; a steer the agent did not take before it stopped is taken no later than the messages queued with `queue`; an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
-| Idempotency | A key without `sessionId` is `invalid_request`; a key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`, and its `wait()` resolves with the same end; concurrent invokes with one key make one message |
-| Messages | `getMessage` by id and by key follows a message through queued, taken and done, and answers `undefined` for an unknown one; a message whose Caller never waits or watches is done; `abort` stops the taken message and withdraws the queued ones, answers once they have ended `canceled`, and reports them, and reports nothing on an idle session; a second `abort` while a tool that ignores its signal keeps the first one waiting reports the same messages; an `abort` whose `signal` is aborted answers `unknown` and its stop, once recorded, still ends the messages `canceled`; messages invoked after a failed or aborted one are taken, one invoked while an abort is still ending its messages included, also when that `abort`'s `signal` was aborted; only a `completed` or `max_tokens` message has an answer, never a reply whose tool calls ran |
-| Restart | A message accepted just before a restart is answered after it, and `getMessage` finds it; queued messages survive and are taken; a message an `abort` was stopping when the process stopped ends `canceled` after the restart, unanswered; no message is redone (a tool's effect count does not grow) |
-| Resuming | `resume` without `replayFrom` replays nothing; with `start` it replays every entry, with `after` the entries after the cursor; it sends one `state` snapshot after the replay and before anything live, and a `done` for each message that ends, before the `user_message` of the message taken after it, also when one commit ends one and places the other; a `resume` opened before an invoke delivers that message's `user_message` and then its answer, and the events before its `user_message` are another message's; one attached mid-answer gets `state.reply`, and it with the deltas that follow is a prefix of the `assistant_message` entry that ends that answer; a reconnect after the last entry it had delivers each entry exactly once; when the storage fails it ends with `serving_error` instead of hanging; an unknown session or cursor is a single `rejected` |
-| Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a taken message's `user_message` names it; every `assistant_message` carries `usage`; `state.usage` counts the session's own spend, which a fork starts from nothing; an entry a fork shares has the same id, data and `sessionId` read from the fork as from its source; the state moves idle → running → idle |
-| Sessions | A new session stores its chosen model and thinking level in the creating commit and keeps them after a restart; `configure` changes either, the state and a `resume` snapshot read it back, a model the agent lacks refuses the next message `missing_model` and configuring an available one lets it be answered, and an unknown session or empty settings are refused; a fork shares the history up to its entry and none of the messages, inherits the source's settings at that entry (its current settings if empty), applies supplied model and thinking level fields independently, and leaves the source unchanged; an unknown fork source is `not_found` |
-| Listing | `listSessions` lists every session created through the API, most recently active first: creating a session, accepting a message into one and writing its entries each move it to the front; it pages by `before` and `limit`, repeating no session and skipping none that did not change; a `before` the Agent cannot read as one of its cursors, a session id included, is `invalid_request`; the order survives a restart |
-| `stream()` | It delivers a new message's events after its `user_message` through its `done`, and only its own message's for one queued behind another; a queued duplicate's once it is taken; a taken duplicate's from its `user_message` on, what it already wrote included, stopping at its answer when it ended before the stream reattached; a done duplicate's entries through its answer, then its `done`; the message's `canceled` `done` when it is aborted; and the invoke's refusal, and an unknown session's, recording nothing |
+| Deleting a session | pi-durable deletes nothing. A deployment that must erase a conversation cannot yet |
+| A message's own usage | Messages handled together share their calls (§3) |
+| A structured result | No Caller needs one yet. An agent whose callers need a typed result defines a tool that takes it as its arguments, and they read that tool's `tool_result` entry |
+| Asking the user mid-message | Added later, under §7.1 |
+| A webhook when a message ends | Added later: `get` with `wait` covers a Caller that can wait, polling the rest |
+| Files other than images | |
+| A2A and MCP bindings | Each maps onto this model (a session is A2A's `contextId`, a message its Task; a message is an MCP tool call); designed when a Caller needs one |
+| The API on AgentCore | §9.5 |
 
-## 10. No network binding
+## 13. Changes from v1
 
-The API is TypeScript, in process. FastAgent serves it over no network: a deployment's served routes are its channels'
-own, which MUST verify that a request comes from their platform (§8), and its host's (AgentCore's, behind IAM). An app that wants the agent on its own
-network writes routes over this API, behind its own authentication, with `stream()` (§3.1) for an answer as it is
-written; every result and event is JSON (§2), so it can send them on as they are. A remote binding is designed when a
-Caller needs one, with that Caller's own requirements: who hosts the agent, and who decides who reaches it.
-
-## 11. Out of scope
-
-- **Operating the agent**: changing a session's tools, extensions or instructions, compaction, inspecting sessions,
-  and anything else its harness can do. These are the harness's own API, in the process that runs the agent.
-- **Deleting sessions**: pi-durable has no deletion, so nothing is deleted.
-- **Identity, authentication, rate limits**: an Agent is one trust domain, and whoever puts it on a network decides
-  who reaches it (§8).
-- **Asking the user**: an agent that waits for a person's approval or answer mid-message. A later version adds it
-  under §6.1's rules.
-- **Files other than images in a prompt.**
-- **A network binding, other transports and protocols**: they sit outside and call this API (§10).
-- **The agent definition, packaging and deployment**: [architecture.md](design/architecture.md).
-
-## 12. Changes
-
-From v0.1, the last released protocol:
-
-| v0.1 | v1 |
-|---|---|
-| `invoke(scope, prompt)` | `invoke(request)`: an optional `sessionId`, `content` parts, `idempotencyKey`, `whenBusy` |
-| `Scope`, Caller-named sessions, `scope.parentSession` | The Agent names sessions; forking is `createSession` with `from` |
-| `text`, `thinking` events | `message_delta`, adding to `state.reply` until the `assistant_message` entry |
-| `tool_ended` | The `tool_result` entry |
-| `retrying` | `retry_scheduled` |
-| A turn, with no id | A message, with an id, a status (`getMessage`) and an outcome that outlive its Caller |
-| `completed`, `failed` endings | The message's `done`, with its outcome; a refusal is `{ ok: false, error }` |
-| `completed.data` | Gone: a structured result waits for a design |
-| MUST 3: the Agent stops when the Caller stops reading | The Caller detaches; `abort` stops the agent |
-| A busy session rejected with `session_busy` | `whenBusy`; `busy` with a reason |
-| The session control extension (`steer`, `followUp`, `abort`, …) | `whenBusy` and `abort` |
-| `collect(events)` | `wait()` |
-| Nothing about history | `read`, `resume` (replay, snapshot, live), `attachment`, and a durable history of entries |
+| v1 | v2 | Why |
+|---|---|---|
+| In process only, no network binding | In process and HTTP, with a key | Agents are called like services |
+| Ten functions on `Agent` | `sessions.*`, `messages.*`, `info`, `usage` | Named by what they act on, as the HTTP routes are |
+| `info()`, synchronous | `info()`, a `Promise` | It is a request over HTTP |
+| `invoke` | `messages.send` | Says what it does |
+| `invoke` without `sessionId` creates a session; a key then needs a session | A message always names its session | One way to start, and no rule about keys without sessions |
+| Results as values: `ok`, `error` | Resolve, or reject with `AgentError` | One failure shape, as HTTP has |
+| `unknown` on an invoke whose receipt could not be read | `unconfirmed`, not retryable, with what is known; `connectAgent` keys its own sends | A key makes the resend safe; without one, nothing may resend |
+| `unknown` on an `abort` that did not answer | The same rule, written for `cancel` (§4): read before cancelling again | A second stop also stops what was sent since |
+| `wait()` on the receipt, `unfinished` when it could not tell | `send` and `get` with `wait`, which answers the status as it is then | Waiting is an option of a request, and works over HTTP |
+| A `signal` on `wait()` and `abort` | A `signal` on `send`, `stream` and `get` | Every wait can be let go of; none stops the message. `cancel` answers in about a millisecond (architecture.md §6.1), so it needs none |
+| `stream(agent, request)` in the Caller | `messages.stream`, served by the Agent | The hard part (a message that is queued, running or ended) is done once |
+| `status: "done"` with `outcome.status` | One `status` with a closed set of ends (§7.1); `max_tokens` is `incomplete` | One field to read, and room for a later waiting state |
+| `taken` | `running` | |
+| `getMessage` answers `undefined` for an unknown message | `messages.get` rejects `not_found` | One way to say "no such thing" |
+| `read` (state and entries; `limit: 0` for the state) | `sessions.get` and `sessions.entries` | One thing each |
+| `resume` with `replayFrom` | `sessions.events` with `after` | Named for what it is; `after` is SSE's `Last-Event-ID` |
+| `listSessions({ before })`, listing `{ sessionId }` | `sessions.list({ after })`, listing `Session` | A list a client can show without reading each session |
+| `createSession({ from })` | `sessions.create({ forkFrom })` | Says what it is |
+| `configure` (model, thinking level) | `sessions.update`, also `instructions` and `tools` | |
+| — | `missing_tool` | A removed tool refuses, as a missing model does, rather than running with less |
+| `abort`, answering once its messages had ended | `sessions.cancel`, answering once its stop is recorded | An answer that a proxy's timeout cannot outlast |
+| — | `sessions.compact` | A Caller may compact a long session |
+| `attachment` answers base64, or `undefined` | `sessions.attachment` answers bytes, or rejects `not_found` | Bytes are what HTTP sends |
+| — | `usage()`, `info().models`, `info().tools`, `defaultModel` | Spend, and what a session may be set to |
+| — | `GET /v1/openapi.json` | A Caller in another language generates its client from it |
+| `user_message`, `assistant_message`, `message_delta`, `retry_scheduled` | `user`, `assistant`, `delta`, `retrying` | "Message" means only what a Caller sends |
+| `serving_error` | `stream_error` | Says what it ends; not `error`, which `EventSource` gives to its connection listener |
+| The `assistant` entry's `outcome` (`failed`, `aborted`, `truncated`) | Its `stop` (`failed`, `aborted`, `max_tokens`) and `error` | The message's status is the outcome; an entry says how its reply stopped |
+| `position`, `duplicate`, `protocolVersion`, `context: "recent"` on a fork, the Middleware role; `info().inputs`, the session's `taken` and `queued`, an entry's `parentEntryId` and `sessionId`, a `user` entry's `idempotencyKey` | Gone | Nothing used them |
+| `openServing`, `mountAgentService`, `serveNode`, `nodeListener`, `/core`, `/node`, `/pi` | `openAgent`, `serve` and its `listen`, and the entry points of §8 | One entry per kind of user, one way to start a server |

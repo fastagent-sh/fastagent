@@ -1,5 +1,5 @@
 /**
- * The Agent API (agent-api.md) over pi-durable: a Harness opened on the instance's storage, and the operations read
+ * The Agent API (SPEC.md) over pi-durable: a Harness opened on the instance's storage, and the operations read
  * from and submitted to it. Admission (a key's lookup, the limits and the submission) is one step per process, since
  * one process owns a storage.
  */
@@ -68,7 +68,7 @@ import { releaseWaitingQueues } from "./release.ts";
 import { type Sessions, trackSessions } from "./sessions.ts";
 import { messageStream } from "./stream.ts";
 
-/** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (agent-api.md §5.1). */
+/** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (SPEC.md §5.1). */
 export interface AgentCommand {
   name: string;
   description?: string;

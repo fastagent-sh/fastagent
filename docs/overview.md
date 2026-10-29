@@ -38,7 +38,7 @@ machine has is bound in `context.local.json` alone: it stays here, and a deploym
 ## What FastAgent provides
 
 1. **The agent is a directory**: its prompt files (`SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`, its code under `src/` and reference material are files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as its [content](configuration.md#content): files the agent reads and changes there, none of which becomes part of its prompt.
-2. **One API**: the [Agent API](SPEC.md), in process: sessions the Agent names, messages whose outcome outlives whoever sent them, and a durable history every Caller reads the same way.
+2. **One API**: the [Agent API](SPEC.md), in process and over HTTP: sessions the Agent names, messages whose outcome outlives whoever sent them, and a durable history every Caller reads the same way.
 3. **One harness**: [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable), which keeps every conversation in the instance's storage and answers an accepted message after a restart. Models come from pi-ai, with your own providers in code.
 4. **Developer workflow**: `init`, `info`, `content`, `env`, `dev`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`. Every check is a command a coding agent can run and read.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, and a small public kit for your own channels.

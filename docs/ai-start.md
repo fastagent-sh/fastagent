@@ -388,7 +388,7 @@ See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and
 Install FastAgent in the application package that imports it as well as in the agent package that imports it; keep
 package versions aligned.
 
-- To call the agent from the app, open it with `openAgent(agentDir)` and use the [Agent API](design/agent-api.md) on
+- To call the agent from the app, open it with `openAgent(agentDir)` and use the [Agent API](SPEC.md) on
   it: `sessions.create`, then `messages.send` with `wait`, or `messages.stream` for an answer as it is written. To serve
   it to the app's own users, write the routes the product needs over these calls, behind the app's authentication.
 - To serve the agent's channels and schedules from the app too, `await agent.serve()`, mount its `fetch` (or `listen`

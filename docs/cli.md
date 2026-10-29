@@ -242,7 +242,7 @@ Sends one message and exits: the answer text to stdout, tool and diagnostic line
 unless the message completed. This is the check a coding agent runs: one message, its answer, and an exit code.
 
 - **`--json`** prints JSON lines on stdout instead: the message's events as the
-  [Agent API](design/agent-api.md) §6.2 delivers them, first `{"type": "message", "message"}` as it was recorded,
+  [Agent API](SPEC.md) §6.2 delivers them, first `{"type": "message", "message"}` as it was recorded,
   then `entry`, `delta`, `tool_started`, ..., ending with its `done`. A message that ends another way ends with the
   line that says why: `{"type": "rejected", "error"}` when the agent refused it, a `stream_error` event, or
   `{"type": "unfinished", "reason"}`. The exit code is the same as without `--json`.
@@ -252,7 +252,7 @@ unless the message completed. This is the check a coding agent runs: one message
   `FASTAGENT_MODEL`, the config), a continued session included.
 
 **`--url <base>`** sends the message to the agent served at `<base>` instead, over its
-[Agent API](design/agent-api.md#9-http): the same output, `--json`, `--session` and exit code, nothing opened here. It
+[Agent API](SPEC.md#9-http): the same output, `--json`, `--session` and exit code, nothing opened here. It
 calls with `--key`, or the first key of `FASTAGENT_API_KEY` in the agent's `.secrets/production/.env`, which `deploy`
 writes; with neither, it exits 2 and says where a key comes from. `--model` sets that session's model on the
 deployment; without it, the deployment's default answers. A coding agent that checked the agent with `invoke` checks

@@ -372,7 +372,7 @@ A serve answers its channels' routes, each of which verifies that a request come
 ## The Agent API over HTTP
 
 With `FASTAGENT_API_KEY` set (in `.secrets/.env` for `dev`, `.secrets/production/.env` for a deployment), a serve also
-answers the [Agent API](design/agent-api.md#9-http) under `/v1`, to a request that presents one of its keys as
+answers the [Agent API](SPEC.md#9-http) under `/v1`, to a request that presents one of its keys as
 `Authorization: Bearer <key>`; without it, `/v1` is not served, and the startup report says which. Several keys,
 separated by commas, let a key be replaced without a gap: add the new one, move the Callers, remove the old. The key is
 a credential for the whole instance ([security boundary](design/security-boundary.md)): keep it on a server, never in a

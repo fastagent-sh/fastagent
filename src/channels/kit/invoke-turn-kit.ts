@@ -31,7 +31,7 @@ import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
 
 /**
  * What a turn reads, in order: the message as it was recorded, or why there is none (`rejected`), then the events of
- * its session that belong to it through its `done` (agent-api.md §6.2).
+ * its session that belong to it through its `done` (SPEC.md §6.2).
  */
 export type TurnEvent = { type: "rejected"; error: AgentErrorData } | MessageStreamEvent;
 

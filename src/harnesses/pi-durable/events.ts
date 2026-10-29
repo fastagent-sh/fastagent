@@ -1,5 +1,5 @@
 /**
- * `sessions.events` (agent-api.md §6.1) over pi-durable's event stream of one conversation: the entries asked for, a
+ * `sessions.events` (SPEC.md §6.1) over pi-durable's event stream of one conversation: the entries asked for, a
  * `state` snapshot, then what each commit adds. pi-durable captures its snapshot and the registration for later
  * commits atomically, so the replay ends at the snapshot's newest entry and the live part starts after it.
  */

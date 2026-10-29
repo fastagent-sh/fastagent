@@ -1,5 +1,5 @@
 /**
- * The package's one entry (agent-api.md §8), besides each first-party channel's: the Agent API, opening an agent
+ * The package's one entry (SPEC.md §8), besides each first-party channel's: the Agent API, opening an agent
  * directory and serving it, and what an author writes.
  */
 export type {

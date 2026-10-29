@@ -1,5 +1,5 @@
 /**
- * The Channel contract: how a channel is mounted beside the Agent it talks to (agent-api.ts, agent-api.md §8.1), and
+ * The Channel contract: how a channel is mounted beside the Agent it talks to (agent-api.ts, SPEC.md §8.1), and
  * `defineChannel`, which types a channel file's export. Importing a host, a framework, or a harness here is forbidden.
  */
 import type { Agent, CreateSessionOptions } from "./agent-api.ts";

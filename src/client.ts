@@ -1,5 +1,5 @@
 /**
- * The Agent API over HTTP, for a program anywhere `fetch` runs (agent-api.md §8): `connectAgent`, its errors and the
+ * The Agent API over HTTP, for a program anywhere `fetch` runs (SPEC.md §8): `connectAgent`, its errors and the
  * types. It opens no agent and needs no Node API, so it also runs on Deno and Workers.
  */
 export type {

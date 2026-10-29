@@ -1,5 +1,5 @@
 /**
- * The Agent API over HTTP (docs/design/agent-api.md §9) as one `effect/http-api` contract: the server answers from it,
+ * The Agent API over HTTP (docs/SPEC.md §9) as one `effect/http-api` contract: the server answers from it,
  * `connectAgent` calls through it and `/v1/openapi.json` is generated from it, so none of them can describe another API
  * than the one served. Built from agent-api.ts's schemas; imports nothing that needs Node, so a client runs wherever
  * `fetch` does.
