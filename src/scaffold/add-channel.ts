@@ -5,9 +5,10 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
-import { SECRETS_DIRNAME, SECRET_FILE_MODE, assertInsideAgentDir, exists } from "../paths.ts";
-import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
-import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
+import { assertInsideAgentDir, exists } from "../paths.ts";
+import { channelBundleFiles, channelTemplate } from "./templates.ts";
+import { type ValueWriteResult, writeValues } from "../value-file.ts";
+import { envExamplePath } from "../env.ts";
 import { FEISHU_AGENT_SCOPES, type FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 import { slackBotScopes } from "../channels/slack/manifest.ts";
 
@@ -195,111 +196,23 @@ export async function appendChannelEnv(dir: string, kind: ChannelKind): Promise<
   return true;
 }
 
-export interface DotEnvWriteResult {
-  /** Generated secret vars written as active `KEY=value` lines. */
-  written: string[];
-  /** Vars already present with a non-empty active value; left untouched and omitted from next steps. */
-  alreadySet: string[];
-  /** Set when the secrets dir is an operator-chosen one (`FASTAGENT_SECRETS_DIR`) carrying no `.gitignore`. */
-  unprotectedSecretsDir?: string;
-}
-
-/** Whether `.env` content carries a non-empty ACTIVE value for `name`. */
-function hasActiveEnvValue(content: string, name: string): boolean {
-  return (parseEnvContent(content).get(name)?.trim() ?? "") !== "";
-}
-
-function mentionsEnvName(content: string, name: string): boolean {
-  return content.split("\n").some((line) => new RegExp(`^\\s*#?\\s*${name}\\s*=`).test(line));
-}
-
 /**
- * Append generated channel secrets to the selected environment's value file. Existing non-empty values are kept.
+ * Append generated channel secrets to the selected environment's value file, and a placeholder for each the channel
+ * reads that nothing generated. Existing non-empty values are kept.
  */
-export async function appendChannelDotEnv(
+export function appendChannelDotEnv(
   dir: string,
   kind: ChannelKind,
   generated: Record<string, string>,
   overwrite: readonly string[] = [],
   ingress: FeishuSubscriptionMode = "webhook",
-): Promise<DotEnvWriteResult> {
-  const file = dotEnvPath(dir);
-  const secretsDir = dirname(file);
-  await mkdir(secretsDir, { recursive: true });
-  // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into carries its own
-  // `.gitignore`.
-  const owned = secretsDir === join(dir, SECRETS_DIRNAME) || secretsDir === join(dir, SECRETS_DIRNAME, "production");
-  let unprotectedSecretsDir: string | undefined;
-  if (owned) {
-    // Only EEXIST is tolerable (already protected, or a concurrent writer).
-    await writeFile(join(secretsDir, ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
-      (e: NodeJS.ErrnoException) => {
-        if (e.code !== "EEXIST") throw e;
-      },
-    );
-  } else if (!(await exists(join(secretsDir, ".gitignore")))) {
-    unprotectedSecretsDir = secretsDir;
-  }
-  let current = "";
-  try {
-    current = await readFile(file, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-  }
-
-  const env = channelSetup(kind, ingress).env;
-  const alreadySet = env
-    .filter((e) => !overwrite.includes(e.name) && hasActiveEnvValue(current, e.name))
-    .map((e) => e.name);
-  const lines: string[] = [];
-  const written: string[] = [];
-  const contentLines = current.split("\n");
-  let replacedInPlace = false;
-  for (const e of env) {
-    if (alreadySet.includes(e.name)) continue;
-    const value = generated[e.name];
-    if (value !== undefined) {
-      // An ACTIVE but EMPTY assignment already in the file (an uncommented, unfilled placeholder from `cp
-      // .env.example .env`) must be replaced IN PLACE.
-      let idx = -1;
-      for (let i = contentLines.length - 1; i >= 0; i--) {
-        if (parseEnvContent(contentLines[i] as string).has(e.name)) {
-          idx = i;
-          break;
-        }
-      }
-      if (idx >= 0) {
-        contentLines[idx] = `${e.name}=${value}`;
-        replacedInPlace = true;
-      } else {
-        lines.push(`${e.name}=${value}`);
-      }
-      written.push(e.name);
-    } else if (!mentionsEnvName(current, e.name)) {
-      // Hint above, never inline after `=` — see appendChannelEnv (this IS the file loadDotEnv reads).
-      lines.push(`# ${e.hint}`, `# ${e.name}=`);
-    }
-  }
-  // 0600 on the file this call CREATES, and nothing at all about one it did not: a `.env` the operator made with
-  // `cp .secrets/.env.example .secrets/.env` carries the mode that command gave it, and re-deciding it would be
-  // fastagent changing the permissions of a file it does not own.
-  const secret = { mode: SECRET_FILE_MODE } as const;
-  if (replacedInPlace) {
-    current = contentLines.join("\n");
-    await writeFile(file, current, secret);
-  }
-  if (lines.length > 0) {
-    const marker = `# --- ${kind} channel ---`;
-    if (current.includes(marker)) {
-      // A marker already present (e.g. a .env copied from .env.example) — slot the new lines under it instead of
-      // orphaning them at the end of the file.
-      await writeFile(file, current.replace(marker, `${marker}\n${lines.join("\n")}`), secret);
-    } else {
-      const prefix = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
-      await appendFile(file, `${prefix}${marker}\n${lines.join("\n")}\n`, secret);
-    }
-  }
-  return { written, alreadySet, unprotectedSecretsDir };
+): Promise<ValueWriteResult> {
+  const entries = channelSetup(kind, ingress).env.map(({ name, hint }) => ({
+    name,
+    hint,
+    ...(generated[name] === undefined ? {} : { value: generated[name] }),
+  }));
+  return writeValues(dir, `${kind} channel`, entries, overwrite);
 }
 
 /** The path `add <kind>` scaffolds to. */
