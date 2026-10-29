@@ -75,9 +75,10 @@ describe("model catalogs", () => {
     vi.stubEnv("FASTAGENT_OFFLINE", "0"); // only `1` is offline
     const radius = { ...builtIn, id: "radius-published", provider: "radius" };
     const video = { ...builtIn, id: "gpt-video", type: "video" };
+    const revised = { ...builtIn, contextWindow: 4242 };
     const pi = await catalogServer(() => ({
       status: 200,
-      body: { openai: [released, video], radius: [radius] },
+      body: { openai: [released, video, revised], radius: [radius] },
       lastModified: newer(),
     }));
     const dir = stateDir();
@@ -85,7 +86,8 @@ describe("model catalogs", () => {
     expect(first.models.getModel("openai", "gpt-released")).toBeUndefined();
     expect(await first.refresh()).toBeUndefined();
     expect(first.models.getModel("openai", "gpt-released")).toMatchObject({ id: "gpt-released", provider: "openai" });
-    expect(listModels(first.models)).toContain(`openai/${builtIn.id}`);
+    // pi's own rule: a published model replaces the built-in one of its type and id.
+    expect(first.models.getModel("openai", builtIn.id)?.contextWindow).toBe(revised.contextWindow);
     expect(first.models.getAllModels("openai").map(({ id }) => id)).not.toContain("gpt-video");
     // Radius fetches its gateway's own list; pi's published one is not its gateway's.
     expect(first.models.getModel("radius", "radius-published")).toBeUndefined();
@@ -173,11 +175,37 @@ describe("model catalogs", () => {
       /^model lists not refreshed \(pi's published catalog: .* answered 500\)/,
     );
     expect(failed.models.getModel("openai", "gpt-released")).toBeDefined();
+    // A failed ask of a stale catalog counts as one: the next open keeps what it has without asking.
+    const kept = join(dir, "published.json");
+    const stale = Date.now() - 4 * 60 * 60 * 1000 - 1;
+    writeFileSync(kept, JSON.stringify({ ...JSON.parse(readFileSync(kept, "utf8")), checkedAt: stale }));
+    expect(await opened(dir, pi.url).refresh()).toMatch(/answered 500/);
+    expect(await opened(dir, pi.url).refresh()).toBeUndefined();
+    expect(pi.requests).toHaveLength(3);
+
+    // With nothing kept, every open asks: a default model may need what it brings.
+    const empty = stateDir();
+    expect(await opened(empty, pi.url).refresh()).toMatch(/answered 500/);
+    expect(await opened(empty, pi.url).refresh()).toMatch(/answered 500/);
+    expect(pi.requests).toHaveLength(5);
 
     const silent = await catalogServer(() => undefined);
     const waited = opened(dir, silent.url, 100);
     expect(await waited.refresh(true)).toMatch(/pi's published catalog: no answer within 0\.1s/);
     expect(waited.models.getModel("openai", "gpt-released")).toBeDefined();
+  });
+
+  it("takes a 404 as no catalog for this pi-ai: its own lists are current until the next ask", async () => {
+    let status = 200;
+    const pi = await catalogServer(() => ({ status, body: { openai: [released] }, lastModified: newer() }));
+    const dir = stateDir();
+    await opened(dir, pi.url).refresh();
+    status = 404;
+    const none = opened(dir, pi.url);
+    expect(await none.refresh(true)).toBeUndefined();
+    expect(none.models.getModel("openai", "gpt-released")).toBeUndefined();
+    expect(await opened(dir, pi.url).refresh()).toBeUndefined();
+    expect(pi.requests).toHaveLength(2);
   });
 
   it("names a kept catalog it cannot read, and how to repair it", async () => {
@@ -189,41 +217,69 @@ describe("model catalogs", () => {
 
   it("refreshes a provider that fetches its own list, with its credential, and keeps that list too", async () => {
     let fetches = 0;
-    const own = createProvider({
-      id: "own",
-      auth: { apiKey: { name: "Own", resolve: async () => ({ auth: { apiKey: "k" } }) } },
-      models: [],
-      fetchModels: async () => {
-        fetches += 1;
-        return [{ ...builtIn, id: "own-1", provider: "own" }] as never;
-      },
-      api: { stream: () => never(), streamSimple: () => never() },
-    });
+    let gatewayDown = false;
+    // A provider keeps what it fetched in its own object, so each process here builds its own, as a real one does.
+    const own = () =>
+      createProvider({
+        id: "own",
+        auth: { apiKey: { name: "Own", resolve: async () => ({ auth: { apiKey: "k" } }) } },
+        models: [],
+        fetchModels: async () => {
+          fetches += 1;
+          if (gatewayDown) throw new Error("the gateway answered 503");
+          return [{ ...builtIn, id: `own-${fetches}`, provider: "own" }] as never;
+        },
+        api: { stream: () => never(), streamSimple: () => never() },
+      });
     const pi = await catalogServer(() => ({ status: 200, body: {}, lastModified: newer() }));
     const dir = stateDir();
-    const catalogs = catalogsIn(dir, { url: pi.url });
-    const models = modelsOver(new InMemoryCredentialStore(), [own], catalogs);
-    expect(models.getModel("own", "own-1")).toBeUndefined();
-    expect(await catalogs.refresh(models)).toBeUndefined();
-    expect(models.getModel("own", "own-1")).toBeDefined();
+    const open = () => {
+      const catalogs = catalogsIn(dir, { url: pi.url });
+      const models = modelsOver(new InMemoryCredentialStore(), [own()], catalogs);
+      const ids = () => models.getModels("own").map(({ id }) => id);
+      return { ids, refresh: (force?: boolean) => catalogs.refresh(models, force ? { force } : {}) };
+    };
+    const first = open();
+    expect(first.ids()).toEqual([]);
+    expect(await first.refresh()).toBeUndefined();
+    expect(first.ids()).toEqual(["own-1"]);
     expect(existsSync(join(dir, "providers", "own.json"))).toBe(true);
 
-    const reopen = () => {
-      const next = catalogsIn(dir, { url: pi.url });
-      const models = modelsOver(new InMemoryCredentialStore(), [own], next);
-      return { models, refresh: (force?: boolean) => next.refresh(models, force ? { force } : {}) };
-    };
-    // Fetched just now: the next start lists it without asking.
-    const restored = reopen();
+    // Fetched just now: the next start lists it without asking; asked by name, it asks.
+    const restored = open();
     expect(await restored.refresh()).toBeUndefined();
-    expect(restored.models.getModel("own", "own-1")).toBeDefined();
-    expect(fetches).toBe(1);
-    expect(await reopen().refresh(true)).toBeUndefined();
-    expect(fetches).toBe(2);
+    expect([restored.ids(), fetches]).toEqual([["own-1"], 1]);
+    expect(await open().refresh(true)).toBeUndefined();
+    const next = open();
+    await next.refresh();
+    expect([next.ids(), fetches]).toEqual([["own-2"], 2]);
 
-    writeFileSync(join(dir, "providers", "own.json"), "{");
-    expect(await reopen().refresh()).toMatch(/model lists not refreshed \(own: .*own\.json is not JSON/);
-    expect(fetches).toBe(2);
+    // A failed ask of a stale list counts as one: the list kept stays, and the next open does not ask.
+    const kept = join(dir, "providers", "own.json");
+    const stale = Date.now() - 4 * 60 * 60 * 1000 - 1;
+    const age = () =>
+      writeFileSync(kept, JSON.stringify({ ...JSON.parse(readFileSync(kept, "utf8")), checkedAt: stale }));
+    age();
+    gatewayDown = true;
+    const down = open();
+    expect(await down.refresh()).toMatch(/model lists not refreshed \(own: .*503/);
+    expect(down.ids()).toEqual(["own-2"]);
+    const after = open();
+    expect(await after.refresh()).toBeUndefined();
+    expect([after.ids(), fetches]).toEqual([["own-2"], 3]);
+    gatewayDown = false;
+
+    // An open without the network asks nothing, so it checks nothing: a stale list stays stale.
+    age();
+    vi.stubEnv("FASTAGENT_OFFLINE", "1");
+    await open().refresh();
+    vi.stubEnv("FASTAGENT_OFFLINE", "0");
+    await open().refresh();
+    expect(fetches).toBe(4);
+
+    writeFileSync(kept, "{");
+    expect(await open().refresh()).toMatch(/model lists not refreshed \(own: .*own\.json is not JSON/);
+    expect(fetches).toBe(4);
   });
 
   it("an agent opens on a model only the published catalog has: the Agent reads the lists its report reads", async () => {

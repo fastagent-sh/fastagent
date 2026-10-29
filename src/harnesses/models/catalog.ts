@@ -87,6 +87,17 @@ export function catalogsIn(dir: string | undefined, options: { url?: string; tim
     const kept = found?.piAi === piAi ? found : undefined;
     show(kept);
     if (!network || (!force && kept && Date.now() - kept.checkedAt < FRESH_MS)) return;
+    try {
+      await askPublished(piAi, kept, signal);
+    } catch (error) {
+      // A failed ask counts as one: the catalog kept stays, and is not asked for again for FRESH_MS. With none kept,
+      // the next open asks, since a default model may need it.
+      if (kept) keep({ ...kept, checkedAt: Date.now() });
+      throw error;
+    }
+  }
+
+  async function askPublished(piAi: string, kept: Published | undefined, signal: AbortSignal): Promise<void> {
     const url = new URL(options.url ?? PUBLISHED_URL);
     url.searchParams.set("types", MODEL_TYPES.join(","));
     url.searchParams.set("pi-version", piAi);
@@ -97,6 +108,13 @@ export function catalogsIn(dir: string | undefined, options: { url?: string; tim
     });
     if (response.status === 304 && kept) {
       keep({ ...kept, checkedAt: Date.now() });
+      return;
+    }
+    if (response.status === 404 || response.status === 501) {
+      // pi.dev publishes no catalog for this pi-ai, so its own lists are the current ones.
+      const none: Published = { piAi, models: {}, lastModified: 0, checkedAt: Date.now() };
+      keep(none);
+      show(none);
       return;
     }
     if (!response.ok) throw new Error(`${url.origin} answered ${response.status}`);
@@ -166,24 +184,37 @@ export function catalogsIn(dir: string | undefined, options: { url?: string; tim
     force: boolean,
     signal: AbortSignal,
   ): Promise<{ aborted: boolean; errors: ReadonlyMap<string, Error> }> {
-    const own = models.getProviders().filter((provider) => provider.refreshModels !== undefined);
-    const stale: string[] = [];
-    const fresh: string[] = [];
-    for (const { id } of own) {
-      // An entry it cannot read counts as stale: pi-ai's refresh reads it again, and reports why it could not.
-      const checkedAt = await fetched.read(id).then(
-        (entry) => entry?.checkedAt,
+    // An entry it cannot read counts as none: pi-ai's refresh reads it again, and reports why it could not.
+    const keptOf = (id: string) =>
+      fetched.read(id).then(
+        (entry) => entry,
         () => undefined,
       );
-      (force || checkedAt === undefined || Date.now() - checkedAt >= FRESH_MS ? stale : fresh).push(id);
+    const own = models.getProviders().filter((provider) => provider.refreshModels !== undefined);
+    const stale = new Map<string, ModelsStoreEntry | undefined>();
+    const fresh: string[] = [];
+    for (const { id } of own) {
+      const kept = await keptOf(id);
+      const checkedAt = kept?.checkedAt;
+      if (force || checkedAt === undefined || Date.now() - checkedAt >= FRESH_MS) stale.set(id, kept);
+      else fresh.push(id);
     }
     const [restored, asked] = await Promise.all([
       models.refresh({ allowNetwork: false, providers: fresh, signal }),
-      models.refresh({ allowNetwork: network, providers: stale, force, signal }),
+      models.refresh({ allowNetwork: network, providers: [...stale.keys()], force, signal }),
     ]);
+    // A failed ask counts as one, as for the published catalog: pi-ai replaces an entry only when it fetched a list, so
+    // one it left as it was is a list asked for and kept, not asked for again for FRESH_MS.
+    const unwritten = new Map<string, Error>();
+    for (const [id, kept] of network ? stale : []) {
+      if (kept === undefined || (await keptOf(id))?.checkedAt !== kept.checkedAt) continue;
+      await fetched
+        .write(id, { ...kept, checkedAt: Date.now() })
+        .catch((error: Error) => void unwritten.set(id, error));
+    }
     return {
       aborted: restored.aborted || asked.aborted,
-      errors: new Map([...restored.errors, ...asked.errors]),
+      errors: new Map([...restored.errors, ...asked.errors, ...unwritten]),
     };
   }
 }

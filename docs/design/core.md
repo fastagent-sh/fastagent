@@ -205,7 +205,7 @@ messages; an app calls `openAgent(dir)`, which is it with a serve's defaults. It
    their lists refreshed before it resolves (`catalog.ts`): pi's published catalog adds what a provider released after
    this pi-ai, asked for as this pi-ai's version reads it and whatever the machine authenticates, since a box opens
    its agent before anyone logs in on it; a provider that fetches its own list is asked with its credential. Each is
-   kept in `<stateRoot>/models/` and asked for again after 4 hours. Every reader builds it here: the serve, the startup report, `info`, `models`, `login`, a
+   kept in `<stateRoot>/models/` and asked for again after 4 hours, a failed ask counting as one once a list is kept. Every reader builds it here: the serve, the startup report, `info`, `models`, `login`, a
    box's `login --if-missing`, `deploy`'s pre-flight; and the Agent is opened over its models, so it runs on the lists
    the report reads.
 5. **The storage** (`storage.ts`): `<stateRoot>/agent.sqlite`, opened by one process at a time (§9). `invoke` never
@@ -641,6 +641,7 @@ is due when a request next wakes it.
 <stateRoot>/                # <agent dir>/.state, .state/production for start (FASTAGENT_STATE_DIR overrides)
 ├── agent.sqlite            # the instance's storage: sessions, messages, entries (pi-durable)
 ├── invoke.sqlite           # `fastagent invoke`'s sessions, apart from the instance's
+├── models/                 # the model lists fetched (§3): published.json, providers/<id>.json
 ├── channels/<name>/        # one per channel file: sessions.json, turns, history cursors, dedup; files/ holds inbound attachments
 └── schedule/               # sessions.json, claims/, wakeups.json
 ```

@@ -101,11 +101,11 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (!released.ok) throw new Error(`preflight gated: ${released.gate}`);
     expect(released.messages).toContainEqual({
       level: "warn",
-      text: expect.stringMatching(/^"openai\/gpt-released" is not in the model lists this FastAgent's pi-ai carries/),
+      text: expect.stringMatching(/^"openai\/gpt-released" is in pi's published catalog, not in the pi-ai/),
     });
     const carried = await call(dir, { model: `openai/${builtIn.id}` });
     if (!carried.ok) throw new Error(`preflight gated: ${carried.gate}`);
-    expect(JSON.stringify(carried.messages)).not.toMatch(/is not in the model lists/);
+    expect(carried.messages.filter(({ text }) => /is in pi's published catalog/.test(text))).toEqual([]);
   });
 
   it("a config model bakes nothing extra — the config is already in the image", async () => {
@@ -824,6 +824,43 @@ export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" 
       const unknown = await call(dir, { model: "gw/nope" }, { run: true });
       expect(unknown.ok).toBe(false);
       if (!unknown.ok) expect(unknown.gate).toMatch(/no provider of the deployed agent offers "gw\/nope"/);
+    } finally {
+      await rm(host, { recursive: true, force: true });
+    }
+  });
+
+  it("a provider's own list is fetched as the box starts: a credential only a login on the box brings is warned of", async () => {
+    // Under test/fixtures, so the configuration's import of pi-ai resolves this repository's.
+    const host = join(import.meta.dirname, "fixtures", `.tmp-preflight-own-${process.pid}`);
+    const dir = join(host, "agent");
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    try {
+      await writeFile(
+        join(dir, "fastagent.config.ts"),
+        `import { createProvider, envApiKeyAuth } from "@earendil-works/pi-ai";
+const never = () => { throw new Error("no message is sent"); };
+export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKeyAuth("Gw", ["GW_KEY"]) }, models: [],
+  fetchModels: async () => [], api: { stream: never, streamSimple: never } })] };\n`,
+      );
+      const builtIn = modelsOver(new InMemoryCredentialStore()).getModels("openai")[0] as AnyModel;
+      const list = { models: [{ ...builtIn, id: "fetched-1", provider: "gw" }], checkedAt: Date.now() };
+      await mkdir(join(resolveStateRoot(dir), "models", "providers"), { recursive: true });
+      await writeFile(join(resolveStateRoot(dir), "models", "providers", "gw.json"), JSON.stringify(list));
+
+      const fetchedFirst = /provider "gw" fetches its own model list/;
+      const loginOnly = await call(dir, { model: "gw/fetched-1" }, { run: true });
+      if (!loginOnly.ok) throw new Error(`preflight gated: ${loginOnly.gate}`);
+      expect(loginOnly.messages).toContainEqual({
+        level: "warn",
+        text: expect.stringMatching(
+          /^provider "gw" fetches its own model list, .* if "gw\/fetched-1" is only in that list, the box refuses to start on it until gw's API key is in \.secrets\/\.env$/,
+        ),
+      });
+
+      await writeFile(join(dir, ".secrets", ".env"), "GW_KEY=k\n");
+      const carried = await call(dir, { model: "gw/fetched-1" }, { run: true });
+      if (!carried.ok) throw new Error(`preflight gated: ${carried.gate}`);
+      expect(carried.messages.filter(({ text }) => fetchedFirst.test(text))).toEqual([]);
     } finally {
       await rm(host, { recursive: true, force: true });
     }

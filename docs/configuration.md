@@ -78,10 +78,11 @@ data, each provider lists its models too. A [provider in code](#custom-models) t
 (`fetchModels`) is asked for it, with its credential.
 
 Every command that opens the agent (`dev`, `start`, `invoke`, `info`, `models`, a deployed start) refreshes the lists
-before it reads them, asking the network for each at most every 4 hours (`fastagent models --refresh` asks now). What
-it fetched is kept in `<state root>/models/`, so a start without the network has the lists it last had. A refresh that
-fails is a warning, and each list stays the one last kept; a default model only a fetched list has is then refused
-when no list kept has it, as on a deployed box's first start without pi.dev (`deploy` warns of such a model).
+before it reads them, asking the network for each at most every 4 hours once one is kept, a failed ask included; with
+none kept, every open asks (`fastagent models --refresh` asks now). What it fetched is kept in `<state root>/models/`,
+so a start without the network has the lists it last had. A refresh that fails is a warning, and each list stays the
+one last kept; a default model only a fetched list has is then refused when no list kept has it, as on a deployed box's
+first start without pi.dev (`deploy` warns of such a model).
 `FASTAGENT_OFFLINE=1` skips the network: each list is the one last kept, or pi-ai's own.
 
 ## Custom models
