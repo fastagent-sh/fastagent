@@ -16,7 +16,7 @@ import { nextRun } from "../../schedule/cron.ts";
 import { fireScheduleNow, scheduleSessions } from "../../schedule/scheduler.ts";
 import { latestFire, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeAnyWakeup } from "../../schedule/wakeups.ts";
-import { failStartup, agentDirOrExit } from "../fail.ts";
+import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { exitCodeOf } from "../invoke-stream.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 
@@ -87,6 +87,15 @@ export async function runScheduleNow(
   dirArg: string,
   opts: { model?: string; input?: boolean },
 ): Promise<void> {
+  // The name first, from the definition's shape: a script told its schedule does not exist need not set up a model.
+  const target = agentDirOrExit(resolve(dirArg));
+  enterAgentEnv(target);
+  const declared = await prepareDefinition(target)
+    .then((definition) => buildDefinitionShape(definition, process.env).schedules.map((s) => s.name))
+    .catch(failStartup);
+  if (!declared.includes(name)) {
+    failUsage(`no schedule "${name}" in ${target}/src/schedules/ (declared: ${declared.join(", ") || "none"})`);
+  }
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
   // Refused while the instance holds work a stopped serve left: this process would run it, and cut it off at its exit.
   const { agent, models, schedules, stateRoot } = await openServing(agentDir, {

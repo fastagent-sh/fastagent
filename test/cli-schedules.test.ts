@@ -122,8 +122,9 @@ describe("cli: schedules run and unwake", () => {
     expect(listed.schedules[0]?.session).toEqual(expect.any(String));
     expect(listed.schedules[0]?.fires.map((fire) => fire.outcome)).toEqual(["interrupted", "completed", "completed"]);
 
-    const unknown = await run(["schedules", "run", "weekly", dir]);
-    expect(unknown.code).toBe(1);
+    // Checked before the model a fire needs: a script that names no schedule learns which there are.
+    const unknown = await run(["schedules", "run", "weekly", dir], undefined, { ...process.env, FASTAGENT_MODEL: "" });
+    expect(unknown.code).toBe(2);
     expect(unknown.stderr).toMatch(/no schedule "weekly" in .*src\/schedules\/ \(declared: digest\)/);
   });
 
