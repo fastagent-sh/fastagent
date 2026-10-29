@@ -57,11 +57,13 @@ src/
 │   ├── invoke-stream.ts    # `invoke`: one message's answer, as messages.stream delivers it, as text or JSON lines → exit code
 │   ├── models-view.ts, auth-view.ts, content-view.ts # `models` / auth-report / content output
 │   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
+│   ├── person.ts           # what an app's setup says to the person for the steps only they can take: printed at a
+│   │                       # terminal, a ticket's `need_user_action` / `afterwards` in a coding agent's run
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
 │   ├── login-relay.ts      # `login` split across a process boundary: LoginIO as JSON lines, box half + terminal half
-│   ├── login-ticket.ts     # an account sign-in that outlives the command starting it (a coding agent's turn): its
-│   │                       # own process, a ticket under ~/.fastagent/.state/logins, `login --check`
+│   ├── ticket.ts           # a step a coding agent starts and a person finishes (a sign-in, an app's setup), outliving
+│   │                       # the command: its own process, a ticket under ~/.fastagent/.state/tickets, `--check`
 │   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell
 │   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
 ├── telegram.ts, slack.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
@@ -304,7 +306,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **The CLI serves a person and a coding agent alike** (docs/cli.md, "Scripts and coding agents"). A coding agent
   works in turns and sees a command's output only once it ends: nothing waits on a terminal, a choice not given exits
   2 naming what to pass, and a step only a person can take returns at once (`need_user_action`, a check command,
-  `agent_next_steps`) while a process of the CLI's own finishes it (`src/cli/login-ticket.ts`). A secret is never
+  `agent_next_steps`) while a process of the CLI's own finishes it (`src/cli/ticket.ts`). A secret is never
   typed into the agent's conversation. Results on stdout, everything else on stderr; a command whose result is data
   has `--json`.
 - **Effect first.** Write with Effect, and with what Effect gives you, rather than hand-rolled async plumbing or a thin wrapper over it.

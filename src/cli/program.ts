@@ -251,11 +251,14 @@ const channelSub = (
   args: [AGENT_ARG],
   flags:
     kind === "feishu" || kind === "lark"
-      ? [CHANNEL_ENVIRONMENT, INGRESS, NO_ONBOARD]
+      ? [CHANNEL_ENVIRONMENT, INGRESS, NO_ONBOARD, ...UNATTENDED_SETUP]
       : kind === "slack"
-        ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG]
-        : [CHANNEL_ENVIRONMENT],
-  examples: [{ cmd: `fastagent add ${kind}` }],
+        ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG, ...UNATTENDED_SETUP]
+        : [CHANNEL_ENVIRONMENT, JSON_FLAG],
+  examples: [
+    { cmd: `fastagent add ${kind}` },
+    ...(kind === "telegram" ? [] : [{ cmd: `fastagent add ${kind} --json`, note: "a coding agent" }]),
+  ],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
     (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, {
@@ -263,8 +266,25 @@ const channelSub = (
       environment: f.env as "dev" | "production" | undefined,
       onboard: f.onboard !== false,
       replaceConfig: f.replaceConfig === true,
+      input: f.input !== false,
+      json: f.json === true,
+      ...(f.check !== undefined ? { check: f.check as string } : {}),
+      ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
+      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
     }),
 });
+
+/**
+ * How an app's setup runs with no one at a terminal: what the person provides is named, and their steps come back with
+ * a ticket to check (`add` in docs/cli.md).
+ */
+const UNATTENDED_SETUP: FlagSpec[] = [
+  { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
+  { flags: "--check <ticket>", description: "where a setup started without a terminal stands" },
+  { flags: "--timeout <seconds>", description: "how long that setup stays open (default 900)" },
+  { flags: "--ticket <id>", description: "the process that runs a ticket's setup", hidden: true },
+  NO_INPUT,
+];
 
 const add: CommandSpec = {
   name: "add",

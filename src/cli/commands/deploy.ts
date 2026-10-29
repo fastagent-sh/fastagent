@@ -157,12 +157,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       );
     }
     if (opts.input === false || !isInteractive()) {
-      failStartup(
-        new Error(
-          `deploy stopped: ${pre.valueFile} has no ${absent.join(", ")}: creating or preparing a separate ` +
-            `production app needs a terminal — run this deploy in one${opts.input === false ? " without --no-input" : ""}, ` +
-            `or supply these values from a production app in ${pre.valueFile}`,
-        ),
+      // With no one to ask, the app is set up first by the command that hands the person's part over (`add --json`).
+      const prepare = unprepared.map(({ kind }) => `fastagent add ${kind} --env production --json`).join(", then ");
+      failUsage(
+        `deploy stopped: ${pre.valueFile} has no ${absent.join(", ")}: set up the separate production app first — ` +
+          `${prepare} (it names what the person does) — then run this deploy again`,
       );
     }
     await prepareFeishuApps(

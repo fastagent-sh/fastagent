@@ -74,7 +74,9 @@ is imported. Unset, the command decides ([design note](design/channel-environmen
 | App-config permission (`application:application:patch`) | Not needed | Needed to register the Request URL and capture the Verification Token; a tenant that reviews it holds the app's version in review once |
 
 `add feishu` sets the app up for `dev`'s WebSocket and asks for no `patch`, so a tenant that reviews it does not
-hold the first `add`. Interactive `deploy --run` creates a separate production app when credentials are missing,
+hold the first `add`. Interactive `deploy --run` creates a separate production app when credentials are missing
+(without a terminal it names `add feishu --env production --json`, which hands the confirmation to a coding agent's
+user),
 requesting webhook scopes including `patch`, then captures the Verification Token into
 `.secrets/production/.env`. It registers the deployment's Request URL once readiness and model login pass.
 Lark uses guided production-app setup and sets the Request URL by hand when its config API answers 404.

@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { checkAgentScopes } from "../src/cli/add-feishu.ts";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { checkAgentScopes, onboardFeishuCloudApp } from "../src/cli/add-feishu.ts";
+import type { Person } from "../src/cli/person.ts";
 import type { FeishuAppScope, FeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import {
   FEISHU_AGENT_SCOPES,
@@ -25,7 +29,14 @@ async function check(
     ingress,
     api: { listAppScopes },
     note: (message) => notes.push(message),
-    openUrl: (url) => opened.push(url),
+    person: {
+      waitsOn: () => {},
+      carriesOn: () => {},
+      afterwards: (instructions, url) => {
+        notes.push(instructions);
+        if (url !== undefined) opened.push(url);
+      },
+    },
   });
   return { result, notes: notes.join("\n"), opened };
 }
@@ -53,7 +64,7 @@ describe("Feishu/Lark agent permission check", () => {
     expect(notes).toContain(
       "im:chat.members:read: without it people in the discussion the agent reads are shown by open_id",
     );
-    expect(notes).toContain("Tick and enable them on the page that opens");
+    expect(notes).toContain("Tick and enable them on that page");
     expect(opened).toHaveLength(1);
     expect(new URL(opened[0] as string).pathname).toBe("/app/cli_a/auth");
     expect(requested(opened[0])).toEqual(["im:message.group_msg", "im:chat.members:read"]);
@@ -89,6 +100,62 @@ describe("Feishu/Lark agent permission check", () => {
     expect(result).toEqual({ publishReady: false, missing: [] });
     expect(notes).toMatch(/could not read the feishu app's permissions: Error: HTTP 403/);
     expect(requested(opened[0])).toEqual(AGENT_SCOPES);
+  });
+});
+
+describe("a new Feishu app through a coding agent's person", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("waits on them to confirm it, carries on once they have, and leaves them publishing it", async () => {
+    const dir = join(await mkdtemp(join(tmpdir(), "fa-feishu-person-")), "fastagent");
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
+    vi.stubGlobal("fetch", async (input: string | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      if (url.includes("/oauth/v1/app/registration")) {
+        return new URLSearchParams(String(init.body)).get("action") === "begin"
+          ? Response.json({
+              device_code: "dev-1",
+              verification_uri_complete: "https://open.feishu.cn/page/launcher?user_code=AB-CD",
+              interval: 0.001,
+              expires_in: 600,
+            })
+          : Response.json({ client_id: "cli_new", client_secret: "s3cret", user_info: { tenant_brand: "feishu" } });
+      }
+      if (url.includes("tenant_access_token"))
+        return Response.json({ code: 0, tenant_access_token: "T", expire: 7200 });
+      if (url.includes("/application/v6/scopes")) {
+        const scopes = AGENT_SCOPES.map((scope_name) => ({ scope_name, grant_status: 1 }));
+        return Response.json({ code: 0, data: { scopes } });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const said: string[] = [];
+    const person: Person = {
+      waitsOn: (url, instructions) => said.push(`waits on: ${instructions} at ${url}`),
+      carriesOn: () => said.push("carries on"),
+      afterwards: (instructions, url) => said.push(`afterwards: ${instructions} at ${url}`),
+    };
+    try {
+      await onboardFeishuCloudApp(dir, "feishu", "websocket", "fastagent add feishu", person);
+      expect(said).toEqual([
+        expect.stringMatching(
+          /^waits on: confirm the new Feishu app .* at https:\/\/open\.feishu\.cn\/.*user_code=AB-CD/,
+        ),
+        "carries on",
+        expect.stringMatching(
+          /^afterwards: .*CREATE \+ PUBLISH a version at https:\/\/open\.feishu\.cn\/app\/cli_new\/version$/,
+        ),
+      ]);
+      expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toMatch(/^FEISHU_APP_ID=cli_new$/m);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

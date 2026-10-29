@@ -69,7 +69,8 @@ the steps it could not do.
   `--run` creates a separate production app when its credentials are missing: Feishu uses scan-to-create with the
   agent scopes plus `application:application:patch`; Lark uses guided console setup. App ID and Secret are saved
   immediately so an interrupted token capture resumes the same app. Approval and publishing remain console steps.
-  CI must supply the production App ID, Secret and Verification Token beforehand.
+  Without a terminal, `--run` stops (exit 2) naming `add <kind> --env production --json`, which a coding agent runs to
+  hand the person's part to its user. CI must supply the production App ID, Secret and Verification Token beforehand.
 - **Other channels:** run `add slack --env production` to create the production Slack app, or
   `add telegram --env production` and create its bot through BotFather. Their local onboarding state is separate.
 - **One app still delivers to one place.** `dev --tunnel` changes only the dev app's URL; `deploy --run` changes

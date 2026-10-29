@@ -33,11 +33,11 @@ describe("cli: deploy", () => {
 };\n`,
     });
     const result = await run(["deploy", "fly", dir, "--run", "--no-input"]);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(2);
     expect(result.stderr).toContain(
       ".secrets/production/.env has no FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_VERIFICATION_TOKEN",
     );
-    expect(result.stderr).toContain("separate production app needs a terminal");
+    expect(result.stderr).toContain("fastagent add feishu --env production --json");
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toContain("FEISHU_APP_ID=cli_dev");
     await expect(stat(join(dir, "Dockerfile"))).rejects.toThrow();
 
