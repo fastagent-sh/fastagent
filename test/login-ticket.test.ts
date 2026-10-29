@@ -1,14 +1,43 @@
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkTicket, createTicket, runTicket, ticketLogPath } from "../src/cli/login-ticket.ts";
+import { checkTicket, createTicket, runTicket, startTicket, ticketLogPath } from "../src/cli/login-ticket.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
 const ticketFile = (ticket: string) =>
   join(process.env.HOME as string, ".fastagent", ".state", "logins", `${ticket}.json`);
+
+/** Whether `pid` runs: signal 0 only asks. */
+function running(pid: number | undefined): boolean {
+  if (pid === undefined) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A sign-in started as `login` starts one, its process standing in for pi-ai's: it shows an address and waits. */
+async function waitingSignIn(provider: string, name: string) {
+  const waits = `
+    const { readFileSync, writeFileSync } = require("node:fs");
+    const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "logins", process.argv.at(-1) + ".json");
+    const ticket = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...ticket, status: "need_user_action", url: "https://auth.example/a", pid: process.pid }));
+    setInterval(() => {}, 1000);`;
+  return startTicket({
+    provider,
+    name,
+    authPath: "/nowhere",
+    timeoutSeconds: 60,
+    command: { file: process.execPath, args: ["-e", waits, "--"], cwd: tmpdir() },
+  });
+}
 
 const ticketOf = () =>
   createTicket({ provider: "openai", name: "OpenAI", authPath: "/nowhere/auth.json", timeoutSeconds: 60 });
@@ -51,7 +80,7 @@ describe("a sign-in that outlives the command that starts it", () => {
   });
 
   it("with no one to ask: a choice takes pi's default, a text question is left blank, a secret fails the sign-in", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const { ticket } = ticketOf();
     const answers: string[] = [];
     await runTicket(ticket, async (interaction) => {
@@ -70,6 +99,8 @@ describe("a sign-in that outlives the command that starts it", () => {
       return {};
     });
     expect(answers).toEqual(["browser", ""]);
+    // The whole error, stack and all, goes to the log a failed ticket points at.
+    expect(logged).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/only a terminal/) }));
     expect(await checkTicket(ticket)).toMatchObject({
       status: "failed",
       message:
@@ -98,6 +129,57 @@ describe("a sign-in that outlives the command that starts it", () => {
       status: "failed",
       message: `the sign-in stopped: ${ticketLogPath(ticket)} says why`,
     });
+  });
+
+  it("a newer sign-in to a provider stops one still waiting, which would hold its callback port", async () => {
+    const openai = await waitingSignIn("openai", "OpenAI");
+    const anthropic = await waitingSignIn("anthropic", "Anthropic");
+    const newer = await waitingSignIn("openai", "OpenAI");
+    try {
+      expect(running(openai.pid)).toBe(false);
+      expect(await checkTicket(openai.ticket)).toMatchObject({
+        status: "failed",
+        message: "replaced by a newer sign-in to OpenAI",
+      });
+      // Another provider's is left alone.
+      expect(await checkTicket(anthropic.ticket)).toMatchObject({ status: "need_user_action" });
+      expect(await checkTicket(newer.ticket)).toMatchObject({ status: "need_user_action" });
+    } finally {
+      for (const pid of [anthropic.pid, newer.pid]) if (running(pid)) process.kill(pid as number);
+    }
+  });
+
+  it("a sign-in given up on for giving no address is stopped first, so it holds no port and writes nothing after", async () => {
+    const sidecar = join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
+    const silent = `require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid)); setInterval(() => {}, 1000);`;
+    const given = await startTicket({
+      provider: "openai",
+      name: "OpenAI",
+      authPath: "/nowhere",
+      timeoutSeconds: 60,
+      command: { file: process.execPath, args: ["-e", silent, "--"], cwd: tmpdir() },
+      startTimeoutMs: 1_000,
+    });
+    expect(given).toMatchObject({
+      status: "failed",
+      message: expect.stringMatching(/gave no address to open within 1s/),
+    });
+    expect(existsSync(sidecar) && running(Number(readFileSync(sidecar, "utf8")))).toBe(false);
+  });
+
+  it("an ended sign-in stays as it ended: a late writer cannot reopen it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { ticket } = ticketOf();
+    writeFileSync(
+      ticketFile(ticket),
+      JSON.stringify({
+        ...JSON.parse(readFileSync(ticketFile(ticket), "utf8")),
+        status: "failed",
+        message: "replaced",
+      }),
+    );
+    await runTicket(ticket, async () => ({}));
+    expect(await checkTicket(ticket)).toMatchObject({ status: "failed", message: "replaced" });
   });
 
   it("names no file outside its directory: a ticket is 16 hex digits or nothing", async () => {

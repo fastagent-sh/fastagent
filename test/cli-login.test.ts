@@ -135,6 +135,30 @@ describe("cli: login and models", () => {
           "not in this conversation. Once they say they have, run check_command.",
       },
     ]);
+    // An account sign-in stored for the provider outranks a key in the environment: it goes first, or the key is unused.
+    const authFile = join(cwd, ".secrets", "auth.json");
+    const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+    await writeFile(authFile, JSON.stringify({ openai: oauth }));
+    const outranked = JSON.parse((await run(["login", "openai", "--method", "api-key", "--json"], cwd, env)).stdout);
+    expect(outranked).toMatchObject({
+      status: "need_user_action",
+      logout_command: "fastagent logout openai",
+      agent_next_steps: expect.stringContaining(
+        `OpenAI is signed in with an account in ${authFile}, which outranks a key in the environment`,
+      ),
+    });
+    await writeFile(authFile, "{}\n");
+
+    // With no agent's value file to name, the person signs in at a terminal of their own, into the file `-g` reads:
+    // a variable set now would never reach the agent's environment, fixed when it started.
+    const outside = await mkdtemp(join(tmpdir(), "fa-login-key-outside-"));
+    const global = await run(["login", "openai", "--method", "api-key", "--json"], outside, { ...env, HOME: outside });
+    expect(JSON.parse(global.stdout)).toMatchObject({
+      status: "need_user_action",
+      terminal_command: "fastagent login openai --method api-key -g",
+      check_command: "fastagent auth check --provider openai -g --json",
+    });
+
     const ready = await run(["login", "openai", "--method", "api-key", "--json"], cwd, {
       ...env,
       OPENAI_API_KEY: "sk-x",

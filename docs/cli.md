@@ -216,11 +216,16 @@ waited on. A coding agent works in turns, so each command does its part and says
   finished), `authorized` (with the `path` it was saved to, and the default `model` for an agent with none), `failed`
   or `expired`. When the person's browser cannot reach this machine, it ends on a page that does not load (an address
   on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the sign-in.
-  `--timeout` sets how long the sign-in stays open (default 600 seconds).
+  `--timeout` sets how long the sign-in stays open (default 600 seconds). A newer sign-in to the same provider stops
+  one still waiting (its ticket is then `failed`, "replaced by a newer sign-in"), which would otherwise hold the
+  provider's callback port until it expired.
 - **An API key** (`--method api-key`) is the person's to set where the agent reads it, never typed into the agent's
   conversation: `"status": "need_user_action"` names the `variables` the provider reads (`OPENAI_API_KEY`) and the
   agent's `value_file` (`.secrets/.env`), and `check_command` is `fastagent auth check`. When one is set already, the
-  answer is `"status": "ready"`.
+  answer is `"status": "ready"`. An account sign-in stored for the provider outranks a key in the environment, so then
+  `logout_command` comes first. With no agent's value file to name (`-g`, or no agent here), the person runs
+  `terminal_command`, `login <provider> --method api-key -g`, in a terminal of their own: a variable set now would never
+  reach the agent's environment, fixed when it started.
 - Exit status: 0 signed in, or waiting on the person; 1 cancelled, failed or expired; 2 a provider or method not
   given, or a ticket that is not one.
 

@@ -7,7 +7,11 @@
  */
 import type { Provider } from "@earendil-works/pi-ai";
 import { enterAgentEnv, dotEnvPath } from "../../env.ts";
-import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../harnesses/models/credentials.ts";
+import {
+  type FastagentCredentialStore,
+  GLOBAL_AUTH_PATH,
+  resolveAuthPath,
+} from "../../harnesses/models/credentials.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { findAgentDir, globalHome, selectAgentEnvironment } from "../../paths.ts";
@@ -108,13 +112,16 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     );
   }
   // What the agent reads, its file over the global one, is what authenticates each provider for it now.
-  const statusFrom = ownAgent ? (await modelEnvironment(ownAgent, {}, providers)).credentials : authPath;
+  const statusFrom = ownAgent
+    ? ((await modelEnvironment(ownAgent, {}, providers)).credentials as FastagentCredentialStore)
+    : authPath;
   if (opts.input === false || opts.json === true || !isInteractive()) {
     const offered = await loginOptionsOver(statusFrom, providers);
     return requestLogin(offered, { provider, method }, opts, {
       authPath,
       providers,
       valueFile: ownAgent === undefined ? undefined : dotEnvPath(ownAgent),
+      heldIn: async (id) => (typeof statusFrom === "string" ? statusFrom : statusFrom.layerOf(id)),
       timeoutSeconds: givenTimeout ?? UNATTENDED_TIMEOUT_SECONDS,
     });
   }
@@ -135,7 +142,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
       process.exit(1);
     }
     if (error instanceof LoginRefused) failUsage(error.message);
-    failStartup(new Error((error as Error).message));
+    failStartup(error);
   });
   const name = loginProviders(providers).find((p) => p.id === result.provider)?.name ?? result.provider;
   console.error(
@@ -207,6 +214,8 @@ async function requestLogin(
     authPath: string;
     providers: readonly Provider[];
     valueFile?: string;
+    /** The credentials file that holds what `provider` has stored, as the agent reads it. */
+    heldIn: (provider: string) => Promise<string>;
     timeoutSeconds: number;
   },
 ): Promise<void> {
@@ -262,11 +271,16 @@ async function requestLogin(
   process.exit(ticket.status === "failed" || ticket.status === "expired" ? 1 : 0);
 }
 
-/** An API key with no terminal to type it in: the variables the person sets themselves, and how to tell it worked. */
+/**
+ * An API key with no terminal to type it in: the variables the person sets themselves where the agent reads them, and
+ * how to tell it worked. With no agent's value file to name (`-g`, or no agent here), the person signs in at a terminal
+ * of their own, which keeps the key in the global file `auth check -g` reads: the agent's environment was fixed when it
+ * started, so a variable set now would never reach it.
+ */
 async function keyNeeded(
   choice: LoginOption,
   opts: LoginOptions,
-  target: { providers: readonly Provider[]; valueFile?: string },
+  target: { providers: readonly Provider[]; valueFile?: string; heldIn: (provider: string) => Promise<string> },
 ): Promise<void> {
   const base = { provider: choice.provider, method: "api-key" };
   if (choice.status?.type === "api_key") {
@@ -275,29 +289,61 @@ async function keyNeeded(
     ]);
     return;
   }
+  const check = `fastagent auth check --provider ${choice.provider}${target.valueFile === undefined ? " -g" : ""}`;
+  if (target.valueFile === undefined) {
+    const terminal = `fastagent login ${choice.provider} --method api-key -g`;
+    report(
+      opts,
+      {
+        status: "need_user_action",
+        ...base,
+        terminal_command: terminal,
+        check_command: `${check} --json`,
+        agent_next_steps:
+          "Ask the user to run terminal_command in a terminal of their own: it asks for the key there, not in this " +
+          "conversation, and keeps it in the global credentials file. Once they say they have, run check_command.",
+      },
+      [`need_user_action: run in a terminal of your own: ${terminal}`, `then run: ${check}`],
+    );
+    return;
+  }
+  // A stored account sign-in outranks any key in the environment: it goes first, or the key set now is never used.
+  const outranking = choice.status?.source === "OAuth" ? await target.heldIn(choice.provider) : undefined;
+  const logout =
+    outranking === undefined
+      ? undefined
+      : `fastagent logout ${choice.provider}${outranking === GLOBAL_AUTH_PATH ? " -g" : ""}`;
   const provider = loginProviders(target.providers).find((p) => p.id === choice.provider);
   const variables = provider ? await keyVariables(provider) : [];
-  const where = target.valueFile ?? "the shell environment the agents here run in (a shell profile)";
   const what =
     variables.length === 0
       ? `its key as ${choice.name}'s own documentation says`
       : variables.length === 1
         ? `${variables[0]}=<their ${choice.name} key>`
         : `the variables ${choice.name} reads its key from (${variables.join(", ")})`;
-  const check = `fastagent auth check --provider ${choice.provider}${opts.global ? " -g" : ""}`;
+  const first =
+    logout === undefined
+      ? ""
+      : `${choice.name} is signed in with an account in ${outranking}, which outranks a key in the environment: ` +
+        "run logout_command first (with the user's agreement: it removes that sign-in). Then ";
   report(
     opts,
     {
       status: "need_user_action",
       ...base,
       variables,
-      ...(target.valueFile === undefined ? {} : { value_file: target.valueFile }),
+      value_file: target.valueFile,
+      ...(logout === undefined ? {} : { logout_command: logout }),
       check_command: `${check} --json`,
       agent_next_steps:
-        `Ask the user to set ${what} in ${where} themselves, not in this conversation. Once they say they have, run ` +
-        "check_command.",
+        `${first}${first ? "ask" : "Ask"} the user to set ${what} in ${target.valueFile} themselves, not in this ` +
+        "conversation. Once they say they have, run check_command.",
     },
-    [`need_user_action: set ${what} in ${where}`, `then run: ${check}`],
+    [
+      ...(logout === undefined ? [] : [`first, to replace the account sign-in in ${outranking}: ${logout}`]),
+      `need_user_action: set ${what} in ${target.valueFile}`,
+      `then run: ${check}`,
+    ],
   );
 }
 

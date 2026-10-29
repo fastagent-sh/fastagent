@@ -416,14 +416,8 @@ export interface IoOption {
 export interface LoginIO {
   /** Single-choice picker. */
   select(message: string, options: IoOption[]): Promise<string | undefined>;
-  /**
-   * Free-text or hidden input. `manual`: the code or address a browser's sign-in ends on, which the provider's own
-   * callback usually brings first, aborting `signal`.
-   */
-  prompt(
-    message: string,
-    opts?: { hidden?: boolean; manual?: boolean; signal?: AbortSignal },
-  ): Promise<string | undefined>;
+  /** Free-text or hidden input. */
+  prompt(message: string, opts?: { hidden?: boolean; signal?: AbortSignal }): Promise<string | undefined>;
   /** Print an informational line (auth URL, device code, progress). */
   note(message: string): void;
   /** Best-effort open a URL in the browser (printed regardless). */
@@ -446,11 +440,7 @@ function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): Auth
                 ...(o.description ? { hint: o.description } : {}),
               })),
             )
-          : await io.prompt(p.message, {
-              hidden: p.type === "secret",
-              manual: p.type === "manual_code",
-              ...(p.signal ? { signal: p.signal } : {}),
-            });
+          : await io.prompt(p.message, { hidden: p.type === "secret", ...(p.signal ? { signal: p.signal } : {}) });
       if (v === undefined) throw new LoginCancelled("cancelled");
       return v;
     },

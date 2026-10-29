@@ -7,7 +7,9 @@
  * ended on when that browser could not reach this machine.
  *
  * A ticket is a file in the machine's own state, ~/.fastagent/.state/logins, written whole by one process at a time:
- * the starting command until the sign-in starts, then the sign-in alone.
+ * the starting command until the sign-in starts, then the sign-in alone. One that has ended stays as it ended. A newer
+ * sign-in to the same provider stops an older one still waiting, whose process would otherwise hold the provider's
+ * callback port (OpenAI's is fixed) until it expires.
  */
 import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -46,6 +48,8 @@ export interface Ticket {
 const START_TIMEOUT_MS = 30_000;
 /** How long `--check` waits for a sign-in to take the address it was handed. */
 const ADDRESS_TIMEOUT_MS = 15_000;
+/** How long a stopped sign-in's process has to let go of its port before it is killed. */
+const STOP_TIMEOUT_MS = 5_000;
 const POLL_MS = 200;
 /** Ticket files are random hex: anything else names no ticket, and no file outside the directory. */
 const TICKET_ID = /^[0-9a-f]{16}$/;
@@ -68,9 +72,16 @@ function readTicket(id: string): Ticket | undefined {
 
 const writeTicket = (ticket: Ticket): void => writeFileAtomic(ticketPath(ticket.ticket), JSON.stringify(ticket));
 
+const waiting = (ticket: Ticket) => ticket.status === "starting" || ticket.status === "need_user_action";
+
+/**
+ * Change the ticket `id` while its sign-in is still waiting; one that has ended is returned as it ended. A writer that
+ * read it before it ended (a check that found its process gone the moment it signed in) cannot reopen it.
+ */
 function update(id: string, change: Partial<Ticket>): Ticket {
   const current = readTicket(id);
   if (current === undefined) throw new Error(`login ticket ${id} is gone from ${ticketsDir()}`);
+  if (!waiting(current)) return current;
   const next = { ...current, ...change };
   writeTicket(next);
   return next;
@@ -88,6 +99,30 @@ function running(pid: number | undefined): boolean {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Stop a sign-in's process and wait until it is gone, so the port its callback held is free. */
+async function stop(pid: number): Promise<void> {
+  if (!running(pid)) return;
+  process.kill(pid);
+  for (const deadline = Date.now() + STOP_TIMEOUT_MS; Date.now() < deadline; await sleep(POLL_MS)) {
+    if (!running(pid)) return;
+  }
+  process.kill(pid, "SIGKILL");
+}
+
+/**
+ * Stop every sign-in to `provider` still waiting, before a newer one starts. Only an unexpired one is taken for a
+ * process of ours: its pid is minutes old, where one an ended process left could by now name another's.
+ */
+async function supersede(provider: string, name: string, now: number): Promise<void> {
+  if (!existsSync(ticketsDir())) return;
+  for (const file of readdirSync(ticketsDir())) {
+    const ticket = file.endsWith(".json") ? readTicket(file.slice(0, -".json".length)) : undefined;
+    if (ticket === undefined || ticket.provider !== provider || !waiting(ticket) || ticket.expiresAt < now) continue;
+    if (ticket.pid !== undefined) await stop(ticket.pid);
+    update(ticket.ticket, { status: "failed", message: `replaced by a newer sign-in to ${name}` });
+  }
+}
 
 /** Tickets a day past their end: each one's files go. */
 function prune(now: number): void {
@@ -133,9 +168,13 @@ export async function startTicket(
   input: TicketRequest & {
     /** The command that runs the sign-in, its arguments, and the directory it runs in; `--ticket <id>` is added. */
     command: { file: string; args: readonly string[]; cwd: string };
+    /** How long the sign-in may take to give an address; a test's is short. */
+    startTimeoutMs?: number;
   },
 ): Promise<Ticket> {
+  await supersede(input.provider, input.name, Date.now());
   const id = createTicket(input).ticket;
+  const startTimeoutMs = input.startTimeoutMs ?? START_TIMEOUT_MS;
   const log = openSync(ticketLogPath(id), "a");
   const child = spawn(input.command.file, [...input.command.args, "--ticket", id], {
     cwd: input.command.cwd,
@@ -149,7 +188,7 @@ export async function startTicket(
     exited = true;
   });
   child.unref();
-  for (const deadline = Date.now() + START_TIMEOUT_MS; Date.now() < deadline; ) {
+  for (const deadline = Date.now() + startTimeoutMs; Date.now() < deadline; ) {
     const ticket = readTicket(id) as Ticket;
     if (ticket.status !== "starting") return ticket;
     if (exited) break;
@@ -157,11 +196,14 @@ export async function startTicket(
   }
   const ticket = readTicket(id) as Ticket;
   if (ticket.status !== "starting") return ticket;
+  // Given up on: its process goes first, or it would hold its port and write the ticket after this.
+  const stoppedItself = exited;
+  if (!stoppedItself && child.pid !== undefined) await stop(child.pid);
   return update(id, {
     status: "failed",
-    message: exited
+    message: stoppedItself
       ? `the sign-in stopped before it started: ${ticketLogPath(id)} says why`
-      : `the sign-in gave no address to open within ${START_TIMEOUT_MS / 1000}s: ${ticketLogPath(id)} says why`,
+      : `the sign-in gave no address to open within ${startTimeoutMs / 1000}s: ${ticketLogPath(id)} says why`,
   });
 }
 
@@ -233,6 +275,8 @@ export async function runTicket(
     const { model } = await run(interaction);
     update(id, { status: "authorized", ...(model === undefined ? {} : { model }) });
   } catch (error) {
+    // The log is where a failed ticket points: the whole error goes there, its message to the ticket.
+    console.error(error);
     if (signal.aborted) update(id, { status: "expired" });
     else update(id, { status: "failed", message: (error as Error).message });
   }
