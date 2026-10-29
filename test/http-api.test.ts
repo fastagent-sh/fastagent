@@ -65,6 +65,8 @@ describe("the Agent API over HTTP", () => {
     for (const key of [KEY, "the-next-key"]) {
       expect((await fetch(`${server.url}/v1/agent`, { headers: auth(key) })).status).toBe(200);
     }
+    // A base URL given with the slash it may end with reaches the same routes.
+    expect(await connectAgent(`${server.url}/`, { apiKey: KEY }).info()).toMatchObject({ name: "subject" });
     expect((await fetch(`${server.url}/v1/openapi.json`)).status).toBe(401);
     const document = (await (await fetch(`${server.url}/v1/openapi.json`, { headers: auth() })).json()) as {
       openapi: string;

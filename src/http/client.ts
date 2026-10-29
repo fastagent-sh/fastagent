@@ -131,15 +131,14 @@ function sendFailure(baseUrl: string, stage: SendStage, error: unknown): AgentEr
 }
 
 export function connectAgent(url: string, options: ConnectOptions): Agent {
-  const baseUrl = url.replace(/\/+$/, "");
   const client = Effect.runSync(
     HttpApiClient.make(AgentHttpApi, {
-      baseUrl,
+      baseUrl: url,
       transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(options.apiKey)),
     }).pipe(Effect.provide(FetchHttpClient.layer)),
   ).agent;
-  const read = (error: unknown) => readFailure(baseUrl, error);
-  const sent = (stage: SendStage) => (error: unknown) => sendFailure(baseUrl, stage, error);
+  const read = (error: unknown) => readFailure(url, error);
+  const sent = (stage: SendStage) => (error: unknown) => sendFailure(url, stage, error);
 
   /**
    * A request: rejected with its signal's reason once its Caller lets go, and otherwise with what `failure` makes of
@@ -355,7 +354,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
               return event.type === "done" && event.message.id === messageId;
             },
             // The answer begins once the message is recorded, so a failure before its first event is a send's.
-            refused: (error) => (stage === undefined ? read(error) : sendFailure(baseUrl, stage, error)),
+            refused: (error) => (stage === undefined ? read(error) : sent(stage)(error)),
             signal: streamOptions?.signal,
           },
         );
