@@ -132,7 +132,7 @@ checkout off its `ref`, a clone not made yet), and each binding whose directory 
 ```bash
 fastagent env add <packages...>       # name[@version], or apt:<name> for the image
 fastagent env remove <packages...>
-fastagent env list
+fastagent env list [--json]
 fastagent env install
 fastagent env exec -- <command...>
 ```
@@ -155,7 +155,8 @@ fastagent env exec -- gh --version
 - **`list`** prints each package with its declared version, and each declared variable with whether it has a value
   here (never the value) and what it is for. It warns about what `deploy` would refuse (a refused backend, a PyPI
   package's undeclared runtime) and about a variable `dev` would refuse to start without. Variables are declared in
-  `context.json` by hand: there is no command for them.
+  `context.json` by hand: there is no command for them. `--json` prints `{packages: [{name, version}], apt: [name],
+  variables: [{name, description, set}]}`, the warnings still on stderr.
 - **`install`** installs mise (adding it to `package.json` when it is not there), then every declared package at the
   newest release its version allows, a newer one where one is out. Day to day it is not needed, since `add` installs
   what it adds and every start installs what is missing: it is for newer releases, and for a clone that has not
@@ -175,7 +176,7 @@ whose image runs the FastAgent they list.
 ## `fastagent models`
 
 ```bash
-fastagent models [search] [-g|--global] [--refresh]
+fastagent models [search] [-g|--global] [--refresh] [--json]
 ```
 
 Lists the model specs (`provider/modelId`) the agent in the current directory can name, optionally filtered: pi-ai's
@@ -183,6 +184,9 @@ built-in providers with the models pi's published catalog adds to them ([model l
 and the providers its `fastagent.config.ts` declares ([custom models](configuration.md#custom-models)). It needs none
 of the secrets the agent declares. Outside an agent, or with `-g`, it lists the built-ins alone, without the agent's
 providers. Inside an agent's subdirectory it refuses (as `login` does): `cd` to the agent, or pass `-g`.
+
+`--json` prints the same list as an array of `{spec, provider, id, name}` (`name` is the model's display name, its
+`id` when it has none), in the same order.
 
 `--refresh` fetches the lists now, however recently they were fetched: for a model released in the last 4 hours. When
 it cannot, `FASTAGENT_OFFLINE=1` included, it prints the lists it has, warns why, and exits 1.
@@ -450,7 +454,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
-| `--json` | `info`, `invoke`, `schedules list`, `content list`, `login`, `auth check` | Machine-readable output. |
+| `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list`, `login`, `auth check` | Machine-readable output. |
 
 ## Exit codes
 
@@ -458,4 +462,23 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 |---|---|
 | `0` | Success (including help and version). |
 | `1` | Runtime failure: a message that did not complete, a definition that does not open, a deploy gate, an unsupported runtime, invalid configuration. |
-| `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags. A mistyped command suggests the nearest one. |
+| `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags, or a choice a terminal would have asked for (a default model, a provider to sign in to) with none there to ask. A mistyped command suggests the nearest one. |
+
+## Scripts and coding agents
+
+Every command serves a person at a terminal, and a script or a coding agent without one. A coding agent works in
+turns: it runs a command, reads what it printed once it ends, then talks to its user. So:
+
+- **Nothing waits on a terminal.** A choice a terminal would ask for has a flag or an argument. Without a terminal,
+  or with `--no-input` or `--json`, a choice not given ends the command, exit 2, naming what to pass (`login --json`
+  answers `need_choice` with a command for each).
+- **A step only a person can take returns at once**, with what the person does and how to follow it:
+  `"status": "need_user_action"`, the address to open, and a `check_command` to run once they have, in a sentence for
+  the agent (`agent_next_steps`). An account sign-in works this way (`login`); the setups of `add slack`, `add lark`,
+  `add feishu` and `login --deployment` follow ([#855](https://github.com/fastagent-sh/fastagent/issues/855)), and
+  until then ask for a terminal.
+- **A secret never passes through the agent's conversation.** The person writes it where the command names (the
+  agent's `.secrets/.env`), or types it at a terminal of their own.
+- **Results on stdout, everything else on stderr**: progress, notes, warnings and errors. A command whose result is
+  data has `--json`.
+- **The exit code says how it ended**: 0, 1 or 2, as above.

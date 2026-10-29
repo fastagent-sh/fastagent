@@ -16,7 +16,7 @@ import { nextRun } from "../../schedule/cron.ts";
 import { fireScheduleNow, scheduleSessions } from "../../schedule/scheduler.ts";
 import { latestFire, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeAnyWakeup } from "../../schedule/wakeups.ts";
-import { failStartup, agentDirOrExit } from "../fail.ts";
+import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { exitCodeOf } from "../invoke-stream.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 
@@ -87,7 +87,16 @@ export async function runScheduleNow(
   dirArg: string,
   opts: { model?: string; input?: boolean },
 ): Promise<void> {
-  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
+  // The name before the model, from the definition's shape: a script told its schedule does not exist need not set up
+  // a model first.
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, async (target) => {
+    const declared = await prepareDefinition(target)
+      .then((definition) => buildDefinitionShape(definition, process.env).schedules.map((s) => s.name))
+      .catch(failStartup);
+    if (!declared.includes(name)) {
+      failUsage(`no schedule "${name}" in ${target}/src/schedules/ (declared: ${declared.join(", ") || "none"})`);
+    }
+  });
   // Refused while the instance holds work a stopped serve left: this process would run it, and cut it off at its exit.
   const { agent, models, schedules, stateRoot } = await openServing(agentDir, {
     model: modelSpec,
@@ -95,9 +104,9 @@ export async function runScheduleNow(
   }).catch(failStartup);
   const schedule = schedules.find((s) => s.name === name);
   if (schedule === undefined) {
+    // Checked above: only an edit of src/schedules/ while this ran gets here.
     await agent.close();
-    const declared = schedules.map((s) => s.name).join(", ") || "none";
-    failStartup(new Error(`no schedule "${name}" in ${agentDir}/src/schedules/ (declared: ${declared})`));
+    failStartup(new Error(`src/schedules/ changed while this ran: "${name}" is gone from it — run it again`));
   }
   await reportAuth(models, modelSpec, agentDir);
   const fired = await Effect.runPromise(fireScheduleNow({ agent, stateRoot, schedule })).catch(failStartup);
