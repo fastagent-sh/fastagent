@@ -22,7 +22,7 @@ both run the **same** agent.
 ## The one mental model
 
 An agent is the [Agent API](design/agent-api.md): sessions the Agent names, messages whose end outlives whoever sent
-them, and a durable history of entries. It is TypeScript, in process; its HTTP binding is not served yet.
+them, and a durable history of entries. It is TypeScript, in process, and the same over HTTP (`connectAgent`).
 
 ```ts
 interface Agent {
@@ -84,9 +84,10 @@ same message rather than a second one. Leaving the iteration detaches; the agent
 
 ### Putting it on your network
 
-The Agent API's HTTP binding is not served yet. To give a browser or another service the agent, write the routes your
-product needs over these calls, behind your own authentication. Every result and event is JSON, so you can send them on
-as they are, for example as Server-Sent Events:
+Another service reaches the agent through the Agent API over HTTP: serve it with a key (below) and call it with
+`connectAgent`. A browser does not: the key opens the whole instance. To give a browser the agent, write the routes
+your product needs over these calls, behind your own authentication. Every result and event is JSON, so you can send
+them on as they are, for example as Server-Sent Events:
 
 ```ts
 app.post("/chat/:session", requireUser, async (req, res) => {
@@ -122,9 +123,11 @@ await agent.close(); // closes the service, then releases the storage
 ```
 
 `serve()` is the assembly `dev`/`start` perform, minus the process: no signal handlers are installed, nothing calls
-`process.exit`. Its `fetch` answers only the channels' routes, each of which verifies its platform, and `GET /health`.
-`listen` starts a server of its own, on Node's `http` server or `Bun.serve`; `close()` gives the requests in flight
-500 ms, then ends them and stops the channels and schedules.
+`process.exit`. Its `fetch` answers the channels' routes, each of which verifies its platform, and `GET /health`; with
+`serve({ apiKeys: [key] })` it also answers the Agent API under `/v1`, which another service calls with
+`connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client`. `listen` starts a server of its own, on Node's
+`http` server or `Bun.serve`; `close()` ends the API's event streams, gives the requests in flight 500 ms, then ends
+them and stops the channels and schedules.
 
 ### Mounting `fetch` in your app
 

@@ -84,10 +84,21 @@ const settingsFields = <O extends typeof Schema.optionalKey | typeof Schema.opti
   tools: optional(Schema.Array(Schema.String)),
 });
 
+/**
+ * A status as a field: the values this version defines, and any other, since a later version may add one and a Caller
+ * reads it the way §7.1 says (an unknown session status is busy, an unknown message status has not ended).
+ */
+const open = <S extends Schema.Top>(known: S) =>
+  // As a type, the known values and any string, so an editor still offers them (`string & {}` does not absorb them).
+  Schema.Union([known, Schema.String]) as unknown as Schema.Codec<S["Type"] | (string & {}), string>;
+
+export const SessionStatus = Schema.Literals(["idle", "running"]);
+export type SessionStatus = typeof SessionStatus.Type;
+
 export class Session extends Schema.Opaque<Session>()(
   Schema.Struct({
     id: Schema.String,
-    status: Schema.Literals(["idle", "running"]),
+    status: open(SessionStatus),
     ...settingsFields(Schema.optionalKey),
     /** The agent's reply being written, as written so far: present only while one is. */
     reply: Schema.optionalKey(Schema.Struct({ text: Schema.String, thinking: Schema.optionalKey(Schema.String) })),
@@ -104,7 +115,7 @@ export class Message extends Schema.Opaque<Message>()(
     id: Schema.String,
     sessionId: Schema.String,
     idempotencyKey: Schema.optionalKey(Schema.String),
-    status: MessageStatus,
+    status: open(MessageStatus),
     /** Its `user` entry, once the agent took it. */
     entryId: Schema.optionalKey(Schema.String),
     /** The `assistant` entry the agent stopped on for it: when `completed`, and when `incomplete`. */
@@ -200,7 +211,7 @@ export const EntriesOptions = Schema.Struct({
 });
 export type EntriesOptions = typeof EntriesOptions.Type;
 
-const IdempotencyKey = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
+export const IdempotencyKey = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
 
 export const SendRequest = Schema.Struct({
   sessionId: Schema.String,
@@ -273,6 +284,8 @@ export const LIMITS = {
   inFlightPerProcess: 100,
   pageDefault: 100,
   pageBytes: 4 << 20,
+  /** The longest one HTTP request waits for a message; `connectAgent` asks again until its Caller's `wait` is met. */
+  httpWaitSeconds: 60,
 } as const;
 
 const RETRYABLE_CODES: ReadonlySet<string> = new Set<ErrorCode>(["busy", "unavailable"]);

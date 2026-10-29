@@ -6,6 +6,7 @@
   "entry": [
     "src/cli.ts",
     "src/index.ts",
+    "src/client.ts",
     "src/telegram.ts",
     "src/slack.ts",
     "src/feishu.ts",

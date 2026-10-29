@@ -4,14 +4,14 @@
 
 fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (a `SYSTEM.md` prompt, `skills/`, code under `src/`, and existing `AGENTS.md` project context) into a live service inside an app, in Telegram, Slack or Feishu, or behind a custom channel without a new authoring DSL.
 
-The design center is decided in `docs/design/architecture.md`: an agent is a definition assembled onto one harness, pi-durable, and served through one API of our own, the consumer Agent API of `docs/design/agent-api.md` (v2; `docs/SPEC.md` describes v1 until v2's HTTP binding lands); everything else is pi-durable's own API.
+The design center is decided in `docs/design/architecture.md`: an agent is a definition assembled onto one harness, pi-durable, and served through one API of our own, the consumer Agent API of `docs/design/agent-api.md` (v2; `docs/SPEC.md` describes v1 until v2 replaces it); everything else is pi-durable's own API.
 
 ## Source of truth
 
 | Document | Purpose |
 |---|---|
-| `docs/SPEC.md` | The Agent API v1. The code has moved to v2 in process; this is replaced by `docs/design/agent-api.md` once v2's HTTP binding lands. |
-| `docs/design/agent-api.md` | The Agent API v2, in process and over HTTP. The code implements its in-process binding. Do not change its semantics without an explicit decision. |
+| `docs/SPEC.md` | The Agent API v1. The code has moved to v2; this is replaced by `docs/design/agent-api.md` once v2's CLI checks land. |
+| `docs/design/agent-api.md` | The Agent API v2, in process and over HTTP. The code implements both bindings. Do not change its semantics without an explicit decision. |
 | `docs/design/architecture.md` | The decided architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
 | `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
@@ -43,6 +43,14 @@ src/
 ├── once.ts                 # work that runs once per process, its outcome shared (shutdown, AgentCore activation)
 ├── index.ts                # the package's one entry: the Agent API, openAgent, what an author writes; every export
 │                           # named. Asserted in package-boundary.test.ts
+├── client.ts               # the `/client` entry: connectAgent and the Agent API's types, for wherever fetch runs
+├── http/                   # the Agent API over HTTP (agent-api.md §9)
+│   ├── contract.ts         # THE ONE CONTRACT (effect/http-api) the server answers from, the client calls through
+│   │                       # and /v1/openapi.json is made from: routes, refusals and their statuses, server-sent
+│   │                       # events; imports nothing that needs Node
+│   ├── server.ts           # the contract answered by an in-process Agent, behind the instance's keys
+│   │                       # (FASTAGENT_API_KEY): a Fetch handler serveAgent mounts under /v1
+│   └── client.ts           # connectAgent: the Agent interface over the contract, waits past a request's 60 s
 ├── cli.ts                  # the THIN entry (import-free; lazy-loads cli/program.ts)
 ├── cli/                    # the CLI, built on clig.dev
 │   ├── kernel.ts           # CommandSpec-as-data + the commander adapter (commander appears ONLY here); exit 0/1/2
@@ -262,7 +270,8 @@ src/
         └── login.ts        # signing in to a model provider, for any front end; `fastagent login` is one
 test/                       # vitest; faux models by default
 ├── agent-api-conformance.ts # the Agent API's conformance suite (docs/design/agent-api.md §11), run in process by
-│                           # durable-agent.test.ts over durable-subject.ts
+│                           # durable-agent.test.ts over durable-subject.ts, and over HTTP by http-api.test.ts
+│                           # (http-subject.ts: the same subject served, called through connectAgent)
 ├── scripted-agent.ts       # an Agent whose answers a test scripts: what channel, schedule and service tests run on
 ├── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)
 └── live/                   # probes for what the offline suite FAKES — see test/live/README.md

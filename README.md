@@ -62,7 +62,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 - **No platform to move to.** No dashboard, no control plane, no runtime you deploy *into* — run it locally, embed it in your app, or ship the directory anywhere.
 - **No new format or DSL.** `AGENTS.md`, Agent Skills, TypeScript modules — FastAgent consumes the standards you already use instead of a parallel ecosystem.
 - **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, send messages from your own queue or workflow.
-- **No HTTP API to secure.** A served agent answers only its channels, each of which verifies its platform; an app that wants it on its network writes its own routes, behind its own auth.
+- **One key, no auth system.** A served agent answers its channels, each of which verifies its platform, and, given `FASTAGENT_API_KEY`, the Agent API under `/v1`: one key for the whole instance, kept on a server, that keeps everyone but its customer out. Users, roles and per-session access are your app's, in front of it.
 - **No model or cloud lock-in.** Any provider pi-ai supports, or your own; any host that runs a container.
 
 ## Install
@@ -118,7 +118,9 @@ for await (const event of agent.messages.stream({ sessionId: session.id, content
 ```
 
 `await agent.serve()` adds the agent's channels and schedules to your app: a Fetch handler for its webhooks, mounted
-where your framework routes them, or a server of its own (`listen`) ([Embedding](docs/embedding.md)).
+where your framework routes them, or a server of its own (`listen`) ([Embedding](docs/embedding.md)). Served with a key
+(`FASTAGENT_API_KEY` for `start`), the same API is reachable over HTTP under `/v1`, and another program calls it with
+`connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client` as it would the opened agent.
 
 ## Documentation
 
@@ -149,6 +151,7 @@ The package exports the supported surface only, from one entry per kind of user,
 |---|---|---|
 | The Agent API | `Agent`, `AgentError` ([Agent API](docs/design/agent-api.md)) | Stable within its version |
 | Directory → agent → service | `openAgent`, `LocalAgent`, `serve()`'s `Service` (`fetch`, `listen`) | Usable now, may tighten before 1.0 |
+| Over HTTP | `connectAgent` (`/client`), the `/v1` routes ([Agent API](docs/design/agent-api.md) §9) | Stable within its version |
 | Authoring | `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, `readBodyCapped`, `text`, `secretEquals` | Usable now, may tighten before 1.0 |
 | Not exported | The assembly's parts (`router`, `createScheduler`), content, models and sign-in (the CLI's), harness internals | No compatibility promise |
 
@@ -158,6 +161,7 @@ custom provider is pi-ai's (`createProvider` from `@earendil-works/pi-ai`): `ini
 Entry points (`./package.json` is also exported, for tools that read the version):
 
 - `@fastagent-sh/fastagent` — the Agent API, `openAgent`, and what an author writes;
+- `@fastagent-sh/fastagent/client` — `connectAgent`, the Agent API over HTTP, for a program anywhere `fetch` runs;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
 - `@fastagent-sh/fastagent/slack` — Slack Events API bot channel;
 - `@fastagent-sh/fastagent/feishu` — canonical Feishu bot channel (飞书, open.feishu.cn);

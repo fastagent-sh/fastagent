@@ -3,7 +3,9 @@
  * (`bun test/bun/serve.ts`), and test/serve-routes.test.ts holds the same contract on Node. What bounds a close on
  * either runtime is the server's graceful-shutdown timeout.
  */
+import type { Agent } from "../../src/agent-api.ts";
 import { serveHandler } from "../../src/channels/serve.ts";
+import { apiHandler } from "../../src/http/server.ts";
 
 if (typeof process.versions.bun !== "string") throw new Error("run this with bun: bun test/bun/serve.ts");
 
@@ -83,6 +85,47 @@ function check(label: string, pass: boolean, detail: string): void {
     (error: Error) => error.message,
   );
   check("closing before it listened binds nothing", /closed before it listened/.test(outcome), outcome);
+}
+
+{
+  // An Agent API event stream says nothing between its events for longer than Bun's own idle timeout (10 s).
+  const session = { id: "s", status: "idle", usage: { models: {}, tools: {} } };
+  const agent = {
+    sessions: {
+      events: () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "state", session };
+          await new Promise((resolve) => setTimeout(resolve, 12_000));
+          yield { type: "state", session };
+          await new Promise(() => {});
+        },
+      }),
+    },
+  } as unknown as Agent;
+  const api = apiHandler(agent, { keys: ["key"], keepAliveMs: 30_000 });
+  const host = serveHandler(api.fetch, { port: 0, host: "127.0.0.1" });
+  const port = await host.listening;
+  const response = await fetch(`http://127.0.0.1:${port}/v1/sessions/s/events`, {
+    headers: { authorization: "Bearer key" },
+  });
+  const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+  let received = "";
+  const outcome = await (async () => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return "it ended";
+        received += new TextDecoder().decode(value);
+        if ((received.match(/event: state/g) ?? []).length === 2) return "both events";
+      }
+    } catch (error) {
+      return `cut: ${String(error)}`;
+    }
+  })();
+  check("an event stream quiet for 12 s is not cut", outcome === "both events", outcome);
+  await api.endStreams();
+  await host.close();
+  await api.dispose();
 }
 
 if (failures.length > 0) {

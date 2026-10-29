@@ -323,11 +323,14 @@ inbound endpoint must not silently disappear.
 signature, so the router (`channels/router.ts`) adds no guard of its own; it dispatches literal paths and answers 404
 and 405. `serveAgent` (`service.ts`, an app's `agent.serve()`) mounts the channels' routes beside `GET /health`,
 starts long connections, schedules and the wake-up poll, and owns their shutdown; its `Service` answers in process
-(`fetch`) or on a server of its own (`listen`, `channels/serve.ts`: Node's `http` server or `Bun.serve`). There is no
-HTTP Agent API yet. AgentCore serves the Runtime's own `/invocations` and `/ping` instead (§9). Health returns 503 until
+(`fetch`) or on a server of its own (`listen`, `channels/serve.ts`: Node's `http` server or `Bun.serve`). With a key
+(`FASTAGENT_API_KEY` for `dev` and `start`, `serve({ apiKeys })` in an app) it mounts the HTTP Agent API under `/v1`
+(`http/server.ts`, answered from the contract in `http/contract.ts` that `connectAgent` calls through), which no
+channel route may take; without one, `/v1` is not served and the startup report says so. AgentCore serves the
+Runtime's own `/invocations` and `/ping` instead (§9). Health returns 503 until
 every long connection is ready, and again if one closes unexpectedly. The CLI listens through the same `Service` and
-exits on unexpected channel closure; its SIGINT/SIGTERM handler closes the service, which stops the server first
-(giving requests in flight 500 ms), and bounds shutdown time. It does not drain the agent's messages: they are durable,
+exits on unexpected channel closure; its SIGINT/SIGTERM handler closes the service, which ends the API's event
+streams, stops the server (giving requests in flight 500 ms), and bounds shutdown time. It does not drain the agent's messages: they are durable,
 and answered after a restart.
 
 The resident service lifecycle uses an Effect scope for scheduler cleanup, connection readiness and closure observers.

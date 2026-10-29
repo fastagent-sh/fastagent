@@ -725,6 +725,16 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     const channel = `export default () => ({ "POST /hook": () => new Response("ok") });\n`;
     const served = await call(await agent({ "src/channels/hook.ts": channel }), { model: "openai/gpt-4o-mini" });
     expect(served.ok && served.messages.some((m) => reachedBy.test(m.text))).toBe(false);
+    // A key among the values serves the Agent API, where the host serves it at all.
+    const keyed = await agent({ ".secrets/.env": "FASTAGENT_API_KEY=k\n" });
+    const api = await call(keyed, { model: "openai/gpt-4o-mini" }, { servesApi: true });
+    expect(api.ok && api.messages.some((m) => reachedBy.test(m.text))).toBe(false);
+    const unkeyed = await call(await agent(), { model: "openai/gpt-4o-mini" }, { servesApi: true });
+    expect(unkeyed.ok && unkeyed.messages.find((m) => reachedBy.test(m.text))?.text).toMatch(
+      /no FASTAGENT_API_KEY in \.secrets\/\.env.*or a key, which serves the Agent API under \/v1/,
+    );
+    const elsewhere = await call(keyed, { model: "openai/gpt-4o-mini" }, { servesApi: false });
+    expect(elsewhere.ok && elsewhere.messages.find((m) => reachedBy.test(m.text))?.level).toBe("warn");
   });
 
   it("a Bun pinned below the floor stops --run: the image would run a Bun without node:sqlite", async () => {

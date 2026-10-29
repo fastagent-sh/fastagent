@@ -116,6 +116,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       noResidentProcess: host === "agentcore", // alarms and webhooks wake the container there — no machine to keep up
       // Every AgentCore deployment starts the storage over (core.md §9).
       storageResets: host === "agentcore",
+      servesApi: host !== "agentcore",
     }).catch(failStartup);
     if (!facts.ok) failStartup(new Error(`deploy stopped: ${facts.gate}`));
     target.validate?.({ opts, agentDir, pre: facts });

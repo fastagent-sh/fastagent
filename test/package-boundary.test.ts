@@ -41,13 +41,30 @@ function staticPackageGraph(entryRel: string, builtins = false): Set<string> {
 
 const CLI_ONLY = ["@clack/prompts", "undici", "chokidar", "giget", "commander"];
 
-/** What the package exports: its one entry, and each first-party channel's. */
-const PUBLIC_ENTRIES = ["index.ts", "telegram.ts", "slack.ts", "feishu.ts", "lark.ts"];
+/** What the package exports: its one entry, the HTTP client's, and each first-party channel's. */
+const PUBLIC_ENTRIES = ["index.ts", "client.ts", "telegram.ts", "slack.ts", "feishu.ts", "lark.ts"];
 
 describe("package boundary: embed entry stays free of CLI-only dependencies", () => {
   it("index.ts does not statically load any CLI-only dep", () => {
     const pkgs = staticPackageGraph("index.ts");
     for (const dep of CLI_ONLY) expect(pkgs).not.toContain(dep);
+  });
+
+  it("the ./client subpath runs wherever fetch does: no Node API, no harness, no server", () => {
+    const reached = [...staticPackageGraph("client.ts"), ...staticPackageGraph("client.ts", true)];
+    expect(reached.filter((p) => p !== "effect" && !p.startsWith("effect/"))).toEqual([]);
+  });
+
+  it("the ./client subpath gives the Agent API the root entry gives, beside connectAgent", async () => {
+    const exportsOf = (entry: string) =>
+      readFileSync(resolve(srcDir, entry), "utf8")
+        .match(/export type \{([^}]*)\} from "\.\/agent-api\.ts"/)?.[1]
+        ?.split(",")
+        .map((name) => name.trim())
+        .filter(Boolean);
+    expect(exportsOf("client.ts")).toEqual(exportsOf("index.ts"));
+    const client = (await import(resolve(srcDir, "client.ts"))) as Record<string, unknown>;
+    expect(Object.keys(client).sort()).toEqual(["AgentError", "LIMITS", "connectAgent", "hasEnded"]);
   });
 
   it("the ./telegram subpath is neutral — no harness, no third-party SDK (it is fetch-only)", () => {
@@ -303,13 +320,15 @@ describe("the contracts depend on nothing", () => {
   it("...and the mechanism that serves them depends on Effect's HTTP server alone", () => {
     // The guard has teeth: serving pulls packages, contracts pull none. What it pulls is Effect's HTTP server, whose
     // runtime's own server (@effect/platform-node or -bun) is imported when a serve starts, so neither is in the static
-    // graph. Dispatch itself is a Map lookup over literal paths, so no routing library is in the graph.
+    // graph, and the Agent API's limits, which bound how long a response may say nothing. Dispatch itself is a Map
+    // lookup over literal paths, so no routing library is in the graph.
     const pkgs = [...staticPackageGraph("channels/serve.ts")].sort();
     expect(pkgs).toEqual([
       "effect/Context",
       "effect/Effect",
       "effect/Exit",
       "effect/Layer",
+      "effect/Schema",
       "effect/Scope",
       "effect/http",
     ]);

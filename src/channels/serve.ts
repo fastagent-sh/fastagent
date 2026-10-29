@@ -8,6 +8,7 @@ import * as Scope from "effect/Scope";
 import { HttpEffect, HttpServer, HttpServerError } from "effect/http";
 import type * as NetAddress from "effect/net/NetAddress";
 import type { ChannelHandler } from "../channel.ts";
+import { LIMITS } from "../agent-api.ts";
 import { log } from "../log.ts";
 import { text } from "./respond.ts";
 
@@ -67,6 +68,12 @@ const isBun = typeof process.versions.bun === "string";
  */
 const GRACEFUL_SHUTDOWN = "500 millis";
 
+/**
+ * How long Bun lets a response say nothing before it ends it (10 s by default): longer than an Agent API request waits
+ * for a message, and than an event stream's keep-alive interval. Node sets no such limit.
+ */
+const BUN_IDLE_TIMEOUT_SECONDS = LIMITS.httpWaitSeconds + 15;
+
 /** The server this runtime serves on: Node's `http.Server`, or `Bun.serve`. */
 async function serverLayer(options: {
   port: number;
@@ -78,6 +85,7 @@ async function serverLayer(options: {
       port: options.port,
       ...(options.host === undefined ? {} : { hostname: options.host }),
       gracefulShutdownTimeout: GRACEFUL_SHUTDOWN,
+      idleTimeout: BUN_IDLE_TIMEOUT_SECONDS,
     });
   }
   const { layer } = await import("@effect/platform-node/NodeHttpServer");

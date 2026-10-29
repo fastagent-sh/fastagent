@@ -11,6 +11,7 @@ import { log } from "../src/log.ts";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { connectAgent } from "../src/http/client.ts";
 import { type ServeOptions, serveAgent } from "../src/service.ts";
 
 const opened: DurableAgent[] = [];
@@ -440,6 +441,53 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
 });
 
 describe("openAgent: an agent directory opened in an app", () => {
+  it("serves the Agent API under /v1 beside its routes only with a key, and keeps /v1 from a channel", async () => {
+    const dir = await agentDir();
+    const unkeyed = await openAgent(dir);
+    const plain = await unkeyed.serve();
+    expect((await plain.fetch(new Request("http://app/v1/agent"))).status).toBe(404);
+    await unkeyed.close();
+
+    const keyed = await openAgent(dir);
+    const service = await keyed.serve({ apiKeys: ["k"] });
+    const info = await service.fetch(new Request("http://app/v1/agent", { headers: { authorization: "Bearer k" } }));
+    expect(await info.json()).toMatchObject({ name: expect.any(String) });
+    expect((await service.fetch(new Request("http://app/v1/agent"))).status).toBe(401);
+    expect((await service.fetch(new Request("http://app/health"))).status).toBe(200);
+    await keyed.close();
+
+    const watched = await openAgent(dir);
+    const listening = await watched.serve({ apiKeys: ["k"] });
+    const port = await listening.listen(0, "127.0.0.1");
+    const { id } = await watched.sessions.create();
+    const events = connectAgent(`http://127.0.0.1:${port}`, { apiKey: "k" })
+      .sessions.events(id)
+      [Symbol.asyncIterator]();
+    expect((await events.next()).value).toMatchObject({ type: "state" });
+    const started = Date.now();
+    await watched.close();
+    // Ended before the server stops, so the close does not wait out the server's grace for it.
+    expect(Date.now() - started).toBeLessThan(450);
+    expect((await events.next()).value).toMatchObject({
+      type: "stream_error",
+      error: { code: "unavailable", message: "the service is closing" },
+    });
+
+    const unset = await openAgent(dir);
+    await expect(unset.serve({ apiKeys: [process.env.FASTAGENT_TEST_UNSET_KEY ?? ""] })).rejects.toThrow(
+      "the Agent API needs at least one key, and no key may be empty",
+    );
+    await unset.close();
+
+    const claiming = await openAgent(
+      await agentDir({
+        "src/channels/claims.mjs": `export default () => ({ "POST /v1/hook": () => new Response("ok") });`,
+      }),
+    );
+    await expect(claiming.serve()).rejects.toThrow('route "POST /v1/hook" is under /v1, which the Agent API serves');
+    await claiming.close();
+  });
+
   it("serves its routes in process and on a server of its own, and closes both before it lets the storage go", async () => {
     const dir = await agentDir();
     const agent = await openAgent(dir);

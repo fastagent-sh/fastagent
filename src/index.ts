@@ -25,6 +25,7 @@ export type {
   SessionChanges,
   SessionEvent,
   SessionSettings,
+  SessionStatus,
   ThinkingLevel,
   Tokens,
   Usage,
@@ -32,7 +33,12 @@ export type {
 } from "./agent-api.ts";
 export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 
-export { openAgent, type LocalAgent, type OpenAgentOptions } from "./harnesses/pi-durable/serve.ts";
+export {
+  openAgent,
+  type LocalAgent,
+  type OpenAgentOptions,
+  type ServeAgentOptions,
+} from "./harnesses/pi-durable/serve.ts";
 export type { Service } from "./service.ts";
 /** What `openAgent`'s `credentials` takes: where provider credentials are kept, pi-ai's. */
 export type { CredentialStore } from "@earendil-works/pi-ai";

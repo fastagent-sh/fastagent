@@ -42,6 +42,8 @@ export interface AgentApiSubject {
   effects(): number;
   /** The storage fails every call from now on. */
   failStorage(): void;
+  /** Whether a send without a key is given one: `connectAgent` keys its own, so that a lost answer can be found. */
+  keysSends?: boolean;
   stop(): Promise<void>;
 }
 
@@ -173,7 +175,8 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           { wait: WAIT, signal: undefined },
         );
         expect(message).toMatchObject({ status: "completed", answer: { text: "answer: hi" } });
-        expect(message).not.toHaveProperty("idempotencyKey");
+        if (subject.keysSends) expect(message.idempotencyKey).toEqual(expect.any(String));
+        else expect(message).not.toHaveProperty("idempotencyKey");
         expect(
           (await agent.sessions.entries(sessionId, { before: unset, after: unset, limit: undefined })).data,
         ).toHaveLength(2);
@@ -271,6 +274,8 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           retryable: false,
           details: { sessionId, messageId: expect.any(String) },
         });
+        // The key that finds it, when the binding gave the send one of its own.
+        if (subject.keysSends) expect(error).toMatchObject({ details: { idempotencyKey: expect.any(String) } });
       });
 
       it("gives results and events that are JSON", async () => {
@@ -381,6 +386,16 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
     });
 
     describe("Idempotency", () => {
+      it("keeps a key as it was given, whatever its characters", async () => {
+        const sessionId = await newSession(agent);
+        for (const idempotencyKey of ["订单-1", " padded ", "chat/42 #7?x=1%", "100%"]) {
+          const sent = await send({ sessionId, content: "hi", idempotencyKey });
+          expect(sent.idempotencyKey).toBe(idempotencyKey);
+          expect(await agent.messages.get({ sessionId, idempotencyKey })).toMatchObject({ id: sent.id });
+          expect(await send({ sessionId, content: "again", idempotencyKey })).toMatchObject({ id: sent.id });
+        }
+      });
+
       it("returns a key's message while it is queued, running and ended, recording it once", async () => {
         const sessionId = await newSession(agent);
         const running = await send({ sessionId, content: "hold", idempotencyKey: "first" });
@@ -906,8 +921,13 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           [Symbol.asyncIterator]();
         const first = await iterator.next();
         expect(first.value).toMatchObject({ type: "message", message: { status: "running" } });
-        subject.release();
         const events: MessageStreamEvent[] = [first.value as MessageStreamEvent];
+        // Released once its state is out: one that ended before the replay was read is delivered as ended.
+        for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
+          events.push(next.value);
+          if (next.value.type === "state") break;
+        }
+        subject.release();
         for (let next = await iterator.next(); !next.done; next = await iterator.next()) events.push(next.value);
         expect(replies(events)).toEqual(["user:", "assistant:", "tool_result:", "assistant:answer: hold"]);
         expect(events.filter((event) => event.type === "state")).toHaveLength(1);

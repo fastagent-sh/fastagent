@@ -9,9 +9,9 @@ updated: 2026-10-28
 
 # Agent API v2
 
-> **Status: in progress.** The code implements the in-process binding (§8, `connectAgent` and `/client` aside); the
-> HTTP binding of §9 is not yet. When it is all implemented, this replaces `docs/SPEC.md`, which still describes v1.
-> Changing its semantics before then is a review of this draft.
+> **Status: in progress.** The code implements both bindings (§8, §9), and §9.6's commands are not yet. When they
+> are, this replaces `docs/SPEC.md`, which still describes v1. Changing its semantics before then is a review of this
+> draft.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
 
@@ -95,7 +95,8 @@ interface AgentInfo {
 
 interface Session {
   id: string;
-  status: "idle" | "running";
+  /** Or a status a later version adds, which a Caller takes for busy (§7.1). */
+  status: "idle" | "running" | (string & {});
   /** Its settings, as set at creation or by `update`; a field it does not name follows the deployment. */
   model?: { provider: string; modelId: string };
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -111,8 +112,11 @@ interface Message {
   id: string;
   sessionId: string;
   idempotencyKey?: string;
-  /** `queued` and `running` until it ends; then one of the four ends, which are all its ends (§5.4, §7.1). */
-  status: "queued" | "running" | "completed" | "incomplete" | "failed" | "canceled";
+  /**
+   * `queued` and `running` until it ends; then one of the four ends, which are all its ends (§5.4, §7.1). A status a
+   * later version adds is one it has not ended in.
+   */
+  status: "queued" | "running" | "completed" | "incomplete" | "failed" | "canceled" | (string & {});
   /** Its `user` entry, once the agent took it. */
   entryId?: string;
   /** The `assistant` entry the agent stopped on for it: present when `completed`, and when `incomplete`. */
@@ -280,8 +284,11 @@ sent (`/review 123`), not the expansion. A `/` followed by a name the agent does
   It is not `retryable`: sending again records a second message unless the send carries a key. With a key, the same
   send is the way to find out; with a `messageId`, `get` is. A dropped connection is the same case, seen from the
   Caller.
-- `connectAgent` gives a send without a key one of its own, so that its own retries are safe, and the Message's
-  `idempotencyKey` shows it. A Caller that retries itself passes its own key.
+- `connectAgent` gives a send without a key one of its own, so that one whose answer was lost rejects `unconfirmed`
+  with that key in `details`, which finds it; the Message's `idempotencyKey` shows it. A Caller that retries itself
+  passes its own key.
+- Only a send is idempotent: it is the one request whose repetition does harm (the agent answers it again, its tools
+  act again). A session created twice is an empty session more, which nothing refers to.
 
 ### 5.3 A busy session
 
@@ -387,7 +394,7 @@ to the last entry it received, and checks the message's end with `messages.get`.
 | `missing_model` | The session names no model the agent has | false | 409 |
 | `missing_tool` | The session's `tools` names a tool the agent no longer has (`details.tools`) | false | 409 |
 | `unconfirmed` | A send may have been recorded and could not be confirmed (§5.2); `details` holds what is known | false | 500 |
-| `unavailable` | The Agent's storage cannot answer now, and nothing was recorded | true | 503, with `Retry-After` |
+| `unavailable` | The Agent cannot answer now (its storage, or over HTTP the connection or a server on the way), and the same request may be sent again: nothing was recorded, or repeating it does no harm (an update or a cancel again, another compaction, an empty session a lost `create` left behind). A send that may have been recorded is `unconfirmed` instead (§5.2) | true | 503, with `Retry-After` |
 | `internal` | Anything else | false | 500 |
 
 A message's `failed` status carries `missing_model`, `auth_required`, `model_error` (retryable by the provider's
@@ -441,7 +448,10 @@ interface Service {
   /** Or a server of its own, Node's `http` server or `Bun.serve`: the one way to start one. Answers the port it bound. */
   listen(port: number, host?: string): Promise<number>;
   ready: Promise<void>;
-  /** Stops the server, giving requests in flight 500 ms before it ends them, then the channels and schedules. */
+  /**
+   * Ends the API's event streams, each with a `stream_error`, then stops the server, giving requests in flight 500 ms
+   * before it ends them, then the channels and schedules.
+   */
   close(): Promise<void>;
 }
 ```
@@ -543,7 +553,9 @@ same context as any other.
   are outside the API and unchanged: each channel verifies its platform.
 - **No CORS**: the key is a credential for the whole instance, so a browser never holds it. A browser app calls its own
   backend, which calls the agent.
-- A request body over 32 MiB is `413`, `invalid_request` with `details.reason: "too_large"`.
+- A request body over 32 MiB is `413`, `invalid_request` with `details.reason: "too_large"`. A request the API
+  cannot read (its path, query, headers or body, or a body sent as another type than `application/json`) is
+  `400 invalid_request`, and a route it does not have is `404 not_found`.
 
 ### 9.2 Routes
 
@@ -566,9 +578,12 @@ same context as any other.
 | `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | `messages.get` by key | `Message`; `404` when the session has seen no such key |
 
 `POST …/messages` takes the `SendRequest` without its `sessionId`, which is in the path, plus `wait` (§4's option)
-and `stream: true` for `messages.stream`: `{ content, whenBusy?, wait?, stream? }`. Its key is the `Idempotency-Key`
-header, percent-encoded in the `by-key` path. A send whose key the session has seen answers with that message and
-`Idempotent-Replayed: true`. Every `wait` is in seconds, and the server waits at most 60 (§7).
+and `stream: true` for `messages.stream`: `{ content, whenBusy?, wait?, stream? }`; a streamed message is watched,
+so `wait` beside `stream: true` is refused, `invalid_request`. A request whose options may be left out
+(`POST /v1/sessions`, `…/compact`) may come without a body. Its key is the `Idempotency-Key`
+header, percent-encoded there as in the `by-key` path, since a header holds neither every character a key may have
+nor the spaces around it (a key of letters, digits and `-_.~` reads the same either way). A send whose key the session has seen answers with that message, as
+§5.2 says. Every `wait` is in seconds, and the server waits at most 60 (§7).
 
 ### 9.3 Event streams
 
@@ -585,10 +600,12 @@ A refused request answers the status §7 gives its code, with `{ "error": AgentE
 `429` and `503` answers §7 names.
 
 ```bash
-curl -s https://support.example.com/v1/sessions -H "Authorization: Bearer $KEY" -d '{}'
+curl -s https://support.example.com/v1/sessions -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d '{}'
 SEND=$(uuidgen)   # one key per message: running the next line again is the same message
 curl -s https://support.example.com/v1/sessions/$SESSION/messages -H "Authorization: Bearer $KEY" \
-  -H "Idempotency-Key: $SEND" -d '{"content": "Where is order 9231?", "wait": 60}'
+  -H "Content-Type: application/json" -H "Idempotency-Key: $SEND" \
+  -d '{"content": "Where is order 9231?", "wait": 60}'
 ```
 
 ### 9.5 Where it is served
@@ -627,7 +644,7 @@ streaming).
 One executable suite runs against the in-process `Agent` and against `connectAgent` over a served one, so both
 bindings answer the same way. It checks:
 
-- acceptance before the answer; a rejection that records nothing, every one but `unconfirmed`; a send whose storage
+- acceptance before the answer; a refusal the Agent answers records nothing, every one but `unconfirmed`; a send whose storage
   fails once it is recorded rejects `unconfirmed` with its `messageId`, never `unavailable`;
 - one end per message, kept across a restart, with no tool run twice; idempotent sends, concurrent ones included, and
   `connectAgent`'s own key on a send without one;
