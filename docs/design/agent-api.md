@@ -284,8 +284,11 @@ sent (`/review 123`), not the expansion. A `/` followed by a name the agent does
   It is not `retryable`: sending again records a second message unless the send carries a key. With a key, the same
   send is the way to find out; with a `messageId`, `get` is. A dropped connection is the same case, seen from the
   Caller.
-- `connectAgent` gives a send without a key one of its own, so that its own retries are safe, and the Message's
-  `idempotencyKey` shows it. A Caller that retries itself passes its own key.
+- `connectAgent` gives a send without a key one of its own, so that one whose answer was lost rejects `unconfirmed`
+  with that key in `details`, which finds it; the Message's `idempotencyKey` shows it. A Caller that retries itself
+  passes its own key.
+- Only a send is idempotent: it is the one request whose repetition does harm (the agent answers it again, its tools
+  act again). A session created twice is an empty session more, which nothing refers to.
 
 ### 5.3 A busy session
 
@@ -391,7 +394,7 @@ to the last entry it received, and checks the message's end with `messages.get`.
 | `missing_model` | The session names no model the agent has | false | 409 |
 | `missing_tool` | The session's `tools` names a tool the agent no longer has (`details.tools`) | false | 409 |
 | `unconfirmed` | A send may have been recorded and could not be confirmed (§5.2); `details` holds what is known | false | 500 |
-| `unavailable` | The Agent's storage cannot answer now, and nothing was recorded | true | 503, with `Retry-After` |
+| `unavailable` | The Agent cannot answer now (its storage, or over HTTP the connection or a server on the way), and the same request may be sent again: nothing was recorded, or repeating it does no harm (an update or a cancel again, another compaction, an empty session a lost `create` left behind). A send that may have been recorded is `unconfirmed` instead (§5.2) | true | 503, with `Retry-After` |
 | `internal` | Anything else | false | 500 |
 
 A message's `failed` status carries `missing_model`, `auth_required`, `model_error` (retryable by the provider's
@@ -641,7 +644,7 @@ streaming).
 One executable suite runs against the in-process `Agent` and against `connectAgent` over a served one, so both
 bindings answer the same way. It checks:
 
-- acceptance before the answer; a rejection that records nothing, every one but `unconfirmed`; a send whose storage
+- acceptance before the answer; a refusal the Agent answers records nothing, every one but `unconfirmed`; a send whose storage
   fails once it is recorded rejects `unconfirmed` with its `messageId`, never `unavailable`;
 - one end per message, kept across a restart, with no tool run twice; idempotent sends, concurrent ones included, and
   `connectAgent`'s own key on a send without one;

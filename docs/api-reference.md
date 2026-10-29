@@ -118,9 +118,10 @@ whole instance, so a browser never holds it). A `wait` over 60 seconds is severa
 stream without an `idempotencyKey` gets one of its own, so one whose answer was lost rejects `unconfirmed` with that key
 in `details`, whatever stopped its answer (no connection, a proxy's page, a body it cannot read), and `messages.get` by
 key finds what became of it; so does a send whose wait failed once the message was recorded, with its `messageId`, as
-in process. A read that could not reach the agent or met a server's error rejects `unavailable`. An event type, a status
-or an error code from a later server that this client does not know is skipped, kept as the status it is (a message in
-one has not ended), or kept as the code it is, at whatever status it was answered with.
+in process. A read or another write that could not reach the agent or met a server's error rejects `unavailable`,
+which is safe to send again: a `create` sent again may leave an empty session behind, a `compact` compacts again. An
+event type, a status or an error code from a later server that this client does not know is skipped, kept as the status
+it is (a message in one has not ended), or kept as the code it is, at whatever status it was answered with.
 
 ## What an author writes
 

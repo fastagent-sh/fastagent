@@ -90,7 +90,8 @@ const whatFailed = (baseUrl: string, error: unknown) =>
 
 /**
  * A read's failure, and a write's other than a send's: a refusal as the agent answered it; one that could not get
- * through or met a server's error may be tried again; anything else is not the Caller's to retry.
+ * through or met a server's error may be sent again, since repeating any request but a send does no harm (§7);
+ * anything else is not the Caller's to retry.
  */
 function readFailure(baseUrl: string, error: unknown): AgentError {
   if (error instanceof AgentError) return error;
