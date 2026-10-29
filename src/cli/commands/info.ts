@@ -52,7 +52,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   }
   // Read already, by the definition's secrets: a refused environment is a definition that does not open.
   const environment = loadEnvironment(agentDir);
-  const models = modelEnvironment(agentDir, {}, code?.providers ?? []);
+  const models = await modelEnvironment(agentDir, {}, code?.providers ?? []);
   const slash = modelSpec?.indexOf("/") ?? -1;
   const modelError =
     modelSpec === undefined || models.models.getModel(modelSpec.slice(0, slash), modelSpec.slice(slash + 1))

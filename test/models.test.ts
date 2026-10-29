@@ -111,7 +111,7 @@ describe("authStatus: the one answer to what authenticates a provider for an age
     const agentDir = await mkdtemp(join(tmpdir(), "fa-auth-status-"));
     const path = join(agentDir, "auth.json");
     await writeFile(path, JSON.stringify(stored));
-    return { models: modelEnvironment(agentDir, { authPath: path }), path };
+    return { models: await modelEnvironment(agentDir, { authPath: path }), path };
   }
 
   it("a live stored login, or nothing: what the startup report and a box's --if-missing both read", async () => {
@@ -154,7 +154,7 @@ describe("authStatus: the one answer to what authenticates a provider for an age
       api: openAICompletionsApi(),
     });
     const agentDir = await mkdtemp(join(tmpdir(), "fa-auth-own-"));
-    const status = await modelEnvironment(agentDir, {}, [local]).authStatus("local");
+    const status = await (await modelEnvironment(agentDir, {}, [local])).authStatus("local");
     expect(status.source).toBe(UNNAMED_AUTH_SOURCE);
   });
 

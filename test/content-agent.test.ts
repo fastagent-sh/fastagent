@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { InMemoryCredentialStore, type Provider, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { modelsOver } from "../src/harnesses/models/models.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import { type ResolvedContent, resolveContent } from "../src/content/resolve.ts";
@@ -22,7 +23,7 @@ async function askOnce(agentDir: string, provider: Provider, content?: readonly 
   const agent = await assembleAgent(definition, {
     storage: new MemoryStorage(),
     code: { ...buildDefinition(definition, {}), providers: [provider] },
-    credentials: new InMemoryCredentialStore(),
+    models: modelsOver(new InMemoryCredentialStore(), [provider]),
     model: "faux/faux-1",
     ...(content === undefined ? {} : { content }),
   });

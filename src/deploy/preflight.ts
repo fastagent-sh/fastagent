@@ -8,13 +8,8 @@ import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
-import {
-  environmentAuth,
-  interactiveLoginKind,
-  loginProviders,
-  modelsOver,
-  providerOf,
-} from "../harnesses/models/models.ts";
+import { environmentAuth, interactiveLoginKind, loginProviders, providerOf } from "../harnesses/models/models.ts";
+import { modelEnvironment } from "../harnesses/models/environment.ts";
 import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
 import {
   type AgentDefinition,
@@ -314,7 +309,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
 
   const providers = code?.providers ?? [];
-  if (modelSpec && code) checkModelExists(modelSpec, providers, report);
+  if (modelSpec && code) await checkModelExists(agentDir, modelSpec, providers, report);
   const authPath = resolveAuthPath(agentDir);
   const route = modelSpec ? await credentialRoute(modelSpec, values, providers) : {};
   const modelAuth = route.envVar;
@@ -462,13 +457,22 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** A model no provider of the deployed agent offers fails every message there. */
-function checkModelExists(spec: string, providers: readonly Provider[], report: DeployReport): void {
+/**
+ * A model no provider of the deployed agent offers fails every message there. Its lists are this machine's, refreshed
+ * as the box refreshes its own when it opens; no credential of this machine's lends a provider a list.
+ */
+async function checkModelExists(
+  agentDir: string,
+  spec: string,
+  providers: readonly Provider[],
+  report: DeployReport,
+): Promise<void> {
   const provider = providerOf(spec);
-  if (modelsOver(new InMemoryCredentialStore(), providers).getModel(provider, spec.slice(provider.length + 1))) return;
+  const { models } = await modelEnvironment(agentDir, { credentialStore: new InMemoryCredentialStore() }, providers);
+  if (models.getModel(provider, spec.slice(provider.length + 1))) return;
   report.issue(
-    `no provider of the deployed agent offers "${spec}" — pi-ai's built-ins and the providers fastagent.config.ts ` +
-      `declares are all it has`,
+    `no provider of the deployed agent offers "${spec}" — pi-ai's built-ins, pi's published catalog and the ` +
+      `providers fastagent.config.ts declares are all it has`,
   );
 }
 

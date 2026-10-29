@@ -20,7 +20,7 @@ import {
 import { MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
-import { createPiModels, modelEnvironment } from "../src/harnesses/models/environment.ts";
+import { modelEnvironment } from "../src/harnesses/models/environment.ts";
 import { login, loginOptions } from "../src/harnesses/models/login.ts";
 import { modelsOver, probeAuthSource } from "../src/harnesses/models/models.ts";
 import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
@@ -90,7 +90,7 @@ describe("a caller's credential store replaces the credentials file", () => {
     try {
       expect(opened.models.auth).toBeUndefined(); // no file is in use, so none is reported
       expect((await opened.models.authStatus("anthropic")).source).toBe("stored credential");
-      expect((await modelEnvironment(agent).authStatus("anthropic")).source).toBeUndefined(); // the files hold nothing
+      expect((await (await modelEnvironment(agent)).authStatus("anthropic")).source).toBeUndefined(); // the files hold nothing
       noCredentialFiles(agent);
     } finally {
       await opened.agent.close();
@@ -101,9 +101,9 @@ describe("a caller's credential store replaces the credentials file", () => {
     // Emptying the store does not sign a provider out while its env variable is set (docs/api-reference.md).
     noAnthropicEnv();
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-env");
-    const empty = createPiModels({ credentialStore: await recordingStore() });
+    const { models: empty } = await modelEnvironment(undefined, { credentialStore: await recordingStore() });
     expect(await probeAuthSource(empty, "anthropic/claude-sonnet-4-5")).toBe("ANTHROPIC_API_KEY");
-    const stored = createPiModels({
+    const { models: stored } = await modelEnvironment(undefined, {
       credentialStore: await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } }),
     });
     expect((await stored.getAuth("anthropic"))?.auth.apiKey).toBe("sk-from-store");
@@ -160,7 +160,7 @@ describe("a caller's credential store replaces the credentials file", () => {
       },
     } as unknown as Provider;
     const store = await recordingStore({ refreshing: { type: "oauth", access: "old", refresh: "r1", expires: 1 } });
-    const models = createPiModels({ credentialStore: store, providers: [provider] });
+    const { models } = await modelEnvironment(undefined, { credentialStore: store }, [provider]);
 
     expect((await models.getAuth("refreshing"))?.auth.apiKey).toBe("new-access");
     expect(store.calls).toContain("modify refreshing");
@@ -187,7 +187,7 @@ describe("a caller's credential store replaces the credentials file", () => {
     const { host, agent } = await agentWorkspace();
     const both = { authPath: join(host, "auth.json"), credentialStore: await recordingStore() };
     await expect(openServing(agent, { ...both, storage: "memory" })).rejects.toThrow(/not both/);
-    expect(() => createPiModels(both)).toThrow(/not both/);
+    await expect(modelEnvironment(undefined, both)).rejects.toThrow(/not both/);
     const interaction = { signal: new AbortController().signal, notify: () => {}, prompt: async () => "" };
     // A JavaScript caller can pass either shape the types forbid.
     await expect(login({ provider: "openai", method: "api_key", interaction, ...both } as never)).rejects.toThrow(

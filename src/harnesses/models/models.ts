@@ -1,8 +1,8 @@
 /**
- * pi-ai's model collection as FastAgent composes it: the built-in providers over a credential store, and the
- * definition's own providers; and the reads a report, a login or a picker make of it. Model selection is pi-ai's
- * alone (architecture.md §3): a custom model is a provider in code (`defineAgent({ providers })`), never a models file,
- * a catalog cache or a per-account list.
+ * pi-ai's model collection as FastAgent composes it: the built-in providers over a credential store, kept current by
+ * the catalogs (catalog.ts), and the definition's own providers; and the reads a report, a login or a picker make of
+ * it. A custom model is a provider in code (`defineAgent({ providers })`), never a models file or a per-account list
+ * (architecture.md §3).
  */
 import {
   type Api,
@@ -11,9 +11,11 @@ import {
   type Model,
   type Models,
   type Provider,
+  createModels,
   defaultProviderAuthContext,
 } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import type { Catalogs } from "./catalog.ts";
 
 /** The provider of a `"provider/modelId"` spec. */
 export function providerOf(spec: string): string {
@@ -30,9 +32,21 @@ export function listModels(models: Models): string[] {
   return specs.sort();
 }
 
-/** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */
-export function modelsOver(credentials: CredentialStore, providers: readonly Provider[] = []): Models {
-  const models = builtinModels({ credentials, authContext: defaultProviderAuthContext() });
+/**
+ * The built-ins plus `providers` (a same id replaces a built-in), over any credential store. With `catalogs`, the lists
+ * its refresh brings up to date; without, the ones this pi-ai was built with.
+ */
+export function modelsOver(
+  credentials: CredentialStore,
+  providers: readonly Provider[] = [],
+  catalogs?: Catalogs,
+): Models {
+  const models = createModels({
+    credentials,
+    authContext: defaultProviderAuthContext(),
+    ...(catalogs ? { modelsStore: catalogs.fetched } : {}),
+  });
+  for (const builtIn of builtinProviders()) models.setProvider(catalogs ? catalogs.over(builtIn) : builtIn);
   for (const provider of providers) models.setProvider(provider);
   return models;
 }

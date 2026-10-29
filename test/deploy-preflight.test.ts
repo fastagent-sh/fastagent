@@ -3,7 +3,8 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
-import { createPiModels } from "../src/harnesses/models/environment.ts";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { modelsOver } from "../src/harnesses/models/models.ts";
 import type { AgentConfig as FastagentConfig } from "../src/harnesses/pi-durable/define.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 
@@ -841,7 +842,7 @@ export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" 
     // with this machine's file system would ship a deploy with no credential and no login.
     const adc = join(await mkdtemp(join(tmpdir(), "fa-adc-")), "adc.json");
     await writeFile(adc, "{}");
-    const vertex = createPiModels().getProvider("google-vertex")?.getModels()[0]?.id as string;
+    const vertex = modelsOver(new InMemoryCredentialStore()).getProvider("google-vertex")?.getModels()[0]?.id as string;
     const env = `GOOGLE_CLOUD_PROJECT=p\nGOOGLE_CLOUD_LOCATION=us-central1\nGOOGLE_APPLICATION_CREDENTIALS=${adc}\n`;
     const pre = await call(await agent({ ".secrets/.env": env }), { model: `google-vertex/${vertex}` }, { run: true });
     expect(pre.ok && pre.boxLogin).toBe("google-vertex");
@@ -850,7 +851,8 @@ export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" 
   it("a keyless credential in the value file travels; the same credential only in this shell leaves it to the box", async () => {
     // AWS keys are what pi reads for amazon-bedrock, with no single key variable to require. From the value file they
     // reach the box; from the shell they are this machine's, and whether the box has a role is the box's answer.
-    const bedrock = createPiModels().getProvider("amazon-bedrock")?.getModels()[0]?.id as string;
+    const bedrock = modelsOver(new InMemoryCredentialStore()).getProvider("amazon-bedrock")?.getModels()[0]
+      ?.id as string;
     const aws = "AWS_ACCESS_KEY_ID=AKIAEXAMPLE\nAWS_SECRET_ACCESS_KEY=secret\nAWS_REGION=us-east-1\n";
     const carried = await call(
       await agent({ ".secrets/.env": aws }),

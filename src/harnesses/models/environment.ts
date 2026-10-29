@@ -1,10 +1,15 @@
 /**
  * An agent's MODEL ENVIRONMENT as one value: the credential store its messages authenticate through, the models they
- * resolve against (models.ts), and what authenticates a provider there. Every reader builds it here (the serve, the
- * startup report, a deployed box's `login --if-missing`, `info`, `login`, the model list), so none can read other
- * credential layers or another registry than the Agent does.
+ * resolve against (models.ts) with their lists refreshed (catalog.ts), and what authenticates a provider there. Every
+ * reader builds it here (the serve, the startup report, a deployed box's `login --if-missing`, `info`, `login`, the
+ * model list, `deploy`'s pre-flight), so none can read other credential layers, another registry, or older lists than
+ * the Agent does.
  */
+import { join } from "node:path";
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
+import { log } from "../../log.ts";
+import { resolveStateRoot } from "../../paths.ts";
+import { catalogsIn } from "./catalog.ts";
 import {
   type AuthLayers,
   type CredentialSourceOptions,
@@ -40,6 +45,8 @@ export interface ModelEnvironment {
   credentials: CredentialStore;
   /** pi's built-ins and the definition's providers, over {@link credentials}. */
   models: Models;
+  /** Why a model list is not current, when one is not (logged already): each lists what it last had. */
+  catalogProblem?: string;
   /**
    * What authenticates `provider` here, resolved exactly as a message resolves it: the one answer the startup report
    * and a deployed box's `login --if-missing` both give. `modelId` picks the model to probe with; the provider's first
@@ -51,13 +58,15 @@ export interface ModelEnvironment {
 /**
  * The model environment of the agent in `agentDir` (or, without one, of a caller with no directory: the named or global
  * credentials file). A supplied `credentialStore` is used as given; otherwise the files: the directory's own layers
- * ({@link resolveAuthLayers}), or the named file, or the global one. `providers` are the definition's.
+ * ({@link resolveAuthLayers}), or the named file, or the global one. `providers` are the definition's. The model lists
+ * are refreshed before it resolves, kept in the agent's state root; `force` asks the network even when they are fresh.
  */
-export function modelEnvironment(
+export async function modelEnvironment(
   agentDir: string | undefined,
   source: CredentialSourceOptions & FastagentAuthOptions = {},
   providers: readonly Provider[] = [],
-): ModelEnvironment {
+  options: { force?: boolean } = {},
+): Promise<ModelEnvironment> {
   assertOneCredentialSource(source);
   const files = source.credentialStore
     ? undefined
@@ -66,11 +75,15 @@ export function modelEnvironment(
       : { path: source.authPath ?? GLOBAL_AUTH_PATH };
   const store = files === undefined ? undefined : layeredStore(files, providers, source.warn);
   const credentials = source.credentialStore ?? (store as FastagentCredentialStore);
-  const models = modelsOver(credentials, providers);
+  const catalogs = catalogsIn(agentDir === undefined ? undefined : join(resolveStateRoot(agentDir), "models"));
+  const models = modelsOver(credentials, providers, catalogs);
+  const catalogProblem = await catalogs.refresh(models, options);
+  if (catalogProblem !== undefined) log.warn(`[fastagent] ${catalogProblem}`);
   return {
     ...(files ? { auth: files } : {}),
     credentials,
     models,
+    ...(catalogProblem === undefined ? {} : { catalogProblem }),
     async authStatus(provider, modelId) {
       const id = modelId ?? models.getProvider(provider)?.getModels()[0]?.id;
       let resolved: { source?: string; error?: string } = {};
@@ -97,16 +110,6 @@ export function modelEnvironment(
       };
     },
   };
-}
-
-export interface CreatePiModelsOptions extends FastagentAuthOptions, CredentialSourceOptions {
-  /** Providers registered on top of the built-ins (a same id replaces a built-in). */
-  providers?: Provider[];
-}
-
-/** A `Models` with every built-in pi provider, wired to fastagent's credentials. */
-export function createPiModels(options: CreatePiModelsOptions = {}): Models {
-  return modelEnvironment(undefined, options, options.providers).models;
 }
 
 /**

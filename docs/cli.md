@@ -173,14 +173,17 @@ whose image runs the FastAgent they list.
 ## `fastagent models`
 
 ```bash
-fastagent models [search] [-g|--global]
+fastagent models [search] [-g|--global] [--refresh]
 ```
 
 Lists the model specs (`provider/modelId`) the agent in the current directory can name, optionally filtered: pi-ai's
-built-in providers, and the providers its `fastagent.config.ts` declares
-([custom models](configuration.md#custom-models)). It needs none of the secrets the agent declares. Outside an agent,
-or with `-g`, it lists pi-ai's built-ins alone. Inside an agent's subdirectory it refuses (as `login` does): `cd` to
-the agent, or pass `-g`.
+built-in providers with the models pi's published catalog adds to them ([model lists](configuration.md#model-lists)),
+and the providers its `fastagent.config.ts` declares ([custom models](configuration.md#custom-models)). It needs none
+of the secrets the agent declares. Outside an agent, or with `-g`, it lists the built-ins alone. Inside an agent's
+subdirectory it refuses (as `login` does): `cd` to the agent, or pass `-g`.
+
+`--refresh` fetches the lists now, however recently they were fetched: for a model released in the last 4 hours. When
+it cannot, it prints the lists it has, warns why, and exits 1.
 
 ## `fastagent login`
 

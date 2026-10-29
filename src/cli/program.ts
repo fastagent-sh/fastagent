@@ -155,18 +155,25 @@ const models: CommandSpec = {
   name: "models",
   summary: 'list the available "provider/modelId" model specs',
   description:
-    'List every "provider/modelId" spec the agent in this directory can name (pi-ai\'s built-ins, and the ' +
-    "providers its fastagent.config.ts declares) — use one with --model or as `model` in fastagent.config.ts. " +
-    "Outside an agent, or with -g, list pi-ai's built-ins.",
+    'List every "provider/modelId" spec the agent in this directory can name (pi-ai\'s built-ins, with the models ' +
+    "pi's published catalog adds to them, and the providers its fastagent.config.ts declares) — use one with " +
+    "--model or as `model` in fastagent.config.ts. Outside an agent, or with -g, list the built-ins. The lists are " +
+    "refreshed at most every 4 hours, by every command that opens the agent; --refresh refreshes them now, and " +
+    "exits 1 when it cannot.",
   args: [{ name: "[search]", description: "case-insensitive substring filter" }],
-  flags: [{ flags: "-g, --global", description: "pi-ai's built-ins alone" }],
+  flags: [
+    { flags: "-g, --global", description: "pi-ai's built-ins alone" },
+    { flags: "--refresh", description: "fetch the model lists now, even when the kept ones are fresh" },
+  ],
   examples: [
     { cmd: "fastagent models", note: "all specs" },
     { cmd: "fastagent models claude", note: "filter; provider-name matches rank first" },
+    { cmd: "fastagent models --refresh gpt", note: "a model released since the last refresh" },
   ],
   run: async (args, f) =>
     (await import("./commands/models.ts")).runModels(args[0] as string | undefined, {
       global: f.global === true,
+      refresh: f.refresh === true,
     }),
 };
 

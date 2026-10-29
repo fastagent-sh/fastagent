@@ -121,7 +121,7 @@ export async function openServing(directory: string, options: OpenServingOptions
   // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
   await enterEnvironment(dir);
   const content = await contentForThisRun(dir);
-  const models = modelEnvironment(
+  const models = await modelEnvironment(
     dir,
     {
       ...(options.authPath === undefined ? {} : { authPath: options.authPath }),
@@ -136,7 +136,7 @@ export async function openServing(directory: string, options: OpenServingOptions
     storage,
     code,
     content,
-    credentials: models.credentials,
+    models: models.models,
     ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
