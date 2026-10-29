@@ -179,7 +179,10 @@ describe("a caller's credential store replaces the credentials file", () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
     await login({ provider: "openai", method: "api_key", credentialStore: store, interaction });
     expect(await store.read("openai")).toMatchObject({ type: "api_key", key: "sk-typed" });
-    expect((await loginOptions(store)).find((o) => o.provider === "openai")?.stored).toBe("api_key");
+    expect((await loginOptions(store)).find((o) => o.provider === "openai")?.status).toEqual({
+      type: "api_key",
+      source: "stored credential",
+    });
     expect(existsSync(GLOBAL_AUTH_PATH)).toBe(false);
   });
 

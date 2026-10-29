@@ -20,7 +20,7 @@ An agent is identified by one filename, `fastagent.config.ts`:
 import { defineAgent } from "@fastagent-sh/fastagent";
 
 export default defineAgent({
-  model: "openai-codex/gpt-5.5",
+  model: "openai/gpt-5.5",
   http: { port: 8787 },
 });
 ```
@@ -60,8 +60,8 @@ created with its own model runs on it, and a message to a session with no model 
 session is given one (`sessions.update`).
 
 ```bash
-fastagent dev --model openai-codex/gpt-5.5
-FASTAGENT_MODEL=openai-codex/gpt-5.5 fastagent start
+fastagent dev --model openai/gpt-5.5
+FASTAGENT_MODEL=openai/gpt-5.5 fastagent start
 ```
 
 `deploy` evaluates the same chain in production: `FASTAGENT_MODEL` from `.secrets/production/.env`, else

@@ -109,7 +109,7 @@ There is no FastAgent build step: the agent folder is the deployable unit.
 ```ts
 import { openAgent } from "@fastagent-sh/fastagent";
 
-const agent = await openAgent("./agent", { model: "openai-codex/gpt-5.5" });
+const agent = await openAgent("./agent", { model: "openai/gpt-5.5" });
 
 const session = await agent.sessions.create();
 for await (const event of agent.messages.stream({ sessionId: session.id, content: "hi" })) {

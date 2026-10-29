@@ -77,12 +77,12 @@ the steps it could not do.
 
 ## Logging a deployment in
 
-A model with no API key in `.secrets/production/.env` (an OAuth subscription such as `openai-codex`, or a key you entered
-with `fastagent login`) authenticates on the deployment itself:
+A model with no API key in `.secrets/production/.env` (an account sign-in such as ChatGPT for `openai`, or a key you
+entered with `fastagent login`) authenticates on the deployment itself:
 
 ```bash
 fastagent login --deployment railway    # the host is always named
-fastagent login openai-codex --deployment fly
+fastagent login openai --deployment fly
 ```
 
 The host is not inferred from the agent directory: a Railway deploy leaves no file of its own there, and one

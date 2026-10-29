@@ -1,18 +1,38 @@
 /**
- * `fastagent login [provider]`: authenticate a model provider into the project-level auth file
- * (`<agentDir>/.secrets/auth.json`) by default, or `FASTAGENT_AUTH_PATH`. `--deployment` runs the same login on this
- * agent's deployed box instead (box-login.ts); `--stdio` is the box's half of that.
+ * `fastagent login [provider]`: sign in to a model provider, into the project-level auth file
+ * (`<agentDir>/.secrets/auth.json`) by default, or `FASTAGENT_AUTH_PATH`. In a terminal it asks, as pi's `/login`
+ * does; otherwise (a script, a coding agent: no terminal, `--no-input` or `--json`) nothing is asked and nothing
+ * waits: what it needs is named, and a person's step is handed back with a ticket to check (login-ticket.ts).
+ * `--deployment` runs the same login on this agent's deployed box instead (box-login.ts); `--stdio` is the box's half.
  */
-import { enterAgentEnv } from "../../env.ts";
-import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../harnesses/models/credentials.ts";
+import type { Provider } from "@earendil-works/pi-ai";
+import { enterAgentEnv, dotEnvPath } from "../../env.ts";
+import {
+  type FastagentCredentialStore,
+  GLOBAL_AUTH_PATH,
+  resolveAuthPath,
+} from "../../harnesses/models/credentials.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { findAgentDir, globalHome, selectAgentEnvironment } from "../../paths.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../../harnesses/models/login.ts";
-import { environmentAuth } from "../../harnesses/models/models.ts";
-import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
+import {
+  LoginCancelled,
+  type LoginIO,
+  type LoginMethod,
+  type LoginOption,
+  LoginRefused,
+  PI_DEFAULT_MODELS,
+  chooseLogin,
+  loginFlow,
+  loginOptionsOver,
+  loginOver,
+  loginStatusText,
+} from "../../harnesses/models/login.ts";
+import { environmentAuth, keyVariables, loginProviders } from "../../harnesses/models/models.ts";
+import { definitionProviders, loadConfig, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { loginOnBox } from "../box-login.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
+import { type Ticket, checkTicket, runTicket, startTicket } from "../login-ticket.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";
 import { isInteractive, terminalLoginIO } from "../shared.ts";
 import { HOSTS } from "./deploy.ts";
@@ -22,6 +42,18 @@ export interface LoginOptions {
   global?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
+  /** `--method account|api-key`: how to sign in, for a provider that offers both. */
+  method?: string;
+  /** `--json`: the outcome as one JSON object on stdout. */
+  json?: boolean;
+  /** `--timeout <seconds>`: how long the sign-in stays open. */
+  timeout?: string;
+  /** `--check <ticket>`: where a sign-in started without a terminal stands. */
+  check?: string;
+  /** `--code <address>` (with `--check`): the address the person's browser ended on, or the code it showed. */
+  code?: string;
+  /** `--ticket <id>`: the process that runs a ticket's sign-in. */
+  ticket?: string;
   /** `--deployment <host>`: log in this agent's deployment on that host. */
   deployment?: string;
   /** `--stdio`: the box's half of `--deployment` — the flow speaks the relay wire on stdin/stdout. */
@@ -30,9 +62,16 @@ export interface LoginOptions {
   ifMissing?: boolean;
 }
 
+/** Without a terminal, how long a sign-in stays open for the person to finish it. */
+const UNATTENDED_TIMEOUT_SECONDS = 600;
+
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.stdio) return runStdioLogin(provider, opts);
   if (opts.deployment !== undefined) return runDeploymentLogin(provider, opts);
+  if (opts.check !== undefined) return runCheck(opts.check, opts);
+  if (opts.code !== undefined) failUsage("--code hands an address to a sign-in: pass --check <ticket> too");
+  const method = opts.method === undefined ? undefined : methodOf(opts.method);
+  const givenTimeout = opts.timeout === undefined ? undefined : secondsOf(opts.timeout);
   // "Outside an agent" must mean exactly that: inside one is refused (findAgentDir), never a global login.
   const agentDir = optionalAgentDirOrExit(process.cwd());
   // Outside any agent the target is the user-global machinery home — handed over explicitly, so the path resolvers
@@ -49,6 +88,19 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // exactly where the operator said, or a second `login` for a provider they already have globally would silently
   // rewrite the global credential instead of creating the project-level override they asked for.
   const authPath = opts.global ? GLOBAL_AUTH_PATH : resolveAuthPath(loginDir);
+  // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint. Not for
+  // `-g`: the global file serves every agent on this machine, so no one agent's providers decide what it holds.
+  const providers = agentDir && !opts.global ? await definitionProviders(agentDir).catch(failStartup) : [];
+  const ownAgent = opts.global ? undefined : agentDir;
+  if (opts.ticket !== undefined) {
+    // The process `startTicket` started: the sign-in itself, its outcome written to the ticket.
+    await runTicket(opts.ticket, async (interaction) => {
+      await loginOver({ provider: provider as string, method: "oauth", authPath, interaction }, { providers });
+      const model = ownAgent ? await defaultModelHint(ownAgent, provider as string) : undefined;
+      return model === undefined ? {} : { model };
+    });
+    process.exit(0);
+  }
   // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path, the credential
   // lands somewhere no agent will read.
   if (!agentDir && !opts.global && !process.env.FASTAGENT_AUTH_PATH) {
@@ -59,30 +111,47 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
         `you want; \`cd\` into an agent to give that one its own account instead.`,
     );
   }
-  // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or prompts for a
-  // key).
-  if (opts.input === false || !isInteractive()) {
-    failStartup(
-      new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
-    );
+  // What the agent reads, its file over the global one, is what authenticates each provider for it now.
+  const statusFrom = ownAgent
+    ? ((await modelEnvironment(ownAgent, {}, providers)).credentials as FastagentCredentialStore)
+    : authPath;
+  if (opts.input === false || opts.json === true || !isInteractive()) {
+    const offered = await loginOptionsOver(statusFrom, providers);
+    return requestLogin(offered, { provider, method }, opts, {
+      authPath,
+      providers,
+      valueFile: ownAgent === undefined ? undefined : dotEnvPath(ownAgent),
+      heldIn: async (id) => (typeof statusFrom === "string" ? statusFrom : statusFrom.layerOf(id)),
+      timeoutSeconds: givenTimeout ?? UNATTENDED_TIMEOUT_SECONDS,
+    });
   }
-  // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint. Not for
-  // `-g`: the global file serves every agent on this machine, so no one agent's providers decide what it holds.
-  const providers = agentDir && !opts.global ? await definitionProviders(agentDir).catch(failStartup) : [];
+  const timeout = givenTimeout === undefined ? undefined : AbortSignal.timeout(givenTimeout * 1000);
   // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
   const result = await loginFlow(terminalLoginIO(), {
     authPath,
     providers,
+    statusFrom: typeof statusFrom === "string" ? undefined : statusFrom,
     ...(provider ? { provider } : {}),
-  }).catch((error: unknown) => {
+    ...(method ? { method } : {}),
+    ...(timeout ? { signal: timeout } : {}),
+  }).catch((error: unknown): never => {
+    if (timeout?.aborted) failStartup(new Error(`login timed out after ${givenTimeout}s (--timeout)`));
     if (error instanceof LoginCancelled) {
       // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
       console.error(`[fastagent] login cancelled`);
       process.exit(1);
     }
+    if (error instanceof LoginRefused) failUsage(error.message);
     failStartup(error);
   });
-  console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
+  const name = loginProviders(providers).find((p) => p.id === result.provider)?.name ?? result.provider;
+  console.error(
+    result.method === "oauth"
+      ? `[fastagent] logged in to ${name} — saved to ${authPath}`
+      : `[fastagent] saved the API key for ${name} to ${authPath}`,
+  );
+  const model = ownAgent ? await defaultModelHint(ownAgent, result.provider) : undefined;
+  if (model !== undefined) console.error(`[fastagent] ${modelHint(model, name)}`);
   // The environment outranks the global file for every agent, so a global login it shadows would sit unused while
   // agents run on, say, an API key billed per request, with only a startup line to show it.
   const shadowedBy =
@@ -94,6 +163,254 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     );
   }
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
+}
+
+const modelHint = (model: string, name: string) =>
+  `this agent has no model: \`model: "${model}"\` in fastagent.config.ts uses ${name}'s default`;
+
+/** `--method`'s words, pi's: an account (OAuth) or an API key. */
+function methodOf(value: string): LoginMethod {
+  if (value === "account") return "oauth";
+  if (value === "api-key") return "api_key";
+  return failUsage(`--method must be account or api-key, not "${value}"`);
+}
+
+const methodWord = (method: LoginMethod) => (method === "oauth" ? "account" : "api-key");
+
+function secondsOf(value: string): number {
+  const seconds = Number(value);
+  if (!Number.isInteger(seconds) || seconds <= 0)
+    failUsage(`--timeout must be a whole number of seconds, not "${value}"`);
+  return seconds;
+}
+
+/**
+ * pi's default model for `provider`, when the agent in `agentDir` has no model of its own: what pi starts on after a
+ * sign-in. Printed, never written: the model belongs in the author's own config.
+ */
+async function defaultModelHint(agentDir: string, provider: string): Promise<string | undefined> {
+  const config = await loadConfig(agentDir).catch(failStartup);
+  if (modelSpecFor(config, undefined) !== undefined) return undefined;
+  const modelId = PI_DEFAULT_MODELS[provider];
+  return modelId === undefined ? undefined : `${provider}/${modelId}`;
+}
+
+/** Print one outcome: the JSON object with `--json`, else `text`'s lines; stdout either way, it is the result. */
+function report(opts: LoginOptions, outcome: Record<string, unknown>, text: readonly string[]): void {
+  console.log(opts.json ? JSON.stringify(outcome, null, 2) : text.join("\n"));
+}
+
+/**
+ * Login with no one at a terminal to ask, as Netlify's `login --request` and Dosu's tickets have it: a choice not
+ * given is named with a command for each way (`need_choice`, exit 2); an account sign-in starts in a process of its
+ * own and returns its address with a ticket (`need_user_action`, exit 0); an API key is the person's to set where the
+ * agent reads it, never handed through the agent (`need_user_action` naming the variables).
+ */
+async function requestLogin(
+  offered: readonly LoginOption[],
+  given: { provider?: string | undefined; method?: LoginMethod | undefined },
+  opts: LoginOptions,
+  target: {
+    authPath: string;
+    providers: readonly Provider[];
+    valueFile?: string;
+    /** The credentials file that holds what `provider` has stored, as the agent reads it. */
+    heldIn: (provider: string) => Promise<string>;
+    timeoutSeconds: number;
+  },
+): Promise<void> {
+  const global = opts.global ? " -g" : "";
+  let choice: LoginOption;
+  try {
+    choice = await chooseLogin(offered, given, undefined);
+  } catch (error) {
+    if (!(error instanceof LoginRefused)) throw error;
+    if (opts.json) {
+      report(
+        opts,
+        {
+          status: "need_choice",
+          message: error.message,
+          choices: error.choices.map((o) => ({
+            provider: o.provider,
+            name: o.name,
+            method: methodWord(o.method),
+            label: o.label,
+            status: loginStatusText(o),
+            command: `fastagent login ${o.provider} --method ${methodWord(o.method)}${global} --json`,
+          })),
+          agent_next_steps: "Ask the user which of these to sign in with, then run that choice's command.",
+        },
+        [],
+      );
+    }
+    return failUsage(error.message);
+  }
+  if (choice.method === "api_key") return keyNeeded(choice, opts, target);
+  const ticket = await startTicket({
+    provider: choice.provider,
+    name: choice.name,
+    authPath: target.authPath,
+    timeoutSeconds: target.timeoutSeconds,
+    command: {
+      file: process.execPath,
+      args: [
+        ...process.execArgv,
+        process.argv[1] as string,
+        "login",
+        choice.provider,
+        "--method",
+        "account",
+        ...(opts.global ? ["-g"] : []),
+      ],
+      cwd: process.cwd(),
+    },
+  });
+  // No browser is opened: the agent hands the address to its person, who may be on another machine.
+  reportTicket(ticket, opts, "started");
+  process.exit(ticket.status === "failed" || ticket.status === "expired" ? 1 : 0);
+}
+
+/**
+ * An API key with no terminal to type it in: the variables the person sets themselves where the agent reads them, and
+ * how to tell it worked. With no agent's value file to name (`-g`, or no agent here), the person signs in at a terminal
+ * of their own, which keeps the key in the global file `auth check -g` reads: the agent's environment was fixed when it
+ * started, so a variable set now would never reach it.
+ */
+async function keyNeeded(
+  choice: LoginOption,
+  opts: LoginOptions,
+  target: { providers: readonly Provider[]; valueFile?: string; heldIn: (provider: string) => Promise<string> },
+): Promise<void> {
+  const base = { provider: choice.provider, method: "api-key" };
+  if (choice.status?.type === "api_key") {
+    report(opts, { status: "ready", ...base, source: choice.status.source }, [
+      `ready: ${choice.name} is authenticated by ${choice.status.source}`,
+    ]);
+    return;
+  }
+  const check = `fastagent auth check --provider ${choice.provider}${target.valueFile === undefined ? " -g" : ""}`;
+  if (target.valueFile === undefined) {
+    const terminal = `fastagent login ${choice.provider} --method api-key -g`;
+    report(
+      opts,
+      {
+        status: "need_user_action",
+        ...base,
+        terminal_command: terminal,
+        check_command: `${check} --json`,
+        agent_next_steps:
+          "Ask the user to run terminal_command in a terminal of their own: it asks for the key there, not in this " +
+          "conversation, and keeps it in the global credentials file. Once they say they have, run check_command.",
+      },
+      [`need_user_action: run in a terminal of your own: ${terminal}`, `then run: ${check}`],
+    );
+    return;
+  }
+  // A stored account sign-in outranks any key in the environment: it goes first, or the key set now is never used.
+  const outranking = choice.status?.source === "OAuth" ? await target.heldIn(choice.provider) : undefined;
+  const logout =
+    outranking === undefined
+      ? undefined
+      : `fastagent logout ${choice.provider}${outranking === GLOBAL_AUTH_PATH ? " -g" : ""}`;
+  const provider = loginProviders(target.providers).find((p) => p.id === choice.provider);
+  const variables = provider ? await keyVariables(provider) : [];
+  const what =
+    variables.length === 0
+      ? `its key as ${choice.name}'s own documentation says`
+      : variables.length === 1
+        ? `${variables[0]}=<their ${choice.name} key>`
+        : `the variables ${choice.name} reads its key from (${variables.join(", ")})`;
+  const first =
+    logout === undefined
+      ? ""
+      : `${choice.name} is signed in with an account in ${outranking}, which outranks a key in the environment: ` +
+        "run logout_command first (with the user's agreement: it removes that sign-in). Then ";
+  report(
+    opts,
+    {
+      status: "need_user_action",
+      ...base,
+      variables,
+      value_file: target.valueFile,
+      ...(logout === undefined ? {} : { logout_command: logout }),
+      check_command: `${check} --json`,
+      agent_next_steps:
+        `${first}${first ? "ask" : "Ask"} the user to set ${what} in ${target.valueFile} themselves, not in this ` +
+        "conversation. Once they say they have, run check_command.",
+    },
+    [
+      ...(logout === undefined ? [] : [`first, to replace the account sign-in in ${outranking}: ${logout}`]),
+      `need_user_action: set ${what} in ${target.valueFile}`,
+      `then run: ${check}`,
+    ],
+  );
+}
+
+/** `login --check <ticket> [--code <address>]`. */
+async function runCheck(id: string, opts: LoginOptions): Promise<void> {
+  const ticket = await checkTicket(id, opts.code);
+  if (ticket === undefined) failUsage(`no sign-in "${id}": a ticket is what \`fastagent login\` printed`);
+  reportTicket(ticket, opts, "checked");
+  process.exit(ticket.status === "failed" || ticket.status === "expired" ? 1 : 0);
+}
+
+/** A ticket's state for whoever started or checked it, with what to do next. */
+function reportTicket(ticket: Ticket, opts: LoginOptions, when: "started" | "checked"): void {
+  const base = { status: ticket.status, provider: ticket.provider, ticket: ticket.ticket };
+  const check = `fastagent login --check ${ticket.ticket}`;
+  const restart = `fastagent login ${ticket.provider} --method account${opts.global ? " -g" : ""}`;
+  if (ticket.status === "authorized") {
+    const hint = ticket.model === undefined ? [] : [modelHint(ticket.model, ticket.name)];
+    report(
+      opts,
+      {
+        ...base,
+        path: ticket.authPath,
+        ...(ticket.model === undefined ? {} : { model: ticket.model, agent_next_steps: `Tell the user: ${hint[0]}.` }),
+      },
+      [`authorized: signed in to ${ticket.name} — saved to ${ticket.authPath}`, ...hint],
+    );
+    return;
+  }
+  if (ticket.status === "failed" || ticket.status === "expired") {
+    const message = ticket.status === "expired" ? "the sign-in was not finished in time" : (ticket.message as string);
+    report(opts, { ...base, message, agent_next_steps: `To try again, run: ${restart} --json` }, [
+      `${ticket.status}: ${message}`,
+      `to try again: ${restart}`,
+    ]);
+    return;
+  }
+  const device = ticket.code !== undefined;
+  const resume = `${check} --code '<address>'`;
+  const give = device
+    ? `Give the URL and the code ${ticket.code} to the user so they can sign in to ${ticket.name} there.`
+    : `Give the URL to the user so they can sign in to ${ticket.name}.`;
+  const then = device
+    ? "Once they say they have, run check_command."
+    : "Once they say they have, run check_command. If their browser ends on a page that does not load (an address " +
+      "on localhost), ask them for that address and run resume_command with it in place of <address>.";
+  report(
+    opts,
+    {
+      ...base,
+      method: "account",
+      ...(ticket.url === undefined ? {} : { url: ticket.url }),
+      ...(device ? { code: ticket.code } : {}),
+      ...(ticket.instructions === undefined ? {} : { instructions: ticket.instructions }),
+      expires_in: Math.max(0, Math.round((ticket.expiresAt - Date.now()) / 1000)),
+      check_command: `${check} --json`,
+      ...(device ? {} : { resume_command: `${resume} --json` }),
+      agent_next_steps:
+        when === "started" ? `${give} ${then}` : `The user has not finished signing in yet. ${give} ${then}`,
+    },
+    [
+      `need_user_action: sign in to ${ticket.name} at`,
+      `  ${ticket.url ?? "(no address yet)"}${device ? `  (code: ${ticket.code})` : ""}`,
+      `then run: ${check}`,
+      ...(device ? [] : [`if the browser ends on a page that does not load, run: ${resume}`]),
+    ],
+  );
 }
 
 /**

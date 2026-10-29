@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, content, env, models, login, dev, invoke, start, schedules, add, deploy, logs, and destroy, with their flags."
+description: "The fastagent CLI reference: init, info, content, env, models, login, logout, auth, dev, invoke, start, schedules, add, deploy, logs, and destroy, with their flags."
 status: current
 ---
 
@@ -23,7 +23,9 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `content list\|add\|remove` | List, add or remove what the agent works on and knows. |
 | `env add\|remove\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
 | `models [search]` | List the model specs the agent can name. |
-| `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
+| `login [provider]` | Sign in to a model provider (an account or an API key) into `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
+| `logout [provider]` | Remove a credential `login` stored. |
+| `auth check` | Whether a provider is ready: `ready`, `not_ready` or `invalid`, for scripts and agents. |
 | `dev [agent]` | Serve locally, restarting on code edits. |
 | `invoke <message> [agent]` | Send one message, print its answer (`--json`: its events), and exit; `--session <id>` continues an earlier run's session. |
 | `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
@@ -188,8 +190,44 @@ it cannot, `FASTAGENT_OFFLINE=1` included, it prints the lists it has, warns why
 ## `fastagent login`
 
 ```bash
-fastagent login [provider] [-g|--global] [--deployment <host>] [--no-input]
+fastagent login [provider] [-g|--global] [--method account|api-key] [--json] [--timeout <seconds>]
+                [--deployment <host>] [--no-input]
+fastagent login --check <ticket> [--code <address>] [--json]
 ```
+
+In a terminal it asks as pi's `/login` does: how to sign in (an account, an API key, or Radius), then the provider,
+listed by name with what authenticates each one now (`✓ configured`, `✓ env: OPENAI_API_KEY`, `API key configured`,
+`not configured`). `[provider]` is an id or a name (`openai`, `OpenAI`); for a provider that offers both ways it asks
+which, in its own words (`Sign in with ChatGPT`). `openai-codex` is listed as pi lists it, `OpenAI Codex (legacy)`:
+a ChatGPT account signs in to `openai`. When the agent has no model, `login` prints the line that would give it pi's
+default for the provider (`model: "openai/gpt-5.5"`); it never edits `fastagent.config.ts`.
+
+Without a terminal, or with `--no-input` or `--json`, a script or a coding agent signs in, and nothing is asked or
+waited on. A coding agent works in turns, so each command does its part and says what comes next, as Netlify's
+`login --request`/`--check` and Dosu's login tickets do. With `--json` the outcome is one object on stdout, whose
+`agent_next_steps` says it in a sentence:
+
+- **A choice not given** (no `[provider]`, or no `--method` for a provider that offers both) exits 2 with
+  `"status": "need_choice"` and the `choices`, each with the `command` that makes it.
+- **An account** (`--method account`) starts its sign-in in a process of its own and returns at once, exit 0, with
+  `"status": "need_user_action"`: the `url` for the person to sign in at (and the `code` to enter there, for a device
+  sign-in), a `ticket`, `check_command` and `expires_in`. No browser is opened: the agent hands the address to its
+  person, who may be on another machine. `fastagent login --check <ticket>` then answers `need_user_action` (not
+  finished), `authorized` (with the `path` it was saved to, and the default `model` for an agent with none), `failed`
+  or `expired`. When the person's browser cannot reach this machine, it ends on a page that does not load (an address
+  on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the sign-in.
+  `--timeout` sets how long the sign-in stays open (default 600 seconds). A newer sign-in to the same provider stops
+  one still waiting (its ticket is then `failed`, "replaced by a newer sign-in"), which would otherwise hold the
+  provider's callback port until it expired.
+- **An API key** (`--method api-key`) is the person's to set where the agent reads it, never typed into the agent's
+  conversation: `"status": "need_user_action"` names the `variables` the provider reads (`OPENAI_API_KEY`) and the
+  agent's `value_file` (`.secrets/.env`), and `check_command` is `fastagent auth check`. When one is set already, the
+  answer is `"status": "ready"`. An account sign-in stored for the provider outranks a key in the environment, so then
+  `logout_command` comes first. With no agent's value file to name (`-g`, or no agent here), the person runs
+  `terminal_command`, `login <provider> --method api-key -g`, in a terminal of their own: a variable set now would never
+  reach the agent's environment, fixed when it started.
+- Exit status: 0 signed in, or waiting on the person; 1 cancelled, failed or expired; 2 a provider or method not
+  given, or a ticket that is not one.
 
 Writes to the selected environment's `auth.json` (default: `<agent dir>/.secrets/auth.json`; overrides:
 `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). Local `start` recovery hints pin `FASTAGENT_AUTH_PATH` to the
@@ -212,6 +250,33 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
   gateway in front of a built-in provider, say); with `-g` it goes to the provider's own endpoint.
 - `auth.json` is always written `0600`. `.secrets/.env` is `0600` only when fastagent creates it; directories keep
   the permissions you gave them.
+
+## `fastagent logout`
+
+```bash
+fastagent logout [provider] [-g|--global] [--no-input]
+```
+
+Removes the credential `login` stored for a provider, from the file `login` writes, as pi's `/logout` does: in a
+terminal, a menu of the providers stored there; otherwise the one named (an id or a name), which must be stored there
+(exit 1 names what is), and none named exits 2. Environment variables, and the grant at the provider, are left as
+they are.
+
+## `fastagent auth check`
+
+```bash
+fastagent auth check (--provider <id> | --model <provider/modelId>) [-g|--global] [--json]
+```
+
+Whether a provider is ready for the agent here, as pi's `auth check` answers it: prints `ready`, `not_ready` or
+`invalid` and exits 0, 1 or 2. The answer is the one the agent's messages would get: its credentials file over the
+global one, then the environment, with a login due a refresh refreshed. `--json` prints one object:
+
+| Status | Fields |
+|---|---|
+| `ready` | `provider`, `authType` (`oauth` or `api_key`), `source` (`OAuth`, `stored credential`, or the variable), `path` |
+| `not_ready` | `provider`, `reason`: `provider_not_found` or `credentials_not_configured`, `path` |
+| `invalid` | `provider`, `reason: "invalid_state"`, `error` (a corrupt entry, a refresh the provider refused), `path` |
 
 ## `fastagent dev`
 
@@ -383,9 +448,9 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
+| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
-| `--json` | `info`, `invoke`, `schedules list`, `content list` | Machine-readable output. |
+| `--json` | `info`, `invoke`, `schedules list`, `content list`, `login`, `auth check` | Machine-readable output. |
 
 ## Exit codes
 

@@ -47,7 +47,7 @@ interface Agent {
 ```ts
 import { openAgent } from "@fastagent-sh/fastagent";
 
-const agent = await openAgent("./my-agent", { model: "openai-codex/gpt-5.5" });
+const agent = await openAgent("./my-agent", { model: "openai/gpt-5.5" });
 // ...
 await agent.close(); // on shutdown: releases the instance's storage
 ```

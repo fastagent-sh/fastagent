@@ -5,7 +5,7 @@
  *
  * The flow itself is interactive, so `loginFlow` is replaced by its result; everything after it is the real command.
  */
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -79,5 +79,27 @@ describe("login: a global credential the environment shadows", () => {
     await mkdir(machineSecrets, { recursive: true });
     await writeFile(join(machineSecrets, ".env"), "ANTHROPIC_API_KEY=sk-machine-home\n");
     expect(await login(outside, true)).not.toMatch(/warning:/);
+  });
+});
+
+describe("login: what it says when it is done", () => {
+  /** An agent whose config is `config`. */
+  async function agentWith(config: string): Promise<string> {
+    const agent = join(await mkdtemp(join(tmpdir(), "fa-login-done-")), "fastagent");
+    await mkdir(agent, { recursive: true });
+    await writeFile(join(agent, "fastagent.config.ts"), config);
+    return agent;
+  }
+
+  it("names pi's default model for the provider, printed and not written, when the agent has none", async () => {
+    vi.stubEnv("FASTAGENT_MODEL", "");
+    const bare = await agentWith("export default {};\n");
+    expect(await login(bare, false)).toMatch(
+      /this agent has no model: `model: "anthropic\/claude-opus-4-8"` in fastagent\.config\.ts uses Anthropic's default/,
+    );
+    expect(await readFile(join(bare, "fastagent.config.ts"), "utf8")).toBe("export default {};\n");
+    expect(await login(await agentWith(`export default { model: "openai/gpt-5.5" };\n`), false)).not.toMatch(
+      /no model/,
+    );
   });
 });

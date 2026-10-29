@@ -60,6 +60,8 @@ src/
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
 │   ├── login-relay.ts      # `login` split across a process boundary: LoginIO as JSON lines, box half + terminal half
+│   ├── login-ticket.ts     # an account sign-in that outlives the command starting it (a coding agent's turn): its
+│   │                       # own process, a ticket under ~/.fastagent/.state/logins, `login --check`
 │   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell
 │   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
 ├── telegram.ts, slack.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)

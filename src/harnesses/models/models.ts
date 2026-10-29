@@ -82,6 +82,25 @@ export async function environmentAuth(
 }
 
 /**
+ * The environment variables a provider reads its key from, in the order it reads them: what a person sets for it to
+ * authenticate with no sign-in. pi-ai keeps the names inside each provider's auth, so they are learnt by asking the
+ * provider to authenticate over an environment that records every name asked for and holds none. Its side-effect-free
+ * `check` when it has one, since its `resolve` may then run commands.
+ */
+export async function keyVariables(provider: Provider): Promise<string[]> {
+  const apiKey = provider.auth.apiKey;
+  if (apiKey === undefined) return [];
+  const asked = new Set<string>();
+  const ctx = {
+    env: async (name: string) => void asked.add(name),
+    fileExists: async () => false,
+  };
+  const signal = new AbortController().signal;
+  await (apiKey.check ? apiKey.check({ ctx, signal }) : apiKey.resolve({ ctx, signal }));
+  return [...asked];
+}
+
+/**
  * What a provider can offer as an interactive login: an OAuth flow, an API-key ENTRY prompt, or nothing ("none" — the
  * key must come from the provider's env var).
  */
