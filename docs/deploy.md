@@ -39,7 +39,7 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 
 ## The Agent API
 
-Docker, Fly and Railway deployments serve the [Agent API](design/agent-api.md#9-http) under `/v1`, behind
+Docker, Fly and Railway deployments serve the [Agent API](SPEC.md#9-http) under `/v1`, behind
 `FASTAGENT_API_KEY`. When `.secrets/production/.env` holds none, `deploy` generates one there once the pre-flight
 passes, and it travels with the other values; a host's own check that stops that deploy afterwards (a stale artifact,
 a missing `flyctl`) leaves the key for the next. The report names the API's URL and the check:

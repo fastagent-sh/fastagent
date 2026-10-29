@@ -1,5 +1,5 @@
 /**
- * The Agent API's conformance suite (docs/design/agent-api.md §11), runnable against any `Agent`. What a message makes
+ * The Agent API's conformance suite (docs/SPEC.md §11), runnable against any `Agent`. What a message makes
  * the agent do is chosen by its text, which a subject maps onto its harness:
  *
  * - `hold`: a tool call that waits for `release()` and stops when aborted; `stubborn`: one that waits whatever its

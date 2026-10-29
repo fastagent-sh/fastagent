@@ -1,5 +1,5 @@
 /**
- * The Agent API (docs/design/agent-api.md) as Effect Schemas: its objects, what a Caller sends, its errors and its
+ * The Agent API (docs/SPEC.md) as Effect Schemas: its objects, what a Caller sends, its errors and its
  * limits. Imports only `effect`: it is the layer that keeps the harness away from its Callers, and the HTTP binding is
  * built from the same schemas, so the two bindings cannot describe different APIs.
  */

@@ -122,7 +122,7 @@ export function startSchedules(
   return scheduler;
 }
 
-/** What `serve()` answers (agent-api.md §8): the agent's channels, schedules and wake-ups, and `GET /health`. */
+/** What `serve()` answers (SPEC.md §8): the agent's channels, schedules and wake-ups, and `GET /health`. */
 export interface Service {
   /** For an app's own server to route to. */
   fetch(request: Request): Promise<Response>;
@@ -149,7 +149,7 @@ export interface ServedAgent extends Service {
   /** What actually mounted: channels serving routes, and long connections. */
   channels: { routes: string[]; longConnections: string[] };
   schedules: readonly Schedule[];
-  /** Whether the Agent API is served, under `/v1`: only with a key (agent-api.md §9.1). */
+  /** Whether the Agent API is served, under `/v1`: only with a key (SPEC.md §9.1). */
   api: boolean;
 }
 
@@ -205,7 +205,7 @@ export interface ServeOptions {
   onChannelClosed?: (name: string, error?: unknown) => void;
   /** How long `close()` waits for a channel to stop before reporting it stuck (default 5s). */
   closeTimeoutMs?: number;
-  /** The keys the Agent API takes; without one it is not served (agent-api.md §9.1). */
+  /** The keys the Agent API takes; without one it is not served (SPEC.md §9.1). */
   apiKeys?: readonly string[];
 }
 

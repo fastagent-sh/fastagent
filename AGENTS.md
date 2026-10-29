@@ -4,14 +4,13 @@
 
 fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (a `SYSTEM.md` prompt, `skills/`, code under `src/`, and existing `AGENTS.md` project context) into a live service inside an app, in Telegram, Slack or Feishu, or behind a custom channel without a new authoring DSL.
 
-The design center is decided in `docs/design/architecture.md`: an agent is a definition assembled onto one harness, pi-durable, and served through one API of our own, the consumer Agent API of `docs/design/agent-api.md` (v2; `docs/SPEC.md` describes v1 until v2 replaces it); everything else is pi-durable's own API.
+The design center is decided in `docs/design/architecture.md`: an agent is a definition assembled onto one harness, pi-durable, and served through one API of our own, the consumer Agent API of `docs/SPEC.md` (v2, in process and over HTTP); everything else is pi-durable's own API.
 
 ## Source of truth
 
 | Document | Purpose |
 |---|---|
-| `docs/SPEC.md` | The Agent API v1, which the code no longer implements: `docs/design/agent-api.md` (v2) replaces it there in the documentation change that follows the implementation (#788). Until then, the guides that point here mean v2. |
-| `docs/design/agent-api.md` | The Agent API v2, in process and over HTTP. The code implements both bindings. Do not change its semantics without an explicit decision. |
+| `docs/SPEC.md` | The Agent API v2, in process and over HTTP: what `src/agent-api.ts` and `src/http/` implement. Do not change its semantics without an explicit decision. |
 | `docs/design/architecture.md` | The decided architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
 | `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
@@ -28,7 +27,7 @@ one place that cannot drift away from the code it explains. Directories that hav
 
 ```
 src/
-├── agent-api.ts            # the Agent API (docs/design/agent-api.md) as Effect Schemas: its objects, requests,
+├── agent-api.ts            # the Agent API (docs/SPEC.md) as Effect Schemas: its objects, requests,
 │                           # errors and limits; imports only effect/Schema
 ├── answer-text.ts          # a message's answer text as it streams: its deltas, plus entry text no delta carried
 ├── channel.ts              # the Channel contract: ChannelContext (agent, sessionFor, recordedSession, turn, stateDir),
@@ -44,7 +43,7 @@ src/
 ├── index.ts                # the package's one entry: the Agent API, openAgent, what an author writes; every export
 │                           # named. Asserted in package-boundary.test.ts
 ├── client.ts               # the `/client` entry: connectAgent and the Agent API's types, for wherever fetch runs
-├── http/                   # the Agent API over HTTP (agent-api.md §9)
+├── http/                   # the Agent API over HTTP (SPEC.md §9)
 │   ├── contract.ts         # THE ONE CONTRACT (effect/http-api) the server answers from, the client calls through
 │   │                       # and /v1/openapi.json is made from: routes, refusals and their statuses, server-sent
 │   │                       # events; imports nothing that needs Node
@@ -273,7 +272,7 @@ src/
         │                   # every reader builds it here, never from the parts
         └── login.ts        # signing in to a model provider, for any front end; `fastagent login` is one
 test/                       # vitest; faux models by default
-├── agent-api-conformance.ts # the Agent API's conformance suite (docs/design/agent-api.md §11), run in process by
+├── agent-api-conformance.ts # the Agent API's conformance suite (docs/SPEC.md §11), run in process by
 │                           # durable-agent.test.ts over durable-subject.ts, and over HTTP by http-api.test.ts
 │                           # (http-subject.ts: the same subject served, called through connectAgent)
 ├── scripted-agent.ts       # an Agent whose answers a test scripts: what channel, schedule and service tests run on
@@ -288,16 +287,16 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 
 1. **Focus on the user (foundation).** The author already has `AGENTS.md` + `skills/`; our job is velocity, not ceremony. Optimize, in order: workflow performance (`dev`/`start` must be fast), **actionable signal** (every failure surfaces as a `failed` event with a diagnosable message — never a silent fallback or a swallowed throw), reliability, documentation (`init` is complete-by-default so authors self-unblock), and scalability. Do the boring author-facing win over the shiny internal rewrite. Serve tomorrow's author too: prefer changes that keep large/growing definitions maintainable.
 2. **Incremental migration.** Both directions. For users: adoption is incremental (existing definition → service, a few rough edges acceptable if the path forward is viable). For us: migrate systems in place; a full rewrite pauses maintenance and usually loses. If you *must* rewrite, say so explicitly and own the risk.
-3. **Clarity.** Surface the *right* level of complexity at the best interaction point — do not mask it in the name of "getting out of the way." The Agent API contract (`docs/design/agent-api.md`) is the narrative; keep plans, APIs, and names plain. It's never too early to share a draft (this is what the PR loop is for) — test changes with whoever has the most context before building.
+3. **Clarity.** Surface the *right* level of complexity at the best interaction point — do not mask it in the name of "getting out of the way." The Agent API contract (`docs/SPEC.md`) is the narrative; keep plans, APIs, and names plain. It's never too early to share a draft (this is what the PR loop is for) — test changes with whoever has the most context before building.
 4. **Re-evaluate assumptions, constraints, trade-offs.** Model- and cloud-neutrality exist *because* these change. Harness neutrality was tried and given up ([architecture.md](docs/design/architecture.md) §1): a neutral layer over the part harnesses differ on most cost more than it bought. Old code wasn't bad — its constraints differed; gain that context before reshaping it. Be honest that most solutions carry negative trade-offs; refuse the ones that put us in a worse future position, and don't stack complex abstractions on complex systems.
 5. **Maximize option value.** Every change should unlock more future options, not fewer. Here that means clear API boundaries (the consumer Agent API in front of the harness), FastAgent's own harness code kept in one directory, the definition's text kept to open standards where they exist, and carefully chosen dependencies. An author's tools and extensions are pi-durable code by choice. It does not mean designing for a second implementation before there is one: a port over a single harness is a cost paid in advance ([architecture.md](docs/design/architecture.md) §2). Prefer modular seams that let a piece be replaced over monoliths that must move as one.
 
 ## Working rules specific to this repo
 
 - **The API imports no harness.** `src/agent-api.ts` must not import any harness (`@earendil-works/pi-*` only under `src/harnesses/`): the consumer API is the layer that keeps a harness's changes away from clients, and keeping FastAgent's own harness code in one directory bounds what replacing the harness costs FastAgent. It does not bound what it costs an author: an agent's tools and extensions are pi-durable code, an accepted trade-off ([architecture.md](docs/design/architecture.md) §2).
-- **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. A message that cannot be answered ends `failed` with its `error` saying why, and a refused operation rejects with an `AgentError` (docs/design/agent-api.md §7). A stream is refused on its first read; once it has delivered anything, a failure ends it with a `stream_error` event, never a rejection a Caller would take for a refusal.
+- **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. A message that cannot be answered ends `failed` with its `error` saying why, and a refused operation rejects with an `AgentError` (docs/SPEC.md §7). A stream is refused on its first read; once it has delivered anything, a failure ends it with a `stream_error` event, never a rejection a Caller would take for a refusal.
 - **One process owns an instance's state.** Durable state is the instance's storage (pi-durable's SQLite: sessions, messages, entries) and each Caller's own files under the state root (a channel's session map and turn records, the schedules' claims, wake-ups). One process opens a storage at a time, so a deployment routes every session of one storage to one process ([architecture.md](docs/design/architecture.md) §4.3). The process holds the open Agent and each Caller's queues; what a caller reads afterwards is durable before it is reported.
-- **Public surface is scoped on purpose.** `src/index.ts` is the one entry, one per kind of user beside the channel subpaths (agent-api.md §8): the Agent API, `openAgent`, and what an author writes, every export named. The contracts stay neutral: `src/agent-api.ts` imports only `effect/Schema` and `src/channel.ts` nothing. Internals (`openServing`, `serveAgent`, `openDurableAgent`, content, models and sign-in, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Public surface is scoped on purpose.** `src/index.ts` is the one entry, one per kind of user beside the channel subpaths (SPEC.md §8): the Agent API, `openAgent`, and what an author writes, every export named. The contracts stay neutral: `src/agent-api.ts` imports only `effect/Schema` and `src/channel.ts` nothing. Internals (`openServing`, `serveAgent`, `openDurableAgent`, content, models and sign-in, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **Effect first.** Write with Effect, and with what Effect gives you, rather than hand-rolled async plumbing or a thin wrapper over it.
 - **Learn Effect from its source, not from guesses.** The installed `effect@4` ships uncompiled source and its own agent guide: read `node_modules/effect/AGENTS.md` before writing Effect code, and the relevant module under `node_modules/effect/src/` for how an API is actually used ([why](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive)). Prefer it over an invented API, a stale memory, or a web search. Read-only reference: never edit it, never import from a path inside it.
 - **A finalizer does not fail.** Since effect 4.0.6, a defect in a combined cause turns every typed failure in it into a defect (`causeElectDefects` in `node_modules/effect/src/internal/effect.ts`): a finalizer that dies takes the body's typed failure with it, and the `catchTag("PortFailure")` waiting for that failure never runs. A finalizer says its own failure in the log, or leaves it to an explicit call in the body (`serialWriter`'s `finish`); it dies only where the defect is the point (`service.ts`'s close of a connection that will not stop).

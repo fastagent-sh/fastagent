@@ -90,7 +90,7 @@ async function untilEnded(agent: ScheduledAgent, key: Parameters<Agent["messages
 
 /**
  * Send one message and wait for its end; `onAccepted` hears that it was recorded. Interrupted, it stops waiting, and
- * the agent goes on: a Caller that stops waiting only lets go (agent-api.md §4).
+ * the agent goes on: a Caller that stops waiting only lets go (SPEC.md §4).
  */
 async function sendAndWait(
   agent: ScheduledAgent,

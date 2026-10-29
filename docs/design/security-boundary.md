@@ -8,12 +8,12 @@ status: current
 # Security boundary
 
 An instance is one trust domain. Whoever holds its Agent can do everything the agent can: every session, and
-everything its tools reach ([Agent API](agent-api.md) §10). A serve answers only routes that verify their caller, and
+everything its tools reach ([Agent API](../SPEC.md) §10). A serve answers only routes that verify their caller, and
 everyone they let in is inside the trust domain.
 
 ## 1. One key for the instance, and no policy of FastAgent's
 
-FastAgent's one credential of its own is the Agent API's key ([Agent API](agent-api.md) §9.1): a key for the whole
+FastAgent's one credential of its own is the Agent API's key ([Agent API](../SPEC.md) §9.1): a key for the whole
 instance, which keeps everyone but the instance's customer out. It expresses no policy (per user, per session, observe
 versus write), and does not try to: one instance serves one customer, and people who must be kept apart get an
 instance each (§3). An earlier bearer token, minted at boot and checked by each route by hand, was removed for what it

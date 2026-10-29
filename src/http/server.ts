@@ -1,5 +1,5 @@
 /**
- * The Agent API served over HTTP (agent-api.md §9): the contract's routes answered by an in-process Agent, behind the
+ * The Agent API served over HTTP (SPEC.md §9): the contract's routes answered by an in-process Agent, behind the
  * instance's keys. A Fetch handler, so it mounts beside the channels' routes on whatever server serves them.
  */
 import * as ByteSize from "effect/ByteSize";

@@ -1,7 +1,7 @@
 /**
  * An agent package opened: its definition prepared (the registry generated, the secrets manifest written), its code
  * built with its secrets, its model environment, its storage, and the Agent over them. `openAgent` is how an app opens
- * one (agent-api.md §8); `dev`, `start`, AgentCore, `invoke` and `schedules run` open it through `openServing`, which
+ * one (SPEC.md §8); `dev`, `start`, AgentCore, `invoke` and `schedules run` open it through `openServing`, which
  * also takes where the Agent keeps its sessions and what becomes of an earlier process's messages.
  */
 import { join } from "node:path";
@@ -159,7 +159,7 @@ export async function openServing(directory: string, options: OpenServingOptions
   };
 }
 
-/** An agent opened in this process (agent-api.md §8): the Agent API, and how it is served and operated. */
+/** An agent opened in this process (SPEC.md §8): the Agent API, and how it is served and operated. */
 export interface LocalAgent extends Agent {
   /**
    * Channels, schedules and wake-ups, `/health`, and the Agent API under `/v1` when `apiKeys` holds a key: a Fetch
@@ -173,7 +173,7 @@ export interface LocalAgent extends Agent {
 }
 
 export interface ServeAgentOptions {
-  /** The keys a Caller of the Agent API may present (agent-api.md §9.1). */
+  /** The keys a Caller of the Agent API may present (SPEC.md §9.1). */
   apiKeys?: readonly string[];
 }
 

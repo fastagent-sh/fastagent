@@ -6,7 +6,7 @@ Key facts:
 
 - Install: `npm i -g @fastagent-sh/fastagent` (CLI) or `npm i @fastagent-sh/fastagent` (library). Requires Node >= 24.15 (or Bun >= 1.4).
 - An agent is a directory of its own, marked by `fastagent.config.ts` (`defineAgent`): `SYSTEM.md` (its prompt), `AGENTS.md`, `skills/`, `prompts/`, and code under `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/`. What it works on is declared in `context.json` as its content. No build step.
-- The contract is the Agent API (docs/design/agent-api.md), in process (`openAgent`) and over HTTP (`connectAgent` from `@fastagent-sh/fastagent/client`): sessions the Agent names, messages whose outcome outlives their callers, a durable history. A serve answers its channels' routes, which verify their platform, and the API under `/v1` only when `FASTAGENT_API_KEY` holds a key.
+- The contract is the Agent API (docs/SPEC.md), in process (`openAgent`) and over HTTP (`connectAgent` from `@fastagent-sh/fastagent/client`): sessions the Agent names, messages whose outcome outlives their callers, a durable history. A serve answers its channels' routes, which verify their platform, and the API under `/v1` only when `FASTAGENT_API_KEY` holds a key.
 - Core CLI: `fastagent init | info | content | env | models | login | dev | invoke | schedules | start | add | deploy | logs | destroy`. A coding agent checks an agent with `fastagent info --json`, `fastagent invoke` (`--json` for its events, `--session` to continue a conversation) and `fastagent schedules run`.
 - Channels: Telegram, Slack, Feishu/Lark, plus custom adapters.
 

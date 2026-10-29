@@ -1,7 +1,7 @@
 /**
  * `fastagent invoke <message> [agent]`: send ONE message to the opened agent, print its answer, then exit. Every run
  * prints its session's id; `--session <id>` sends the message into that session, continuing it. `--url` sends it to a
- * served agent instead, over its Agent API (agent-api.md §9.6), with the same output and exit code.
+ * served agent instead, over its Agent API (SPEC.md §9.6), with the same output and exit code.
  */
 import { join, relative, resolve } from "node:path";
 import { type Agent, AgentError, type MessageStreamEvent, type SessionSettings } from "../../agent-api.ts";

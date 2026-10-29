@@ -48,7 +48,7 @@ FastAgent is the missing bridge from local agent directory to live service.
 
 FastAgent is built around a small serving contract, app-owned runtime concerns, typed boundaries, and composable adapters.
 
-- **One API, in process** — the [Agent API](docs/SPEC.md) is what every channel, schedule and app calls.
+- **One API, in process and over HTTP** — the [Agent API](docs/SPEC.md) is what every channel, schedule and app calls, and what a program calls a deployed agent with.
 - **App-owned runtime** — no takeover of your auth, database, routes, or deployment.
 - **Typed edges** — typed tools, explicit events, boundary validation.
 - **Agent-native shape** — the directory is the deployable unit, and every check is a command a coding agent can run.
@@ -149,9 +149,9 @@ The package exports the supported surface only, from one entry per kind of user,
 
 | Area | Examples | Stability |
 |---|---|---|
-| The Agent API | `Agent`, `AgentError` ([Agent API](docs/design/agent-api.md)) | Stable within its version |
+| The Agent API | `Agent`, `AgentError` ([Agent API](docs/SPEC.md)) | Stable within its version |
 | Directory → agent → service | `openAgent`, `LocalAgent`, `serve()`'s `Service` (`fetch`, `listen`) | Usable now, may tighten before 1.0 |
-| Over HTTP | `connectAgent` (`/client`), the `/v1` routes ([Agent API](docs/design/agent-api.md) §9) | Stable within its version |
+| Over HTTP | `connectAgent` (`/client`), the `/v1` routes ([Agent API](docs/SPEC.md) §9) | Stable within its version |
 | Authoring | `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, `readBodyCapped`, `text`, `secretEquals` | Usable now, may tighten before 1.0 |
 | Not exported | The assembly's parts (`router`, `createScheduler`), content, models and sign-in (the CLI's), harness internals | No compatibility promise |
 

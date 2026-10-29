@@ -1,5 +1,5 @@
 /**
- * An Agent over HTTP (agent-api.md §8, §9): the interface `openAgent` gives in process, called through the contract the
+ * An Agent over HTTP (SPEC.md §8, §9): the interface `openAgent` gives in process, called through the contract the
  * server answers from. Runs wherever `fetch` does (Node, Bun, Deno, Workers): nothing here needs a runtime's own API.
  */
 import * as Cause from "effect/Cause";

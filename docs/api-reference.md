@@ -14,12 +14,12 @@ A compact reference for `@fastagent-sh/fastagent`. The package has one entry per
 | `@fastagent-sh/fastagent/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers) |
 | `@fastagent-sh/fastagent/telegram`, `/slack`, `/feishu`, `/lark` | Each first-party channel, and the transport and thread reader its tools use |
 
-FastAgent is pre-1.0; the [Agent API](design/agent-api.md) is the stable design center.
+FastAgent is pre-1.0; the [Agent API](SPEC.md) is the stable design center.
 
 ## The Agent API
 
 Every Caller (a channel, a schedule, `fastagent invoke`, an app that embeds the agent, a program that calls a served
-one) uses one interface, in process or over HTTP. [agent-api.md](design/agent-api.md) is normative (v2); this is its
+one) uses one interface, in process or over HTTP. [Agent API](SPEC.md) is normative (v2); this is its
 shape:
 
 ```ts
@@ -100,7 +100,7 @@ message is refused `missing_model` until its session is given one (`sessions.upd
 
 `serve()` is what `start` serves: the channels' routes and `GET /health` (503 until every long connection is ready), the
 long connections, the schedules and the wake-up poll, and, when `apiKeys` holds a key, the Agent API over HTTP under
-`/v1` ([agent-api.md](design/agent-api.md) §9; `dev` and `start` take the keys from `FASTAGENT_API_KEY`). Use `fetch`
+`/v1` ([Agent API](SPEC.md) §9; `dev` and `start` take the keys from `FASTAGENT_API_KEY`). Use `fetch`
 from the app's own server, or `listen` for a server of the agent's own on Node's `http` server or `Bun.serve`; `host`
 is the bind address, unset binds all interfaces. `close()` ends the API's event streams, stops the server, giving the
 requests in flight 500 ms before it ends them, then the long connections and the schedules; the agent's messages are

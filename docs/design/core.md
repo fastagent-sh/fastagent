@@ -221,7 +221,7 @@ If the Agent does not open, the storage is closed before the failure is thrown, 
 
 ## 4. Messages and sessions on pi-durable
 
-The operations of the Agent API ([agent-api.md](agent-api.md)) are read from and submitted to pi-durable
+The operations of the Agent API ([SPEC.md](../SPEC.md)) are read from and submitted to pi-durable
 (`harnesses/pi-durable/`):
 
 | Module | Owns |
@@ -307,7 +307,7 @@ around one:
 { name: string, connect(ctx, signal): { ready: Promise<void>, closed: Promise<void> } }
 ```
 
-Both forms get the same context (`channels/context.ts`, [agent-api.md](agent-api.md) §8.1): the Agent, the
+Both forms get the same context (`channels/context.ts`, [SPEC.md](../SPEC.md) §8.1): the Agent, the
 channel's conversation-to-session map (`sessionFor`, and `recordedSession` to read it without making one), a per-place
 queue for work after the route has answered (`turn`), and `stateDir`, `<stateRoot>/channels/<the file's name>/`, made
 at the mount. The first-party channels are written against it like any other.
@@ -604,7 +604,7 @@ refused only while the process or its session's queue is full: a one-shot one go
 poll, and a recurring one has its next occurrence.
 
 `stop()` interrupts pending waits without canceling a claimed occurrence: a Caller that stops waiting only detaches
-([Agent API](../SPEC.md) §3.1), so the message goes on to its end and stays in its session. A claimed cron occurrence
+([Agent API](../SPEC.md) §4), so the message goes on to its end and stays in its session. A claimed cron occurrence
 finishes its settlement before its loop exits; no next wake is claimed. The process itself is not waited for, so a
 restart can land between a claim and its settlement. Every `start()` therefore reads the newest claim of each schedule,
 and settles one left unsettled by what became of its message: one the agent took is durable and answered after the
