@@ -12,7 +12,8 @@ import {
 } from "../src/agent-api.ts";
 import { serveHandler } from "../src/channels/serve.ts";
 import { connectAgent } from "../src/http/client.ts";
-import { statusOf } from "../src/http/contract.ts";
+import { OpenApi } from "effect/http-api";
+import { AgentHttpApi, statusOf } from "../src/http/contract.ts";
 import { log } from "../src/log.ts";
 import { agentApiConformance } from "./agent-api-conformance.ts";
 import { durableSubject } from "./durable-subject.ts";
@@ -45,10 +46,21 @@ describe("the Agent API over HTTP", () => {
   });
 
   it("refuses a request without a key or with one the instance does not hold, and takes each key it holds", async () => {
-    for (const headers of [{}, auth("not-a-key")]) {
-      const response = await fetch(`${server.url}/v1/agent`, { headers });
-      expect(response.status).toBe(401);
-      expect(await response.json()).toMatchObject({ error: { code: "unauthorized", retryable: false } });
+    // Every route the contract has, so one added where the key's middleware does not reach it fails here.
+    const routes = Object.entries(OpenApi.fromApi(AgentHttpApi).paths).flatMap(([path, operations]) =>
+      Object.keys(operations as object).map((method) => ({ method: method.toUpperCase(), path })),
+    );
+    expect(routes.length).toBeGreaterThan(10);
+    for (const { method, path } of routes) {
+      for (const headers of [{}, auth("not-a-key")]) {
+        const response = await fetch(`${server.url}${path.replaceAll(/\{\w+\}/g, "x")}`, {
+          method,
+          headers,
+          ...(method === "GET" ? {} : { body: "{}" }),
+        });
+        expect([method, path, response.status]).toEqual([method, path, 401]);
+        expect(await response.json()).toMatchObject({ error: { code: "unauthorized", retryable: false } });
+      }
     }
     for (const key of [KEY, "the-next-key"]) {
       expect((await fetch(`${server.url}/v1/agent`, { headers: auth(key) })).status).toBe(200);
@@ -109,6 +121,10 @@ describe("the Agent API over HTTP", () => {
     const large = await post(JSON.stringify({ content: "x".repeat(33 << 20) }));
     expect(large.status).toBe(413);
     expect(await large.json()).toMatchObject({ error: { code: "invalid_request", details: { reason: "too_large" } } });
+    // A request whose options may be left out may come without a body, as from `curl -X POST`.
+    const bare = { method: "POST", headers: { authorization: `Bearer ${KEY}` } };
+    expect((await fetch(`${server.url}/v1/sessions`, bare)).status).toBe(201);
+    expect((await fetch(`${server.url}/v1/sessions/${id}/compact`, bare)).status).toBe(202);
     const missing = await fetch(`${server.url}/v1/nothing-here`, { headers: auth() });
     expect(missing.status).toBe(404);
     expect(await missing.json()).toMatchObject({ error: { code: "not_found" } });
@@ -389,6 +405,40 @@ describe("connectAgent", () => {
       await expect(agent.sessions.get("s")).rejects.toMatchObject({ code: "internal", retryable: false });
       answer = () => new Response("{ not json", { status: 200, headers: { "content-type": "application/json" } });
       await expect(agent.messages.send({ sessionId: "s", content: "hi" })).rejects.toMatchObject(lost);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("gives the agent's own unconfirmed the key the send carried, the client's own included", async () => {
+    const server = await fakeServer(() =>
+      Response.json(
+        { error: { code: "unconfirmed", message: "recording failed", retryable: false, details: { sessionId: "s" } } },
+        { status: 500 },
+      ),
+    );
+    try {
+      const agent = connectAgent(server.url, { apiKey: KEY });
+      const unconfirmed = { code: "unconfirmed", details: { sessionId: "s", idempotencyKey: expect.any(String) } };
+      await expect(agent.messages.send({ sessionId: "s", content: "hi" })).rejects.toMatchObject(unconfirmed);
+      await expect(
+        agent.messages.stream({ sessionId: "s", content: "hi" })[Symbol.asyncIterator]().next(),
+      ).rejects.toMatchObject(unconfirmed);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects a stream's first read unconfirmed when its answer ends or cannot be read before its first event", async () => {
+    let body = "";
+    const server = await fakeServer(() => new Response(body, { headers: { "content-type": "text/event-stream" } }));
+    try {
+      const agent = connectAgent(server.url, { apiKey: KEY });
+      const first = () => agent.messages.stream({ sessionId: "s", content: "hi" })[Symbol.asyncIterator]().next();
+      const unconfirmed = { code: "unconfirmed", details: { sessionId: "s", idempotencyKey: expect.any(String) } };
+      await expect(first()).rejects.toMatchObject(unconfirmed);
+      body = 'data: {"type":"message","message":{"id":7,"sessionId":"s","status":"queued"}}\n\n';
+      await expect(first()).rejects.toMatchObject(unconfirmed);
     } finally {
       await server.close();
     }

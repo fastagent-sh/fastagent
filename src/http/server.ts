@@ -209,7 +209,9 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       .handle("info", () => call("info", () => agent.info()))
       .handle("usage", () => call("usage", () => agent.usage()))
       .handle("openapi", () => Effect.succeed(HttpServerResponse.jsonUnsafe(openapi)))
-      .handle("createSession", ({ payload }) => call("sessions.create", () => agent.sessions.create(payload)))
+      .handle("createSession", ({ payload }) =>
+        call("sessions.create", () => agent.sessions.create(payload ?? undefined)),
+      )
       .handle("listSessions", ({ query }) => call("sessions.list", () => agent.sessions.list(query)))
       .handle("getSession", ({ params }) => call("sessions.get", () => agent.sessions.get(params.sessionId)))
       .handle("updateSession", ({ params, payload }) =>
@@ -226,7 +228,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       )
       .handle("cancel", ({ params }) => call("sessions.cancel", () => agent.sessions.cancel(params.sessionId)))
       .handle("compact", ({ params, payload }) =>
-        call("sessions.compact", () => agent.sessions.compact(params.sessionId, payload)),
+        call("sessions.compact", () => agent.sessions.compact(params.sessionId, payload ?? undefined)),
       )
       .handle("attachment", ({ params }) =>
         call("sessions.attachment", () => agent.sessions.attachment(params.sessionId, params.ref)).pipe(

@@ -274,6 +274,8 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           retryable: false,
           details: { sessionId, messageId: expect.any(String) },
         });
+        // The key that finds it, when the binding gave the send one of its own.
+        if (subject.keysSends) expect(error).toMatchObject({ details: { idempotencyKey: expect.any(String) } });
       });
 
       it("gives results and events that are JSON", async () => {

@@ -62,6 +62,73 @@ const rejected = (signal: AbortSignal) =>
     return Effect.sync(() => signal.removeEventListener("abort", onAbort));
   });
 
+/**
+ * A refusal at a status the contract does not declare, a later server's: its body says what it is, as any refusal's
+ * does (§7.1). A body that is not one (a proxy's page) leaves the failure the request met.
+ */
+const refusalIn = (error: unknown): Effect.Effect<never, unknown> => {
+  const response = (error as { reason?: { response?: HttpClientResponse.HttpClientResponse } }).reason?.response;
+  if (response === undefined || response.status < 400) return Effect.fail(error);
+  return response.json.pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Refusal)),
+    Effect.matchEffect({ onSuccess: Effect.fail, onFailure: () => Effect.fail(error) }),
+  );
+};
+
+const reasonOf = (error: unknown) => (error as { reason?: { _tag?: string; response?: { status: number } } }).reason;
+
+/** A request this client could not make: it never left. */
+const unsent = (error: unknown) => ["EncodeError", "InvalidUrlError"].includes(reasonOf(error)?._tag ?? "");
+
+const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** What stopped a request that left, said for a Caller. */
+const whatFailed = (baseUrl: string, error: unknown) =>
+  reasonOf(error)?._tag === "TransportError"
+    ? `could not reach the agent at ${baseUrl}: ${said(error)}`
+    : `the agent at ${baseUrl} answered what this client cannot read: ${said(error)}`;
+
+/**
+ * A read's failure, and a write's other than a send's: a refusal as the agent answered it; one that could not get
+ * through or met a server's error may be tried again; anything else is not the Caller's to retry.
+ */
+function readFailure(baseUrl: string, error: unknown): AgentError {
+  if (error instanceof AgentError) return error;
+  if (unsent(error))
+    return agentError("internal", `this client could not make a request of ${baseUrl}: ${said(error)}`);
+  const reason = reasonOf(error);
+  const status = reason?.response?.status;
+  const again = reason?._tag === "TransportError" || (status !== undefined && status >= 500);
+  return agentError(again ? "unavailable" : "internal", whatFailed(baseUrl, error));
+}
+
+/** How far a send got: its key once it is made, and its message's id once that is known. */
+interface SendStage {
+  sessionId: string;
+  key: string;
+  messageId?: string;
+}
+
+/**
+ * A send's failure, by how far it got (§5.2), the one place that says so. Refused before it was recorded, it is the
+ * refusal; recorded, or perhaps recorded, it is `unconfirmed` with what finds it: the key, the client's own when the
+ * Caller gave none, and the message's id once known.
+ */
+function sendFailure(baseUrl: string, stage: SendStage, error: unknown): AgentError {
+  const { sessionId, key, messageId } = stage;
+  const finds = { sessionId, idempotencyKey: key, ...(messageId === undefined ? {} : { messageId }) };
+  if (error instanceof AgentError && error.code === "unconfirmed") {
+    const known = typeof error.details === "object" && error.details !== null ? error.details : {};
+    return new AgentError({ ...errorData(error), details: { ...known, ...finds } });
+  }
+  if (messageId !== undefined) {
+    return agentError("unconfirmed", `The message was recorded, and waiting for it failed: ${said(error)}`, finds);
+  }
+  if (error instanceof AgentError) return error;
+  if (unsent(error)) return readFailure(baseUrl, error);
+  return agentError("unconfirmed", `${whatFailed(baseUrl, error)}; the message may have been recorded`, finds);
+}
+
 export function connectAgent(url: string, options: ConnectOptions): Agent {
   const baseUrl = url.replace(/\/+$/, "");
   const client = Effect.runSync(
@@ -70,46 +137,17 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
       transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(options.apiKey)),
     }).pipe(Effect.provide(FetchHttpClient.layer)),
   ).agent;
+  const read = (error: unknown) => readFailure(baseUrl, error);
+  const sent = (stage: SendStage) => (error: unknown) => sendFailure(baseUrl, stage, error);
 
   /**
-   * A failure as the Agent API's. A refusal the agent answered is as it was sent. A request that went out and got no
-   * answer this client can read is `lost`'s to say for a send, which may have been recorded (§5.2); for the rest, one
-   * that could not get through or met a server's error may be tried again, and anything else is the server's fault.
+   * A request: rejected with its signal's reason once its Caller lets go, and otherwise with what `failure` makes of
+   * the failure, as it met it.
    */
-  const failureOf = (error: unknown, lost?: (why: string) => AgentError): AgentError => {
-    if (error instanceof AgentError) return error;
-    const reason = (error as { reason?: { _tag?: string; response?: { status: number } } }).reason;
-    if (reason?._tag === "EncodeError" || reason?._tag === "InvalidUrlError") {
-      return agentError("internal", `this client could not make a request of ${baseUrl}: ${String(error)}`);
-    }
-    const unreached = reason?._tag === "TransportError";
-    const why = unreached
-      ? `could not reach the agent at ${baseUrl}: ${String(error)}`
-      : `the agent at ${baseUrl} answered what this client cannot read: ${String(error)}`;
-    if (lost !== undefined) return lost(why);
-    const status = reason?.response?.status;
-    return unreached || (status !== undefined && status >= 500) ? unavailable(why) : agentError("internal", why);
-  };
-  const unavailable = (why: string) => agentError("unavailable", why);
-
-  /**
-   * A refusal at a status the contract does not declare, a later server's: its body says what it is, as any refusal's
-   * does (§7.1). A body that is not one (a proxy's page) leaves the failure the request met.
-   */
-  const refusalIn = (error: unknown): Effect.Effect<never, unknown> => {
-    const response = (error as { reason?: { response?: HttpClientResponse.HttpClientResponse } }).reason?.response;
-    if (response === undefined || response.status < 400) return Effect.fail(error);
-    return response.json.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Refusal)),
-      Effect.matchEffect({ onSuccess: Effect.fail, onFailure: () => Effect.fail(error) }),
-    );
-  };
-
-  /** A request: rejected with its signal's reason once its Caller lets go, and with an `AgentError` otherwise. */
   const request = async <A>(
     effect: Effect.Effect<A, unknown>,
     signal?: AbortSignal,
-    lost?: (why: string) => AgentError,
+    failure: (error: unknown) => AgentError = read,
   ): Promise<A> => {
     if (signal?.aborted) throw signal.reason;
     const answered = effect.pipe(Effect.catch(refusalIn));
@@ -120,17 +158,17 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     );
     if (Exit.isSuccess(exit)) return exit.value;
     if (signal?.aborted) throw signal.reason;
-    throw failureOf(Cause.squash(exit.cause), lost);
+    throw failure(Cause.squash(exit.cause));
   };
 
   /**
-   * Asks again until the message ends or the Caller's `wait` is over: a request waits at most a minute (§7). A request
-   * after the first that fails is `failedAfter`'s to say, since for a send the message is recorded by then.
+   * Asks again until the message ends or the Caller's `wait` is over: a request waits at most a minute (§7). What a
+   * request after the first that fails means is `failureAfter`'s to say: for a send, the message is recorded by then.
    */
   const waited = async (
     first: (wait: number | undefined) => Promise<Message>,
     options: WaitOptions | undefined,
-    failedAfter: (message: Message, error: unknown) => unknown = (_, error) => error,
+    failureAfter: (message: Message) => (error: unknown) => AgentError = () => read,
   ) => {
     const wait = options?.wait === undefined ? undefined : checked(Wait, options.wait, "wait");
     const deadline = wait === undefined ? undefined : Date.now() + wait * 1000;
@@ -139,54 +177,59 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     let message = await first(wait === undefined ? undefined : capped());
     while (!hasEnded(message) && remaining() > 0) {
       const { sessionId, id: messageId } = message;
-      try {
-        message = await request(
-          client.getMessage({ params: { sessionId, messageId }, query: { wait: capped() } }),
-          options?.signal,
-        );
-      } catch (error) {
-        // A Caller that let go is told its signal's reason, as it is.
-        if (options?.signal?.aborted) throw error;
-        throw failedAfter(message, error);
-      }
+      message = await request(
+        client.getMessage({ params: { sessionId, messageId }, query: { wait: capped() } }),
+        options?.signal,
+        failureAfter(message),
+      );
     }
     return message;
   };
 
   /**
-   * An event stream: its first read rejects with the request's refusal; once it has delivered anything, a connection
-   * that fails or ends before the stream's own end ends it with `stream_error` (§6). A signal ends it, rejecting the
-   * read waiting then with its reason.
+   * An event stream. Until it has delivered an event, a failure rejects its first read with what `refused` makes of
+   * it, an answer that ends before its first event included; once it has, a connection that fails or ends before the
+   * stream's own end ends it with `stream_error` (§6). A signal ends it, rejecting the read waiting then with its reason.
    */
   const watched = <E extends { readonly type: string }>(
     opened: Effect.Effect<Stream.Stream<{ readonly type: string }, unknown>, unknown>,
-    known: ReadonlySet<string>,
-    isLast: (event: E) => boolean,
-    signal: AbortSignal | undefined,
+    stream: {
+      known: ReadonlySet<string>;
+      isLast: (event: E) => boolean;
+      refused: (error: unknown) => AgentError;
+      signal: AbortSignal | undefined;
+    },
   ): AsyncIterable<E> => {
-    const lostWith = (why: string) => ({ type: "stream_error", error: errorData(unavailable(why)) }) as unknown as E;
+    const { known, isLast, refused, signal } = stream;
+    const lostWith = (why: string) =>
+      ({ type: "stream_error", error: errorData(agentError("unavailable", why)) }) as unknown as E;
+    let delivered = false;
     let ended = false;
     const events = Stream.unwrap(
-      opened.pipe(
-        Effect.provideService(HttpClient.TracerPropagationEnabled, false),
-        Effect.catch(refusalIn),
-        Effect.mapError((error) => failureOf(error)),
-        Effect.map((stream) =>
-          stream.pipe(
-            // A type a later server sends is not one this Caller can be handed (§7.1).
-            Stream.filter((event): event is E => known.has(event.type)),
-            Stream.catchCause((cause) =>
-              Stream.make(lostWith(`the connection to the agent failed: ${String(Cause.squash(cause))}`)),
-            ),
-            Stream.takeUntil((event) => {
-              ended = event.type === "stream_error" || isLast(event);
-              return ended;
-            }),
-            Stream.concat(
-              Stream.suspend(() => (ended ? Stream.empty : Stream.make(lostWith("the agent ended the stream")))),
-            ),
-          ),
-        ),
+      opened.pipe(Effect.catch(refusalIn), Effect.provideService(HttpClient.TracerPropagationEnabled, false)),
+    ).pipe(
+      // A type a later server sends is not one this Caller can be handed (§7.1).
+      Stream.filter((event): event is E => known.has(event.type)),
+      Stream.tap(() =>
+        Effect.sync(() => {
+          delivered = true;
+        }),
+      ),
+      Stream.catchCause((cause) =>
+        delivered
+          ? Stream.make(lostWith(`the connection to the agent failed: ${said(Cause.squash(cause))}`))
+          : Stream.fail(refused(Cause.squash(cause))),
+      ),
+      Stream.takeUntil((event) => {
+        ended = event.type === "stream_error" || isLast(event);
+        return ended;
+      }),
+      Stream.concat(
+        Stream.suspend(() => {
+          if (ended) return Stream.empty;
+          if (delivered) return Stream.make(lostWith("the agent ended the stream"));
+          return Stream.fail(refused(new Error("the answer ended before its first event")));
+        }),
       ),
     );
     if (signal === undefined) return Stream.toAsyncIterable(events);
@@ -208,15 +251,8 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
 
   /** A send carries a key, the Caller's or one of its own, so that one whose answer was lost can be found (§5.2). */
   const keyed = (sendRequest: SendRequest, what: string) => {
-    const { sessionId, idempotencyKey, ...rest } = checked(SendRequest, sendRequest, what);
-    const key = idempotencyKey ?? crypto.randomUUID();
-    return {
-      sessionId,
-      key,
-      body: rest,
-      lost: (why: string) =>
-        agentError("unconfirmed", `${why}; the message may have been recorded`, { sessionId, idempotencyKey: key }),
-    };
+    const { sessionId, idempotencyKey, ...body } = checked(SendRequest, sendRequest, what);
+    return { stage: { sessionId, key: idempotencyKey ?? crypto.randomUUID() }, body };
   };
 
   return {
@@ -250,9 +286,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
             query: { after: eventsOptions?.after },
             headers: { "last-event-id": undefined },
           }),
-          SESSION_EVENT_TYPES,
-          () => false,
-          eventsOptions?.signal,
+          { known: SESSION_EVENT_TYPES, isLast: () => false, refused: read, signal: eventsOptions?.signal },
         ),
       cancel: async (sessionId) => {
         const { stopped } = await request(client.cancel({ params: { sessionId } }));
@@ -282,53 +316,47 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     },
     messages: {
       send: async (sendRequest, sendOptions) => {
-        const { sessionId, key, body, lost } = keyed(sendRequest, "messages.send");
+        const { stage, body } = keyed(sendRequest, "messages.send");
         return waited(
           (wait) =>
             request(
               client.send({
-                params: { sessionId },
-                headers: { "idempotency-key": key },
+                params: { sessionId: stage.sessionId },
+                headers: { "idempotency-key": stage.key },
                 payload: { ...body, wait },
               }) as Effect.Effect<Message, unknown>,
               sendOptions?.signal,
-              lost,
+              sent(stage),
             ),
           sendOptions,
-          // Recorded, as the in-process send says of a wait that failed (agent-api.md §5.2).
-          (message, error) =>
-            agentError(
-              "unconfirmed",
-              `The message was recorded, and waiting for it failed: ${error instanceof Error ? error.message : String(error)}`,
-              { sessionId, messageId: message.id, idempotencyKey: key },
-            ),
+          (message) => sent({ ...stage, messageId: message.id }),
         );
       },
       stream: (sendRequest, streamOptions) => {
+        // Checked on the first read, which a refusal rejects (§6.2): until then there is no stage to fail at.
+        let stage: SendStage | undefined;
         let messageId: string | undefined;
         return watched<MessageStreamEvent>(
-          // Checked on the first read, which a refusal rejects (§6.2).
           Effect.try({ try: () => keyed(sendRequest, "messages.stream"), catch: (error) => error }).pipe(
-            Effect.flatMap(({ sessionId, key, body, lost }) =>
-              (
-                client.send({
-                  params: { sessionId },
-                  headers: { "idempotency-key": key },
-                  payload: { ...body, stream: true },
-                }) as Effect.Effect<Stream.Stream<{ readonly type: string }, unknown>, unknown>
-              ).pipe(
-                // The answer begins once the message is recorded, so one that never came may have been (§5.2).
-                Effect.catch(refusalIn),
-                Effect.mapError((error) => failureOf(error, lost)),
-              ),
-            ),
+            Effect.flatMap((keying) => {
+              stage = keying.stage;
+              return client.send({
+                params: { sessionId: keying.stage.sessionId },
+                headers: { "idempotency-key": keying.stage.key },
+                payload: { ...keying.body, stream: true },
+              }) as Effect.Effect<Stream.Stream<{ readonly type: string }, unknown>, unknown>;
+            }),
           ),
-          MESSAGE_STREAM_EVENT_TYPES,
-          (event) => {
-            if (event.type === "message") messageId = event.message.id;
-            return event.type === "done" && event.message.id === messageId;
+          {
+            known: MESSAGE_STREAM_EVENT_TYPES,
+            isLast: (event) => {
+              if (event.type === "message") messageId = event.message.id;
+              return event.type === "done" && event.message.id === messageId;
+            },
+            // The answer begins once the message is recorded, so a failure before its first event is a send's.
+            refused: (error) => (stage === undefined ? read(error) : sendFailure(baseUrl, stage, error)),
+            signal: streamOptions?.signal,
           },
-          streamOptions?.signal,
         );
       },
       get: async (key, getOptions) => {

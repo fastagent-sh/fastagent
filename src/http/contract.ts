@@ -182,7 +182,9 @@ const AgentGroup = HttpApiGroup.make("agent")
     HttpApiEndpoint.get("usage", "/usage", { success: Usage, error: Refused }),
     HttpApiEndpoint.get("openapi", "/openapi.json", { success: Schema.Json, error: Refused }),
     HttpApiEndpoint.post("createSession", "/sessions", {
-      payload: CreateSessionOptions,
+      // Its options may be left out, as in process (§4): a request without a body is one without them, which the
+      // contract reads as `null` only when a payload schema is `null` itself.
+      payload: [CreateSessionOptions, Schema.Null],
       success: Session.pipe(HttpApiSchema.status(201)),
       error: Refused,
     }),
@@ -222,7 +224,7 @@ const AgentGroup = HttpApiGroup.make("agent")
     }),
     HttpApiEndpoint.post("compact", "/sessions/:sessionId/compact", {
       params: sessionPath,
-      payload: CompactOptions,
+      payload: [CompactOptions, Schema.Null],
       success: HttpApiSchema.Accepted,
       error: Refused,
     }),
