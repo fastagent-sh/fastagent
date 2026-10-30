@@ -15,8 +15,8 @@ import { residencyFor } from "../../../deploy/residency.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { failStartup } from "../../fail.ts";
-import { isInteractive } from "../../shared.ts";
-import { type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
+import { FLY_LOGIN, hostLogin } from "./host-login.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const flyHost: HostDeploy = {
@@ -74,7 +74,7 @@ export const flyHost: HostDeploy = {
         appName,
         modelAuth,
         boxLogin,
-        input: opts.input !== false && isInteractive(),
+        answerer: ctx.answerer,
         channels,
         declaredSecrets,
         values,
@@ -94,8 +94,8 @@ async function runDeployFly(params: {
   modelAuth: string | undefined;
   /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
   boxLogin: string | undefined;
-  /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
-  input: boolean;
+  /** Who answers the box's login: `--run` continues into it rather than stopping at "not logged in". */
+  answerer: Answerer;
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
@@ -124,6 +124,7 @@ async function runDeployFly(params: {
       flyConfig: "fly.toml",
       dockerfile: "Dockerfile",
       ...boxLoginStep("fly", params, () => flyShell(appName, agentDir)),
+      ...hostLogin(FLY_LOGIN, params.answerer, agentDir),
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),

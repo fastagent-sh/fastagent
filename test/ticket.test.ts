@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { failStartup } from "../src/cli/fail.ts";
 import {
   type TicketStep,
   checkTicket,
@@ -38,7 +39,7 @@ const request = (subject = "login:openai", timeoutSeconds = 60) => ({
 });
 
 /** A step started as a command starts one, its process standing in for the step's: it shows an address and waits. */
-async function waitingStep(subject: string) {
+async function waitingStep(subject: string, whenRunning: "replace" | "join" = "replace") {
   const waits = `
     const { readFileSync, writeFileSync } = require("node:fs");
     const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "tickets", process.argv.at(-1) + ".json");
@@ -48,6 +49,7 @@ async function waitingStep(subject: string) {
   return startTicket({
     ...request(subject),
     waitsFirst: true,
+    whenRunning,
     command: { file: process.execPath, args: ["-e", waits, "--"], cwd: tmpdir() },
   });
 }
@@ -132,12 +134,35 @@ describe("a step that outlives the command that starts it", () => {
     }
   });
 
+  it("a step that must not be stopped halfway is joined instead: the same ticket, its process left running", async () => {
+    const first = await waitingStep("deploy:fly", "join");
+    try {
+      const again = await waitingStep("deploy:fly", "join");
+      expect(again.ticket).toBe(first.ticket);
+      expect(running(first.pid)).toBe(true);
+    } finally {
+      if (running(first.pid)) process.kill(first.pid as number);
+    }
+  });
+
+  it("a failure that ends the process on its way out is the ticket's, with its reason", async () => {
+    const { ticket } = createTicket(request("deploy:fly"));
+    const exited = new Error("exited");
+    vi.spyOn(process, "exit").mockImplementation(() => {
+      throw exited;
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await runTicket(ticket, async () => failStartup(new Error("not logged in to Fly")));
+    expect(await checkTicket(ticket)).toMatchObject({ status: "failed", message: "not logged in to Fly" });
+  });
+
   it("a step given up on for giving the person nothing to do is stopped first, so it writes nothing after", async () => {
     const sidecar = join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
     const silent = `require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid)); setInterval(() => {}, 1000);`;
     const given = await startTicket({
       ...request(),
       waitsFirst: true,
+      whenRunning: "replace",
       command: { file: process.execPath, args: ["-e", silent, "--"], cwd: tmpdir() },
       startTimeoutMs: 1_000,
     });
@@ -154,6 +179,7 @@ describe("a step that outlives the command that starts it", () => {
     const given = await startTicket({
       ...request("add:lark"),
       waitsFirst: false,
+      whenRunning: "replace",
       command: { file: process.execPath, args: ["-e", busy, "--"], cwd: tmpdir() },
       startTimeoutMs: 1_000,
     });

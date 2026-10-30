@@ -10,7 +10,8 @@ import { PassThrough } from "node:stream";
 import type { AuthInteraction, Credential, Provider } from "@earendil-works/pi-ai";
 import { afterEach, expect, it, vi } from "vitest";
 import { stdioLoginIO } from "../src/cli/login-relay.ts";
-import { type Ticket, checkTicket, createTicket } from "../src/cli/ticket.ts";
+import { type Ticket, checkTicket, createTicket, runTicket } from "../src/cli/ticket.ts";
+import { boxLoginStep } from "../src/cli/commands/deploy/shared.ts";
 import type { BoxShell } from "../src/deploy/box-shell.ts";
 import { LoginCancelled, loginFlow } from "../src/harnesses/models/login.ts";
 
@@ -158,4 +159,73 @@ it("--json at a terminal is a coding agent's: nothing is asked, and a choice not
   expect(process.exit).toHaveBeenCalledWith(2);
   expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({ status: "need_choice" });
   expect(box.commands).toEqual([]);
+});
+
+it("a deploy's box login through its ticket: an account sign-in, its refusals named", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fa-box-step-"));
+  box.authPath = join(dir, "box-auth.json");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const deployTicket = () =>
+    createTicket({
+      subject: "deploy:fly:x",
+      action: "deploy the agent to fly",
+      check: "fastagent deploy fly --check",
+      restart: "fastagent deploy fly --run",
+      timeoutSeconds: 60,
+    }).ticket;
+  const viaTicket = (ticket: string) =>
+    runTicket(ticket, async (step) => {
+      const { boxLogin } = boxLoginStep(
+        "fly",
+        { agentDir: dir, boxLogin: "codex", answerer: { kind: "ticket", step } },
+        () => fakeShell,
+      );
+      const failed = await boxLogin?.run();
+      if (failed) throw new Error(failed);
+      return {};
+    });
+
+  box.provider = {
+    id: "codex",
+    name: "Codex",
+    getModels: () => [],
+    auth: {
+      oauth: {
+        name: "Codex",
+        login: async (cb: AuthInteraction) => {
+          cb.notify({ type: "auth_url", url: "https://auth.example/authorize" });
+          await cb.prompt({ type: "manual_code", message: "Paste the redirect URL" });
+          return OAUTH;
+        },
+      },
+    },
+  };
+  const signedIn = deployTicket();
+  const ran = viaTicket(signedIn);
+  expect(await waitingOn(signedIn)).toMatchObject({ url: "https://auth.example/authorize", takesAddress: true });
+  await checkTicket(signedIn, "http://localhost:1455/cb?code=abc");
+  await ran;
+  expect(await checkTicket(signedIn)).toMatchObject({ status: "done" });
+  expect(box.commands[0]).toMatch(/login --stdio codex --method account --if-missing/);
+
+  box.provider = {
+    id: "codex",
+    name: "Codex",
+    getModels: () => [],
+    auth: {
+      oauth: {
+        name: "Codex",
+        login: async (cb: AuthInteraction) => {
+          await cb.prompt({ type: "secret", message: "Enter the key" });
+          return OAUTH;
+        },
+      },
+    },
+  };
+  const refused = deployTicket();
+  await viaTicket(refused);
+  expect(await checkTicket(refused)).toMatchObject({
+    status: "failed",
+    message: expect.stringContaining('the sign-in asks "Enter the key", which only a terminal can answer'),
+  });
 });

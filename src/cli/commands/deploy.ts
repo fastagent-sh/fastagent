@@ -12,6 +12,7 @@ import { unmarkDevServe } from "../../serving-command.ts";
 import {
   assertIndependentFeishuApps,
   feishuAppSecretNames,
+  larkCredentialsNeeded,
   prepareFeishuApps,
   unpreparedFeishuApps,
 } from "../add-feishu.ts";
@@ -21,12 +22,28 @@ import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
 import { unprotectedSecretsNote } from "../../value-file.ts";
 import { loadConfig } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
-import { enterAgentDirectory, isInteractive } from "../shared.ts";
+import { enterAgentDirectory, isInteractive, shellArg } from "../shared.ts";
+import { terminalPerson } from "../person.ts";
+import {
+  type Ticket,
+  checkTicket,
+  printReport,
+  runTicket,
+  startTicket,
+  ticketExitCode,
+  ticketReport,
+} from "../ticket.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
 import { railwayHost } from "./deploy/railway.ts";
-import { type DeployOptions, type HostDeploy, applyArtifactPlan, planArtifacts } from "./deploy/shared.ts";
+import {
+  type Answerer,
+  type DeployOptions,
+  type HostDeploy,
+  applyArtifactPlan,
+  planArtifacts,
+} from "./deploy/shared.ts";
 
 export { applyArtifactPlan, planArtifacts };
 
@@ -83,11 +100,17 @@ export function warnHostOnlyFlags(host: DeployHost, opts: DeployOptions): void {
   }
 }
 
+/** How long a coding agent's deploy stays open: a build, and the person's steps between. */
+const TICKET_TIMEOUT_SECONDS = 3600;
+
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
+  if (opts.check !== undefined) return checkDeploy(host, opts.check, opts);
+  if (opts.code !== undefined) failUsage("--code hands a code to a deploy's ticket: pass --check <ticket> too");
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
+  if (opts.json && !opts.run) failUsage("--json reports a deploy --run drives: pass --run too");
   selectAgentEnvironment("production");
   const { agentDir } = await enterAgentDirectory(dirArg, opts);
   const config = await loadConfig(agentDir).catch(failStartup);
@@ -130,85 +153,161 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     return facts;
   };
   let pre = await preflight();
+  const agentArg = displayPath(process.cwd(), agentDir);
+  const rerun =
+    `fastagent deploy ${host}${agentArg === undefined ? "" : ` ${shellArg(agentArg)}`}` +
+    `${opts.tunnel ? " --tunnel" : ""}${opts.intoLinked ? " --into-linked" : ""} --run`;
   const unprepared = opts.run ? unpreparedFeishuApps(pre.channels, pre.values) : [];
-  if (unprepared.length > 0) {
-    const supplied = unprepared.flatMap(({ kind, ingress }) => feishuAppSecretNames(kind, ingress));
-    const kinds = unprepared.map(({ kind }) => kind);
-    const { values } = pre;
-    const absent = supplied.filter((name) => !values.get(name)?.trim());
-    const { missingSecrets } = assembleSecrets({
-      modelAuth: pre.modelAuth,
-      declared: pre.declaredSecrets,
-      values: pre.values,
+
+  if (opts.json && opts.ticket === undefined) {
+    // A coding agent's deploy: what this machine can refuse is refused above, at once; the rest runs in a ticket.
+    if (unprepared.some(({ kind }) => kind === "lark")) {
+      const needed = await larkCredentialsNeeded(agentDir, rerun).catch(failStartup);
+      if (needed !== undefined) {
+        printReport(true, needed.json, needed.text);
+        process.exit(0);
+      }
+    }
+    const timeout = opts.timeout === undefined ? TICKET_TIMEOUT_SECONDS : Number(opts.timeout);
+    if (!Number.isInteger(timeout) || timeout <= 0) failUsage("--timeout must be a whole number of seconds");
+    const ticket = await startTicket({
+      subject: `deploy:${host}:${agentDir}`,
+      action: `deploy the agent to ${host}`,
+      check: `fastagent deploy ${host} --check`,
+      restart: rerun,
+      timeoutSeconds: timeout,
+      waitsFirst: false,
+      // A deploy stopped halfway leaves the host half-changed: one already running is the answer.
+      whenRunning: "join",
+      command: {
+        file: process.execPath,
+        args: [
+          ...process.execArgv,
+          process.argv[1] as string,
+          "deploy",
+          host,
+          agentDir,
+          ...(opts.tunnel ? ["--tunnel"] : []),
+          ...(opts.force ? ["--force"] : []),
+          ...(opts.intoLinked ? ["--into-linked"] : []),
+          "--run",
+          "--json",
+        ],
+        cwd: process.cwd(),
+      },
     });
-    const missing = missingValuesGate(
-      missingSecrets.filter((name) => !supplied.includes(name)),
-      pre.valueFile,
-    );
-    if (missing) failStartup(new Error(`deploy stopped: ${missing}`));
-    if (host === "docker" && !opts.tunnel && unprepared.some(({ ingress }) => ingress === "webhook")) {
-      failStartup(
-        new Error(
-          `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
-            `public URL to point the app at — re-run with --tunnel (the app is prepared then), or set up your own ` +
-            `ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
-            `set ${kinds.map((kind) => `${cloudFor(kind).envPrefix}_INGRESS=websocket`).join(", ")} there`,
-        ),
-      );
-    }
-    if (opts.input === false || !isInteractive()) {
-      // With no one to ask, the app is set up first by the command that hands the person's part over (`add --json`).
-      const prepare = unprepared.map(({ kind }) => `fastagent add ${kind} --env production --json`).join(", then ");
-      failUsage(
-        `deploy stopped: ${pre.valueFile} has no ${absent.join(", ")}: set up the separate production app first — ` +
-          `${prepare} (it names what the person does) — then run this deploy again`,
-      );
-    }
-    await prepareFeishuApps(
-      agentDir,
-      unprepared,
-      `fastagent deploy ${host}${opts.tunnel ? " --tunnel" : ""} --run`,
-    ).catch(failStartup);
-    pre = await preflight();
+    reportDeploy(ticket, host, "started");
+    process.exit(ticketExitCode(ticket));
   }
-  independentApps(pre.values);
-  if (api.served && api.generatesKey) {
-    // Past every refusal the pre-flight makes, and read again, so this deploy carries it.
-    const unprotected = await writeApiKey(agentDir).catch(failStartup);
-    if (unprotected !== undefined) console.error(`[fastagent] note: ${unprotectedSecretsNote(unprotected)}`);
-    pre = await preflight();
-  }
-  for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
-  const { channels } = pre;
-  warnHostOnlyFlags(host, opts);
-  const reachedAt = await target.deploy({
-    opts,
-    agentDir,
-    config,
-    pre,
-    channels,
-    webhookChannels: channels.filter((channel) => channel.ingress === "webhook"),
-    // The ownership predicate is bound HERE, from the same lookup that chose the host, so no host module can pass
-    // one.
-    // Reporting a stale artifact is enough when only generating them — the operator reads the line and decides. But
-    // `--run` would then deploy FROM it: a determinate mismatch between what ships and what the definition says,
-    // the same class as a Dockerfile that cannot read the manifest, and gated the
-    // same way. `--force` regenerates ours; a file we did not generate is never touched by either, and the marker
-    // line is how an operator takes a path back on purpose.
-    write: async (artifacts, options) => {
-      const plan = await planArtifacts(agentDir, artifacts, { ...options, isOurs: target.isOurs });
-      if (opts.run && plan.stale.length > 0) {
+
+  /** Everything past the pre-flight, its person's steps taken by `answerer`; the URL and what the API report says. */
+  const deployWith = async (answerer: Answerer): Promise<{ url?: string; notes: string[] }> => {
+    if (unprepared.length > 0) {
+      const supplied = unprepared.flatMap(({ kind, ingress }) => feishuAppSecretNames(kind, ingress));
+      const kinds = unprepared.map(({ kind }) => kind);
+      const { values } = pre;
+      const absent = supplied.filter((name) => !values.get(name)?.trim());
+      const { missingSecrets } = assembleSecrets({
+        modelAuth: pre.modelAuth,
+        declared: pre.declaredSecrets,
+        values: pre.values,
+      });
+      const missing = missingValuesGate(
+        missingSecrets.filter((name) => !supplied.includes(name)),
+        pre.valueFile,
+      );
+      if (missing) failStartup(new Error(`deploy stopped: ${missing}`));
+      if (host === "docker" && !opts.tunnel && unprepared.some(({ ingress }) => ingress === "webhook")) {
         failStartup(
           new Error(
-            `deploy stopped: ${plan.stale.join(", ")} no longer match what this definition generates, and --run ` +
-              `would deploy from them. Re-run with --force to regenerate, or remove each file's generated-by ` +
-              `marker to own it yourself.`,
+            `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
+              `public URL to point the app at — re-run with --tunnel (the app is prepared then), or set up your own ` +
+              `ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
+              `set ${kinds.map((kind) => `${cloudFor(kind).envPrefix}_INGRESS=websocket`).join(", ")} there`,
           ),
         );
       }
-      await applyArtifactPlan(plan);
-    },
-  });
-  const where = { valueFile: pre.valueFile, agentArg: displayPath(process.cwd(), agentDir) };
-  for (const line of apiReport(api, where, reachedAt)) console.error(`[fastagent] ${line}`);
+      if (answerer.kind === "nobody") {
+        failUsage(
+          `deploy stopped: ${pre.valueFile} has no ${absent.join(", ")}: setting up the separate production app ` +
+            `needs a person — run this deploy in a terminal; from a coding agent, run \`${rerun} --json\`, which ` +
+            `hands their part to its user`,
+        );
+      }
+      const person = answerer.kind === "ticket" ? answerer.step.person : terminalPerson;
+      const again = answerer.kind === "ticket" ? `${rerun} --json` : rerun;
+      await prepareFeishuApps(agentDir, unprepared, again, person).catch(failStartup);
+      pre = await preflight();
+    }
+    independentApps(pre.values);
+    if (api.served && api.generatesKey) {
+      // Past every refusal the pre-flight makes, and read again, so this deploy carries it.
+      const unprotected = await writeApiKey(agentDir).catch(failStartup);
+      if (unprotected !== undefined) console.error(`[fastagent] note: ${unprotectedSecretsNote(unprotected)}`);
+      pre = await preflight();
+    }
+    for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
+    const { channels } = pre;
+    warnHostOnlyFlags(host, opts);
+    const reachedAt = await target.deploy({
+      opts,
+      answerer,
+      agentDir,
+      config,
+      pre,
+      channels,
+      webhookChannels: channels.filter((channel) => channel.ingress === "webhook"),
+      // The ownership predicate is bound HERE, from the same lookup that chose the host, so no host module can pass
+      // one.
+      // Reporting a stale artifact is enough when only generating them — the operator reads the line and decides. But
+      // `--run` would then deploy FROM it: a determinate mismatch between what ships and what the definition says,
+      // the same class as a Dockerfile that cannot read the manifest, and gated the
+      // same way. `--force` regenerates ours; a file we did not generate is never touched by either, and the marker
+      // line is how an operator takes a path back on purpose.
+      write: async (artifacts, options) => {
+        const plan = await planArtifacts(agentDir, artifacts, { ...options, isOurs: target.isOurs });
+        if (opts.run && plan.stale.length > 0) {
+          failStartup(
+            new Error(
+              `deploy stopped: ${plan.stale.join(", ")} no longer match what this definition generates, and --run ` +
+                `would deploy from them. Re-run with --force to regenerate, or remove each file's generated-by ` +
+                `marker to own it yourself.`,
+            ),
+          );
+        }
+        await applyArtifactPlan(plan);
+      },
+    });
+    const notes = apiReport(api, { valueFile: pre.valueFile, agentArg }, reachedAt);
+    for (const line of notes) console.error(`[fastagent] ${line}`);
+    return { ...(reachedAt === undefined ? {} : { url: reachedAt }), notes };
+  };
+
+  if (opts.ticket !== undefined) {
+    // The process `startTicket` started: the deploy itself, its person the ticket's.
+    await runTicket(opts.ticket, (step) => deployWith({ kind: "ticket", step }));
+    process.exit(0);
+  }
+  await deployWith(opts.input === false || !isInteractive() ? { kind: "nobody" } : { kind: "terminal" });
+}
+
+/** `deploy <host> --check <ticket> [--code <code>]`. */
+async function checkDeploy(host: DeployHost, id: string, opts: DeployOptions): Promise<void> {
+  const ticket = await checkTicket(id, opts.code);
+  if (ticket === undefined) failUsage(`no deploy "${id}": a ticket is what \`fastagent deploy --run --json\` printed`);
+  reportDeploy(ticket, host, "checked");
+  process.exit(ticketExitCode(ticket));
+}
+
+/** A deploy's ticket for the agent that started or checked it, always as JSON: `--json` is how one started. */
+function reportDeploy(ticket: Ticket, host: DeployHost, when: "started" | "checked"): void {
+  const { json } = ticketReport(ticket, when, (result) => ({
+    fields: result,
+    text: [],
+    next:
+      result.url === undefined
+        ? "Deployed. Tell the user what the notes say."
+        : `Deployed to ${String(result.url)}. Tell the user what the notes say.`,
+  }));
+  printReport(true, { ...json, deployment: host }, []);
 }

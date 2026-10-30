@@ -267,11 +267,30 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     );
   });
 
-  it("gate: not logged in → stops before any side effect", async () => {
+  it("gate: not logged in with nobody to sign in → stops before any side effect, naming every way in", async () => {
     const { fly, cmds } = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
     const out = await run(plan(), fly);
-    expect(out).toEqual({ ok: false, gate: expect.stringMatching(/fly auth login|FLY_API_TOKEN/) });
+    expect(out).toEqual({
+      ok: false,
+      gate:
+        "not logged in to Fly — run `fly auth login` in a terminal (it opens a browser), or set FLY_API_TOKEN in this " +
+        "shell's environment, never in .secrets/production/.env (everything there travels to the box); then re-run. " +
+        "From a coding agent, `fastagent deploy fly --run --json` hands the sign-in to its user",
+    });
     expect(cmds()).toEqual(["auth whoami"]); // nothing after the gate
+  });
+
+  it("not logged in with someone to sign in: signed in, then the run goes on; a failed sign-in is the gate", async () => {
+    const { fly, cmds } = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
+    const hostLogin = vi.fn(async () => undefined);
+    await run(plan({ hostLogin }), fly);
+    expect(hostLogin).toHaveBeenCalledOnce();
+    expect(cmds()).toContain("apps list --json");
+
+    const refused = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
+    const out = await run(plan({ hostLogin: async () => "the person did not approve" }), refused.fly);
+    expect(out).toEqual({ ok: false, gate: "the person did not approve" });
+    expect(refused.cmds()).toEqual(["auth whoami"]);
   });
 
   it("gate: a missing secret value stops before creating infra", async () => {

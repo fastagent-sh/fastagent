@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { STATE_DIRNAME, globalHome } from "../paths.ts";
+import { recordFailures } from "./fail.ts";
 import type { Person } from "./person.ts";
 
 type TicketStatus = "starting" | "need_user_action" | "working" | "done" | "failed" | "expired";
@@ -120,14 +121,21 @@ async function stop(pid: number): Promise<void> {
 }
 
 /**
- * Stop every step for `subject` still running, before a newer one starts. Only an unexpired one is taken for a
- * process of ours: its pid is minutes old, where one an ended process left could by now name another's.
+ * The steps for `subject` still running. Only an unexpired one is taken for a process of ours: its pid is minutes old,
+ * where one an ended process left could by now name another's.
  */
-async function supersede(subject: string, now: number): Promise<void> {
-  if (!existsSync(ticketsDir())) return;
-  for (const file of readdirSync(ticketsDir())) {
+function runningFor(subject: string, now: number): Ticket[] {
+  if (!existsSync(ticketsDir())) return [];
+  return readdirSync(ticketsDir()).flatMap((file) => {
     const ticket = file.endsWith(".json") ? readTicket(file.slice(0, -".json".length)) : undefined;
-    if (ticket === undefined || ticket.subject !== subject || !waiting(ticket) || ticket.expiresAt < now) continue;
+    const runs = ticket?.subject === subject && waiting(ticket) && ticket.expiresAt >= now && running(ticket.pid);
+    return runs ? [ticket as Ticket] : [];
+  });
+}
+
+/** Stop every step for `subject` still running, before a newer one starts. */
+async function supersede(subject: string, now: number): Promise<void> {
+  for (const ticket of runningFor(subject, now)) {
     if (ticket.pid !== undefined) await stop(ticket.pid);
     update(ticket.ticket, { status: "failed", message: `replaced by a newer attempt to ${ticket.action}` });
   }
@@ -184,11 +192,21 @@ export async function startTicket(
      * still at it then is returned working, its process carrying on.
      */
     waitsFirst: boolean;
+    /**
+     * A step for the same subject still running: `replace` stops it (a sign-in, holding a port the new one needs);
+     * `join` answers with it instead of starting another (a deploy, which must not be stopped halfway).
+     */
+    whenRunning: "replace" | "join";
     /** How long the step may take to give the person something to do; a test's is short. */
     startTimeoutMs?: number;
   },
 ): Promise<Ticket> {
-  await supersede(input.subject, Date.now());
+  if (input.whenRunning === "join") {
+    const [joined] = runningFor(input.subject, Date.now());
+    if (joined !== undefined) return joined;
+  } else {
+    await supersede(input.subject, Date.now());
+  }
   const id = createTicket(input).ticket;
   const startTimeoutMs = input.startTimeoutMs ?? START_TIMEOUT_MS;
   const log = openSync(ticketLogPath(id), "a");
@@ -272,6 +290,7 @@ export async function runTicket(
   const ticket = readTicket(id);
   if (ticket === undefined) throw new Error(`no ticket ${id} in ${ticketsDir()}`);
   update(id, { pid: process.pid });
+  recordFailures((message) => update(id, { status: "failed", message }));
   const signal = AbortSignal.timeout(Math.max(0, ticket.expiresAt - Date.now()));
   const waits: TicketStep["waits"] = (on) => update(id, { status: "need_user_action", ...on });
   const afterwards: Person["afterwards"] = (instructions, url) => {
@@ -301,6 +320,8 @@ export async function runTicket(
     console.error(error);
     if (signal.aborted) update(id, { status: "expired" });
     else update(id, { status: "failed", message: (error as Error).message });
+  } finally {
+    recordFailures(undefined);
   }
 }
 
@@ -347,11 +368,12 @@ export function ticketReport(
       text: [`done: ${ticket.action}`, ...report.text, ...left.map((line) => `afterwards: ${line}`)],
     };
   }
+  const log = ticketLogPath(ticket.ticket);
   if (ticket.status === "failed" || ticket.status === "expired") {
     const message = ticket.status === "expired" ? "it was not finished in time" : (ticket.message as string);
     return {
-      json: { ...base, message, agent_next_steps: `To try again, run: ${ticket.restart} --json` },
-      text: [`${ticket.status}: ${message}`, `to try again: ${ticket.restart}`],
+      json: { ...base, message, log, agent_next_steps: `To try again, run: ${ticket.restart} --json` },
+      text: [`${ticket.status}: ${message}`, `log: ${log}`, `to try again: ${ticket.restart}`],
     };
   }
   if (ticket.status === "working") {
@@ -359,9 +381,11 @@ export function ticketReport(
       json: {
         ...base,
         check_command: `${check} --json`,
-        agent_next_steps: "The user's part is done and fastagent is finishing it. Run check_command again in a minute.",
+        log,
+        agent_next_steps:
+          "fastagent is working on it, with nothing for the user to do now. Run check_command again in a minute.",
       },
-      text: [`working: the person's part is done; fastagent is finishing it`, `then run: ${check}`],
+      text: [`working: nothing for the person to do now`, `log: ${log}`, `then run: ${check}`],
     };
   }
   const resume = `${check} --code '<address>'`;
@@ -371,7 +395,8 @@ export function ticketReport(
       : `Give the URL and the code ${ticket.code} to the user so they can ${ticket.action} there.`;
   const then = ticket.takesAddress
     ? "Once they say they have, run check_command. If their browser ends on a page that does not load (an address " +
-      "on localhost), ask them for that address and run resume_command with it in place of <address>."
+      "on localhost), or on one showing a one-time code to hand back, ask them for that address or code and run " +
+      "resume_command with it in place of <address>."
     : "Once they say they have, run check_command.";
   return {
     json: {

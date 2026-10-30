@@ -22,9 +22,17 @@ fastagent deploy railway
 fastagent deploy railway --run
 fastagent deploy agentcore              # CloudFormation stack for AWS Bedrock AgentCore + runbook
 fastagent deploy agentcore --run
+fastagent deploy fly --run --json       # a coding agent's deploy: a ticket, its person's steps handed back
 ```
 
 Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are yours.
+
+A coding agent deploys with `--run --json`. The deploy runs in a process of its own and the command returns its
+ticket; the agent checks it with `fastagent deploy <host> --check <ticket>` and relays each `need_user_action`: the
+host's CLI sign-in (`fly auth login`, `railway login`, run for the person, who approves in the browser), a production
+Feishu app to confirm, the box's model login. It ends `done` with the deployment's URL. AWS credentials for
+AgentCore are typed by the person: a ticket without them fails saying to run `aws configure` in a terminal of their
+own. See [`fastagent deploy`](cli.md#commands).
 
 ## Before you deploy
 
@@ -69,8 +77,8 @@ the steps it could not do.
   `--run` creates a separate production app when its credentials are missing: Feishu uses scan-to-create with the
   agent scopes plus `application:application:patch`; Lark uses guided console setup. App ID and Secret are saved
   immediately so an interrupted token capture resumes the same app. Approval and publishing remain console steps.
-  Without a terminal, `--run` stops (exit 2) naming `add <kind> --env production --json`, which a coding agent runs to
-  hand the person's part to its user. CI must supply the production App ID, Secret and Verification Token beforehand.
+  `--run --json` hands the confirmation to a coding agent's user; without either a terminal or `--json`, `--run`
+  stops (exit 2) naming it. CI must supply the production App ID, Secret and Verification Token beforehand.
 - **Other channels:** run `add slack --env production` to create the production Slack app, or
   `add telegram --env production` and create its bot through BotFather. Their local onboarding state is separate.
 - **One app still delivers to one place.** `dev --tunnel` changes only the dev app's URL; `deploy --run` changes
@@ -112,10 +120,11 @@ unless the box already holds an account sign-in for that provider, which outrank
 credential it already authenticates the model's provider with (a login it holds, unexpired or refreshable; a
 variable its host sets; a role it runs as), and logs in only when it has none. A redeploy therefore keeps the box's
 credential. A credential revoked at the provider before it expires is not detected, and the first turn fails with
-the provider's error: run `fastagent login --deployment <host>` to replace it. Without a terminal (CI, a coding agent),
-`--run` stops at the login with `not logged in`, exit 1, naming the command for a terminal and the `--json` one for a
-coding agent. It has registered no webhook at that point, so when
-the agent has any, the message also says what to re-run once the box is logged in.
+the provider's error: run `fastagent login --deployment <host>` to replace it. With `--json`, the login is a step of
+the deploy's ticket, and the webhooks are registered once it is done. Without a terminal or `--json` (CI), `--run`
+stops at the login with `not logged in`, exit 1, naming the command for a terminal and the `--json` one for a coding
+agent. It has registered no webhook at that point, so when the agent has any, the message also says what to re-run
+once the box is logged in.
 
 A login stored on the box outranks a key in its environment (pi lets a stored credential own its provider). So a key
 added to `.secrets/production/.env` after the box was logged in is not used; the box's startup log says so and names the
@@ -134,8 +143,9 @@ platform sets in the box's environment). A Docker box cannot tell, and leaves `<
 - **AgentCore** resets its storage on every deploy and after 14 idle days, and the login with it. Every deploy of an
   agent that logs in ends with this login; after an idle reset every turn fails until you run
   `fastagent login <provider> --deployment agentcore` again (the runtime's log names it). An agent that must keep
-  answering unattended needs an API key there. Without a terminal, `deploy agentcore --run` therefore stops before building anything, rather than replace a
-  serving runtime with one nobody can log in; for frequent or CI deploys, use an API key. The shell needs
+  answering unattended needs an API key there. Without a terminal or `--json`, `deploy agentcore --run` therefore
+  stops before building anything, rather than replace a serving runtime with one nobody can log in; with `--json`
+  the login is a step of the same ticket. For frequent or CI deploys, use an API key. The shell needs
   `bedrock-agentcore:InvokeAgentRuntimeCommandShell`, and the login first sends the runtime a probe so its storage
   is prepared (after a reset, nothing may have invoked it yet). The shell does not inherit the runtime's environment, so
   an egress proxy set in `.secrets/production/.env` (`HTTPS_PROXY`) applies to the agent's turns but not to the login: where the
@@ -208,7 +218,9 @@ or reverse proxy.
 
 ## Fly.io
 
-Requires [flyctl](https://fly.io/docs/flyctl/install) and `fly auth login`.
+Requires [flyctl](https://fly.io/docs/flyctl/install), signed in: `--run` runs `fly auth login` when it is not (at a
+terminal, or for a coding agent's person with `--json`). A token goes in your shell's or CI's environment
+(`FLY_API_TOKEN`), never in `.secrets/production/.env`, whose every variable travels to the box.
 
 ```bash
 fastagent deploy fly
@@ -232,7 +244,9 @@ Idle behavior is **suspend** with `min_machines_running = 0`. Both lines are in 
 
 ## Railway
 
-Requires the [Railway CLI](https://docs.railway.com/guides/cli) and `railway login`.
+Requires the [Railway CLI](https://docs.railway.com/guides/cli), signed in: `--run` runs `railway login` when it is
+not, as for Fly. A token (`RAILWAY_API_TOKEN`) goes in your shell's or CI's environment, never in
+`.secrets/production/.env`.
 
 ```bash
 fastagent deploy railway

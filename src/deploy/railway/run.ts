@@ -9,7 +9,7 @@ import {
 } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
-import { missingValuesGate } from "../secrets.ts";
+import { hostSignedOutGate, missingValuesGate } from "../secrets.ts";
 
 export interface RailwayRunPlan {
   /** Names both the project (`railway init --name`) and the service (`railway add --service`). */
@@ -34,6 +34,11 @@ export interface RailwayRunPlan {
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
    */
   boxLogin?: BoxLoginStep;
+  /**
+   * Sign the host's CLI in when it is signed out, through whoever can (host-login.ts): resolves a gate line, or
+   * undefined once signed in. Absent: nobody can, and the run stops naming how.
+   */
+  hostLogin?: () => Promise<string | undefined>;
 }
 
 /**
@@ -127,9 +132,10 @@ export async function deployRailwayRun(
 
   // 1.
   if ((await railway(["whoami"], { capture: true })).code !== 0) {
-    return gate(
-      "not logged in to Railway — run `railway login`, or set RAILWAY_API_TOKEN (an account token), then re-run",
-    );
+    const failed = plan.hostLogin
+      ? await plan.hostLogin()
+      : hostSignedOutGate("Railway", "railway login", "RAILWAY_API_TOKEN (an account token)", "railway");
+    if (failed) return gate(failed);
   }
 
   // 2. Gate missing required secret VALUES before any side effect (no half-created infra).

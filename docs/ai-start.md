@@ -444,11 +444,11 @@ and verifies it. Review [Deploy](deploy.md) before authorizing resource creation
 
 Put the model in config and every value the deployment needs in `.secrets/production/.env`; `deploy` carries the whole
 file, never the dev one. A
-model without an API key there (an OAuth subscription) is logged in on the deployment by the owner: `--run` starts
-`fastagent login --deployment <host>` once the box is up, and without a terminal it stops and names
-`fastagent login <provider> --method account --deployment <host> --json`. Run that: it answers `need_user_action`
-with the address (and a device code) for the owner, and a `check_command` that reports `done` once the box holds the
-login ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
+model without an API key there (an OAuth subscription) is logged in on the deployment by the owner. Deploy with
+`fastagent deploy <host> --run --json`: it returns a ticket, and `fastagent deploy <host> --check <ticket>` reports
+`working`, a `need_user_action` for each step only the owner can take (signing the host's CLI in, confirming a
+production Feishu app, the box's model login: relay the address, and a code when there is one), then `done` with the
+deployment's URL ([Deploy](deploy.md), [Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
 host. A deployed agent is reached through its channels and schedules, and on Docker, Fly and Railway through the

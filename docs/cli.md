@@ -45,6 +45,16 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 `--force`; a generated one that no longer matches the definition is flagged stale and gates `--run`. See
 [Deploy](deploy.md).
 
+`deploy <host> --run --json` is a coding agent's deploy. What this machine can refuse (a missing value, a stale
+artifact, a Lark app without its credentials) is answered at once; the deploy then runs in a process of its own, and
+the command returns its ticket. `deploy <host> --check <ticket>` reads it, always as JSON: `working` with the `log`,
+`need_user_action` for each step only the person can take (signing the host's CLI in, confirming a production
+Feishu app, the box's model login), then `done` with the `url` and the Agent API's `notes`, or `failed` with why.
+Fly's approval page can show a one-time code instead of finishing: `--check <ticket> --code <code>` hands it over.
+A second `--run --json` while one runs answers with that one's ticket; a deploy is never stopped halfway.
+`--timeout` (default 3600 s) bounds it. Without `--json` and without a terminal (CI), such a step stops the deploy,
+naming how to give it.
+
 ## `fastagent init`
 
 ```bash
@@ -502,9 +512,9 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
   `"status": "need_user_action"`, the address to open, and a `check_command` to run once they have, in a sentence for
   the agent (`agent_next_steps`). An account sign-in (`login`, and `login --deployment` on the box) and an app's setup
   (`add slack|feishu|lark`) work this way: a process of the CLI's own finishes the step and keeps a ticket that
-  `--check <ticket>` reads. `deploy --run` without a terminal names the command that hands its person's part over:
-  `add <kind> --env production --json` for a production app, `login <provider> --method account --deployment <host>
-  --json` for the box's model login.
+  `--check <ticket>` reads. So does a whole deploy, opted into with `deploy <host> --run --json`: a deploy's exit 0
+  says it is deployed, so one paused for a person (exit 0, `need_user_action`) is never what a CI job gets without
+  asking for it.
 - **A secret never passes through the agent's conversation.** The person writes it where the command names (the
   agent's `.secrets/.env`), pastes it on a page the command's own process serves, or types it at a terminal of their
   own.

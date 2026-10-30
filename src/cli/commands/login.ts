@@ -242,6 +242,7 @@ async function requestLogin(
     restart: `fastagent login ${choice.provider} --method account${global}`,
     timeoutSeconds: target.timeoutSeconds,
     waitsFirst: true,
+    whenRunning: "replace",
     command: {
       file: process.execPath,
       args: [
@@ -543,6 +544,7 @@ async function requestDeploymentLogin(
     timeoutSeconds,
     // Reaching the box comes first, and can take a while (a host's shell, an idle runtime woken).
     waitsFirst: false,
+    whenRunning: "replace",
     command: {
       file: process.execPath,
       args: [
