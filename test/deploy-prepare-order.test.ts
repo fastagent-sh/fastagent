@@ -80,7 +80,13 @@ vi.mock("../src/cli/ticket.ts", async (importOriginal) => ({
   // The parent's start, recorded: the process it would start is this test's own child half, run below by hand.
   startTicket: async (input: Record<string, unknown>) => {
     started.push(input);
-    return { ticket: "0123456789abcdef", status: "working", expiresAt: Date.now() + 60_000, check: input.check };
+    return {
+      ticket: "0123456789abcdef",
+      status: "working",
+      expiresAt: Date.now() + 60_000,
+      check: input.check,
+      fields: input.fields,
+    };
   },
 }));
 const { createTicket, checkTicket } = await import("../src/cli/ticket.ts");

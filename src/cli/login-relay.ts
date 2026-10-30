@@ -9,6 +9,7 @@
  */
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { BOX_CLI_PREDATES } from "../deploy/box-shell.ts";
 import type { IoOption, LoginIO, LoginMethod } from "../harnesses/models/login.ts";
 
 /** How a login on the box ended, as the box reports it. */
@@ -24,7 +25,8 @@ export type RelayResult =
 
 type BoxMessage =
   | { type: "select"; id: number; message: string; options: IoOption[] }
-  | { type: "prompt"; id: number; message: string; hidden: boolean; redirect?: boolean }
+  /** `redirect` is always there: one without it is from a box older than this wire (`BOX_CLI_PREDATES`). */
+  | { type: "prompt"; id: number; message: string; hidden: boolean; redirect: boolean }
   | { type: "abort"; id: number }
   | { type: "note"; message: string }
   | { type: "open"; url: string; userCode?: string }
@@ -79,13 +81,7 @@ export function stdioLoginIO(input: Readable, output: Writable): { io: LoginIO; 
       select: (message, options) => ask((id) => ({ type: "select", id, message, options })),
       prompt: (message, opts) =>
         ask(
-          (id) => ({
-            type: "prompt",
-            id,
-            message,
-            hidden: opts?.hidden === true,
-            ...(opts?.redirect ? { redirect: true } : {}),
-          }),
+          (id) => ({ type: "prompt", id, message, hidden: opts?.hidden === true, redirect: opts?.redirect === true }),
           opts?.signal,
         ),
       note: (message) => send(output, { type: "note", message }),
@@ -100,7 +96,8 @@ export function stdioLoginIO(input: Readable, output: Writable): { io: LoginIO; 
 
 /**
  * The terminal half: drive `io` from what the box sends on `from`, answering on `to`. Resolves with the box's
- * `result` line when `from` ends, or `undefined` when it ended without one. A line that is not the wire (a host
+ * `result` line when `from` ends, `undefined` when it ended without one, or a failure of this side's own when the box
+ * speaks an older wire than this one (`BOX_CLI_PREDATES`). A line that is not the wire (a host
  * CLI's banner, a shell's error) goes to `passthrough`, so nothing the box printed is lost.
  */
 export function relayLogin(
@@ -114,6 +111,8 @@ export function relayLogin(
   const answer = (id: number, value: string | undefined): void => send(to, { id, value: value ?? null });
   const prompts = new Map<number, AbortController>();
   let result: RelayResult | undefined;
+  /** Why this relay stopped the box itself: a box whose wire this CLI cannot read whole. */
+  let refused: string | undefined;
   const lines = createInterface({ input: from });
   lines.on("line", (line) => {
     const message = parse(line);
@@ -123,13 +122,16 @@ export function relayLogin(
         void io.select(message.message, message.options).then((value) => answer(message.id, value));
         return;
       case "prompt": {
+        if (typeof message.redirect !== "boolean") {
+          // An older box: which of its prompts takes the browser's address cannot be told, so none could be answered
+          // from the redirect this side catches. Its input ends, so it stops instead of waiting on a paste.
+          refused = BOX_CLI_PREDATES;
+          to.end();
+          return;
+        }
         const controller = new AbortController();
         prompts.set(message.id, controller);
-        const asked = {
-          hidden: message.hidden,
-          ...(message.redirect ? { redirect: true } : {}),
-          signal: controller.signal,
-        };
+        const asked = { hidden: message.hidden, redirect: message.redirect, signal: controller.signal };
         void io.prompt(message.message, asked).then((value) => {
           prompts.delete(message.id);
           if (!controller.signal.aborted) answer(message.id, value);
@@ -153,7 +155,7 @@ export function relayLogin(
   return new Promise((resolve) =>
     lines.on("close", () => {
       for (const controller of prompts.values()) controller.abort();
-      resolve(result);
+      resolve(refused === undefined ? result : { ok: false, reason: "failed", message: refused });
     }),
   );
 }

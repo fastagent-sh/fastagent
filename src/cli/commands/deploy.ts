@@ -193,6 +193,7 @@ async function deploy(
     if (!Number.isInteger(timeout) || timeout <= 0) failUsage("--timeout must be a whole number of seconds");
     const ticket = await startTicket({
       subject: `deploy:${host}:${agentDir}`,
+      fields: { deployment: host },
       action: `deploy the agent to ${host}`,
       check: deployCheck(host),
       restart: rerun,
@@ -217,7 +218,7 @@ async function deploy(
         cwd: process.cwd(),
       },
     });
-    reportDeploy(ticket, host, "started");
+    reportDeploy(ticket, "started");
     process.exit(ticketExitCode(ticket));
   }
 
@@ -314,12 +315,12 @@ async function checkDeploy(host: DeployHost, id: string, opts: DeployOptions): P
   if (refused !== undefined) failUsage(refused);
   // There: refusedCheck read it, and a ticket is pruned only a day after it ends.
   const ticket = (await checkTicket(id, opts.code)) as Ticket;
-  reportDeploy(ticket, host, "checked");
+  reportDeploy(ticket, "checked");
   process.exit(ticketExitCode(ticket));
 }
 
 /** A deploy's ticket for the agent that started or checked it, always as JSON: `--json` is how one started. */
-function reportDeploy(ticket: Ticket, host: DeployHost, when: "started" | "checked"): void {
+function reportDeploy(ticket: Ticket, when: "started" | "checked"): void {
   const { json } = ticketReport(ticket, when, (result) => ({
     fields: result,
     text: [],
@@ -328,5 +329,5 @@ function reportDeploy(ticket: Ticket, host: DeployHost, when: "started" | "check
         ? "Deployed. Tell the user what the notes say."
         : `Deployed to ${String(result.url)}. Tell the user what the notes say.`,
   }));
-  printReport(true, { ...json, deployment: host }, []);
+  printReport(true, json, []);
 }

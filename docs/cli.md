@@ -232,10 +232,11 @@ waited on. A coding agent works in turns, so each command does its part and says
   `"method": "account"`. When the person's browser cannot reach this machine, it ends on a page that does not load
   (an address on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the
   sign-in. `--timeout` sets how long the sign-in stays open (default 600 seconds). A newer sign-in to the same
-  provider stops one still waiting on the person (its ticket is then `failed`, "replaced by a newer attempt to sign in
-  to <provider>"), which would otherwise hold the provider's callback port until it expired; one already exchanging
-  the code is never stopped, and the newer attempt answers with its ticket. A ticket belongs to the command that
-  started it: `--check` with another command's ticket exits 2 naming the right one.
+  provider, on this machine or on a deployment (both hold its callback port here), stops one still waiting on the
+  person or still getting ready, such as reaching a box that does not answer (its ticket is then `failed`, "replaced by
+  a newer attempt to sign in to <provider>"), which would otherwise hold that port until it expired; one already
+  exchanging the code is never stopped, and the newer attempt answers with its ticket. A ticket belongs to the command
+  that started it: `--check` with another command's ticket exits 2 naming the right one.
 - **An API key** (`--method api-key`) is the person's to set where the agent reads it, never typed into the agent's
   conversation: `"status": "need_user_action"` names the `variables` the provider reads (`OPENAI_API_KEY`) and the
   agent's `value_file` (`.secrets/.env`), and `check_command` is `fastagent auth check`. When one is set already, the
@@ -260,7 +261,9 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
   AgentCore) and the credential stays there. `deploy` never carries `auth.json`. Without a terminal, an account's
   sign-in returns a ticket as a local one does (`deployment` names the host), its process holding the box's shell
   until the box answers; an API key is named for the person to set in `.secrets/production/.env`, which the next
-  `deploy <host> --run` carries. See [Logging a deployment in](deploy.md#logging-a-deployment-in).
+  `deploy <host> --run` carries. `login --check` reads that ticket as any other, without `--deployment`. A box whose
+  agent installed an older `@fastagent-sh/fastagent` than this CLI fails the login naming the version to align. See
+  [Logging a deployment in](deploy.md#logging-a-deployment-in).
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
   each copy rotates the single-use refresh token and breaks the other.
 - An API-key login is checked with one request to pi's default model for the provider, before the key is written.

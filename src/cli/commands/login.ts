@@ -242,7 +242,9 @@ async function requestLogin(
   }
   if (choice.method === "api_key") return keyNeeded(choice, opts, target);
   const ticket = await startTicket({
+    // One subject per provider, here or on a deployment: they hold the same callback port on this machine.
     subject: `login:${choice.provider}`,
+    fields: { provider: choice.provider, method: "account" },
     action: `sign in to ${choice.name}`,
     check: LOGIN_CHECK,
     restart: `fastagent login ${choice.provider} --method account${global}`,
@@ -393,8 +395,7 @@ async function runCheck(id: string, opts: LoginOptions): Promise<void> {
 
 /** A sign-in's ticket for whoever started or checked it: the shared report, and what a finished sign-in adds. */
 function reportTicket(ticket: Ticket, opts: LoginOptions, when: "started" | "checked"): void {
-  // `login:<provider>`, or `login:<provider>@<host>` for a deployment's.
-  const [provider, deployment] = ticket.subject.slice("login:".length).split("@") as [string, string | undefined];
+  const deployment = ticket.fields?.deployment;
   const { json, text } = ticketReport(ticket, when, (result) => {
     if (deployment !== undefined) {
       return { fields: {}, text: [`signed in on the ${deployment} deployment`], next: "Signed in on the deployment." };
@@ -406,8 +407,7 @@ function reportTicket(ticket: Ticket, opts: LoginOptions, when: "started" | "che
       next: hint === undefined ? "Signed in." : `Signed in. Tell the user: ${hint}.`,
     };
   });
-  const about = { provider, method: "account", ...(deployment === undefined ? {} : { deployment }) };
-  printReport(opts.json, { ...json, ...about }, text);
+  printReport(opts.json, json, text);
 }
 
 /**
@@ -453,6 +453,12 @@ export function signInInteraction(step: TicketStep, provider: string): AuthInter
  */
 async function runDeploymentLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.global) failUsage("--deployment logs the deployment in; -g names this machine's global file — pick one");
+  // A ticket is read on its own: with --deployment, this would start another sign-in and replace the one it names.
+  if (opts.check !== undefined || opts.code !== undefined) {
+    failUsage(
+      "--check reads a sign-in's ticket by itself: run `fastagent login --check <ticket>`, without --deployment",
+    );
+  }
   const agentDir = agentDirOrExit(process.cwd());
   selectAgentEnvironment("production");
   enterAgentEnv(agentDir);
@@ -545,7 +551,8 @@ async function requestDeploymentLogin(
     process.exit(0);
   }
   const ticket = await startTicket({
-    subject: `login:${choice.provider}@${host}`,
+    subject: `login:${choice.provider}`,
+    fields: { provider: choice.provider, method: "account", deployment: host },
     action: `sign in to ${choice.name} for the ${host} deployment`,
     check: LOGIN_CHECK,
     restart: `fastagent login ${choice.provider} --method account --deployment ${host}`,

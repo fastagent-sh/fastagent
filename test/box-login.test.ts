@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { boxLoginCommand } from "../src/deploy/container.ts";
 import { relayLogin } from "../src/cli/login-relay.ts";
 import { catchingRedirect, loginOnBox } from "../src/cli/box-login.ts";
-import { processShell } from "../src/deploy/box-shell.ts";
+import { BOX_CLI_PREDATES, processShell } from "../src/deploy/box-shell.ts";
 import type { LoginIO } from "../src/harnesses/models/login.ts";
 import { UNNAMED_AUTH_SOURCE } from "../src/harnesses/models/models.ts";
 import { createServer as createNetServer } from "node:net";
@@ -168,9 +168,10 @@ export default {
     expect(failed).toMatch(/ended without a login result \(exit 0\).*login --deployment railway/);
   });
 
-  it("an agent whose own fastagent predates login --stdio says so, through the quoting a host wraps it in", async () => {
-    // The agent pins an older release; a newer CLI deploys it. The old CLI refuses the flag as a usage error (exit 2),
-    // and without an answer for it the owner saw only "ended without a login result".
+  it("an agent whose own fastagent predates this CLI's login --stdio says so, through the quoting a host wraps it in", async () => {
+    // The agent pins an older release; a newer CLI deploys it. The old CLI refuses a flag it does not know (--stdio, or
+    // one added since such as --method) as a usage error (exit 2), and without an answer for it the owner saw only
+    // "ended without a login result".
     const { root, agentDir } = await box();
     await mkdir(join(agentDir, "node_modules", ".bin"), { recursive: true });
     await executable(
@@ -184,9 +185,10 @@ export default {
         // As `fly ssh console --command` and `railway ssh` receive it: one single-quoted word.
         shell: processShell("sh", (command) => ["-c", `sh -c '${command}'`], root),
         provider: "openai-codex",
+        method: "oauth",
         input: false,
       });
-      expect(failed).toMatch(/^login on the deployment failed: .*predates login --stdio: align .*redeploy$/);
+      expect(failed).toBe(`login on the deployment failed: ${BOX_CLI_PREDATES}`);
     } finally {
       vi.unstubAllEnvs();
     }
