@@ -544,7 +544,7 @@ async function requestDeploymentLogin(
   const ticket = await startTicket({
     subject: `login:${choice.provider}@${host}`,
     action: `sign in to ${choice.name} for the ${host} deployment`,
-    check: "fastagent login --check",
+    check: LOGIN_CHECK,
     restart: `fastagent login ${choice.provider} --method account --deployment ${host}`,
     timeoutSeconds,
     // Reaching the box comes first, and can take a while (a host's shell, an idle runtime woken).
