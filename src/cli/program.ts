@@ -723,7 +723,9 @@ const login: CommandSpec = {
     "--deployment runs the login on the deployed box through the host's own shell (docker compose exec, fly ssh, " +
     "railway ssh, AgentCore's command shell); this terminal shows it, opens the browser, and catches the browser's " +
     "return to localhost (or asks you to paste that address when its port is taken). The box keeps the credential, " +
-    "so it is the only holder of that grant, and logging in again replaces it there.",
+    "so it is the only holder of that grant, and logging in again replaces it there. Without a terminal, an " +
+    "account's sign-in on the box returns a ticket as a local one does, its process holding the box's shell; an API " +
+    "key is named, for the person to set in .secrets/production/.env before the next deploy carries it.",
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0] as string | undefined, {
       global: f.global === true,

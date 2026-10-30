@@ -444,9 +444,11 @@ and verifies it. Review [Deploy](deploy.md) before authorizing resource creation
 
 Put the model in config and every value the deployment needs in `.secrets/production/.env`; `deploy` carries the whole
 file, never the dev one. A
-model without an API key there (an OAuth subscription) is logged in on the deployment by the owner, in a terminal:
-`--run` starts `fastagent login --deployment <host>` once the box is up, and without a terminal it stops and names that
-command ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
+model without an API key there (an OAuth subscription) is logged in on the deployment by the owner: `--run` starts
+`fastagent login --deployment <host>` once the box is up, and without a terminal it stops and names
+`fastagent login <provider> --method account --deployment <host> --json`. Run that: it answers `need_user_action`
+with the address (and a device code) for the owner, and a `check_command` that reports `done` once the box holds the
+login ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
 host. A deployed agent is reached through its channels and schedules, and on Docker, Fly and Railway through the

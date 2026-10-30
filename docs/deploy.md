@@ -101,12 +101,20 @@ says so, and you paste the address the browser landed on instead. The box exchan
 credential on its storage, so it is the only holder of that grant: your machine's login is untouched, and neither
 side can log the other out. Logging in again replaces it.
 
+A coding agent runs `fastagent login <provider> --method account --deployment <host> --json`. It answers at once with
+the sign-in's address (and a device code) for its user, and a ticket: a process of its own holds the box's shell,
+catches the browser's return to `localhost` on this machine, and takes the address from `login --check <ticket>
+--code <address>` when the browser is elsewhere. `login --check <ticket>` reports `done` once the box holds the login.
+For an API key it names the variable to set in `.secrets/production/.env`; the next `deploy <host> --run` carries it,
+unless the box already holds an account sign-in for that provider, which outranks it (below).
+
 `deploy --run` asks the box once it answers `/health` and before any webhook is pointed at it: the box keeps a
 credential it already authenticates the model's provider with (a login it holds, unexpired or refreshable; a
 variable its host sets; a role it runs as), and logs in only when it has none. A redeploy therefore keeps the box's
 credential. A credential revoked at the provider before it expires is not detected, and the first turn fails with
-the provider's error: run `fastagent login --deployment <host>` to replace it. Without a terminal (CI), `--run` stops at
-the login with `not logged in` and the command to run, exit 1. It has registered no webhook at that point, so when
+the provider's error: run `fastagent login --deployment <host>` to replace it. Without a terminal (CI, a coding agent),
+`--run` stops at the login with `not logged in`, exit 1, naming the command for a terminal and the `--json` one for a
+coding agent. It has registered no webhook at that point, so when
 the agent has any, the message also says what to re-run once the box is logged in.
 
 A login stored on the box outranks a key in its environment (pi lets a stored credential own its provider). So a key

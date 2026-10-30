@@ -64,7 +64,8 @@ src/
 │   ├── login-relay.ts      # `login` split across a process boundary: LoginIO as JSON lines, box half + terminal half
 │   ├── ticket.ts           # a step a coding agent starts and a person finishes (a sign-in, an app's setup), outliving
 │   │                       # the command: its own process, a ticket under ~/.fastagent/.state/tickets, `--check`
-│   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell
+│   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell;
+│   │                       # answered at this terminal, or by a ticket's process for a coding agent (ticketLoginIO)
 │   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
 ├── telegram.ts, slack.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
 │   feishu.ts, lark.ts

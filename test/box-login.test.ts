@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { boxLoginCommand } from "../src/deploy/container.ts";
 import { relayLogin } from "../src/cli/login-relay.ts";
 import { catchingRedirect, loginOnBox } from "../src/cli/box-login.ts";
-import { processShell } from "../src/deploy/box-shell.ts";
+import { BOX_CLI_PREDATES, processShell } from "../src/deploy/box-shell.ts";
 import type { LoginIO } from "../src/harnesses/models/login.ts";
 import { UNNAMED_AUTH_SOURCE } from "../src/harnesses/models/models.ts";
 import { createServer as createNetServer } from "node:net";
@@ -116,6 +116,22 @@ export default {
     expect(held.result, held.stderr).toEqual({ ok: true, provider: "gw", kept: UNNAMED_AUTH_SOURCE });
   });
 
+  it("a method given is passed on: the box asks no menu, only what that method needs", async () => {
+    const { root, bin } = await box();
+    await executable(join(bin, "fastagent"), `exec "${process.execPath}" "${CLI}" "$@"`);
+    const { child } = onBox(boxLoginCommand(["openai", "--method", "api-key"]), envFor(root, bin));
+    const asked: string[] = [];
+    const backsOut: LoginIO = {
+      select: async (message) => void asked.push(`select: ${message}`),
+      prompt: async (message, opts) => void asked.push(`${opts?.hidden ? "secret" : "text"}: ${message}`),
+      note: () => {},
+      openUrl: () => {},
+    };
+    const result = await relayLogin(child.stdout, child.stdin, backsOut, () => {});
+    expect(result).toMatchObject({ ok: false, reason: "cancelled" });
+    expect(asked).toEqual([expect.stringMatching(/^secret: /)]);
+  });
+
   it("reports a credential the box already holds, and a missing one without asking, as one result line", async () => {
     const { root, bin } = await box();
     const relay = (args: string[]) => relayOn(root, bin, args);
@@ -152,9 +168,10 @@ export default {
     expect(failed).toMatch(/ended without a login result \(exit 0\).*login --deployment railway/);
   });
 
-  it("an agent whose own fastagent predates login --stdio says so, through the quoting a host wraps it in", async () => {
-    // The agent pins an older release; a newer CLI deploys it. The old CLI refuses the flag as a usage error (exit 2),
-    // and without an answer for it the owner saw only "ended without a login result".
+  it("an agent whose own fastagent predates this CLI's login --stdio says so, through the quoting a host wraps it in", async () => {
+    // The agent pins an older release; a newer CLI deploys it. The old CLI refuses a flag it does not know (--stdio, or
+    // one added since such as --method) as a usage error (exit 2), and without an answer for it the owner saw only
+    // "ended without a login result".
     const { root, agentDir } = await box();
     await mkdir(join(agentDir, "node_modules", ".bin"), { recursive: true });
     await executable(
@@ -168,9 +185,10 @@ export default {
         // As `fly ssh console --command` and `railway ssh` receive it: one single-quoted word.
         shell: processShell("sh", (command) => ["-c", `sh -c '${command}'`], root),
         provider: "openai-codex",
+        method: "oauth",
         input: false,
       });
-      expect(failed).toMatch(/^login on the deployment failed: .*predates login --stdio: align .*redeploy$/);
+      expect(failed).toBe(`login on the deployment failed: ${BOX_CLI_PREDATES}`);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -186,7 +204,9 @@ export default {
       input: false,
     });
     expect(failed).toBe(
-      "not logged in: no openai-codex credential — run `fastagent login openai-codex --deployment fly` in a terminal",
+      "not logged in: no openai-codex credential — run `fastagent login openai-codex --deployment fly` in a terminal, " +
+        "or `fastagent login openai-codex --method account --deployment fly --json` from a coding agent, which hands " +
+        "the sign-in to its user",
     );
   });
 });
@@ -229,13 +249,26 @@ describe("catching the browser's redirect on this machine", () => {
     const io = catchingRedirect(terminal.io);
     try {
       io.openUrl(authUrl(port));
-      const answer = io.prompt("paste the redirect URL");
+      const answer = io.prompt("paste the redirect URL", { redirect: true });
       const page = await fetch(`http://127.0.0.1:${port}/auth/callback?code=abc&state=s`);
       expect(page.status).toBe(200);
       expect(await answer).toBe(`http://localhost:${port}/auth/callback?code=abc&state=s`);
       expect(terminal.aborted()).toBe(true);
       // Caught once: the listener is gone, so nothing else on this port is ours to answer.
       await expect(fetch(`http://127.0.0.1:${port}/auth/callback?code=again`)).rejects.toThrow();
+    } finally {
+      io.close();
+    }
+  });
+
+  it("a question that is not the redirect goes to the person, even with the port listening", async () => {
+    const port = await freePort();
+    const io = catchingRedirect({ ...waitingTerminal().io, prompt: async () => "acme.ghe.com" });
+    try {
+      io.openUrl(authUrl(port));
+      await fetch(`http://127.0.0.1:${port}/auth/callback?code=early&state=s`);
+      expect(await io.prompt("GitHub Enterprise domain (blank for github.com)")).toBe("acme.ghe.com");
+      expect(await io.prompt("paste", { redirect: true })).toMatch(/code=early/);
     } finally {
       io.close();
     }
@@ -249,7 +282,7 @@ describe("catching the browser's redirect on this machine", () => {
     const io = catchingRedirect(terminal.io);
     try {
       io.openUrl(authUrl(port));
-      const answer = io.prompt("paste the redirect URL");
+      const answer = io.prompt("paste the redirect URL", { redirect: true });
       for (const forged of ["code=x", "code=x&state=guessed"]) {
         expect((await fetch(`http://127.0.0.1:${port}/auth/callback?${forged}`)).status, forged).toBe(404);
       }
@@ -265,7 +298,7 @@ describe("catching the browser's redirect on this machine", () => {
     const io = catchingRedirect({ ...waitingTerminal().io, prompt: async () => "pasted" });
     io.openUrl(`https://auth.example/authorize?redirect_uri=${encodeURIComponent(`http://localhost:${port}/cb`)}`);
     await expect(fetch(`http://127.0.0.1:${port}/cb?code=x`)).rejects.toThrow(); // nothing listens
-    expect(await io.prompt("paste")).toBe("pasted");
+    expect(await io.prompt("paste", { redirect: true })).toBe("pasted");
     io.close();
   });
 
@@ -275,7 +308,7 @@ describe("catching the browser's redirect on this machine", () => {
     try {
       io.openUrl(authUrl(port));
       await fetch(`http://127.0.0.1:${port}/auth/callback?code=early&state=s`);
-      expect(await io.prompt("paste")).toMatch(/code=early/);
+      expect(await io.prompt("paste", { redirect: true })).toMatch(/code=early/);
     } finally {
       io.close();
     }
@@ -290,7 +323,7 @@ describe("catching the browser's redirect on this machine", () => {
     try {
       io.openUrl(authUrl(port));
       await vi.waitFor(() => expect(terminal.notes.join("\n")).toMatch(new RegExp(`${port}.*EADDRINUSE.*paste`)));
-      expect(await io.prompt("paste")).toBe(terminal.pasted);
+      expect(await io.prompt("paste", { redirect: true })).toBe(terminal.pasted);
     } finally {
       io.close();
       taken.close();
@@ -300,7 +333,7 @@ describe("catching the browser's redirect on this machine", () => {
   it("a URL with no localhost redirect (a device-code page) catches nothing", async () => {
     const io = catchingRedirect({ ...waitingTerminal().io, prompt: async () => "typed" });
     io.openUrl("https://github.com/login/device");
-    expect(await io.prompt("code")).toBe("typed");
+    expect(await io.prompt("code", { redirect: true })).toBe("typed");
     io.close();
   });
 });

@@ -222,10 +222,11 @@ waited on. A coding agent works in turns, so each command does its part and says
   `"method": "account"`. When the person's browser cannot reach this machine, it ends on a page that does not load
   (an address on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the
   sign-in. `--timeout` sets how long the sign-in stays open (default 600 seconds). A newer sign-in to the same
-  provider stops one still waiting on the person (its ticket is then `failed`, "replaced by a newer attempt to sign in
-  to <provider>"), which would otherwise hold the provider's callback port until it expired; one already exchanging
-  the code is never stopped, and the newer attempt answers with its ticket. A ticket belongs to the command that
-  started it: `--check` with another command's ticket exits 2 naming the right one.
+  provider, on this machine or on a deployment (both hold its callback port here), stops one still waiting on the
+  person or still getting ready, such as reaching a box that does not answer (its ticket is then `failed`, "replaced by
+  a newer attempt to sign in to <provider>"), which would otherwise hold that port until it expired; one already
+  exchanging the code is never stopped, and the newer attempt answers with its ticket. A ticket belongs to the command
+  that started it: `--check` with another command's ticket exits 2 naming the right one.
 - **An API key** (`--method api-key`) is the person's to set where the agent reads it, never typed into the agent's
   conversation: `"status": "need_user_action"` names the `variables` the provider reads (`OPENAI_API_KEY`) and the
   agent's `value_file` (`.secrets/.env`), and `check_command` is `fastagent auth check`. When one is set already, the
@@ -247,7 +248,11 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
   it was read from. `login` warns when an env variable already authenticates the provider, because the global login
   is then not used.
 - `--deployment <host>` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway,
-  AgentCore) and the credential stays there. `deploy` never carries `auth.json`. See
+  AgentCore) and the credential stays there. `deploy` never carries `auth.json`. Without a terminal, an account's
+  sign-in returns a ticket as a local one does (`deployment` names the host), its process holding the box's shell
+  until the box answers; an API key is named for the person to set in `.secrets/production/.env`, which the next
+  `deploy <host> --run` carries. `login --check` reads that ticket as any other, without `--deployment`. A box whose
+  agent installed an older `@fastagent-sh/fastagent` than this CLI fails the login naming the version to align. See
   [Logging a deployment in](deploy.md#logging-a-deployment-in).
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
   each copy rotates the single-use refresh token and breaks the other.
@@ -503,11 +508,11 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
   answers `need_choice` with a command for each).
 - **A step only a person can take returns at once**, with what the person does and how to follow it:
   `"status": "need_user_action"`, the address to open, and a `check_command` to run once they have, in a sentence for
-  the agent (`agent_next_steps`). An account sign-in (`login`) and an app's setup (`add slack|feishu|lark`) work this
-  way: a process of the CLI's own finishes the step and keeps a ticket that `--check <ticket>` reads. `deploy --run`
-  without a terminal names the `add <kind> --env production --json` that sets up a production app.
-  `login --deployment` follows ([#855](https://github.com/fastagent-sh/fastagent/issues/855)), and until then asks for
-  a terminal.
+  the agent (`agent_next_steps`). An account sign-in (`login`, and `login --deployment` on the box) and an app's setup
+  (`add slack|feishu|lark`) work this way: a process of the CLI's own finishes the step and keeps a ticket that
+  `--check <ticket>` reads. `deploy --run` without a terminal names the command that hands its person's part over:
+  `add <kind> --env production --json` for a production app, `login <provider> --method account --deployment <host>
+  --json` for the box's model login.
 - **A secret never passes through the agent's conversation.** The person writes it where the command names (the
   agent's `.secrets/.env`), pastes it on a page the command's own process serves, or types it at a terminal of their
   own.

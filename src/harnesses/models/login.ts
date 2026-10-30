@@ -416,12 +416,18 @@ export interface IoOption {
 export interface LoginIO {
   /** Single-choice picker. */
   select(message: string, options: IoOption[]): Promise<string | undefined>;
-  /** Free-text or hidden input. */
-  prompt(message: string, opts?: { hidden?: boolean; signal?: AbortSignal }): Promise<string | undefined>;
+  /**
+   * Free-text or hidden input. `redirect`: what is asked is the address the browser ended on after signing in, or the
+   * code its page showed (pi-ai's `manual_code`).
+   */
+  prompt(
+    message: string,
+    opts?: { hidden?: boolean; redirect?: boolean; signal?: AbortSignal },
+  ): Promise<string | undefined>;
   /** Print an informational line (auth URL, device code, progress). */
   note(message: string): void;
-  /** Best-effort open a URL in the browser (printed regardless). */
-  openUrl(url: string): void;
+  /** Best-effort open a URL in the browser (printed regardless); `userCode` is what a device sign-in enters there. */
+  openUrl(url: string, userCode?: string): void;
 }
 
 /** {@link LoginIO} as pi-ai's `AuthInteraction`: what {@link login} drives for the terminal. */
@@ -440,7 +446,11 @@ function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): Auth
                 ...(o.description ? { hint: o.description } : {}),
               })),
             )
-          : await io.prompt(p.message, { hidden: p.type === "secret", ...(p.signal ? { signal: p.signal } : {}) });
+          : await io.prompt(p.message, {
+              hidden: p.type === "secret",
+              redirect: p.type === "manual_code",
+              ...(p.signal ? { signal: p.signal } : {}),
+            });
       if (v === undefined) throw new LoginCancelled("cancelled");
       return v;
     },
@@ -451,7 +461,7 @@ function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): Auth
         io.openUrl(e.url);
       } else if (e.type === "device_code") {
         io.note(`Go to ${e.verificationUri} and enter the code:  ${e.userCode}`);
-        io.openUrl(e.verificationUri);
+        io.openUrl(e.verificationUri, e.userCode);
       } else {
         io.note(e.message);
       }

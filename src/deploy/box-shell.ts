@@ -47,6 +47,15 @@ export function processShell(bin: string, args: (command: string) => string[], c
 }
 
 /**
+ * Why a box's login cannot be driven from here: the fastagent the agent installed on the box is older than the CLI
+ * relaying it, and speaks less of `login --stdio` than this CLI does. Fixed by versions, never by a compatibility path.
+ * No quote of either kind: it rides inside the box's shell line, which a host may wrap in single quotes.
+ */
+export const BOX_CLI_PREDATES =
+  "the fastagent installed in the agent on the box predates the login --stdio this CLI speaks: align the " +
+  "@fastagent-sh/fastagent version in the agent package.json with the CLI that deploys it, then redeploy";
+
+/**
  * The command that logs a deployment in, as every message and runbook names it: with the provider when it is known,
  * because the model needs THAT one, and a menu invites another.
  */

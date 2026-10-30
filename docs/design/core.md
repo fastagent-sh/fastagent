@@ -722,7 +722,7 @@ can log the builder's machine out. The browser's return to the flow's `localhost
 the builder's machine (`catchingRedirect` in `cli/box-login.ts`) and answered as the paste. Success is read only from that line, because a host shell can drop
 a session and still exit 0. `deploy --run` starts the same login once the box is up, keeping a
 credential the box already authenticates with (`--if-missing`, answered by `ModelEnvironment.authStatus`, with the
-definition's providers, the same resolution the box's startup report prints); without a terminal it exits 1 naming the command. The
+definition's providers, the same resolution the box's startup report prints); without a terminal it exits 1 naming the command. A coding agent's `login --deployment --json` runs the terminal half in a ticket's process (`cli/ticket.ts`): `ticketLoginIO` answers the box as the person's part comes, with pi-ai's `manual_code` and a device code carried on the wire (`redirect`, `userCode`) so neither is guessed. The
 builder never predicts that answer from its own credentials: `credentialRoute` decides only what the
 deploy ships.
 

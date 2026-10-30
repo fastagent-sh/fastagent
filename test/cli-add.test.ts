@@ -30,6 +30,7 @@ describe("add <channel> with no one at a terminal: the person's part, named", ()
       check: "fastagent login --check",
       restart: "fastagent login openai --method account",
       timeoutSeconds: 60,
+      fields: { provider: "openai", method: "account" },
     }).ticket;
     const other = await run(["add", "feishu", "--check", signIn, "--json"]);
     expect(other.code).toBe(2);
