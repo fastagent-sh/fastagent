@@ -30,7 +30,8 @@ import {
 } from "../../harnesses/models/login.ts";
 import { environmentAuth, keyVariables, loginProviders } from "../../harnesses/models/models.ts";
 import { definitionProviders, loadConfig, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
-import { loginOnBox } from "../box-login.ts";
+import { loginOnBox, ticketLoginIO } from "../box-login.ts";
+import { deploymentLoginCommand } from "../../deploy/box-shell.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import {
   printReport,
@@ -231,26 +232,7 @@ async function requestLogin(
     choice = await chooseLogin(offered, given, undefined);
   } catch (error) {
     if (!(error instanceof LoginRefused)) throw error;
-    if (opts.json) {
-      printReport(
-        opts.json,
-        {
-          status: "need_choice",
-          message: error.message,
-          choices: error.choices.map((o) => ({
-            provider: o.provider,
-            name: o.name,
-            method: methodWord(o.method),
-            label: o.label,
-            status: loginStatusText(o),
-            command: `fastagent login ${o.provider} --method ${methodWord(o.method)}${global} --json`,
-          })),
-          agent_next_steps: "Ask the user which of these to sign in with, then run that choice's command.",
-        },
-        [],
-      );
-    }
-    return failUsage(error.message);
+    return choiceNotGiven(error, opts, { flags: global, statuses: true });
   }
   if (choice.method === "api_key") return keyNeeded(choice, opts, target);
   const ticket = await startTicket({
@@ -321,14 +303,7 @@ async function keyNeeded(
     outranking === undefined
       ? undefined
       : `fastagent logout ${choice.provider}${outranking === GLOBAL_AUTH_PATH ? " -g" : ""}`;
-  const provider = loginProviders(target.providers).find((p) => p.id === choice.provider);
-  const variables = provider ? await keyVariables(provider) : [];
-  const what =
-    variables.length === 0
-      ? `its key as ${choice.name}'s own documentation says`
-      : variables.length === 1
-        ? `${variables[0]}=<their ${choice.name} key>`
-        : `the variables ${choice.name} reads its key from (${variables.join(", ")})`;
+  const { variables, what } = await keyToSet(choice, target.providers);
   const first =
     logout === undefined
       ? ""
@@ -355,6 +330,50 @@ async function keyNeeded(
   );
 }
 
+/**
+ * A sign-in not chosen with no one to ask (exit 2): with `--json`, the choices and the command for each, `flags`
+ * added to it. `statuses`: what authenticates each provider here is worth showing (it is not, for a deployment).
+ */
+function choiceNotGiven(error: LoginRefused, opts: LoginOptions, how: { flags: string; statuses: boolean }): never {
+  if (opts.json) {
+    const choices = error.choices.map((o) => ({
+      provider: o.provider,
+      name: o.name,
+      method: methodWord(o.method),
+      label: o.label,
+      ...(how.statuses ? { status: loginStatusText(o) } : {}),
+      command: `fastagent login ${o.provider} --method ${methodWord(o.method)}${how.flags} --json`,
+    }));
+    printReport(
+      true,
+      {
+        status: "need_choice",
+        message: error.message,
+        choices,
+        agent_next_steps: "Ask the user which of these to sign in with, then run that choice's command.",
+      },
+      [],
+    );
+  }
+  return failUsage(error.message);
+}
+
+/** The variables `choice`'s key is read from, and how to tell the person to set it. */
+async function keyToSet(
+  choice: LoginOption,
+  providers: readonly Provider[],
+): Promise<{ variables: string[]; what: string }> {
+  const provider = loginProviders(providers).find((p) => p.id === choice.provider);
+  const variables = provider ? await keyVariables(provider) : [];
+  const what =
+    variables.length === 0
+      ? `its key as ${choice.name}'s own documentation says`
+      : variables.length === 1
+        ? `${variables[0]}=<their ${choice.name} key>`
+        : `the variables ${choice.name} reads its key from (${variables.join(", ")})`;
+  return { variables, what };
+}
+
 /** `login --check <ticket> [--code <address>]`. */
 async function runCheck(id: string, opts: LoginOptions): Promise<void> {
   const ticket = await checkTicket(id, opts.code);
@@ -365,15 +384,21 @@ async function runCheck(id: string, opts: LoginOptions): Promise<void> {
 
 /** A sign-in's ticket for whoever started or checked it: the shared report, and what a finished sign-in adds. */
 function reportTicket(ticket: Ticket, opts: LoginOptions, when: "started" | "checked"): void {
+  // `login:<provider>`, or `login:<provider>@<host>` for a deployment's.
+  const [provider, deployment] = ticket.subject.slice("login:".length).split("@") as [string, string | undefined];
   const { json, text } = ticketReport(ticket, when, (result) => {
+    if (deployment !== undefined) {
+      return { fields: {}, text: [`signed in on the ${deployment} deployment`], next: "Signed in on the deployment." };
+    }
     const hint = typeof result.model === "string" ? modelHint(result.model, String(result.name)) : undefined;
     return {
-      fields: { provider: result.provider, path: result.path, ...(result.model ? { model: result.model } : {}) },
+      fields: { path: result.path, ...(result.model ? { model: result.model } : {}) },
       text: [`saved to ${String(result.path)}`, ...(hint === undefined ? [] : [hint])],
       next: hint === undefined ? "Signed in." : `Signed in. Tell the user: ${hint}.`,
     };
   });
-  printReport(opts.json, { ...json, provider: ticket.subject.slice("login:".length), method: "account" }, text);
+  const about = { provider, method: "account", ...(deployment === undefined ? {} : { deployment }) };
+  printReport(opts.json, { ...json, ...about }, text);
 }
 
 /**
@@ -429,18 +454,112 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
     );
   }
   const host = opts.deployment as DeployHost;
-  const input = opts.input !== false && isInteractive();
-  if (!input) {
-    failStartup(new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal`));
+  const method = opts.method === undefined ? undefined : methodOf(opts.method);
+  if (opts.ticket !== undefined) {
+    // The process `startTicket` started: it holds the box's shell while the person signs in.
+    const retry = deploymentLoginCommand(host, provider);
+    await runTicket(opts.ticket, async (step) => {
+      const io = ticketLoginIO(step, retry);
+      const failed = await loginOnBox({
+        host,
+        shell: await HOSTS[host].shell(agentDir),
+        provider: provider as string,
+        method: "oauth",
+        input: true,
+        io,
+      });
+      if (failed) throw new Error(io.refusal() ?? failed);
+      return { provider, deployment: host };
+    });
+    process.exit(0);
+  }
+  if (opts.input === false || opts.json === true || !isInteractive()) {
+    const timeout = opts.timeout === undefined ? UNATTENDED_TIMEOUT_SECONDS : secondsOf(opts.timeout);
+    return requestDeploymentLogin(agentDir, host, { provider, method }, opts, timeout);
   }
   const failed = await loginOnBox({
     host,
     shell: await HOSTS[host].shell(agentDir).catch(failStartup),
     ...(provider ? { provider } : {}),
-    input,
+    ...(method ? { method } : {}),
+    input: true,
   });
   if (failed) failStartup(new Error(failed));
   process.exit(0);
+}
+
+/**
+ * `login --deployment <host>` with no one at a terminal. The sign-in is chosen here, from the definition the box
+ * serves; what this machine holds says nothing of the box, so no status is shown. An account sign-in runs on the box
+ * through a ticket whose process holds the box's shell (box-login.ts `ticketLoginIO`). An API key reaches a box only
+ * as a variable its deploy carries, so the person sets it in the production value file and the agent deploys again.
+ */
+async function requestDeploymentLogin(
+  agentDir: string,
+  host: DeployHost,
+  given: { provider?: string | undefined; method?: LoginMethod | undefined },
+  opts: LoginOptions,
+  timeoutSeconds: number,
+): Promise<void> {
+  const providers = await definitionProviders(agentDir).catch(failStartup);
+  const offered = await loginOptionsOver(resolveAuthPath(agentDir), providers);
+  let choice: LoginOption;
+  try {
+    choice = await chooseLogin(offered, given, undefined);
+  } catch (error) {
+    if (!(error instanceof LoginRefused)) throw error;
+    return choiceNotGiven(error, opts, { flags: ` --deployment ${host}`, statuses: false });
+  }
+  if (choice.method === "api_key") {
+    const valueFile = dotEnvPath(agentDir);
+    const { variables, what } = await keyToSet(choice, providers);
+    const deploy = `fastagent deploy ${host} --run`;
+    printReport(
+      opts.json,
+      {
+        status: "need_user_action",
+        provider: choice.provider,
+        method: "api-key",
+        deployment: host,
+        variables,
+        value_file: valueFile,
+        check_command: deploy,
+        agent_next_steps:
+          `Ask the user to set ${what} in ${valueFile} themselves, not in this conversation. A key reaches the ` +
+          `${host} deployment with its next deploy: once they say they have, run check_command.`,
+      },
+      [
+        `need_user_action: set ${what} in ${valueFile}`,
+        `then run: ${deploy}   # the key reaches the deployment with its deploy`,
+      ],
+    );
+    process.exit(0);
+  }
+  const ticket = await startTicket({
+    subject: `login:${choice.provider}@${host}`,
+    action: `sign in to ${choice.name} for the ${host} deployment`,
+    check: "fastagent login --check",
+    restart: `fastagent login ${choice.provider} --method account --deployment ${host}`,
+    timeoutSeconds,
+    // Reaching the box comes first, and can take a while (a host's shell, an idle runtime woken).
+    waitsFirst: false,
+    command: {
+      file: process.execPath,
+      args: [
+        ...process.execArgv,
+        process.argv[1] as string,
+        "login",
+        choice.provider,
+        "--method",
+        "account",
+        "--deployment",
+        host,
+      ],
+      cwd: process.cwd(),
+    },
+  });
+  reportTicket(ticket, opts, "started");
+  process.exit(ticketExitCode(ticket));
 }
 
 /**
@@ -494,6 +613,12 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   if (opts.input === false) {
     return { ok: false, reason: "missing", message: `no ${provider ?? "model"} credential in ${auth.path}` };
   }
-  const result = await loginFlow(io, { authPath: auth.path, providers, ...(provider ? { provider } : {}) });
+  const method = opts.method === undefined ? undefined : methodOf(opts.method);
+  const result = await loginFlow(io, {
+    authPath: auth.path,
+    providers,
+    ...(provider ? { provider } : {}),
+    ...(method ? { method } : {}),
+  });
   return { ok: true, provider: result.provider, method: result.method, path: auth.path };
 }

@@ -32,23 +32,31 @@ const boxOauth: Provider = {
 
 /** The owner's terminal, scripted: what it was shown and opened, and the answers it gives. */
 function terminal(answers: { select?: string[]; prompt?: Array<string | undefined> }) {
-  const shown: { notes: string[]; opened: string[]; selects: IoOption[][]; prompts: string[] } = {
-    notes: [],
-    opened: [],
-    selects: [],
-    prompts: [],
+  const shown = {
+    notes: [] as string[],
+    opened: [] as string[],
+    /** The user code each opened page was given, for a device sign-in. */
+    codes: [] as Array<string | undefined>,
+    selects: [] as IoOption[][],
+    prompts: [] as string[],
+    /** Which prompts asked for the address the browser ended on. */
+    redirects: [] as boolean[],
   };
   const io: LoginIO = {
     select: async (_m, options) => {
       shown.selects.push(options);
       return answers.select?.shift();
     },
-    prompt: async (message) => {
+    prompt: async (message, opts) => {
       shown.prompts.push(message);
+      shown.redirects.push(opts?.redirect === true);
       return answers.prompt?.shift();
     },
     note: (m) => void shown.notes.push(m),
-    openUrl: (u) => void shown.opened.push(u),
+    openUrl: (u, code) => {
+      shown.opened.push(u);
+      shown.codes.push(code);
+    },
   };
   return { io, shown };
 }
@@ -72,7 +80,20 @@ describe("login relay", () => {
     expect(await relayed).toEqual({ ok: true, provider: "codex", method: "oauth", path: authPath });
     expect(shown.opened).toEqual(["https://auth.example/authorize"]);
     expect(shown.prompts).toEqual(["Paste the redirect URL"]);
+    // pi-ai's manual_code: what a front end with no one to type answers from the browser's redirect.
+    expect(shown.redirects).toEqual([true]);
     expect(JSON.parse(await readFile(authPath, "utf8")).codex.type).toBe("oauth");
+  });
+
+  it("a device sign-in's code and a plain question reach the terminal as what they are", async () => {
+    const { box, toBox, fromBox } = session();
+    const { io, shown } = terminal({ prompt: ["acme.ghe.com"] });
+    void relayLogin(fromBox, toBox, io, () => {});
+    box.io.openUrl("https://github.com/login/device", "AB-12");
+    expect(await box.io.prompt("Enterprise domain")).toBe("acme.ghe.com");
+    expect(shown.opened).toEqual(["https://github.com/login/device"]);
+    expect(shown.codes).toEqual(["AB-12"]);
+    expect(shown.redirects).toEqual([false]);
   });
 
   it("a select is answered by value, and backing out reaches the box as undefined", async () => {

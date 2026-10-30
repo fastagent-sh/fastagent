@@ -24,10 +24,10 @@ export type RelayResult =
 
 type BoxMessage =
   | { type: "select"; id: number; message: string; options: IoOption[] }
-  | { type: "prompt"; id: number; message: string; hidden: boolean }
+  | { type: "prompt"; id: number; message: string; hidden: boolean; redirect?: boolean }
   | { type: "abort"; id: number }
   | { type: "note"; message: string }
-  | { type: "open"; url: string }
+  | { type: "open"; url: string; userCode?: string }
   | ({ type: "result" } & RelayResult);
 
 /** The terminal's answer to one question; `null` means the person backed out. */
@@ -78,9 +78,18 @@ export function stdioLoginIO(input: Readable, output: Writable): { io: LoginIO; 
     io: {
       select: (message, options) => ask((id) => ({ type: "select", id, message, options })),
       prompt: (message, opts) =>
-        ask((id) => ({ type: "prompt", id, message, hidden: opts?.hidden === true }), opts?.signal),
+        ask(
+          (id) => ({
+            type: "prompt",
+            id,
+            message,
+            hidden: opts?.hidden === true,
+            ...(opts?.redirect ? { redirect: true } : {}),
+          }),
+          opts?.signal,
+        ),
       note: (message) => send(output, { type: "note", message }),
-      openUrl: (url) => send(output, { type: "open", url }),
+      openUrl: (url, userCode) => send(output, { type: "open", url, ...(userCode ? { userCode } : {}) }),
     },
     result: (result) => {
       send(output, { type: "result", ...result });
@@ -116,7 +125,12 @@ export function relayLogin(
       case "prompt": {
         const controller = new AbortController();
         prompts.set(message.id, controller);
-        void io.prompt(message.message, { hidden: message.hidden, signal: controller.signal }).then((value) => {
+        const asked = {
+          hidden: message.hidden,
+          ...(message.redirect ? { redirect: true } : {}),
+          signal: controller.signal,
+        };
+        void io.prompt(message.message, asked).then((value) => {
           prompts.delete(message.id);
           if (!controller.signal.aborted) answer(message.id, value);
         });
@@ -128,7 +142,7 @@ export function relayLogin(
       case "note":
         return io.note(message.message);
       case "open":
-        return io.openUrl(message.url);
+        return io.openUrl(message.url, message.userCode);
       case "result": {
         const { type: _, ...rest } = message;
         result = rest;

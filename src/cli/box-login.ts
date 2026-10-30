@@ -8,19 +8,24 @@ import { type Server, createServer } from "node:http";
 import { type BoxShell, deploymentLoginCommand } from "../deploy/box-shell.ts";
 import { boxLoginCommand } from "../deploy/container.ts";
 import type { DeployHost } from "../deploy/hosts.ts";
-import type { LoginIO } from "../harnesses/models/login.ts";
+import type { LoginIO, LoginMethod } from "../harnesses/models/login.ts";
 import { relayLogin } from "./login-relay.ts";
 import { terminalLoginIO } from "./shared.ts";
+import type { TicketStep } from "./ticket.ts";
 
 export interface BoxLoginRequest {
   host: DeployHost;
   shell: BoxShell;
   /** Skip the provider menu. */
   provider?: string;
+  /** Skip the method menu. */
+  method?: LoginMethod;
   /** Keep a credential the box already holds for `provider` (a redeploy), instead of replacing it. */
   ifMissing?: boolean;
   /** false: never ask; a box without the credential is a failure naming the command to run in a terminal. */
   input: boolean;
+  /** Who answers what the box asks: this terminal by default, or a ticket's process ({@link ticketLoginIO}). */
+  io?: LoginIO;
 }
 
 /**
@@ -32,6 +37,7 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
   const retry = deploymentLoginCommand(host, provider);
   const args = [
     ...(provider ? [provider] : []),
+    ...(request.method ? ["--method", request.method === "oauth" ? "account" : "api-key"] : []),
     ...(request.ifMissing ? ["--if-missing"] : []),
     ...(request.input ? [] : ["--no-input"]),
   ];
@@ -46,7 +52,7 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
   if (woken instanceof Error) return woken.message;
   const channel = await shell.open(command).catch((error: Error) => error);
   if (channel instanceof Error) return channel.message;
-  const io = catchingRedirect(terminalLoginIO());
+  const io = catchingRedirect(request.io ?? terminalLoginIO());
   const result = await relayLogin(channel.output, channel.input, io, (line) => console.error(line)).finally(io.close);
   const closed = await channel.closed;
   if (!closed.opened) return closed.error;
@@ -64,7 +70,15 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
     );
     return undefined;
   }
-  if (result.reason === "missing") return `not logged in: ${result.message} — run \`${retry}\` in a terminal`;
+  if (result.reason === "missing") {
+    const forAgent = provider
+      ? `fastagent login ${provider} --method account --deployment ${host} --json`
+      : `${retry} --json`;
+    return (
+      `not logged in: ${result.message} — run \`${retry}\` in a terminal, or \`${forAgent}\` from a coding agent, ` +
+      `which hands the sign-in to its user`
+    );
+  }
   if (result.reason === "cancelled") return `login on the deployment cancelled — run \`${retry}\` to log it in`;
   return `login on the deployment failed: ${result.message}`;
 }
@@ -74,14 +88,40 @@ const CAUGHT_PAGE =
   "<p>fastagent received the sign-in and sent it to your deployment. Return to your terminal.</p>";
 
 /**
+ * A box's sign-in answered by a ticket's process, with no one at a terminal: what the person does is the ticket's
+ * (`need_user_action`), and what the box asks is answered as {@link signInInteraction} answers a local sign-in. A choice
+ * takes its first option, pi's default; a text question is left blank; the address the browser ended on comes from
+ * `login --check --code` (or the redirect {@link catchingRedirect} catches first); a secret it cannot take, and
+ * `refusal` says so, since the box only hears that the question was backed out of.
+ */
+export function ticketLoginIO(step: TicketStep, retry: string): LoginIO & { refusal(): string | undefined } {
+  let refusal: string | undefined;
+  return {
+    refusal: () => refusal,
+    select: async (_message, options) => options[0]?.value,
+    async prompt(message, opts) {
+      if (opts?.hidden) {
+        refusal = `the sign-in asks "${message}", which only a terminal can answer: run \`${retry}\` in one`;
+        return undefined;
+      }
+      if (!opts?.redirect) return "";
+      const address = await step
+        .address(opts.signal ? AbortSignal.any([opts.signal, step.signal]) : step.signal)
+        .catch(() => undefined);
+      if (address !== undefined) step.person.carriesOn();
+      return address;
+    },
+    note: (message) => console.error(`[fastagent] ${message}`),
+    openUrl: (url, userCode) => step.waits(userCode ? { url, code: userCode } : { url, takesAddress: true }),
+  };
+}
+
+/**
  * A browser OAuth flow sends the owner's browser back to its `redirect_uri`: a localhost address, which on the owner's
  * machine has nothing of the box behind it. So catch it here. While an authorization URL naming such a redirect is
  * open, listen on that address (the port the provider fixed, loopback only, as pi's own flows do), and answer the
- * next text prompt with the URL the browser brought back, exactly what the person would paste. The terminal prompt
+ * prompt for that address with the URL the browser brought back, exactly what the person would paste. The prompt
  * stays up meanwhile: a taken port, or a browser on another machine, still leaves pasting.
- *
- * ponytail: "the next text prompt" is the one after the URL. pi's browser flows (Anthropic, Codex) ask exactly one,
- * the paste; a flow that asked something else in between would get the URL as that answer and reject it.
  */
 export function catchingRedirect(io: LoginIO): LoginIO & { close(): void } {
   let server: Server | undefined;
@@ -137,11 +177,12 @@ export function catchingRedirect(io: LoginIO): LoginIO & { close(): void } {
     select: io.select,
     note: io.note,
     close,
-    openUrl(url) {
+    openUrl(url, userCode) {
       listen(url);
-      io.openUrl(url);
+      io.openUrl(url, userCode);
     },
     async prompt(message, opts) {
+      if (!opts?.redirect) return io.prompt(message, opts);
       if (caught !== undefined) {
         const url = caught;
         caught = undefined;

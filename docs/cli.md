@@ -244,8 +244,10 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
   it was read from. `login` warns when an env variable already authenticates the provider, because the global login
   is then not used.
 - `--deployment <host>` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway,
-  AgentCore) and the credential stays there. `deploy` never carries `auth.json`. See
-  [Logging a deployment in](deploy.md#logging-a-deployment-in).
+  AgentCore) and the credential stays there. `deploy` never carries `auth.json`. Without a terminal, an account's
+  sign-in returns a ticket as a local one does (`deployment` names the host), its process holding the box's shell
+  until the box answers; an API key is named for the person to set in `.secrets/production/.env`, which the next
+  `deploy <host> --run` carries. See [Logging a deployment in](deploy.md#logging-a-deployment-in).
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
   each copy rotates the single-use refresh token and breaks the other.
 - An API-key login is checked with one request to pi's default model for the provider, before the key is written.
@@ -493,11 +495,11 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
   answers `need_choice` with a command for each).
 - **A step only a person can take returns at once**, with what the person does and how to follow it:
   `"status": "need_user_action"`, the address to open, and a `check_command` to run once they have, in a sentence for
-  the agent (`agent_next_steps`). An account sign-in (`login`) and an app's setup (`add slack|feishu|lark`) work this
-  way: a process of the CLI's own finishes the step and keeps a ticket that `--check <ticket>` reads. `deploy --run`
-  without a terminal names the `add <kind> --env production --json` that sets up a production app.
-  `login --deployment` follows ([#855](https://github.com/fastagent-sh/fastagent/issues/855)), and until then asks for
-  a terminal.
+  the agent (`agent_next_steps`). An account sign-in (`login`, and `login --deployment` on the box) and an app's setup
+  (`add slack|feishu|lark`) work this way: a process of the CLI's own finishes the step and keeps a ticket that
+  `--check <ticket>` reads. `deploy --run` without a terminal names the command that hands its person's part over:
+  `add <kind> --env production --json` for a production app, `login <provider> --method account --deployment <host>
+  --json` for the box's model login.
 - **A secret never passes through the agent's conversation.** The person writes it where the command names (the
   agent's `.secrets/.env`, or a handoff file for a value that must not deploy), or types it at a terminal of their
   own.
