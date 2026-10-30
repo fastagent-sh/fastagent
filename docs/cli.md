@@ -217,12 +217,15 @@ waited on. A coding agent works in turns, so each command does its part and says
   `"status": "need_user_action"`: the `url` for the person to sign in at (and the `code` to enter there, for a device
   sign-in), a `ticket`, `check_command` and `expires_in`. No browser is opened: the agent hands the address to its
   person, who may be on another machine. `fastagent login --check <ticket>` then answers `need_user_action` (not
-  finished), `authorized` (with the `path` it was saved to, and the default `model` for an agent with none), `failed`
-  or `expired`. When the person's browser cannot reach this machine, it ends on a page that does not load (an address
-  on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the sign-in.
-  `--timeout` sets how long the sign-in stays open (default 600 seconds). A newer sign-in to the same provider stops
-  one still waiting (its ticket is then `failed`, "replaced by a newer sign-in"), which would otherwise hold the
-  provider's callback port until it expired.
+  finished), `working` (fastagent is at it: nothing for the person now), `done` (with the `path` it was saved to, and
+  the default `model` for an agent with none), `failed` or `expired`; every answer carries `provider` and
+  `"method": "account"`. When the person's browser cannot reach this machine, it ends on a page that does not load
+  (an address on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the
+  sign-in. `--timeout` sets how long the sign-in stays open (default 600 seconds). A newer sign-in to the same
+  provider stops one still waiting on the person (its ticket is then `failed`, "replaced by a newer attempt to sign in
+  to <provider>"), which would otherwise hold the provider's callback port until it expired; one already exchanging
+  the code is never stopped, and the newer attempt answers with its ticket. A ticket belongs to the command that
+  started it: `--check` with another command's ticket exits 2 naming the right one.
 - **An API key** (`--method api-key`) is the person's to set where the agent reads it, never typed into the agent's
   conversation: `"status": "need_user_action"` names the `variables` the provider reads (`OPENAI_API_KEY`) and the
   agent's `value_file` (`.secrets/.env`), and `check_command` is `fastagent auth check`. When one is set already, the
@@ -396,6 +399,8 @@ fastagent add lark [agent]     # Lark international: console + credential valida
                              # feishu/lark take --ingress websocket|webhook: writes the selected environment's setting
                              # (unset: dev connects by websocket, start and deployments receive by webhook)
                              # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding
+                             # --json: the outcome as one JSON object; without a terminal, the person's part
+                             # comes back as need_user_action and a ticket (below)
 ```
 
 Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion tools (`src/tools/<kind>-send.ts`, and
@@ -403,7 +408,8 @@ Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion t
 `.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
 `add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
 `--env production` selects `.secrets/production/.env` and `.state/production` without changing dev credentials.
-Interactive `deploy --run` creates the separate Feishu/Lark production app automatically; Slack needs
+Interactive `deploy --run` creates the separate Feishu/Lark production app automatically (without a terminal it names
+`add <kind> --env production --json`); Slack needs
 `add slack --env production`, and Telegram needs a separate BotFather bot.
 
 Slack:
@@ -413,6 +419,29 @@ Slack:
   this machine; `dev --tunnel` and `deploy --run` use it to update the Request URL.
 - `--replace-config` replaces that token pair when it has expired or been revoked. Other machines set the Request
   URL in the Slack console.
+
+Without a terminal, or with `--json` or `--no-input`, the app's setup is driven by a coding agent and finished by its
+user ([Scripts and coding agents](#scripts-and-coding-agents)):
+
+| Channel | What the person provides first | What the ticket waits on |
+|---|---|---|
+| `feishu` | nothing | confirming the new app (`url`, in a browser or in Feishu) |
+| `lark` | `LARK_APP_ID` and `LARK_APP_SECRET`, from the app they create at `url`, in the selected environment's file (`value_file`: `.secrets/.env`, or `.secrets/production/.env` with `--env production`) | nothing; the setup verifies the app and captures its Verification Token |
+| `slack` | nothing | pasting an App Configuration token pair on the page at `url`, which then takes the browser on to Slack's install page to click Allow |
+
+Slack's page is the setup's own, served through the temporary tunnel `add slack` opens anyway, at a one-time random
+address. The pair never passes through the agent's conversation or any `.env` file: it manages every Slack app the
+person owns in that workspace, and only this machine's CLI uses it, so it goes into the onboarding state (`0600`) and
+never deploys.
+
+A missing first part answers `need_user_action` naming it, with the command to run again (`check_command`). Then the
+setup runs in a process of its own and the command returns its ticket: `need_user_action` while the person has a
+step, `working` while there is nothing for them to do, then `done` with the variables it `written`, the
+`next_steps` and the steps left to the person (`afterwards`, such as publishing a version). `add <kind> --check
+<ticket>` reads where it stands, `--timeout <seconds>` sets how long it stays open (default 900). Running `add` again
+for the same agent, channel and environment replaces a setup waiting on the person, and answers with one at work. A
+value the setup still needs (a Lark Verification Token it could not capture) fails the ticket naming the variable to
+set before running it again.
 
 See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 
@@ -452,9 +481,9 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
+| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `add slack\|feishu\|lark`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
-| `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list`, `login`, `auth check` | Machine-readable output. |
+| `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list`, `login`, `auth check`, `add` | Machine-readable output. |
 
 ## Exit codes
 
@@ -474,11 +503,14 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
   answers `need_choice` with a command for each).
 - **A step only a person can take returns at once**, with what the person does and how to follow it:
   `"status": "need_user_action"`, the address to open, and a `check_command` to run once they have, in a sentence for
-  the agent (`agent_next_steps`). An account sign-in works this way (`login`); the setups of `add slack`, `add lark`,
-  `add feishu` and `login --deployment` follow ([#855](https://github.com/fastagent-sh/fastagent/issues/855)), and
-  until then ask for a terminal.
+  the agent (`agent_next_steps`). An account sign-in (`login`) and an app's setup (`add slack|feishu|lark`) work this
+  way: a process of the CLI's own finishes the step and keeps a ticket that `--check <ticket>` reads. `deploy --run`
+  without a terminal names the `add <kind> --env production --json` that sets up a production app.
+  `login --deployment` follows ([#855](https://github.com/fastagent-sh/fastagent/issues/855)), and until then asks for
+  a terminal.
 - **A secret never passes through the agent's conversation.** The person writes it where the command names (the
-  agent's `.secrets/.env`), or types it at a terminal of their own.
+  agent's `.secrets/.env`), pastes it on a page the command's own process serves, or types it at a terminal of their
+  own.
 - **Results on stdout, everything else on stderr**: progress, notes, warnings and errors. A command whose result is
   data has `--json`.
 - **The exit code says how it ended**: 0, 1 or 2, as above.

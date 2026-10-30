@@ -79,6 +79,8 @@ beforeEach(async () => {
     ]),
   };
   dir = join(await mkdtemp(join(tmpdir(), "fa-deploy-order-")), "fastagent");
+  // Run from the agent directory, so the command a step names to run again is the plain one.
+  vi.spyOn(process, "cwd").mockReturnValue(dir);
   await mkdir(join(dir, ".secrets", "production"), { recursive: true });
   await writeFile(join(dir, ".secrets", ".env"), "FEISHU_APP_ID=cli_dev\n");
   // Its key given, so the cases below are about preparing an app; the key's own order is the last cases'.
@@ -142,13 +144,13 @@ it("does not prepare an app a deployment cannot point anywhere, and says what it
   expect(calls).toContain("prepare feishu rerun=fastagent deploy docker --tunnel --run");
 });
 
-it("prepares only from a terminal: unattended, it says how to supply the token instead", async () => {
+it("prepares only from a terminal: unattended, it names the add that hands the person's part over", async () => {
   interactive = false;
   await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
   expect(said.join("\n")).toContain(
-    "creating or preparing a separate production app needs a terminal — run this deploy in one, " +
-      "or supply these values from a production app in .secrets/production/.env",
+    "set up the separate production app first — fastagent add feishu --env production --json (it names what the " +
+      "person does) — then run this deploy again",
   );
 
   interactive = true;
@@ -156,7 +158,7 @@ it("prepares only from a terminal: unattended, it says how to supply the token i
   said.length = 0;
   await expect(runDeploy("fly", dir, { run: true, input: false })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
-  expect(said.join("\n")).toContain("run this deploy in one without --no-input");
+  expect(said.join("\n")).toContain("fastagent add feishu --env production --json");
 });
 
 it("creates an app when all production app values are absent, instead of gating on values onboarding supplies", async () => {

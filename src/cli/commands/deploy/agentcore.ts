@@ -25,14 +25,9 @@ import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
-import { isInteractive } from "../../shared.ts";
+import { isInteractive, shellArg } from "../../shared.ts";
 import { type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
-
-/** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
-function shellArg(value: string): string {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
-}
 
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),

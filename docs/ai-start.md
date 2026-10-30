@@ -310,9 +310,15 @@ webhook servers, token refresh loops, or reply pipelines:
 | Channel | Command from the agent directory | Owner action and reference |
 |---|---|---|
 | Telegram | `fastagent add telegram` | Supply the bot token and webhook verification secret. [Telegram](telegram.md) |
-| Slack | `fastagent add slack` | Complete interactive app configuration and OAuth installation. [Slack](slack.md) |
-| Feishu | `fastagent add feishu` | Scan to approve app creation and publish its version in the console. [Feishu](feishu.md) |
-| Lark | `fastagent add lark` | Complete international-console app/credential setup. [Lark compatibility](feishu.md) |
+| Slack | `fastagent add slack --json` | Paste an App Configuration token pair on the page it returns, then click Allow on Slack's install page. [Slack](slack.md) |
+| Feishu | `fastagent add feishu --json` | Confirm the new app at the address it returns, then publish its version in the console. [Feishu](feishu.md) |
+| Lark | `fastagent add lark --json` | Create the app in the international console and set its ID and secret in `.secrets/.env`. [Lark compatibility](feishu.md) |
+
+With `--json`, `add slack|feishu|lark` answers `need_user_action` for each part only the owner can do, with the
+address, what to write where, and a `check_command`; relay it, wait for the owner to say it is done, and run the
+command it names. The setup's ticket ends `done` with the variables it wrote, the next steps, and what is left for
+the owner (`afterwards`, such as publishing a version). Never ask for a token in the conversation: the response names
+the file or page the owner enters it in ([`fastagent add`](cli.md#fastagent-add-telegramslackfeishulark)).
 
 After owner-approved setup, use `fastagent dev --tunnel` for webhook testing (`cloudflared` required).
 Confirm each channel loads, inspect registration results, and send a real message from the authorized
@@ -323,8 +329,8 @@ enabled channel must fail serving instead of silently disappearing.
 ### Slack installation and credential ownership
 
 `fastagent add slack` scaffolds both the channel and `slack-send`, then offers single-workspace internal-app
-onboarding. The owner chooses visibility, supplies App Configuration access/refresh tokens through hidden
-prompts, and approves installation in Slack. This enables Slack's irreversible Agent messaging experience;
+onboarding. The owner supplies the App Configuration access/refresh tokens (through hidden prompts at a terminal,
+or the one-time page `add slack --json` returns) and approves installation in Slack. This enables Slack's irreversible Agent messaging experience;
 platform plan requirements and the manual `--no-onboard` path are in [Slack onboarding](slack.md#internal-app-onboarding).
 
 The credentials and where each lives are one table in [Slack → Credentials](slack.md#credentials): the

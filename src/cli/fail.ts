@@ -10,11 +10,22 @@ export function errorPrefix(colors: boolean = stderrHasColors()): string {
   return colors ? "\x1b[1;31mError:\x1b[0m" : "Error:";
 }
 
+let failureRecorder: ((message: string) => void) | undefined;
+
+/**
+ * A ticket's process (ticket.ts): a failure that ends the process is the ticket's failure too, recorded before the
+ * process exits, wherever in a long command it happens.
+ */
+export function recordFailures(record: ((message: string) => void) | undefined): void {
+  failureRecorder = record;
+}
+
 /**
  * User-fixable startup problems (missing model / bad config / broken definition) are thrown as plain `Error` — print
  * just the message. Anything else (a TypeError, a non-Error throw) is a bug: keep the stack.
  */
 export function failStartup(error: unknown): never {
+  failureRecorder?.(error instanceof Error ? error.message : String(error));
   if (error instanceof Error && error.constructor === Error) console.error(`${errorPrefix()} ${error.message}`);
   else console.error(errorPrefix(), error);
   process.exit(1);
@@ -43,6 +54,7 @@ export function optionalAgentDirOrExit(dir: string): string | undefined {
  * command body): print the message and exit 2.
  */
 export function failUsage(message: string): never {
+  failureRecorder?.(message);
   console.error(`${errorPrefix()} ${message}`);
   process.exit(2);
 }

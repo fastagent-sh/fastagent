@@ -217,8 +217,9 @@ export default { providers: [createProvider({ id: "openai", name: "OpenAI", mode
       expect([done.code, JSON.parse(done.stdout)]).toEqual([
         0,
         {
-          status: "authorized",
+          status: "done",
           provider: "openai",
+          method: "account",
           ticket: ticket.ticket,
           path: join(dir, ".secrets", "auth.json"),
           model: "openai/gpt-5.5",
