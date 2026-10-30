@@ -4,8 +4,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { join, relative, resolve } from "node:path";
-import { activeDotEnvValues, assertIndependentFeishuApps, onboardFeishuCloudApp } from "../add-feishu.ts";
-import { LARK_CONSOLE_URL } from "../../channels/lark/onboard.ts";
+import { assertIndependentFeishuApps, larkCredentialsNeeded, onboardFeishuCloudApp } from "../add-feishu.ts";
 import { type Person, terminalPerson } from "../person.ts";
 import { isInteractive, shellArg } from "../shared.ts";
 import {
@@ -293,30 +292,10 @@ const SETUP_ACTIONS: Record<"slack" | "feishu" | "lark", string> = {
  */
 async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChannelOptions, at: AddPlan): Promise<void> {
   const { target } = at;
-  const valueFile = dotEnvPath(target);
-  const again = `${at.rerun} --json`;
   if (kind === "lark") {
-    const held = await activeDotEnvValues(target, ["LARK_APP_ID", "LARK_APP_SECRET"]).catch(failStartup);
-    if (!held.LARK_APP_ID || !held.LARK_APP_SECRET) {
-      printReport(
-        opts.json,
-        {
-          status: "need_user_action",
-          url: LARK_CONSOLE_URL,
-          variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
-          value_file: valueFile,
-          check_command: again,
-          agent_next_steps:
-            "Give the URL to the user so they can create the Lark app there, and ask them to set LARK_APP_ID and " +
-            `LARK_APP_SECRET (from its Credentials & Basic Info) in ${valueFile} themselves, not in this ` +
-            "conversation. Once they say they have, run check_command.",
-        },
-        [
-          `need_user_action: create the Lark app at ${LARK_CONSOLE_URL}`,
-          `  and set LARK_APP_ID and LARK_APP_SECRET in ${valueFile}`,
-          `then run: ${at.rerun}`,
-        ],
-      );
+    const needed = await larkCredentialsNeeded(target, at.rerun).catch(failStartup);
+    if (needed !== undefined) {
+      printReport(opts.json, needed.json, needed.text);
       process.exit(0);
     }
   }
@@ -330,6 +309,7 @@ async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChann
     restart: at.rerun,
     timeoutSeconds: timeout,
     waitsFirst: false,
+    whenRunning: "replace",
     command: {
       file: process.execPath,
       args: [

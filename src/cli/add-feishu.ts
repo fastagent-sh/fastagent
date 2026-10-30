@@ -22,7 +22,7 @@ import {
   isTransientFeishuRegistrationError,
 } from "../channels/feishu/feishu-api.ts";
 import { registerFeishuApp } from "../channels/feishu/register-app.ts";
-import { type LarkOnboardIO, onboardLarkApp } from "../channels/lark/onboard.ts";
+import { LARK_CONSOLE_URL, type LarkOnboardIO, onboardLarkApp } from "../channels/lark/onboard.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
 import { dotEnvPath, loadEnvValues, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -361,10 +361,42 @@ async function createFeishuAppFlow(
 }
 
 /**
+ * Lark's app credentials, which only the person can get, from the app they create in Lark's console: with no one at a
+ * terminal to type them, the report naming where they set them (the selected environment's file), when either is
+ * absent. `again` is the command that continues once they have.
+ */
+export async function larkCredentialsNeeded(
+  agentDir: string,
+  again: string,
+): Promise<{ json: Record<string, unknown>; text: string[] } | undefined> {
+  const held = await activeDotEnvValues(agentDir, ["LARK_APP_ID", "LARK_APP_SECRET"]);
+  if (held.LARK_APP_ID && held.LARK_APP_SECRET) return undefined;
+  const valueFile = dotEnvPath(agentDir);
+  return {
+    json: {
+      status: "need_user_action",
+      url: LARK_CONSOLE_URL,
+      variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
+      value_file: valueFile,
+      check_command: `${again} --json`,
+      agent_next_steps:
+        "Give the URL to the user so they can create the Lark app there, and ask them to set LARK_APP_ID and " +
+        `LARK_APP_SECRET (from its Credentials & Basic Info) in ${valueFile} themselves, not in this ` +
+        "conversation. Once they say they have, run check_command.",
+    },
+    text: [
+      `need_user_action: create the Lark app at ${LARK_CONSOLE_URL}`,
+      `  and set LARK_APP_ID and LARK_APP_SECRET in ${valueFile}`,
+      `then run: ${again}`,
+    ],
+  };
+}
+
+/**
  * Active agent `.env` (`.secrets/.env`) values for the requested names — decided by THE .env parser, so this check can
  * never disagree with what `loadDotEnv` reads.
  */
-export async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<string, string>> {
+async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<string, string>> {
   let content: string;
   try {
     content = await readFile(dotEnvPath(dir), "utf8");
@@ -430,11 +462,12 @@ export async function prepareFeishuApps(
   agentDir: string,
   apps: readonly FeishuAppSetup[],
   rerun: string,
+  person: Person,
   onboard: typeof onboardFeishuCloudApp = onboardFeishuCloudApp,
 ): Promise<void> {
   for (const { kind, ingress } of apps) {
     console.error(`[fastagent] ${kind}: preparing the production app for ${ingress} in ${dotEnvPath(agentDir)}`);
-    const created = await onboard(agentDir, kind, ingress, rerun, terminalPerson);
+    const created = await onboard(agentDir, kind, ingress, rerun, person);
     if (created) await appendChannelDotEnv(agentDir, kind, created, Object.keys(created), ingress);
   }
 }

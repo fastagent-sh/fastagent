@@ -397,10 +397,26 @@ const deploy: CommandSpec = {
         "(railway --run) provision INTO the project this dir is already linked to (skip create); by " +
         "default --run refuses a pre-existing link (could be unrelated/production)",
     },
+    {
+      flags: "--json",
+      description:
+        "with --run, for a coding agent: the deploy runs in a process of its own and the command returns its " +
+        "ticket, handing each step only a person can take (a host sign-in, a production app, the box's model " +
+        "login) to its user",
+    },
+    { flags: "--check <ticket>", description: "where a deploy started with --json stands" },
+    {
+      flags: "--code <code>",
+      description: "with --check: the code a host's approval page showed, when it could not reach this machine",
+    },
+    { flags: "--timeout <seconds>", description: "how long a deploy started with --json stays open (default 3600)" },
+    { flags: "--stop", description: "with --check: stop that deploy where it is (can leave the host half-changed)" },
+    { flags: "--ticket <id>", description: "the process that runs a ticket's deploy", hidden: true },
     NO_INPUT,
   ],
   examples: [
     { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
+    { cmd: "fastagent deploy fly --run --json", note: "a coding agent" },
     { cmd: "fastagent deploy docker --tunnel --run", note: "Compose + a public URL" },
     { cmd: "fastagent deploy railway", note: "print the runbook only" },
     { cmd: "fastagent deploy agentcore --run", note: "arm64 image + stack + webhooks" },
@@ -416,6 +432,12 @@ const deploy: CommandSpec = {
       force: f.force === true,
       intoLinked: f.intoLinked === true,
       input: f.input !== false,
+      json: f.json === true,
+      ...(f.check !== undefined ? { check: f.check as string } : {}),
+      ...(f.code !== undefined ? { code: f.code as string } : {}),
+      ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
+      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
+      stop: f.stop === true,
     }),
 };
 

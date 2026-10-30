@@ -60,6 +60,7 @@ it("runs each cloud's existing onboarding in production and writes only that env
       { kind: "lark", ingress: "webhook" },
     ],
     "fastagent deploy fly --run",
+    terminalPerson,
     onboard,
   );
   expect(onboard.mock.calls).toEqual([

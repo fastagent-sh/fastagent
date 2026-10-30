@@ -66,7 +66,8 @@ src/
 │   │                       # the command: its own process, a ticket under ~/.fastagent/.state/tickets, `--check`
 │   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell;
 │   │                       # answered at this terminal, or by a ticket's process for a coding agent (ticketLoginIO)
-│   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
+│   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each,
+│                           # and signs a host's CLI in through whoever answers (commands/deploy/host-login.ts)
 ├── telegram.ts, slack.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
 │   feishu.ts, lark.ts
 ├── bind.ts                 # the ONE reading of a bind address, as the six different questions it is

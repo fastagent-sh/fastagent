@@ -6,6 +6,16 @@ import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/c
 import { fastagentVersion } from "../src/version.ts";
 import { agentWorkspace, run } from "./cli-run.ts";
 
+/** Whether `pid` runs: signal 0 only asks. */
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("cli: deploy", () => {
   it("selects the production value file and Docker env_file without reading dev values", async () => {
     const dir = await agentWorkspace("fa-deploy-env-", {
@@ -38,7 +48,7 @@ describe("cli: deploy", () => {
       ".secrets/production/.env has no FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_VERIFICATION_TOKEN",
     );
     // Named so it runs from where this deploy ran: the agent is not the current directory here.
-    expect(result.stderr).toContain(`fastagent add feishu ${dir} --env production --json`);
+    expect(result.stderr).toContain(`\`fastagent deploy fly ${dir} --run --json\`, which hands their part to its user`);
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toContain("FEISHU_APP_ID=cli_dev");
     await expect(stat(join(dir, "Dockerfile"))).rejects.toThrow();
 
@@ -90,7 +100,80 @@ describe("cli: deploy", () => {
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toMatch(/wipes the runtime's openai-codex login.*run this deploy in a terminal/);
+    // The coding agent's way names this agent, run from wherever this deploy was.
+    expect(result.stderr).toContain(
+      `\`fastagent deploy agentcore ${dir} --run --json\`, which hands the login to its user`,
+    );
     await expect(stat(called)).rejects.toThrow(); // no aws invocation
+  });
+
+  it("deploy agentcore --run --json goes on past that stop: its ticket has someone to redo the login", async () => {
+    const dir = await agentWorkspace("fa-deploy-ac-ticket-", {
+      "fastagent.config.ts": `export default { model: "openai-codex/gpt-5.5" };\n`,
+    });
+    const bin = await mkdtemp(join(tmpdir(), "fa-aws-"));
+    const called = join(bin, "called");
+    await writeFile(join(bin, "aws"), `#!/bin/sh\necho "$@" >> ${called}\nexit 1\n`, { mode: 0o755 });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const started = await run(["deploy", "agentcore", dir, "--run", "--json"], undefined, env);
+    let report = JSON.parse(started.stdout);
+    for (let tries = 0; report.status === "working" && tries < 40; tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      report = JSON.parse((await run(["deploy", "agentcore", "--check", report.ticket], undefined, env)).stdout);
+    }
+    // Past the stop: the AWS CLI was asked, and what it answered is the ticket's reason.
+    expect(report).toMatchObject({ status: "failed", deployment: "agentcore", message: expect.stringMatching(/AWS/) });
+    expect(await readFile(called, "utf8")).toContain("sts get-caller-identity");
+  });
+
+  it.each([
+    [
+      "fly",
+      'case "$1 $2" in "auth whoami") exit 1;; "auth login") echo "Open https://fly.io/app/auth/cli/abc123"; sleep 30;; esac',
+      // A code the approval page shows comes back through --check --code.
+      { url: "https://fly.io/app/auth/cli/abc123", resume_command: expect.stringMatching(/--check \w+ --code/) },
+    ],
+    [
+      "railway",
+      'case "$1" in whoami) exit 1;; login) echo "https://railway.com/activate?user_code=AB-12" >&2; sleep 30;; esac',
+      { url: "https://railway.com/activate?user_code=AB-12", code: "AB-12" },
+    ],
+  ])("deploy %s --run --json hands a signed-out host CLI's sign-in to the person", async (host, body, expected) => {
+    const dir = await agentWorkspace(`fa-deploy-${host}-login-`, {
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      ".secrets/production/.env": "OPENAI_API_KEY=sk\n",
+    });
+    const bin = await mkdtemp(join(tmpdir(), "fa-host-cli-"));
+    await writeFile(join(bin, host), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    let report = JSON.parse((await run(["deploy", host, dir, "--run", "--json"], undefined, env)).stdout);
+    try {
+      for (let tries = 0; report.status === "working" && tries < 40; tries++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        report = JSON.parse((await run(["deploy", host, "--check", report.ticket], undefined, env)).stdout);
+      }
+      expect(report).toMatchObject({
+        status: "need_user_action",
+        deployment: host,
+        ...expected,
+        stop_command: `fastagent deploy ${host} --check ${report.ticket} --stop --json`,
+      });
+      // The way out of a deploy no deadline cuts: stopped where it is, with what it started.
+      const stopped = await run(["deploy", host, "--check", report.ticket, "--stop", "--json"], undefined, env);
+      expect(JSON.parse(stopped.stdout)).toMatchObject({
+        status: "failed",
+        message: expect.stringMatching(/^stopped on request/),
+      });
+    } finally {
+      const ticket = JSON.parse(
+        await readFile(
+          join(process.env.HOME as string, ".fastagent", ".state", "tickets", `${report.ticket}.json`),
+          "utf8",
+        ),
+      );
+      expect(ticket.pid === undefined || !isRunning(ticket.pid)).toBe(true);
+      if (ticket.pid && isRunning(ticket.pid)) process.kill(ticket.pid);
+    }
   });
 
   it("deploy: generate mode succeeds with the WYSIWYG note; the agentDir config key is retired", async () => {

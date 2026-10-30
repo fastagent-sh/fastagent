@@ -162,6 +162,34 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     expect(gate).toBeUndefined();
   });
 
+  it("a manual step also goes to the person who reads no log, whether a registrar or no registrar left it", async () => {
+    const left: string[] = [];
+    const gate = await registerWebhooks({
+      baseUrl: "https://x",
+      channels: webhook("telegram", "lark"),
+      // Lark's config API answers 404, as it does: the registrar can only say "manual".
+      registrars: {
+        telegram: vi.fn(registered),
+        feishu: vi.fn(async () => "manual" as const),
+        leave: (s) => left.push(s),
+      },
+      log: () => {},
+      retryHint: "re-run",
+    });
+    expect(gate).toBeUndefined();
+    expect(left).toEqual([expect.stringMatching(/^lark: set the event Request URL .* → https:\/\/x\/lark /)]);
+
+    const unwired: string[] = [];
+    await registerWebhooks({
+      baseUrl: "https://x",
+      channels: webhook("slack"),
+      registrars: { telegram: vi.fn(registered), leave: (s) => unwired.push(s) },
+      log: () => {},
+      retryHint: "re-run",
+    });
+    expect(unwired).toEqual(["slack: set Event Subscriptions → Request URL → https://x/slack"]);
+  });
+
   it("a failed registrar gates, and one failure does not skip the rest", async () => {
     const feishu = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const slack = vi.fn(registered);

@@ -32,6 +32,7 @@ const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   channels: [],
   flyConfig: "fastagent/fly.toml",
   dockerfile: "fastagent/Dockerfile",
+  forAgent: "fastagent deploy fly ../bot --run --json",
   ...over,
 });
 
@@ -267,18 +268,40 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     );
   });
 
-  it("gate: not logged in → stops before any side effect", async () => {
+  it("gate: not logged in with nobody to sign in → stops before any side effect, naming every way in", async () => {
     const { fly, cmds } = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
     const out = await run(plan(), fly);
-    expect(out).toEqual({ ok: false, gate: expect.stringMatching(/fly auth login|FLY_API_TOKEN/) });
+    expect(out).toEqual({
+      ok: false,
+      gate:
+        "not logged in to Fly — run `fly auth login` in a terminal (it opens a browser), or set FLY_API_TOKEN in this " +
+        "shell's environment, never in .secrets/production/.env (everything there travels to the box); then re-run. " +
+        "From a coding agent, `fastagent deploy fly ../bot --run --json` hands the sign-in to its user",
+    });
     expect(cmds()).toEqual(["auth whoami"]); // nothing after the gate
   });
 
+  it("not logged in with someone to sign in: signed in, then the run goes on; a failed sign-in is the gate", async () => {
+    const { fly, cmds } = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
+    const hostLogin = vi.fn(async () => undefined);
+    await run(plan({ hostLogin }), fly);
+    expect(hostLogin).toHaveBeenCalledOnce();
+    expect(cmds()).toContain("apps list --json");
+
+    const refused = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
+    const out = await run(plan({ hostLogin: async () => "the person did not approve" }), refused.fly);
+    expect(out).toEqual({ ok: false, gate: "the person did not approve" });
+    expect(refused.cmds()).toEqual(["auth whoami"]);
+  });
+
   it("gate: a missing secret value stops before creating infra", async () => {
-    const { fly, cmds } = fakeFly();
-    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"] }), fly);
+    // Signed out as well: no person is asked to sign in for a deploy that stops here anyway.
+    const { fly, cmds } = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
+    const hostLogin = vi.fn(async () => undefined);
+    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"], hostLogin }), fly);
     expect(out).toEqual({ ok: false, gate: expect.stringContaining("TELEGRAM_BOT_TOKEN") });
-    expect(cmds()).toEqual(["auth whoami"]); // no apps create
+    expect(cmds()).toEqual([]); // not even whoami
+    expect(hostLogin).not.toHaveBeenCalled();
   });
 
   it("gate: a failed `apps list` stops (not misreported as a name clash)", async () => {

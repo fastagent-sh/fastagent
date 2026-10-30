@@ -21,7 +21,13 @@ vi.mock("../src/cli/ticket.ts", async (original) => ({
   ...(await original<typeof import("../src/cli/ticket.ts")>()),
   startTicket: async (input: Record<string, unknown>) => {
     started.push(input);
-    return { ticket: "0123456789abcdef", status: "working", expiresAt: Date.now() + 60_000, check: input.check };
+    return {
+      ticket: "0123456789abcdef",
+      status: "working",
+      expiresAt: Date.now() + 60_000,
+      check: input.check,
+      fields: input.fields,
+    };
   },
 }));
 

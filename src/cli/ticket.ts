@@ -164,7 +164,9 @@ function runningFor(subject: string, now: number): Ticket[] {
   if (!existsSync(ticketsDir())) return [];
   return readdirSync(ticketsDir()).flatMap((file) => {
     const ticket = file.endsWith(".json") ? readTicket(file.slice(0, -".json".length)) : undefined;
-    const runs = ticket?.subject === subject && waiting(ticket) && ticket.expiresAt >= now && running(ticket.pid);
+    // One finishing past its deadline still runs: the deadline is for the person, never for work begun.
+    const current = ticket !== undefined && (ticket.expiresAt >= now || ticket.finishing === true);
+    const runs = ticket?.subject === subject && waiting(ticket) && current && running(ticket.pid);
     return runs ? [ticket as Ticket] : [];
   });
 }
@@ -239,12 +241,23 @@ export async function startTicket(
      * still at it then is returned working, its process carrying on.
      */
     waitsFirst: boolean;
+    /**
+     * A step for the same subject still running: `replace` stops one waiting on its person or still getting ready (a
+     * sign-in, holding a port the new one needs) and answers with one finishing what its person did; `join` answers
+     * with it whatever it is doing (a deploy, which must not be stopped halfway, even between its person's steps).
+     */
+    whenRunning: "replace" | "join";
     /** How long the step may take to give the person something to do; a test's is short. */
     startTimeoutMs?: number;
   },
 ): Promise<Ticket> {
-  const finishing = await supersede(input.subject, Date.now());
-  if (finishing !== undefined) return finishing;
+  if (input.whenRunning === "join") {
+    const [joined] = runningFor(input.subject, Date.now());
+    if (joined !== undefined) return joined;
+  } else {
+    const finishing = await supersede(input.subject, Date.now());
+    if (finishing !== undefined) return finishing;
+  }
   const id = createTicket(input).ticket;
   const startTimeoutMs = input.startTimeoutMs ?? START_TIMEOUT_MS;
   const log = openSync(ticketLogPath(id), "a");
@@ -310,6 +323,21 @@ export async function checkTicket(id: string, address?: string): Promise<Ticket 
 }
 
 /**
+ * Stop the step of ticket `id` where it is, and everything it started, on a person's or an agent's say: the way out of
+ * a step that hangs while finishing, which no deadline cuts. What it was doing may be left half-done.
+ */
+export async function stopTicket(id: string): Promise<Ticket> {
+  const ticket = readTicket(id);
+  if (ticket === undefined) throw new Error(`ticket ${id} is gone from ${ticketsDir()}`);
+  if (!waiting(ticket)) return ticket;
+  if (ticket.pid !== undefined) await stop(ticket.pid);
+  return update(id, {
+    status: "failed",
+    message: `stopped on request; what it was doing may be left half-done (${ticketLogPath(id)} says where it was)`,
+  });
+}
+
+/**
  * Why the command whose `--check` is `check` cannot read ticket `id`: there is none on this machine, or it is another
  * command's, named so the agent runs that one. Undefined when it is this command's.
  */
@@ -336,8 +364,9 @@ export interface TicketStep {
 /**
  * The step of ticket `id`, in the process `startTicket` started: `run` does it, through what it is handed, and
  * resolves with what to report once done. Whatever it throws fails the ticket, the whole error going to the log. At
- * the deadline the ticket expires, whether or not `run` heeds the signal; the caller ends the process after this, and
- * a run still going ends with it.
+ * the deadline the ticket expires, whether or not `run` heeds the signal (the caller ends the process after this, and
+ * a run still going ends with it), unless the step is finishing what its person did: that runs to its end, and
+ * expires only if it waits on its person again.
  */
 export async function runTicket(
   id: string,
@@ -354,9 +383,18 @@ export async function runTicket(
   recordFailures((message) => update(id, { status: "failed", message }));
   // However this process ends (done, failed, expired with the run still waiting), what it started goes with it.
   if (leadsGroup()) process.once("exit", () => signalGroup(process.pid, "SIGTERM"));
-  const signal = AbortSignal.timeout(Math.max(0, ticket.expiresAt - Date.now()));
+  // The deadline bounds what the step waits on (its person, getting ready), never what it is finishing (a host's
+  // deploy, a code exchanged): past it, a step finishing is let finish, and expires the moment it would wait again.
+  const expiry = new AbortController();
+  let finishing = false;
+  const expireIfDue = (): void => {
+    if (!finishing && !expiry.signal.aborted && Date.now() >= ticket.expiresAt) expiry.abort(new Error("expired"));
+  };
+  const clock = setInterval(expireIfDue, POLL_MS);
+  const signal = expiry.signal;
   // Each step replaces the last one's fields: a code or an expiry of the one before is not this one's.
-  const waits: TicketStep["waits"] = (on) =>
+  const waits: TicketStep["waits"] = (on) => {
+    finishing = false;
     update(id, {
       status: "need_user_action",
       code: undefined,
@@ -366,6 +404,7 @@ export async function runTicket(
       finishing: undefined,
       ...on,
     });
+  };
   const afterwards: Person["afterwards"] = (instructions, url) => {
     const current = readTicket(id);
     update(id, {
@@ -376,7 +415,10 @@ export async function runTicket(
     signal,
     person: {
       waitsOn: (url, instructions, until) => waits({ url, instructions, ...(until === undefined ? {} : { until }) }),
-      carriesOn: () => update(id, { status: "working", finishing: true }),
+      carriesOn: () => {
+        finishing = true;
+        update(id, { status: "working", finishing: true });
+      },
       afterwards,
     },
     waits,
@@ -394,6 +436,7 @@ export async function runTicket(
     if (signal.aborted) update(id, { status: "expired" });
     else update(id, { status: "failed", message: (error as Error).message });
   } finally {
+    clearInterval(clock);
     recordFailures(undefined);
   }
 }
@@ -481,7 +524,8 @@ export function ticketReport(
       : `Give the URL and the code ${ticket.code} to the user so they can ${ticket.action} there.`;
   const then = ticket.takesAddress
     ? "Once they say they have, run check_command. If their browser ends on a page that does not load (an address " +
-      "on localhost), ask them for that address and run resume_command with it in place of <address>."
+      "on localhost), or on one showing a one-time code to hand back, ask them for that address or code and run " +
+      "resume_command with it in place of <address>."
     : "Once they say they have, run check_command.";
   return {
     json: {
