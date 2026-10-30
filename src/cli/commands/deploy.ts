@@ -7,7 +7,7 @@ import type { DeployHost } from "../../deploy/hosts.ts";
 import { cloudFor } from "../../channels/feishu/cloud.ts";
 import { FEISHU_INGRESS_SETTINGS } from "../../channels/feishu/setup-mode.ts";
 import { assembleSecrets, divergentSettingsGate, missingValuesGate } from "../../deploy/secrets.ts";
-import { dotEnvPath, loadEnvValues } from "../../env.ts";
+import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
 import {
   assertIndependentFeishuApps,

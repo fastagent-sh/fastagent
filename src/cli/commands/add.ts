@@ -22,7 +22,8 @@ import { type FeishuSubscriptionMode, feishuIngressFor } from "../../channels/fe
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
 import { channelIngress } from "../../channels/discover.ts";
 import { buildDefinitionShape, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
-import { dotEnvPath, enterAgentEnv, loadEnvValues } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
+import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { selectAgentEnvironment, resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {

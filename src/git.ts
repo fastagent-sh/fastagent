@@ -13,12 +13,12 @@ export class GitNotInstalled extends Error {}
  * Never wait on a terminal prompt for a credential: a serving process has nobody to answer it, so git fails and says
  * why instead. Not covered by a test: it takes a remote that asks for a credential.
  */
-const gitEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0" });
+const gitEnv = (env: NodeJS.ProcessEnv) => ({ ...env, GIT_TERMINAL_PROMPT: "0" });
 
 const execGit = promisify(execFile);
 
-/** git for one purpose, `why`: what a missing git is reported as needed for. */
-export function gitFor(why: string) {
+/** git for one purpose, `why`: what a missing git is reported as needed for. It runs in `env`. */
+export function gitFor(why: string, env: NodeJS.ProcessEnv = process.env) {
   const missing = () => new GitNotInstalled(`git is not installed: ${why}`);
   return {
     /**
@@ -29,7 +29,7 @@ export function gitFor(why: string) {
       try {
         return execFileSync("git", args, {
           cwd,
-          env: gitEnv(),
+          env: gitEnv(env),
           encoding: "utf8",
           stdio: ["ignore", "pipe", "pipe"],
         }).trim();
@@ -42,7 +42,7 @@ export function gitFor(why: string) {
     /** Run git in `cwd`: its output, or its stderr as the error. */
     async run(args: string[], cwd: string): Promise<string> {
       try {
-        return (await execGit("git", args, { cwd, env: gitEnv() })).stdout;
+        return (await execGit("git", args, { cwd, env: gitEnv(env) })).stdout;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") throw missing();
         const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();

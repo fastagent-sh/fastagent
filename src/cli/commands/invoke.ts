@@ -5,7 +5,8 @@
  */
 import { join, relative, resolve } from "node:path";
 import { type Agent, AgentError, type MessageStreamEvent, type SessionSettings } from "../../agent-api.ts";
-import { dotEnvPath, enterAgentEnv, loadEnvValues } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
+import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { modelRefOf } from "../../harnesses/pi-durable/open.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";

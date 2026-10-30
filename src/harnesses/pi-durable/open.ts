@@ -363,6 +363,11 @@ export interface AssembleAgentOptions {
   /** Where the instance's state is: given by a serve, whose scheduler fires the wake-ups `wake` keeps there. */
   stateRoot?: string;
   unfinished?: Unfinished;
+  /**
+   * What the agent's environment adds to this process's, for the commands it runs: its value file's variables and its
+   * packages' PATH.
+   */
+  environment?: Readonly<Record<string, string>>;
 }
 
 /** Open the definition as an Agent over `models`: the coding tools, then its own. */
@@ -402,7 +407,8 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
-    env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? dir, shellEnv: { [DEV_SERVE_ENV]: undefined } }),
+    env: ({ cwd }) =>
+      new NodeExecutionEnv({ cwd: cwd ?? dir, shellEnv: { ...options.environment, [DEV_SERVE_ENV]: undefined } }),
     commands: () => readCommands(dir),
   });
 }

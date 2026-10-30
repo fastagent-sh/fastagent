@@ -25,10 +25,10 @@ import {
 import {
   checkPackages,
   ensureMise,
-  enterEnvironment,
   installPackages,
   MISE_PACKAGE_NAMES,
   miseBinary,
+  prepareEnvironment,
 } from "../src/environment/mise.ts";
 import { addContent, writeEnvironment } from "../src/authoring.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
@@ -71,6 +71,8 @@ interface MiseCall {
   /** MISE_OVERRIDE_CONFIG_FILENAMES, MISE_GLOBAL_CONFIG_FILE and MISE_PYTHON_COMPILE, as it saw them. */
   isolation: string;
   path: string;
+  /** FAKE_AGENT_VALUE as it saw it: whose environment it ran in. */
+  agentValue: string;
 }
 
 /**
@@ -93,7 +95,7 @@ async function fakeMise(
   await writeFile(
     bin,
     `#!/bin/sh
-echo "run|$*|$PWD|$MISE_OVERRIDE_CONFIG_FILENAMES,$MISE_GLOBAL_CONFIG_FILE,$MISE_PYTHON_COMPILE|\${PATH%%${delimiter}*}" >> "${logFile}"
+echo "run|$*|$PWD|$MISE_OVERRIDE_CONFIG_FILENAMES,$MISE_GLOBAL_CONFIG_FILE,$MISE_PYTHON_COMPILE|\${PATH%%${delimiter}*}|$FAKE_AGENT_VALUE" >> "${logFile}"
 case "$1" in
   where) grep -qxF "$2" "${installed}" 2>/dev/null || { echo "mise ERROR $2 is not installed" >&2; exit 1; } ;;
   install) shift; [ "$1" = --quiet ] && shift
@@ -121,8 +123,8 @@ esac
       .split("\n")
       .filter((line) => line.startsWith("run|"))
       .map((line) => {
-        const [, args, cwd, isolation, path] = line.split("|") as string[];
-        return { args, cwd, isolation, path } as MiseCall;
+        const [, args, cwd, isolation, path, agentValue] = line.split("|") as string[];
+        return { args, cwd, isolation, path, agentValue } as MiseCall;
       });
   return { bin, calls, log };
 }
@@ -370,13 +372,13 @@ describe("environment: installed by the agent's own mise", () => {
   });
 });
 
-describe("environment: entered by a process that runs the agent", () => {
-  it("installs what is missing and puts the packages on PATH, writing nothing in the agent directory", async () => {
+describe("environment: prepared by a process that runs the agent", () => {
+  it("installs what is missing and answers the PATH that puts the packages first, writing nothing", async () => {
     const dir = await agentDir({ packages: { gh: "2", jq: "1" } });
     const { calls } = await fakeMise(dir);
     vi.spyOn(log, "info").mockImplementation(() => {});
     const before = await contents(dir);
-    await enterEnvironment(dir);
+    const variables = await prepareEnvironment(dir, process.env);
     // `where` asks of each package at once, so those runs are in no particular order.
     const args = (await calls()).map((call) => call.args);
     expect([...args.slice(0, 2).sort(), ...args.slice(2)]).toEqual([
@@ -386,15 +388,17 @@ describe("environment: entered by a process that runs the agent", () => {
       "env --json gh@2 jq@1",
     ]);
     expect(await contents(dir)).toEqual(before);
-    expect((process.env.PATH ?? "").split(delimiter)[0]).toBe("/fake/tools");
-    expect(process.env.FAKE_TOOL_HOME).toBe("/fake/home");
+    expect((variables.PATH ?? "").split(delimiter)[0]).toBe("/fake/tools");
+    expect(variables.FAKE_TOOL_HOME).toBe("/fake/home");
+    // Answered, not entered: this process may run other agents.
+    expect(process.env).toEqual(savedEnv);
     // The isolation is these runs' alone, and the agent's mise is not on the PATH.
     for (const name of ["MISE_OVERRIDE_CONFIG_FILENAMES", "MISE_GLOBAL_CONFIG_FILE", "MISE_PYTHON_COMPILE"]) {
-      expect(process.env[name], name).toBe(savedEnv[name]);
+      expect(variables[name], name).toBeUndefined();
     }
-    expect(process.env.PATH).not.toContain(join(dir, "node_modules"));
+    expect(variables.PATH).not.toContain(join(dir, "node_modules"));
     // The next start has them all: it installs nothing, so it needs no network.
-    await enterEnvironment(dir);
+    await prepareEnvironment(dir, process.env);
     const again = (await calls()).slice(4).map((call) => call.args);
     expect([...again.slice(0, 2).sort(), ...again.slice(2)]).toEqual([
       "where gh@2",
@@ -404,12 +408,10 @@ describe("environment: entered by a process that runs the agent", () => {
   });
 
   it("an agent without packages borrows the machine's commands; one with packages and no mise is refused", async () => {
-    const before = process.env.PATH;
-    await enterEnvironment(await agentDir({ aptPackages: ["chromium"] }));
-    expect(process.env.PATH).toBe(before);
+    expect(await prepareEnvironment(await agentDir({ aptPackages: ["chromium"] }), process.env)).toEqual({});
     const dir = await agentDir({ packages: { gh: "2" } });
     expect(miseBinary(dir)).toBeUndefined();
-    await expect(enterEnvironment(dir)).rejects.toThrow(
+    await expect(prepareEnvironment(dir, process.env)).rejects.toThrow(
       `context.json declares packages, and the agent has no mise installed — run \`fastagent env install\` in ${dir}`,
     );
   });
@@ -422,15 +424,23 @@ describe("environment: entered by a process that runs the agent", () => {
     await (await open()).agent.close();
   });
 
-  it("is entered as the agent opens, so every process that opens it has it", async () => {
+  it("is prepared as the agent opens, in the agent's own environment, leaving this process's as it was", async () => {
     await expect(openServing(await agentDir({ packages: { gh: "2" } }), { storage: "memory" })).rejects.toThrow(
       /the agent has no mise installed/,
     );
     const dir = await agentDir({ packages: { gh: "2" } });
-    await fakeMise(dir);
+    const { calls } = await fakeMise(dir);
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "FAKE_AGENT_VALUE=from-the-value-file\n");
     vi.spyOn(log, "info").mockImplementation(() => {});
     await (await openServing(dir, { storage: "memory" })).agent.close();
-    expect((process.env.PATH ?? "").split(delimiter)[0]).toBe("/fake/tools");
+    // mise reached GitHub, say, with the agent's own token.
+    expect((await calls()).map((call) => `${call.args.split(" ")[0]}: ${call.agentValue}`)).toEqual([
+      "where: from-the-value-file",
+      "install: from-the-value-file",
+      "env: from-the-value-file",
+    ]);
+    expect(process.env).toEqual(savedEnv);
   });
 });
 

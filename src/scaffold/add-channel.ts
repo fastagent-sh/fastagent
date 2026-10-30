@@ -8,7 +8,7 @@ import { detectRuntime } from "../runtime.ts";
 import { assertInsideAgentDir, exists } from "../paths.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { type ValueWriteResult, writeValues } from "../value-file.ts";
-import { envExamplePath } from "../env.ts";
+import { envExamplePath } from "../value-file.ts";
 import { FEISHU_AGENT_SCOPES, type FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 import { slackBotScopes } from "../channels/slack/manifest.ts";
 

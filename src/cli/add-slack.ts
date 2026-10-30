@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
-import { dotEnvPath, parseEnvContent } from "../env.ts";
+import { dotEnvPath, parseEnvContent } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../channels/slack/onboard.ts";

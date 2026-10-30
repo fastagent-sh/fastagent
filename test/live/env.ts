@@ -21,7 +21,7 @@ import { destroyAgentcoreDeployment as destroyDeployment } from "../../src/deplo
 import { PROBE_PAYLOAD, ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
 import type { CliRunner } from "../../src/deploy/runner.ts";
 import type { Message } from "../../src/agent-api.ts";
-import { dotEnvPath } from "../../src/env.ts";
+import { dotEnvPath } from "../../src/value-file.ts";
 import { environmentAuth } from "../../src/harnesses/models/models.ts";
 import { openServing } from "../../src/harnesses/pi-durable/serve.ts";
 import { type ServedAgent, serveAgent } from "../../src/service.ts";

@@ -33,17 +33,31 @@ export function listModels(models: Models): string[] {
 }
 
 /**
- * The built-ins plus `providers` (a same id replaces a built-in), over any credential store. With `catalogs`, the lists
- * its refresh brings up to date; without, the ones this pi-ai was built with.
+ * pi's own reading of an environment (a blank variable is unset) over `env` instead of this process's: an agent's
+ * environment is its own when the process runs several. Files a source points at are this machine's unless
+ * `fileExists` says otherwise.
+ */
+function authContextIn(
+  env: NodeJS.ProcessEnv,
+  fileExists: (path: string) => Promise<boolean> = defaultProviderAuthContext().fileExists,
+) {
+  return { env: async (name: string) => (env[name]?.trim() ? env[name] : undefined), fileExists };
+}
+
+/**
+ * The built-ins plus `providers` (a same id replaces a built-in), over any credential store, a provider's key read
+ * from `env` (the agent's environment; this process's by default). With `catalogs`, the lists its refresh brings up
+ * to date; without, the ones this pi-ai was built with.
  */
 export function modelsOver(
   credentials: CredentialStore,
   providers: readonly Provider[] = [],
   catalogs?: Catalogs,
+  env: NodeJS.ProcessEnv = process.env,
 ): Models {
   const models = createModels({
     credentials,
-    authContext: defaultProviderAuthContext(),
+    authContext: authContextIn(env),
     ...(catalogs ? { modelsStore: catalogs.fetched } : {}),
   });
   for (const builtIn of builtinProviders()) models.setProvider(catalogs ? catalogs.over(builtIn) : builtIn);
@@ -71,11 +85,7 @@ export async function environmentAuth(
 ): Promise<{ source?: string } | undefined> {
   const models = builtinModels({
     credentials: new InMemoryCredentialStore(),
-    authContext: {
-      // pi's own reading of a variable (a blank one is unset), over the given environment.
-      env: async (name) => (env[name]?.trim() ? env[name] : undefined),
-      fileExists,
-    },
+    authContext: authContextIn(env, fileExists),
   });
   for (const provider of providers) models.setProvider(provider);
   return models.checkAuth(providerId);

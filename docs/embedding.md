@@ -54,8 +54,8 @@ await agent.close(); // on shutdown: releases the instance's storage
 
 `openAgent` is what `dev` and `start` run before they serve: it reads the definition (`SYSTEM.md`, `AGENTS.md`,
 `skills/`, `prompts/`, `src/`, `fastagent.config.ts`), builds its code with the secrets it declares, installs its
-declared [environment](configuration.md#environment) where it has no install yet and puts it first on this process's
-`PATH`, clones its content, refreshes its [model lists](configuration.md#model-lists) (a request to `https://pi.dev` of
+declared [environment](configuration.md#environment) where it has no install yet and puts it first on the `PATH` of
+the commands the agent runs, clones its content, refreshes its [model lists](configuration.md#model-lists) (a request to `https://pi.dev` of
 at most 5 s, and to a provider that fetches its own list, unless what `<agent dir>/.state/models/` keeps is less than
 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage (`<agent dir>/.state/agent.sqlite`),
 which one process holds at a time; `stateDir` puts the instance somewhere else ([below](#6-a-desktop-host)). Without a
@@ -236,14 +236,17 @@ calls the Agent API; `createAgent(dir)` makes a new one, as `fastagent init` doe
   every 4 hours.
 - **Changes to the agent.** `SYSTEM.md`, `AGENTS.md`, skills and prompt templates are read for every message. Code
   under `src/` and `fastagent.config.ts` are built when the agent opens: `close()` it and open it again.
-- **One process, shared.** An agent's declared [environment](configuration.md#environment) goes first on this
-  process's `PATH`, and its code reads the secrets it declares from this process's environment (`dev` and `start`
-  load `.secrets/.env` into it; `openAgent` does not), so agents opened in one process share both.
+- **Each agent's own environment.** An agent runs on this process's environment plus its own: its `.secrets/.env`
+  (a variable the process holds wins over the file) and its declared packages. Its code's `needs()`, its commands,
+  its content's clones and its model keys all read that, and `openAgent` writes nothing into `process.env`, so agents
+  opened in one process keep their values and packages apart. Code that reads `process.env` itself sees the process's
+  alone: an agent's code takes its values with `needs()`. The process is still one: a tool that blocks it or crashes
+  it does so for every agent in it.
 
 ## How embed and CLI relate
 
-`fastagent dev` / `start` are `openAgent` plus `serve()` and `listen` plus process concerns (`.env`, the proxy, the
-dev watcher, the port, the signal handlers). The agent they serve is the one `openAgent` returns to your app.
+`fastagent dev` / `start` are `openAgent` plus `serve()` and `listen` plus process concerns (the proxy and the log
+level `.env` may set, the dev watcher, the port, the signal handlers). The agent they serve is the one `openAgent` returns to your app.
 
 ## Where next
 

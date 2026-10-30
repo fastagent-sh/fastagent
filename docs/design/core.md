@@ -202,7 +202,10 @@ state root (`stateDir`: an instance of its own beside `dev`'s). It works in this
    directory holds; two tools, extensions, channels or schedules of one name are refused, as is an extension named like
    one FastAgent installs. `buildDefinitionShape` builds the same code with stand-ins for missing values, for readers
    that need only its shape: `deploy`'s pre-flight, `add <channel>`, `models`, `login`, `schedules list`.
-3. **The environment** (`enterEnvironment`, §5) and **the content** (`cloneContent`, §2), before anything can run.
+3. **The agent's environment** as one value (§5): this process's plus the agent's own, its `.secrets/.env`
+   (`agentValues`, a variable the process holds winning) and its packages' PATH (`prepareEnvironment`). The code is
+   built in it, mise runs in it, **the content** is cloned in it (`cloneContent`, §2), the model keys are read from it
+   and the commands the agent runs get it; nothing writes `process.env`, since one process may run several agents.
 4. **The model environment** (`harnesses/models/environment.ts`): the credential store (the agent's file, layered over
    the machine's, or a store the caller supplies), pi-ai's built-in providers over it, and the definition's providers,
    their lists refreshed before it resolves (`catalog.ts`): pi's published catalog adds what a provider released after
@@ -268,9 +271,10 @@ optional npm dependency per platform, with the packages as arguments (`gh@2`) an
 Nothing is locked. `installPackages` gives mise the packages it names (`newest`) whatever is installed, which installs
 the newest release their version allows, and of the rest only those with no matching install, which `mise where` answers
 without the network; what is installed goes on the install's PATH (a PyPI package needs its uv there). A start names
-none, `fastagent env add` names what it adds or re-versions, and `fastagent env install` names every one (`"all"`). `openServing` enters the environment (`enterEnvironment`: the missing ones installed, then `mise env --json` of every
-package) and puts the packages on `process.env.PATH` before anything is spawned, so every process that opens the agent
-does, an embedder's included, and the `dev` supervisor does not. It writes nothing in the agent directory. An edit to `context.json`
+none, `fastagent env add` names what it adds or re-versions, and `fastagent env install` names every one (`"all"`). `openServing` prepares the environment (`prepareEnvironment`: the missing ones installed, then `mise env --json` of
+every package) and gives the PATH that answers to the commands the agent runs, never to `process.env`: every process
+that opens the agent does it, an embedder's included, and the `dev` supervisor does not. It writes nothing in the
+agent directory. An edit to `context.json`
 restarts the `dev` worker. Only the packages reach that `PATH`: the isolation variables go to FastAgent's own mise runs,
 and mise itself is not put there.
 

@@ -149,10 +149,13 @@ export function checkBinding(
  * agent did in it (git.ts `refreshClone`): what git refuses, or a remote that cannot be reached, keeps it as it is,
  * with the reason. Only a process that runs the agent calls this. A checkout this machine binds is never cloned over.
  */
-export async function cloneContent(entry: Extract<ResolvedContent, { kind: "github" }>): Promise<CloneOutcome> {
+export async function cloneContent(
+  entry: Extract<ResolvedContent, { kind: "github" }>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<CloneOutcome> {
   if (!entry.clone) throw new Error(`content "${entry.name}" is bound to the checkout ${entry.location}, not a clone`);
   ensureContentDir(dirname(entry.location));
-  return refreshClone(entry.repo, entry.ref, entry.location).catch((error: unknown) => {
+  return refreshClone(entry.repo, entry.ref, entry.location, env).catch((error: unknown) => {
     throw new Error(`content "${entry.name}": ${(error as Error).message}`);
   });
 }

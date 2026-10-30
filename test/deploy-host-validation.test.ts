@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { HOSTS, runDeploy } from "../src/cli/commands/deploy.ts";
-import { dotEnvPath, loadEnvValues } from "../src/env.ts";
+import { dotEnvPath, loadEnvValues } from "../src/value-file.ts";
 import { registerFeishuApp } from "../src/channels/feishu/register-app.ts";
 import { createFeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import { feishuAppScopes } from "../src/channels/feishu/setup-mode.ts";

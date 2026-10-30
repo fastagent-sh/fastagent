@@ -262,7 +262,7 @@ platform. The author never writes mise's files.
   keep both. `remove` and `list` complete it; `install` installs every package at its newest release, adding mise to
   `package.json` when it is missing; `exec -- <command>` runs a command in the environment. Every process that opens
   the agent (`dev`, `start`, `invoke`, an app's `openAgent`) installs what is missing and puts the packages
-  first on the `PATH` their commands inherit. A change to `context.json` restarts `dev`.
+  first on the `PATH` of the agent's commands. A change to `context.json` restarts `dev`.
 - **The image installs every package when it is built.** It installs `aptPackages` in its apt layer, with what
   FastAgent needs there (git, CA certificates, curl for rust), then copies `fastagent.packages`, the list every
   deploy writes, and runs `mise install --system` of what it lists, in a layer rebuilt only when the packages or the

@@ -7,7 +7,8 @@ import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } fro
 import { basename, dirname, join } from "node:path";
 import { gitFor } from "../git.ts";
 
-const { answer: gitAnswer, run: runGit } = gitFor("github content needs it on this machine");
+const WHY = "github content needs it on this machine";
+const { answer: gitAnswer } = gitFor(WHY);
 
 /** The `owner/repo` a GitHub remote URL names, in any of its spellings (https, ssh, scp-like), or undefined. */
 export function githubRepoOf(url: string): string | undefined {
@@ -110,13 +111,20 @@ export type CloneOutcome = { outcome: "cloned" | "updated" | "current" } | { out
  * - None yet: cloned beside it and renamed into place. A first clone that fails stops the start.
  * - A clone of another repository there (the entry was renamed or redeclared): refused, naming it.
  */
-export async function refreshClone(repo: string, ref: string | undefined, dir: string): Promise<CloneOutcome> {
+export async function refreshClone(
+  repo: string,
+  ref: string | undefined,
+  dir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<CloneOutcome> {
+  // The agent's environment, whose GITHUB_TOKEN the clone's credential helper reads.
+  const { run: runGit } = gitFor(WHY, env);
   // A library caller can hand this anything; git reads a leading "-" as an option, and no repository or ref has one
   // (a declaration with one is refused at load, declare.ts).
   if (repo.startsWith("-") || ref?.startsWith("-")) {
     throw new Error(`github ${repo}${ref !== undefined ? ` at ${ref}` : ""} would reach git as an option`);
   }
-  if (!existsSync(dir)) return cloneInto(repo, ref, dir);
+  if (!existsSync(dir)) return cloneInto(repo, ref, dir, runGit);
   const origin = gitAnswer(["config", "--get", "remote.origin.url"], dir);
   if (origin === undefined || githubRepoOf(origin)?.toLowerCase() !== repo.toLowerCase()) {
     throw new Error(
@@ -176,7 +184,12 @@ function gitReason(error: unknown): string {
  * process reads no clone or a whole one. When another process put its own there first, that one stands and this one
  * is discarded. Shallow: a starting point to work from; a later fetch brings the history an update needs.
  */
-async function cloneInto(repo: string, ref: string | undefined, dir: string): Promise<CloneOutcome> {
+async function cloneInto(
+  repo: string,
+  ref: string | undefined,
+  dir: string,
+  runGit: ReturnType<typeof gitFor>["run"],
+): Promise<CloneOutcome> {
   const parent = dirname(dir);
   mkdirSync(parent, { recursive: true });
   const next = join(parent, `.${basename(dir)}.next-${process.pid}-${Date.now()}`);
