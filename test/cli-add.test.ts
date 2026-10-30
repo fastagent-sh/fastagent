@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { agentWorkspace, run } from "./cli-run.ts";
 
@@ -18,28 +17,6 @@ describe("add <channel> with no one at a terminal: the person's part, named", ()
       agent_next_steps: expect.stringContaining("themselves, not in this conversation"),
     });
     expect(existsSync(join(dir, "src", "channels", "lark.ts"))).toBe(false);
-  });
-
-  it("slack: the token pair goes in a handoff file beside the state, which a bad pair is refused from by name", async () => {
-    const dir = await agentWorkspace("fa-add-slack-");
-    const result = await run(["add", "slack", dir, "--json"]);
-    expect(result.code).toBe(0);
-    const report = JSON.parse(result.stdout);
-    expect(report).toMatchObject({
-      status: "need_user_action",
-      url: "https://api.slack.com/apps",
-      keys: ["SLACK_CONFIG_TOKEN", "SLACK_CONFIG_REFRESH_TOKEN"],
-      handoff_file: expect.stringMatching(/channels\/slack\/config-tokens\.env$/),
-      agent_next_steps: expect.stringContaining("never deploys it"),
-    });
-    expect(report.handoff_file.startsWith(dir)).toBe(true);
-    expect(existsSync(dirname(report.handoff_file))).toBe(true);
-
-    await writeFile(report.handoff_file, "SLACK_CONFIG_TOKEN=xoxb-not-a-config-token\n");
-    const refused = await run(["add", "slack", dir, "--json"]);
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toContain(`invalid Slack configuration token prefix`);
-    expect(refused.stderr).toContain(report.handoff_file);
   });
 
   it("a ticket that names no setup is a usage error", async () => {

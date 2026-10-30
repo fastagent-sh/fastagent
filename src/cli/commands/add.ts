@@ -3,15 +3,8 @@
  * slack/feishu/lark additionally CREATE OR RESUME the platform app.
  */
 import { randomBytes } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { activeDotEnvValues, assertIndependentFeishuApps, onboardFeishuCloudApp } from "../add-feishu.ts";
-import {
-  SLACK_CONFIG_TOKEN_URL,
-  slackTokenHandoffKeys,
-  slackTokenHandoffPath,
-  slackTokensForAgent,
-} from "../add-slack.ts";
 import { LARK_CONSOLE_URL } from "../../channels/lark/onboard.ts";
 import { type Person, terminalPerson } from "../person.ts";
 import { isInteractive, shellArg } from "../shared.ts";
@@ -267,16 +260,16 @@ async function addChannel(
 
 /** What the person does for each kind's app, to follow "so they can". */
 const SETUP_ACTIONS: Record<"slack" | "feishu" | "lark", string> = {
-  slack: "install the Slack app in their workspace",
+  slack: "set up the Slack app: paste a configuration token on the page, then click Allow in Slack",
   feishu: "confirm the new Feishu app",
   lark: "finish setting up the Lark app",
 };
 
 /**
  * `add slack|feishu|lark` with no one at a terminal to ask, for a coding agent: what the person must provide first is
- * named (Lark's app credentials in the value file, Slack's token pair in its handoff file), never asked for in the
- * agent's conversation; then the app's setup runs in a process of its own (ticket.ts), and the command returns once the
- * person has a step to take, it is done, or it is still working at it.
+ * named (Lark's app credentials, in the file the agent reads), never asked for in the agent's conversation; then the
+ * app's setup runs in a process of its own (ticket.ts), and the command returns once the person has a step to take, it
+ * is done, or it is still working at it.
  */
 async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChannelOptions, at: AddPlan): Promise<void> {
   const { target } = at;
@@ -301,37 +294,6 @@ async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChann
         [
           `need_user_action: create the Lark app at ${LARK_CONSOLE_URL}`,
           `  and set LARK_APP_ID and LARK_APP_SECRET in ${valueFile}`,
-          `then run: ${at.rerun}`,
-        ],
-      );
-      process.exit(0);
-    }
-  }
-  if (kind === "slack") {
-    const stateRoot = resolveStateRoot(target);
-    const tokens = await slackTokensForAgent(target, stateRoot, opts.replaceConfig === true).catch(failStartup);
-    if (tokens === "needs-handoff") {
-      const file = slackTokenHandoffPath(stateRoot);
-      mkdirSync(dirname(file), { recursive: true });
-      const keys = [...slackTokenHandoffKeys];
-      printReport(
-        opts.json,
-        {
-          status: "need_user_action",
-          url: SLACK_CONFIG_TOKEN_URL,
-          handoff_file: file,
-          keys,
-          check_command: again,
-          agent_next_steps:
-            "Give the URL to the user so they can generate an App Configuration Token pair there (Your App " +
-            `Configuration Tokens → Generate Token), and ask them to write it into ${file} as ` +
-            `${keys[0]}=<the access token> and ${keys[1]}=<the refresh token> themselves, not in this conversation. ` +
-            "fastagent moves the pair into its own state on this machine, deletes the file, and never deploys it. " +
-            "Once they say they have, run check_command.",
-        },
-        [
-          `need_user_action: generate an App Configuration Token pair at ${SLACK_CONFIG_TOKEN_URL}`,
-          `  and write it into ${file} as ${keys[0]}=… and ${keys[1]}=…`,
           `then run: ${at.rerun}`,
         ],
       );

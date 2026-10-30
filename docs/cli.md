@@ -425,8 +425,13 @@ user ([Scripts and coding agents](#scripts-and-coding-agents)):
 | Channel | What the person provides first | What the ticket waits on |
 |---|---|---|
 | `feishu` | nothing | confirming the new app (`url`, in a browser or in Feishu) |
-| `lark` | `LARK_APP_ID` and `LARK_APP_SECRET` in the `value_file`, from the app they create at `url` | nothing; the setup verifies the app and captures its Verification Token |
-| `slack` | an App Configuration token pair, written into the `handoff_file` beside the onboarding state as `SLACK_CONFIG_TOKEN=` and `SLACK_CONFIG_REFRESH_TOKEN=`; `add slack` moves it into that state and deletes the file, so it never travels with a deploy | clicking Allow on the app's install page (`url`) |
+| `lark` | `LARK_APP_ID` and `LARK_APP_SECRET`, from the app they create at `url`, in the selected environment's file (`value_file`: `.secrets/.env`, or `.secrets/production/.env` with `--env production`) | nothing; the setup verifies the app and captures its Verification Token |
+| `slack` | nothing | pasting an App Configuration token pair on the page at `url`, which then takes the browser on to Slack's install page to click Allow |
+
+Slack's page is the setup's own, served through the temporary tunnel `add slack` opens anyway, at a one-time random
+address. The pair never passes through the agent's conversation or any `.env` file: it manages every Slack app the
+person owns in that workspace, and only this machine's CLI uses it, so it goes into the onboarding state (`0600`) and
+never deploys.
 
 A missing first part answers `need_user_action` naming it, with the command to run again (`check_command`). Then the
 setup runs in a process of its own and the command returns its ticket: `need_user_action` while the person has a
@@ -501,7 +506,7 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
   `add <kind> --env production --json` for a production app, `login <provider> --method account --deployment <host>
   --json` for the box's model login.
 - **A secret never passes through the agent's conversation.** The person writes it where the command names (the
-  agent's `.secrets/.env`, or a handoff file for a value that must not deploy), or types it at a terminal of their
+  agent's `.secrets/.env`), pastes it on a page the command's own process serves, or types it at a terminal of their
   own.
 - **Results on stdout, everything else on stderr**: progress, notes, warnings and errors. A command whose result is
   data has `--json`.

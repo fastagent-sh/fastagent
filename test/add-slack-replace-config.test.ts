@@ -5,7 +5,7 @@
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const prompts = vi.hoisted(() => ({
@@ -36,7 +36,7 @@ vi.mock("../src/channels/slack/setup-server.ts", () => ({
   }),
 }));
 
-import { onboardSlackInternalApp, slackTokenHandoffPath, slackTokensForAgent } from "../src/cli/add-slack.ts";
+import { onboardSlackInternalApp } from "../src/cli/add-slack.ts";
 import { writeSlackOnboardingState } from "../src/channels/slack/onboarding-state.ts";
 
 const RUNTIME_ENV = ["SLACK_BOT_TOKEN=xoxb-runtime", "SLACK_SIGNING_SECRET=signing"].join("\n");
@@ -147,88 +147,5 @@ describe("add slack --replace-config", () => {
     // error, so on a headless box this line is the only way to reach it — asserted on what the
     // operator actually sees, not on the source text that produces it.
     expect(printed.join("\n")).toContain("https://api.slack.com/apps");
-  });
-});
-
-describe("add slack through a coding agent's person", () => {
-  let target: string;
-  let stateRoot: string;
-
-  beforeEach(async () => {
-    target = await mkdtemp(join(tmpdir(), "fa-slack-agent-"));
-    stateRoot = join(target, ".state");
-    await mkdir(join(target, ".secrets"), { recursive: true });
-    prompts.passwordAnswers.length = 0;
-    prompts.select.mockClear();
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await rm(target, { recursive: true, force: true });
-  });
-
-  const handOff = async (text: string) => {
-    await mkdir(join(stateRoot, "channels", "slack"), { recursive: true });
-    await writeFile(slackTokenHandoffPath(stateRoot), text);
-  };
-  const readState = async (): Promise<Record<string, unknown>> =>
-    JSON.parse(await readFile(join(stateRoot, "channels", "slack", "onboarding.json"), "utf8"));
-  const person = { waitsOn: vi.fn(), carriesOn: vi.fn(), afterwards: vi.fn() };
-
-  it("waits for the token pair, then takes it from the handoff file into its state and deletes the file", async () => {
-    expect(await slackTokensForAgent(target, stateRoot, false)).toBe("needs-handoff");
-    await handOff("SLACK_CONFIG_TOKEN=xoxe.xoxp-1\nSLACK_CONFIG_REFRESH_TOKEN=xoxe-1\n");
-    expect(await slackTokensForAgent(target, stateRoot, false)).toBe("ready");
-    expect(await readState()).toMatchObject({
-      appName: `FastAgent ${basename(target)}`,
-      configToken: "xoxe.xoxp-1",
-      configRefreshToken: "xoxe-1",
-    });
-    await expect(readFile(slackTokenHandoffPath(stateRoot))).rejects.toThrow(/ENOENT/);
-  });
-
-  it("refuses a handoff file that holds no token pair, by its path, and keeps it for the person to fix", async () => {
-    await handOff("SLACK_CONFIG_TOKEN=xoxb-wrong\n");
-    await expect(slackTokensForAgent(target, stateRoot, false)).rejects.toThrow(
-      `invalid Slack configuration token prefix (expected xoxe. access + xoxe- refresh) in ${slackTokenHandoffPath(stateRoot)}`,
-    );
-    expect(await readFile(slackTokenHandoffPath(stateRoot), "utf8")).toContain("xoxb-wrong");
-  });
-
-  it("an installed app needs no pair; --replace-config takes a fresh one, and with no state refuses as at a terminal", async () => {
-    await expect(slackTokensForAgent(target, stateRoot, true)).rejects.toThrow(
-      /--replace-config found no local Slack onboarding state/,
-    );
-    writeSlackOnboardingState(stateRoot, {
-      version: 1,
-      appName: "App",
-      appId: "A1",
-      configToken: "xoxe.xoxp-old",
-      configRefreshToken: "xoxe-old",
-      configTokenExpiresAt: 1,
-      installedAt: "2026-01-01T00:00:00.000Z",
-    });
-    expect(await slackTokensForAgent(target, stateRoot, false)).toBe("ready");
-    expect(await slackTokensForAgent(target, stateRoot, true)).toBe("needs-handoff");
-    await handOff("SLACK_CONFIG_TOKEN=xoxe.xoxp-new\nSLACK_CONFIG_REFRESH_TOKEN=xoxe-new\n");
-    expect(await slackTokensForAgent(target, stateRoot, true)).toBe("ready");
-    expect(await readState()).toMatchObject({ appId: "A1", configToken: "xoxe.xoxp-new" });
-  });
-
-  it("asks nothing: a saved pair is kept, and a run with no pair is refused", async () => {
-    await expect(onboardSlackInternalApp({ target, stateRoot, person })).rejects.toThrow(
-      /no Slack App Configuration token pair/,
-    );
-    // Not created yet: the resume where a terminal asks which token pair to use.
-    writeSlackOnboardingState(stateRoot, {
-      version: 1,
-      appName: "App",
-      configToken: "xoxe.xoxp-old",
-      configRefreshToken: "xoxe-old",
-      configTokenExpiresAt: 1,
-    });
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(onboardSlackInternalApp({ target, stateRoot, person })).rejects.toThrow(/SENTINEL/);
-    expect(prompts.select).not.toHaveBeenCalled();
   });
 });

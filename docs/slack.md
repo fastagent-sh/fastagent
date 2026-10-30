@@ -61,10 +61,9 @@ Remove the old app in the Slack console when the new one answers.
 Slack's [App Manifest API](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/) requires a user/workspace **App Configuration Token**. The command opens
 [Your Apps](https://api.slack.com/apps); generate one under **Your App Configuration Tokens**, then paste
 its access and refresh tokens into the hidden prompts. Run by a coding agent (`add slack --json`), the command
-asks for no prompt: it names `<state root>/channels/slack/config-tokens.env`, where you write
-`SLACK_CONFIG_TOKEN=` and `SLACK_CONFIG_REFRESH_TOKEN=` yourself; the next `add slack` moves the pair into the
-onboarding state and deletes that file, then returns the install page for you to approve. These configuration
-credentials can manage apps owned by your user in that workspace, so FastAgent:
+asks for no prompt: it returns the address of a one-time page the setup serves through its temporary tunnel; you
+paste the pair there, and the page takes you on to Slack's install page. These configuration credentials can manage
+apps owned by your user in that workspace, so FastAgent:
 
 - stores them only in owner-readable (`0600`) `<state root>/channels/slack/onboarding.json`;
 - never puts it in `.env`, an image, a deploy secret, argv, or logs;
