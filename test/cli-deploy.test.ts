@@ -37,7 +37,8 @@ describe("cli: deploy", () => {
     expect(result.stderr).toContain(
       ".secrets/production/.env has no FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_VERIFICATION_TOKEN",
     );
-    expect(result.stderr).toContain("fastagent add feishu --env production --json");
+    // Named so it runs from where this deploy ran: the agent is not the current directory here.
+    expect(result.stderr).toContain(`fastagent add feishu ${dir} --env production --json`);
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toContain("FEISHU_APP_ID=cli_dev");
     await expect(stat(join(dir, "Dockerfile"))).rejects.toThrow();
 

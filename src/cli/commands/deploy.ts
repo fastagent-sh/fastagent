@@ -21,7 +21,7 @@ import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
 import { unprotectedSecretsNote } from "../../value-file.ts";
 import { loadConfig } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
-import { enterAgentDirectory, isInteractive } from "../shared.ts";
+import { enterAgentDirectory, isInteractive, shellArg } from "../shared.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
@@ -158,7 +158,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }
     if (opts.input === false || !isInteractive()) {
       // With no one to ask, the app is set up first by the command that hands the person's part over (`add --json`).
-      const prepare = unprepared.map(({ kind }) => `fastagent add ${kind} --env production --json`).join(", then ");
+      const agentArg = displayPath(process.cwd(), agentDir);
+      const dir = agentArg === undefined ? "" : ` ${shellArg(agentArg)}`;
+      const prepare = unprepared
+        .map(({ kind }) => `fastagent add ${kind}${dir} --env production --json`)
+        .join(", then ");
       failUsage(
         `deploy stopped: ${pre.valueFile} has no ${absent.join(", ")}: set up the separate production app first — ` +
           `${prepare} (it names what the person does) — then run this deploy again`,

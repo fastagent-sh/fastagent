@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type TicketStep,
@@ -38,19 +39,35 @@ const request = (subject = "login:openai", timeoutSeconds = 60) => ({
 });
 
 /** A step started as a command starts one, its process standing in for the step's: it shows an address and waits. */
-async function waitingStep(subject: string) {
+/**
+ * What a step's process starts, as a tunnel would be: told SIGTERM, it notes it in `<sidecar>.term` and carries on, so
+ * only SIGKILL stops it.
+ */
+const stubborn = (sidecar: string) => `
+  process.on("SIGTERM", () => require("node:fs").writeFileSync(${JSON.stringify(`${sidecar}.term`)}, "term"));
+  require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid));
+  setInterval(() => {}, 1000);`;
+
+async function waitingStep(subject: string, status = "need_user_action", sidecar?: string) {
   const waits = `
     const { readFileSync, writeFileSync } = require("node:fs");
     const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "tickets", process.argv.at(-1) + ".json");
     const ticket = JSON.parse(readFileSync(path, "utf8"));
-    writeFileSync(path, JSON.stringify({ ...ticket, status: "need_user_action", url: "https://auth.example/a", pid: process.pid }));
+    ${sidecar === undefined ? "" : `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(stubborn(sidecar))}], { stdio: "ignore" });`}
+    ${sidecar === undefined ? "" : `while (!require("node:fs").existsSync(${JSON.stringify(sidecar)})) {}`}
+    writeFileSync(path, JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, url: "https://auth.example/a", pid: process.pid }));
     setInterval(() => {}, 1000);`;
   return startTicket({
     ...request(subject),
-    waitsFirst: true,
+    waitsFirst: status === "need_user_action",
+    // A step at work is answered as it stands once the start window passes.
+    ...(status === "working" ? { startTimeoutMs: 1_000 } : {}),
     command: { file: process.execPath, args: ["-e", waits, "--"], cwd: tmpdir() },
   });
 }
+
+/** A sidecar file, to which a step's process writes the pid of what it started. */
+const sidecarFile = () => join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
 
 /** A step's run, settled from outside: `step` once it has started, `finish` to end it. */
 function steered() {
@@ -73,6 +90,8 @@ describe("a step that outlives the command that starts it", () => {
     const steer = steered();
     const running = runTicket(ticket, steer.run);
     const step = await steer.step;
+    // The step's own write as it starts: at work, nothing for the person yet.
+    expect(await checkTicket(ticket)).toMatchObject({ status: "working", pid: process.pid });
     step.waits({ url: "https://open.feishu.cn/confirm", code: "ABCD-EFGH" });
     expect(await checkTicket(ticket)).toMatchObject({
       status: "need_user_action",
@@ -132,6 +151,59 @@ describe("a step that outlives the command that starts it", () => {
     }
   });
 
+  it("a step stopped for a newer one takes what it started with it (a tunnel left open is public)", async () => {
+    const sidecar = sidecarFile();
+    const older = await waitingStep("add:slack:dev:/a", "need_user_action", sidecar);
+    const started = Number(readFileSync(sidecar, "utf8"));
+    expect(running(started)).toBe(true);
+    const newer = await waitingStep("add:slack:dev:/a");
+    try {
+      expect(running(older.pid)).toBe(false);
+      // Asked to stop first, so it can let go of what it holds; stopped regardless once it does not.
+      expect(existsSync(`${sidecar}.term`)).toBe(true);
+      await vi.waitFor(() => expect(running(started)).toBe(false));
+    } finally {
+      if (running(newer.pid)) process.kill(newer.pid as number);
+      if (running(started)) process.kill(started, "SIGKILL");
+    }
+  });
+
+  it("a step at work is never stopped halfway: a newer attempt is answered with it", async () => {
+    const atWork = await waitingStep("add:slack:dev:/b", "working");
+    try {
+      const again = await waitingStep("add:slack:dev:/b");
+      expect(again.ticket).toBe(atWork.ticket);
+      expect(running(atWork.pid)).toBe(true);
+    } finally {
+      if (running(atWork.pid)) process.kill(atWork.pid as number);
+    }
+  });
+
+  it("a step's process that expires with its run still waiting takes what that run started with it", async () => {
+    const sidecar = sidecarFile();
+    const ticketModule = fileURLToPath(new URL("../src/cli/ticket.ts", import.meta.url));
+    const runs = `
+      import { spawn } from "node:child_process";
+      import { writeFileSync } from "node:fs";
+      import { runTicket } from ${JSON.stringify(ticketModule)};
+      await runTicket(process.argv.at(-1), async () => {
+        writeFileSync(${JSON.stringify(sidecar)}, String(spawn("sleep", ["60"], { stdio: "ignore" }).pid));
+        return new Promise(() => {});
+      });
+      process.exit(0);`;
+    const { ticket } = await startTicket({
+      ...request("add:feishu:dev:/c", 2),
+      waitsFirst: false,
+      command: { file: process.execPath, args: ["--input-type=module", "-e", runs, "--"], cwd: tmpdir() },
+    });
+    await vi.waitFor(() => expect(existsSync(sidecar)).toBe(true), { timeout: 10_000 });
+    const started = Number(readFileSync(sidecar, "utf8"));
+    await vi.waitFor(async () => expect(await checkTicket(ticket)).toMatchObject({ status: "expired" }), {
+      timeout: 10_000,
+    });
+    await vi.waitFor(() => expect(running(started)).toBe(false), { timeout: 10_000 });
+  });
+
   it("a step given up on for giving the person nothing to do is stopped first, so it writes nothing after", async () => {
     const sidecar = join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
     const silent = `require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid)); setInterval(() => {}, 1000);`;
@@ -148,7 +220,7 @@ describe("a step that outlives the command that starts it", () => {
     expect(existsSync(sidecar) && running(Number(readFileSync(sidecar, "utf8")))).toBe(false);
   });
 
-  it("a step that may work a while first is returned working past the start timeout, its process carrying on", async () => {
+  it("a step that may work a while first is returned as it stands past the start timeout, the ticket left to it", async () => {
     const sidecar = join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
     const busy = `require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid)); setInterval(() => {}, 1000);`;
     const given = await startTicket({
@@ -161,7 +233,8 @@ describe("a step that outlives the command that starts it", () => {
     for (let tries = 0; !existsSync(sidecar) && tries < 50; tries++) await new Promise((r) => setTimeout(r, 100));
     const pid = Number(readFileSync(sidecar, "utf8"));
     try {
-      expect(given).toMatchObject({ status: "working" });
+      // Not written for it: the step writes its own ticket once it runs.
+      expect(given).toMatchObject({ status: "starting" });
       expect(running(pid)).toBe(true);
     } finally {
       process.kill(pid);

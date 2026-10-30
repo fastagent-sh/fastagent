@@ -12,6 +12,7 @@ import {
   type Ticket,
   checkTicket,
   printReport,
+  refusedCheck,
   runTicket,
   startTicket,
   ticketExitCode,
@@ -61,7 +62,7 @@ const UNATTENDED_TIMEOUT_SECONDS = 900;
 
 /** `fastagent add <kind> [dir]`: scaffold `src/channels/<kind>.ts`, the adapter configured with a starter policy. */
 export async function runAddChannel(channelKind: ChannelKind, dirArg: string, opts: AddChannelOptions): Promise<void> {
-  if (opts.check !== undefined) return checkSetup(opts.check, opts);
+  if (opts.check !== undefined) return checkSetup(channelKind, opts.check, opts);
   // The channel (glue + companion tools + secrets) is agent surface: everything lands in the AGENT DIR.
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
@@ -110,7 +111,10 @@ export async function runAddChannel(channelKind: ChannelKind, dirArg: string, op
     file,
     existsAlready,
     ...ingress,
-    rerun: `fastagent add ${channelKind}${agentFromCwd === undefined ? "" : ` ${shellArg(agentFromCwd)}`}${environment === "production" ? " --env production" : ""}${opts.ingress ? ` --ingress ${opts.ingress}` : ""}`,
+    rerun:
+      `fastagent add ${channelKind}${agentFromCwd === undefined ? "" : ` ${shellArg(agentFromCwd)}`}` +
+      `${environment === "production" ? " --env production" : ""}${opts.ingress ? ` --ingress ${opts.ingress}` : ""}` +
+      `${opts.replaceConfig ? " --replace-config" : ""}`,
   };
   if (opts.ticket !== undefined) {
     // The process `startTicket` started: the whole `add`, its person the ticket's.
@@ -258,6 +262,9 @@ async function addChannel(
   return { written: dotEnv.written, next_steps: next };
 }
 
+/** The command that reads an app's setup ticket, as every such ticket records it. */
+const setupCheck = (kind: ChannelKind) => `fastagent add ${kind} --check`;
+
 /** What the person does for each kind's app, to follow "so they can". */
 const SETUP_ACTIONS: Record<"slack" | "feishu" | "lark", string> = {
   slack: "set up the Slack app: paste a configuration token on the page, then click Allow in Slack",
@@ -303,9 +310,10 @@ async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChann
   const timeout = opts.timeout === undefined ? UNATTENDED_TIMEOUT_SECONDS : Number(opts.timeout);
   if (!Number.isInteger(timeout) || timeout <= 0) failUsage(`--timeout must be a whole number of seconds`);
   const ticket = await startTicket({
-    subject: `add:${kind}:${at.environment}`,
+    // One setup per agent, channel and environment: another agent's is its own business.
+    subject: `add:${kind}:${at.environment}:${target}`,
     action: SETUP_ACTIONS[kind],
-    check: `fastagent add ${kind} --check`,
+    check: setupCheck(kind),
     restart: at.rerun,
     timeoutSeconds: timeout,
     waitsFirst: false,
@@ -319,6 +327,7 @@ async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChann
         target,
         ...(at.environment === "production" ? ["--env", "production"] : []),
         ...(opts.ingress === undefined ? [] : ["--ingress", opts.ingress]),
+        ...(opts.replaceConfig ? ["--replace-config"] : []),
       ],
       cwd: process.cwd(),
     },
@@ -328,9 +337,11 @@ async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChann
 }
 
 /** `add <kind> --check <ticket>`. */
-async function checkSetup(id: string, opts: AddChannelOptions): Promise<void> {
-  const ticket = await checkTicket(id);
-  if (ticket === undefined) failUsage(`no setup "${id}": a ticket is what \`fastagent add\` printed`);
+async function checkSetup(kind: ChannelKind, id: string, opts: AddChannelOptions): Promise<void> {
+  const refused = refusedCheck(id, setupCheck(kind));
+  if (refused !== undefined) failUsage(refused);
+  // There: refusedCheck read it, and a ticket is pruned only a day after it ends.
+  const ticket = (await checkTicket(id)) as Ticket;
   reportSetup(ticket, opts, "checked");
   process.exit(ticketExitCode(ticket));
 }
