@@ -45,6 +45,12 @@ describe("cli: login and models", () => {
     expect([bare.code, bare.stderr]).toEqual([2, expect.stringMatching(/--deployment <host>.*argument missing/)]);
     const wrong = await run(["login", "--deployment", "heroku", "--no-input"], dir);
     expect([wrong.code, wrong.stderr]).toEqual([2, expect.stringMatching(/--deployment takes a host \(docker, fly/)]);
+    // A ticket's check is not a new sign-in on the box, which would replace the one the person is at.
+    const checking = await run(
+      ["login", "openai", "--deployment", "fly", "--check", "0123456789abcdef", "--json"],
+      dir,
+    );
+    expect([checking.code, checking.stderr]).toEqual([2, expect.stringContaining("without --deployment")]);
   });
 
   it("login --deployment without a terminal: a choice names the deployment, a key travels with the next deploy", async () => {
@@ -102,6 +108,14 @@ echo '{"type":"result","ok":true,"provider":"openai","method":"oauth","path":"/d
       check_command: `fastagent login --check ${ticket.ticket} --json`,
     });
     expect(await readFile(join(bin, "args"), "utf8")).toContain("login --stdio openai --method account");
+    // One subject with a sign-in to openai on this machine: both hold its callback port here, so each replaces the other.
+    const stored = JSON.parse(
+      await readFile(
+        join(process.env.HOME as string, ".fastagent", ".state", "tickets", `${ticket.ticket}.json`),
+        "utf8",
+      ),
+    );
+    expect(stored).toMatchObject({ subject: "login:openai", fields: { deployment: "docker" } });
     let checked: { status: string } = ticket;
     for (let tries = 0; checked.status === "need_user_action" && tries < 20; tries++) {
       await new Promise((resolve) => setTimeout(resolve, 500));

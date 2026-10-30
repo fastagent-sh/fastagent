@@ -6,6 +6,7 @@ import type { AuthInteraction, Credential, Provider } from "@earendil-works/pi-a
 import { describe, expect, it, vi } from "vitest";
 import { type IoOption, type LoginIO, loginFlow } from "../src/harnesses/models/login.ts";
 import { relayLogin, stdioLoginIO } from "../src/cli/login-relay.ts";
+import { BOX_CLI_PREDATES } from "../src/deploy/box-shell.ts";
 
 const OAUTH: Credential = { type: "oauth", access: "tok", refresh: "rt", expires: Date.now() + 3_600_000 };
 
@@ -94,6 +95,24 @@ describe("login relay", () => {
     expect(shown.opened).toEqual(["https://github.com/login/device"]);
     expect(shown.codes).toEqual(["AB-12"]);
     expect(shown.redirects).toEqual([false]);
+  });
+
+  it("a box older than this wire is stopped and named, never left waiting on a paste the browser's redirect cannot make", async () => {
+    const toBox = new PassThrough();
+    const fromBox = new PassThrough();
+    const { io, shown } = terminal({ prompt: ["must not be asked"] });
+    const relayed = relayLogin(fromBox, toBox, io, () => {});
+    let boxInputEnded = false;
+    toBox.on("finish", () => {
+      boxInputEnded = true;
+    });
+    // 0.24's box half: its prompt says nothing of which question takes the browser's address.
+    fromBox.write(`${JSON.stringify({ type: "open", url: "https://auth.example/authorize" })}\n`);
+    fromBox.write(`${JSON.stringify({ type: "prompt", id: 1, message: "Paste the redirect URL", hidden: false })}\n`);
+    await vi.waitFor(() => expect(boxInputEnded).toBe(true));
+    fromBox.end();
+    expect(await relayed).toEqual({ ok: false, reason: "failed", message: BOX_CLI_PREDATES });
+    expect(shown.prompts).toEqual([]);
   });
 
   it("a select is answered by value, and backing out reaches the box as undefined", async () => {

@@ -75,8 +75,9 @@ async function signIn(login: (cb: AuthInteraction) => Promise<Credential>) {
     throw exited;
   });
   const { ticket } = createTicket({
-    subject: "login:codex@fly",
+    subject: "login:codex",
     action: "sign in to Codex for the fly deployment",
+    fields: { provider: "codex", method: "account", deployment: "fly" },
     check: "fastagent login --check",
     restart: "fastagent login codex --method account --deployment fly",
     timeoutSeconds: 60,

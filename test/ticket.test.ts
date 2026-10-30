@@ -50,14 +50,14 @@ const stubborn = (sidecar: string) => `
   require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid));
   setInterval(() => {}, 1000);`;
 
-async function waitingStep(subject: string, status = "need_user_action", sidecar?: string) {
+async function waitingStep(subject: string, status = "need_user_action", sidecar?: string, finishing = false) {
   const waits = `
     const { readFileSync, writeFileSync } = require("node:fs");
     const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "tickets", process.argv.at(-1) + ".json");
     const ticket = JSON.parse(readFileSync(path, "utf8"));
     ${sidecar === undefined ? "" : `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(stubborn(sidecar))}], { stdio: "ignore" });`}
     ${sidecar === undefined ? "" : `while (!require("node:fs").existsSync(${JSON.stringify(sidecar)})) {}`}
-    writeFileSync(path, JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, url: "https://auth.example/a", pid: process.pid }));
+    writeFileSync(path, JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, ${finishing ? "finishing: true, " : ""}url: "https://auth.example/a", pid: process.pid }));
     setInterval(() => {}, 1000);`;
   return startTicket({
     ...request(subject),
@@ -93,7 +93,10 @@ describe("a step that outlives the command that starts it", () => {
     const running = runTicket(ticket, steer.run);
     const step = await steer.step;
     // The step's own write as it starts: at work, nothing for the person yet.
-    expect(await checkTicket(ticket)).toMatchObject({ status: "working", pid: process.pid });
+    const claimed = await checkTicket(ticket);
+    expect(claimed).toMatchObject({ status: "working", pid: process.pid });
+    // Only getting ready: a newer attempt may still replace it.
+    expect(claimed).not.toHaveProperty("finishing");
     step.waits({ url: "https://open.feishu.cn/confirm", code: "ABCD-EFGH" });
     expect(await checkTicket(ticket)).toMatchObject({
       status: "need_user_action",
@@ -103,7 +106,7 @@ describe("a step that outlives the command that starts it", () => {
     });
     step.person.carriesOn();
     step.person.afterwards("Create and publish a version", "https://open.feishu.cn/app/cli_x/version");
-    expect(await checkTicket(ticket)).toMatchObject({ status: "working" });
+    expect(await checkTicket(ticket)).toMatchObject({ status: "working", finishing: true });
     steer.finish();
     await running;
     expect(await checkTicket(ticket)).toMatchObject({
@@ -170,14 +173,29 @@ describe("a step that outlives the command that starts it", () => {
     }
   });
 
-  it("a step at work is never stopped halfway: a newer attempt is answered with it", async () => {
-    const atWork = await waitingStep("add:slack:dev:/b", "working");
+  it("a step finishing what its person did is never stopped halfway: a newer attempt is answered with it", async () => {
+    const atWork = await waitingStep("add:slack:dev:/b", "working", undefined, true);
     try {
       const again = await waitingStep("add:slack:dev:/b");
       expect(again.ticket).toBe(atWork.ticket);
       expect(running(atWork.pid)).toBe(true);
     } finally {
       if (running(atWork.pid)) process.kill(atWork.pid as number);
+    }
+  });
+
+  it("a step still getting ready (a box that does not answer) is replaced: a newer attempt is never locked out", async () => {
+    const hung = await waitingStep("login:openai", "working");
+    const newer = await waitingStep("login:openai");
+    try {
+      expect(newer.ticket).not.toBe(hung.ticket);
+      expect(running(hung.pid)).toBe(false);
+      expect(await checkTicket(hung.ticket)).toMatchObject({
+        status: "failed",
+        message: "replaced by a newer attempt to sign in to OpenAI",
+      });
+    } finally {
+      if (running(newer.pid)) process.kill(newer.pid as number);
     }
   });
 
@@ -277,11 +295,14 @@ describe("a step that outlives the command that starts it", () => {
     const running = runTicket(ticket, steer.run);
     const step = await steer.step;
     step.waits({ url: "https://t.example/tokens", code: "AB", takesAddress: true });
+    step.person.carriesOn();
     step.person.waitsOn("https://slack.com/oauth", "click Allow", Date.now() + 120_000);
     const waiting = (await checkTicket(ticket)) as Ticket;
     expect(waiting).toMatchObject({ url: "https://slack.com/oauth", instructions: "click Allow" });
     expect(waiting).not.toHaveProperty("code");
     expect(waiting).not.toHaveProperty("takesAddress");
+    // Waiting on the person again: replaceable again, its finished part kept in the state it wrote.
+    expect(waiting).not.toHaveProperty("finishing");
     expect(ticketReport(waiting, "checked").json.expires_in).toBeLessThanOrEqual(120);
     steer.finish();
     await running;

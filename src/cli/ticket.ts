@@ -9,8 +9,10 @@
  * A ticket is a file in the machine's own state, ~/.fastagent/.state/tickets, written whole by one process at a time:
  * the starting command until the step starts, then the step alone (or whoever finds its process gone). One that has
  * ended stays as it ended. A newer step for the same subject stops an older one still waiting on its person, whose
- * process would otherwise hold what it holds (a sign-in's callback port, OpenAI's fixed) until it expires; one at work
- * is never stopped halfway, and the newer attempt is answered with it.
+ * process would otherwise hold what it holds (a sign-in's callback port, OpenAI's fixed) until it expires; so does one
+ * still getting ready (reaching a box, opening a tunnel), which may hang there. One finishing what its person did (a
+ * code exchanged, an app created from a pasted token) is never stopped halfway, and the newer attempt is answered
+ * with it.
  *
  * The step's process leads a process group of its own, so what it starts (a tunnel, a host CLI, a shell to a box) is
  * stopped with it, by `stop` and when it exits.
@@ -49,6 +51,10 @@ export interface Ticket {
   instructions?: string;
   /** When the person's step itself stops being usable (a confirmation link's own expiry), if before `expiresAt`. */
   until?: number;
+  /** The person's part is done and the step is finishing it: never stopped halfway. */
+  finishing?: boolean;
+  /** What every report of the ticket carries beside its status (the provider a sign-in is to, the deployment). */
+  fields?: Record<string, string>;
   /** The step's browser may end on a page this machine never sees, whose address `--check --code` hands over. */
   takesAddress?: boolean;
   /** Steps left to the person after the run, which nothing waits for. */
@@ -164,13 +170,14 @@ function runningFor(subject: string, now: number): Ticket[] {
 }
 
 /**
- * Before a newer step for `subject` starts: one at work is the answer instead, never stopped halfway (an app created
- * whose credentials are not written yet); every one waiting on its person is stopped. Answers the one at work.
+ * Before a newer step for `subject` starts: one finishing what its person did is the answer instead, never stopped
+ * halfway (an app created whose credentials are not written yet); every other one, waiting on its person or still
+ * getting ready, is stopped. Answers the one finishing.
  */
 async function supersede(subject: string, now: number): Promise<Ticket | undefined> {
   const runs = runningFor(subject, now);
-  const atWork = runs.find((ticket) => ticket.status === "working");
-  if (atWork !== undefined) return atWork;
+  const finishing = runs.find((ticket) => ticket.finishing === true);
+  if (finishing !== undefined) return finishing;
   for (const ticket of runs) {
     if (ticket.pid !== undefined) await stop(ticket.pid);
     update(ticket.ticket, { status: "failed", message: `replaced by a newer attempt to ${ticket.action}` });
@@ -196,6 +203,8 @@ export interface TicketRequest {
   check: string;
   restart: string;
   timeoutSeconds: number;
+  /** {@link Ticket.fields}. */
+  fields?: Record<string, string>;
 }
 
 /** A new ticket, its step not started yet. Not public: what `startTicket` starts, and a test seam. */
@@ -211,6 +220,7 @@ export function createTicket(request: TicketRequest): Ticket {
     restart: request.restart,
     status: "starting",
     expiresAt: now + request.timeoutSeconds * 1000,
+    ...(request.fields === undefined ? {} : { fields: request.fields }),
   };
   writeTicket(ticket);
   return ticket;
@@ -233,8 +243,8 @@ export async function startTicket(
     startTimeoutMs?: number;
   },
 ): Promise<Ticket> {
-  const atWork = await supersede(input.subject, Date.now());
-  if (atWork !== undefined) return atWork;
+  const finishing = await supersede(input.subject, Date.now());
+  if (finishing !== undefined) return finishing;
   const id = createTicket(input).ticket;
   const startTimeoutMs = input.startTimeoutMs ?? START_TIMEOUT_MS;
   const log = openSync(ticketLogPath(id), "a");
@@ -353,6 +363,7 @@ export async function runTicket(
       instructions: undefined,
       takesAddress: undefined,
       until: undefined,
+      finishing: undefined,
       ...on,
     });
   const afterwards: Person["afterwards"] = (instructions, url) => {
@@ -365,7 +376,7 @@ export async function runTicket(
     signal,
     person: {
       waitsOn: (url, instructions, until) => waits({ url, instructions, ...(until === undefined ? {} : { until }) }),
-      carriesOn: () => update(id, { status: "working" }),
+      carriesOn: () => update(id, { status: "working", finishing: true }),
       afterwards,
     },
     waits,
@@ -411,7 +422,7 @@ export function ticketReport(
     result,
   ) => ({ fields: result, text: [] }),
 ): { json: Record<string, unknown>; text: string[] } {
-  const base = { status: ticket.status, ticket: ticket.ticket };
+  const base = { ...ticket.fields, status: ticket.status, ticket: ticket.ticket };
   const check = `${ticket.check} ${ticket.ticket}`;
   const left = (ticket.afterwards ?? []).map((step) =>
     step.url === undefined ? step.instructions : `${step.instructions} ${step.url}`,
