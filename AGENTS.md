@@ -57,11 +57,17 @@ src/
 │   ├── invoke-stream.ts    # `invoke`: one message's answer, as messages.stream delivers it, as text or JSON lines → exit code
 │   ├── models-view.ts, auth-view.ts, content-view.ts # `models` / auth-report / content output
 │   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
+│   ├── person.ts           # what an app's setup says to the person for the steps only they can take: printed at a
+│   │                       # terminal, a ticket's `need_user_action` / `afterwards` in a coding agent's run
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
 │   ├── login-relay.ts      # `login` split across a process boundary: LoginIO as JSON lines, box half + terminal half
-│   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell
-│   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
+│   ├── ticket.ts           # a step a coding agent starts and a person finishes (a sign-in, an app's setup), outliving
+│   │                       # the command: its own process, a ticket under ~/.fastagent/.state/tickets, `--check`
+│   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell;
+│   │                       # answered at this terminal, or by a ticket's process for a coding agent (ticketLoginIO)
+│   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each,
+│                           # and signs a host's CLI in through whoever answers (commands/deploy/host-login.ts)
 ├── telegram.ts, slack.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
 │   feishu.ts, lark.ts
 ├── bind.ts                 # the ONE reading of a bind address, as the six different questions it is
@@ -265,6 +271,8 @@ src/
     │   ├── defaults.ts     # the deployment's default model and thinking level, for a conversation that names none
     │   └── release.ts      # temporary: places the messages a run that did not answer left waiting
     └── models/             # the model environment: pi-ai's models, credentials and sign-in
+        ├── catalog.ts      # the model lists a pi-ai release does not carry: pi's published catalog (fetched whatever
+        │                   # the machine authenticates) and the providers that fetch their own, kept in the state root
         ├── models.ts       # pi-ai's model collection as FastAgent composes it (built-ins over a credential store,
         │                   # the definition's providers), and the reads a report, a login or a picker make of it
         ├── credentials.ts  # the credentials file store + which files (layers) an agent reads
@@ -297,6 +305,12 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. A message that cannot be answered ends `failed` with its `error` saying why, and a refused operation rejects with an `AgentError` (docs/SPEC.md §7). A stream is refused on its first read; once it has delivered anything, a failure ends it with a `stream_error` event, never a rejection a Caller would take for a refusal.
 - **One process owns an instance's state.** Durable state is the instance's storage (pi-durable's SQLite: sessions, messages, entries) and each Caller's own files under the state root (a channel's session map and turn records, the schedules' claims, wake-ups). One process opens a storage at a time, so a deployment routes every session of one storage to one process ([architecture.md](docs/design/architecture.md) §4.3). The process holds the open Agent and each Caller's queues; what a caller reads afterwards is durable before it is reported.
 - **Public surface is scoped on purpose.** `src/index.ts` is the one entry, one per kind of user beside the channel subpaths (SPEC.md §8): the Agent API, `openAgent`, and what an author writes, every export named. The contracts stay neutral: `src/agent-api.ts` imports only `effect/Schema` and `src/channel.ts` nothing. Internals (`openServing`, `serveAgent`, `openDurableAgent`, content, models and sign-in, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
+- **The CLI serves a person and a coding agent alike** (docs/cli.md, "Scripts and coding agents"). A coding agent
+  works in turns and sees a command's output only once it ends: nothing waits on a terminal, a choice not given exits
+  2 naming what to pass, and a step only a person can take returns at once (`need_user_action`, a check command,
+  `agent_next_steps`) while a process of the CLI's own finishes it (`src/cli/ticket.ts`). A secret is never
+  typed into the agent's conversation. Results on stdout, everything else on stderr; a command whose result is data
+  has `--json`.
 - **Effect first.** Write with Effect, and with what Effect gives you, rather than hand-rolled async plumbing or a thin wrapper over it.
 - **Learn Effect from its source, not from guesses.** The installed `effect@4` ships uncompiled source and its own agent guide: read `node_modules/effect/AGENTS.md` before writing Effect code, and the relevant module under `node_modules/effect/src/` for how an API is actually used ([why](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive)). Prefer it over an invented API, a stale memory, or a web search. Read-only reference: never edit it, never import from a path inside it.
 - **A finalizer does not fail.** Since effect 4.0.6, a defect in a combined cause turns every typed failure in it into a defect (`causeElectDefects` in `node_modules/effect/src/internal/effect.ts`): a finalizer that dies takes the body's typed failure with it, and the `catchTag("PortFailure")` waiting for that failure never runs. A finalizer says its own failure in the log, or leaves it to an explicit call in the body (`serialWriter`'s `finish`); it dies only where the defect is the point (`service.ts`'s close of a connection that will not stop).

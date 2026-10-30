@@ -18,8 +18,7 @@ import { announceWebhooks } from "../../../tunnel.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { failStartup } from "../../fail.ts";
-import { isInteractive } from "../../shared.ts";
-import { type HostDeploy, boxLoginStep } from "./shared.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, leftToPerson } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
@@ -95,7 +94,7 @@ export const dockerHost: HostDeploy = {
         requireTunnel: requestedTunnel,
         modelAuth,
         boxLogin,
-        input: opts.input !== false && isInteractive(),
+        answerer: ctx.answerer,
         channels,
         declaredSecrets,
         values,
@@ -122,14 +121,15 @@ async function runDeployDocker(params: {
   modelAuth: string | undefined;
   /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
   boxLogin: string | undefined;
-  /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
-  input: boolean;
+  /** Who answers the box's login: `--run` continues into it rather than stopping at "not logged in". */
+  answerer: Answerer;
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
   valueFile: string;
 }): Promise<string | undefined> {
   const { agentDir, composeFile, port, requireTunnel, channels } = params;
+  const leave = leftToPerson(params.answerer);
   const { secrets, missingSecrets } = assembleSecrets({
     modelAuth: params.modelAuth,
     declared: params.declaredSecrets,
@@ -147,7 +147,8 @@ async function runDeployDocker(params: {
       ...boxLoginStep("docker", params, () => composeShell(composeFile, agentDir)),
       announce: (tunnelUrl) =>
         announceWebhooks(agentDir, tunnelUrl, channels, {
-          openUrl: openExternalUrl,
+          // A ticket's process opens no browser: its person is told, through `leave`.
+          ...(leave === undefined ? { openUrl: openExternalUrl } : { leave }),
           stateRoot: resolveStateRoot(agentDir),
           env: Object.fromEntries(params.values),
         }),
@@ -174,11 +175,12 @@ async function runDeployDocker(params: {
   if (outcome.tunnelUrl) return outcome.tunnelUrl;
   const paths = webhookPaths(channels);
   if (paths.length > 0) {
-    console.error(
-      `[fastagent] note: ${paths.join(", ")} receive nothing until a public URL reaches this container — re-run ` +
-        `with --tunnel for a Quick Tunnel, or configure your own tunnel/proxy and point those webhook path(s) ` +
-        `(or your remapped channel routes) at it`,
-    );
+    const unreached =
+      `${paths.join(", ")} receive nothing until a public URL reaches this container — re-run with --tunnel for a ` +
+      `Quick Tunnel, or configure your own tunnel/proxy and point those webhook path(s) (or your remapped channel ` +
+      `routes) at it`;
+    console.error(`[fastagent] note: ${unreached}`);
+    leave?.(unreached);
   }
   return outcome.url;
 }

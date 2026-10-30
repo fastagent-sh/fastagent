@@ -22,10 +22,11 @@ import {
   isTransientFeishuRegistrationError,
 } from "../channels/feishu/feishu-api.ts";
 import { registerFeishuApp } from "../channels/feishu/register-app.ts";
-import { onboardLarkApp } from "../channels/lark/onboard.ts";
+import { LARK_CONSOLE_URL, type LarkOnboardIO, onboardLarkApp } from "../channels/lark/onboard.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
 import { dotEnvPath, loadEnvValues, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
+import { type Person, terminalPerson } from "./person.ts";
 import { AGENT_ENVIRONMENT_ENV } from "../paths.ts";
 import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
@@ -50,11 +51,12 @@ export async function checkAgentScopes(input: {
   ingress: FeishuSubscriptionMode;
   api: Pick<FeishuApi, "listAppScopes">;
   note?: (message: string) => void;
-  openUrl?: (url: string) => void;
+  /** Who is sent to the console page that requests a missing permission. */
+  person?: Person;
 }): Promise<AgentScopeCheck> {
   const { kind, appId, apiBase, api } = input;
   const note = input.note ?? ((message: string) => console.error(message));
-  const openUrl = input.openUrl ?? openExternalUrl;
+  const person = input.person ?? terminalPerson;
   const needed = feishuAppScopes(input.ingress);
   const requested = needed.map((entry) => entry.request);
   let scopes: Awaited<ReturnType<FeishuApi["listAppScopes"]>>;
@@ -62,11 +64,8 @@ export async function checkAgentScopes(input: {
     scopes = await api.listAppScopes();
   } catch (error) {
     const url = feishuScopeRequestUrl(apiBase, appId, requested);
-    note(
-      `[fastagent] warn: could not read the ${kind} app's permissions: ${String(error)} — make sure it holds ` +
-        `${requested.join(", ")} before publishing. Opening ${url}`,
-    );
-    openUrl(url);
+    note(`[fastagent] warn: could not read the ${kind} app's permissions: ${String(error)}`);
+    person.afterwards(`make sure the ${kind} app holds ${requested.join(", ")} before publishing`, url);
     return { publishReady: false, missing: [] };
   }
   // A user-type entry is not the tenant scope the app acts with.
@@ -84,12 +83,11 @@ export async function checkAgentScopes(input: {
     appId,
     missing.map((entry) => entry.request),
   );
-  note(
-    `[fastagent] the ${kind} app is not granted:${missing.map(describe).join("")}\n` +
-      `Tick and enable them on the page that opens (one may already be awaiting a tenant admin's approval), ` +
-      `before publishing. Opening ${url}`,
+  person.afterwards(
+    `the ${kind} app is not granted:${missing.map(describe).join("")}\n` +
+      `Tick and enable them on that page (one may already be awaiting a tenant admin's approval), before publishing`,
+    url,
   );
-  openUrl(url);
   return { publishReady: false, missing: missing.map((entry) => entry.request) };
 }
 
@@ -100,6 +98,8 @@ export async function onboardFeishuCloudApp(
   ingress: FeishuSubscriptionMode,
   /** The command that continues an interrupted setup: the one that started it. */
   rerun = `fastagent add ${kind}${ingress === "webhook" ? " --ingress webhook" : ""}`,
+  /** Who takes the steps only a person can: at this terminal, or a coding agent's person through a ticket. */
+  person: Person = terminalPerson,
 ): Promise<Record<string, string> | undefined> {
   const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
@@ -120,34 +120,20 @@ export async function onboardFeishuCloudApp(
         apiBase,
         ingress,
         api: createFeishuApi({ kind, baseUrl: apiBase, appId, appSecret }),
+        person,
       });
       return undefined;
     }
   }
 
   if (capabilities.appCreation === "scan-to-create") {
-    await createFeishuAppFlow(target, existing, ingress, rerun);
+    await createFeishuAppFlow(target, existing, ingress, rerun, person);
     return undefined;
   }
 
   // guided-console (lark): the intl cloud cannot complete the bound device flow — collect + validate.
-  if (
-    !(process.stdin.isTTY && process.stdout.isTTY) &&
-    !(existing[`${envPrefix}_APP_ID`] && existing[`${envPrefix}_APP_SECRET`])
-  ) {
-    throw new Error(
-      "`add lark` needs an interactive terminal to onboard the Lark app credentials — re-run it in a terminal",
-    );
-  }
   const credentials = await onboardLarkApp(
-    {
-      openUrl: openExternalUrl,
-      note: (message) => clackLog.info(message),
-      async prompt(message, opts) {
-        const result = opts?.hidden ? await password({ message }) : await clackText({ message });
-        return isCancel(result) ? undefined : (result as string);
-      },
-    },
+    person === terminalPerson ? larkAtTerminal : larkThrough(person, env, rerun),
     {
       existing,
       ingress,
@@ -196,6 +182,7 @@ export async function onboardFeishuCloudApp(
     appId: credentials.LARK_APP_ID,
     apiBase,
     ingress,
+    person,
     api: createFeishuApi({
       kind: "lark",
       baseUrl: apiBase,
@@ -208,12 +195,40 @@ export async function onboardFeishuCloudApp(
   );
 }
 
+/** Lark's guided console at a terminal: what to open, and the values asked for there. */
+const larkAtTerminal: LarkOnboardIO = {
+  openUrl(url, action) {
+    clackLog.info(`${action}. Opening ${url}`);
+    openExternalUrl(url);
+  },
+  note: (message) => clackLog.info(message),
+  async prompt(message, opts) {
+    const result = opts?.hidden ? await password({ message }) : await clackText({ message });
+    return isCancel(result) ? undefined : (result as string);
+  },
+};
+
+/**
+ * Lark's guided console through a coding agent's person: a page is a step left to them, with what they do there; a
+ * value it would ask for is theirs to set in the value file, and the setup continues when run again.
+ */
+function larkThrough(person: Person, env: string, rerun: string): LarkOnboardIO {
+  return {
+    note: (message) => console.error(`[fastagent] ${message}`),
+    openUrl: (url, action) => person.afterwards(action, url),
+    async prompt(message) {
+      throw new Error(`${message} is needed: ask the user to set it in ${env}, then run \`${rerun}\` again`);
+    },
+  };
+}
+
 /** The scan-to-create flow `add feishu` runs by default. */
 async function createFeishuAppFlow(
   target: string,
   existing: Readonly<Record<string, string>>,
   ingress: FeishuSubscriptionMode,
   rerun: string,
+  person: Person,
 ): Promise<void> {
   const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { apiBase } = cloudFor("feishu");
@@ -232,13 +247,14 @@ async function createFeishuAppFlow(
       desc: "Served by fastagent",
       // The agent template alone is not enough to SERVE, nor to hear a group (see feishuAppAddons).
       addons: feishuAppAddons(ingress),
-      onVerificationUrl: ({ url, expiresInS }) => {
-        console.error(
-          `\n  Opening the confirmation link in your browser (or open it in Feishu / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
-        );
-        openExternalUrl(url); // best-effort, like `login` — the URL above is the fallback
-      },
+      onVerificationUrl: ({ url, expiresInS }) =>
+        person.waitsOn(
+          url,
+          "confirm the new Feishu app (in a browser, or in Feishu, or as a QR code)",
+          Date.now() + expiresInS * 1000,
+        ),
     });
+    person.carriesOn();
     console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);
     // A cross-brand confirmation should be impossible (each confirm page refuses the other brand's code).
     if (app.tenantBrand && app.tenantBrand !== "feishu") {
@@ -269,22 +285,17 @@ async function createFeishuAppFlow(
     apiBase,
     ingress,
     api: createFeishuApi({ kind: "feishu", baseUrl: apiBase, appId, appSecret }),
+    person,
   });
 
   if (ingress === "websocket") {
     const versionUrl = `${apiBase}/app/${appId}/version`;
-    if (groupSetup.publishReady) {
-      console.error(
-        `[fastagent] WebSocket ingress needs no Verification Token, Encrypt Key, Request URL, or tunnel. ` +
-          `Choose long connection in Events & Callbacks, then CREATE + PUBLISH a version. Opening ${versionUrl}`,
-      );
-      openExternalUrl(versionUrl);
-    } else {
-      console.error(
-        `[fastagent] WebSocket ingress needs no Verification Token, Encrypt Key, Request URL, or tunnel. ` +
-          `Choose long connection in Events & Callbacks, finish the permission work opened above, then CREATE + PUBLISH: ${versionUrl}`,
-      );
-    }
+    const choose =
+      "WebSocket ingress needs no Verification Token, Encrypt Key, Request URL, or tunnel: choose long connection in " +
+      "Events & Callbacks";
+    if (groupSetup.publishReady) person.afterwards(`${choose}, then CREATE + PUBLISH a version`, versionUrl);
+    else
+      person.afterwards(`${choose}, finish the permission work above, then CREATE + PUBLISH a version: ${versionUrl}`);
     return;
   }
 
@@ -335,24 +346,50 @@ async function createFeishuAppFlow(
     const staged = await appendChannelDotEnv(target, "feishu", { [tokenVar]: token }, [tokenVar]);
     console.error(`[fastagent] wrote ${staged.written.join(", ")} to ${env}`);
   } else {
-    console.error(
-      `[fastagent] copy it manually: developer console → Events & Callbacks → Encryption Strategy → Verification Token → ${tokenVar} in ${env}`,
+    person.afterwards(
+      `copy the Verification Token: developer console → Events & Callbacks → Encryption Strategy → Verification ` +
+        `Token → ${tokenVar} in ${env}`,
     );
   }
   if (webhookModeChanged) {
     // The bootstrap's PATCH flipped event mode in the DRAFT.
     const versionUrl = `${apiBase}/app/${appId}/version`;
-    if (groupSetup.publishReady) {
-      console.error(
-        `[fastagent] one console click remains: CREATE + PUBLISH a version (self-approved) — the switch to webhook mode takes effect on publish. Opening ${versionUrl}`,
-      );
-      openExternalUrl(versionUrl);
-    } else {
-      console.error(
-        `[fastagent] after the permission work opened above, CREATE + PUBLISH a version — the switch to webhook mode takes effect on publish: ${versionUrl}`,
-      );
-    }
+    const publish = "CREATE + PUBLISH a version (self-approved): the switch to webhook mode takes effect on publish";
+    if (groupSetup.publishReady) person.afterwards(publish, versionUrl);
+    else person.afterwards(`after the permission work above, ${publish}: ${versionUrl}`);
   }
+}
+
+/**
+ * Lark's app credentials, which only the person can get, from the app they create in Lark's console: with no one at a
+ * terminal to type them, the report naming where they set them (the selected environment's file), when either is
+ * absent. `again` is the command that continues once they have.
+ */
+export async function larkCredentialsNeeded(
+  agentDir: string,
+  again: string,
+): Promise<{ json: Record<string, unknown>; text: string[] } | undefined> {
+  const held = await activeDotEnvValues(agentDir, ["LARK_APP_ID", "LARK_APP_SECRET"]);
+  if (held.LARK_APP_ID && held.LARK_APP_SECRET) return undefined;
+  const valueFile = dotEnvPath(agentDir);
+  return {
+    json: {
+      status: "need_user_action",
+      url: LARK_CONSOLE_URL,
+      variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
+      value_file: valueFile,
+      check_command: `${again} --json`,
+      agent_next_steps:
+        "Give the URL to the user so they can create the Lark app there, and ask them to set LARK_APP_ID and " +
+        `LARK_APP_SECRET (from its Credentials & Basic Info) in ${valueFile} themselves, not in this ` +
+        "conversation. Once they say they have, run check_command.",
+    },
+    text: [
+      `need_user_action: create the Lark app at ${LARK_CONSOLE_URL}`,
+      `  and set LARK_APP_ID and LARK_APP_SECRET in ${valueFile}`,
+      `then run: ${again}`,
+    ],
+  };
 }
 
 /**
@@ -425,11 +462,12 @@ export async function prepareFeishuApps(
   agentDir: string,
   apps: readonly FeishuAppSetup[],
   rerun: string,
+  person: Person,
   onboard: typeof onboardFeishuCloudApp = onboardFeishuCloudApp,
 ): Promise<void> {
   for (const { kind, ingress } of apps) {
     console.error(`[fastagent] ${kind}: preparing the production app for ${ingress} in ${dotEnvPath(agentDir)}`);
-    const created = await onboard(agentDir, kind, ingress, rerun);
+    const created = await onboard(agentDir, kind, ingress, rerun, person);
     if (created) await appendChannelDotEnv(agentDir, kind, created, Object.keys(created), ingress);
   }
 }

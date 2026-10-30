@@ -111,8 +111,8 @@ Two rules follow:
 ## 6. CLI surface
 
 ```bash
-fastagent login openai-codex          # writes <agent>/.secrets/auth.json
-fastagent login openai-codex -g       # writes ~/.fastagent/.secrets/auth.json
+fastagent login openai          # writes <agent>/.secrets/auth.json
+fastagent login openai -g       # writes ~/.fastagent/.secrets/auth.json
 
 fastagent deploy fly                  # plan + write the generated artifacts; touches nothing remote
 fastagent deploy fly --run            # execute

@@ -3,6 +3,7 @@ import { CONTENT_DIRNAME, LOCAL_CONTEXT_FILE, SECRETS_DIRNAME, STATE_DIRNAME } f
 import { RUNTIME_FLOOR } from "../runtime.ts";
 import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 import { MISE_ENVIRONMENT } from "../environment/mise.ts";
+import { BOX_CLI_PREDATES } from "./box-shell.ts";
 
 /**
  * The packages the image installs, one per line as mise is given them: build output every deploy writes beside the
@@ -18,14 +19,15 @@ export interface Artifact {
   content: string;
 }
 
-/** The result line for a box CLI that refused `login --stdio` as an unknown option (see {@link boxLoginCommand}). */
+/**
+ * The result line for a box CLI that refused this CLI's `login --stdio` as a usage error: an option it does not know
+ * (`--stdio` itself, or one added since, such as `--method`). See {@link boxLoginCommand}.
+ */
 const STDIO_PREDATED = JSON.stringify({
   type: "result",
   ok: false,
   reason: "failed",
-  message:
-    "the fastagent installed in the agent on the box predates login --stdio: align the @fastagent-sh/fastagent " +
-    "version in the agent package.json with the CLI that deploys it, then redeploy",
+  message: BOX_CLI_PREDATES,
 }).replaceAll('"', '\\"');
 
 /** Where a generated image keeps its storage (`FASTAGENT_STORAGE_DIR`); every host mounts its volume here. */

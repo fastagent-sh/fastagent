@@ -129,7 +129,7 @@ describe("cli: process contracts", () => {
     const env = { ...process.env };
     delete env.FASTAGENT_MODEL; // no model source → assembly fails before any model call (no auth needed)
     const { code, stdout, stderr } = await run(["invoke", "hi", cwd], undefined, env);
-    expect(code).toBe(1);
+    expect(code).toBe(2); // the choice a terminal's picker would have asked for: a usage error
     expect(stderr).toMatch(/missing model/);
     expect(stdout).toBe(""); // a failure never pollutes stdout
   });

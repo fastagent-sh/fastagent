@@ -8,3 +8,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.HOME = mkdtempSync(join(tmpdir(), "fa-test-home-"));
+
+// No model list is fetched from pi.dev (catalog.ts): a test that is about the refresh serves its own catalog.
+process.env.FASTAGENT_OFFLINE = "1";

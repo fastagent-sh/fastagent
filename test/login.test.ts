@@ -20,12 +20,15 @@ import {
   type IoOption,
   LoginCancelled,
   type LoginIO,
+  LoginRefused,
   PI_DEFAULT_MODELS,
+  chooseLogin,
   login,
   loginFlow,
   loginOptions,
   loginOptionsOver,
   loginOver,
+  loginStatusText,
 } from "../src/harnesses/models/login.ts";
 
 // The store is the REAL fastagentCredentialStore over a temp file — the same writer the runtime uses,
@@ -55,6 +58,7 @@ function fakeProvider(
       apiKey: opts.apiKeyLogin
         ? {
             name: `${id} API key`,
+            resolve: async () => undefined,
             login: async (cb: AuthInteraction): Promise<Credential> => ({
               type: "api_key",
               key: await cb.prompt({ type: "secret", message: "API key" }),
@@ -198,17 +202,115 @@ describe("loginFlow", () => {
     await store.modify("anthropic", async () => OAUTH_CRED); // pre-configure
     const { io, shown } = fakeIO({ select: ["oauth", "codex"] });
     await loginFlow(io, { providers: PROVIDERS, authPath: path });
-    expect(shown[1]?.find((o) => o.value === "anthropic")?.hint).toMatch(/configured \(oauth\)/);
-    expect(shown[1]?.find((o) => o.value === "codex")?.hint).toBeUndefined(); // unconfigured
+    // On every row, as pi writes it, not only the one a cursor is on.
+    expect(shown[1]?.find((o) => o.value === "anthropic")?.label).toBe("anthropic ✓ configured");
+    expect(shown[1]?.find((o) => o.value === "codex")?.label).toBe("codex • not configured");
   });
 
-  it("an empty provider selection fails visibly", async () => {
+  it("the status is what the agent reads, which can hold more than the file a sign-in writes", async () => {
+    const reads = new InMemoryCredentialStore();
+    await reads.modify("codex", async () => OAUTH_CRED);
+    const { io, shown } = fakeIO({ select: ["oauth", undefined] });
+    await expect(loginFlow(io, { providers: PROVIDERS, authPath: await tmpAuth(), statusFrom: reads })).rejects.toThrow(
+      LoginCancelled,
+    );
+    expect(shown[1]?.find((o) => o.value === "codex")?.label).toBe("codex ✓ configured");
+  });
+
+  it("an empty provider selection is a cancel", async () => {
     await expect(
       loginFlow(fakeIO({ select: ["oauth", undefined] }).io, {
         providers: PROVIDERS,
         authPath: await tmpAuth(),
       }),
-    ).rejects.toThrow(/no provider selected/);
+    ).rejects.toThrow(LoginCancelled);
+  });
+
+  it("asks as pi's /login asks: how to sign in, then the provider by name, in name order", async () => {
+    const { io, shown } = fakeIO({ select: ["api_key", undefined] });
+    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(LoginCancelled);
+    expect(shown[0]).toEqual([
+      { value: "oauth", label: "Sign in with an account" },
+      { value: "api_key", label: "Sign in with an API key" },
+      { value: "radius", label: "Sign in with Radius • not configured" },
+    ]);
+    const names = shown[1]?.map(({ label }) => label) ?? [];
+    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+    expect(shown[1]?.find(({ value }) => value === "openai")?.label).toMatch(/^OpenAI (✓|•) /);
+  });
+
+  it("names the legacy provider as pi does, so the ChatGPT sign-in is the one called OpenAI", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    const { io, shown } = fakeIO({ select: ["oauth", undefined] });
+    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(LoginCancelled);
+    expect(shown[1]?.filter(({ value }) => value.startsWith("openai")).map(({ label }) => label)).toEqual([
+      "OpenAI • not configured",
+      "OpenAI Codex (legacy) • not configured",
+    ]);
+  });
+
+  it("each sign-in says what authenticates its provider now, a stored credential outranking the environment", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-env");
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-env");
+    const offered = await loginOptions(await tmpAuth(JSON.stringify({ anthropic: { type: "api_key", key: "sk" } })));
+    const status = (provider: string, method: string) =>
+      loginStatusText(offered.find((o) => o.provider === provider && o.method === method) as never);
+    expect(status("anthropic", "api_key")).toBe("✓ configured");
+    expect(status("anthropic", "oauth")).toBe("API key configured");
+    expect(status("openai", "api_key")).toBe("✓ env: OPENAI_API_KEY");
+    expect(status("openai-codex", "oauth")).toBe("not configured");
+  });
+
+  it("a provider is named by its id or, as pi takes it, by its name", async () => {
+    const named = { ...fakeProvider("gw", { apiKeyLogin: true }), name: "My Gateway" } as Provider;
+    const authPath = await tmpAuth();
+    const { io } = fakeIO({ prompt: ["sk-gw"] });
+    await loginFlow(io, { providers: [named], provider: "my gateway", authPath });
+    expect((await readAuth(authPath)).gw).toEqual({ type: "api_key", key: "sk-gw" });
+  });
+
+  it("a provider named by its id or its name, offering both, is asked how with its own label", async () => {
+    const { io, shown } = fakeIO({ select: [undefined] });
+    await expect(loginFlow(io, { provider: "OpenAI", authPath: await tmpAuth() })).rejects.toThrow(LoginCancelled);
+    expect(shown[0]).toEqual([
+      { value: "oauth", label: "Sign in with ChatGPT" },
+      { value: "api_key", label: "Sign in with an API key" },
+    ]);
+  });
+
+  it("without menus, a choice not given is refused, naming how to give it and the sign-ins to choose from", async () => {
+    const offered = await loginOptionsOver(await tmpAuth(), PROVIDERS);
+    const refused = async (given: { provider?: string; method?: "oauth" | "api_key" }) => {
+      const error = await chooseLogin(offered, given, undefined).then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      );
+      if (!(error instanceof LoginRefused)) throw new Error(`not refused: ${String(error)}`);
+      return { message: error.message, choices: error.choices.map((o) => `${o.provider}:${o.method}`) };
+    };
+    const unnamed = await refused({});
+    expect(unnamed.message).toMatch(/^name the provider to sign in to \(one of .*codex.*openai/);
+    expect(unnamed.choices).toEqual(offered.map((o) => `${o.provider}:${o.method}`));
+    expect(await refused({ provider: "anthropic" })).toEqual({
+      message: "anthropic signs in with an account or an API key: pass --method account or --method api-key",
+      choices: ["anthropic:oauth", "anthropic:api_key"],
+    });
+    expect((await refused({ provider: "nope" })).message).toMatch(/^unknown provider "nope": one of /);
+    expect(await refused({ provider: "codex", method: "api_key" })).toEqual({
+      message: "codex signs in only with an account",
+      choices: ["codex:oauth"],
+    });
+    expect((await refused({ method: "api_key" })).choices).toEqual(
+      offered.filter((o) => o.method === "api_key").map((o) => `${o.provider}:${o.method}`),
+    );
+  });
+
+  it("a provider whose key comes only from the environment says so, and signs in to nothing", async () => {
+    const ambient = { ...fakeProvider("ambient"), name: "Ambient", auth: { apiKey: { name: "Ambient key" } } };
+    const { io } = fakeIO({ select: ["api_key", "ambient"] });
+    await expect(loginFlow(io, { providers: [ambient as Provider], authPath: await tmpAuth() })).rejects.toThrow(
+      "Ambient is configured outside fastagent: set its key in the environment",
+    );
   });
 
   it("an empty API key fails visibly and persists no credential", async () => {
@@ -554,11 +656,27 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
     // The built-ins are always offered; the test's providers are added (replacing the built-in of the same id).
     expect(offered.some((o) => o.provider === "openai-codex")).toBe(true);
     const ours = new Set(PROVIDERS.map((p) => p.id));
+    const stored = { type: "api_key", source: "stored credential" };
+    const option = { external: false, subscription: false };
     expect(offered.filter((o) => ours.has(o.provider))).toEqual([
-      { provider: "anthropic", method: "oauth", label: "anthropic (OAuth)", subscription: false, stored: "api_key" },
-      { provider: "anthropic", method: "api_key", label: "anthropic API key", subscription: false, stored: "api_key" },
-      { provider: "openai", method: "api_key", label: "openai API key", subscription: false },
-      { provider: "codex", method: "oauth", label: "codex (OAuth)", subscription: false },
+      {
+        ...option,
+        provider: "anthropic",
+        name: "anthropic",
+        method: "oauth",
+        label: "Sign in with an account",
+        status: stored,
+      },
+      {
+        ...option,
+        provider: "anthropic",
+        name: "anthropic",
+        method: "api_key",
+        label: "Sign in with an API key",
+        status: stored,
+      },
+      { ...option, provider: "codex", name: "codex", method: "oauth", label: "Sign in with an account" },
+      { ...option, provider: "openai", name: "openai", method: "api_key", label: "Sign in with an API key" },
     ]);
   });
 

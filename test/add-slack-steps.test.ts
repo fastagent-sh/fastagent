@@ -4,7 +4,15 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 
 // The onboarding itself (Manifest API, OAuth) is add-slack's and tested there; this is what `add` prints after it.
-vi.mock("../src/cli/add-slack.ts", () => ({ onboardSlackInternalApp: vi.fn(async () => {}) }));
+vi.mock("../src/cli/add-slack.ts", async (original) => ({
+  ...(await original<typeof import("../src/cli/add-slack.ts")>()),
+  onboardSlackInternalApp: vi.fn(async () => {}),
+}));
+// At a terminal: without one, `add slack` hands the person's part to a ticket instead.
+vi.mock("../src/cli/shared.ts", async (original) => ({
+  ...(await original<typeof import("../src/cli/shared.ts")>()),
+  isInteractive: () => true,
+}));
 const { runAddChannel } = await import("../src/cli/commands/add.ts");
 
 const dirs: string[] = [];

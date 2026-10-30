@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { GLOBAL_AUTH_PATH, resolveAuthLayers, resolveAuthPath } from "../src/harnesses/models/credentials.ts";
-import { createPiModels } from "../src/harnesses/models/environment.ts";
+import { modelEnvironment } from "../src/harnesses/models/environment.ts";
 import { probeAuthSource } from "../src/harnesses/models/models.ts";
 import { modelSpecFor } from "../src/harnesses/pi-durable/open.ts";
 import { resolveSecretsDir, resolveStateRoot } from "../src/paths.ts";
@@ -42,16 +42,19 @@ describe("config: resolveStateRoot / resolveSecretsDir (the machinery dirs)", ()
   });
 });
 
-describe("models: createPiModels honors authPath (the project-level credential seam)", () => {
+describe("models: modelEnvironment honors authPath (the project-level credential seam)", () => {
   it("reads a stored credential from the GIVEN file, not the global default or env", async () => {
-    // Point createPiModels at a path and it must read THAT file. "stored credential" (not the
+    // Point modelEnvironment at a path and it must read THAT file. "stored credential" (not the
     // "ANTHROPIC_API_KEY" env label) proves the file at authPath won — so an empty project file
     // genuinely reads as not-configured, which is what the startup auth report keys on.
     const path = join(await mkdtemp(join(tmpdir(), "fa-auth-")), "auth.json");
     await writeFile(path, JSON.stringify({ anthropic: { type: "api_key", key: "sk-test" } }));
-    expect(await probeAuthSource(createPiModels({ authPath: path }), "anthropic/claude-sonnet-4-5")).toBe(
-      "stored credential",
-    );
+    expect(
+      await probeAuthSource(
+        (await modelEnvironment(undefined, { authPath: path })).models,
+        "anthropic/claude-sonnet-4-5",
+      ),
+    ).toBe("stored credential");
   });
 });
 

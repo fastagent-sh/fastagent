@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, content, env, models, login, dev, invoke, start, schedules, add, deploy, logs, and destroy, with their flags."
+description: "The fastagent CLI reference: init, info, content, env, models, login, logout, auth, dev, invoke, start, schedules, add, deploy, logs, and destroy, with their flags."
 status: current
 ---
 
@@ -23,7 +23,9 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `content list\|add\|remove` | List, add or remove what the agent works on and knows. |
 | `env add\|remove\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
 | `models [search]` | List the model specs the agent can name. |
-| `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
+| `login [provider]` | Sign in to a model provider (an account or an API key) into `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
+| `logout [provider]` | Remove a credential `login` stored. |
+| `auth check` | Whether a provider is ready: `ready`, `not_ready` or `invalid`, for scripts and agents. |
 | `dev [agent]` | Serve locally, restarting on code edits. |
 | `invoke <message> [agent]` | Send one message, print its answer (`--json`: its events), and exit; `--session <id>` continues an earlier run's session. |
 | `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
@@ -42,6 +44,18 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 `deploy` writes artifacts and prints a runbook; only `--run` touches a host. Existing artifacts are kept unless
 `--force`; a generated one that no longer matches the definition is flagged stale and gates `--run`. See
 [Deploy](deploy.md).
+
+`deploy <host> --run --json` is a coding agent's deploy. What this machine can refuse (a missing value, a stale
+artifact, a Lark app without its credentials) is answered at once; the deploy then runs in a process of its own, and
+the command returns its ticket. `deploy <host> --check <ticket>` reads it, always as JSON: `working` with the `log`,
+`need_user_action` for each step only the person can take (signing the host's CLI in, confirming a production
+Feishu app, the box's model login), then `done` with the `url`, the Agent API's `notes` and what is left for the
+person (`afterwards`: a channel whose Request URL only the console can set, say), or `failed` with why. Fly's
+approval page can show a one-time code instead of finishing: `--check <ticket> --code <code>` hands it over. A second
+`--run --json` while one runs answers with that one's ticket. `--timeout` (default 3600 s) bounds the person's steps,
+never the host's work: a deploy is never cut halfway by it. One that hangs there ends on request,
+`--check <ticket> --stop` (the report's `stop_command`), which can leave the host half-changed. Without `--json` and
+without a terminal (CI), such a step stops the deploy, naming how to give it.
 
 ## `fastagent init`
 
@@ -130,7 +144,7 @@ checkout off its `ref`, a clone not made yet), and each binding whose directory 
 ```bash
 fastagent env add <packages...>       # name[@version], or apt:<name> for the image
 fastagent env remove <packages...>
-fastagent env list
+fastagent env list [--json]
 fastagent env install
 fastagent env exec -- <command...>
 ```
@@ -153,7 +167,8 @@ fastagent env exec -- gh --version
 - **`list`** prints each package with its declared version, and each declared variable with whether it has a value
   here (never the value) and what it is for. It warns about what `deploy` would refuse (a refused backend, a PyPI
   package's undeclared runtime) and about a variable `dev` would refuse to start without. Variables are declared in
-  `context.json` by hand: there is no command for them.
+  `context.json` by hand: there is no command for them. `--json` prints `{packages: [{name, version}], apt: [name],
+  variables: [{name, description, set}]}`, the warnings still on stderr.
 - **`install`** installs mise (adding it to `package.json` when it is not there), then every declared package at the
   newest release its version allows, a newer one where one is out. Day to day it is not needed, since `add` installs
   what it adds and every start installs what is missing: it is for newer releases, and for a clone that has not
@@ -173,20 +188,66 @@ whose image runs the FastAgent they list.
 ## `fastagent models`
 
 ```bash
-fastagent models [search] [-g|--global]
+fastagent models [search] [-g|--global] [--refresh] [--json]
 ```
 
 Lists the model specs (`provider/modelId`) the agent in the current directory can name, optionally filtered: pi-ai's
-built-in providers, and the providers its `fastagent.config.ts` declares
-([custom models](configuration.md#custom-models)). It needs none of the secrets the agent declares. Outside an agent,
-or with `-g`, it lists pi-ai's built-ins alone. Inside an agent's subdirectory it refuses (as `login` does): `cd` to
-the agent, or pass `-g`.
+built-in providers with the models pi's published catalog adds to them ([model lists](configuration.md#model-lists)),
+and the providers its `fastagent.config.ts` declares ([custom models](configuration.md#custom-models)). It needs none
+of the secrets the agent declares. Outside an agent, or with `-g`, it lists the built-ins alone, without the agent's
+providers. Inside an agent's subdirectory it refuses (as `login` does): `cd` to the agent, or pass `-g`.
+
+`--json` prints the same list as an array of `{spec, provider, id, name}` (`name` is the model's display name, its
+`id` when it has none), in the same order.
+
+`--refresh` fetches the lists now, however recently they were fetched: for a model released in the last 4 hours. When
+it cannot, `FASTAGENT_OFFLINE=1` included, it prints the lists it has, warns why, and exits 1.
 
 ## `fastagent login`
 
 ```bash
-fastagent login [provider] [-g|--global] [--deployment <host>] [--no-input]
+fastagent login [provider] [-g|--global] [--method account|api-key] [--json] [--timeout <seconds>]
+                [--deployment <host>] [--no-input]
+fastagent login --check <ticket> [--code <address>] [--json]
 ```
+
+In a terminal it asks as pi's `/login` does: how to sign in (an account, an API key, or Radius), then the provider,
+listed by name with what authenticates each one now (`✓ configured`, `✓ env: OPENAI_API_KEY`, `API key configured`,
+`not configured`). `[provider]` is an id or a name (`openai`, `OpenAI`); for a provider that offers both ways it asks
+which, in its own words (`Sign in with ChatGPT`). `openai-codex` is listed as pi lists it, `OpenAI Codex (legacy)`:
+a ChatGPT account signs in to `openai`. When the agent has no model, `login` prints the line that would give it pi's
+default for the provider (`model: "openai/gpt-5.5"`); it never edits `fastagent.config.ts`.
+
+Without a terminal, or with `--no-input` or `--json`, a script or a coding agent signs in, and nothing is asked or
+waited on. A coding agent works in turns, so each command does its part and says what comes next, as Netlify's
+`login --request`/`--check` and Dosu's login tickets do. With `--json` the outcome is one object on stdout, whose
+`agent_next_steps` says it in a sentence:
+
+- **A choice not given** (no `[provider]`, or no `--method` for a provider that offers both) exits 2 with
+  `"status": "need_choice"` and the `choices`, each with the `command` that makes it.
+- **An account** (`--method account`) starts its sign-in in a process of its own and returns at once, exit 0, with
+  `"status": "need_user_action"`: the `url` for the person to sign in at (and the `code` to enter there, for a device
+  sign-in), a `ticket`, `check_command` and `expires_in`. No browser is opened: the agent hands the address to its
+  person, who may be on another machine. `fastagent login --check <ticket>` then answers `need_user_action` (not
+  finished), `working` (fastagent is at it: nothing for the person now), `done` (with the `path` it was saved to, and
+  the default `model` for an agent with none), `failed` or `expired`; every answer carries `provider` and
+  `"method": "account"`. When the person's browser cannot reach this machine, it ends on a page that does not load
+  (an address on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the
+  sign-in. `--timeout` sets how long the sign-in stays open (default 600 seconds). A newer sign-in to the same
+  provider, on this machine or on a deployment (both hold its callback port here), stops one still waiting on the
+  person or still getting ready, such as reaching a box that does not answer (its ticket is then `failed`, "replaced by
+  a newer attempt to sign in to <provider>"), which would otherwise hold that port until it expired; one already
+  exchanging the code is never stopped, and the newer attempt answers with its ticket. A ticket belongs to the command
+  that started it: `--check` with another command's ticket exits 2 naming the right one.
+- **An API key** (`--method api-key`) is the person's to set where the agent reads it, never typed into the agent's
+  conversation: `"status": "need_user_action"` names the `variables` the provider reads (`OPENAI_API_KEY`) and the
+  agent's `value_file` (`.secrets/.env`), and `check_command` is `fastagent auth check`. When one is set already, the
+  answer is `"status": "ready"`. An account sign-in stored for the provider outranks a key in the environment, so then
+  `logout_command` comes first. With no agent's value file to name (`-g`, or no agent here), the person runs
+  `terminal_command`, `login <provider> --method api-key -g`, in a terminal of their own: a variable set now would never
+  reach the agent's environment, fixed when it started.
+- Exit status: 0 signed in, or waiting on the person; 1 cancelled, failed or expired; 2 a provider or method not
+  given, or a ticket that is not one.
 
 Writes to the selected environment's `auth.json` (default: `<agent dir>/.secrets/auth.json`; overrides:
 `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). Local `start` recovery hints pin `FASTAGENT_AUTH_PATH` to the
@@ -199,7 +260,11 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
   it was read from. `login` warns when an env variable already authenticates the provider, because the global login
   is then not used.
 - `--deployment <host>` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway,
-  AgentCore) and the credential stays there. `deploy` never carries `auth.json`. See
+  AgentCore) and the credential stays there. `deploy` never carries `auth.json`. Without a terminal, an account's
+  sign-in returns a ticket as a local one does (`deployment` names the host), its process holding the box's shell
+  until the box answers; an API key is named for the person to set in `.secrets/production/.env`, which the next
+  `deploy <host> --run` carries. `login --check` reads that ticket as any other, without `--deployment`. A box whose
+  agent installed an older `@fastagent-sh/fastagent` than this CLI fails the login naming the version to align. See
   [Logging a deployment in](deploy.md#logging-a-deployment-in).
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
   each copy rotates the single-use refresh token and breaks the other.
@@ -209,6 +274,33 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
   gateway in front of a built-in provider, say); with `-g` it goes to the provider's own endpoint.
 - `auth.json` is always written `0600`. `.secrets/.env` is `0600` only when fastagent creates it; directories keep
   the permissions you gave them.
+
+## `fastagent logout`
+
+```bash
+fastagent logout [provider] [-g|--global] [--no-input]
+```
+
+Removes the credential `login` stored for a provider, from the file `login` writes, as pi's `/logout` does: in a
+terminal, a menu of the providers stored there; otherwise the one named (an id or a name), which must be stored there
+(exit 1 names what is), and none named exits 2. Environment variables, and the grant at the provider, are left as
+they are.
+
+## `fastagent auth check`
+
+```bash
+fastagent auth check (--provider <id> | --model <provider/modelId>) [-g|--global] [--json]
+```
+
+Whether a provider is ready for the agent here, as pi's `auth check` answers it: prints `ready`, `not_ready` or
+`invalid` and exits 0, 1 or 2. The answer is the one the agent's messages would get: its credentials file over the
+global one, then the environment, with a login due a refresh refreshed. `--json` prints one object:
+
+| Status | Fields |
+|---|---|
+| `ready` | `provider`, `authType` (`oauth` or `api_key`), `source` (`OAuth`, `stored credential`, or the variable), `path` |
+| `not_ready` | `provider`, `reason`: `provider_not_found` or `credentials_not_configured`, `path` |
+| `invalid` | `provider`, `reason: "invalid_state"`, `error` (a corrupt entry, a refresh the provider refused), `path` |
 
 ## `fastagent dev`
 
@@ -324,6 +416,8 @@ fastagent add lark [agent]     # Lark international: console + credential valida
                              # feishu/lark take --ingress websocket|webhook: writes the selected environment's setting
                              # (unset: dev connects by websocket, start and deployments receive by webhook)
                              # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding
+                             # --json: the outcome as one JSON object; without a terminal, the person's part
+                             # comes back as need_user_action and a ticket (below)
 ```
 
 Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion tools (`src/tools/<kind>-send.ts`, and
@@ -331,8 +425,9 @@ Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion t
 `.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
 `add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
 `--env production` selects `.secrets/production/.env` and `.state/production` without changing dev credentials.
-Interactive `deploy --run` creates the separate Feishu/Lark production app automatically; Slack needs
-`add slack --env production`, and Telegram needs a separate BotFather bot.
+`deploy --run` creates the separate Feishu/Lark production app automatically, at a terminal or, with `--json`, for a
+coding agent's user (without either it stops, naming the `--json` command); Slack needs `add slack --env production`,
+and Telegram needs a separate BotFather bot.
 
 Slack:
 
@@ -341,6 +436,29 @@ Slack:
   this machine; `dev --tunnel` and `deploy --run` use it to update the Request URL.
 - `--replace-config` replaces that token pair when it has expired or been revoked. Other machines set the Request
   URL in the Slack console.
+
+Without a terminal, or with `--json` or `--no-input`, the app's setup is driven by a coding agent and finished by its
+user ([Scripts and coding agents](#scripts-and-coding-agents)):
+
+| Channel | What the person provides first | What the ticket waits on |
+|---|---|---|
+| `feishu` | nothing | confirming the new app (`url`, in a browser or in Feishu) |
+| `lark` | `LARK_APP_ID` and `LARK_APP_SECRET`, from the app they create at `url`, in the selected environment's file (`value_file`: `.secrets/.env`, or `.secrets/production/.env` with `--env production`) | nothing; the setup verifies the app and captures its Verification Token |
+| `slack` | nothing | pasting an App Configuration token pair on the page at `url`, which then takes the browser on to Slack's install page to click Allow |
+
+Slack's page is the setup's own, served through the temporary tunnel `add slack` opens anyway, at a one-time random
+address. The pair never passes through the agent's conversation or any `.env` file: it manages every Slack app the
+person owns in that workspace, and only this machine's CLI uses it, so it goes into the onboarding state (`0600`) and
+never deploys.
+
+A missing first part answers `need_user_action` naming it, with the command to run again (`check_command`). Then the
+setup runs in a process of its own and the command returns its ticket: `need_user_action` while the person has a
+step, `working` while there is nothing for them to do, then `done` with the variables it `written`, the
+`next_steps` and the steps left to the person (`afterwards`, such as publishing a version). `add <kind> --check
+<ticket>` reads where it stands, `--timeout <seconds>` sets how long it stays open (default 900). Running `add` again
+for the same agent, channel and environment replaces a setup waiting on the person, and answers with one at work. A
+value the setup still needs (a Lark Verification Token it could not capture) fails the ticket naming the variable to
+set before running it again.
 
 See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 
@@ -380,9 +498,9 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
+| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `add slack\|feishu\|lark`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
-| `--json` | `info`, `invoke`, `schedules list`, `content list` | Machine-readable output. |
+| `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list`, `login`, `auth check`, `add` | Machine-readable output. |
 
 ## Exit codes
 
@@ -390,4 +508,26 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 |---|---|
 | `0` | Success (including help and version). |
 | `1` | Runtime failure: a message that did not complete, a definition that does not open, a deploy gate, an unsupported runtime, invalid configuration. |
-| `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags. A mistyped command suggests the nearest one. |
+| `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags, or a choice a terminal would have asked for (a default model, a provider to sign in to) with none there to ask. A mistyped command suggests the nearest one. |
+
+## Scripts and coding agents
+
+Every command serves a person at a terminal, and a script or a coding agent without one. A coding agent works in
+turns: it runs a command, reads what it printed once it ends, then talks to its user. So:
+
+- **Nothing waits on a terminal.** A choice a terminal would ask for has a flag or an argument. Without a terminal,
+  or with `--no-input` or `--json`, a choice not given ends the command, exit 2, naming what to pass (`login --json`
+  answers `need_choice` with a command for each).
+- **A step only a person can take returns at once**, with what the person does and how to follow it:
+  `"status": "need_user_action"`, the address to open, and a `check_command` to run once they have, in a sentence for
+  the agent (`agent_next_steps`). An account sign-in (`login`, and `login --deployment` on the box) and an app's setup
+  (`add slack|feishu|lark`) work this way: a process of the CLI's own finishes the step and keeps a ticket that
+  `--check <ticket>` reads. So does a whole deploy, opted into with `deploy <host> --run --json`: a deploy's exit 0
+  says it is deployed, so one paused for a person (exit 0, `need_user_action`) is never what a CI job gets without
+  asking for it.
+- **A secret never passes through the agent's conversation.** The person writes it where the command names (the
+  agent's `.secrets/.env`), pastes it on a page the command's own process serves, or types it at a terminal of their
+  own.
+- **Results on stdout, everything else on stderr**: progress, notes, warnings and errors. A command whose result is
+  data has `--json`.
+- **The exit code says how it ended**: 0, 1 or 2, as above.

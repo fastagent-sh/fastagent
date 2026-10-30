@@ -155,18 +155,27 @@ const models: CommandSpec = {
   name: "models",
   summary: 'list the available "provider/modelId" model specs',
   description:
-    'List every "provider/modelId" spec the agent in this directory can name (pi-ai\'s built-ins, and the ' +
-    "providers its fastagent.config.ts declares) — use one with --model or as `model` in fastagent.config.ts. " +
-    "Outside an agent, or with -g, list pi-ai's built-ins.",
+    'List every "provider/modelId" spec the agent in this directory can name (pi-ai\'s built-ins, with the models ' +
+    "pi's published catalog adds to them, and the providers its fastagent.config.ts declares) — use one with " +
+    "--model or as `model` in fastagent.config.ts. Outside an agent, or with -g, list the built-ins without the " +
+    "agent's providers. Every command that opens the agent refreshes the lists, asking at most every 4 hours once " +
+    "one is kept; --refresh asks now, and exits 1 when it cannot.",
   args: [{ name: "[search]", description: "case-insensitive substring filter" }],
-  flags: [{ flags: "-g, --global", description: "pi-ai's built-ins alone" }],
+  flags: [
+    { flags: "-g, --global", description: "the built-ins, without the agent's providers" },
+    { flags: "--refresh", description: "fetch the model lists now, even when the kept ones are fresh" },
+    { flags: "--json", description: "the specs as JSON: spec, provider, id and name of each (its id, unnamed)" },
+  ],
   examples: [
     { cmd: "fastagent models", note: "all specs" },
     { cmd: "fastagent models claude", note: "filter; provider-name matches rank first" },
+    { cmd: "fastagent models --refresh gpt", note: "a model released since the last refresh" },
   ],
   run: async (args, f) =>
     (await import("./commands/models.ts")).runModels(args[0] as string | undefined, {
       global: f.global === true,
+      refresh: f.refresh === true,
+      json: f.json === true,
     }),
 };
 
@@ -242,11 +251,14 @@ const channelSub = (
   args: [AGENT_ARG],
   flags:
     kind === "feishu" || kind === "lark"
-      ? [CHANNEL_ENVIRONMENT, INGRESS, NO_ONBOARD]
+      ? [CHANNEL_ENVIRONMENT, INGRESS, NO_ONBOARD, ...UNATTENDED_SETUP]
       : kind === "slack"
-        ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG]
-        : [CHANNEL_ENVIRONMENT],
-  examples: [{ cmd: `fastagent add ${kind}` }],
+        ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG, ...UNATTENDED_SETUP]
+        : [CHANNEL_ENVIRONMENT, JSON_FLAG],
+  examples: [
+    { cmd: `fastagent add ${kind}` },
+    ...(kind === "telegram" ? [] : [{ cmd: `fastagent add ${kind} --json`, note: "a coding agent" }]),
+  ],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
     (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, {
@@ -254,8 +266,25 @@ const channelSub = (
       environment: f.env as "dev" | "production" | undefined,
       onboard: f.onboard !== false,
       replaceConfig: f.replaceConfig === true,
+      input: f.input !== false,
+      json: f.json === true,
+      ...(f.check !== undefined ? { check: f.check as string } : {}),
+      ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
+      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
     }),
 });
+
+/**
+ * How an app's setup runs with no one at a terminal: what the person provides is named, and their steps come back with
+ * a ticket to check (`add` in docs/cli.md).
+ */
+const UNATTENDED_SETUP: FlagSpec[] = [
+  { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
+  { flags: "--check <ticket>", description: "where a setup started without a terminal stands" },
+  { flags: "--timeout <seconds>", description: "how long that setup stays open (default 900)" },
+  { flags: "--ticket <id>", description: "the process that runs a ticket's setup", hidden: true },
+  NO_INPUT,
+];
 
 const add: CommandSpec = {
   name: "add",
@@ -368,10 +397,26 @@ const deploy: CommandSpec = {
         "(railway --run) provision INTO the project this dir is already linked to (skip create); by " +
         "default --run refuses a pre-existing link (could be unrelated/production)",
     },
+    {
+      flags: "--json",
+      description:
+        "with --run, for a coding agent: the deploy runs in a process of its own and the command returns its " +
+        "ticket, handing each step only a person can take (a host sign-in, a production app, the box's model " +
+        "login) to its user",
+    },
+    { flags: "--check <ticket>", description: "where a deploy started with --json stands" },
+    {
+      flags: "--code <code>",
+      description: "with --check: the code a host's approval page showed, when it could not reach this machine",
+    },
+    { flags: "--timeout <seconds>", description: "how long a deploy started with --json stays open (default 3600)" },
+    { flags: "--stop", description: "with --check: stop that deploy where it is (can leave the host half-changed)" },
+    { flags: "--ticket <id>", description: "the process that runs a ticket's deploy", hidden: true },
     NO_INPUT,
   ],
   examples: [
     { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
+    { cmd: "fastagent deploy fly --run --json", note: "a coding agent" },
     { cmd: "fastagent deploy docker --tunnel --run", note: "Compose + a public URL" },
     { cmd: "fastagent deploy railway", note: "print the runbook only" },
     { cmd: "fastagent deploy agentcore --run", note: "arm64 image + stack + webhooks" },
@@ -387,6 +432,12 @@ const deploy: CommandSpec = {
       force: f.force === true,
       intoLinked: f.intoLinked === true,
       input: f.input !== false,
+      json: f.json === true,
+      ...(f.check !== undefined ? { check: f.check as string } : {}),
+      ...(f.code !== undefined ? { code: f.code as string } : {}),
+      ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
+      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
+      stop: f.stop === true,
     }),
 };
 
@@ -425,8 +476,9 @@ const env: CommandSpec = {
     {
       name: "list",
       summary: "the declared packages and their versions, the variables and whether each has a value",
-      examples: [{ cmd: "fastagent env list" }],
-      run: async () => (await import("./commands/env.ts")).runEnvList(),
+      flags: [{ flags: "--json", description: "the packages, apt packages and variables as JSON" }],
+      examples: [{ cmd: "fastagent env list" }, { cmd: "fastagent env list --json" }],
+      run: async (_args, f) => (await import("./commands/env.ts")).runEnvList({ json: f.json === true }),
     },
     {
       name: "install",
@@ -634,24 +686,42 @@ const logs: CommandSpec = {
     }),
 };
 
+const GLOBAL_AUTH: FlagSpec = {
+  flags: "-g, --global",
+  description:
+    "the global ~/.fastagent/.secrets/auth.json, which every agent here reads for a provider it has no other credential for",
+};
+
 const login: CommandSpec = {
   name: "login",
-  summary: "authenticate a model provider (subscription/OAuth or API key)",
+  summary: "sign in to a model provider (an account or an API key)",
   description:
-    "Authenticate a model provider into the project-level <agent dir>/.secrets/auth.json (outside an " +
-    "agent it writes the global ~/.fastagent/.secrets/auth.json, and says so): pick a method " +
-    "(subscription/OAuth or API " +
-    "key), then a provider that offers it (configured status shown). [provider] takes the method from " +
-    "what that provider supports, asked only when both. An agent READS the global store for a provider it has " +
-    "no other credential for (its own file, a provider in its config that authenticates itself, an env variable), so " +
-    "`-g` logs in once for every " +
-    "agent on this machine; it warns when an env variable already authenticates the provider.",
-  args: [{ name: "[provider]", description: "provider id (skip the provider menu)" }],
+    "Sign in to a model provider into the agent's <agent dir>/.secrets/auth.json (outside an agent it writes the " +
+    "global ~/.fastagent/.secrets/auth.json, and says so), as pi's /login does: how to sign in (an account or an API " +
+    "key), then the provider, each with what authenticates it now. [provider] (its id or name) skips the provider " +
+    "menu; how is asked only when it offers both. An agent READS the global store for a provider it has no other " +
+    "credential for (its own file, a provider in its config that authenticates itself, an env variable), so `-g` " +
+    "signs in once for every agent on this machine; it warns when an env variable already authenticates the " +
+    "provider. Without a terminal (or with --no-input or --json), for a script or a coding agent, nothing is asked " +
+    "and nothing waits: a provider or --method not given is answered with the choices and a command for each (exit " +
+    "2); an account's sign-in starts in a process of its own and the command returns its address and a ticket at " +
+    "once, for the person to sign in at and `login --check <ticket>` to follow; an API key is named, for the person " +
+    "to set in the agent's .secrets/.env themselves.",
+  args: [{ name: "[provider]", description: "provider id or name (skip the provider menu)" }],
   flags: [
+    GLOBAL_AUTH,
+    { flags: "--method <how>", description: "account or api-key, for a provider that offers both" },
+    { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
+    { flags: "--check <ticket>", description: "where a sign-in started without a terminal stands" },
     {
-      flags: "-g, --global",
-      description: `store in ~/.fastagent/.secrets/auth.json — every agent here reads it for a provider it has no other credential for`,
+      flags: "--code <address>",
+      description: "with --check: the address the browser ended on, when it could not reach this machine",
     },
+    {
+      flags: "--timeout <seconds>",
+      description: "how long the sign-in stays open (default 600 without a terminal)",
+    },
+    { flags: "--ticket <id>", description: "the process that runs a ticket's sign-in", hidden: true },
     {
       flags: "--deployment <host>",
       description:
@@ -663,24 +733,85 @@ const login: CommandSpec = {
   ],
   examples: [
     { cmd: "fastagent login" },
-    { cmd: "fastagent login openai" },
-    { cmd: "fastagent login openai -g" },
-    { cmd: "fastagent login openai-codex --deployment fly", note: "on the box" },
+    { cmd: "fastagent login openai", note: "ChatGPT, or an API key" },
+    { cmd: "fastagent login openai -g", note: "for every agent here" },
+    { cmd: "fastagent login openai --method account --json", note: "an agent" },
+    { cmd: "fastagent login --check 3f9a0c1d2e4b5a67 --json", note: "then" },
+    { cmd: "fastagent login openai --deployment fly", note: "on the box" },
   ],
   notes:
-    "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in. " +
+    "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in. Exit status: 0 signed in " +
+    "or waiting on the person (need_user_action), 1 cancelled, failed or expired, 2 a provider or method not given. " +
     "--deployment runs the login on the deployed box through the host's own shell (docker compose exec, fly ssh, " +
     "railway ssh, AgentCore's command shell); this terminal shows it, opens the browser, and catches the browser's " +
     "return to localhost (or asks you to paste that address when its port is taken). The box keeps the credential, " +
-    "so it is the only holder of that grant, and logging in again replaces it there.",
+    "so it is the only holder of that grant, and logging in again replaces it there. Without a terminal, an " +
+    "account's sign-in on the box returns a ticket as a local one does, its process holding the box's shell; an API " +
+    "key is named, for the person to set in .secrets/production/.env before the next deploy carries it.",
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0] as string | undefined, {
       global: f.global === true,
       input: f.input !== false,
+      json: f.json === true,
+      ...(f.method !== undefined ? { method: f.method as string } : {}),
+      ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
+      ...(f.check !== undefined ? { check: f.check as string } : {}),
+      ...(f.code !== undefined ? { code: f.code as string } : {}),
+      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
       ...(f.deployment !== undefined ? { deployment: f.deployment as string } : {}),
       stdio: f.stdio === true,
       ifMissing: f.ifMissing === true,
     }),
+};
+
+const logout: CommandSpec = {
+  name: "logout",
+  summary: "remove a provider's stored credential",
+  description:
+    "Remove the credential `login` stored for a provider, from the agent's <agent dir>/.secrets/auth.json (outside " +
+    "an agent, or with -g, the global file), as pi's /logout does: a menu of the providers stored there, or the one " +
+    "named. Environment variables, and the grant at the provider, are left as they are.",
+  args: [{ name: "[provider]", description: "provider id or name (required without a terminal)" }],
+  flags: [GLOBAL_AUTH, NO_INPUT],
+  examples: [{ cmd: "fastagent logout" }, { cmd: "fastagent logout openai-codex" }],
+  run: async (args, f) =>
+    (await import("./commands/logout.ts")).runLogout(args[0] as string | undefined, {
+      global: f.global === true,
+      input: f.input !== false,
+    }),
+};
+
+const auth: CommandSpec = {
+  name: "auth",
+  summary: "check a model provider's credential (for scripts and agents)",
+  subcommands: [
+    {
+      name: "check",
+      summary: "is a provider ready: prints ready, not_ready or invalid",
+      description:
+        "Check what authenticates a provider for the agent here (outside an agent, or with -g, for the global " +
+        "file), as pi's `auth check` does: prints ready, not_ready or invalid, and exits 0, 1 or 2. --model names " +
+        "the provider by a model of it; a login due a refresh is refreshed, as a message would. --json prints " +
+        "{status, provider, authType | reason, source, path}.",
+      flags: [
+        { flags: "--provider <id>", description: "the provider to check" },
+        { flags: "--model <provider/modelId>", description: "the provider of this model" },
+        GLOBAL_AUTH,
+        JSON_FLAG,
+      ],
+      examples: [
+        { cmd: "fastagent auth check --provider openai" },
+        { cmd: "fastagent auth check --model openai/gpt-5.5 --json" },
+      ],
+      run: async (_args, f) =>
+        (await import("./commands/auth.ts")).runAuthCheck({
+          ...(f.provider !== undefined ? { provider: f.provider as string } : {}),
+          ...(f.model !== undefined ? { model: f.model as string } : {}),
+          global: f.global === true,
+          json: f.json === true,
+        }),
+    },
+  ],
 };
 
 /**
@@ -702,6 +833,8 @@ export const specs: readonly CommandSpec[] = [
   logs,
   destroy,
   login,
+  logout,
+  auth,
 ];
 
 /** The production program assembly (specs + the top-level examples/docs). */

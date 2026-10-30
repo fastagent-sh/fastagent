@@ -9,6 +9,11 @@ export interface Registrars {
   telegram: (baseUrl: string) => Promise<RegistrationOutcome>;
   slack?: (baseUrl: string) => Promise<RegistrationOutcome>;
   feishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>;
+  /**
+   * Where a channel's manual step goes beside the log, for a person who reads no log: a coding agent's user, through
+   * the deploy's ticket (its `afterwards`).
+   */
+  leave?: (step: string) => void;
 }
 
 interface ChannelIngress {
@@ -110,6 +115,10 @@ export async function pointChannelsAt(input: {
     }
     input.log(`registering ${kind} webhook…`);
     outcomes.push({ kind, outcome: await running });
+  }
+  // What the registrar said is in the log; the person who reads none gets the one route to set.
+  for (const { kind } of outcomes.filter(({ outcome }) => outcome === "manual")) {
+    input.registrars.leave?.(INGRESS[kind].manual(input.baseUrl));
   }
   return outcomes;
 }

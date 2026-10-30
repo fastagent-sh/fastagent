@@ -43,6 +43,7 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   valueFile: ".secrets/.env",
   channels: [],
   intoLinked: false,
+  forAgent: "fastagent deploy railway ../bot --into-linked --run --json",
   ...over,
 });
 
@@ -355,18 +356,40 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(tg).not.toHaveBeenCalled();
   });
 
-  it("gate: not logged in → stops before any side effect", async () => {
+  it("gate: not logged in with nobody to sign in → stops before any side effect", async () => {
     const { railway, cmds } = fakeRailway((a) => (a[0] === "whoami" ? { code: 1 } : {}));
     const out = await run(plan(), railway);
-    expect(out).toEqual({ ok: false, gate: expect.stringMatching(/railway login|RAILWAY_API_TOKEN/) });
+    expect(out).toEqual({
+      ok: false,
+      // The command as this deploy was run: its directory and its flags.
+      gate: expect.stringMatching(
+        /`railway login`.*RAILWAY_API_TOKEN.*`fastagent deploy railway \.\.\/bot --into-linked --run --json`/,
+      ),
+    });
     expect(cmds()).toEqual(["whoami"]); // nothing after the gate
   });
 
+  it("not logged in with someone to sign in: signed in, then the run goes on; a failed sign-in is the gate", async () => {
+    const { railway, cmds } = fakeRailway((a) => (a[0] === "whoami" ? { code: 1 } : {}));
+    const hostLogin = vi.fn(async () => undefined);
+    await run(plan({ hostLogin }), railway);
+    expect(hostLogin).toHaveBeenCalledOnce();
+    expect(cmds()).toContain("status --json");
+
+    const refused = fakeRailway((a) => (a[0] === "whoami" ? { code: 1 } : {}));
+    const out = await run(plan({ hostLogin: async () => "the person did not approve" }), refused.railway);
+    expect(out).toEqual({ ok: false, gate: "the person did not approve" });
+    expect(refused.cmds()).toEqual(["whoami"]);
+  });
+
   it("gate: a missing secret value stops before creating infra", async () => {
-    const { railway, cmds } = fakeRailway();
-    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"] }), railway);
+    // Signed out as well: no person is asked to sign in for a deploy that stops here anyway.
+    const { railway, cmds } = fakeRailway((a) => (a[0] === "whoami" ? { code: 1 } : {}));
+    const hostLogin = vi.fn(async () => undefined);
+    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"], hostLogin }), railway);
     expect(out).toEqual({ ok: false, gate: expect.stringContaining("TELEGRAM_BOT_TOKEN") });
-    expect(cmds()).toEqual(["whoami"]); // no init
+    expect(cmds()).toEqual([]); // not even whoami
+    expect(hostLogin).not.toHaveBeenCalled();
   });
 
   it("gate: `railway init` failure surfaces the workspace hint", async () => {

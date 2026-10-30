@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { enterAgentDirectory, reportAssembly, reportAuth } from "../src/cli/shared.ts";
 import { setLogLevel } from "../src/log.ts";
 import * as environment from "../src/harnesses/models/environment.ts";
@@ -14,15 +14,18 @@ const { modelEnvironment } = environment;
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 
 describe("reportAssembly (the startup report dev and start share)", () => {
-  const opened = {
-    agentDir: "/w/agent",
-    stateRoot: "/w/agent/.state",
-    content: [{ name: "app", kind: "local", readonly: false, location: "/w/app", notices: [] }],
-    models: modelEnvironment("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
-    definition: { name: "agent", config: {} },
-    code: { tools: [{ name: "fetch-url" }], extensions: [] },
-    agent: { info: () => ({ commands: [{ name: "skill:release" }] }) },
-  } as unknown as Parameters<typeof reportAssembly>[0];
+  let opened: Parameters<typeof reportAssembly>[0];
+  beforeAll(async () => {
+    opened = {
+      agentDir: "/w/agent",
+      stateRoot: "/w/agent/.state",
+      content: [{ name: "app", kind: "local", readonly: false, location: "/w/app", notices: [] }],
+      models: await modelEnvironment("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
+      definition: { name: "agent", config: {} },
+      code: { tools: [{ name: "fetch-url" }], extensions: [] },
+      agent: { info: () => ({ commands: [{ name: "skill:release" }] }) },
+    } as unknown as Parameters<typeof reportAssembly>[0];
+  });
 
   /** The report writes through the leveled logger; `info` is the posture both commands report at. */
   const lines = async (extras?: Parameters<typeof reportAssembly>[2]): Promise<string[]> => {
@@ -126,7 +129,7 @@ describe("reportAuth (which layer the line names)", () => {
     const out: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
     try {
-      await reportAuth(modelEnvironment(agentDir), "p/m", agentDir);
+      await reportAuth(await modelEnvironment(agentDir), "p/m", agentDir);
     } finally {
       spy.mockRestore();
     }
@@ -143,13 +146,13 @@ describe("reportAuth (which layer the line names)", () => {
       if (override) vi.stubEnv("FASTAGENT_AUTH_PATH", authPath);
       const out: string[] = [];
       vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
-      await reportAuth(modelEnvironment(held.dir), "p/m", held.dir);
+      await reportAuth(await modelEnvironment(held.dir), "p/m", held.dir);
       expect(out.join("\n")).toContain(`FASTAGENT_AUTH_PATH='${authPath}' fastagent login`);
       if (!override) expect(out.join("\n")).toContain(held.fallback);
 
       rmSync(GLOBAL_AUTH_PATH);
       out.length = 0;
-      await reportAuth(modelEnvironment(held.dir), "p/m", held.dir);
+      await reportAuth(await modelEnvironment(held.dir), "p/m", held.dir);
       expect(out.join("\n")).toContain(join(held.dir, ".secrets/production/.env"));
       expect(out.join("\n")).toContain(`FASTAGENT_AUTH_PATH='${authPath}' fastagent login`);
     },
@@ -178,7 +181,7 @@ describe("reportAuth (which layer the line names)", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-project");
     const out: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
-    await reportAuth(modelEnvironment(held.dir), "anthropic/claude-sonnet-4-5", held.dir);
+    await reportAuth(await modelEnvironment(held.dir), "anthropic/claude-sonnet-4-5", held.dir);
     const line = out.find((l) => l.includes("auth:")) ?? "";
     expect(line).not.toContain(held.fallback);
     expect(line).toContain("ANTHROPIC_API_KEY");

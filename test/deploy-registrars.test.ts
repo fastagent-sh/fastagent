@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { TicketStep } from "../src/cli/ticket.ts";
 import { registrarsFor } from "../src/cli/commands/deploy/shared.ts";
 import { announceWebhooks } from "../src/tunnel.ts";
 import { registerSlackWebhook } from "../src/channels/slack/register-webhook.ts";
@@ -43,6 +44,7 @@ it("every cloud registrar uses carried production credentials, even when the she
       ["LARK_APP_ID", "cli_lark_prod"],
       ["LARK_APP_SECRET", "lark_prod_secret"],
     ]),
+    { kind: "nobody" },
   );
   expect(await registrars.feishu?.("https://production.test", "feishu")).toBe("registered");
   expect(await registrars.feishu?.("https://production.test", "lark")).toBe("registered");
@@ -61,14 +63,16 @@ it("a deployment with no app credentials never registers the shell's dev app", a
   vi.stubEnv("FEISHU_APP_ID", "cli_dev");
   vi.stubEnv("FEISHU_APP_SECRET", "dev_secret");
   const requests = platformFetch();
-  expect(await registrarsFor("/agent", new Map()).feishu?.("https://production.test", "feishu")).toBe("manual");
+  expect(
+    await registrarsFor("/agent", new Map(), { kind: "nobody" }).feishu?.("https://production.test", "feishu"),
+  ).toBe("manual");
   expect(requests).toEqual([]);
 });
 
 it("deploy and production tunnel registration pass Slack the selected environment and state", async () => {
   vi.stubEnv("FASTAGENT_ENVIRONMENT", "production");
   vi.stubEnv("FASTAGENT_STATE_DIR", "");
-  await registrarsFor("/agent", new Map()).slack?.("https://production.test");
+  await registrarsFor("/agent", new Map(), { kind: "nobody" }).slack?.("https://production.test");
   expect(registerSlackWebhook).toHaveBeenLastCalledWith(
     "https://production.test",
     expect.objectContaining({
@@ -102,4 +106,12 @@ it("Docker tunnel registration uses its selected production values, not dev's ex
       body: { url: "https://production.test/telegram", secret_token: "prod_secret" },
     },
   ]);
+});
+
+it("a ticket's registrars leave a manual step to its person; nobody's leave it to the log", () => {
+  const afterwards = vi.fn();
+  const step = { person: { afterwards } } as unknown as TicketStep;
+  registrarsFor("/agent", new Map(), { kind: "ticket", step }).leave?.("lark: set the event Request URL");
+  expect(afterwards).toHaveBeenCalledWith("lark: set the event Request URL");
+  expect(registrarsFor("/agent", new Map(), { kind: "nobody" }).leave).toBeUndefined();
 });

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { prepareFeishuApps, unpreparedFeishuApps } from "../src/cli/add-feishu.ts";
+import { terminalPerson } from "../src/cli/person.ts";
 import { appendChannelDotEnv } from "../src/scaffold/add-channel.ts";
 
 const dirs: string[] = [];
@@ -59,11 +60,12 @@ it("runs each cloud's existing onboarding in production and writes only that env
       { kind: "lark", ingress: "webhook" },
     ],
     "fastagent deploy fly --run",
+    terminalPerson,
     onboard,
   );
   expect(onboard.mock.calls).toEqual([
-    [dir, "feishu", "webhook", "fastagent deploy fly --run"],
-    [dir, "lark", "webhook", "fastagent deploy fly --run"],
+    [dir, "feishu", "webhook", "fastagent deploy fly --run", terminalPerson],
+    [dir, "lark", "webhook", "fastagent deploy fly --run", terminalPerson],
   ]);
   const env = await readFile(join(dir, ".secrets", "production", ".env"), "utf8");
   expect(env).toMatch(/^FEISHU_APP_ID=cli_prod$/m);

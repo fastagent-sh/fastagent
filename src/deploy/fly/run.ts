@@ -9,7 +9,7 @@ import {
 } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
-import { missingValuesGate } from "../secrets.ts";
+import { hostSignedOutGate, missingValuesGate } from "../secrets.ts";
 
 export interface FlyRunPlan {
   appName: string;
@@ -30,6 +30,13 @@ export interface FlyRunPlan {
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
    */
   boxLogin?: BoxLoginStep;
+  /**
+   * Sign the host's CLI in when it is signed out, through whoever can (host-login.ts): resolves a gate line, or
+   * undefined once signed in. Absent: nobody can, and the run stops naming how.
+   */
+  hostLogin?: () => Promise<string | undefined>;
+  /** The command a coding agent runs to deploy this, its person's steps handed to its user (`--run --json`). */
+  forAgent: string;
 }
 
 /** Done, or a gate the operator must clear before re-running (printed + non-zero exit by the CLI). */
@@ -75,14 +82,18 @@ export async function deployFlyRun(
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
-  // 1.
-  if ((await fly(["auth", "whoami"], { capture: true })).code !== 0) {
-    return gate("not logged in to Fly — run `fly auth login` (opens a browser), or set FLY_API_TOKEN, then re-run");
-  }
-
-  // 2. Gate missing required secret VALUES before any side effect (no half-created infra).
+  // 1. Gate missing required secret VALUES before any side effect (no half-created infra), and before asking a
+  // person to sign in for a deploy that would stop here anyway.
   const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
   if (missingValues) return gate(missingValues);
+
+  // 2.
+  if ((await fly(["auth", "whoami"], { capture: true })).code !== 0) {
+    const failed = plan.hostLogin
+      ? await plan.hostLogin()
+      : hostSignedOutGate("Fly", "fly auth login", "FLY_API_TOKEN", plan.forAgent);
+    if (failed) return gate(failed);
+  }
 
   // 3.
   const appExists = await readOutput(fly, "fly", ["apps", "list", "--json"], (out) => listHasName(out, plan.appName));

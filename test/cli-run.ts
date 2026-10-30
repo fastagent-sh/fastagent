@@ -28,7 +28,7 @@ export async function agentWorkspace(prefix: string, files: Record<string, strin
   return dir;
 }
 
-/** Run the CLI to completion; capture stdout, stderr, exit code. */
+/** Run the CLI to completion, its stdin ended at once as a coding agent's shell hands it; capture stdout, stderr, exit code. */
 export function run(
   args: string[],
   cwd?: string,
@@ -36,6 +36,7 @@ export function run(
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CLI, ...args], { ...(cwd ? { cwd } : {}), env: env ?? process.env });
+    child.stdin.end();
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));

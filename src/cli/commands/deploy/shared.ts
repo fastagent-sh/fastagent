@@ -20,7 +20,8 @@ import type { DeployPreflight } from "../../../deploy/preflight.ts";
 import type { AgentConfig } from "../../../harnesses/pi-durable/define.ts";
 import { exists, resolveStateRoot } from "../../../paths.ts";
 import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
-import { loginOnBox } from "../../box-login.ts";
+import { loginOnBox, ticketLoginIO } from "../../box-login.ts";
+import type { TicketStep } from "../../ticket.ts";
 import type { DeployHost } from "../../../deploy/hosts.ts";
 
 export interface DeployOptions {
@@ -30,7 +31,26 @@ export interface DeployOptions {
   intoLinked?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
+  /** `--json`: a coding agent's `--run`, run in a ticket that hands each step only a person can take to its user. */
+  json?: boolean;
+  /** `--check <ticket>`: where such a deploy stands. */
+  check?: string;
+  /** `--code <code>` (with `--check`): the code a host's approval page showed, when it could not reach this machine. */
+  code?: string;
+  /** `--stop` (with `--check`): stop that deploy where it is. */
+  stop?: boolean;
+  /** `--timeout <seconds>`: how long it stays open. */
+  timeout?: string;
+  /** `--ticket <id>`: the process that runs it. */
+  ticket?: string;
 }
+
+/**
+ * Who takes a deploy's steps only a person can (a host account's sign-in, a production app's confirmation, the box's
+ * model login): the person at this terminal, a coding agent's person through the deploy's ticket, or nobody (CI, or a
+ * script), for whom such a step stops the deploy naming how to give it.
+ */
+export type Answerer = { kind: "terminal" } | { kind: "ticket"; step: TicketStep } | { kind: "nobody" };
 
 /**
  * What the dispatcher resolved before handing off: the agent directory, the flags, the config and the host-neutral
@@ -38,6 +58,9 @@ export interface DeployOptions {
  */
 interface DeployContext {
   opts: DeployOptions;
+  answerer: Answerer;
+  /** The command that runs this deploy again, from where it ran: its agent directory and flags. */
+  rerun: string;
   agentDir: string;
   config: AgentConfig;
   pre: Extract<DeployPreflight, { ok: true }>;
@@ -64,11 +87,18 @@ export interface HostDeploy {
   deploy(ctx: DeployContext): Promise<string | undefined>;
 }
 
-/** The registrars every host driver gets. */
-export function registrarsFor(agentDir: string, values: ReadonlyMap<string, string>): Registrars {
+/** Where a step left to the person goes for `answerer`: a ticket's `afterwards`; nowhere else but the log. */
+export function leftToPerson(answerer: Answerer): ((step: string) => void) | undefined {
+  return answerer.kind === "ticket" ? (step) => answerer.step.person.afterwards(step) : undefined;
+}
+
+/** The registrars every host driver gets; a channel's manual step also goes to `answerer`'s person. */
+export function registrarsFor(agentDir: string, values: ReadonlyMap<string, string>, answerer: Answerer): Registrars {
   const attempts = DEPLOY_REGISTRATION_ATTEMPTS;
   const env = Object.fromEntries(values);
+  const leave = leftToPerson(answerer);
   return {
+    ...(leave === undefined ? {} : { leave }),
     telegram: (baseUrl) => registerTelegramWebhook(baseUrl, { attempts, env }),
     slack: (baseUrl) =>
       registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir), environment: "production", attempts }),
@@ -83,16 +113,28 @@ export function registrarsFor(agentDir: string, values: ReadonlyMap<string, stri
  */
 export function boxLoginStep<Args extends unknown[]>(
   host: DeployHost,
-  params: { agentDir: string; boxLogin: string | undefined; input: boolean },
+  params: { agentDir: string; boxLogin: string | undefined; answerer: Answerer },
   /** The shell, from whatever the driver learns only after deploying (AgentCore's runtime ARN). */
   shell: (...args: Args) => BoxShell,
 ): { boxLogin?: BoxLoginStep<Args> } {
   const provider = params.boxLogin;
   if (provider === undefined) return {};
+  const command = deploymentLoginCommand(host, provider);
+  const { answerer } = params;
   return {
     boxLogin: {
-      command: deploymentLoginCommand(host, provider),
-      run: (...args) => loginOnBox({ host, shell: shell(...args), provider, ifMissing: true, input: params.input }),
+      command,
+      run: async (...args) => {
+        const request = { host, shell: shell(...args), provider, ifMissing: true };
+        if (answerer.kind !== "ticket") return loginOnBox({ ...request, input: answerer.kind === "terminal" });
+        // An account sign-in: a key cannot be typed into a ticket.
+        const io = ticketLoginIO(answerer.step, command);
+        const failed = await loginOnBox({ ...request, method: "oauth", input: true, io });
+        if (failed !== undefined) return io.refusal() ?? failed;
+        // Logged in: what follows (the webhooks) is the deploy finishing, never cut by the person's deadline.
+        answerer.step.person.carriesOn();
+        return undefined;
+      },
     },
   };
 }

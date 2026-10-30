@@ -137,7 +137,7 @@ fastagent content remove <name> [agent]
 Startup says what the agent works on and what it knows:
 
 ```text
-agent     ~/agents/reviewer  (model openai-codex/gpt-5.5)
+agent     ~/agents/reviewer  (model openai/gpt-5.5)
 works on  app       ~/code/app (github acme/app, this checkout)
 knows     handbook  ~/agents/reviewer/content/handbook (github acme/handbook@main, a clone brought up to date at each start)
 instance  ~/agents/reviewer/.state

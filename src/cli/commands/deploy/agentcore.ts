@@ -25,14 +25,9 @@ import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
-import { isInteractive } from "../../shared.ts";
-import { type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
+import { shellArg } from "../../shared.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
-
-/** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
-function shellArg(value: string): string {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
-}
 
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
@@ -121,7 +116,8 @@ export const agentcoreHost: HostDeploy = {
         name: acName,
         modelAuth,
         boxLogin,
-        input: opts.input !== false && isInteractive(),
+        answerer: ctx.answerer,
+        rerun: ctx.rerun,
         channels,
         declaredSecrets,
         values,
@@ -142,8 +138,10 @@ async function runDeployAgentcore(params: {
   modelAuth: string | undefined;
   /** The provider the runtime logs in to itself once it is verified (the pre-flight's `boxLogin`). */
   boxLogin: string | undefined;
-  /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
-  input: boolean;
+  /** Who answers the box's login: `--run` continues into it rather than stopping at "not logged in". */
+  answerer: Answerer;
+  /** The command that runs this deploy again (`DeployContext.rerun`). */
+  rerun: string;
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
@@ -153,13 +151,14 @@ async function runDeployAgentcore(params: {
   const { agentDir, name, channels, topology } = params;
   // Decided before the first side effect: the deploy resets the runtime's storage and the login with it, so with nobody
   // to log it in again it would end at "not logged in" AFTER replacing a runtime that was serving, with the webhooks
-  // a previous deploy registered still pointing at it.
-  if (params.boxLogin && !params.input) {
+  // a previous deploy registered still pointing at it. A coding agent's ticket has someone: its user.
+  if (params.boxLogin && params.answerer.kind === "nobody") {
     failStartup(
       new Error(
         `deploy stopped: every AgentCore deploy wipes the runtime's ${params.boxLogin} login, and without a terminal ` +
-          `nobody can log it in again — run this deploy in a terminal, or set ${params.boxLogin}'s API key in ` +
-          `${params.valueFile}`,
+          `nobody can log it in again — run this deploy in a terminal; from a coding agent, run ` +
+          `\`${params.rerun} --json\`, which hands the login to its user; or set ` +
+          `${params.boxLogin}'s API key in ${params.valueFile}`,
       ),
     );
   }
@@ -208,7 +207,7 @@ async function runDeployAgentcore(params: {
         await writeFile(path, bytes);
         return path;
       },
-      registrarsFor(agentDir, params.values),
+      registrarsFor(agentDir, params.values, params.answerer),
     );
     if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
     console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);

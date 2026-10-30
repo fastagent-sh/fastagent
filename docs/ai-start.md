@@ -257,9 +257,17 @@ permissions before relying on it. See [CLI reference](cli.md).
 
 Choose a provider and model with the owner. `fastagent models` lists available specifications, the providers
 `fastagent.config.ts` declares included ([custom models](configuration.md#custom-models)).
-Ask the owner to run `fastagent login` in the agent directory, or have them configure an approved
-provider key in `.secrets/.env`. Keep credentials out of chat transcripts, issue comments,
-source files, and logs. The CLI reads the agent's `.secrets/.env`, not a `.env` at its root.
+`fastagent auth check --provider <id>` says whether the provider is ready (`ready`, exit 0). When it is not:
+
+- An account (ChatGPT for `openai`, a Claude subscription for `anthropic`): run
+  `fastagent login <provider> --method account --json`. It returns at once with `status: "need_user_action"`, the
+  `url` to give the owner, and a `check_command` to run once they say they have signed in; follow its
+  `agent_next_steps`.
+- An API key: `fastagent login <provider> --method api-key --json` names the variable and the file; the owner sets
+  it there themselves. The owner can also run `fastagent login` in a terminal, which asks for everything.
+
+Keep credentials out of chat transcripts, issue comments, source files, and logs. The CLI reads the agent's
+`.secrets/.env`, not a `.env` at its root.
 
 Set `model: "provider/model-id"` in the existing `fastagent.config.ts`, preserving its export. A terminal
 picker can also set the model; unattended invocations require an explicit model. A deployment resolves
@@ -302,9 +310,15 @@ webhook servers, token refresh loops, or reply pipelines:
 | Channel | Command from the agent directory | Owner action and reference |
 |---|---|---|
 | Telegram | `fastagent add telegram` | Supply the bot token and webhook verification secret. [Telegram](telegram.md) |
-| Slack | `fastagent add slack` | Complete interactive app configuration and OAuth installation. [Slack](slack.md) |
-| Feishu | `fastagent add feishu` | Scan to approve app creation and publish its version in the console. [Feishu](feishu.md) |
-| Lark | `fastagent add lark` | Complete international-console app/credential setup. [Lark compatibility](feishu.md) |
+| Slack | `fastagent add slack --json` | Paste an App Configuration token pair on the page it returns, then click Allow on Slack's install page. [Slack](slack.md) |
+| Feishu | `fastagent add feishu --json` | Confirm the new app at the address it returns, then publish its version in the console. [Feishu](feishu.md) |
+| Lark | `fastagent add lark --json` | Create the app in the international console and set its ID and secret in `.secrets/.env`. [Lark compatibility](feishu.md) |
+
+With `--json`, `add slack|feishu|lark` answers `need_user_action` for each part only the owner can do, with the
+address, what to write where, and a `check_command`; relay it, wait for the owner to say it is done, and run the
+command it names. The setup's ticket ends `done` with the variables it wrote, the next steps, and what is left for
+the owner (`afterwards`, such as publishing a version). Never ask for a token in the conversation: the response names
+the file or page the owner enters it in ([`fastagent add`](cli.md#fastagent-add-telegramslackfeishulark)).
 
 After owner-approved setup, use `fastagent dev --tunnel` for webhook testing (`cloudflared` required).
 Confirm each channel loads, inspect registration results, and send a real message from the authorized
@@ -315,8 +329,8 @@ enabled channel must fail serving instead of silently disappearing.
 ### Slack installation and credential ownership
 
 `fastagent add slack` scaffolds both the channel and `slack-send`, then offers single-workspace internal-app
-onboarding. The owner chooses visibility, supplies App Configuration access/refresh tokens through hidden
-prompts, and approves installation in Slack. This enables Slack's irreversible Agent messaging experience;
+onboarding. The owner supplies the App Configuration access/refresh tokens (through hidden prompts at a terminal,
+or the one-time page `add slack --json` returns) and approves installation in Slack. This enables Slack's irreversible Agent messaging experience;
 platform plan requirements and the manual `--no-onboard` path are in [Slack onboarding](slack.md#internal-app-onboarding).
 
 The credentials and where each lives are one table in [Slack → Credentials](slack.md#credentials): the
@@ -430,9 +444,11 @@ and verifies it. Review [Deploy](deploy.md) before authorizing resource creation
 
 Put the model in config and every value the deployment needs in `.secrets/production/.env`; `deploy` carries the whole
 file, never the dev one. A
-model without an API key there (an OAuth subscription) is logged in on the deployment by the owner, in a terminal:
-`--run` starts `fastagent login --deployment <host>` once the box is up, and without a terminal it stops and names that
-command ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
+model without an API key there (an OAuth subscription) is logged in on the deployment by the owner. Deploy with
+`fastagent deploy <host> --run --json`: it returns a ticket, and `fastagent deploy <host> --check <ticket>` reports
+`working`, a `need_user_action` for each step only the owner can take (signing the host's CLI in, confirming a
+production Feishu app, the box's model login: relay the address, and a code when there is one), then `done` with the
+deployment's URL ([Deploy](deploy.md), [Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
 host. A deployed agent is reached through its channels and schedules, and on Docker, Fly and Railway through the

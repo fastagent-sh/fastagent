@@ -11,7 +11,14 @@ import { dotEnvPath, loadEnvValues } from "../src/env.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 
 const calls: string[] = [];
-let facts: { values: Map<string, string>; modelAuth?: string };
+let facts: { values: Map<string, string>; modelAuth?: string; channels?: { name: string; ingress: string }[] };
+/** Who the last preparation was handed, and who the host's last deploy was. */
+let preparedFor: unknown;
+/** The ticket a test runs the deploy through, and its status when the pre-flight first ran. */
+let throughTicket: string | undefined;
+let statusAtPreflight: string | undefined;
+let finishingAtHost: boolean | undefined;
+let answeredBy: string | undefined;
 const stopped = new Error("deploy stopped");
 
 let interactive = true;
@@ -29,13 +36,17 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/deploy/preflight.ts")>()),
   // The values as the real pre-flight reads them, the selected value file, over what a test sets in `facts`.
   preflightDeploy: async ({ agentDir }: { agentDir: string }) => {
+    if (throughTicket !== undefined && statusAtPreflight === undefined) {
+      const { checkTicket: read } = await import("../src/cli/ticket.ts");
+      statusAtPreflight = (await read(throughTicket))?.status;
+    }
     calls.push(
       `preflight dev=${process.env[DEV_SERVE_ENV] ?? "-"} token=${facts.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`,
     );
     return {
       ok: true,
       messages: [],
-      channels: [{ name: "feishu", ingress: "webhook" }],
+      channels: facts.channels ?? [{ name: "feishu", ingress: "webhook" }],
       values: new Map([...loadEnvValues(dotEnvPath(agentDir)), ...facts.values]),
       valueFile: ".secrets/production/.env",
       modelAuth: facts.modelAuth,
@@ -48,8 +59,9 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
 }));
 vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/cli/add-feishu.ts")>()),
-  prepareFeishuApps: async (_dir: string, apps: { kind: string }[], rerun: string) => {
+  prepareFeishuApps: async (_dir: string, apps: { kind: string }[], rerun: string, person: unknown) => {
     calls.push(`prepare ${apps.map(({ kind }) => kind).join(",")} rerun=${rerun}`);
+    preparedFor = person;
     facts.values.set("FEISHU_APP_ID", "cli_production");
     facts.values.set("FEISHU_APP_SECRET", "production_secret");
     facts.values.set("FEISHU_VERIFICATION_TOKEN", "captured");
@@ -57,10 +69,33 @@ vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
 }));
 /** Whether each deploy the host received carries the Agent API's key: what it would set on the host. */
 const carriedKey: boolean[] = [];
-const deployed = vi.fn(async (ctx: { pre: { values: Map<string, string> } }) => {
+const deployed = vi.fn(async (ctx: { pre: { values: Map<string, string> }; answerer: { kind: string } }) => {
   calls.push(`host token=${ctx.pre.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`);
+  if (throughTicket !== undefined) {
+    const { checkTicket: read } = await import("../src/cli/ticket.ts");
+    finishingAtHost = (await read(throughTicket))?.finishing;
+  }
   carriedKey.push(ctx.pre.values.has("FASTAGENT_API_KEY"));
+  answeredBy = ctx.answerer.kind;
+  return "https://bot.fly.dev";
 });
+const started: Record<string, unknown>[] = [];
+vi.mock("../src/cli/ticket.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/cli/ticket.ts")>()),
+  // The parent's start, recorded: the process it would start is this test's own child half, run below by hand.
+  startTicket: async (input: Record<string, unknown>) => {
+    started.push(input);
+    return {
+      ticket: "0123456789abcdef",
+      status: "working",
+      expiresAt: Date.now() + 60_000,
+      check: input.check,
+      fields: input.fields,
+    };
+  },
+}));
+const { createTicket, checkTicket } = await import("../src/cli/ticket.ts");
+const { terminalPerson } = await import("../src/cli/person.ts");
 vi.mock("../src/cli/commands/deploy/fly.ts", () => ({ flyHost: { deploy: deployed, isOurs: () => true } }));
 vi.mock("../src/cli/commands/deploy/docker.ts", () => ({ dockerHost: { deploy: deployed, isOurs: () => true } }));
 const { runDeploy } = await import("../src/cli/commands/deploy.ts");
@@ -71,6 +106,12 @@ const production = () => join(dir, ".secrets", "production", ".env");
 beforeEach(async () => {
   calls.length = 0;
   carriedKey.length = 0;
+  started.length = 0;
+  preparedFor = undefined;
+  throughTicket = undefined;
+  statusAtPreflight = undefined;
+  finishingAtHost = undefined;
+  answeredBy = undefined;
   interactive = true;
   facts = {
     values: new Map([
@@ -79,6 +120,8 @@ beforeEach(async () => {
     ]),
   };
   dir = join(await mkdtemp(join(tmpdir(), "fa-deploy-order-")), "fastagent");
+  // Run from the agent directory, so the command a step names to run again is the plain one.
+  vi.spyOn(process, "cwd").mockReturnValue(dir);
   await mkdir(join(dir, ".secrets", "production"), { recursive: true });
   await writeFile(join(dir, ".secrets", ".env"), "FEISHU_APP_ID=cli_dev\n");
   // Its key given, so the cases below are about preparing an app; the key's own order is the last cases'.
@@ -142,13 +185,13 @@ it("does not prepare an app a deployment cannot point anywhere, and says what it
   expect(calls).toContain("prepare feishu rerun=fastagent deploy docker --tunnel --run");
 });
 
-it("prepares only from a terminal: unattended, it says how to supply the token instead", async () => {
+it("prepares only with a person: with nobody, it names the deploy that hands their part to a coding agent's user", async () => {
   interactive = false;
   await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
   expect(said.join("\n")).toContain(
-    "creating or preparing a separate production app needs a terminal — run this deploy in one, " +
-      "or supply these values from a production app in .secrets/production/.env",
+    "setting up the separate production app needs a person — run this deploy in a terminal; from a coding agent, " +
+      "run `fastagent deploy fly --run --json`, which hands their part to its user",
   );
 
   interactive = true;
@@ -156,7 +199,7 @@ it("prepares only from a terminal: unattended, it says how to supply the token i
   said.length = 0;
   await expect(runDeploy("fly", dir, { run: true, input: false })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
-  expect(said.join("\n")).toContain("run this deploy in one without --no-input");
+  expect(said.join("\n")).toContain("fastagent deploy fly --run --json");
 });
 
 it("creates an app when all production app values are absent, instead of gating on values onboarding supplies", async () => {
@@ -211,4 +254,87 @@ it("gives no key to a definition that turns the API off, and says the deployment
   expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
   await expect(readFile(production(), "utf8")).rejects.toThrow("ENOENT");
   expect(said.join("\n")).toContain("Agent API: not served — fastagent.config.ts says http.api: false");
+});
+
+it("a coding agent's deploy: refused here what can be, the rest started in a ticket it joins if one runs", async () => {
+  const printed = vi.spyOn(console, "log").mockImplementation(() => {});
+  await expect(runDeploy("fly", dir, { run: true, json: true })).rejects.toBe(stopped);
+  // Only the read-only pre-flight ran here; preparing an app and deploying are the ticket's.
+  expect(calls).toEqual(["preflight dev=- token=-"]);
+  expect(started).toEqual([
+    expect.objectContaining({
+      subject: `deploy:fly:${dir}`,
+      check: "fastagent deploy fly --check",
+      restart: "fastagent deploy fly --run",
+      whenRunning: "join",
+      waitsFirst: false,
+      command: expect.objectContaining({ args: expect.arrayContaining(["deploy", "fly", dir, "--run", "--json"]) }),
+    }),
+  ]);
+  expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({
+    status: "working",
+    deployment: "fly",
+    check_command: "fastagent deploy fly --check 0123456789abcdef --json",
+  });
+});
+
+it("a coding agent's deploy needing a Lark app without its credentials names them before any ticket", async () => {
+  facts.channels = [{ name: "lark", ingress: "webhook" }];
+  const printed = vi.spyOn(console, "log").mockImplementation(() => {});
+  await expect(runDeploy("fly", dir, { run: true, json: true })).rejects.toBe(stopped);
+  expect(started).toEqual([]);
+  expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({
+    status: "need_user_action",
+    variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
+    value_file: production(),
+    check_command: "fastagent deploy fly --run --json",
+  });
+});
+
+it("the ticket's run is the whole deploy, each person's step its user's, its result the URL and the API's notes", async () => {
+  const { ticket } = createTicket({
+    subject: `deploy:fly:${dir}`,
+    action: "deploy the agent to fly",
+    check: "fastagent deploy fly --check",
+    restart: "fastagent deploy fly --run",
+    timeoutSeconds: 60,
+  });
+  throughTicket = ticket;
+  await expect(runDeploy("fly", dir, { run: true, json: true, ticket })).rejects.toBe(stopped);
+  // Taken before the pre-flight's seconds, so the starting command never finds it unclaimed.
+  expect(statusAtPreflight).toBe("working");
+  // The host's work runs as the step finishing: the person's deadline never cuts it halfway.
+  expect(finishingAtHost).toBe(true);
+  expect(calls).toEqual([
+    "preflight dev=- token=-",
+    "prepare feishu rerun=fastagent deploy fly --run --json",
+    "preflight dev=- token=captured",
+    "host token=captured",
+  ]);
+  expect(preparedFor).toBeDefined();
+  expect(preparedFor).not.toBe(terminalPerson);
+  expect(answeredBy).toBe("ticket");
+  expect(await checkTicket(ticket)).toMatchObject({
+    status: "done",
+    result: {
+      url: "https://bot.fly.dev",
+      notes: expect.arrayContaining([expect.stringContaining("fastagent invoke --url https://bot.fly.dev")]),
+    },
+  });
+});
+
+it("a deploy refused inside its ticket fails the ticket with the reason, not just that it stopped", async () => {
+  facts.modelAuth = "OPENAI_API_KEY";
+  const { ticket } = createTicket({
+    subject: `deploy:fly:${dir}`,
+    action: "deploy the agent to fly",
+    check: "fastagent deploy fly --check",
+    restart: "fastagent deploy fly --run",
+    timeoutSeconds: 60,
+  });
+  await expect(runDeploy("fly", dir, { run: true, json: true, ticket })).rejects.toBe(stopped);
+  expect(await checkTicket(ticket)).toMatchObject({
+    status: "failed",
+    message: expect.stringContaining("no value for: OPENAI_API_KEY"),
+  });
 });

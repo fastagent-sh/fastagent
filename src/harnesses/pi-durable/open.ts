@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CredentialStore, ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
+import type { ModelThinkingLevel, Models, Provider } from "@earendil-works/pi-ai";
 import {
   type Extension,
   type HarnessSettings,
@@ -29,7 +29,6 @@ import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { DEV_SERVE_ENV } from "../../serving-command.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
-import { modelsOver } from "../models/models.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isNeeds } from "./define.ts";
 import { GENERATED_DIR, REGISTRY_FILE, REGISTRY_KINDS, type Registry, generateRegistry } from "./registry.ts";
@@ -350,8 +349,13 @@ export interface AssembleAgentOptions {
   content?: readonly ResolvedContent[];
   /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;
-  /** Where `login` keeps provider credentials: the machine's in development, the instance's when deployed. */
-  credentials: CredentialStore;
+  /**
+   * pi-ai's built-ins and the definition's providers over the instance's credentials, lists refreshed: the model
+   * environment's (environment.ts), so the Agent runs on the lists its startup report reads.
+   */
+  models: Models;
+  /** Why the lists of {@link models} are not current, when they are not: said with a default model none offers. */
+  catalogProblem?: string;
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
@@ -361,15 +365,15 @@ export interface AssembleAgentOptions {
   unfinished?: Unfinished;
 }
 
-/** Open the definition as an Agent: pi-ai's built-in models and the definition's providers, the coding tools, then its own. */
+/** Open the definition as an Agent over `models`: the coding tools, then its own. */
 export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
   const { dir, config } = definition;
-  const { code } = options;
-  const models = modelsOver(options.credentials, code.providers);
+  const { code, models } = options;
   const spec = options.model ?? config.model;
   const model = spec === undefined ? undefined : modelRefOf(spec, "the default model");
   if (model !== undefined && models.getModel(model.provider, model.modelId) === undefined) {
-    throw new Error(`unknown model "${spec}": no provider "${model.provider}" offers "${model.modelId}"`);
+    const stale = options.catalogProblem === undefined ? "" : `, and ${options.catalogProblem}`;
+    throw new Error(`unknown model "${spec}": no provider "${model.provider}" offers "${model.modelId}"${stale}`);
   }
   const ownWake = [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].some(({ name }) =>
     WAKE_TOOLS.includes(name),

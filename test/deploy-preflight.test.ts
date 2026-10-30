@@ -3,7 +3,10 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
-import { createPiModels } from "../src/harnesses/models/environment.ts";
+import { type AnyModel, InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { modelsOver } from "../src/harnesses/models/models.ts";
+import { resolveStateRoot } from "../src/paths.ts";
+import { keepCatalog } from "./kept-catalog.ts";
 import type { AgentConfig as FastagentConfig } from "../src/harnesses/pi-durable/define.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 
@@ -88,6 +91,21 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // and it is not a credential, so it stays out of the secret channel and every runbook's required list.
     expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
     expect(pre.declaredSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
+  });
+
+  it("a model only a fetched list has passes, warning that a box with no list kept must fetch it to start", async () => {
+    const dir = await agent();
+    const builtIn = modelsOver(new InMemoryCredentialStore()).getModels("openai")[0] as AnyModel;
+    keepCatalog(join(resolveStateRoot(dir), "models"), [{ ...builtIn, id: "gpt-released" }]);
+    const released = await call(dir, { model: "openai/gpt-released" });
+    if (!released.ok) throw new Error(`preflight gated: ${released.gate}`);
+    expect(released.messages).toContainEqual({
+      level: "warn",
+      text: expect.stringMatching(/^"openai\/gpt-released" is in pi's published catalog, not in the pi-ai/),
+    });
+    const carried = await call(dir, { model: `openai/${builtIn.id}` });
+    if (!carried.ok) throw new Error(`preflight gated: ${carried.gate}`);
+    expect(carried.messages.filter(({ text }) => /is in pi's published catalog/.test(text))).toEqual([]);
   });
 
   it("a config model bakes nothing extra — the config is already in the image", async () => {
@@ -811,6 +829,43 @@ export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" 
     }
   });
 
+  it("a provider's own list is fetched as the box starts: a credential only a login on the box brings is warned of", async () => {
+    // Under test/fixtures, so the configuration's import of pi-ai resolves this repository's.
+    const host = join(import.meta.dirname, "fixtures", `.tmp-preflight-own-${process.pid}`);
+    const dir = join(host, "agent");
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    try {
+      await writeFile(
+        join(dir, "fastagent.config.ts"),
+        `import { createProvider, envApiKeyAuth } from "@earendil-works/pi-ai";
+const never = () => { throw new Error("no message is sent"); };
+export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKeyAuth("Gw", ["GW_KEY"]) }, models: [],
+  fetchModels: async () => [], api: { stream: never, streamSimple: never } })] };\n`,
+      );
+      const builtIn = modelsOver(new InMemoryCredentialStore()).getModels("openai")[0] as AnyModel;
+      const list = { models: [{ ...builtIn, id: "fetched-1", provider: "gw" }], checkedAt: Date.now() };
+      await mkdir(join(resolveStateRoot(dir), "models", "providers"), { recursive: true });
+      await writeFile(join(resolveStateRoot(dir), "models", "providers", "gw.json"), JSON.stringify(list));
+
+      const fetchedFirst = /provider "gw" fetches its own model list/;
+      const loginOnly = await call(dir, { model: "gw/fetched-1" }, { run: true });
+      if (!loginOnly.ok) throw new Error(`preflight gated: ${loginOnly.gate}`);
+      expect(loginOnly.messages).toContainEqual({
+        level: "warn",
+        text: expect.stringMatching(
+          /^provider "gw" fetches its own model list, .* if "gw\/fetched-1" is only in that list, the box refuses to start on it until gw's API key is in \.secrets\/\.env$/,
+        ),
+      });
+
+      await writeFile(join(dir, ".secrets", ".env"), "GW_KEY=k\n");
+      const carried = await call(dir, { model: "gw/fetched-1" }, { run: true });
+      if (!carried.ok) throw new Error(`preflight gated: ${carried.gate}`);
+      expect(carried.messages.filter(({ text }) => fetchedFirst.test(text))).toEqual([]);
+    } finally {
+      await rm(host, { recursive: true, force: true });
+    }
+  });
+
   it("with nothing stored here either: the box still logs in, since this machine's login was never the source", async () => {
     noAnthropicEnv();
     const pre = await call(await agent(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
@@ -841,7 +896,7 @@ export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" 
     // with this machine's file system would ship a deploy with no credential and no login.
     const adc = join(await mkdtemp(join(tmpdir(), "fa-adc-")), "adc.json");
     await writeFile(adc, "{}");
-    const vertex = createPiModels().getProvider("google-vertex")?.getModels()[0]?.id as string;
+    const vertex = modelsOver(new InMemoryCredentialStore()).getProvider("google-vertex")?.getModels()[0]?.id as string;
     const env = `GOOGLE_CLOUD_PROJECT=p\nGOOGLE_CLOUD_LOCATION=us-central1\nGOOGLE_APPLICATION_CREDENTIALS=${adc}\n`;
     const pre = await call(await agent({ ".secrets/.env": env }), { model: `google-vertex/${vertex}` }, { run: true });
     expect(pre.ok && pre.boxLogin).toBe("google-vertex");
@@ -850,7 +905,8 @@ export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" 
   it("a keyless credential in the value file travels; the same credential only in this shell leaves it to the box", async () => {
     // AWS keys are what pi reads for amazon-bedrock, with no single key variable to require. From the value file they
     // reach the box; from the shell they are this machine's, and whether the box has a role is the box's answer.
-    const bedrock = createPiModels().getProvider("amazon-bedrock")?.getModels()[0]?.id as string;
+    const bedrock = modelsOver(new InMemoryCredentialStore()).getProvider("amazon-bedrock")?.getModels()[0]
+      ?.id as string;
     const aws = "AWS_ACCESS_KEY_ID=AKIAEXAMPLE\nAWS_SECRET_ACCESS_KEY=secret\nAWS_REGION=us-east-1\n";
     const carried = await call(
       await agent({ ".secrets/.env": aws }),

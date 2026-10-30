@@ -47,7 +47,7 @@ interface Agent {
 ```ts
 import { openAgent } from "@fastagent-sh/fastagent";
 
-const agent = await openAgent("./my-agent", { model: "openai-codex/gpt-5.5" });
+const agent = await openAgent("./my-agent", { model: "openai/gpt-5.5" });
 // ...
 await agent.close(); // on shutdown: releases the instance's storage
 ```
@@ -55,10 +55,12 @@ await agent.close(); // on shutdown: releases the instance's storage
 `openAgent` is what `dev` and `start` run before they serve: it reads the definition (`SYSTEM.md`, `AGENTS.md`,
 `skills/`, `prompts/`, `src/`, `fastagent.config.ts`), builds its code with the secrets it declares, installs its
 declared [environment](configuration.md#environment) where it has no install yet and puts it first on this process's
-`PATH`, clones its content, and opens the instance's storage (`<agent dir>/.state/agent.sqlite`), which one process
-holds at a time. Without a `model`, the config's is the default; with none at all the agent still opens, and a session
-needs a model of its own (`sessions.create({ model })`, `sessions.update`) before a message is answered. Nothing reaches
-the agent until `serve`.
+`PATH`, clones its content, refreshes its [model lists](configuration.md#model-lists) (a request to `https://pi.dev` of
+at most 5 s, and to a provider that fetches its own list, unless what `<agent dir>/.state/models/` keeps is less than
+4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage (`<agent dir>/.state/agent.sqlite`),
+which one process holds at a time. Without a `model`, the config's is the default; with none at all the agent still
+opens, and a session needs a model of its own (`sessions.create({ model })`, `sessions.update`) before a message is
+answered. Nothing reaches the agent until `serve`.
 
 A definition is always a directory: the prompt is its `SYSTEM.md`, and its tools are modules of `src/tools/`. To
 assemble one in code, write the directory.

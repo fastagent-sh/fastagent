@@ -57,6 +57,10 @@ export interface AgentcoreRunPlan {
   boxLogin?: BoxLoginStep<[runtimeArn: string]>;
 }
 
+/** AWS keys are typed, so a coding agent's user signs the CLI in at a terminal of their own. */
+const AWS_SIGN_IN =
+  "run `aws configure` (or `aws sso login`) in a terminal of your own, where the keys are typed, then re-run";
+
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
 
 /**
@@ -210,10 +214,10 @@ export async function deployAgentcoreRun(
     }),
   );
   if (!("ok" in identity)) {
-    if ("absent" in identity) return gate("`aws sts get-caller-identity` found no caller — run `aws configure`");
+    if ("absent" in identity) return gate(`\`aws sts get-caller-identity\` found no caller — ${AWS_SIGN_IN}`);
     if (identity.code === 127) return gate(`${identity.unreadable}, then re-run`);
     // QUOTED: expired token, a missing profile and a proxy that eats STS are three different next actions.
-    return gate(`no working AWS credentials (${identity.unreadable}) — run \`aws configure\`, then re-run`);
+    return gate(`no working AWS credentials (${identity.unreadable}) — ${AWS_SIGN_IN}`);
   }
   const { account, principal } = identity.ok;
   let region = plan.region;
