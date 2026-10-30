@@ -63,6 +63,28 @@ const UNATTENDED_TIMEOUT_SECONDS = 900;
 /** `fastagent add <kind> [dir]`: scaffold `src/channels/<kind>.ts`, the adapter configured with a starter policy. */
 export async function runAddChannel(channelKind: ChannelKind, dirArg: string, opts: AddChannelOptions): Promise<void> {
   if (opts.check !== undefined) return checkSetup(channelKind, opts.check, opts);
+  if (opts.ticket !== undefined) {
+    // The process `startTicket` started: it takes the ticket before anything slow (the definition is built to plan),
+    // then does the whole `add`, its person the ticket's.
+    await runTicket(opts.ticket, async (step) => ({
+      ...(await addChannel(channelKind, await planAdd(channelKind, dirArg, opts), opts, step.person)),
+    }));
+    process.exit(0);
+  }
+  const plan = await planAdd(channelKind, dirArg, opts);
+  const unattended = opts.input === false || opts.json === true || !isInteractive();
+  if (unattended && opts.onboard !== false && channelKind !== "telegram") {
+    return setUpUnattended(channelKind, opts, plan);
+  }
+  const added = await addChannel(channelKind, plan, opts, terminalPerson).catch(failStartup);
+  if (opts.json) console.log(JSON.stringify({ status: "done", ...added }, null, 2));
+  // App-creation flows leave platform/tunnel sockets behind that would otherwise hold the one-shot scaffold command
+  // open after all durable boundaries have completed.
+  process.exit(0);
+}
+
+/** What `add` settles before it changes anything, refusing what it can while nothing has changed. */
+async function planAdd(channelKind: ChannelKind, dirArg: string, opts: AddChannelOptions): Promise<AddPlan> {
   // The channel (glue + companion tools + secrets) is agent surface: everything lands in the AGENT DIR.
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
@@ -103,7 +125,7 @@ export async function runAddChannel(channelKind: ChannelKind, dirArg: string, op
       inAgent(relative(target, file)),
     );
   }
-  const plan: AddPlan = {
+  return {
     target,
     environment,
     inAgent,
@@ -116,20 +138,6 @@ export async function runAddChannel(channelKind: ChannelKind, dirArg: string, op
       `${environment === "production" ? " --env production" : ""}${opts.ingress ? ` --ingress ${opts.ingress}` : ""}` +
       `${opts.replaceConfig ? " --replace-config" : ""}`,
   };
-  if (opts.ticket !== undefined) {
-    // The process `startTicket` started: the whole `add`, its person the ticket's.
-    await runTicket(opts.ticket, async (step) => ({ ...(await addChannel(channelKind, plan, opts, step.person)) }));
-    process.exit(0);
-  }
-  const unattended = opts.input === false || opts.json === true || !isInteractive();
-  if (unattended && opts.onboard !== false && channelKind !== "telegram") {
-    return setUpUnattended(channelKind, opts, plan);
-  }
-  const added = await addChannel(channelKind, plan, opts, terminalPerson).catch(failStartup);
-  if (opts.json) console.log(JSON.stringify({ status: "done", ...added }, null, 2));
-  // App-creation flows leave platform/tunnel sockets behind that would otherwise hold the one-shot scaffold command
-  // open after all durable boundaries have completed.
-  process.exit(0);
 }
 
 /** What `add` settled before it does anything: where, for which environment, and how the app receives. */
@@ -160,6 +168,7 @@ async function addChannel(
   const { target, environment, inAgent, agentFromCwd, file, existsAlready, ingress, pinned, setting, rerun } = plan;
   const envPath = dotEnvPath(target);
   const envLabel = isUnderDir(envPath, target) ? inAgent(relative(target, envPath)) : envPath;
+  const before = loadEnvValues(envPath);
   if (existsAlready) {
     console.error(`[fastagent] ${inAgent(relative(target, file))} already exists — keeping it`);
   } else {
@@ -228,9 +237,13 @@ async function addChannel(
   step(
     `${agentFromCwd === undefined ? install : `(cd ${agentFromCwd} && ${install})`}                      # if @fastagent-sh/fastagent is not installed yet`,
   );
+  // Onboarding writes some itself (an app's ID and secret, a bot token) before the write above: what this `add` wrote is
+  // what the file holds now and did not before.
+  const now = loadEnvValues(envPath);
+  const written = [...now.keys()].filter((name) => now.get(name) && now.get(name) !== before.get(name));
   for (const e of env) {
-    if (dotEnv.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
-    if (dotEnv.written.includes(e.name)) {
+    if (!written.includes(e.name) && dotEnv.alreadySet.includes(e.name)) continue; // the user's already: nothing to do
+    if (written.includes(e.name)) {
       // Written, but its hint may still carry an action — keep the variable visible instead of silently absorbing it.
       step(`${e.name} — ${e.generate ? "generated and " : ""}written to ${envLabel}   # ${e.hint}`);
       continue;
@@ -259,7 +272,7 @@ async function addChannel(
   } else if (channelKind !== "lark") {
     step(`fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
   }
-  return { written: dotEnv.written, next_steps: next };
+  return { written, next_steps: next };
 }
 
 /** The command that reads an app's setup ticket, as every such ticket records it. */

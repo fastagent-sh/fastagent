@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { failStartup } from "../src/cli/fail.ts";
 import {
+  type Ticket,
   type TicketStep,
   checkTicket,
   createTicket,
@@ -206,7 +208,13 @@ describe("a step that outlives the command that starts it", () => {
 
   it("a step given up on for giving the person nothing to do is stopped first, so it writes nothing after", async () => {
     const sidecar = join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
-    const silent = `require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid)); setInterval(() => {}, 1000);`;
+    // It takes its ticket, then shows the person nothing.
+    const silent = `
+      const { readFileSync, writeFileSync } = require("node:fs");
+      const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "tickets", process.argv.at(-1) + ".json");
+      writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), status: "working", pid: process.pid }));
+      writeFileSync(${JSON.stringify(sidecar)}, String(process.pid));
+      setInterval(() => {}, 1000);`;
     const given = await startTicket({
       ...request(),
       waitsFirst: true,
@@ -220,7 +228,18 @@ describe("a step that outlives the command that starts it", () => {
     expect(existsSync(sidecar) && running(Number(readFileSync(sidecar, "utf8")))).toBe(false);
   });
 
-  it("a step that may work a while first is returned as it stands past the start timeout, the ticket left to it", async () => {
+  it("a failure that ends the process on its way out is the ticket's, with its reason", async () => {
+    const { ticket } = createTicket(request("deploy:fly"));
+    const exited = new Error("exited");
+    vi.spyOn(process, "exit").mockImplementation(() => {
+      throw exited;
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await runTicket(ticket, async () => failStartup(new Error("not logged in to Fly")));
+    expect(await checkTicket(ticket)).toMatchObject({ status: "failed", message: "not logged in to Fly" });
+  });
+
+  it("a step that never takes its ticket within the start window is stopped and failed, whatever it may do", async () => {
     const sidecar = join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
     const busy = `require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid)); setInterval(() => {}, 1000);`;
     const given = await startTicket({
@@ -229,16 +248,43 @@ describe("a step that outlives the command that starts it", () => {
       command: { file: process.execPath, args: ["-e", busy, "--"], cwd: tmpdir() },
       startTimeoutMs: 1_000,
     });
-    // The child writes its pid as it starts, which a loaded machine can take past the start timeout.
-    for (let tries = 0; !existsSync(sidecar) && tries < 50; tries++) await new Promise((r) => setTimeout(r, 100));
-    const pid = Number(readFileSync(sidecar, "utf8"));
-    try {
-      // Not written for it: the step writes its own ticket once it runs.
-      expect(given).toMatchObject({ status: "starting" });
-      expect(running(pid)).toBe(true);
-    } finally {
-      process.kill(pid);
-    }
+    expect(given).toMatchObject({
+      status: "failed",
+      message: expect.stringMatching(/^it did not start within 1s: /),
+    });
+    // Stopped first: a step left running past a failed ticket would write nowhere and hold what it holds.
+    const pid = existsSync(sidecar) ? Number(readFileSync(sidecar, "utf8")) : undefined;
+    expect(running(pid)).toBe(false);
+  });
+
+  it("a step that takes a ticket already ended does not run: it is not this process's any more", async () => {
+    const { ticket } = createTicket(request("add:lark"));
+    // Given up on by the starting command before this process got to it.
+    expect(await checkTicket(ticket)).toMatchObject({ status: "failed" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const run = vi.fn(async () => ({}));
+    await runTicket(ticket, run);
+    expect(run).not.toHaveBeenCalled();
+    expect(await checkTicket(ticket)).toMatchObject({
+      status: "failed",
+      message: expect.stringMatching(/^it stopped/),
+    });
+  });
+
+  it("each step the person is waited on replaces the last one's fields; one that lapses first sets expires_in", async () => {
+    const { ticket } = createTicket(request("add:slack", 900));
+    const steer = steered();
+    const running = runTicket(ticket, steer.run);
+    const step = await steer.step;
+    step.waits({ url: "https://t.example/tokens", code: "AB", takesAddress: true });
+    step.person.waitsOn("https://slack.com/oauth", "click Allow", Date.now() + 120_000);
+    const waiting = (await checkTicket(ticket)) as Ticket;
+    expect(waiting).toMatchObject({ url: "https://slack.com/oauth", instructions: "click Allow" });
+    expect(waiting).not.toHaveProperty("code");
+    expect(waiting).not.toHaveProperty("takesAddress");
+    expect(ticketReport(waiting, "checked").json.expires_in).toBeLessThanOrEqual(120);
+    steer.finish();
+    await running;
   });
 
   it("a step whose process stopped is failed, pointing at what it said", async () => {
@@ -312,6 +358,19 @@ describe("a ticket as its command reports it", () => {
     expect(ticketReport({ ...base, status: "failed", message: "no" }, "checked").json).toMatchObject({
       message: "no",
       agent_next_steps: "To try again, run: fastagent login openai --method account --json",
+    });
+    // What it reached before it failed is still the person's: where to get the value it stopped for.
+    const reached = { instructions: "copy the Verification Token", url: "https://open.larksuite.com/app/cli/event" };
+    expect(
+      ticketReport(
+        { ...base, status: "failed", message: "LARK_VERIFICATION_TOKEN is needed", afterwards: [reached] },
+        "checked",
+      ).json,
+    ).toMatchObject({
+      afterwards: [reached],
+      agent_next_steps:
+        "Tell the user what the steps it reached leave them: copy the Verification Token " +
+        "https://open.larksuite.com/app/cli/event To try again, run: fastagent login openai --method account --json",
     });
     expect(ticketReport({ ...base, status: "expired" }, "checked").json).toMatchObject({
       message: "it was not finished in time",

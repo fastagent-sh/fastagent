@@ -6,8 +6,8 @@
 import { openExternalUrl } from "../open-url.ts";
 
 export interface Person {
-  /** A step this run waits on: `instructions`, at `url`. */
-  waitsOn(url: string, instructions: string): void;
+  /** A step this run waits on: `instructions`, at `url`; `until`, when the step itself lapses (ms since the epoch). */
+  waitsOn(url: string, instructions: string, until?: number): void;
   /** The step waited on is done: the run carries on without the person. */
   carriesOn(): void;
   /** A step left to the person once this run ends, which nothing here waits for; at `url`, when it has one. */
@@ -16,8 +16,9 @@ export interface Person {
 
 /** The person at this terminal: told, and the page opened for them. */
 export const terminalPerson: Person = {
-  waitsOn(url, instructions) {
-    console.error(`[fastagent] ${instructions} — opening ${url} (waiting; keep this running)`);
+  waitsOn(url, instructions, until) {
+    const lapses = until === undefined ? "" : `, valid for ${Math.round((until - Date.now()) / 60_000)} minutes`;
+    console.error(`[fastagent] ${instructions} — opening ${url} (waiting${lapses}; keep this running)`);
     openExternalUrl(url);
   },
   carriesOn() {},

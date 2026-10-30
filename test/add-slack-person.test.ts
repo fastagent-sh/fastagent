@@ -3,7 +3,7 @@
  * shows, and the browser goes straight on to Slack's install page. The setup server is real; the tunnel and Slack's
  * config API are faked at their module boundary.
  */
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -175,4 +175,27 @@ it("a setup refused before it needs the page opens no tunnel to report it", asyn
     /--replace-config found no local Slack onboarding state/,
   );
   expect(startCloudflareTunnel).not.toHaveBeenCalled();
+});
+
+it("a saved pair replaced through the page ends there: the browser is told, not left waiting on a closing tunnel", async () => {
+  await writeFile(join(target, ".secrets", ".env"), "SLACK_BOT_TOKEN=xoxb-runtime\nSLACK_SIGNING_SECRET=sig\n");
+  const { writeSlackOnboardingState } = await import("../src/channels/slack/onboarding-state.ts");
+  writeSlackOnboardingState(stateRoot, {
+    version: 1,
+    appName: "App",
+    appId: "A1",
+    configToken: "xoxe.xoxp-old",
+    configRefreshToken: "xoxe-old",
+    configTokenExpiresAt: 1,
+    installedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const { person, waitedOn } = recordingPerson();
+  const run = onboardSlackInternalApp({ target, stateRoot, person, replaceConfig: true });
+  const tokensPage = local(await vi.waitFor(() => waitedOn() ?? Promise.reject(new Error("not yet"))));
+  const taken = await paste(tokensPage, "xoxe.xoxp-new", "xoxe-new");
+  const ended = await nextPage(new URL(taken.headers.get("location") as string, tokensPage).toString());
+  expect(await ended.text()).toContain("Slack App Configuration tokens replaced: you can close this page.");
+  await run;
+  const state = JSON.parse(await readFile(join(stateRoot, "channels", "slack", "onboarding.json"), "utf8"));
+  expect(state).toMatchObject({ appId: "A1", configToken: "xoxe.xoxp-new", configRefreshToken: "xoxe-new" });
 });

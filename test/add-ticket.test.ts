@@ -86,7 +86,8 @@ it("a ticket's run is the whole add: the person waited on, the app written, its 
       status: "done",
       url: expect.stringContaining("user_code=AB-CD"),
       result: {
-        written: expect.arrayContaining(["FEISHU_INGRESS"]),
+        // What the app's creation wrote mid-way counts, not only the scaffold's own last write.
+        written: expect.arrayContaining(["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_INGRESS"]),
         next_steps: expect.arrayContaining([expect.stringContaining("fastagent dev")]),
       },
       afterwards: [
