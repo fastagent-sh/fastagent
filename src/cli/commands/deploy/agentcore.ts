@@ -117,6 +117,7 @@ export const agentcoreHost: HostDeploy = {
         modelAuth,
         boxLogin,
         answerer: ctx.answerer,
+        rerun: ctx.rerun,
         channels,
         declaredSecrets,
         values,
@@ -139,6 +140,8 @@ async function runDeployAgentcore(params: {
   boxLogin: string | undefined;
   /** Who answers the box's login: `--run` continues into it rather than stopping at "not logged in". */
   answerer: Answerer;
+  /** The command that runs this deploy again (`DeployContext.rerun`). */
+  rerun: string;
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
@@ -154,7 +157,7 @@ async function runDeployAgentcore(params: {
       new Error(
         `deploy stopped: every AgentCore deploy wipes the runtime's ${params.boxLogin} login, and without a terminal ` +
           `nobody can log it in again — run this deploy in a terminal; from a coding agent, run ` +
-          `\`fastagent deploy agentcore --run --json\`, which hands the login to its user; or set ` +
+          `\`${params.rerun} --json\`, which hands the login to its user; or set ` +
           `${params.boxLogin}'s API key in ${params.valueFile}`,
       ),
     );
@@ -204,7 +207,7 @@ async function runDeployAgentcore(params: {
         await writeFile(path, bytes);
         return path;
       },
-      registrarsFor(agentDir, params.values),
+      registrarsFor(agentDir, params.values, params.answerer),
     );
     if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
     console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);

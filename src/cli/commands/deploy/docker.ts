@@ -18,7 +18,7 @@ import { announceWebhooks } from "../../../tunnel.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { failStartup } from "../../fail.ts";
-import { type Answerer, type HostDeploy, boxLoginStep } from "./shared.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, leftToPerson } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
@@ -129,6 +129,7 @@ async function runDeployDocker(params: {
   valueFile: string;
 }): Promise<string | undefined> {
   const { agentDir, composeFile, port, requireTunnel, channels } = params;
+  const leave = leftToPerson(params.answerer);
   const { secrets, missingSecrets } = assembleSecrets({
     modelAuth: params.modelAuth,
     declared: params.declaredSecrets,
@@ -146,7 +147,8 @@ async function runDeployDocker(params: {
       ...boxLoginStep("docker", params, () => composeShell(composeFile, agentDir)),
       announce: (tunnelUrl) =>
         announceWebhooks(agentDir, tunnelUrl, channels, {
-          openUrl: openExternalUrl,
+          // A ticket's process opens no browser: its person is told, through `leave`.
+          ...(leave === undefined ? { openUrl: openExternalUrl } : { leave }),
           stateRoot: resolveStateRoot(agentDir),
           env: Object.fromEntries(params.values),
         }),
@@ -173,11 +175,12 @@ async function runDeployDocker(params: {
   if (outcome.tunnelUrl) return outcome.tunnelUrl;
   const paths = webhookPaths(channels);
   if (paths.length > 0) {
-    console.error(
-      `[fastagent] note: ${paths.join(", ")} receive nothing until a public URL reaches this container — re-run ` +
-        `with --tunnel for a Quick Tunnel, or configure your own tunnel/proxy and point those webhook path(s) ` +
-        `(or your remapped channel routes) at it`,
-    );
+    const unreached =
+      `${paths.join(", ")} receive nothing until a public URL reaches this container — re-run with --tunnel for a ` +
+      `Quick Tunnel, or configure your own tunnel/proxy and point those webhook path(s) (or your remapped channel ` +
+      `routes) at it`;
+    console.error(`[fastagent] note: ${unreached}`);
+    leave?.(unreached);
   }
   return outcome.url;
 }

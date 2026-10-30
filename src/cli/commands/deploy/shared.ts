@@ -37,6 +37,8 @@ export interface DeployOptions {
   check?: string;
   /** `--code <code>` (with `--check`): the code a host's approval page showed, when it could not reach this machine. */
   code?: string;
+  /** `--stop` (with `--check`): stop that deploy where it is. */
+  stop?: boolean;
   /** `--timeout <seconds>`: how long it stays open. */
   timeout?: string;
   /** `--ticket <id>`: the process that runs it. */
@@ -57,6 +59,8 @@ export type Answerer = { kind: "terminal" } | { kind: "ticket"; step: TicketStep
 interface DeployContext {
   opts: DeployOptions;
   answerer: Answerer;
+  /** The command that runs this deploy again, from where it ran: its agent directory and flags. */
+  rerun: string;
   agentDir: string;
   config: AgentConfig;
   pre: Extract<DeployPreflight, { ok: true }>;
@@ -83,11 +87,18 @@ export interface HostDeploy {
   deploy(ctx: DeployContext): Promise<string | undefined>;
 }
 
-/** The registrars every host driver gets. */
-export function registrarsFor(agentDir: string, values: ReadonlyMap<string, string>): Registrars {
+/** Where a step left to the person goes for `answerer`: a ticket's `afterwards`; nowhere else but the log. */
+export function leftToPerson(answerer: Answerer): ((step: string) => void) | undefined {
+  return answerer.kind === "ticket" ? (step) => answerer.step.person.afterwards(step) : undefined;
+}
+
+/** The registrars every host driver gets; a channel's manual step also goes to `answerer`'s person. */
+export function registrarsFor(agentDir: string, values: ReadonlyMap<string, string>, answerer: Answerer): Registrars {
   const attempts = DEPLOY_REGISTRATION_ATTEMPTS;
   const env = Object.fromEntries(values);
+  const leave = leftToPerson(answerer);
   return {
+    ...(leave === undefined ? {} : { leave }),
     telegram: (baseUrl) => registerTelegramWebhook(baseUrl, { attempts, env }),
     slack: (baseUrl) =>
       registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir), environment: "production", attempts }),
@@ -119,7 +130,10 @@ export function boxLoginStep<Args extends unknown[]>(
         // An account sign-in: a key cannot be typed into a ticket.
         const io = ticketLoginIO(answerer.step, command);
         const failed = await loginOnBox({ ...request, method: "oauth", input: true, io });
-        return failed === undefined ? undefined : (io.refusal() ?? failed);
+        if (failed !== undefined) return io.refusal() ?? failed;
+        // Logged in: what follows (the webhooks) is the deploy finishing, never cut by the person's deadline.
+        answerer.step.person.carriesOn();
+        return undefined;
       },
     },
   };

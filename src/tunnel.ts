@@ -160,7 +160,13 @@ export async function announceWebhooks(
   dir: string,
   baseUrl: string,
   channels: readonly DeclaredChannel[],
-  opts: { openUrl?: (url: string) => void; stateRoot?: string; env?: NodeJS.ProcessEnv } = {},
+  opts: {
+    openUrl?: (url: string) => void;
+    stateRoot?: string;
+    env?: NodeJS.ProcessEnv;
+    /** {@link Registrars.leave}. */
+    leave?: (step: string) => void;
+  } = {},
 ): Promise<{ kind: string; outcome: RegistrationOutcome }[]> {
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
@@ -188,6 +194,7 @@ export async function announceWebhooks(
     channels,
     log: (message) => log.info(`[fastagent] ${message}`),
     registrars: {
+      ...(opts.leave === undefined ? {} : { leave: opts.leave }),
       telegram: (url) => registerTelegramWebhook(url, { env: opts.env }),
       slack: (url) =>
         registerSlackWebhook(url, {

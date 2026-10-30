@@ -32,6 +32,7 @@ const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   channels: [],
   flyConfig: "fastagent/fly.toml",
   dockerfile: "fastagent/Dockerfile",
+  forAgent: "fastagent deploy fly ../bot --run --json",
   ...over,
 });
 
@@ -275,7 +276,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       gate:
         "not logged in to Fly — run `fly auth login` in a terminal (it opens a browser), or set FLY_API_TOKEN in this " +
         "shell's environment, never in .secrets/production/.env (everything there travels to the box); then re-run. " +
-        "From a coding agent, `fastagent deploy fly --run --json` hands the sign-in to its user",
+        "From a coding agent, `fastagent deploy fly ../bot --run --json` hands the sign-in to its user",
     });
     expect(cmds()).toEqual(["auth whoami"]); // nothing after the gate
   });
@@ -294,10 +295,13 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   });
 
   it("gate: a missing secret value stops before creating infra", async () => {
-    const { fly, cmds } = fakeFly();
-    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"] }), fly);
+    // Signed out as well: no person is asked to sign in for a deploy that stops here anyway.
+    const { fly, cmds } = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
+    const hostLogin = vi.fn(async () => undefined);
+    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"], hostLogin }), fly);
     expect(out).toEqual({ ok: false, gate: expect.stringContaining("TELEGRAM_BOT_TOKEN") });
-    expect(cmds()).toEqual(["auth whoami"]); // no apps create
+    expect(cmds()).toEqual([]); // not even whoami
+    expect(hostLogin).not.toHaveBeenCalled();
   });
 
   it("gate: a failed `apps list` stops (not misreported as a name clash)", async () => {

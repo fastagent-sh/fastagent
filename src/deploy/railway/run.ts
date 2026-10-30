@@ -39,6 +39,8 @@ export interface RailwayRunPlan {
    * undefined once signed in. Absent: nobody can, and the run stops naming how.
    */
   hostLogin?: () => Promise<string | undefined>;
+  /** The command a coding agent runs to deploy this, its person's steps handed to its user (`--run --json`). */
+  forAgent: string;
 }
 
 /**
@@ -130,17 +132,18 @@ export async function deployRailwayRun(
   // --name` + `add --service`).
   const svc = ["--service", plan.name];
 
-  // 1.
+  // 1. Gate missing required secret VALUES before any side effect (no half-created infra), and before asking a
+  // person to sign in for a deploy that would stop here anyway.
+  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
+  if (missingValues) return gate(missingValues);
+
+  // 2.
   if ((await railway(["whoami"], { capture: true })).code !== 0) {
     const failed = plan.hostLogin
       ? await plan.hostLogin()
-      : hostSignedOutGate("Railway", "railway login", "RAILWAY_API_TOKEN (an account token)", "railway");
+      : hostSignedOutGate("Railway", "railway login", "RAILWAY_API_TOKEN (an account token)", plan.forAgent);
     if (failed) return gate(failed);
   }
-
-  // 2. Gate missing required secret VALUES before any side effect (no half-created infra).
-  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
-  if (missingValues) return gate(missingValues);
 
   // 3.
   const status = await railway(["status", "--json"], { capture: true });

@@ -17,6 +17,7 @@ let preparedFor: unknown;
 /** The ticket a test runs the deploy through, and its status when the pre-flight first ran. */
 let throughTicket: string | undefined;
 let statusAtPreflight: string | undefined;
+let finishingAtHost: boolean | undefined;
 let answeredBy: string | undefined;
 const stopped = new Error("deploy stopped");
 
@@ -70,6 +71,10 @@ vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
 const carriedKey: boolean[] = [];
 const deployed = vi.fn(async (ctx: { pre: { values: Map<string, string> }; answerer: { kind: string } }) => {
   calls.push(`host token=${ctx.pre.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`);
+  if (throughTicket !== undefined) {
+    const { checkTicket: read } = await import("../src/cli/ticket.ts");
+    finishingAtHost = (await read(throughTicket))?.finishing;
+  }
   carriedKey.push(ctx.pre.values.has("FASTAGENT_API_KEY"));
   answeredBy = ctx.answerer.kind;
   return "https://bot.fly.dev";
@@ -105,6 +110,7 @@ beforeEach(async () => {
   preparedFor = undefined;
   throughTicket = undefined;
   statusAtPreflight = undefined;
+  finishingAtHost = undefined;
   answeredBy = undefined;
   interactive = true;
   facts = {
@@ -297,6 +303,8 @@ it("the ticket's run is the whole deploy, each person's step its user's, its res
   await expect(runDeploy("fly", dir, { run: true, json: true, ticket })).rejects.toBe(stopped);
   // Taken before the pre-flight's seconds, so the starting command never finds it unclaimed.
   expect(statusAtPreflight).toBe("working");
+  // The host's work runs as the step finishing: the person's deadline never cuts it halfway.
+  expect(finishingAtHost).toBe(true);
   expect(calls).toEqual([
     "preflight dev=- token=-",
     "prepare feishu rerun=fastagent deploy fly --run --json",

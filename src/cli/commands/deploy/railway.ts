@@ -38,6 +38,7 @@ export const railwayHost: HostDeploy = {
         modelAuth,
         boxLogin,
         answerer: ctx.answerer,
+        rerun: ctx.rerun,
         channels,
         declaredSecrets,
         values,
@@ -60,6 +61,8 @@ async function runDeployRailway(params: {
   boxLogin: string | undefined;
   /** Who answers the box's login: `--run` continues into it rather than stopping at "not logged in". */
   answerer: Answerer;
+  /** The command that runs this deploy again (`DeployContext.rerun`). */
+  rerun: string;
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
@@ -90,10 +93,11 @@ async function runDeployRailway(params: {
       intoLinked,
       ...boxLoginStep("railway", params, () => railwayShell(name, agentDir)),
       ...hostLogin(RAILWAY_LOGIN, params.answerer, agentDir),
+      forAgent: `${params.rerun} --json`,
     },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
-    registrarsFor(agentDir, params.values),
+    registrarsFor(agentDir, params.values, params.answerer),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);

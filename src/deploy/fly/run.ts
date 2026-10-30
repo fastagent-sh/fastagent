@@ -35,6 +35,8 @@ export interface FlyRunPlan {
    * undefined once signed in. Absent: nobody can, and the run stops naming how.
    */
   hostLogin?: () => Promise<string | undefined>;
+  /** The command a coding agent runs to deploy this, its person's steps handed to its user (`--run --json`). */
+  forAgent: string;
 }
 
 /** Done, or a gate the operator must clear before re-running (printed + non-zero exit by the CLI). */
@@ -80,17 +82,18 @@ export async function deployFlyRun(
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
-  // 1.
+  // 1. Gate missing required secret VALUES before any side effect (no half-created infra), and before asking a
+  // person to sign in for a deploy that would stop here anyway.
+  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
+  if (missingValues) return gate(missingValues);
+
+  // 2.
   if ((await fly(["auth", "whoami"], { capture: true })).code !== 0) {
     const failed = plan.hostLogin
       ? await plan.hostLogin()
-      : hostSignedOutGate("Fly", "fly auth login", "FLY_API_TOKEN", "fly");
+      : hostSignedOutGate("Fly", "fly auth login", "FLY_API_TOKEN", plan.forAgent);
     if (failed) return gate(failed);
   }
-
-  // 2. Gate missing required secret VALUES before any side effect (no half-created infra).
-  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
-  if (missingValues) return gate(missingValues);
 
   // 3.
   const appExists = await readOutput(fly, "fly", ["apps", "list", "--json"], (out) => listHasName(out, plan.appName));

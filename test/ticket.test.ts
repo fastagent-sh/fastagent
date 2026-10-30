@@ -57,7 +57,14 @@ async function waitingStep(
     sidecar,
     finishing = false,
     whenRunning = "replace",
-  }: { status?: string; sidecar?: string; finishing?: boolean; whenRunning?: "replace" | "join" } = {},
+    timeoutSeconds = 60,
+  }: {
+    status?: string;
+    sidecar?: string;
+    finishing?: boolean;
+    whenRunning?: "replace" | "join";
+    timeoutSeconds?: number;
+  } = {},
 ) {
   const waits = `
     const { readFileSync, writeFileSync } = require("node:fs");
@@ -68,7 +75,7 @@ async function waitingStep(
     writeFileSync(path, JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, ${finishing ? "finishing: true, " : ""}url: "https://auth.example/a", pid: process.pid }));
     setInterval(() => {}, 1000);`;
   return startTicket({
-    ...request(subject),
+    ...request(subject, timeoutSeconds),
     waitsFirst: status === "need_user_action",
     whenRunning,
     // A step at work is answered as it stands once the start window passes.
@@ -162,6 +169,46 @@ describe("a step that outlives the command that starts it", () => {
       expect(await checkTicket(newer.ticket)).toMatchObject({ status: "need_user_action" });
     } finally {
       for (const pid of [feishu.pid, newer.pid]) if (running(pid)) process.kill(pid as number);
+    }
+  });
+
+  it("the deadline is the person's: a step finishing past it runs to its end; one waiting again expires at once", async () => {
+    const steer = steered();
+    const finished = createTicket(request("deploy:fly", 1)).ticket;
+    const running = runTicket(finished, steer.run);
+    const step = await steer.step;
+    step.person.carriesOn();
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    steer.finish();
+    await running;
+    expect(await checkTicket(finished)).toMatchObject({ status: "done" });
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const again = steered();
+    const waitsAgain = createTicket(request("deploy:fly", 1)).ticket;
+    const runningAgain = runTicket(waitsAgain, again.run);
+    const stepAgain = await again.step;
+    stepAgain.person.carriesOn();
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    // Past its deadline, a box's login to wait on: the person's time is up.
+    stepAgain.waits({ url: "https://auth.example/box" });
+    await runningAgain;
+    expect(await checkTicket(waitsAgain)).toMatchObject({ status: "expired" });
+  });
+
+  it("a step finishing past its deadline still holds its subject: a newer deploy joins it, never runs beside it", async () => {
+    const first = await waitingStep("deploy:railway", {
+      status: "working",
+      finishing: true,
+      whenRunning: "join",
+      timeoutSeconds: 1,
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      const again = await waitingStep("deploy:railway", { whenRunning: "join" });
+      expect(again.ticket).toBe(first.ticket);
+    } finally {
+      if (running(first.pid)) process.kill(first.pid as number);
     }
   });
 

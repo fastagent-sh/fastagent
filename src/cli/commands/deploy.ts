@@ -32,6 +32,7 @@ import {
   refusedCheck,
   runTicket,
   startTicket,
+  stopTicket,
   ticketExitCode,
   ticketReport,
 } from "../ticket.ts";
@@ -110,6 +111,7 @@ const TICKET_TIMEOUT_SECONDS = 3600;
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
   if (opts.check !== undefined) return checkDeploy(host, opts.check, opts);
+  if (opts.stop) failUsage("--stop stops a deploy started with --json: pass --check <ticket> too");
   if (opts.ticket !== undefined) {
     // The process `startTicket` started: it takes the ticket before the pre-flight (seconds of building the
     // definition), then does the whole deploy, its person the ticket's.
@@ -271,9 +273,13 @@ async function deploy(
     for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
     const { channels } = pre;
     warnHostOnlyFlags(host, opts);
+    // What follows is the host's work: a deadline meant for the person must never cut it halfway. Its own steps for
+    // the person (a host sign-in, the box's login) wait again, and are bounded again.
+    if (answerer.kind === "ticket") answerer.step.person.carriesOn();
     const reachedAt = await target.deploy({
       opts,
       answerer,
+      rerun,
       agentDir,
       config,
       pre,
@@ -314,14 +320,14 @@ async function checkDeploy(host: DeployHost, id: string, opts: DeployOptions): P
   const refused = refusedCheck(id, deployCheck(host));
   if (refused !== undefined) failUsage(refused);
   // There: refusedCheck read it, and a ticket is pruned only a day after it ends.
-  const ticket = (await checkTicket(id, opts.code)) as Ticket;
+  const ticket = opts.stop ? await stopTicket(id) : ((await checkTicket(id, opts.code)) as Ticket);
   reportDeploy(ticket, "checked");
   process.exit(ticketExitCode(ticket));
 }
 
 /** A deploy's ticket for the agent that started or checked it, always as JSON: `--json` is how one started. */
 function reportDeploy(ticket: Ticket, when: "started" | "checked"): void {
-  const { json } = ticketReport(ticket, when, (result) => ({
+  const report = ticketReport(ticket, when, (result) => ({
     fields: result,
     text: [],
     next:
@@ -329,5 +335,21 @@ function reportDeploy(ticket: Ticket, when: "started" | "checked"): void {
         ? "Deployed. Tell the user what the notes say."
         : `Deployed to ${String(result.url)}. Tell the user what the notes say.`,
   }));
-  printReport(true, json, []);
+  const running = ticket.status === "starting" || ticket.status === "working" || ticket.status === "need_user_action";
+  if (!running) {
+    printReport(true, report.json, []);
+    return;
+  }
+  // A deploy finishing is never cut by its deadline, so one that hangs there ends only on someone's say.
+  const stop = `${ticket.check} ${ticket.ticket} --stop --json`;
+  const hung =
+    ticket.status === "need_user_action"
+      ? ""
+      : " If its log has shown no progress for a long while, stop_command stops it where it is, which can leave the " +
+        "host half-changed: ask the user first.";
+  printReport(
+    true,
+    { ...report.json, stop_command: stop, agent_next_steps: `${String(report.json.agent_next_steps)}${hung}` },
+    [],
+  );
 }

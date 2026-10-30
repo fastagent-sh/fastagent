@@ -104,11 +104,11 @@ export function assembleSecrets(input: {
  * The stop for a host CLI signed out with nobody to sign it in. A token goes in the shell's (or CI's) environment,
  * never in the production value file: everything there travels to the box, which runs an agent with a shell.
  */
-export function hostSignedOutGate(host: string, login: string, token: string, deployHost: string): string {
+export function hostSignedOutGate(host: string, login: string, token: string, forAgent: string): string {
   return (
     `not logged in to ${host} — run \`${login}\` in a terminal (it opens a browser), or set ${token} in this ` +
     `shell's environment, never in .secrets/production/.env (everything there travels to the box); then re-run. ` +
-    `From a coding agent, \`fastagent deploy ${deployHost} --run --json\` hands the sign-in to its user`
+    `From a coding agent, \`${forAgent}\` hands the sign-in to its user`
   );
 }
 

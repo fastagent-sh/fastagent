@@ -6,6 +6,16 @@ import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/c
 import { fastagentVersion } from "../src/version.ts";
 import { agentWorkspace, run } from "./cli-run.ts";
 
+/** Whether `pid` runs: signal 0 only asks. */
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("cli: deploy", () => {
   it("selects the production value file and Docker env_file without reading dev values", async () => {
     const dir = await agentWorkspace("fa-deploy-env-", {
@@ -90,6 +100,10 @@ describe("cli: deploy", () => {
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toMatch(/wipes the runtime's openai-codex login.*run this deploy in a terminal/);
+    // The coding agent's way names this agent, run from wherever this deploy was.
+    expect(result.stderr).toContain(
+      `\`fastagent deploy agentcore ${dir} --run --json\`, which hands the login to its user`,
+    );
     await expect(stat(called)).rejects.toThrow(); // no aws invocation
   });
 
@@ -138,7 +152,18 @@ describe("cli: deploy", () => {
         await new Promise((resolve) => setTimeout(resolve, 500));
         report = JSON.parse((await run(["deploy", host, "--check", report.ticket], undefined, env)).stdout);
       }
-      expect(report).toMatchObject({ status: "need_user_action", deployment: host, ...expected });
+      expect(report).toMatchObject({
+        status: "need_user_action",
+        deployment: host,
+        ...expected,
+        stop_command: `fastagent deploy ${host} --check ${report.ticket} --stop --json`,
+      });
+      // The way out of a deploy no deadline cuts: stopped where it is, with what it started.
+      const stopped = await run(["deploy", host, "--check", report.ticket, "--stop", "--json"], undefined, env);
+      expect(JSON.parse(stopped.stdout)).toMatchObject({
+        status: "failed",
+        message: expect.stringMatching(/^stopped on request/),
+      });
     } finally {
       const ticket = JSON.parse(
         await readFile(
@@ -146,7 +171,8 @@ describe("cli: deploy", () => {
           "utf8",
         ),
       );
-      if (ticket.pid) process.kill(ticket.pid);
+      expect(ticket.pid === undefined || !isRunning(ticket.pid)).toBe(true);
+      if (ticket.pid && isRunning(ticket.pid)) process.kill(ticket.pid);
     }
   });
 

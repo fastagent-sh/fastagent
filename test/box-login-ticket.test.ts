@@ -209,6 +209,26 @@ it("a deploy's box login through its ticket: an account sign-in, its refusals na
   expect(await checkTicket(signedIn)).toMatchObject({ status: "done" });
   expect(box.commands[0]).toMatch(/login --stdio codex --method account --if-missing/);
 
+  // A device sign-in hands nothing back, so the step's own finish after the box answers is what marks the rest.
+  box.provider = {
+    id: "codex",
+    name: "Codex",
+    getModels: () => [],
+    auth: {
+      oauth: {
+        name: "Codex",
+        login: async (cb: AuthInteraction) => {
+          cb.notify({ type: "device_code", verificationUri: "https://auth.example/device", userCode: "AB-12" });
+          return OAUTH;
+        },
+      },
+    },
+  };
+  const device = deployTicket();
+  await viaTicket(device);
+  // What follows the box's login (the webhooks) is the deploy finishing: past the person's deadline, it still runs.
+  expect(await checkTicket(device)).toMatchObject({ status: "done", finishing: true });
+
   box.provider = {
     id: "codex",
     name: "Codex",

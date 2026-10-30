@@ -410,6 +410,7 @@ const deploy: CommandSpec = {
       description: "with --check: the code a host's approval page showed, when it could not reach this machine",
     },
     { flags: "--timeout <seconds>", description: "how long a deploy started with --json stays open (default 3600)" },
+    { flags: "--stop", description: "with --check: stop that deploy where it is (can leave the host half-changed)" },
     { flags: "--ticket <id>", description: "the process that runs a ticket's deploy", hidden: true },
     NO_INPUT,
   ],
@@ -436,6 +437,7 @@ const deploy: CommandSpec = {
       ...(f.code !== undefined ? { code: f.code as string } : {}),
       ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
       ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
+      stop: f.stop === true,
     }),
 };
 

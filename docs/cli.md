@@ -49,11 +49,13 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 artifact, a Lark app without its credentials) is answered at once; the deploy then runs in a process of its own, and
 the command returns its ticket. `deploy <host> --check <ticket>` reads it, always as JSON: `working` with the `log`,
 `need_user_action` for each step only the person can take (signing the host's CLI in, confirming a production
-Feishu app, the box's model login), then `done` with the `url` and the Agent API's `notes`, or `failed` with why.
-Fly's approval page can show a one-time code instead of finishing: `--check <ticket> --code <code>` hands it over.
-A second `--run --json` while one runs answers with that one's ticket; a deploy is never stopped halfway.
-`--timeout` (default 3600 s) bounds it. Without `--json` and without a terminal (CI), such a step stops the deploy,
-naming how to give it.
+Feishu app, the box's model login), then `done` with the `url`, the Agent API's `notes` and what is left for the
+person (`afterwards`: a channel whose Request URL only the console can set, say), or `failed` with why. Fly's
+approval page can show a one-time code instead of finishing: `--check <ticket> --code <code>` hands it over. A second
+`--run --json` while one runs answers with that one's ticket. `--timeout` (default 3600 s) bounds the person's steps,
+never the host's work: a deploy is never cut halfway by it. One that hangs there ends on request,
+`--check <ticket> --stop` (the report's `stop_command`), which can leave the host half-changed. Without `--json` and
+without a terminal (CI), such a step stops the deploy, naming how to give it.
 
 ## `fastagent init`
 
@@ -423,9 +425,9 @@ Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion t
 `.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
 `add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
 `--env production` selects `.secrets/production/.env` and `.state/production` without changing dev credentials.
-Interactive `deploy --run` creates the separate Feishu/Lark production app automatically (without a terminal it names
-`add <kind> --env production --json`); Slack needs
-`add slack --env production`, and Telegram needs a separate BotFather bot.
+`deploy --run` creates the separate Feishu/Lark production app automatically, at a terminal or, with `--json`, for a
+coding agent's user (without either it stops, naming the `--json` command); Slack needs `add slack --env production`,
+and Telegram needs a separate BotFather bot.
 
 Slack:
 
