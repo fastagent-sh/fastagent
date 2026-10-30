@@ -50,7 +50,10 @@ export interface SignInOption {
   status?: { type: SignInMethod; source: string };
   /** What in the environment authenticates the provider with nothing stored: what still answers after a sign-out. */
   environment?: string;
-  /** Why checking what authenticates the provider failed, when that decided its status. */
+  /**
+   * Why checking the environment for the provider failed: `environment` is then unknown, and so is `status` when
+   * nothing is stored.
+   */
   problem?: string;
 }
 
@@ -74,9 +77,10 @@ export type SignInEvent =
     };
 
 /**
- * How a sign-in reaches the person. `prompt` resolves with the answer (a select's option `id`) and rejects when the
- * person backs out. A prompt's `signal` aborts when the sign-in no longer needs the answer, such as a `manual_code`
- * question a browser callback answered first.
+ * How a sign-in reaches the person. `prompt` resolves with the answer (a select's option `id`); it rejects with
+ * {@link SignInCancelled} when the person backs out, which ends the sign-in with that error, and with any other error
+ * when asking failed, which fails the sign-in with it. A prompt's `signal` aborts when the sign-in no longer needs the
+ * answer, such as a `manual_code` question a browser callback answered first.
  */
 export interface SignInInteraction {
   signal?: AbortSignal;
