@@ -10,7 +10,6 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  type AuthInteraction,
   type Credential,
   type CredentialStore,
   InMemoryCredentialStore,
@@ -21,7 +20,7 @@ import { MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
 import { modelEnvironment } from "../src/harnesses/models/environment.ts";
-import { login, loginOptions } from "../src/harnesses/models/login.ts";
+import { loginOver } from "../src/harnesses/models/login.ts";
 import { modelsOver, probeAuthSource } from "../src/harnesses/models/models.ts";
 import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
@@ -168,35 +167,16 @@ describe("a caller's credential store replaces the credentials file", () => {
     expect(existsSync(GLOBAL_AUTH_PATH)).toBe(false);
   });
 
-  it("login and its options use the store", async () => {
-    const store = await recordingStore();
-    const interaction: AuthInteraction = {
-      signal: new AbortController().signal,
-      notify: () => {},
-      prompt: async (prompt) => (prompt.type === "secret" ? "sk-typed" : ""),
-    };
-    // An API key is verified with one request before it is written; that request is not what this test is about.
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
-    await login({ provider: "openai", method: "api_key", credentialStore: store, interaction });
-    expect(await store.read("openai")).toMatchObject({ type: "api_key", key: "sk-typed" });
-    expect((await loginOptions(store)).find((o) => o.provider === "openai")?.status).toEqual({
-      type: "api_key",
-      source: "stored credential",
-    });
-    expect(existsSync(GLOBAL_AUTH_PATH)).toBe(false);
-  });
-
   it("refuses both sources, and a login with neither", async () => {
     const { host, agent } = await agentWorkspace();
     const both = { authPath: join(host, "auth.json"), credentialStore: await recordingStore() };
     await expect(openServing(agent, { ...both, storage: "memory" })).rejects.toThrow(/not both/);
     await expect(modelEnvironment(undefined, both)).rejects.toThrow(/not both/);
     const interaction = { signal: new AbortController().signal, notify: () => {}, prompt: async () => "" };
-    // A JavaScript caller can pass either shape the types forbid.
-    await expect(login({ provider: "openai", method: "api_key", interaction, ...both } as never)).rejects.toThrow(
+    await expect(loginOver({ provider: "openai", method: "api_key", interaction, ...both } as never)).rejects.toThrow(
       /not both/,
     );
-    await expect(login({ provider: "openai", method: "api_key", interaction } as never)).rejects.toThrow(
+    await expect(loginOver({ provider: "openai", method: "api_key", interaction } as never)).rejects.toThrow(
       /needs authPath or credentialStore/,
     );
   });

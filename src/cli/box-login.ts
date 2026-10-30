@@ -8,7 +8,8 @@ import { type Server, createServer } from "node:http";
 import { type BoxShell, deploymentLoginCommand } from "../deploy/box-shell.ts";
 import { boxLoginCommand } from "../deploy/container.ts";
 import type { DeployHost } from "../deploy/hosts.ts";
-import type { LoginIO, LoginMethod } from "../harnesses/models/login.ts";
+import type { LoginIO } from "../harnesses/models/login.ts";
+import type { SignInMethod } from "../sign-in-api.ts";
 import { relayLogin } from "./login-relay.ts";
 import { terminalLoginIO } from "./shared.ts";
 import type { TicketStep } from "./ticket.ts";
@@ -19,7 +20,7 @@ export interface BoxLoginRequest {
   /** Skip the provider menu. */
   provider?: string;
   /** Skip the method menu. */
-  method?: LoginMethod;
+  method?: SignInMethod;
   /** Keep a credential the box already holds for `provider` (a redeploy), instead of replacing it. */
   ifMissing?: boolean;
   /** false: never ask; a box without the credential is a failure naming the command to run in a terminal. */

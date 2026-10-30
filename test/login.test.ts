@@ -14,18 +14,16 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
+import { SignInCancelled } from "../src/sign-in-api.ts";
 import * as models from "../src/harnesses/models/models.ts";
 import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../src/harnesses/models/credentials.ts";
 import {
   type IoOption,
-  LoginCancelled,
   type LoginIO,
   LoginRefused,
   PI_DEFAULT_MODELS,
   chooseLogin,
-  login,
   loginFlow,
-  loginOptions,
   loginOptionsOver,
   loginOver,
   loginStatusText,
@@ -212,7 +210,7 @@ describe("loginFlow", () => {
     await reads.modify("codex", async () => OAUTH_CRED);
     const { io, shown } = fakeIO({ select: ["oauth", undefined] });
     await expect(loginFlow(io, { providers: PROVIDERS, authPath: await tmpAuth(), statusFrom: reads })).rejects.toThrow(
-      LoginCancelled,
+      SignInCancelled,
     );
     expect(shown[1]?.find((o) => o.value === "codex")?.label).toBe("codex ✓ configured");
   });
@@ -223,12 +221,12 @@ describe("loginFlow", () => {
         providers: PROVIDERS,
         authPath: await tmpAuth(),
       }),
-    ).rejects.toThrow(LoginCancelled);
+    ).rejects.toThrow(SignInCancelled);
   });
 
   it("asks as pi's /login asks: how to sign in, then the provider by name, in name order", async () => {
     const { io, shown } = fakeIO({ select: ["api_key", undefined] });
-    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(LoginCancelled);
+    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(SignInCancelled);
     expect(shown[0]).toEqual([
       { value: "oauth", label: "Sign in with an account" },
       { value: "api_key", label: "Sign in with an API key" },
@@ -242,7 +240,7 @@ describe("loginFlow", () => {
   it("names the legacy provider as pi does, so the ChatGPT sign-in is the one called OpenAI", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     const { io, shown } = fakeIO({ select: ["oauth", undefined] });
-    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(LoginCancelled);
+    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(SignInCancelled);
     expect(shown[1]?.filter(({ value }) => value.startsWith("openai")).map(({ label }) => label)).toEqual([
       "OpenAI • not configured",
       "OpenAI Codex (legacy) • not configured",
@@ -252,13 +250,19 @@ describe("loginFlow", () => {
   it("each sign-in says what authenticates its provider now, a stored credential outranking the environment", async () => {
     vi.stubEnv("OPENAI_API_KEY", "sk-env");
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-env");
-    const offered = await loginOptions(await tmpAuth(JSON.stringify({ anthropic: { type: "api_key", key: "sk" } })));
+    const offered = await loginOptionsOver(
+      await tmpAuth(JSON.stringify({ anthropic: { type: "api_key", key: "sk" } })),
+    );
     const status = (provider: string, method: string) =>
       loginStatusText(offered.find((o) => o.provider === provider && o.method === method) as never);
     expect(status("anthropic", "api_key")).toBe("✓ configured");
     expect(status("anthropic", "oauth")).toBe("API key configured");
     expect(status("openai", "api_key")).toBe("✓ env: OPENAI_API_KEY");
     expect(status("openai-codex", "oauth")).toBe("not configured");
+    // What answers once the stored one is gone, beside the status it does not decide.
+    const anthropic = offered.find((o) => o.provider === "anthropic" && o.method === "api_key");
+    expect(anthropic).toMatchObject({ status: { source: "stored credential" }, environment: "ANTHROPIC_API_KEY" });
+    expect(offered.find((o) => o.provider === "openai-codex")?.environment).toBeUndefined();
   });
 
   it("a provider is named by its id or, as pi takes it, by its name", async () => {
@@ -271,7 +275,7 @@ describe("loginFlow", () => {
 
   it("a provider named by its id or its name, offering both, is asked how with its own label", async () => {
     const { io, shown } = fakeIO({ select: [undefined] });
-    await expect(loginFlow(io, { provider: "OpenAI", authPath: await tmpAuth() })).rejects.toThrow(LoginCancelled);
+    await expect(loginFlow(io, { provider: "OpenAI", authPath: await tmpAuth() })).rejects.toThrow(SignInCancelled);
     expect(shown[0]).toEqual([
       { value: "oauth", label: "Sign in with ChatGPT" },
       { value: "api_key", label: "Sign in with an API key" },
@@ -507,7 +511,7 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
     // google's catalog opens with a Deep Research preview model, which a minimal request may not reach.
     const { interaction, events } = client(["sk-google"]);
     const probe = vi.spyOn(models, "probeApiKey").mockResolvedValue({ state: "ok" });
-    await login({ provider: "google", method: "api_key", authPath: await tmpAuth(), interaction });
+    await loginOver({ provider: "google", method: "api_key", authPath: await tmpAuth(), interaction });
     expect(probe.mock.calls[0]?.[1]).toMatchObject({ provider: "google", id: PI_DEFAULT_MODELS.google });
     expect(events.find((e) => e.type === "progress")?.message).toContain(`google/${PI_DEFAULT_MODELS.google}`);
   });
@@ -575,11 +579,11 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
 
     abort.abort();
 
-    await expect(pending).rejects.toBeInstanceOf(LoginCancelled);
+    await expect(pending).rejects.toBeInstanceOf(SignInCancelled);
     expect((await readAuth(authPath)).keyed).toEqual(previous);
   });
 
-  it("aborting while the key is being verified rejects with LoginCancelled and writes nothing", async () => {
+  it("aborting while the key is being verified rejects with SignInCancelled and writes nothing", async () => {
     const authPath = await tmpAuth();
     const abort = new AbortController();
     const { interaction, events } = client(["eu", "sk-good"], abort.signal);
@@ -603,11 +607,11 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
 
     abort.abort();
 
-    await expect(pending).rejects.toBeInstanceOf(LoginCancelled);
+    await expect(pending).rejects.toBeInstanceOf(SignInCancelled);
     expect((await readAuth(authPath).catch(() => ({}))).keyed).toBeUndefined();
   });
 
-  it("aborting the interaction's signal rejects with LoginCancelled and writes nothing", async () => {
+  it("aborting the interaction's signal rejects with SignInCancelled and writes nothing", async () => {
     const authPath = await tmpAuth();
     const abort = new AbortController();
     const { interaction, prompts } = client([], abort.signal); // never answers: waits on the prompt's signal
@@ -619,7 +623,7 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
 
     abort.abort();
 
-    await expect(pending).rejects.toBeInstanceOf(LoginCancelled);
+    await expect(pending).rejects.toBeInstanceOf(SignInCancelled);
     expect((await readAuth(authPath).catch(() => ({}))).openai).toBeUndefined();
   });
 
@@ -684,7 +688,7 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
     const authPath = await tmpAuth("{bad");
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
-    await loginOptions(authPath);
+    await loginOptionsOver(authPath);
 
     expect(warn.mock.calls.filter(([m]) => /corrupt auth file/.test(String(m)))).toHaveLength(1);
   });

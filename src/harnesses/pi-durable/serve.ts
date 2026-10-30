@@ -4,12 +4,14 @@
  * one (SPEC.md §8); `dev`, `start`, AgentCore, `invoke` and `schedules run` open it through `openServing`, which
  * also takes where the Agent keeps its sessions and what becomes of an earlier process's messages.
  */
-import { join } from "node:path";
-import type { CredentialStore, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { join, resolve } from "node:path";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type Harness, MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
+import { piCredentials } from "../models/host.ts";
+import type { CredentialStore } from "../../sign-in-api.ts";
 import { loadContent } from "../../content/file.ts";
 import {
   type ResolvedContent,
@@ -47,6 +49,8 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   storage?: ServingStorage;
   /** What becomes of the messages an earlier process left unfinished in the storage. Default `"resume"`. */
   unfinished?: Unfinished;
+  /** The instance's state root, over `FASTAGENT_STATE_DIR` and the directory's own. */
+  stateRoot?: string;
 }
 
 type ServingStorage = { instance: StorageLocking } | { file: string; holders?: string } | "memory";
@@ -121,6 +125,7 @@ export async function openServing(directory: string, options: OpenServingOptions
   // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
   await enterEnvironment(dir);
   const content = await contentForThisRun(dir);
+  const stateRoot = options.stateRoot ?? resolveStateRoot(dir);
   const models = await modelEnvironment(
     dir,
     {
@@ -128,8 +133,8 @@ export async function openServing(directory: string, options: OpenServingOptions
       ...(options.credentialStore === undefined ? {} : { credentialStore: options.credentialStore }),
     },
     code.providers,
+    { stateRoot },
   );
-  const stateRoot = resolveStateRoot(dir);
   const chosen = options.storage ?? { instance: "posix" };
   const storage = await openStorage(stateRoot, chosen);
   const agent = await assembleAgent(definition, {
@@ -183,6 +188,11 @@ export interface OpenAgentOptions {
   model?: string;
   /** Where provider credentials are kept, instead of the agent's own `.secrets/auth.json` over the machine's. */
   credentials?: CredentialStore;
+  /**
+   * Where this instance keeps its sessions, its channels' and schedules' state and its model lists, instead of
+   * `FASTAGENT_STATE_DIR` or the agent's `.state/`: a host's own instance of an agent beside `fastagent dev`'s.
+   */
+  stateDir?: string;
 }
 
 /**
@@ -193,7 +203,8 @@ export interface OpenAgentOptions {
 export async function openAgent(dir: string, options: OpenAgentOptions = {}): Promise<LocalAgent> {
   const opened = await openServing(dir, {
     ...(options.model === undefined ? {} : { model: options.model }),
-    ...(options.credentials === undefined ? {} : { credentialStore: options.credentials }),
+    ...(options.credentials === undefined ? {} : { credentialStore: piCredentials(options.credentials) }),
+    ...(options.stateDir === undefined ? {} : { stateRoot: resolve(options.stateDir) }),
   });
   const { agent } = opened;
   let served: Promise<Service> | undefined;

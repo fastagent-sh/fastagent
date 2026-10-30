@@ -58,7 +58,8 @@ declared [environment](configuration.md#environment) where it has no install yet
 `PATH`, clones its content, refreshes its [model lists](configuration.md#model-lists) (a request to `https://pi.dev` of
 at most 5 s, and to a provider that fetches its own list, unless what `<agent dir>/.state/models/` keeps is less than
 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage (`<agent dir>/.state/agent.sqlite`),
-which one process holds at a time. Without a `model`, the config's is the default; with none at all the agent still
+which one process holds at a time; `stateDir` puts the instance somewhere else ([below](#6-a-desktop-host)). Without a
+`model`, the config's is the default; with none at all the agent still
 opens, and a session needs a model of its own (`sessions.create({ model })`, `sessions.update`) before a message is
 answered. Nothing reaches the agent until `serve`.
 
@@ -184,15 +185,60 @@ app.register(async (scope) => {
 
 `openAgent` reads the agent's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's environment
 variable, and then the global `~/.fastagent/.secrets/auth.json` for a provider the agent authenticates no other way
-([order](configuration.md#auth-and-secrets)). `credentials` is a store of your own (an OS keychain, Electron
-`safeStorage`, pi-ai's `CredentialStore`), which replaces the credentials files, refreshes included; environment
-variables and a provider's own auth still apply. `fastagent login` in the agent directory signs a provider in.
+([order](configuration.md#auth-and-secrets)). `fastagent login` in the agent directory signs a provider in.
+
+`credentials` replaces the files with a `CredentialStore` of your own, refreshes included; environment variables and a
+provider's own auth still apply. Implement one over an OS keychain or Electron `safeStorage`, or keep FastAgent's file
+somewhere of your choosing with `credentialFile(path)`. To sign a person in from your own UI, list the ways with
+`signInOptions(store)` and run one with `signIn`, which asks and tells through your interaction:
+
+```ts
+import { join } from "node:path";
+import { credentialFile, openAgent, signIn, SignInCancelled } from "@fastagent-sh/fastagent";
+
+const credentials = credentialFile(join(app.getPath("userData"), "auth.json"));
+try {
+  await signIn({
+    credentials,
+    provider: "anthropic",
+    method: "oauth",
+    interaction: {
+      prompt: (prompt) => askInWindow(prompt), // text, secret, select, manual_code; reject to back out
+      notify: (event) => showInWindow(event), // auth_url, device_code, info, progress
+    },
+  });
+} catch (error) {
+  if (!(error instanceof SignInCancelled)) throw error;
+}
+const agent = await openAgent(dir, { credentials });
+```
+
+Every store is FastAgent's own type; see the [API reference](api-reference.md#what-a-host-embedding-agents-needs).
 
 ## 5. Your own model source
 
 A gateway or a self-hosted model is a provider in the agent's `fastagent.config.ts` (`providers`), so every path
 (`dev`, `start`, `invoke`, `deploy`, and your app) picks it up: see [custom models](configuration.md#custom-models).
 Its `auth.apiKey.resolve()` runs per request, which is where a token you mint or rotate goes.
+
+## 6. A desktop host
+
+An app that runs agents for a person on their machine (a desktop client, an editor) opens each with `openAgent` and
+calls the Agent API; `createAgent(dir)` makes a new one, as `fastagent init` does.
+
+- **Its own instance.** `openAgent(dir, { credentials, stateDir })` with a `stateDir` of the app's (one per agent,
+  under its data directory) is an instance of the agent separate from the one `fastagent dev` opens in the same
+  directory, so both run at once. They share the definition and nothing else: each has its own sessions. Only one of
+  them serves the definition's channels and schedules (two would fire every schedule twice and compete for the
+  channels' messages); an app beside `dev` does not call `serve()`.
+- **Models.** `agent.info().models` are the models a session may name, each with its `contextWindow`; a provider
+  signed in to while the agent is open is in the next answer. The lists are refreshed when the agent opens, at most
+  every 4 hours.
+- **Changes to the agent.** `SYSTEM.md`, `AGENTS.md`, skills and prompt templates are read for every message. Code
+  under `src/` and `fastagent.config.ts` are built when the agent opens: `close()` it and open it again.
+- **One process, shared.** An agent's declared [environment](configuration.md#environment) goes first on this
+  process's `PATH`, and its code reads the secrets it declares from this process's environment (`dev` and `start`
+  load `.secrets/.env` into it; `openAgent` does not), so agents opened in one process share both.
 
 ## How embed and CLI relate
 

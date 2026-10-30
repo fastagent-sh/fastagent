@@ -6,7 +6,8 @@ import { resolve } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import type { Models, Provider } from "@earendil-works/pi-ai";
 import { buildModelPickerOptions } from "./models-view.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../harnesses/models/login.ts";
+import { type LoginIO, loginFlow } from "../harnesses/models/login.ts";
+import { SignInCancelled } from "../sign-in-api.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
@@ -210,7 +211,7 @@ async function pickWithCredentials(
     await loginFlow(terminalLoginIO(), { provider, authPath, providers, verifyWith: chosen });
     console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
   } catch (error) {
-    if (error instanceof LoginCancelled) return undefined; // user backed out — discard the choice, like a picker cancel
+    if (error instanceof SignInCancelled) return undefined; // user backed out — discard the choice, like a picker cancel
     // A FAILED login keeps the choice: the pick persists, the startup auth report names the remedy, and a later
     // `fastagent login` fixes auth without re-picking the model.
     log.warn(

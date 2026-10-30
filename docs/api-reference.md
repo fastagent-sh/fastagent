@@ -1,6 +1,6 @@
 ---
 title: API reference
-description: "The public TypeScript surface of @fastagent-sh/fastagent: the Agent API, opening and serving an agent directory, what an author writes, and the channel kit."
+description: "The public TypeScript surface of @fastagent-sh/fastagent: the Agent API, opening and serving an agent directory, what a host embedding agents needs, what an author writes, and the channel kit."
 status: current
 ---
 
@@ -10,7 +10,7 @@ A compact reference for `@fastagent-sh/fastagent`. The package has one entry per
 
 | Import | Holds |
 |---|---|
-| `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, and what an author writes: `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, and a channel's helpers |
+| `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, what a host embedding agents needs beside it (`createAgent`, `credentialFile`, `signIn`, `signInOptions`, `providerAuth`), and what an author writes: `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, and a channel's helpers |
 | `@fastagent-sh/fastagent/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers) |
 | `@fastagent-sh/fastagent/telegram`, `/slack`, `/feishu`, `/lark` | Each first-party channel, and the transport and thread reader its tools use |
 
@@ -24,7 +24,7 @@ shape:
 
 ```ts
 interface Agent {
-  info(): Promise<AgentInfo>; // name, description, commands, the tools and models a session may name
+  info(): Promise<AgentInfo>; // name, description, commands, the tools and models (with their context windows) a session may name
   usage(): Promise<Usage>; // what the instance has spent
   sessions: {
     create(options?: SessionSettings & { forkFrom?: { sessionId: string; entryId?: string } }): Promise<Session>;
@@ -74,7 +74,10 @@ with a `stream_error` event. It is what a channel's live preview reads.
 ## Opening and serving an agent directory
 
 ```ts
-function openAgent(dir: string, options?: { model?: string; credentials?: CredentialStore }): Promise<LocalAgent>;
+function openAgent(
+  dir: string,
+  options?: { model?: string; credentials?: CredentialStore; stateDir?: string },
+): Promise<LocalAgent>;
 
 interface LocalAgent extends Agent {
   serve(options?: { apiKeys?: string[] }): Promise<Service>; // channels, schedules, wake-ups, /health, and /v1 with a key
@@ -93,12 +96,13 @@ interface Service {
 `openAgent` opens a directory the way `dev` and `start` do: it generates `.fastagent/` from `src/`, builds the code with
 the secrets it declares (a required one without a value refuses, naming where it is declared), enters the declared
 environment, clones the content, builds the model environment over the agent's credentials (`.secrets/auth.json` over
-the machine's, or `credentials`) with its [model lists](configuration.md#model-lists) refreshed (a request to
+the machine's, or the store `credentials` gives) with its [model lists](configuration.md#model-lists) refreshed (a request to
 `https://pi.dev` of at most 5 s, and to a provider that fetches its own list, unless what `<state root>/models/` keeps
 is less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage,
-`<state root>/agent.sqlite`, which one process holds at a time: a second opener is refused. `model` is the default for
-a session that names none; without one anywhere, a message is refused `missing_model` until its session is given one
-(`sessions.update`). Nothing reaches the agent until `serve`.
+`<state root>/agent.sqlite`, which one process holds at a time: a second opener is refused. The state root is
+`stateDir`, else `FASTAGENT_STATE_DIR`, else the agent's `.state/`. `model` is the default for a session that names
+none; without one anywhere, a message is refused `missing_model` until its session is given one (`sessions.update`).
+Nothing reaches the agent until `serve`.
 
 `serve()` is what `start` serves: the channels' routes and `GET /health` (503 until every long connection is ready), the
 long connections, the schedules and the wake-up poll, and, when `apiKeys` holds a key, the Agent API over HTTP under
@@ -107,6 +111,60 @@ from the app's own server, or `listen` for a server of the agent's own on Node's
 is the bind address, unset binds all interfaces. `close()` ends the API's event streams, stops the server, giving the
 requests in flight 500 ms before it ends them, then the long connections and the schedules; the agent's messages are
 durable and go on after a restart. An agent is served once; a `serve` that failed to start may be tried again.
+
+## What a host embedding agents needs
+
+A desktop app or a tool that runs agents for a person creates them, keeps the model credentials, and signs in to
+providers in its own UI. None of it needs the harness's model library: the types are FastAgent's own.
+
+```ts
+function createAgent(dir: string): Promise<{ dir: string; created: string[]; repository: string }>;
+
+type Credential =
+  | { type: "api_key"; key?: string; env?: Record<string, string> }
+  | { type: "oauth"; access: string; refresh: string; expires: number; [field: string]: unknown };
+
+interface CredentialStore {
+  read(provider: string): Promise<Credential | undefined>;
+  list(): Promise<readonly { provider: string; type: "api_key" | "oauth" }[]>;
+  modify(provider: string, change: (current?: Credential) => Promise<Credential | undefined>): Promise<Credential | undefined>;
+  delete(provider: string): Promise<void>;
+}
+function credentialFile(path: string): CredentialStore;
+
+function signInOptions(credentials: CredentialStore): Promise<SignInOption[]>;
+function signIn(request: {
+  credentials: CredentialStore;
+  provider: string;
+  method: "oauth" | "api_key";
+  interaction: SignInInteraction; // { signal?, prompt(SignInPrompt): Promise<string>, notify(SignInEvent): void }
+  deviceId?: string;
+}): Promise<{ provider: string; method: "oauth" | "api_key"; verified: "ok" | "unknown" | "n/a" }>;
+class SignInCancelled extends Error {}
+
+function providerAuth(
+  credentials: CredentialStore,
+  provider: string,
+): Promise<{ type: "oauth" | "api_key"; source?: string; apiKey?: string } | undefined>;
+```
+
+- `createAgent` is `fastagent init` without its options: the whole scaffold and a git repository whose first commit is
+  it, or why not. It installs no dependencies; the agent opens without them. A directory that is not empty is refused.
+- A `CredentialStore` keeps one credential per provider, whole. `modify` is its only write and runs one at a time per
+  provider, because an OAuth refresh happens inside it and a rotated refresh token must never be used twice; a store it
+  cannot read rejects, since answering it as empty would let the next write replace every provider's credential.
+  `credentialFile(path)` is FastAgent's own, the locked JSON file `fastagent login` writes; a corrupt one rejects.
+- `signInOptions` lists each way to sign in to each built-in provider, with what authenticates the provider now
+  (`status`: a stored credential, else the environment), what in the environment would with nothing stored
+  (`environment`), and whether the provider takes its key from the environment only (`external`).
+- `signIn` runs one provider's sign-in through `interaction`: `prompt` asks (`text`, `secret`, `select`, or
+  `manual_code`, the address the browser ended on), and `notify` tells (`auth_url`, a page to open; `device_code`, a
+  code to enter there; `info`, `progress`). A prompt's `signal` aborts when the answer is no longer needed, such as a
+  browser callback that came first. An API key is checked with one request before it is stored, and asked for again
+  when the provider rejects it. Aborting `interaction.signal` rejects with `SignInCancelled` and stores nothing. Sign in
+  with ChatGPT needs a stable `deviceId`: `credentialFile` keeps one beside its file, a store of your own passes it.
+- `providerAuth` resolves what a request to the provider sends (an OAuth token refreshed when due, through the store),
+  for a host that calls the provider itself, such as for its usage.
 
 ## Calling a served agent
 
@@ -195,6 +253,7 @@ Every serve (`dev`, `start`, an app's `serve()`; not `fastagent invoke`) gives t
 
 ```ts
 import { AgentError, defineAgent, defineChannel, defineSchedule, needs, openAgent, sessionIdOf } from "@fastagent-sh/fastagent";
+import { createAgent, credentialFile, providerAuth, signIn, signInOptions, SignInCancelled } from "@fastagent-sh/fastagent";
 import { telegramChannel, telegramTransport } from "@fastagent-sh/fastagent/telegram";
 import { slackChannel, slackThreads, slackTransport } from "@fastagent-sh/fastagent/slack";
 import { feishuChannel, feishuThreads, feishuTransport } from "@fastagent-sh/fastagent/feishu";

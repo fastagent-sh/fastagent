@@ -10,12 +10,13 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { BOX_CLI_PREDATES } from "../deploy/box-shell.ts";
-import type { IoOption, LoginIO, LoginMethod } from "../harnesses/models/login.ts";
+import type { IoOption, LoginIO } from "../harnesses/models/login.ts";
+import type { SignInMethod } from "../sign-in-api.ts";
 
 /** How a login on the box ended, as the box reports it. */
 export type RelayResult =
   /** Logged in now: `method` is how, `path` where the box saved it. */
-  | { ok: true; provider: string; method: LoginMethod; path: string }
+  | { ok: true; provider: string; method: SignInMethod; path: string }
   /**
    * `--if-missing`: the box already authenticates the provider and was left alone. `source` is what does it, as the
    * box's startup report names it (`OAuth`, `stored credential`, or an environment variable such as `OPENAI_API_KEY`).
@@ -42,7 +43,7 @@ const send = (out: Writable, message: BoxMessage | Answer): void => void out.wri
 
 /**
  * The box half: a {@link LoginIO} over `input`/`output`. Once `input` ends (the session dropped), every pending and
- * later question reads as backed out, so the flow ends in `LoginCancelled` instead of waiting forever.
+ * later question reads as backed out, so the flow ends in `SignInCancelled` instead of waiting forever.
  */
 export function stdioLoginIO(input: Readable, output: Writable): { io: LoginIO; result(result: RelayResult): void } {
   const pending = new Map<number, (value: string | undefined) => void>();

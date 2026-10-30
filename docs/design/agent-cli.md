@@ -107,7 +107,7 @@ works on app  ~/code/app (github acme/app); a host clones it
 People edit `context.json` and `context.local.json` by hand, and so can a client such as duang: they are JSON. Content
 belongs in the agent directory, not in the client, or a deployment from that directory would lose what it declares. The
 bindings are this machine's, and `content add` writes the one an entry needs here. Both use one implementation: the
-command, or the functions under it (`createAgent`, `addContent`, `removeContent`, `listContent` in
+command, or the functions under it (`initAgent`, `addContent`, `removeContent`, `listContent` in
 `src/authoring.ts`), which the CLI's commands wrap.
 The command:
 

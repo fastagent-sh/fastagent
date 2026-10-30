@@ -1,8 +1,8 @@
 /**
  * Creating an agent and editing its content: `fastagent init` and `fastagent content` are thin wrappers over these (and
  * `fastagent env` writes its declaration through {@link writeEnvironment}), so the rules live here, not in a command.
- * Nothing here prints or exits; every refusal is thrown with the message the CLI shows. Not exported from the package
- * (#847 decides how a client reaches them).
+ * Nothing here prints or exits; every refusal is thrown with the message the CLI shows. The package exports
+ * {@link createAgent}; the content and environment edits wait for context packages, whose shape they follow.
  */
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -47,7 +47,7 @@ export class ContentNameError extends Error {
   override name = "ContentNameError";
 }
 
-export interface CreateAgentOptions {
+export interface InitAgentOptions {
   /** What the agent works on and knows: repositories into `context.json`, this machine's directories into
    *  `context.local.json`. */
   content?: ContentAddition[];
@@ -65,8 +65,6 @@ export interface CreatedAgent {
   dir: string;
   /** The files written, relative to `dir`. */
   created: string[];
-  /** The content, resolved for this instance. */
-  content: ResolvedContent[];
   /**
    * What became of the agent's git repository, as a sentence to show: created with the scaffold as its first commit,
    * or why not (inside a repository that tracks it, git missing, no commit identity).
@@ -81,12 +79,23 @@ interface ContentMaps {
 }
 
 /**
- * Create an agent in `dir`, which must be new or empty. Every content entry is checked before anything is written, and
- * the scaffold is removed again when writing the content fails. The agent is then a git repository whose first commit
- * is what was written:
- * it changes itself, and version control is how its author goes back to a version that worked.
+ * Create an agent in `dir` as `fastagent init` does, which must be new or empty: the whole scaffold, and a git
+ * repository whose first commit is what was written, since the agent changes itself and version control is how its
+ * author goes back to a version that worked. It installs no dependencies; the agent opens without them.
  */
-export async function createAgent(dir: string, options: CreateAgentOptions = {}): Promise<CreatedAgent> {
+export async function createAgent(dir: string): Promise<CreatedAgent> {
+  const { content: _, ...created } = await initAgent(dir);
+  return created;
+}
+
+/**
+ * {@link createAgent} with what `fastagent init` adds: content, and the install. Every content entry is checked before
+ * anything is written, and the scaffold is removed again when writing the content fails.
+ */
+export async function initAgent(
+  dir: string,
+  options: InitAgentOptions = {},
+): Promise<CreatedAgent & { content: ResolvedContent[] }> {
   const agentDir = resolve(dir);
   const additions = options.content ?? [];
   let maps: ContentMaps = { content: {}, bindings: {} };

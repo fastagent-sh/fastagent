@@ -59,13 +59,14 @@ export interface ModelEnvironment {
  * The model environment of the agent in `agentDir` (or, without one, of a caller with no directory: the named or global
  * credentials file). A supplied `credentialStore` is used as given; otherwise the files: the directory's own layers
  * ({@link resolveAuthLayers}), or the named file, or the global one. `providers` are the definition's. The model lists
- * are refreshed before it resolves, kept in the agent's state root; `force` asks the network even when they are fresh.
+ * are refreshed before it resolves, kept in the instance's state root (`stateRoot`, else the directory's); `force`
+ * asks the network even when they are fresh.
  */
 export async function modelEnvironment(
   agentDir: string | undefined,
   source: CredentialSourceOptions & FastagentAuthOptions = {},
   providers: readonly Provider[] = [],
-  options: { force?: boolean } = {},
+  options: { force?: boolean; stateRoot?: string } = {},
 ): Promise<ModelEnvironment> {
   assertOneCredentialSource(source);
   const files = source.credentialStore
@@ -75,9 +76,10 @@ export async function modelEnvironment(
       : { path: source.authPath ?? GLOBAL_AUTH_PATH };
   const store = files === undefined ? undefined : layeredStore(files, providers, source.warn);
   const credentials = source.credentialStore ?? (store as FastagentCredentialStore);
-  const catalogs = catalogsIn(agentDir === undefined ? undefined : join(resolveStateRoot(agentDir), "models"));
+  const stateRoot = options.stateRoot ?? (agentDir === undefined ? undefined : resolveStateRoot(agentDir));
+  const catalogs = catalogsIn(stateRoot === undefined ? undefined : join(stateRoot, "models"));
   const models = modelsOver(credentials, providers, catalogs);
-  const catalogProblem = await catalogs.refresh(models, options);
+  const catalogProblem = await catalogs.refresh(models, { force: options.force === true });
   if (catalogProblem !== undefined) log.warn(`[fastagent] ${catalogProblem}`);
   return {
     ...(files ? { auth: files } : {}),

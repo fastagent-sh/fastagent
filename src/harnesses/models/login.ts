@@ -1,9 +1,10 @@
 /**
- * Signing in to a MODEL PROVIDER, for any front end: {@link login} runs one provider's flow over pi-ai's own
+ * Signing in to a MODEL PROVIDER, for any front end: {@link loginOver} runs one provider's flow over pi-ai's own
  * `AuthInteraction` and persists the credential through the same {@link fastagentCredentialStore} the runtime reads
- * (one writer, one lock/corruption semantics); {@link loginOptions} is the list a picker offers. `fastagent login` is
- * one front end ({@link loginFlow}: terminal menus, then {@link login}); `login --deployment` drives the same flow on a
- * deployed box over a relay (cli/login-relay.ts).
+ * (one writer, one lock/corruption semantics); {@link loginOptionsOver} is the list a picker offers. An embedding host
+ * reaches both through host.ts (`signIn`, `signInOptions`); `fastagent login` is a front end of its own
+ * ({@link loginFlow}: terminal menus, then {@link loginOver}); `login --deployment` drives the same flow on a deployed
+ * box over a relay (cli/login-relay.ts).
  */
 import {
   type AuthEvent,
@@ -19,91 +20,59 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
+import { SignInCancelled, type SignInMethod, type SignInOption, type SignInResult } from "../../sign-in-api.ts";
 import { assertOneCredentialSource, fastagentCredentialStore } from "./credentials.ts";
 import { UNNAMED_AUTH_SOURCE, interactiveAuth, loginProviders, modelsOver, probeApiKey } from "./models.ts";
-
-export type LoginMethod = "oauth" | "api_key";
-
-/** The user backed out of a prompt/menu, or the flow was aborted — a decision, not a failure. */
-export class LoginCancelled extends Error {}
 
 /** A sign-in that cannot start as asked: an unknown provider, or a choice a caller without menus did not make. */
 export class LoginRefused extends Error {
   /** The sign-ins it could be instead, for a caller to choose from. */
-  readonly choices: readonly LoginOption[];
-  constructor(message: string, choices: readonly LoginOption[]) {
+  readonly choices: readonly SignInOption[];
+  constructor(message: string, choices: readonly SignInOption[]) {
     super(message);
     this.choices = choices;
   }
 }
 
-/** One provider sign-in a picker can offer, as pi's `/login` offers it. */
-export interface LoginOption {
-  provider: string;
-  /** The provider's name, as pi lists it: "OpenAI", "OpenAI Codex (legacy)". */
-  name: string;
-  method: LoginMethod;
-  /** What signing in this way is called: the provider's own label ("Sign in with ChatGPT"), else pi's. */
-  label: string;
-  /** An OAuth login backed by a provider subscription. */
-  subscription: boolean;
-  /** Its key comes from the environment, never from a sign-in: picking it says so. */
-  external: boolean;
-  /**
-   * What authenticates the provider now: the kind of credential, and `OAuth`, `stored credential` or an env variable
-   * such as `OPENAI_API_KEY`. The store keeps ONE credential per provider, so signing in with the other method
-   * replaces a stored one, which a picker shows.
-   */
-  status?: { type: LoginMethod; source: string };
-  /** Why checking what authenticates it failed, when it did. */
-  problem?: string;
-}
-
 const ACCOUNT_LABEL = "Sign in with an account";
 const API_KEY_LABEL = "Sign in with an API key";
-
-/**
- * Every sign-in of pi's built-in providers, sorted by name as pi's `/login` lists them, with what authenticates each
- * one here: a credential `credentials` (a credentials file, or the caller's own store) holds, else this process's
- * environment, which a stored credential outranks.
- */
-export function loginOptions(credentials: string | CredentialStore): Promise<LoginOption[]> {
-  return loginOptionsOver(credentials);
-}
 
 /** A credentials file path names fastagent's store over it; a store is used as given. */
 const storeOf = (credentials: string | CredentialStore): CredentialStore =>
   typeof credentials === "string" ? fastagentCredentialStore(credentials) : credentials;
 
-/** {@link loginOptions} over pi's built-ins plus `providers` (a same id replaces one). Not public: a test seam. */
+/**
+ * Every sign-in of pi's built-in providers plus `providers` (a same id replaces one), sorted by name as pi's `/login`
+ * lists them, with what authenticates each one here: a credential `credentials` (a credentials file, or a store) holds,
+ * else this process's environment, which a stored credential outranks.
+ */
 export async function loginOptionsOver(
   credentials: string | CredentialStore,
   providers?: readonly Provider[],
-): Promise<LoginOption[]> {
+): Promise<SignInOption[]> {
   // ONE read of the store: `list` is metadata only, and reading per provider would repeat a corrupt file's warning for
   // every provider.
   const held = new Map((await storeOf(credentials).list()).map((info) => [info.providerId, info.type] as const));
   // The environment alone, over no store: what authenticates a provider nothing is stored for.
   const environment = modelsOver(new InMemoryCredentialStore(), providers);
-  const offered: LoginOption[] = [];
+  const offered: SignInOption[] = [];
   for (const provider of loginProviders(providers)) {
     const methods = (["oauth", "api_key"] as const).filter(
       (method) => provider.auth[method === "oauth" ? "oauth" : "apiKey"],
     );
     if (methods.length === 0) continue;
     const stored = held.get(provider.id);
-    let status: LoginOption["status"];
+    let ambient: SignInOption["status"];
     let problem: string | undefined;
-    if (stored !== undefined) {
-      status = { type: stored, source: stored === "oauth" ? "OAuth" : "stored credential" };
-    } else {
-      try {
-        const found = await environment.checkAuth(provider.id);
-        if (found !== undefined) status = { type: found.type, source: found.source ?? UNNAMED_AUTH_SOURCE };
-      } catch (error) {
-        problem = (error as Error).message;
-      }
+    try {
+      const found = await environment.checkAuth(provider.id);
+      if (found !== undefined) ambient = { type: found.type, source: found.source ?? UNNAMED_AUTH_SOURCE };
+    } catch (error) {
+      // A problem only where it decides the status: a stored credential outranks the environment.
+      if (stored === undefined) problem = (error as Error).message;
     }
+    const status: SignInOption["status"] =
+      stored === undefined ? ambient : { type: stored, source: stored === "oauth" ? "OAuth" : "stored credential" };
     for (const method of methods) {
       offered.push({
         provider: provider.id,
@@ -113,6 +82,7 @@ export async function loginOptionsOver(
         subscription: method === "oauth" && provider.auth.oauth?.isSubscription === true,
         external: interactiveAuth(provider, method) === undefined,
         ...(status ? { status } : {}),
+        ...(ambient ? { environment: ambient.source } : {}),
         ...(problem ? { problem } : {}),
       });
     }
@@ -121,13 +91,13 @@ export async function loginOptionsOver(
 }
 
 /** What a credential of `type` is called beside a provider's sign-in, as pi's picker calls it. */
-function credentialKind(type: LoginMethod, subscription: boolean): string {
+function credentialKind(type: SignInMethod, subscription: boolean): string {
   if (type === "api_key") return "API key";
   return subscription ? "subscription" : "account";
 }
 
 /** An option's status as pi's picker writes it after the provider's name. */
-export function loginStatusText(option: LoginOption): string {
+export function loginStatusText(option: SignInOption): string {
   if (option.problem !== undefined) return `auth check failed: ${option.problem}`;
   const { status } = option;
   if (status === undefined) return "not configured";
@@ -146,7 +116,7 @@ export type LoginRequest = {
    */
   getDeviceId?: () => string;
   provider: string;
-  method: LoginMethod;
+  method: SignInMethod;
   /** pi-ai's own interaction: prompts (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`, …). */
   interaction: AuthInteraction;
 } & (
@@ -162,39 +132,13 @@ export type LoginRequest = {
     }
 );
 
-export interface LoginResult {
-  provider: string;
-  method: LoginMethod;
-  /** An API key checked with one minimal request: accepted, or not decidable (kept). OAuth needs no check. */
-  verified: "ok" | "unknown" | "n/a";
-}
-
 /** Combine present abort signals into one (no-op when none/one). */
 function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
   const present = signals.filter((s): s is AbortSignal => s !== undefined);
   return present.length === 0 ? undefined : present.length === 1 ? present[0] : AbortSignal.any(present);
 }
 
-/**
- * Sign in to one of pi's built-in providers and persist the credential to `authPath`, or to the caller's
- * `credentialStore`.
- *
- * The store is checked FIRST (a no-op write runs the file store's refuse-corrupt and writability checks, or whatever
- * the caller's store does on a write), so a flow never runs toward a credential that could not be saved. An entered API key is verified with one minimal request to pi's
- * default model for the provider (its first model when pi names none), at pi's built-in endpoint, BEFORE it is
- * written. Credentials are provider-scoped, so any of the provider's models answers the question the check asks (does
- * the provider refuse the key, HTTP 401); a key the provider rejects is never stored, and the provider's key flow runs
- * again (the provider and method were not the mistake). Progress and outcome go out through `interaction.notify`.
- *
- * Aborting `interaction.signal` at any point, the verification included, rejects with {@link LoginCancelled} and
- * writes no credential (an OAuth device ID, the installation's identity, is kept once created). Every prompt carries a signal that aborts on it, on the prompt's own signal (a callback server
- * beating a `manual_code` prompt), and when the flow settles with a prompt still pending.
- */
-export function login(request: LoginRequest): Promise<LoginResult> {
-  return loginOver(request);
-}
-
-/** Not public: what the CLI and the tests add to {@link login}. */
+/** What the CLI adds to a sign-in. */
 export interface LoginInternals {
   /**
    * The definition's providers, added to pi's built-ins (a same id replaces one): a key is verified against the
@@ -209,8 +153,23 @@ export interface LoginInternals {
   verifyWith?: string;
 }
 
-/** {@link login}, plus {@link LoginInternals}. */
-export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<LoginResult> {
+/**
+ * Sign in to one of pi's built-in providers (plus the definition's) and persist the credential to `authPath`, or to
+ * the caller's `credentialStore`.
+ *
+ * The store is checked FIRST (a no-op write runs the file store's refuse-corrupt and writability checks, or whatever
+ * the caller's store does on a write), so a flow never runs toward a credential that could not be saved. An entered API key is verified with one minimal request to pi's
+ * default model for the provider (its first model when pi names none), at pi's built-in endpoint, BEFORE it is
+ * written. Credentials are provider-scoped, so any of the provider's models answers the question the check asks (does
+ * the provider refuse the key, HTTP 401); a key the provider rejects is never stored, and the provider's key flow runs
+ * again (the provider and method were not the mistake). Progress and outcome go out through `interaction.notify`.
+ *
+ * Aborting `interaction.signal` at any point, the verification included, rejects with {@link SignInCancelled} and
+ * writes no credential (an OAuth device ID, the installation's identity, is kept once created). Every prompt carries a
+ * signal that aborts on it, on the prompt's own signal (a callback server beating a `manual_code` prompt), and when the
+ * flow settles with a prompt still pending.
+ */
+export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<SignInResult> {
   const { providers, verifyWith } = internals;
   const { method, interaction } = request;
   assertOneCredentialSource(request);
@@ -238,11 +197,11 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
 
   for (;;) {
     const credential = await runFlow((io) => flow(io, { getDeviceId }), interaction, signal);
-    let verified: LoginResult["verified"] = "n/a";
+    let verified: SignInResult["verified"] = "n/a";
     if (models) {
       await trial.modify(provider.id, async () => credential);
       const verdict = await verifyApiKey(models, provider.id, verifyWith, notify, signal);
-      if (signal.aborted) throw new LoginCancelled("cancelled");
+      if (signal.aborted) throw new SignInCancelled("cancelled");
       if (verdict === "rejected") continue;
       verified = verdict;
     }
@@ -287,7 +246,7 @@ async function runFlow(
   interaction: AuthInteraction,
   signal: AbortSignal,
 ): Promise<Credential> {
-  if (signal.aborted) throw new LoginCancelled("cancelled");
+  if (signal.aborted) throw new SignInCancelled("cancelled");
   const done = new AbortController();
   let credential: Credential;
   try {
@@ -299,13 +258,13 @@ async function runFlow(
     });
   } catch (error) {
     // Whatever the provider made of the abort (its own error, a rejected prompt), it was the caller's decision.
-    if (signal.aborted) throw new LoginCancelled("cancelled");
+    if (signal.aborted) throw new SignInCancelled("cancelled");
     throw error;
   } finally {
     done.abort();
   }
   // A provider that ignored the abort and finished anyway: the caller still cancelled.
-  if (signal.aborted) throw new LoginCancelled("cancelled");
+  if (signal.aborted) throw new SignInCancelled("cancelled");
   return credential;
 }
 
@@ -430,7 +389,7 @@ export interface LoginIO {
   openUrl(url: string, userCode?: string): void;
 }
 
-/** {@link LoginIO} as pi-ai's `AuthInteraction`: what {@link login} drives for the terminal. */
+/** {@link LoginIO} as pi-ai's `AuthInteraction`: what {@link loginOver} drives for the terminal. */
 function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): AuthInteraction {
   return {
     ...(signal ? { signal } : {}),
@@ -451,7 +410,7 @@ function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): Auth
               redirect: p.type === "manual_code",
               ...(p.signal ? { signal: p.signal } : {}),
             });
-      if (v === undefined) throw new LoginCancelled("cancelled");
+      if (v === undefined) throw new SignInCancelled("cancelled");
       return v;
     },
     notify: (e: AuthEvent): void => {
@@ -471,14 +430,14 @@ function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): Auth
 
 /**
  * `fastagent login` in a terminal: ask only what was not given, as pi's `/login` asks it (how to sign in, then the
- * provider; a provider named by its id or its name, then how, when it offers both), then {@link login}.
+ * provider; a provider named by its id or its name, then how, when it offers both), then {@link loginOver}.
  */
 export async function loginFlow(
   io: LoginIO,
   options: {
     authPath: string;
     provider?: string;
-    method?: LoginMethod;
+    method?: SignInMethod;
     providers?: readonly Provider[];
     signal?: AbortSignal;
     /**
@@ -489,7 +448,7 @@ export async function loginFlow(
     /** {@link LoginInternals.verifyWith}. */
     verifyWith?: string;
   },
-): Promise<LoginResult> {
+): Promise<SignInResult> {
   const offered = await loginOptionsOver(options.statusFrom ?? options.authPath, options.providers);
   const choice = await chooseLogin(offered, options, io);
   if (choice.external) {
@@ -517,19 +476,19 @@ const METHOD_FLAGS = "--method account or --method api-key";
  * ({@link LoginRefused}) naming how to give it.
  */
 export async function chooseLogin(
-  offered: readonly LoginOption[],
-  given: { provider?: string; method?: LoginMethod },
+  offered: readonly SignInOption[],
+  given: { provider?: string; method?: SignInMethod },
   menus: LoginIO | undefined,
-): Promise<LoginOption> {
+): Promise<SignInOption> {
   const picked = async (
     message: string,
     options: IoOption[],
-    from: readonly LoginOption[],
-    by: (o: LoginOption) => string,
+    from: readonly SignInOption[],
+    by: (o: SignInOption) => string,
   ) => {
     const value = await (menus as LoginIO).select(message, options);
     const option = from.find((o) => by(o) === value);
-    if (option === undefined) throw new LoginCancelled("nothing selected");
+    if (option === undefined) throw new SignInCancelled("nothing selected");
     return option;
   };
   if (given.provider !== undefined) {
@@ -538,13 +497,13 @@ export async function chooseLogin(
     if (ofProvider.length === 0) {
       throw new LoginRefused(`unknown provider "${given.provider}": ${providerIds(offered)}`, offered);
     }
-    const name = (ofProvider[0] as LoginOption).name;
+    const name = (ofProvider[0] as SignInOption).name;
     const ofMethod = given.method === undefined ? ofProvider : ofProvider.filter((o) => o.method === given.method);
     if (ofMethod.length === 0) {
-      const only = (ofProvider[0] as LoginOption).method === "oauth" ? "an account" : "an API key";
+      const only = (ofProvider[0] as SignInOption).method === "oauth" ? "an account" : "an API key";
       throw new LoginRefused(`${name} signs in only with ${only}`, ofProvider);
     }
-    if (ofMethod.length === 1) return ofMethod[0] as LoginOption;
+    if (ofMethod.length === 1) return ofMethod[0] as SignInOption;
     if (menus === undefined)
       throw new LoginRefused(`${name} signs in with an account or an API key: pass ${METHOD_FLAGS}`, ofMethod);
     return picked(
@@ -571,7 +530,7 @@ export async function chooseLogin(
     ];
     const way = await menus.select("Select authentication method:", ways);
     if (way === "radius" && radius) return radius;
-    if (way !== "oauth" && way !== "api_key") throw new LoginCancelled("no authentication method selected");
+    if (way !== "oauth" && way !== "api_key") throw new SignInCancelled("no authentication method selected");
     method = way;
   }
   const candidates = offered.filter((o) => o.method === method);
@@ -586,12 +545,12 @@ export async function chooseLogin(
 }
 
 /** An option's status after its name on every row, as pi's picker writes it: ` ✓ configured`, ` • not configured`. */
-function statusSuffix(option: LoginOption): string {
+function statusSuffix(option: SignInOption): string {
   const text = loginStatusText(option);
   return text.startsWith("✓") ? ` ${text}` : ` • ${text}`;
 }
 
 /** Every provider id a sign-in can name, for a refusal that must say which. */
-function providerIds(offered: readonly LoginOption[]): string {
+function providerIds(offered: readonly SignInOption[]): string {
   return `one of ${[...new Set(offered.map((o) => o.provider))].sort().join(", ")}`;
 }
