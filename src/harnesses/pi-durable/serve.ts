@@ -4,7 +4,7 @@
  * one (SPEC.md §8); `dev`, `start`, AgentCore, `invoke` and `schedules run` open it through `openServing`, which
  * also takes where the Agent keeps its sessions and what becomes of an earlier process's messages.
  */
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type Harness, MemoryStorage, type Storage } from "@earendil-works/pi-durable";
@@ -23,7 +23,7 @@ import {
 import { enterEnvironment } from "../../environment/mise.ts";
 import { log } from "../../log.ts";
 import type { Agent } from "../../agent-api.ts";
-import { resolveStateRoot } from "../../paths.ts";
+import { resolveOverridePath, resolveStateRoot } from "../../paths.ts";
 import { type Service, serveAgent } from "../../service.ts";
 import type { DurableAgent, Unfinished } from "./agent.ts";
 import {
@@ -198,6 +198,13 @@ export interface OpenAgentOptions {
   stateDir?: string;
 }
 
+/** `stateDir` read as `FASTAGENT_STATE_DIR` is: `~` is the home directory, a relative one resolves against the cwd. */
+function stateDirOf(stateDir: string): string {
+  const resolved = resolveOverridePath(stateDir);
+  if (resolved === undefined) throw new Error("stateDir needs the directory the instance's state is kept in");
+  return resolved;
+}
+
 /**
  * Open the agent directory `dir` the way `dev` and `start` do before they serve: its definition, its code built with
  * the secrets it declares, its environment, its content and the instance's storage, which one process holds at a time.
@@ -210,7 +217,7 @@ export async function openAgent(dir: string, options: OpenAgentOptions = {}): Pr
     wakeTicking: () => ticking,
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.credentials === undefined ? {} : { credentialStore: piCredentials(options.credentials) }),
-    ...(options.stateDir === undefined ? {} : { stateRoot: resolve(options.stateDir) }),
+    ...(options.stateDir === undefined ? {} : { stateRoot: stateDirOf(options.stateDir) }),
   });
   const { agent } = opened;
   let served: Promise<Service> | undefined;
@@ -225,7 +232,16 @@ export async function openAgent(dir: string, options: OpenAgentOptions = {}): Pr
       // Its storage is let go, or about to be: a service now would run channels and schedules nobody closes.
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
-      const serving = serveAgent(opened, serveOptions);
+      const serving = serveAgent(opened, serveOptions).then(
+        (service): Service => ({
+          ...service,
+          close: () => {
+            // Its clock stops with it, whichever closes it: a wake-up kept after this is one nothing fires.
+            ticking = false;
+            return service.close();
+          },
+        }),
+      );
       served = serving;
       serving.then(
         () => {

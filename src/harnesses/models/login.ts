@@ -253,14 +253,15 @@ async function runFlow(
   try {
     credential = await flow({
       signal,
-      prompt: (prompt: AuthPrompt) =>
-        interaction
-          .prompt({ ...prompt, signal: anySignal(prompt.signal, signal, done.signal) } as AuthPrompt)
-          .catch((error: unknown) => {
-            // Remembered here: a provider may wrap the rejection it is handed in an error of its own.
-            if (error instanceof SignInCancelled) backedOut = error;
-            throw error;
-          }),
+      prompt: (prompt: AuthPrompt) => {
+        const asked = anySignal(prompt.signal, signal, done.signal);
+        return interaction.prompt({ ...prompt, signal: asked } as AuthPrompt).catch((error: unknown) => {
+          // Remembered here: a provider may wrap the rejection it is handed in an error of its own. Only a question
+          // still asked: one the flow withdrew (its callback came first) rejects too, and nobody backed out of it.
+          if (error instanceof SignInCancelled && !asked?.aborted) backedOut = error;
+          throw error;
+        });
+      },
       notify: (event: AuthEvent) => interaction.notify(event),
     });
   } catch (error) {

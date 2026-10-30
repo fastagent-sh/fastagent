@@ -684,6 +684,35 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
     expect((await readAuth(authPath)).codex.type).toBe("oauth");
   });
 
+  it("a failure after the provider withdrew a prompt is the provider's, though the withdrawn prompt read as backed out", async () => {
+    const authPath = await tmpAuth();
+    const providers = [
+      fakeProvider("codex", {
+        oauth: true,
+        onOauthLogin: async (cb) => {
+          const manual = new AbortController();
+          const typed = cb.prompt({ type: "manual_code", message: "paste the code", signal: manual.signal });
+          await new Promise((resolve) => setTimeout(resolve, 5)); // the browser's callback arrives
+          manual.abort();
+          await typed.catch(() => {});
+          throw new Error("token exchange failed: 400 invalid_grant");
+        },
+      }),
+    ];
+    // As the terminal does: a prompt aborted under it reads as backed out.
+    const interaction: AuthInteraction = {
+      notify: () => {},
+      prompt: (prompt) =>
+        new Promise<string>((_resolve, reject) => {
+          prompt.signal?.addEventListener("abort", () => reject(new SignInCancelled("cancelled")));
+        }),
+    };
+
+    await expect(
+      loginOver({ provider: "codex", method: "oauth", authPath, interaction, getDeviceId: () => "d" }, { providers }),
+    ).rejects.toThrow("token exchange failed: 400 invalid_grant");
+  });
+
   it("loginOptions offers each interactive method, with what the file holds for the provider", async () => {
     const authPath = await tmpAuth(JSON.stringify({ anthropic: { type: "api_key", key: "sk" } }));
 

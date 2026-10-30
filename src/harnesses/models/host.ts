@@ -108,10 +108,16 @@ export async function providerAuth(credentials: CredentialStore, provider: strin
   const resolved = await models.getAuth(provider);
   if (resolved === undefined) return undefined;
   const source = resolved.source ?? checked.source;
-  const { apiKey } = resolved.auth;
+  const { apiKey, baseUrl } = resolved.auth;
+  // pi's null header is one a request leaves out, which is what a header not given does.
+  const headers = Object.entries(resolved.auth.headers ?? {}).flatMap(([name, value]) =>
+    value === null ? [] : [[name, value] as const],
+  );
   return {
     type: checked.type,
     ...(source === undefined ? {} : { source }),
     ...(apiKey === undefined ? {} : { apiKey }),
+    ...(headers.length === 0 ? {} : { headers: Object.fromEntries(headers) }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
   };
 }
