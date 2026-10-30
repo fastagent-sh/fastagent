@@ -33,35 +33,72 @@ export function listModels(models: Models): string[] {
 }
 
 /**
- * pi's own reading of an environment (a blank variable is unset) over `env` instead of this process's: an agent's
+ * pi's own reading of an environment (a blank variable is unset) through `read` instead of this process's: an agent's
  * environment is its own when the process runs several. Files a source points at are this machine's unless
  * `fileExists` says otherwise.
  */
 function authContextIn(
-  env: NodeJS.ProcessEnv,
+  read: (name: string) => string | undefined,
   fileExists: (path: string) => Promise<boolean> = defaultProviderAuthContext().fileExists,
 ) {
-  return { env: async (name: string) => (env[name]?.trim() ? env[name] : undefined), fileExists };
+  return {
+    env: async (name: string) => {
+      const value = read(name);
+      return value?.trim() ? value : undefined;
+    },
+    fileExists,
+  };
 }
 
 /**
- * The built-ins plus `providers` (a same id replaces a built-in), over any credential store, a provider's key read
- * from `env` (the agent's environment; this process's by default). With `catalogs`, the lists its refresh brings up
- * to date; without, the ones this pi-ai was built with.
+ * `provider` with `environment` given to each request, as its auth reads it: pi resolves a provider's key from the
+ * auth context, but a request reads its region, endpoint or ambient key (Bedrock, Azure, Vertex) from the request's
+ * own `env`, which it otherwise takes from this process.
+ */
+function inEnvironment(provider: Provider, environment: Readonly<Record<string, string>>): Provider {
+  const withEnv = <Options extends { env?: Record<string, string> }>(options: Options | undefined) =>
+    ({ ...options, env: { ...environment, ...options?.env } }) as Options;
+  const { fetchDeferred, cancelDeferred, generateImages, classify } = provider;
+  return {
+    ...provider,
+    stream: (model, context, options) => provider.stream(model, context, withEnv(options)),
+    streamSimple: (model, context, options) => provider.streamSimple(model, context, withEnv(options)),
+    ...(fetchDeferred && {
+      fetchDeferred: (model, handle, options) => fetchDeferred.call(provider, model, handle, withEnv(options)),
+    }),
+    ...(cancelDeferred && {
+      cancelDeferred: (model, handle, options) => cancelDeferred.call(provider, model, handle, withEnv(options)),
+    }),
+    ...(generateImages && {
+      generateImages: (model, context, options) => generateImages.call(provider, model, context, withEnv(options)),
+    }),
+    ...(classify && {
+      classify: (model, context, options) => classify.call(provider, model, context, withEnv(options)),
+    }),
+  };
+}
+
+/**
+ * The built-ins plus `providers` (a same id replaces a built-in), over any credential store, in `environment`: what
+ * the agent's environment adds to this process's, read before it by a provider's auth and by each request. With
+ * `catalogs`, the lists its refresh brings up to date; without, the ones this pi-ai was built with.
  */
 export function modelsOver(
   credentials: CredentialStore,
   providers: readonly Provider[] = [],
   catalogs?: Catalogs,
-  env: NodeJS.ProcessEnv = process.env,
+  environment: Readonly<Record<string, string>> = {},
 ): Models {
   const models = createModels({
     credentials,
-    authContext: authContextIn(env),
+    // As a request reads it (pi's getProviderEnvValue): the request's env first, then this process's.
+    authContext: authContextIn((name) => environment[name] || process.env[name]),
     ...(catalogs ? { modelsStore: catalogs.fetched } : {}),
   });
-  for (const builtIn of builtinProviders()) models.setProvider(catalogs ? catalogs.over(builtIn) : builtIn);
-  for (const provider of providers) models.setProvider(provider);
+  for (const builtIn of builtinProviders()) {
+    models.setProvider(inEnvironment(catalogs ? catalogs.over(builtIn) : builtIn, environment));
+  }
+  for (const provider of providers) models.setProvider(inEnvironment(provider, environment));
   return models;
 }
 
@@ -85,7 +122,7 @@ export async function environmentAuth(
 ): Promise<{ source?: string } | undefined> {
   const models = builtinModels({
     credentials: new InMemoryCredentialStore(),
-    authContext: authContextIn(env, fileExists),
+    authContext: authContextIn((name) => env[name], fileExists),
   });
   for (const provider of providers) models.setProvider(provider);
   return models.checkAuth(providerId);

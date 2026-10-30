@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
+import { type Api, InMemoryCredentialStore, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { modelEnvironment } from "../src/harnesses/models/environment.ts";
-import { UNNAMED_AUTH_SOURCE, probeApiKey, providerAuthStatuses } from "../src/harnesses/models/models.ts";
+import { UNNAMED_AUTH_SOURCE, modelsOver, probeApiKey, providerAuthStatuses } from "../src/harnesses/models/models.ts";
 
 type FakeProvider = {
   id: string;
@@ -32,6 +32,37 @@ function fakeModels(providers: FakeProvider[]): Models {
     },
   } as unknown as Models;
 }
+
+describe("modelsOver: an agent's environment", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("reaches a built-in provider's request, which reads its endpoint there, not only the auth before it", async () => {
+    for (const name of ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME"]) {
+      vi.stubEnv(name, undefined);
+    }
+    const asked: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      asked.push(input instanceof Request ? input.url : String(input));
+      throw new Error("offline");
+    });
+    const models = modelsOver(new InMemoryCredentialStore(), [], undefined, {
+      AZURE_OPENAI_API_KEY: "k",
+      AZURE_OPENAI_BASE_URL: "https://agent-endpoint.example/openai/v1",
+    });
+    const [model] = models.getProvider("azure")?.getModels() ?? [];
+    if (model === undefined) throw new Error("pi-ai lists no azure model");
+    await models.complete(
+      model,
+      { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+      { maxRetries: 0 },
+    );
+    expect(asked).toEqual([expect.stringMatching(/^https:\/\/agent-endpoint\.example\/openai\/v1\//)]);
+    expect(process.env.AZURE_OPENAI_BASE_URL).toBeUndefined();
+  });
+});
 
 describe("providerAuthStatuses", () => {
   it("maps usable → ready (with source), unconfigured, and rejecting → broken (with the message)", async () => {

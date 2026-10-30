@@ -132,7 +132,7 @@ export async function openServing(directory: string, options: OpenServingOptions
   const environment = { ...values, ...(await prepareEnvironment(dir, { ...process.env, ...values })) };
   const env = { ...process.env, ...environment };
   const content = await contentForThisRun(dir, env);
-  const stateRoot = options.stateRoot ?? resolveStateRoot(dir);
+  const stateRoot = options.stateRoot ?? resolveStateRoot(dir, env);
   const models = await modelEnvironment(
     dir,
     {
@@ -140,7 +140,7 @@ export async function openServing(directory: string, options: OpenServingOptions
       ...(options.credentialStore === undefined ? {} : { credentialStore: options.credentialStore }),
     },
     code.providers,
-    { stateRoot, env },
+    { stateRoot, environment },
   );
   const chosen = options.storage ?? { instance: "posix" };
   const storage = await openStorage(stateRoot, chosen);

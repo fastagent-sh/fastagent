@@ -239,7 +239,8 @@ calls the Agent API; `createAgent(dir)` makes a new one, as `fastagent init` doe
   under `src/` and `fastagent.config.ts` are built when the agent opens: `close()` it and open it again.
 - **Each agent's own environment.** An agent runs on this process's environment plus its own: its `.secrets/.env`
   (a variable the process holds wins over the file) and its declared packages. Its code's `needs()`, its commands,
-  its content's clones and its model keys all read that, and `openAgent` writes nothing into `process.env`, so agents
+  its content's clones, its model keys and its model requests all read that, and `openAgent` writes nothing into
+  `process.env`, so agents
   opened in one process keep their values and packages apart. Code that reads `process.env` itself sees the process's
   alone: an agent's code takes its values with `needs()`. The process is still one: a tool that blocks it or crashes
   it does so for every agent in it.

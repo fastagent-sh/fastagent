@@ -101,7 +101,9 @@ the machine's, or the store `credentials` gives) with its [model lists](configur
 is less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage,
 `<state root>/agent.sqlite`, which one process holds at a time: a second opener is refused. The state root is
 `stateDir`, else `FASTAGENT_STATE_DIR`, else the agent's `.state/`. Everything it reads from an environment (the
-secrets, the model keys, what its commands and its content's clones run with) is this process's plus the agent's own:
+secrets, the model keys and what each model request reads, such as Bedrock's region or Azure's endpoint, what its
+commands and its content's clones run with, `FASTAGENT_STATE_DIR` and `FASTAGENT_AUTH_PATH`) is this process's plus the
+agent's own:
 its `.secrets/.env`, where the process does not hold a variable, and its declared packages. Nothing is written into
 `process.env`, so one process can open several agents. `model` is the default for a session that names
 none; without one anywhere, a message is refused `missing_model` until its session is given one (`sessions.update`).

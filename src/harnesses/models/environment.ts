@@ -58,8 +58,9 @@ export interface ModelEnvironment {
 /**
  * The model environment of the agent in `agentDir` (or, without one, of a caller with no directory: the named or global
  * credentials file). A supplied `credentialStore` is used as given; otherwise the files: the directory's own layers
- * ({@link resolveAuthLayers}), or the named file, or the global one. `providers` are the definition's. A provider's
- * key is read from `env`, the agent's environment (this process's by default). The model lists are refreshed before it
+ * ({@link resolveAuthLayers}), or the named file, or the global one. `providers` are the definition's. `environment` is
+ * what the agent's environment adds to this process's: its keys, the requests' settings, and where its files are
+ * (`FASTAGENT_AUTH_PATH`, `FASTAGENT_STATE_DIR`) are all read there first. The model lists are refreshed before it
  * resolves, kept in the instance's state root (`stateRoot`, else the directory's); `force` asks the network even when
  * they are fresh.
  */
@@ -67,20 +68,21 @@ export async function modelEnvironment(
   agentDir: string | undefined,
   source: CredentialSourceOptions & FastagentAuthOptions = {},
   providers: readonly Provider[] = [],
-  options: { force?: boolean; stateRoot?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { force?: boolean; stateRoot?: string; environment?: Readonly<Record<string, string>> } = {},
 ): Promise<ModelEnvironment> {
-  const env = options.env ?? process.env;
+  const environment = options.environment ?? {};
+  const env = { ...process.env, ...environment };
   assertOneCredentialSource(source);
   const files = source.credentialStore
     ? undefined
     : agentDir
-      ? resolveAuthLayers(agentDir, source.authPath)
+      ? resolveAuthLayers(agentDir, source.authPath, env)
       : { path: source.authPath ?? GLOBAL_AUTH_PATH };
-  const store = files === undefined ? undefined : layeredStore(files, providers, source.warn, env);
+  const store = files === undefined ? undefined : layeredStore(files, providers, source.warn, environment);
   const credentials = source.credentialStore ?? (store as FastagentCredentialStore);
-  const stateRoot = options.stateRoot ?? (agentDir === undefined ? undefined : resolveStateRoot(agentDir));
+  const stateRoot = options.stateRoot ?? (agentDir === undefined ? undefined : resolveStateRoot(agentDir, env));
   const catalogs = catalogsIn(stateRoot === undefined ? undefined : join(stateRoot, "models"));
-  const models = modelsOver(credentials, providers, catalogs, env);
+  const models = modelsOver(credentials, providers, catalogs, environment);
   const catalogProblem = await catalogs.refresh(models, { force: options.force === true });
   if (catalogProblem !== undefined) log.warn(`[fastagent] ${catalogProblem}`);
   return {
@@ -126,11 +128,11 @@ function layeredStore(
   auth: AuthLayers,
   providers: readonly Provider[],
   warn: FastagentAuthOptions["warn"],
-  env: NodeJS.ProcessEnv,
+  environment: Readonly<Record<string, string>>,
 ): FastagentCredentialStore {
   const own = () => fastagentCredentialStore(auth.path, { ...(warn ? { warn } : {}) });
   if (auth.fallback === undefined) return own();
-  const project = modelsOver(own(), providers, undefined, env);
+  const project = modelsOver(own(), providers, undefined, environment);
   return fastagentCredentialStore(auth.path, {
     ...(warn ? { warn } : {}),
     fallbackPath: auth.fallback,
