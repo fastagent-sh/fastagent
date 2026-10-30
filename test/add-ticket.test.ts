@@ -7,6 +7,12 @@ import { FEISHU_AGENT_SCOPES } from "../src/channels/feishu/setup-mode.ts";
 import { checkTicket, createTicket } from "../src/cli/ticket.ts";
 import { agentWorkspace } from "./cli-run.ts";
 
+// At a terminal, so `--json` alone is what says a coding agent runs this (the ticket's own run asks nothing either way).
+vi.mock("../src/cli/shared.ts", async (original) => ({
+  ...(await original<typeof import("../src/cli/shared.ts")>()),
+  isInteractive: () => true,
+}));
+
 const exited = new Error("exited");
 
 afterEach(() => {
@@ -110,4 +116,18 @@ it("a failure inside the run fails the ticket with its reason, not a bare exit",
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+it("--json hands the person's part over even at a terminal: a coding agent may run commands in one", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fa-add-json-"));
+  await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
+  vi.stubEnv("FASTAGENT_STATE_DIR", "");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const printed = vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(process, "exit").mockImplementation(() => {
+    throw exited;
+  });
+  await expect(runAddChannel("lark", dir, { onboard: true, json: true })).rejects.toBe(exited);
+  expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({ status: "need_user_action" });
+  await rm(dir, { recursive: true, force: true });
 });

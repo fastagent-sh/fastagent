@@ -44,19 +44,3 @@ it("an onboarded Slack app's next steps name every tool the scaffold wrote", asy
   expect(out).toContain("tools/slack-send.ts tool");
   expect(out).toContain("tools/slack-threads.ts tool");
 });
-
-it("--json hands the person's part over even at a terminal: a coding agent may run commands in one", async () => {
-  const dir = join(await mkdtemp(join(tmpdir(), "fa-add-slack-")), "fastagent");
-  dirs.push(dir);
-  await mkdir(dir);
-  await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
-  vi.stubEnv("FASTAGENT_STATE_DIR", "");
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  const printed = vi.spyOn(console, "log").mockImplementation(() => {});
-  const exited = new Error("exited");
-  vi.spyOn(process, "exit").mockImplementation(() => {
-    throw exited;
-  });
-  await expect(runAddChannel("slack", dir, { onboard: true, json: true })).rejects.toBe(exited);
-  expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({ status: "need_user_action" });
-});
