@@ -101,13 +101,14 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // exactly where the operator said, or a second `login` for a provider they already have globally would silently
   // rewrite the global credential instead of creating the project-level override they asked for.
   const authPath = opts.global ? GLOBAL_AUTH_PATH : resolveAuthPath(loginDir);
+  const ownAgent = opts.global ? undefined : agentDir;
   // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint. Not for
   // `-g`: the global file serves every agent on this machine, so no one agent's providers decide what it holds.
-  const providers = agentDir && !opts.global ? await definitionProviders(agentDir).catch(failStartup) : [];
-  const ownAgent = opts.global ? undefined : agentDir;
+  const providersOf = () => (ownAgent ? definitionProviders(ownAgent) : Promise.resolve([]));
   if (opts.ticket !== undefined) {
-    // The process `startTicket` started: the sign-in itself, its outcome written to the ticket.
+    // The process `startTicket` started: it takes the ticket before loading the definition, then signs in.
     await runTicket(opts.ticket, async (step) => {
+      const providers = await providersOf();
       const interaction = signInInteraction(step, provider as string);
       await loginOver({ provider: provider as string, method: "oauth", authPath, interaction }, { providers });
       const model = ownAgent ? await defaultModelHint(ownAgent, provider as string) : undefined;
@@ -116,6 +117,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     });
     process.exit(0);
   }
+  const providers = await providersOf().catch(failStartup);
   // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path, the credential
   // lands somewhere no agent will read.
   if (!agentDir && !opts.global && !process.env.FASTAGENT_AUTH_PATH) {

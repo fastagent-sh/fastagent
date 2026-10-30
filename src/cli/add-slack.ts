@@ -191,6 +191,10 @@ async function onboard(
     if (action === "replace-config") {
       writeSlackOnboardingState(input.stateRoot, { ...state, ...(await freshTokens()) });
       console.error("[fastagent] replaced local Slack App Configuration tokens; runtime app credentials are unchanged");
+      // A browser that pasted the pair waits on the page after it: this is where the setup ends.
+      await (await endpoint.ifStarted())?.server.done(
+        "Slack App Configuration tokens replaced: you can close this page.",
+      );
     } else {
       console.error("[fastagent] keeping the installed Slack app and local configuration tokens");
     }
