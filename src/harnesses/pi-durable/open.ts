@@ -362,6 +362,8 @@ export interface AssembleAgentOptions {
   settings?: HarnessSettings;
   /** Where the instance's state is: given by a serve, whose scheduler fires the wake-ups `wake` keeps there. */
   stateRoot?: string;
+  /** Whether that scheduler runs now: an app's `openAgent` runs one only while it serves. Default always. */
+  wakeTicking?: () => boolean;
   unfinished?: Unfinished;
   /**
    * What the agent's environment adds to this process's, for the commands it runs: its value file's variables and its
@@ -394,7 +396,11 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     }),
   );
   for (const extension of code.extensions) registry.install(extension);
-  if (options.stateRoot !== undefined && !ownWake) registry.install(wakeExtension(options.stateRoot));
+  if (options.stateRoot !== undefined && !ownWake) {
+    registry.install(
+      wakeExtension(options.stateRoot, options.wakeTicking === undefined ? {} : { ticking: options.wakeTicking }),
+    );
+  }
   const thinkingLevel = options.thinkingLevel ?? config.thinkingLevel;
   return openDurableAgent({
     storage: options.storage,

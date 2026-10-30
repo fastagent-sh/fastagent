@@ -105,7 +105,8 @@ secrets, the model keys, what its commands and its content's clones run with) is
 its `.secrets/.env`, where the process does not hold a variable, and its declared packages. Nothing is written into
 `process.env`, so one process can open several agents. `model` is the default for a session that names
 none; without one anywhere, a message is refused `missing_model` until its session is given one (`sessions.update`).
-Nothing reaches the agent until `serve`.
+Nothing reaches the agent until `serve`, and its `wake` tool refuses a wake-up until then: only a serve's clock fires
+one.
 
 `serve()` is what `start` serves: the channels' routes and `GET /health` (503 until every long connection is ready), the
 long connections, the schedules and the wake-up poll, and, when `apiKeys` holds a key, the Agent API over HTTP under
@@ -161,7 +162,8 @@ function providerAuth(
   (`status`: a stored credential, else the environment), what in the environment would with nothing stored
   (`environment`), and whether the provider takes its key from the environment only (`external`).
 - `signIn` runs one provider's sign-in through `interaction`: `prompt` asks (`text`, `secret`, `select`, or
-  `manual_code`, the address the browser ended on), and `notify` tells (`auth_url`, a page to open; `device_code`, a
+  `manual_code`, the address the browser ended on) and rejects with `SignInCancelled` when the person backs out, and
+  `notify` tells (`auth_url`, a page to open; `device_code`, a
   code to enter there; `info`, `progress`). A prompt's `signal` aborts when the answer is no longer needed, such as a
   browser callback that came first. An API key is checked with one request before it is stored, and asked for again
   when the provider rejects it. Aborting `interaction.signal` rejects with `SignInCancelled` and stores nothing. Sign in

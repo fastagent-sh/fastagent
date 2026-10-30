@@ -203,7 +203,7 @@ try {
     provider: "anthropic",
     method: "oauth",
     interaction: {
-      prompt: (prompt) => askInWindow(prompt), // text, secret, select, manual_code; reject to back out
+      prompt: (prompt) => askInWindow(prompt), // text, secret, select, manual_code; reject with SignInCancelled to back out
       notify: (event) => showInWindow(event), // auth_url, device_code, info, progress
     },
   });
@@ -230,7 +230,8 @@ calls the Agent API; `createAgent(dir)` makes a new one, as `fastagent init` doe
   under its data directory) is an instance of the agent separate from the one `fastagent dev` opens in the same
   directory, so both run at once. They share the definition and nothing else: each has its own sessions. Only one of
   them serves the definition's channels and schedules (two would fire every schedule twice and compete for the
-  channels' messages); an app beside `dev` does not call `serve()`.
+  channels' messages); an app beside `dev` does not call `serve()`. An instance nothing serves has no clock, so the
+  agent's `wake` tool refuses a wake-up there instead of keeping one nothing would fire.
 - **Models.** `agent.info().models` are the models a session may name, each with its `contextWindow`; a provider
   signed in to while the agent is open is in the next answer. The lists are refreshed when the agent opens, at most
   every 4 hours.

@@ -6,7 +6,7 @@
  */
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AnyModel, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -108,7 +108,7 @@ describe("a host's credentials", () => {
     expect(existsSync(GLOBAL_AUTH_PATH)).toBe(false);
   });
 
-  it("an aborted sign-in rejects with the exported SignInCancelled and stores nothing", async () => {
+  it("an aborted sign-in, or one the person backs out of, rejects with SignInCancelled and stores nothing", async () => {
     const store = hostStore();
     const abort = new AbortController();
     abort.abort();
@@ -119,6 +119,16 @@ describe("a host's credentials", () => {
       interaction: typing("sk-typed", abort.signal),
     });
     await expect(signingIn).rejects.toBeInstanceOf(SignInCancelled);
+    // The person backing out of a question, as the host's UI says so.
+    const backingOut: SignInInteraction = {
+      notify: () => {},
+      prompt: async () => {
+        throw new SignInCancelled("closed the dialog");
+      },
+    };
+    await expect(
+      signIn({ credentials: store, provider: "openai", method: "api_key", interaction: backingOut }),
+    ).rejects.toBeInstanceOf(SignInCancelled);
     expect(await store.list()).toEqual([]);
   });
 
@@ -147,12 +157,13 @@ describe("a host's credentials", () => {
     const run = vi
       .spyOn(login, "loginOver")
       .mockResolvedValue({ provider: "openai", method: "oauth", verified: "n/a" });
-    const path = join(await tmp("fa-host-device-"), "auth.json");
     const interaction = typing("unused");
 
-    await signIn({ credentials: credentialFile(path), provider: "openai", method: "oauth", interaction });
-    expect(run.mock.calls[0]?.[0]).toMatchObject({ authPath: path });
+    // Resolved as the store resolves it: `~/…` is the home directory's, so the id is kept beside the credentials.
+    await signIn({ credentials: credentialFile("~/host/auth.json"), provider: "openai", method: "oauth", interaction });
+    expect(run.mock.calls[0]?.[0]).toMatchObject({ authPath: join(homedir(), "host", "auth.json") });
     expect(run.mock.calls[0]?.[0]).not.toHaveProperty("credentialStore");
+    expect(() => credentialFile("")).toThrow("credentialFile needs the path of a credentials file");
 
     await signIn({ credentials: hostStore(), provider: "openai", method: "oauth", interaction, deviceId: "dev-1" });
     const request = run.mock.calls[1]?.[0];

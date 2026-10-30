@@ -52,6 +52,8 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   unfinished?: Unfinished;
   /** The instance's state root, over `FASTAGENT_STATE_DIR` and the directory's own. */
   stateRoot?: string;
+  /** Whether a clock fires the instance's wake-ups now (`assembleAgent`'s `wakeTicking`). Default always. */
+  wakeTicking?: () => boolean;
 }
 
 type ServingStorage = { instance: StorageLocking } | { file: string; holders?: string } | "memory";
@@ -153,6 +155,7 @@ export async function openServing(directory: string, options: OpenServingOptions
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
+    ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
   }).catch(async (error: unknown) => {
     // An Agent that did not open does not own the storage, and its lock would refuse this process's next attempt.
     await storage.close(BACKGROUND_CONTEXT);
@@ -207,7 +210,10 @@ export interface OpenAgentOptions {
  * Nothing reaches the agent until `serve`.
  */
 export async function openAgent(dir: string, options: OpenAgentOptions = {}): Promise<LocalAgent> {
+  // An app may never serve the agent, and then no clock fires a wake-up: `wake` is refused until it does.
+  let ticking = false;
   const opened = await openServing(dir, {
+    wakeTicking: () => ticking,
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.credentials === undefined ? {} : { credentialStore: piCredentials(options.credentials) }),
     ...(options.stateDir === undefined ? {} : { stateRoot: resolve(options.stateDir) }),
@@ -227,10 +233,15 @@ export async function openAgent(dir: string, options: OpenAgentOptions = {}): Pr
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
       const serving = serveAgent(opened, serveOptions);
       served = serving;
-      // A serve that failed to start rolled itself back, so the agent may be served again.
-      serving.catch(() => {
-        if (served === serving) served = undefined;
-      });
+      serving.then(
+        () => {
+          if (served === serving && closing === undefined) ticking = true;
+        },
+        // A serve that failed to start rolled itself back, so the agent may be served again.
+        () => {
+          if (served === serving) served = undefined;
+        },
+      );
       return serving;
     },
     close() {

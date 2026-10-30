@@ -28,7 +28,9 @@ pi-durable's own API (`agent.harness`). The public surface is one entry (`src/in
 what a host embedding agents needs, what an author writes) and one per first-party channel, each naming every export;
 `package-boundary.test.ts` asserts it, and that the contracts (`agent-api.ts`, `channel.ts`, `sign-in-api.ts`) and the
 channel spine import no harness. A host keeps credentials and signs in through `sign-in-api.ts`'s types, which
-`harnesses/models/host.ts` translates to pi-ai's in one place, without a cast, so the two cannot drift apart unseen.
+`harnesses/models/host.ts` translates to pi-ai's in one place, without a cast and with the interaction's `prompt` and
+`notify` checked as functions (a method's parameters are checked in either direction), so the two cannot drift apart
+unseen.
 
 ## 2. Agent shape, content and prompt
 

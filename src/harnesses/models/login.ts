@@ -68,8 +68,7 @@ export async function loginOptionsOver(
       const found = await environment.checkAuth(provider.id);
       if (found !== undefined) ambient = { type: found.type, source: found.source ?? UNNAMED_AUTH_SOURCE };
     } catch (error) {
-      // A problem only where it decides the status: a stored credential outranks the environment.
-      if (stored === undefined) problem = (error as Error).message;
+      problem = (error as Error).message;
     }
     const status: SignInOption["status"] =
       stored === undefined ? ambient : { type: stored, source: stored === "oauth" ? "OAuth" : "stored credential" };
@@ -98,9 +97,10 @@ function credentialKind(type: SignInMethod, subscription: boolean): string {
 
 /** An option's status as pi's picker writes it after the provider's name. */
 export function loginStatusText(option: SignInOption): string {
-  if (option.problem !== undefined) return `auth check failed: ${option.problem}`;
   const { status } = option;
-  if (status === undefined) return "not configured";
+  // A stored credential outranks the environment, so a failed check of the environment does not decide it.
+  if (status === undefined)
+    return option.problem === undefined ? "not configured" : `auth check failed: ${option.problem}`;
   if (status.type !== option.method) return `${credentialKind(status.type, option.subscription)} configured`;
   if (status.source === "OAuth" || status.source === "stored credential") return "✓ configured";
   return /^[A-Z][A-Z0-9_]*(?:, [A-Z][A-Z0-9_]*)*$/.test(status.source)
@@ -248,17 +248,25 @@ async function runFlow(
 ): Promise<Credential> {
   if (signal.aborted) throw new SignInCancelled("cancelled");
   const done = new AbortController();
+  let backedOut: SignInCancelled | undefined;
   let credential: Credential;
   try {
     credential = await flow({
       signal,
       prompt: (prompt: AuthPrompt) =>
-        interaction.prompt({ ...prompt, signal: anySignal(prompt.signal, signal, done.signal) } as AuthPrompt),
+        interaction
+          .prompt({ ...prompt, signal: anySignal(prompt.signal, signal, done.signal) } as AuthPrompt)
+          .catch((error: unknown) => {
+            // Remembered here: a provider may wrap the rejection it is handed in an error of its own.
+            if (error instanceof SignInCancelled) backedOut = error;
+            throw error;
+          }),
       notify: (event: AuthEvent) => interaction.notify(event),
     });
   } catch (error) {
     // Whatever the provider made of the abort (its own error, a rejected prompt), it was the caller's decision.
     if (signal.aborted) throw new SignInCancelled("cancelled");
+    if (backedOut !== undefined) throw backedOut;
     throw error;
   } finally {
     done.abort();

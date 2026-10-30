@@ -627,6 +627,38 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
     expect((await readAuth(authPath).catch(() => ({}))).openai).toBeUndefined();
   });
 
+  it("a prompt rejected with SignInCancelled ends the sign-in with it, whatever error the provider makes of it", async () => {
+    const authPath = await tmpAuth();
+    // A provider that wraps whatever its prompt rejects with, as one may.
+    const wrapping = fakeProvider("codex", {
+      oauth: true,
+      onOauthLogin: async (cb) => {
+        try {
+          await cb.prompt({ type: "text", message: "Paste the code" });
+        } catch (error) {
+          throw new Error(`codex sign-in failed: ${(error as Error).message}`);
+        }
+        return OAUTH_CRED;
+      },
+    });
+    const ask = (rejection: Error): AuthInteraction => ({
+      notify: () => {},
+      prompt: async () => {
+        throw rejection;
+      },
+    });
+    const backedOut = new SignInCancelled("closed the dialog");
+    const request = { provider: "codex", method: "oauth" as const, authPath, getDeviceId: () => "d" };
+    await expect(loginOver({ ...request, interaction: ask(backedOut) }, { providers: [wrapping] })).rejects.toBe(
+      backedOut,
+    );
+    // Asking that failed is a failure, not a person's decision.
+    await expect(
+      loginOver({ ...request, interaction: ask(new Error("the window is gone")) }, { providers: [wrapping] }),
+    ).rejects.toThrow("codex sign-in failed: the window is gone");
+    expect((await readAuth(authPath).catch(() => ({}))).codex).toBeUndefined();
+  });
+
   it("a prompt the provider withdraws (its callback beat manual_code) lets the flow complete", async () => {
     const authPath = await tmpAuth();
     const providers = [
@@ -682,6 +714,35 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
       { ...option, provider: "codex", name: "codex", method: "oauth", label: "Sign in with an account" },
       { ...option, provider: "openai", name: "openai", method: "api_key", label: "Sign in with an API key" },
     ]);
+  });
+
+  it("a failed check of the environment is said, beside a stored credential too, which still decides the status", async () => {
+    const broken = {
+      id: "broken",
+      name: "broken",
+      getModels: () => [],
+      auth: {
+        apiKey: {
+          name: "broken API key",
+          resolve: async () => {
+            throw new Error("its key command failed");
+          },
+          login: async (): Promise<Credential> => ({ type: "api_key", key: "k" }),
+        },
+      },
+    } as unknown as Provider;
+    const option = async (held: string) =>
+      (await loginOptionsOver(await tmpAuth(held), [broken])).find((o) => o.provider === "broken") as never;
+    const stored = await option(JSON.stringify({ broken: { type: "api_key", key: "sk" } }));
+    // `environment` is unknown, not empty: what answers after a sign-out could not be read.
+    const problem = "API key auth failed for provider broken: its key command failed";
+    expect(stored).toMatchObject({ status: { source: "stored credential" }, problem });
+    expect(stored).not.toHaveProperty("environment");
+    expect(loginStatusText(stored)).toBe("✓ configured");
+    const nothing = await option("{}");
+    expect(nothing).toMatchObject({ problem });
+    expect(nothing).not.toHaveProperty("status");
+    expect(loginStatusText(nothing)).toBe(`auth check failed: ${problem}`);
   });
 
   it("loginOptions reads the credentials file once: a corrupt file warns once, not once per provider", async () => {
