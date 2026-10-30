@@ -11,16 +11,23 @@ function fakeIO(answers: Array<string | undefined>): {
   prompts: Array<{ message: string; hidden?: boolean }>;
   notes: string[];
   opened: string[];
+  /** What the person is told to do on each page opened. */
+  actions: string[];
 } {
   const prompts: Array<{ message: string; hidden?: boolean }> = [];
   const notes: string[] = [];
   const opened: string[] = [];
+  const actions: string[] = [];
   return {
     prompts,
     notes,
     opened,
+    actions,
     io: {
-      openUrl: (url) => opened.push(url),
+      openUrl: (url, action) => {
+        opened.push(url);
+        actions.push(action);
+      },
       note: (message) => notes.push(message),
       async prompt(message, opts) {
         prompts.push({ message, hidden: opts?.hidden });
@@ -45,7 +52,9 @@ describe("guided Lark app onboarding", () => {
     });
     expect(LARK_CONSOLE_URL).toBe("https://open.larksuite.com/page/launcher?from=backend_oneclick");
     expect(larkEventSecurityUrl("cli_app")).toBe("https://open.larksuite.com/app/cli_app/event?tab=safe");
-    expect(fx.opened).toEqual([LARK_CONSOLE_URL, "https://open.larksuite.com/app/cli_app/event?tab=safe"]);
+    // The token captured, nothing is left for the person on the app's event page.
+    expect(fx.opened).toEqual([LARK_CONSOLE_URL]);
+    expect(fx.actions).toEqual([expect.stringMatching(/^create the app on Lark's one-click launcher/)]);
     expect(fx.prompts.map((p) => p.message)).toEqual([
       expect.stringContaining("LARK_APP_ID"),
       expect.stringContaining("LARK_APP_SECRET"),
@@ -68,7 +77,8 @@ describe("guided Lark app onboarding", () => {
     ).resolves.toEqual({ LARK_APP_ID: "cli_ws", LARK_APP_SECRET: "secret" });
     expect(bootstrapWebhook).not.toHaveBeenCalled();
     expect(fx.prompts).toHaveLength(2);
-    expect(fx.notes.at(-1)).toMatch(/long connection.*do not publish yet.*No Verification Token/);
+    expect(fx.opened.at(-1)).toBe(larkEventSecurityUrl("cli_ws"));
+    expect(fx.actions.at(-1)).toMatch(/long connection.*do not publish yet.*no Verification Token/);
   });
 
   it("prompts for the console token only after a definitive config-API fallback", async () => {
@@ -82,7 +92,9 @@ describe("guided Lark app onboarding", () => {
     });
     expect(fx.prompts).toHaveLength(3);
     expect(fx.prompts[2]?.message).toContain("LARK_VERIFICATION_TOKEN");
-    expect(fx.notes.at(-1)).toMatch(/HTTP 404.*switch Subscription mode to webhook/);
+    expect(fx.notes.at(-1)).toBe("config API returned HTTP 404");
+    expect(fx.opened.at(-1)).toBe(larkEventSecurityUrl("cli_app"));
+    expect(fx.actions.at(-1)).toMatch(/copy the Verification Token.*switch Subscription mode to webhook/);
   });
 
   it("reuses and validates an existing complete ID/secret pair before bootstrap", async () => {

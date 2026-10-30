@@ -79,6 +79,8 @@ beforeEach(async () => {
     ]),
   };
   dir = join(await mkdtemp(join(tmpdir(), "fa-deploy-order-")), "fastagent");
+  // Run from the agent directory, so the command a step names to run again is the plain one.
+  vi.spyOn(process, "cwd").mockReturnValue(dir);
   await mkdir(join(dir, ".secrets", "production"), { recursive: true });
   await writeFile(join(dir, ".secrets", ".env"), "FEISHU_APP_ID=cli_dev\n");
   // Its key given, so the cases below are about preparing an app; the key's own order is the last cases'.

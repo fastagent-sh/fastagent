@@ -19,10 +19,26 @@ describe("add <channel> with no one at a terminal: the person's part, named", ()
     expect(existsSync(join(dir, "src", "channels", "lark.ts"))).toBe(false);
   });
 
-  it("a ticket that names no setup is a usage error", async () => {
+  it("a ticket that names no setup, or another command's, is a usage error naming the right command", async () => {
     const result = await run(["add", "feishu", "--check", "0123456789abcdef", "--json"]);
     expect(result.code).toBe(2);
-    expect(result.stderr).toContain(`no setup "0123456789abcdef"`);
+    expect(result.stderr).toContain(`no ticket "0123456789abcdef" on this machine`);
+    const { createTicket } = await import("../src/cli/ticket.ts");
+    const signIn = createTicket({
+      subject: "login:openai",
+      action: "sign in to OpenAI",
+      check: "fastagent login --check",
+      restart: "fastagent login openai --method account",
+      timeoutSeconds: 60,
+    }).ticket;
+    const other = await run(["add", "feishu", "--check", signIn, "--json"]);
+    expect(other.code).toBe(2);
+    expect(other.stderr).toContain(
+      `ticket ${signIn} is not this command's: it is to sign in to OpenAI; check it with \`fastagent login --check ${signIn}\``,
+    );
+    // Its own command reads it (failed: no process ever ran it).
+    const back = await run(["login", "--check", signIn, "--json"]);
+    expect(JSON.parse(back.stdout)).toMatchObject({ provider: "openai", status: "failed" });
   });
 
   it("telegram has no person's part: it is added, the outcome one JSON object", async () => {

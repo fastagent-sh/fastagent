@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkAgentScopes, onboardFeishuCloudApp } from "../src/cli/add-feishu.ts";
 import type { Person } from "../src/cli/person.ts";
+import { LARK_CONSOLE_URL } from "../src/channels/lark/onboard.ts";
 import type { FeishuAppScope, FeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import {
   FEISHU_AGENT_SCOPES,
@@ -153,6 +154,70 @@ describe("a new Feishu app through a coding agent's person", () => {
         ),
       ]);
       expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toMatch(/^FEISHU_APP_ID=cli_new$/m);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a Lark app through a coding agent's person", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  /** A person whose steps are recorded, and an agent dir whose dev value file holds `env`. */
+  async function larkSetup(env: string) {
+    const dir = join(await mkdtemp(join(tmpdir(), "fa-lark-person-")), "fastagent");
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), env);
+    vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
+    vi.stubGlobal("fetch", async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("tenant_access_token"))
+        return Response.json({ code: 0, tenant_access_token: "T", expire: 7200 });
+      if (url.includes("/application/v6/scopes")) {
+        const scopes = AGENT_SCOPES.map((scope_name) => ({ scope_name, grant_status: 1 }));
+        return Response.json({ code: 0, data: { scopes } });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const left: { instructions: string; url?: string }[] = [];
+    const person: Person = {
+      waitsOn: () => {},
+      carriesOn: () => {},
+      afterwards: (instructions, url) => left.push({ instructions, ...(url === undefined ? {} : { url }) }),
+    };
+    return { dir, person, left };
+  }
+
+  it("leaves the person what they do on each page, not what the setup said it did", async () => {
+    const { dir, person, left } = await larkSetup("LARK_APP_ID=cli_lark\nLARK_APP_SECRET=s\n");
+    try {
+      await onboardFeishuCloudApp(dir, "lark", "websocket", "fastagent add lark", person);
+      expect(left).toEqual([
+        {
+          instructions: expect.stringMatching(/^in Events & Callbacks, choose long connection/),
+          url: "https://open.larksuite.com/app/cli_lark/event?tab=safe",
+        },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a value only the person has fails the run naming where they set it", async () => {
+    const { dir, person, left } = await larkSetup("");
+    try {
+      await expect(onboardFeishuCloudApp(dir, "lark", "websocket", "fastagent add lark", person)).rejects.toThrow(
+        `LARK_APP_ID (Credentials & Basic Info) is needed: ask the user to set it in ${join(dir, ".secrets", ".env")}, ` +
+          "then run `fastagent add lark` again",
+      );
+      expect(left).toEqual([
+        { instructions: expect.stringMatching(/^create the app on Lark's one-click launcher/), url: LARK_CONSOLE_URL },
+      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
