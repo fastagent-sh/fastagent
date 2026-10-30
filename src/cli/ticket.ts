@@ -47,6 +47,8 @@ export interface Ticket {
   code?: string;
   /** What the provider or platform says to do there. */
   instructions?: string;
+  /** When the person's step itself stops being usable (a confirmation link's own expiry), if before `expiresAt`. */
+  until?: number;
   /** The step's browser may end on a page this machine never sees, whose address `--check --code` hands over. */
   takesAddress?: boolean;
   /** Steps left to the person after the run, which nothing waits for. */
@@ -268,16 +270,20 @@ export async function startTicket(
   }
   const ticket = readTicket(id) as Ticket;
   if (settled(ticket)) return ticket;
-  // Still at it: the step writes the ticket now, so this command reports it as it is.
-  if (!exited && !input.waitsFirst) return ticket;
-  // Given up on: its process goes first, or it would hold its port and write the ticket after this.
+  // Claimed and at work: the step writes the ticket now, so this command reports it as it is.
+  if (!exited && !input.waitsFirst && ticket.status === "working") return ticket;
+  // Given up on, unclaimed or giving the person nothing: its process goes first, or it would hold its port and write
+  // the ticket after this.
   const stoppedItself = exited;
   if (!stoppedItself && child.pid !== undefined) await stop(child.pid);
+  const within = `${startTimeoutMs / 1000}s: ${ticketLogPath(id)} says why`;
   return update(id, {
     status: "failed",
     message: stoppedItself
       ? `it stopped before it started: ${ticketLogPath(id)} says why`
-      : `it gave the person nothing to do within ${startTimeoutMs / 1000}s: ${ticketLogPath(id)} says why`,
+      : ticket.status === "starting"
+        ? `it did not start within ${within}`
+        : `it gave the person nothing to do within ${within}`,
   });
 }
 
@@ -323,7 +329,7 @@ export interface TicketStep {
   /** The person, as the run speaks to them (person.ts): what it waits on, what it leaves them. */
   person: Person;
   /** The person's step the run now waits on, with what a sign-in's flow says of it. */
-  waits(on: { url: string; code?: string; instructions?: string; takesAddress?: boolean }): void;
+  waits(on: { url: string; code?: string; instructions?: string; takesAddress?: boolean; until?: number }): void;
   /** The address `--check --code` hands over, once it does. */
   address(signal: AbortSignal): Promise<string>;
 }
@@ -340,12 +346,26 @@ export async function runTicket(
 ): Promise<void> {
   const ticket = readTicket(id);
   if (ticket === undefined) throw new Error(`no ticket ${id} in ${ticketsDir()}`);
-  update(id, { pid: process.pid, status: "working" });
+  const claimed = update(id, { pid: process.pid, status: "working" });
+  if (claimed.status !== "working" || claimed.pid !== process.pid) {
+    // Given up on before this process got to it (a start slower than the start window): not ours to run.
+    console.error(`[fastagent] ticket ${id} ended (${claimed.status}) before this process took it; not running it`);
+    return;
+  }
   recordFailures((message) => update(id, { status: "failed", message }));
   // However this process ends (done, failed, expired with the run still waiting), what it started goes with it.
   if (leadsGroup()) process.once("exit", () => signalGroup(process.pid, "SIGTERM"));
   const signal = AbortSignal.timeout(Math.max(0, ticket.expiresAt - Date.now()));
-  const waits: TicketStep["waits"] = (on) => update(id, { status: "need_user_action", ...on });
+  // Each step replaces the last one's fields: a code or an expiry of the one before is not this one's.
+  const waits: TicketStep["waits"] = (on) =>
+    update(id, {
+      status: "need_user_action",
+      code: undefined,
+      instructions: undefined,
+      takesAddress: undefined,
+      until: undefined,
+      ...on,
+    });
   const afterwards: Person["afterwards"] = (instructions, url) => {
     const current = readTicket(id);
     update(id, {
@@ -355,7 +375,7 @@ export async function runTicket(
   const step: TicketStep = {
     signal,
     person: {
-      waitsOn: (url, instructions) => waits({ url, instructions }),
+      waitsOn: (url, instructions, until) => waits({ url, instructions, ...(until === undefined ? {} : { until }) }),
       carriesOn: () => update(id, { status: "working" }),
       afterwards,
     },
@@ -424,9 +444,22 @@ export function ticketReport(
   const log = ticketLogPath(ticket.ticket);
   if (ticket.status === "failed" || ticket.status === "expired") {
     const message = ticket.status === "expired" ? "it was not finished in time" : (ticket.message as string);
+    // What the step reached before it ended is still the person's: where to get the value it stopped for, say.
+    const reached = left.length === 0 ? "" : `Tell the user what the steps it reached leave them: ${left.join(" ")} `;
     return {
-      json: { ...base, message, log, agent_next_steps: `To try again, run: ${ticket.restart} --json` },
-      text: [`${ticket.status}: ${message}`, `log: ${log}`, `to try again: ${ticket.restart}`],
+      json: {
+        ...base,
+        message,
+        log,
+        ...(ticket.afterwards ? { afterwards: ticket.afterwards } : {}),
+        agent_next_steps: `${reached}To try again, run: ${ticket.restart} --json`,
+      },
+      text: [
+        `${ticket.status}: ${message}`,
+        `log: ${log}`,
+        ...left.map((line) => `left for the person: ${line}`),
+        `to try again: ${ticket.restart}`,
+      ],
     };
   }
   if (ticket.status === "starting" || ticket.status === "working") {
@@ -457,7 +490,8 @@ export function ticketReport(
       ...(ticket.url === undefined ? {} : { url: ticket.url }),
       ...(ticket.code === undefined ? {} : { code: ticket.code }),
       ...(ticket.instructions === undefined ? {} : { instructions: ticket.instructions }),
-      expires_in: Math.max(0, Math.round((ticket.expiresAt - Date.now()) / 1000)),
+      // The person's step can lapse before the ticket does (a confirmation link of the platform's own).
+      expires_in: Math.max(0, Math.round((Math.min(ticket.expiresAt, ticket.until ?? Infinity) - Date.now()) / 1000)),
       check_command: `${check} --json`,
       ...(ticket.takesAddress ? { resume_command: `${resume} --json` } : {}),
       agent_next_steps: when === "started" ? `${give} ${then}` : `The user has not finished yet. ${give} ${then}`,

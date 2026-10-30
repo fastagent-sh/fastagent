@@ -247,9 +247,12 @@ async function createFeishuAppFlow(
       desc: "Served by fastagent",
       // The agent template alone is not enough to SERVE, nor to hear a group (see feishuAppAddons).
       addons: feishuAppAddons(ingress),
-      // No validity here: a ticket closes on its own deadline (`expires_in`), whichever comes first.
-      onVerificationUrl: ({ url }) =>
-        person.waitsOn(url, "confirm the new Feishu app (in a browser, or in Feishu, or as a QR code)"),
+      onVerificationUrl: ({ url, expiresInS }) =>
+        person.waitsOn(
+          url,
+          "confirm the new Feishu app (in a browser, or in Feishu, or as a QR code)",
+          Date.now() + expiresInS * 1000,
+        ),
     });
     person.carriesOn();
     console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);

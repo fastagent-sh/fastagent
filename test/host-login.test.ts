@@ -87,7 +87,8 @@ it("a code the approval page showed finishes the sign-in, the waiting login stop
   const handing = async (code: string) => {
     const { fake, said, handOver } = step();
     const done = signIn(flyLike(bin), fake);
-    await vi.waitFor(() => expect(said).toHaveLength(1));
+    // A stand-in CLI's start, which a loaded machine can take past waitFor's default second.
+    await vi.waitFor(() => expect(said).toHaveLength(1), { timeout: 10_000 });
     handOver(code);
     return { answer: await done, said };
   };

@@ -19,6 +19,8 @@ export interface SlackSetupServer {
    * when no browser waits there, or after one refresh window, so a setup can stop without leaving it on a dead page.
    */
   failed(message: string): Promise<void>;
+  /** What the setup did, for a browser waiting on that page when the setup ends there (a saved pair replaced), as `failed`. */
+  done(message: string): Promise<void>;
   waitForOAuth(timeoutMs?: number): Promise<{ code?: string; state?: string; error?: string }>;
   close(): Promise<void>;
 }
@@ -55,8 +57,20 @@ export async function startSlackSetupServer(): Promise<SlackSetupServer> {
   const nextPath = `/slack/next/${nonce}`;
   let takeTokens: ((pair: { access: string; refresh: string }) => void) | undefined;
   let pasted = false;
-  let after: { url: string } | { error: string } | undefined;
-  let errorShown: (() => void) | undefined;
+  let after: { url: string } | { said: string; failed: boolean } | undefined;
+  let lastShown: (() => void) | undefined;
+  /** The last page a browser waiting after the pair sees, and when it has seen it (bounded by one refresh window). */
+  const lastPage = (said: string, failed: boolean): Promise<void> => {
+    if (!pasted || after !== undefined) return Promise.resolve();
+    after = { said, failed };
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 5_000);
+      lastShown = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+  };
   let settleOAuth: ((value: { code?: string; state?: string; error?: string }) => void) | undefined;
   const oauth = new Promise<{ code?: string; state?: string; error?: string }>((resolve) => {
     settleOAuth = resolve;
@@ -122,8 +136,9 @@ export async function startSlackSetupServer(): Promise<SlackSetupServer> {
         response.setHeader("location", after.url);
         response.end();
       } else {
-        response.end(page(`<p style="color:#b00"><b>${escapeHtml(after.error)}</b></p><p>Return to your agent.</p>`));
-        errorShown?.();
+        const style = after.failed ? ' style="color:#b00"' : "";
+        response.end(page(`<p${style}><b>${escapeHtml(after.said)}</b></p><p>Return to your agent.</p>`));
+        lastShown?.();
       }
       return;
     }
@@ -182,17 +197,8 @@ export async function startSlackSetupServer(): Promise<SlackSetupServer> {
     next(url) {
       after = { url };
     },
-    failed(message) {
-      if (!pasted || after !== undefined) return Promise.resolve();
-      after = { error: message };
-      return new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 5_000);
-        errorShown = () => {
-          clearTimeout(timer);
-          resolve();
-        };
-      });
-    },
+    failed: (message) => lastPage(message, true),
+    done: (message) => lastPage(message, false),
     async waitForOAuth(timeoutMs = 10 * 60_000) {
       let timer: NodeJS.Timeout | undefined;
       const timeout = new Promise<never>((_, reject) => {

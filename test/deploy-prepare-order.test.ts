@@ -14,6 +14,9 @@ const calls: string[] = [];
 let facts: { values: Map<string, string>; modelAuth?: string; channels?: { name: string; ingress: string }[] };
 /** Who the last preparation was handed, and who the host's last deploy was. */
 let preparedFor: unknown;
+/** The ticket a test runs the deploy through, and its status when the pre-flight first ran. */
+let throughTicket: string | undefined;
+let statusAtPreflight: string | undefined;
 let answeredBy: string | undefined;
 const stopped = new Error("deploy stopped");
 
@@ -32,6 +35,10 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/deploy/preflight.ts")>()),
   // The values as the real pre-flight reads them, the selected value file, over what a test sets in `facts`.
   preflightDeploy: async ({ agentDir }: { agentDir: string }) => {
+    if (throughTicket !== undefined && statusAtPreflight === undefined) {
+      const { checkTicket: read } = await import("../src/cli/ticket.ts");
+      statusAtPreflight = (await read(throughTicket))?.status;
+    }
     calls.push(
       `preflight dev=${process.env[DEV_SERVE_ENV] ?? "-"} token=${facts.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`,
     );
@@ -90,6 +97,8 @@ beforeEach(async () => {
   carriedKey.length = 0;
   started.length = 0;
   preparedFor = undefined;
+  throughTicket = undefined;
+  statusAtPreflight = undefined;
   answeredBy = undefined;
   interactive = true;
   facts = {
@@ -278,7 +287,10 @@ it("the ticket's run is the whole deploy, each person's step its user's, its res
     restart: "fastagent deploy fly --run",
     timeoutSeconds: 60,
   });
+  throughTicket = ticket;
   await expect(runDeploy("fly", dir, { run: true, json: true, ticket })).rejects.toBe(stopped);
+  // Taken before the pre-flight's seconds, so the starting command never finds it unclaimed.
+  expect(statusAtPreflight).toBe("working");
   expect(calls).toEqual([
     "preflight dev=- token=-",
     "prepare feishu rerun=fastagent deploy fly --run --json",

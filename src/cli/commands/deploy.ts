@@ -26,6 +26,7 @@ import { enterAgentDirectory, isInteractive, shellArg } from "../shared.ts";
 import { terminalPerson } from "../person.ts";
 import {
   type Ticket,
+  type TicketStep,
   checkTicket,
   printReport,
   refusedCheck,
@@ -109,6 +110,22 @@ const TICKET_TIMEOUT_SECONDS = 3600;
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
   if (opts.check !== undefined) return checkDeploy(host, opts.check, opts);
+  if (opts.ticket !== undefined) {
+    // The process `startTicket` started: it takes the ticket before the pre-flight (seconds of building the
+    // definition), then does the whole deploy, its person the ticket's.
+    await runTicket(opts.ticket, (step) => deploy(host, dirArg, opts, step));
+    process.exit(0);
+  }
+  await deploy(host, dirArg, opts);
+}
+
+/** The deploy itself: through a ticket's `step` when one runs it, else at this terminal or with nobody to ask. */
+async function deploy(
+  host: DeployHost,
+  dirArg: string,
+  opts: DeployOptions,
+  step?: TicketStep,
+): Promise<{ url?: string; notes: string[] }> {
   if (opts.code !== undefined) failUsage("--code hands a code to a deploy's ticket: pass --check <ticket> too");
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
@@ -163,7 +180,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     `${opts.tunnel ? " --tunnel" : ""}${opts.intoLinked ? " --into-linked" : ""} --run`;
   const unprepared = opts.run ? unpreparedFeishuApps(pre.channels, pre.values) : [];
 
-  if (opts.json && opts.ticket === undefined) {
+  if (opts.json && step === undefined) {
     // A coding agent's deploy: what this machine can refuse is refused above, at once; the rest runs in a ticket.
     if (unprepared.some(({ kind }) => kind === "lark")) {
       const needed = await larkCredentialsNeeded(agentDir, rerun).catch(failStartup);
@@ -287,12 +304,8 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     return { ...(reachedAt === undefined ? {} : { url: reachedAt }), notes };
   };
 
-  if (opts.ticket !== undefined) {
-    // The process `startTicket` started: the deploy itself, its person the ticket's.
-    await runTicket(opts.ticket, (step) => deployWith({ kind: "ticket", step }));
-    process.exit(0);
-  }
-  await deployWith(opts.input === false || !isInteractive() ? { kind: "nobody" } : { kind: "terminal" });
+  if (step !== undefined) return deployWith({ kind: "ticket", step });
+  return deployWith(opts.input === false || !isInteractive() ? { kind: "nobody" } : { kind: "terminal" });
 }
 
 /** `deploy <host> --check <ticket> [--code <code>]`. */

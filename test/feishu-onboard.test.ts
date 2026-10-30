@@ -137,8 +137,12 @@ describe("a new Feishu app through a coding agent's person", () => {
     });
     vi.spyOn(console, "error").mockImplementation(() => {});
     const said: string[] = [];
+    let until: number | undefined;
     const person: Person = {
-      waitsOn: (url, instructions) => said.push(`waits on: ${instructions} at ${url}`),
+      waitsOn: (url, instructions, lapses) => {
+        until = lapses;
+        said.push(`waits on: ${instructions} at ${url}`);
+      },
       carriesOn: () => said.push("carries on"),
       afterwards: (instructions, url) => said.push(`afterwards: ${instructions} at ${url}`),
     };
@@ -154,6 +158,9 @@ describe("a new Feishu app through a coding agent's person", () => {
         ),
       ]);
       expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toMatch(/^FEISHU_APP_ID=cli_new$/m);
+      // The link's own lapse (Feishu's expires_in), which can come before the ticket's.
+      expect((until as number) - Date.now()).toBeGreaterThan(590_000);
+      expect((until as number) - Date.now()).toBeLessThanOrEqual(600_000);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
