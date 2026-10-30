@@ -35,6 +35,7 @@ import { deploymentLoginCommand } from "../../deploy/box-shell.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import {
   printReport,
+  refusedCheck,
   type Ticket,
   type TicketStep,
   checkTicket,
@@ -71,6 +72,9 @@ export interface LoginOptions {
   /** `--if-missing` (with `--stdio`): keep a credential already stored for the provider. */
   ifMissing?: boolean;
 }
+
+/** The command that reads a sign-in's ticket, as every such ticket records it. */
+const LOGIN_CHECK = "fastagent login --check";
 
 /** Without a terminal, how long a sign-in stays open for the person to finish it. */
 const UNATTENDED_TIMEOUT_SECONDS = 600;
@@ -238,7 +242,7 @@ async function requestLogin(
   const ticket = await startTicket({
     subject: `login:${choice.provider}`,
     action: `sign in to ${choice.name}`,
-    check: "fastagent login --check",
+    check: LOGIN_CHECK,
     restart: `fastagent login ${choice.provider} --method account${global}`,
     timeoutSeconds: target.timeoutSeconds,
     waitsFirst: true,
@@ -377,8 +381,10 @@ async function keyToSet(
 
 /** `login --check <ticket> [--code <address>]`. */
 async function runCheck(id: string, opts: LoginOptions): Promise<void> {
-  const ticket = await checkTicket(id, opts.code);
-  if (ticket === undefined) failUsage(`no sign-in "${id}": a ticket is what \`fastagent login\` printed`);
+  const refused = refusedCheck(id, LOGIN_CHECK);
+  if (refused !== undefined) failUsage(refused);
+  // There: refusedCheck read it, and a ticket is pruned only a day after it ends.
+  const ticket = (await checkTicket(id, opts.code)) as Ticket;
   reportTicket(ticket, opts, "checked");
   process.exit(ticketExitCode(ticket));
 }
@@ -539,7 +545,7 @@ async function requestDeploymentLogin(
   const ticket = await startTicket({
     subject: `login:${choice.provider}@${host}`,
     action: `sign in to ${choice.name} for the ${host} deployment`,
-    check: "fastagent login --check",
+    check: LOGIN_CHECK,
     restart: `fastagent login ${choice.provider} --method account --deployment ${host}`,
     timeoutSeconds,
     // Reaching the box comes first, and can take a while (a host's shell, an idle runtime woken).

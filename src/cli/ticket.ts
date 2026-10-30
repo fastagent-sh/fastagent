@@ -7,9 +7,13 @@
  * and hands the step the address a browser ended on when that browser could not reach this machine.
  *
  * A ticket is a file in the machine's own state, ~/.fastagent/.state/tickets, written whole by one process at a time:
- * the starting command until the step starts, then the step alone. One that has ended stays as it ended. A newer step
- * for the same subject stops an older one still waiting, whose process would otherwise hold what it holds (a sign-in's
- * callback port, OpenAI's fixed) until it expires.
+ * the starting command until the step starts, then the step alone (or whoever finds its process gone). One that has
+ * ended stays as it ended. A newer step for the same subject stops an older one still waiting on its person, whose
+ * process would otherwise hold what it holds (a sign-in's callback port, OpenAI's fixed) until it expires; one at work
+ * is never stopped halfway, and the newer attempt is answered with it.
+ *
+ * The step's process leads a process group of its own, so what it starts (a tunnel, a host CLI, a shell to a box) is
+ * stopped with it, by `stop` and when it exits.
  */
 import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -110,14 +114,38 @@ function running(pid: number | undefined): boolean {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Stop a step's process and wait until it is gone, so what it held is free. */
+/**
+ * Signal the process group `pid` leads. A group gone has nothing left to stop (ESRCH), and one this user may not
+ * signal is not ours (EPERM, which macOS also answers for a group of one exited, unreaped process).
+ */
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && code !== "EPERM") throw error;
+  }
+}
+
+/** Stop a step's process and everything it started, and wait until it is gone, so what it held is free. */
 async function stop(pid: number): Promise<void> {
   if (!running(pid)) return;
-  process.kill(pid);
+  signalGroup(pid, "SIGTERM");
   for (const deadline = Date.now() + STOP_TIMEOUT_MS; Date.now() < deadline; await sleep(POLL_MS)) {
-    if (!running(pid)) return;
+    if (!running(pid)) break;
   }
-  process.kill(pid, "SIGKILL");
+  // What the step started may outlive it, or ignore SIGTERM.
+  signalGroup(pid, "SIGKILL");
+}
+
+/** Whether this process leads a process group: a step's process, which `startTicket` starts detached. */
+function leadsGroup(): boolean {
+  try {
+    process.kill(-process.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -133,12 +161,19 @@ function runningFor(subject: string, now: number): Ticket[] {
   });
 }
 
-/** Stop every step for `subject` still running, before a newer one starts. */
-async function supersede(subject: string, now: number): Promise<void> {
-  for (const ticket of runningFor(subject, now)) {
+/**
+ * Before a newer step for `subject` starts: one at work is the answer instead, never stopped halfway (an app created
+ * whose credentials are not written yet); every one waiting on its person is stopped. Answers the one at work.
+ */
+async function supersede(subject: string, now: number): Promise<Ticket | undefined> {
+  const runs = runningFor(subject, now);
+  const atWork = runs.find((ticket) => ticket.status === "working");
+  if (atWork !== undefined) return atWork;
+  for (const ticket of runs) {
     if (ticket.pid !== undefined) await stop(ticket.pid);
     update(ticket.ticket, { status: "failed", message: `replaced by a newer attempt to ${ticket.action}` });
   }
+  return undefined;
 }
 
 /** Tickets a day past their end: each one's files go. */
@@ -193,8 +228,9 @@ export async function startTicket(
      */
     waitsFirst: boolean;
     /**
-     * A step for the same subject still running: `replace` stops it (a sign-in, holding a port the new one needs);
-     * `join` answers with it instead of starting another (a deploy, which must not be stopped halfway).
+     * A step for the same subject still running: `replace` stops one waiting on its person (a sign-in, holding a port
+     * the new one needs) and answers with one at work; `join` answers with it whatever it is doing (a deploy, which
+     * must not be stopped halfway, even between its person's steps).
      */
     whenRunning: "replace" | "join";
     /** How long the step may take to give the person something to do; a test's is short. */
@@ -205,7 +241,8 @@ export async function startTicket(
     const [joined] = runningFor(input.subject, Date.now());
     if (joined !== undefined) return joined;
   } else {
-    await supersede(input.subject, Date.now());
+    const atWork = await supersede(input.subject, Date.now());
+    if (atWork !== undefined) return atWork;
   }
   const id = createTicket(input).ticket;
   const startTimeoutMs = input.startTimeoutMs ?? START_TIMEOUT_MS;
@@ -222,15 +259,17 @@ export async function startTicket(
     exited = true;
   });
   child.unref();
+  const settled = (ticket: Ticket) => ticket.status !== "starting" && ticket.status !== "working";
   for (const deadline = Date.now() + startTimeoutMs; Date.now() < deadline; ) {
     const ticket = readTicket(id) as Ticket;
-    if (ticket.status !== "starting") return ticket;
+    if (settled(ticket)) return ticket;
     if (exited) break;
     await sleep(POLL_MS);
   }
   const ticket = readTicket(id) as Ticket;
-  if (ticket.status !== "starting") return ticket;
-  if (!exited && !input.waitsFirst) return update(id, { status: "working" });
+  if (settled(ticket)) return ticket;
+  // Still at it: the step writes the ticket now, so this command reports it as it is.
+  if (!exited && !input.waitsFirst) return ticket;
   // Given up on: its process goes first, or it would hold its port and write the ticket after this.
   const stoppedItself = exited;
   if (!stoppedItself && child.pid !== undefined) await stop(child.pid);
@@ -265,6 +304,18 @@ export async function checkTicket(id: string, address?: string): Promise<Ticket 
   return ticket;
 }
 
+/**
+ * Why the command whose `--check` is `check` cannot read ticket `id`: there is none on this machine, or it is another
+ * command's, named so the agent runs that one. Undefined when it is this command's.
+ */
+export function refusedCheck(id: string, check: string): string | undefined {
+  const ticket = readTicket(id);
+  if (ticket === undefined)
+    return `no ticket "${id}" on this machine: a ticket is what the command that started it printed`;
+  if (ticket.check === check) return undefined;
+  return `ticket ${id} is not this command's: it is to ${ticket.action}; check it with \`${ticket.check} ${id}\``;
+}
+
 /** What a step's run is handed: the person's part as it comes, and the address `--check --code` brings. */
 export interface TicketStep {
   /** When the step gives up. */
@@ -289,8 +340,10 @@ export async function runTicket(
 ): Promise<void> {
   const ticket = readTicket(id);
   if (ticket === undefined) throw new Error(`no ticket ${id} in ${ticketsDir()}`);
-  update(id, { pid: process.pid });
+  update(id, { pid: process.pid, status: "working" });
   recordFailures((message) => update(id, { status: "failed", message }));
+  // However this process ends (done, failed, expired with the run still waiting), what it started goes with it.
+  if (leadsGroup()) process.once("exit", () => signalGroup(process.pid, "SIGTERM"));
   const signal = AbortSignal.timeout(Math.max(0, ticket.expiresAt - Date.now()));
   const waits: TicketStep["waits"] = (on) => update(id, { status: "need_user_action", ...on });
   const afterwards: Person["afterwards"] = (instructions, url) => {
@@ -376,7 +429,7 @@ export function ticketReport(
       text: [`${ticket.status}: ${message}`, `log: ${log}`, `to try again: ${ticket.restart}`],
     };
   }
-  if (ticket.status === "working") {
+  if (ticket.status === "starting" || ticket.status === "working") {
     return {
       json: {
         ...base,
@@ -385,7 +438,7 @@ export function ticketReport(
         agent_next_steps:
           "fastagent is working on it, with nothing for the user to do now. Run check_command again in a minute.",
       },
-      text: [`working: nothing for the person to do now`, `log: ${log}`, `then run: ${check}`],
+      text: [`${ticket.status}: nothing for the person to do now`, `log: ${log}`, `then run: ${check}`],
     };
   }
   const resume = `${check} --code '<address>'`;

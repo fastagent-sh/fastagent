@@ -15,6 +15,16 @@ vi.mock("../src/cli/shared.ts", async (original) => ({
 
 const exited = new Error("exited");
 
+/** What the command started, recorded: the process it would start is the ticket's own half, run by hand above. */
+const started: Record<string, unknown>[] = [];
+vi.mock("../src/cli/ticket.ts", async (original) => ({
+  ...(await original<typeof import("../src/cli/ticket.ts")>()),
+  startTicket: async (input: Record<string, unknown>) => {
+    started.push(input);
+    return { ticket: "0123456789abcdef", status: "working", expiresAt: Date.now() + 60_000, check: input.check };
+  },
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -129,5 +139,24 @@ it("--json hands the person's part over even at a terminal: a coding agent may r
   });
   await expect(runAddChannel("lark", dir, { onboard: true, json: true })).rejects.toBe(exited);
   expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({ status: "need_user_action" });
+  await rm(dir, { recursive: true, force: true });
+});
+
+it("what the setup was asked reaches its process: --replace-config with the rest, one setup per agent", async () => {
+  const dir = await agentWorkspace("fa-add-replace-");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(process, "exit").mockImplementation(() => {
+    throw exited;
+  });
+  started.length = 0;
+  await expect(runAddChannel("slack", dir, { onboard: true, replaceConfig: true, json: true })).rejects.toBe(exited);
+  expect(started).toEqual([
+    expect.objectContaining({
+      subject: `add:slack:dev:${dir}`,
+      restart: expect.stringMatching(/ --replace-config$/),
+      command: expect.objectContaining({ args: expect.arrayContaining(["add", "slack", dir, "--replace-config"]) }),
+    }),
+  ]);
   await rm(dir, { recursive: true, force: true });
 });

@@ -197,7 +197,10 @@ export async function onboardFeishuCloudApp(
 
 /** Lark's guided console at a terminal: what to open, and the values asked for there. */
 const larkAtTerminal: LarkOnboardIO = {
-  openUrl: openExternalUrl,
+  openUrl(url, action) {
+    clackLog.info(`${action}. Opening ${url}`);
+    openExternalUrl(url);
+  },
   note: (message) => clackLog.info(message),
   async prompt(message, opts) {
     const result = opts?.hidden ? await password({ message }) : await clackText({ message });
@@ -206,17 +209,13 @@ const larkAtTerminal: LarkOnboardIO = {
 };
 
 /**
- * Lark's guided console through a coding agent's person: a page is a step left to them, with what was said before it;
- * a value it would ask for is theirs to set in the value file, and the setup continues when run again.
+ * Lark's guided console through a coding agent's person: a page is a step left to them, with what they do there; a
+ * value it would ask for is theirs to set in the value file, and the setup continues when run again.
  */
 function larkThrough(person: Person, env: string, rerun: string): LarkOnboardIO {
-  let said = "";
   return {
-    note(message) {
-      said = message;
-      console.error(`[fastagent] ${message}`);
-    },
-    openUrl: (url) => person.afterwards(said, url),
+    note: (message) => console.error(`[fastagent] ${message}`),
+    openUrl: (url, action) => person.afterwards(action, url),
     async prompt(message) {
       throw new Error(`${message} is needed: ask the user to set it in ${env}, then run \`${rerun}\` again`);
     },

@@ -227,12 +227,15 @@ waited on. A coding agent works in turns, so each command does its part and says
   `"status": "need_user_action"`: the `url` for the person to sign in at (and the `code` to enter there, for a device
   sign-in), a `ticket`, `check_command` and `expires_in`. No browser is opened: the agent hands the address to its
   person, who may be on another machine. `fastagent login --check <ticket>` then answers `need_user_action` (not
-  finished), `authorized` (with the `path` it was saved to, and the default `model` for an agent with none), `failed`
-  or `expired`. When the person's browser cannot reach this machine, it ends on a page that does not load (an address
-  on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the sign-in.
-  `--timeout` sets how long the sign-in stays open (default 600 seconds). A newer sign-in to the same provider stops
-  one still waiting (its ticket is then `failed`, "replaced by a newer sign-in"), which would otherwise hold the
-  provider's callback port until it expired.
+  finished), `working` (fastagent is at it: nothing for the person now), `done` (with the `path` it was saved to, and
+  the default `model` for an agent with none), `failed` or `expired`; every answer carries `provider` and
+  `"method": "account"`. When the person's browser cannot reach this machine, it ends on a page that does not load
+  (an address on localhost): `resume_command`, `login --check <ticket> --code '<that address>'`, hands it to the
+  sign-in. `--timeout` sets how long the sign-in stays open (default 600 seconds). A newer sign-in to the same
+  provider stops one still waiting on the person (its ticket is then `failed`, "replaced by a newer attempt to sign in
+  to <provider>"), which would otherwise hold the provider's callback port until it expired; one already exchanging
+  the code is never stopped, and the newer attempt answers with its ticket. A ticket belongs to the command that
+  started it: `--check` with another command's ticket exits 2 naming the right one.
 - **An API key** (`--method api-key`) is the person's to set where the agent reads it, never typed into the agent's
   conversation: `"status": "need_user_action"` names the `variables` the provider reads (`OPENAI_API_KEY`) and the
   agent's `value_file` (`.secrets/.env`), and `check_command` is `fastagent auth check`. When one is set already, the
@@ -445,10 +448,12 @@ never deploys.
 
 A missing first part answers `need_user_action` naming it, with the command to run again (`check_command`). Then the
 setup runs in a process of its own and the command returns its ticket: `need_user_action` while the person has a
-step, `working` while the setup finishes, then `done` with the variables it `written`, the `next_steps` and the
-steps left to the person (`afterwards`, such as publishing a version). `add <kind> --check <ticket>` reads where it
-stands, `--timeout <seconds>` sets how long it stays open (default 900). A value the setup still needs (a Lark
-Verification Token it could not capture) fails the ticket naming the variable to set before running it again.
+step, `working` while there is nothing for them to do, then `done` with the variables it `written`, the
+`next_steps` and the steps left to the person (`afterwards`, such as publishing a version). `add <kind> --check
+<ticket>` reads where it stands, `--timeout <seconds>` sets how long it stays open (default 900). Running `add` again
+for the same agent, channel and environment replaces a setup waiting on the person, and answers with one at work. A
+value the setup still needs (a Lark Verification Token it could not capture) fails the ticket naming the variable to
+set before running it again.
 
 See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 

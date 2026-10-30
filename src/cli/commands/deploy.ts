@@ -28,6 +28,7 @@ import {
   type Ticket,
   checkTicket,
   printReport,
+  refusedCheck,
   runTicket,
   startTicket,
   ticketExitCode,
@@ -99,6 +100,9 @@ export function warnHostOnlyFlags(host: DeployHost, opts: DeployOptions): void {
     console.error(`[fastagent] warn: ${rule.flag}: ${rule.owner}-only — ${instead}`);
   }
 }
+
+/** The command that reads a deploy's ticket, as every such ticket records it. */
+const deployCheck = (host: DeployHost) => `fastagent deploy ${host} --check`;
 
 /** How long a coding agent's deploy stays open: a build, and the person's steps between. */
 const TICKET_TIMEOUT_SECONDS = 3600;
@@ -173,7 +177,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     const ticket = await startTicket({
       subject: `deploy:${host}:${agentDir}`,
       action: `deploy the agent to ${host}`,
-      check: `fastagent deploy ${host} --check`,
+      check: deployCheck(host),
       restart: rerun,
       timeoutSeconds: timeout,
       waitsFirst: false,
@@ -293,8 +297,10 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
 
 /** `deploy <host> --check <ticket> [--code <code>]`. */
 async function checkDeploy(host: DeployHost, id: string, opts: DeployOptions): Promise<void> {
-  const ticket = await checkTicket(id, opts.code);
-  if (ticket === undefined) failUsage(`no deploy "${id}": a ticket is what \`fastagent deploy --run --json\` printed`);
+  const refused = refusedCheck(id, deployCheck(host));
+  if (refused !== undefined) failUsage(refused);
+  // There: refusedCheck read it, and a ticket is pruned only a day after it ends.
+  const ticket = (await checkTicket(id, opts.code)) as Ticket;
   reportDeploy(ticket, host, "checked");
   process.exit(ticketExitCode(ticket));
 }

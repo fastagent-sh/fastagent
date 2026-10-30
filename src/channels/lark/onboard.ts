@@ -10,7 +10,8 @@ export function larkEventSecurityUrl(appId: string): string {
 }
 
 export interface LarkOnboardIO {
-  openUrl(url: string): void;
+  /** A page for the person, and what they do there. */
+  openUrl(url: string, action: string): void;
   note(message: string): void;
   prompt(message: string, opts?: { hidden?: boolean }): Promise<string | undefined>;
 }
@@ -53,10 +54,12 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
 
   // Credentials are one App-scoped set.
   if (reuseExistingApp) {
-    io.note(`Reusing Lark app ${existingId}; opening its Events & Callbacks configuration directly.`);
+    io.note(`Reusing Lark app ${existingId}.`);
   } else {
-    io.note(`Create the app on Lark's one-click launcher. Opening ${LARK_CONSOLE_URL}`);
-    io.openUrl(LARK_CONSOLE_URL);
+    io.openUrl(
+      LARK_CONSOLE_URL,
+      "create the app on Lark's one-click launcher; LARK_APP_ID and LARK_APP_SECRET are under Credentials & Basic Info",
+    );
   }
   const appId = required(
     reuseExistingApp ? existingId : await io.prompt("LARK_APP_ID (Credentials & Basic Info)", { hidden: false }),
@@ -71,11 +74,12 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
 
   await opts.verifyCredentials(appId, appSecret);
   const eventSecurityUrl = larkEventSecurityUrl(appId);
-  io.note(`App ID / Secret verified. Opening Events & Callbacks → Security: ${eventSecurityUrl}`);
-  io.openUrl(eventSecurityUrl);
+  io.note("App ID / Secret verified.");
   if (opts.ingress === "websocket") {
-    io.note(
-      "Choose long connection and subscribe im.message.receive_v1, but do not publish yet — the permission check follows. No Verification Token or Request URL is needed.",
+    io.openUrl(
+      eventSecurityUrl,
+      "in Events & Callbacks, choose long connection and subscribe im.message.receive_v1, but do not publish yet: " +
+        "the permission check follows (no Verification Token or Request URL is needed)",
     );
     return { LARK_APP_ID: appId, LARK_APP_SECRET: appSecret };
   }
@@ -85,8 +89,11 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
   if (bootstrap.token) {
     io.note("Verification Token captured; Subscription mode changed to webhook in the app draft.");
   } else {
-    io.note(
-      `${bootstrap.manualReason ?? "Automatic bootstrap unavailable."} Open Events & Callbacks → Encryption Strategy and copy the Verification Token. You must also switch Subscription mode to webhook when setting the Request URL.`,
+    io.note(bootstrap.manualReason ?? "Automatic bootstrap unavailable.");
+    io.openUrl(
+      eventSecurityUrl,
+      "in Events & Callbacks → Encryption Strategy, copy the Verification Token, and switch Subscription mode to " +
+        "webhook when setting the Request URL",
     );
   }
 
