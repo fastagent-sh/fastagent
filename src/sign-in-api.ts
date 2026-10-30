@@ -114,6 +114,10 @@ export interface ProviderAuth {
   source?: string;
   /** The key or access token a request sends. */
   apiKey?: string;
+  /** Headers a request sends, where the provider authenticates by them (an `Authorization` of its own). */
+  headers?: Record<string, string>;
+  /** Where the request goes, where the credential decides it (an enterprise endpoint). */
+  baseUrl?: string;
 }
 
 /** The person backed out of a sign-in, or its signal aborted: a decision, not a failure. Nothing was stored. */

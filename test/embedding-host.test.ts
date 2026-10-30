@@ -185,6 +185,16 @@ describe("a host's credentials", () => {
       apiKey: "sk-env",
     });
     await expect(providerAuth(hostStore(), "nope")).rejects.toThrow('unknown provider "nope"');
+    // A provider that authenticates by a header, and one whose credential decides where requests go.
+    const signedIn = { type: "oauth", access: "at-1", refresh: "rt-1", expires: Date.now() + 3_600_000 } as const;
+    expect(await providerAuth(hostStore({ "kimi-coding": signedIn }), "kimi-coding")).toMatchObject({
+      type: "oauth",
+      headers: { Authorization: "Bearer at-1" },
+    });
+    expect(await providerAuth(hostStore({ "github-copilot": signedIn }), "github-copilot")).toMatchObject({
+      apiKey: "at-1",
+      baseUrl: expect.stringMatching(/^https:\/\/.*githubcopilot\.com/),
+    });
   });
 });
 
@@ -220,13 +230,17 @@ describe("a host's own instance of an agent", () => {
     const dir = join(base, "agent");
     await mkdir(dir);
     await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
-    const stateDir = join(base, "host-state", "agent");
+    // Read as FASTAGENT_STATE_DIR is: `~/…` is the home directory's.
+    const stateDir = join(homedir(), "host-state", "agent");
     const store = hostStore({ anthropic: { type: "api_key", key: "sk-host" } });
     // The model lists are the instance's too: a model only the host's kept list has is offered.
     const anthropic = modelsOver(new InMemoryCredentialStore()).getModels("anthropic")[0] as AnyModel;
     keepCatalog(join(stateDir, "models"), [{ ...anthropic, id: "claude-released" }]);
 
-    const hosted = await openAgent(dir, { credentials: store, stateDir });
+    await expect(openAgent(dir, { stateDir: "" })).rejects.toThrow(
+      "stateDir needs the directory the instance's state is kept in",
+    );
+    const hosted = await openAgent(dir, { credentials: store, stateDir: "~/host-state/agent" });
     // The directory's own instance (what `fastagent dev` opens) is not held by the host's.
     const own = await openAgent(dir);
     try {

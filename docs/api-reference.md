@@ -149,7 +149,10 @@ class SignInCancelled extends Error {}
 function providerAuth(
   credentials: CredentialStore,
   provider: string,
-): Promise<{ type: "oauth" | "api_key"; source?: string; apiKey?: string } | undefined>;
+): Promise<
+  | { type: "oauth" | "api_key"; source?: string; apiKey?: string; headers?: Record<string, string>; baseUrl?: string }
+  | undefined
+>;
 ```
 
 - `createAgent` is `fastagent init` without its options: the whole scaffold and a git repository whose first commit is
@@ -168,8 +171,9 @@ function providerAuth(
   browser callback that came first. An API key is checked with one request before it is stored, and asked for again
   when the provider rejects it. Aborting `interaction.signal` rejects with `SignInCancelled` and stores nothing. Sign in
   with ChatGPT needs a stable `deviceId`: `credentialFile` keeps one beside its file, a store of your own passes it.
-- `providerAuth` resolves what a request to the provider sends (an OAuth token refreshed when due, through the store),
-  for a host that calls the provider itself, such as for its usage.
+- `providerAuth` resolves what a request to the provider sends (an OAuth token refreshed when due, through the store):
+  its key, the headers a provider authenticates by, and the endpoint a credential decides. It is for a host that calls
+  the provider itself, such as for its usage.
 
 ## Calling a served agent
 

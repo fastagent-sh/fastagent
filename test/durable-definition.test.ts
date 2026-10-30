@@ -450,7 +450,7 @@ describe("two agents in one process", () => {
 });
 
 describe("an app's openAgent", () => {
-  it("refuses a wake-up until the app serves the agent, since only a serve's clock fires one", async () => {
+  it("refuses a wake-up while the app does not serve the agent, since only a serve's clock fires one", async () => {
     const dir = agentPackage(FILES);
     for (const [name, value] of Object.entries(ENV)) process.env[name] = value;
     const agent = await openAgent(dir, { stateDir: join(dir, ".host-state") });
@@ -466,8 +466,12 @@ describe("an app's openAgent", () => {
       };
       expect(await wake()).toContain("nothing fires wake-ups for this agent now");
       expect(listWakeups(join(dir, ".host-state"))).toEqual([]);
-      await agent.serve();
+      const service = await agent.serve();
       expect(await wake()).toContain("OK — I'll wake up at");
+      expect(listWakeups(join(dir, ".host-state"))).toHaveLength(1);
+      // The service closed alone, the agent still open: its clock is gone with it.
+      await service.close();
+      expect(await wake()).toContain("nothing fires wake-ups for this agent now");
       expect(listWakeups(join(dir, ".host-state"))).toHaveLength(1);
     } finally {
       await agent.close();
