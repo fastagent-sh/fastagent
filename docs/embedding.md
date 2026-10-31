@@ -230,7 +230,7 @@ Its `auth.apiKey.resolve()` runs per request, which is where a token you mint or
 
 An app that runs agents for a person on their machine (a desktop client, an editor) opens each with `openAgent` and
 calls the Agent API; `createAgent(dir, { content })` makes a new one, as `fastagent init` does, with the folders and
-repositories it works on, and `addContent`, `removeContent` and `listContent` change them later.
+repositories it works on. `addContent` and `removeContent` edit those declarations later; `listContent` reads them.
 
 - **Its own instance.** `openAgent(dir, { credentials, stateDir })` with a `stateDir` of the app's (one per agent,
   under its data directory) is an instance of the agent separate from the one `fastagent dev` opens in the same
@@ -241,6 +241,13 @@ repositories it works on, and `addContent`, `removeContent` and `listContent` ch
 - **Models.** `agent.info().models` are the models a session may name, each with its `contextWindow` and the
   `thinkingLevels` it supports; a provider signed in to while the agent is open is in the next answer. The lists are
   refreshed when the agent opens, at most every 4 hours.
+- **Content changes.** `openAgent` resolves the content declarations once and prepares GitHub clones at startup.
+  Adding or removing entries, or changing their paths or descriptions, takes effect at the next open, not in a new
+  session of the already-open agent. `addContent`, `removeContent` and `listContent` return the current on-disk
+  declaration resolved for this machine, not the running agent's snapshot. There is no hot reload: a desktop host
+  can wait for current work to finish, then `close()` and reopen with the same `stateDir`. Cancel first only if it
+  intends to stop that work. Files inside an already-bound directory are different: their changes are visible when
+  a tool next reads them, without reopening.
 - **Changes to the agent.** `SYSTEM.md`, `AGENTS.md`, skills and prompt templates are read for every message. Code
   under `src/` and `fastagent.config.ts` are built when the agent opens: `close()` it and open it again.
 - **Each agent's own environment.** An agent runs on this process's environment plus its own: its `.secrets/.env`

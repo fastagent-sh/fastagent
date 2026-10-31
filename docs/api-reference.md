@@ -197,7 +197,11 @@ function providerAuth(
   as `ContentNameError`. `readContentSource` reads a path or `github:owner/repo` as the CLI's `<source>` is read, and
   names it for the directory or repository. A removed repository's clone in `content/` is left as it is. Two entries
   may bind the same directory, or one inside the other, and the agent reaches it by both names; a directory may not
-  contain the agent's own, nor lie inside it. [Content](configuration.md#content) says how the agent is told of it.
+  contain the agent's own, nor lie inside it. These functions read or edit the declaration on disk; their results
+  are not the open agent's snapshot. Changes to entries, paths or descriptions take effect at the next `openAgent`,
+  which also prepares GitHub clones. They do not update an already-open agent, even for a new session. File changes
+  inside an already-bound directory need no reopen: a tool sees them when it next reads the files.
+  [Content](configuration.md#content) says how the agent is told of it.
 - A `CredentialStore` keeps one credential per provider, whole. `modify` is its only write and runs one at a time per
   provider, because an OAuth refresh happens inside it and a rotated refresh token must never be used twice; a store it
   cannot read rejects, since answering it as empty would let the next write replace every provider's credential.

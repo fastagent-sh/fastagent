@@ -209,7 +209,12 @@ there, like any other file; none of them is added to the agent's prompt, whose i
 agent directory alone. To have the agent read the project's `AGENTS.md` before it changes anything, say so in the
 entry's `description`.
 
-The locations are resolved when a process starts; editing either file restarts `dev`. A deployed host links its
+Content declarations are resolved once when an instance opens; there is no hot reload. Adding or removing entries,
+changing a path, or changing a description takes effect after a restart (or redeployment with the changed definition).
+Editing either file restarts `dev`; an embedding host closes and reopens the agent. Changes to files inside an
+already-bound directory need no restart: the agent sees them when its tools next read the files.
+
+A deployed host links its
 `content/` to its storage, so each repository is a clone there, made and kept up to date the same way, and outlives
 each release ([deploy](deploy.md#before-you-deploy)). A directory only this machine binds stays here: the deployed
 agent works without it, and `deploy` says so by name. To give a host what the agent only reads there, copy it into

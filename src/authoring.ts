@@ -132,8 +132,8 @@ export async function initAgent(
 }
 
 /**
- * The agent's content, resolved for this instance (what `fastagent content list` shows), and the directories this
- * machine binds that are not here: the agent is not told of those.
+ * The on-disk declaration resolved for this machine, not an open agent's startup snapshot. Missing local directories
+ * are listed separately; an agent opened here is not told of them.
  */
 export async function listContent(agentDir: string): Promise<{ content: ResolvedContent[]; absent: BoundContent[] }> {
   const dir = resolveAgentDir(agentDir);
@@ -142,8 +142,7 @@ export async function listContent(agentDir: string): Promise<{ content: Resolved
 }
 
 /**
- * What an edit leaves: the entry it added or removed, by name, the agent's content after it, and what to tell the
- * user about what was left on this machine.
+ * The edited declaration resolved for this machine; an already-open agent keeps its startup snapshot until reopened.
  */
 export interface ContentEdit {
   name: string;
