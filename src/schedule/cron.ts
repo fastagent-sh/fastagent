@@ -47,8 +47,10 @@ const verdicts = new Map<string, string | undefined>();
  * A function of the expression alone, so a file's verdict never flips with the time it is read. Two consecutive
  * instants under 10 minutes apart are on one day or across one midnight, and the time-of-day fields repeat every day,
  * so two days of the time-of-day form (the day fields made `*`, in UTC) hold every such gap. That is conservative:
- * `0,55 0,23 * * 1` is refused for the 23:55 → 00:00 pair, though Tuesday never fires. A DST change only lengthens a
- * gap (croner fires a repeated hour once). A year field is refused, since what repeats every year does not need one.
+ * `0,55 0,23 * * 1` is refused for the 23:55 → 00:00 pair, though Tuesday never fires. A DST change can bring two
+ * instants closer once a year, which this does not refuse: an expression with several times runs both passes of the
+ * hour the autumn change repeats (`0,55 1 * * *` at 01:55 and, 5 minutes on, the second 01:00), and a schedule whose
+ * session is busy skips a fire anyway. A year field is refused, since what repeats every year does not need one.
  */
 export function recurringCronError(cron: string, tz: string | undefined): string | undefined {
   const key = `${cron}\u0000${tz ?? ""}`;

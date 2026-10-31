@@ -9,10 +9,6 @@ updates:
       npm-dependencies:
         patterns:
           - "*"
-    ignore:
-      # 11 changes what `?` means and how a DST gap is run; adopting it is a decision about schedules (#865).
-      - dependency-name: croner
-        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
