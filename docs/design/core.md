@@ -843,8 +843,8 @@ next start) delays a change and leaves what EventBridge holds firing. One rule f
 host's clock: discovery refuses, on every host, a cron it cannot express (both day fields restricted, `L`/`#`,
 nicknames), so what runs locally runs here. Two differences remain, at a DST change: a local time the spring
 change removes is skipped by EventBridge and run by croner at the first valid time after the gap, and a schedule with
-several times runs both passes of the hour the autumn change repeats on croner and once on EventBridge (a single time
-in that hour runs once on both). Because the container sets the schedules, one
+several times runs both passes of the hour the autumn change repeats on croner and, going by EventBridge's
+documentation, once on EventBridge (not tried on a live schedule); a single time in that hour runs once on both. Because the container sets the schedules, one
 written on the runtime takes effect without a deploy; the cost is that they are set only once an envelope has
 reached the container through the forwarder (`--run` probes it; the manual runbook prints the probe). They are no
 stack resources, so `destroy` deletes both prefixes itself. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the

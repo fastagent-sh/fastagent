@@ -14,9 +14,10 @@ describe("schedule/cron", () => {
     );
   });
 
-  // What docs/configuration.md says a resident host does at a DST change, and what EventBridge is said to do instead
-  // (it skips a spring time that does not exist and runs a repeated autumn time once). Pinned here because the
-  // difference is croner's, and croner changed it in 11.
+  // What docs/configuration.md says a resident host does at a DST change. Only croner's side is run here. EventBridge's
+  // is AWS's documentation (it skips a spring time that does not exist and runs once when the clock goes back), and
+  // the reading of that for several times in the repeated hour is not tested against a live schedule. The difference
+  // is croner's, and croner changed it in 11.
   describe("at a DST change (America/New_York, 2026)", () => {
     const zone = "America/New_York";
     const fires = (cron: string, from: string, until: string): string[] => {

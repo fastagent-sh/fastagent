@@ -56,9 +56,11 @@ function mapDowField(dow: string): { value: string } | { error: string } {
  * Translate a 5-field cron into EventBridge Scheduler's `cron(m h dom mon dow *)`, or say why it can't be. The two
  * fire on the same instants in the same zone, with two exceptions at a DST change, both on a resident host (croner):
  * a local time the spring change removes (02:30 in most of the US on that day) is skipped by EventBridge and run by
- * croner at the first valid time after the gap, and a schedule with several minutes or hours (every 15 minutes) runs both
- * passes of the hour the autumn change repeats, where EventBridge runs it once. A single time in the repeated hour
- * runs once in both. `?` is `*`, as croner reads it and as EventBridge means it ("any").
+ * croner at the first valid time after the gap, and a schedule with several minutes or hours (every 15 minutes) runs
+ * both passes of the hour the autumn change repeats. EventBridge's documentation says a schedule "runs only once" when
+ * the clock goes back, which is read here as once per time: once for each of the four times of an every-15-minutes
+ * schedule. That reading is not tested against a live schedule. A single time in the repeated hour runs once in both.
+ * `?` is `*`, as croner reads it and as EventBridge means it ("any").
  */
 export function toEventBridgeCron(cron: string): { expression: string } | { error: string } {
   const fields = cron.trim().split(/\s+/);
