@@ -228,7 +228,7 @@ state root (`stateDir`: an instance of its own beside `dev`'s). It works in this
    process accepted and did not settle is counted as work in flight (`channels/busy.ts`) and resumed. Two openers ask
    otherwise (`unfinished`), before the scheduler starts: `invoke`, whose messages do not outlive it, aborts what a
    stopped `invoke` left (`"abort"`), so a message its user stopped is not run by the next one; `schedules run`, which
-   would run that work and cut it off when it exits, refuses to open over it (`"refuse"`).
+   would run that work and cut it off when it exits, refuses to open over it (`"refuse"`). Before either, a task the crash-loop guard parked (`parked.ts`) is given up on: its message ends `failed`.
 
 If the Agent does not open, the storage is closed before the failure is thrown, so the same process can open it again.
 
@@ -247,6 +247,7 @@ The operations of the Agent API ([SPEC.md](../SPEC.md)) are read from and submit
 | `stream.ts` | `messages.stream`: a message sent and delivered from wherever it is, new, queued, running or ended |
 | `sessions.ts` | Which conversations are sessions (a subagent's is not) and each one's latest activity, its newest own id: a cache read at open and moved by every commit, which `sessions.list` orders by |
 | `defaults.ts` | The deployment's default model and thinking level, written into a conversation that names none when a message is admitted |
+| `parked.ts` | A task pi-durable's crash-loop guard parked (cut off by a crash 5 times in a row): its message ends `failed` (`internal`, `details.reason` `restart_limit`) and the session is freed, at open, before the scheduler starts |
 | `release.ts` | Temporary: places the messages a run that did not answer left waiting, until pi-durable does it itself |
 
 `sessions.cancel` answers once its stop is recorded, not once what it stopped has ended: pi-durable runs commits one at
