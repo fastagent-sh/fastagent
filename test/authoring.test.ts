@@ -89,9 +89,9 @@ describe("authoring API", () => {
       }),
     ).rejects.toThrow("registry unreachable");
     expect(await readdir(failed).catch(() => [])).toEqual([]);
-    // What the package gives a host: the agent, without what only `init` adds.
+    // What the package gives a host: the agent and its content, without the install only `init` adds.
     const created = await createAgent(failed);
-    expect(Object.keys(created).sort()).toEqual(["created", "dir", "repository"]);
+    expect(Object.keys(created).sort()).toEqual(["content", "created", "dir", "repository"]);
     expect(created.dir).toBe(failed);
   });
 

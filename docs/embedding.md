@@ -229,7 +229,8 @@ Its `auth.apiKey.resolve()` runs per request, which is where a token you mint or
 ## 6. A desktop host
 
 An app that runs agents for a person on their machine (a desktop client, an editor) opens each with `openAgent` and
-calls the Agent API; `createAgent(dir)` makes a new one, as `fastagent init` does.
+calls the Agent API; `createAgent(dir, { content })` makes a new one, as `fastagent init` does, with the folders and
+repositories it works on and knows, and `addContent`, `removeContent` and `listContent` change them later.
 
 - **Its own instance.** `openAgent(dir, { credentials, stateDir })` with a `stateDir` of the app's (one per agent,
   under its data directory) is an instance of the agent separate from the one `fastagent dev` opens in the same

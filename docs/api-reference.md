@@ -10,7 +10,7 @@ A compact reference for `@fastagent-sh/fastagent`. The package has one entry per
 
 | Import | Holds |
 |---|---|
-| `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, what a host embedding agents needs beside it (`createAgent`, `credentialFile`, `signIn`, `signInOptions`, `providerAuth`), and what an author writes: `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, and a channel's helpers |
+| `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, what a host embedding agents needs beside it (`createAgent`, the content edits, `credentialFile`, `signIn`, `signInOptions`, `providerAuth`), and what an author writes: `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, and a channel's helpers |
 | `@fastagent-sh/fastagent/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers) |
 | `@fastagent-sh/fastagent/telegram`, `/slack`, `/feishu`, `/lark` | Each first-party channel, and the transport and thread reader its tools use |
 
@@ -124,7 +124,22 @@ A desktop app or a tool that runs agents for a person creates them, keeps the mo
 providers in its own UI. None of it needs the harness's model library: the types are FastAgent's own.
 
 ```ts
-function createAgent(dir: string): Promise<{ dir: string; created: string[]; repository: string }>;
+function createAgent(
+  dir: string,
+  options?: { content?: ContentAddition[] },
+): Promise<{ dir: string; created: string[]; repository: string; content: ResolvedContent[] }>;
+
+// What the agent works on and knows: directories of this machine and GitHub repositories, by name.
+interface ContentAddition {
+  name: string; // one path segment of letters, digits, "-" and "_"; unique ignoring case
+  entry?: { github: string; ref?: string; readonly?: boolean; description?: string }; // in context.json
+  binding?: { path: string; readonly?: boolean; description?: string }; // in context.local.json, this machine's
+}
+function listContent(agentDir: string): Promise<{ content: ResolvedContent[]; absent: BoundContent[] }>;
+function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit>;
+function removeContent(agentDir: string, name: string): Promise<ContentEdit>;
+function readContentSource(source: string, cwd: string, options?: SourceOptions): { addition: ContentAddition; notes: string[] };
+class ContentNameError extends Error {} // a name that cannot name content, that is taken, or that the agent has not
 
 type Credential =
   | { type: "api_key"; key?: string; env?: Record<string, string> }
@@ -157,8 +172,15 @@ function providerAuth(
 >;
 ```
 
-- `createAgent` is `fastagent init` without its options: the whole scaffold and a git repository whose first commit is
-  it, or why not. It installs no dependencies; the agent opens without them. A directory that is not empty is refused.
+- `createAgent` is `fastagent init` without the install: the whole scaffold and a git repository whose first commit is
+  it, or why not. The agent opens without dependencies. A directory that is not empty is refused. `content` gives it
+  any number of entries, all checked before anything is written; one that is refused leaves no directory.
+- `addContent`, `removeContent` and `listContent` are `fastagent content add|remove|list`: they change `context.json`
+  and this machine's `context.local.json` under one lock, with the CLI's checks and messages, and throw a name refusal
+  as `ContentNameError`. `readContentSource` reads a path or `github:owner/repo` as the CLI's `<source>` is read, and
+  names it for the directory or repository. A removed repository's clone in `content/` is left as it is. Two entries
+  may bind the same directory, or one inside the other, and the agent reaches it by both names; a directory may not
+  contain the agent's own, nor lie inside it. [Content](configuration.md#content) says how the agent is told of it.
 - A `CredentialStore` keeps one credential per provider, whole. `modify` is its only write and runs one at a time per
   provider, because an OAuth refresh happens inside it and a rotated refresh token must never be used twice; a store it
   cannot read rejects, since answering it as empty would let the next write replace every provider's credential.

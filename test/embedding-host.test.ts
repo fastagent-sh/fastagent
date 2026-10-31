@@ -14,13 +14,19 @@ import * as login from "../src/harnesses/models/login.ts";
 import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import {
+  ContentNameError,
   type Credential,
   type CredentialStore,
   type SignInInteraction,
   SignInCancelled,
+  addContent,
+  createAgent,
   credentialFile,
+  listContent,
   openAgent,
   providerAuth,
+  readContentSource,
+  removeContent,
   signIn,
   signInOptions,
 } from "../src/index.ts";
@@ -219,6 +225,63 @@ describe("the models an agent offers", () => {
     } finally {
       await agent.close();
     }
+  });
+});
+
+describe("an agent's own content, from the package entry", () => {
+  const folders = async () => {
+    const base = await tmp("fa-host-content-");
+    const made = ["notes", "app", "handbook"].map((name) => join(base, name));
+    for (const dir of made) await mkdir(dir);
+    return { base, notes: made[0] as string, app: made[1] as string, handbook: made[2] as string };
+  };
+  const bind = (name: string, path: string, readonly = false) => ({ name, binding: { path, readonly } });
+
+  it("is created with any number of folders, edited and listed", async () => {
+    const { base, notes, app, handbook } = await folders();
+    const dir = join(base, "agent");
+    const created = await createAgent(dir, { content: [bind("app", app), bind("handbook", handbook, true)] });
+    expect(created.content.map(({ name, readonly }) => ({ name, readonly }))).toEqual([
+      { name: "app", readonly: false },
+      { name: "handbook", readonly: true },
+    ]);
+
+    const edit = await addContent(dir, bind("notes", notes));
+    expect(edit.content.map(({ name }) => name).sort()).toEqual(["app", "handbook", "notes"]);
+    expect((await listContent(dir)).content).toHaveLength(3);
+
+    const removed = await removeContent(dir, "NOTES");
+    expect(removed.name).toBe("notes");
+    expect((await listContent(dir)).content.map(({ name }) => name).sort()).toEqual(["app", "handbook"]);
+  });
+
+  it("refuses a name the agent has, and a created agent with one bad entry leaves no directory", async () => {
+    const { base, notes, app } = await folders();
+    const dir = join(base, "agent");
+    await createAgent(dir, { content: [bind("app", app)] });
+    await expect(addContent(dir, bind("App", notes))).rejects.toBeInstanceOf(ContentNameError);
+
+    const refused = join(base, "refused");
+    await expect(createAgent(refused, { content: [bind("app", app), bind("bad name", notes)] })).rejects.toBeInstanceOf(
+      ContentNameError,
+    );
+    expect(existsSync(refused)).toBe(false);
+  });
+
+  it("reads a folder as the CLI does: named for it, bound on this machine", async () => {
+    const { notes } = await folders();
+    const { addition } = readContentSource(notes, process.cwd(), { readonly: true });
+    expect(addition).toEqual({ name: "notes", binding: { path: notes, readonly: true } });
+  });
+
+  it("accepts two names for one folder, and a folder inside another", async () => {
+    const { base, app } = await folders();
+    const inner = join(app, "src");
+    await mkdir(inner);
+    const created = await createAgent(join(base, "agent"), {
+      content: [bind("a", app), bind("b", app), bind("inner", inner)],
+    });
+    expect(created.content.map(({ name }) => name).sort()).toEqual(["a", "b", "inner"]);
   });
 });
 
