@@ -13,6 +13,7 @@ import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { connectAgent } from "../src/http/client.ts";
 import { type ServeOptions, serveAgent } from "../src/service.ts";
+import { CODEX_MODEL } from "./codex-model.ts";
 
 const opened: DurableAgent[] = [];
 afterAll(async () => {
@@ -26,10 +27,7 @@ async function createAgentService(dir: string, options: ServeOptions = {}) {
   return serveAgent(served, options);
 }
 
-async function agentDir(
-  files: Record<string, string> = {},
-  config = `{ model: "openai-codex/gpt-5.5" }`,
-): Promise<string> {
+async function agentDir(files: Record<string, string> = {}, config = `{ model: "${CODEX_MODEL}" }`): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-surface-"));
   await writeFile(join(dir, "fastagent.config.ts"), `export default ${config};\n`);
   await writeFile(join(dir, "SYSTEM.md"), "You are a test agent.\n");
@@ -194,7 +192,7 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
   it("every serve polls the agent's own wake-ups — no switch — and close() stops it", async () => {
     const timers = vi.spyOn(globalThis, "setTimeout");
     const cleared = vi.spyOn(globalThis, "clearTimeout");
-    const service = await createAgentService(await agentDir({}, `{ model: "openai-codex/gpt-5.5" }`));
+    const service = await createAgentService(await agentDir({}, `{ model: "${CODEX_MODEL}" }`));
     try {
       const polls = timers.mock.calls.flatMap((args, i) => (args[1] === 30_000 ? [timers.mock.results[i]?.value] : []));
       expect(polls).toHaveLength(1);

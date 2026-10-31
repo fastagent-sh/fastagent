@@ -16,6 +16,7 @@ import { type ContentBinding, declareBindings } from "../src/content/declare.ts"
 import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
+import { CODEX_MODEL } from "./codex-model.ts";
 
 /** Send one message to the agent in `agentDir`, opened on `provider` with `content`. */
 async function askOnce(agentDir: string, provider: Provider, content?: readonly ResolvedContent[]): Promise<void> {
@@ -150,7 +151,7 @@ describe("one resolution", () => {
     // A second derivation of where the content is would disagree with this one sooner or later; here every
     // reader is asked after each change of the bindings.
     const { root, agentDir, app, handbook } = await layout();
-    await writeFile(join(agentDir, "fastagent.config.ts"), `export default {\n  model: "openai-codex/gpt-5.5",\n};\n`);
+    await writeFile(join(agentDir, "fastagent.config.ts"), `export default {\n  model: "${CODEX_MODEL}",\n};\n`);
     await bind(agentDir, { app: { path: "../app" } });
     const readers = async () => {
       const opened = await openServing(agentDir, { storage: "memory" });

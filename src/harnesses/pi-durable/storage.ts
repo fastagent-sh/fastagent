@@ -36,8 +36,9 @@ export async function openLockedStorage(path: string, locking: StorageLocking, h
     await adapter.exec("PRAGMA synchronous = NORMAL");
     return await SqliteStorage.open(adapter);
   } catch (error) {
-    // The connection only: the adapter's close checkpoints first, which a refused opener cannot do.
-    database.close();
+    // The connection only: the adapter's close checkpoints first, which a refused opener cannot do. Already closed
+    // when the storage refused the database itself (a schema it does not know), and closing it again would hide why.
+    if (database.isOpen) database.close();
     if ((error as { errcode?: unknown }).errcode !== SQLITE_BUSY) throw error;
     const who = holders === undefined ? "" : `: ${holders} is running`;
     throw new Error(`the storage ${path} is held by another process${who}. Stop that one first`, { cause: error });

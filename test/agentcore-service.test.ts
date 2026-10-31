@@ -6,8 +6,9 @@ import type { ServedAgent } from "../src/service.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
 import { openPreparedStartService } from "../src/cli/commands/start.ts";
+import { CODEX_MODEL } from "./codex-model.ts";
 
-async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
+async function agentDir(files: Record<string, string> = {}, config = `{ model: "${CODEX_MODEL}" }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
   await writeFile(join(dir, "fastagent.config.ts"), `export default ${config};\n`);
   await writeFile(join(dir, "SYSTEM.md"), "You are a test agent.\n");
@@ -258,7 +259,7 @@ describe("mountAgentcoreService", () => {
   });
 
   it("reports loaded schedules, and close() is safe to call twice", async () => {
-    const dir = await agentDir({ "src/schedules/digest.ts": DIGEST }, `{ model: "openai-codex/gpt-5.5" }`);
+    const dir = await agentDir({ "src/schedules/digest.ts": DIGEST }, `{ model: "${CODEX_MODEL}" }`);
     const service = await mountAgentcoreService(await open(dir));
     expect(service.schedules.map((s) => s.name)).toEqual(["digest"]);
 

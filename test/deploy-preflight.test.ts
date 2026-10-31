@@ -9,6 +9,7 @@ import { resolveStateRoot } from "../src/paths.ts";
 import { keepCatalog } from "./kept-catalog.ts";
 import type { AgentConfig as FastagentConfig } from "../src/harnesses/pi-durable/define.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
+import { CODEX_MODEL } from "./codex-model.ts";
 
 /** An agent directory, as `init` produces one; `files` land in it. Named `agent`: a deployed agent's name is its
  *  directory's, and the temp prefix would not pass the release-name rule. */
@@ -485,7 +486,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 
   it("loads the definition the box will load: a refusal in it gates --run instead of shipping a crash-loop", async () => {
     const dir = await agent({ "src/tools/x.ts": "export default { name: 'x' };\n" });
-    const config = { model: "openai-codex/gpt-5.5" };
+    const config = { model: CODEX_MODEL };
     const gated = await call(dir, config, { run: true });
     expect(gated.ok).toBe(false);
     if (!gated.ok)

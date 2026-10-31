@@ -1,8 +1,9 @@
 /**
- * Temporary: pi-durable 1.3.0 leaves a conversation's queued messages waiting after a run that did not answer (a model
+ * Temporary: pi-durable leaves a conversation's queued messages waiting after a run that did not answer (a model
  * failure, an abort, a message sent while an aborted run was still ending) until another submission places them, while
  * the Agent API takes them whatever the message before them ended with (SPEC.md §5.3). A write of FastAgent's own
- * kind places them. Remove once pi-durable ships `afterFailedRun` and it covers aborts too.
+ * kind places them. pi-durable 1.4.0's `settings.afterFailedRun` covers a model failure (`model_error`, `no_model`)
+ * and not an abort: remove this once it does.
  */
 import type { Context } from "@earendil-works/chord/context";
 import { type ConversationId, type Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";

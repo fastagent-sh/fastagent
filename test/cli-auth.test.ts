@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAuthCheck } from "../src/cli/commands/auth.ts";
 import { runLogout } from "../src/cli/commands/logout.ts";
+import { CODEX_MODEL } from "./codex-model.ts";
 
 // enterAgentEnv installs the proxy fetch, which swaps this process's fetch with no way back.
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
@@ -72,7 +73,7 @@ describe("auth check: a provider's readiness, as pi's `auth check` answers a scr
       "fetch",
       vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 401 })),
     );
-    const refused = await checked({ model: "openai-codex/gpt-5.5", json: true });
+    const refused = await checked({ model: CODEX_MODEL, json: true });
     expect(refused.code).toBe(2);
     expect(JSON.parse(refused.out)).toMatchObject({
       status: "invalid",

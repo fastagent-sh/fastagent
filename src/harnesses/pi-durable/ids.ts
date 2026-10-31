@@ -13,6 +13,8 @@ const StorageDoc = defineDoc<{ incarnation: string }>({
   version: 1,
   scope: "session",
   initial: () => ({ incarnation: "" }),
+  // Written once, when the storage is first opened: no deltas pile up to bound.
+  checkpointWhen: () => false,
 });
 
 export interface Ids {
