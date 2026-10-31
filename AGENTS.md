@@ -275,6 +275,7 @@ src/
     │   │                   # sessions.list's cursors, which no id reads as; the session id a tool runs in
     │   ├── wake.ts         # `wake` and `unwake` as pi-durable tools, installed when a serve gives the state root
     │   ├── defaults.ts     # the deployment's default model and thinking level, for a conversation that names none
+    │   ├── parked.ts       # a task the crash-loop guard parked: its message ends `failed`, its session is freed
     │   └── release.ts      # temporary: places the messages a run that did not answer left waiting
     └── models/             # the model environment: pi-ai's models, credentials and sign-in
         ├── catalog.ts      # the model lists a pi-ai release does not carry: pi's published catalog (fetched whatever

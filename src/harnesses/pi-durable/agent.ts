@@ -62,6 +62,7 @@ import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, isPublished, parseImageRef } from "./entries.ts";
 import { sessionEvents } from "./events.ts";
 import { type Ids, storageIds } from "./ids.ts";
+import { giveUpOnParked, parkedTasks } from "./parked.ts";
 import { type InputRecord, isInput, queuedInputs, requestIdFor, usageOfState } from "./messages.ts";
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
@@ -115,6 +116,7 @@ const COMMAND = /^\/([^\s]+)(?:\s+([\s\S]*))?$/;
 
 export async function openDurableAgent(options: DurableAgentOptions): Promise<DurableAgent> {
   const context = BACKGROUND_CONTEXT;
+  const parked = parkedTasks();
   const harness = await Harness.open(
     options.storage,
     {
@@ -122,7 +124,10 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
       registry: options.registry,
       ...(options.settings === undefined ? {} : { settings: options.settings }),
       ...(options.env === undefined ? {} : { env: options.env }),
-      onReport: (error) => log.warn(`[fastagent] pi-durable reported: ${String(error)}`),
+      onReport: (error, info) => {
+        log.warn(`[fastagent] pi-durable reported: ${String(error)}`);
+        parked.report(info);
+      },
     },
     context,
   );
@@ -130,6 +135,7 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
   try {
     const ids = await storageIds(harness, context);
     const sessions = await Effect.runPromise(Scope.provide(trackSessions(harness, options.storage, context), lifetime));
+    await giveUpOnParked(harness, parked.tasks, context);
     // Before `resume()`, which runs an earlier process's work. An abort enables the scheduler too, but commits first, so
     // the aborted work does not run (measured).
     const unsettled = (await harness.inspect(context)).submissions.filter(isInput);
