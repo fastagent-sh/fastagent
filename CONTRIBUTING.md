@@ -6,7 +6,7 @@ All repository-facing text — code, comments, docs, commit messages, PR descrip
 
 ## Branch model
 
-- `main` is the only long-lived branch. It is protected: linear history, required CI, a merge queue, no force-push, no deletion.
+- `main` is the only long-lived branch. It is protected: linear history, required CI, no force-push, no deletion.
 - **Never commit directly to `main`.** Every change lands through a pull request.
 - Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
 
@@ -33,8 +33,8 @@ Tests use faux models by default, so they validate serving mechanics without net
 3. npm run lint && npm run typecheck && npm test
 4. git push -u origin feature/<thing>
 5. gh pr create --base main --assignee @me   # drop --assignee without push access
-6. gh pr merge <N>   # a maintainer's call; enqueues the PR or enables auto-merge (see "Merge strategy")
-7. After the queue merges it: clean up local + remote tracking branches
+6. gh pr merge <N> --squash --auto   # a maintainer's call; merges now or once CI passes (see "Merge strategy")
+7. After it merges: clean up local + remote tracking branches
 ```
 
 ### Issue and PR metadata
@@ -62,7 +62,7 @@ A PR whose branch prefix matches no rule in `.github/labeler.yml` gets no label,
 
 ### After a PR merges
 
-The queue merges asynchronously, so clean up only once `gh pr view <N> --json state -q .state` prints `MERGED`. A deleted remote branch does not prove that: the branch of a closed PR can be deleted too. Delete the local branch with `-D`: a squashed branch is never an ancestor of `main`, so `-d` refuses it.
+A PR waiting on auto-merge lands later, so clean up only once `gh pr view <N> --json state -q .state` prints `MERGED`. A deleted remote branch does not prove that: the branch of a closed PR can be deleted too. Delete the local branch with `-D`: a squashed branch is never an ancestor of `main`, so `-d` refuses it.
 
 ```bash
 git checkout main
@@ -88,7 +88,7 @@ A PR is mergeable only when:
 - `npm run lint` is clean (Biome format/lint plus local Markdown links; run `npm run format` to auto-fix code),
 - `npm run typecheck` is clean (TypeScript with `noUnusedLocals`/`noUnusedParameters`),
 - `npm test` passes,
-- CI (`Core checks` across Node 24.15 / 24 / 26, and `CodeQL`) is green. The merge queue enforces this: it reruns both on top of the latest `main` and merges only if they pass.
+- CI (`Core checks` across Node 24.15 / 24 / 26, and `CodeQL`) is green. Branch protection enforces this: a PR whose required checks have not passed cannot merge.
 
 Add or update the smallest relevant tests that prove the change. The Agent API's conformance suite lives in `test/agent-api-conformance.ts`; one-off product-scenario scripts should be run and then deleted, not committed.
 
@@ -97,7 +97,7 @@ Add or update the smallest relevant tests that prove the change. The Agent API's
 **Squash merge only** — the repository settings enforce it (rebase merges and merge commits are disabled). One PR lands as exactly one commit on `main`, so `main` reads as a sequence of reviewed changes and history stays linear.
 
 - Curate the PR title and description: they become the squash commit's subject and body — the durable record of the change. Branch commits are working state; the PR is the design asset.
-- Merges go through a **merge queue**. `gh pr merge <N>` adds the PR to the queue, or enables auto-merge until its own checks pass. The queue tests it on top of the latest `main` and the PRs ahead of it, then squash-merges it. A PR therefore does not have to be up to date with `main` first, and nobody waits for CI by hand. A PR that fails in the queue or conflicts with `main` leaves the queue and stays open; a PR whose own checks fail never enters it and stays open with auto-merge pending. Whoever runs `gh pr merge` reports which of the two its output shows (queued, or auto-merge enabled).
+- `gh pr merge <N> --squash --auto` squash-merges the PR at once when its required checks have passed, and otherwise enables auto-merge, which merges it when they do. A PR does not have to be up to date with `main` first, and nobody waits for CI by hand. A PR whose checks fail, or which conflicts with `main`, stays open with auto-merge pending. Whoever runs it reports which of the two its output shows (merged, or auto-merge enabled). There is no merge queue: the checks that decide ran on the PR as last pushed, so two PRs that are each green but break together are caught by CI on `main` after the second lands, not before.
 
 One branch = one focused change. If a branch grows several unrelated changes, split it into multiple PRs rather than squashing them into an opaque blob.
 
@@ -105,7 +105,7 @@ One branch = one focused change. If a branch grows several unrelated changes, sp
 
 A maintainer is a collaborator with write or admin access. The project is open source: every change lands through a reviewed PR, without exception.
 
-- **Merging is an explicit maintainer decision.** A maintainer decides to land a PR; the merge queue makes sure CI is green when it does. An agent opens the PR, reports its local check result and stops. It runs `gh pr merge <N>` only when a maintainer says so, and returns without waiting for the queue.
+- **Merging is an explicit maintainer decision.** A maintainer decides to land a PR; branch protection makes sure CI is green when it does. An agent opens the PR, reports its local check result and stops. It runs `gh pr merge <N> --squash --auto` only when a maintainer says so, and returns without waiting for CI.
 - Maintainer-authored PRs require green CI before merging. Review by a second maintainer is recommended for SPEC and public API changes.
 - A PR from an external contributor must be reviewed and merged by a maintainer; external contributors do not have merge permission.
 - `CODEOWNERS` routes changes to the relevant maintainers.
