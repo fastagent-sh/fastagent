@@ -522,15 +522,19 @@ export default defineSchedule({
 });
 ```
 
-- **`cron`** has 5 fields; **`tz`** is an IANA timezone, default UTC. **`prompt`** is a text, or a function of the
+- **`cron`** has 5 fields, and `?` means `*` (so `0 9 ? * MON` fires on Mondays); **`tz`** is an IANA timezone,
+  default UTC. **`prompt`** is a text, or a function of the
   instant it fires for (`({ at }) => …`), which may read secrets through `needs`.
 - **Checked when the definition is built**: no two instants of a schedule may be under 10 minutes apart, which also
   refuses the six-field per-second form; at most 20 schedules.
 - **A cron AgentCore can run, on every host.** AgentCore's clock is EventBridge, which cannot express a few cron
   forms: both day fields restricted at once (`0 9 15 * WED`, "the 15th or any Wednesday"), `L` and `#` day forms,
   and nicknames such as `@daily`. Such a schedule is refused everywhere, so one that runs locally also runs there.
-  One difference remains: on the day a DST change skips a local hour, a time inside it (02:30 in most of the US) is
-  skipped on AgentCore and run an hour later elsewhere.
+  Two differences remain, at a DST change. A time inside the local hour the spring change skips (02:30 in most of the
+  US) is skipped on AgentCore and run elsewhere at the first valid time after the gap (03:00). A schedule with several
+  times (`*/15`) runs both passes of the hour the autumn change repeats elsewhere; on AgentCore it runs once, going by
+  EventBridge's documentation ("runs only once" when the clock goes back), which has not been tried on a live schedule.
+  A single time in that hour runs once on both.
 - **One session per schedule.** Every fire continues the schedule's own session, created the first time it fires, so
   the agent sees what its earlier runs did, and nothing of users' chats.
 - **It delivers nothing.** The agent's tools send output; name the target (a chat or channel id) in the prompt.

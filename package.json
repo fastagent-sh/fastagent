@@ -98,7 +98,7 @@
     "@smithy/signature-v4": "^5.7.4",
     "chokidar": "^6.0.0",
     "commander": "^15.0.0",
-    "croner": "^10.0.1",
+    "croner": "^11.0.0",
     "effect": "^4.0.7",
     "giget": "^3.3.0",
     "ignore": "^7.0.14",
