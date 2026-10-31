@@ -14,6 +14,50 @@ describe("schedule/cron", () => {
     );
   });
 
+  // What docs/configuration.md says a resident host does at a DST change, and what EventBridge is said to do instead
+  // (it skips a spring time that does not exist and runs a repeated autumn time once). Pinned here because the
+  // difference is croner's, and croner changed it in 11.
+  describe("at a DST change (America/New_York, 2026)", () => {
+    const zone = "America/New_York";
+    const fires = (cron: string, from: string, until: string): string[] => {
+      const out: string[] = [];
+      for (let at = nextRun(cron, zone, new Date(from)); at && at <= new Date(until); at = nextRun(cron, zone, at)) {
+        out.push(at.toISOString().slice(5, 16));
+      }
+      return out;
+    };
+
+    it("a time the spring change removes runs at the first valid time after the gap", () => {
+      // 02:30 does not exist on 8 March; 03:00 EDT is 07:00 UTC, and EventBridge runs nothing.
+      expect(fires("30 2 * * *", "2026-03-08T05:00:00Z", "2026-03-08T12:00:00Z")).toEqual(["03-08T07:00"]);
+      // An interval skips the gap and adds nothing.
+      expect(fires("*/30 * * * *", "2026-03-08T06:29:00Z", "2026-03-08T07:30:00Z")).toEqual([
+        "03-08T06:30",
+        "03-08T07:00",
+        "03-08T07:30",
+      ]);
+    });
+
+    it("one time in the hour the autumn change repeats runs once", () => {
+      expect(fires("30 1 * * *", "2026-11-01T04:00:00Z", "2026-11-01T09:00:00Z")).toEqual(["11-01T05:30"]);
+    });
+
+    it("a schedule with several times runs both passes of that hour, where EventBridge runs it once", () => {
+      expect(fires("*/15 * * * *", "2026-11-01T04:50:00Z", "2026-11-01T06:50:00Z")).toEqual(
+        [
+          ...["05:00", "05:15", "05:30", "05:45"], // 01:00-01:45 EDT
+          ...["06:00", "06:15", "06:30", "06:45"], // 01:00-01:45 EST, the repeat
+        ].map((time) => `11-01T${time}`),
+      );
+      // Which can put two instants closer than the expression says, which recurringCronError does not refuse.
+      expect(recurringCronError("0,55 1 * * *", zone)).toBeUndefined();
+      expect(fires("0,55 1 * * *", "2026-11-01T05:30:00Z", "2026-11-01T06:10:00Z")).toEqual([
+        "11-01T05:55",
+        "11-01T06:00",
+      ]);
+    });
+  });
+
   it("cronError: undefined for valid, a message for an invalid pattern or timezone", () => {
     expect(cronError("0 9 * * *", "UTC")).toBeUndefined();
     expect(cronError("not a cron", undefined)).toBeTruthy();

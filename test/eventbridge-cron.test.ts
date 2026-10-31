@@ -16,7 +16,7 @@ describe("schedule/eventbridge-cron", () => {
   };
 
   // One pure translation, its whole mapping table: dow renumbering, dom/dow exclusivity, names,
-  // steps, lists, and the `?` field croner reads as unrestricted.
+  // steps, lists, and the `?` field, which is `*` for croner and "any" for EventBridge.
   it("translates every 5-field cron shape into the Quartz-flavoured EventBridge form", () => {
     expect(expression("0 * * * *")).toBe("cron(0 * * * ? *)"); // both wildcards → dow becomes ?
     expect(expression("30 6 1 * *")).toBe("cron(30 6 1 * ? *)"); // a dom restriction keeps dom
@@ -34,12 +34,16 @@ describe("schedule/eventbridge-cron", () => {
     expect(expression("0 9 * * 0-7")).toBe("cron(0 9 ? * 1-7 *)");
     expect(expression("0 9 * * 5-7")).toBe("cron(0 9 ? * 1,6-7 *)"); // Fri–Sun: no wrap once expanded
     expect(expression("0 9 * * MON,3")).toBe("cron(0 9 ? * 4,MON *)");
-    // A `?` field is UNRESTRICTED — croner reads it as daily, so the deployed rule must say daily.
-    // Carrying MON/1 across would deploy a schedule the workspace never runs.
-    expect(expression("0 9 ? * MON")).toBe("cron(0 9 * * ? *)");
-    expect(expression("0 9 1 * ?")).toBe("cron(0 9 * * ? *)");
+    // `?` is `*`: the other day field is the one that restricts, as in croner and in EventBridge.
+    expect(expression("0 9 ? * MON")).toBe("cron(0 9 ? * MON *)");
+    expect(expression("0 9 1 * ?")).toBe("cron(0 9 1 * ? *)");
     expect(expression("0 9 * * ?")).toBe("cron(0 9 * * ? *)");
     expect(expression("0 9 ? * *")).toBe("cron(0 9 * * ? *)");
+    expect(expression("0 9 ? * ?")).toBe("cron(0 9 * * ? *)");
+    // EventBridge takes `?` in the day fields only, so croner's `?` in any other field is written `*`.
+    expect(expression("? 9 * * *")).toBe("cron(* 9 * * ? *)");
+    expect(expression("0 ? * * 1")).toBe("cron(0 * ? * 2 *)");
+    expect(expression("0 9 * ? *")).toBe("cron(0 9 * * ? *)");
   });
 
   it("refuses what EventBridge cannot express, with the reason", () => {
@@ -90,10 +94,13 @@ describe("schedule/eventbridge-cron vs the Croner dialect the workspace actually
     "0 9 * * MON", // the plain weekly form
     "0 9 1 * *", // day-of-month
     "*/5 * * * *", // the every-N form a deploy test actually uses
-    "0 9 ? * MON", // `?` is NOT `*` in croner: this fires DAILY, whatever MON suggests
-    "0 9 1 * ?", // …and here too, whatever the 1st suggests
+    "0 9 ? * MON", // `?` is `*`: Mondays
+    "0 9 1 * ?", // …the 1st
     "0 9 * * ?",
     "0 9 ? * *",
+    "0 9 ? * ?",
+    "0 ? * * 1", // `?` outside the day fields
+    "? 9 * * *",
     // Day-of-week numbers, where the two numberings differ.
     "0 9 * * 1-5",
     "0 9 * * 0-7", // every day — remapping its endpoints gave Sundays only

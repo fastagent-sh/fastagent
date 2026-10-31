@@ -54,22 +54,27 @@ function mapDowField(dow: string): { value: string } | { error: string } {
 
 /**
  * Translate a 5-field cron into EventBridge Scheduler's `cron(m h dom mon dow *)`, or say why it can't be. The two
- * fire on the same instants in the same zone, with one exception at a DST change: a local time the spring change
- * removes (02:30 in most of the US on that day) is skipped by EventBridge and run an hour later by croner, so such a
- * schedule runs once more a year on a resident host. A time the autumn change repeats runs once in both.
+ * fire on the same instants in the same zone, with two exceptions at a DST change, both on a resident host (croner):
+ * a local time the spring change removes (02:30 in most of the US on that day) is skipped by EventBridge and run by
+ * croner at the first valid time after the gap, and a schedule with several minutes or hours (every 15 minutes) runs both
+ * passes of the hour the autumn change repeats, where EventBridge runs it once. A single time in the repeated hour
+ * runs once in both. `?` is `*`, as croner reads it and as EventBridge means it ("any").
  */
 export function toEventBridgeCron(cron: string): { expression: string } | { error: string } {
   const fields = cron.trim().split(/\s+/);
   if (fields.length !== 5) {
     return { error: `EventBridge supports 5-field cron only (got ${fields.length} fields)` };
   }
-  const [min, hour, dom, mon, dow] = fields as [string, string, string, string, string];
+  // EventBridge takes `?` in the day fields only, and exactly one of them; croner reads it as `*` anywhere.
+  const [min, hour, dom, mon, dow] = fields.map((field) => (field === "?" ? "*" : field)) as [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
   if (/[L#]/i.test(dow) || /[L#]/i.test(dom)) {
     return { error: "L/# day forms don't translate to EventBridge numbering — set this schedule up manually" };
-  }
-  // `?` FIRST, and not as a synonym for `*`.
-  if (dom === "?" || dow === "?") {
-    return { expression: `cron(${min} ${hour} * ${mon} ? *)` };
   }
   if (dom !== "*" && dow !== "*") {
     return {
