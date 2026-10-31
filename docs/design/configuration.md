@@ -215,7 +215,7 @@ Day one is built: the credential layers (§5, §8), the value-file-only delivery
 | Work | Where |
 |---|---|
 | `resolveEnvValues(agentDir, envName?)` → `{ envName, file, values }`: the **one** read of the selected value file, shared by the plan side and the run side | a new module under `src/deploy/` |
-| Loading a definition under a given env's values (channel discovery) runs in a **subprocess**: a module captures `process.env` at import time, and a subprocess is cheaper than inventing ESM cache invalidation | `src/env.ts` (`loadEnvValues` already returns a Map without writing `process.env`) |
+| Loading a definition under a given env's values (channel discovery) runs in a **subprocess**: a module captures `process.env` at import time, and a subprocess is cheaper than inventing ESM cache invalidation | `src/value-file.ts` (`loadEnvValues` returns a Map without writing `process.env`) |
 | The `<name>-<env>` prefix, read from `config.name`, which exists (today `info()` reads it) but `init` does not yet record | `src/deploy/` + `src/scaffold/` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) | `src/deploy/container.ts` + each host's `plan.ts` |

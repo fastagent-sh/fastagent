@@ -98,15 +98,17 @@ src/
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
 ├── environment/            # the commands an agent runs, declared in context.json — harness-neutral
 │   ├── declare.ts          # the `environment` declaration, read and refused in ONE place; the backend allowlist
-│   ├── mise.ts             # the agent's OWN mise (an npm dep per platform), packages as arguments: install, enter
+│   ├── mise.ts             # the agent's OWN mise (an npm dep per platform), packages as arguments: install, and the
+│                           # PATH that puts them first for the agent's commands (never written into process.env)
 │   └── apt.ts              # which declared apt packages THIS machine lacks (dpkg; Debian and Ubuntu only)
 ├── authoring.ts            # creating an agent (createAgent, exported; initAgent, `init`'s) + editing its content
 │                           # as an API; `init`/`content` are thin wrappers
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape (`needs()` in code, context.json's
 │                           # variables), and what "has no value" means
 ├── atomic-write.ts         # writeFileAtomic: the ONE "whole file or none of it" write
-├── value-file.ts           # writing a generated value (a channel's secret, the API's key) into the selected
-│                           # environment's value file: kept when set, its secrets dir gitignored
+├── value-file.ts           # the selected environment's value file, READ as data (never entered: what it declares,
+│                           # what it adds to an agent's environment) and WRITTEN (a generated value — a channel's
+│                           # secret, the API's key — kept when set, its secrets dir gitignored)
 ├── locked-file.ts          # the cross-process locked read-modify-write that REPLACES a file (credentials,
 │                           # context.json), pi's lock included, so every reader of those files reads without one
 ├── state-file.ts           # a Caller's durable JSON state under the state root (channels, schedules), read and

@@ -283,7 +283,7 @@ for Windows, so an agent that declares packages does not run there.
 
 **Nothing is locked.** A package is a release the agent uses, as a CLI you install on your own machine is: each place
 installs the newest release its declared version allows when it first needs the package, and keeps it. `dev`,
-`start`, `invoke` and an app's [`openAgent`](embedding.md) install the declared packages that have no install matching them here yet, and put them first on the agent's `PATH`; one already
+`start`, `invoke` and an app's [`openAgent`](embedding.md) install the declared packages that have no install matching them here yet, and put them first on the `PATH` of the agent's commands (never on the process's, which may run other agents); one already
 installed is kept, so a start needs no network. `fastagent env install` installs the newest release of each again.
 A change to `context.json` restarts `dev`. A package is installed into mise's data directory on this machine
 (`~/.local/share/mise`), which other mise projects share.

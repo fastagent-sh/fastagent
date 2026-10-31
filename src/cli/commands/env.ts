@@ -13,11 +13,12 @@ import {
   parsePackageArgument,
   runtimeAdvice,
 } from "../../environment/declare.ts";
-import { checkPackages, ensureMise, enterEnvironment, installPackages, miseBinary } from "../../environment/mise.ts";
+import { checkPackages, ensureMise, installPackages, miseBinary, prepareEnvironment } from "../../environment/mise.ts";
 import { writeEnvironment } from "../../authoring.ts";
 import { log } from "../../log.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
-import { dotEnvPath, enterAgentEnv } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
+import { dotEnvPath } from "../../value-file.ts";
 import { missingSecrets } from "../../declared-secrets.ts";
 
 const NONE: DeclaredEnvironment = { packages: {}, aptPackages: [], variables: {} };
@@ -151,10 +152,10 @@ export async function runEnvInstall(): Promise<void> {
 
 export async function runEnvExec(command: string[]): Promise<void> {
   const agentDir = enterAgentHere();
-  await enterEnvironment(agentDir).catch(failStartup);
+  const variables = await prepareEnvironment(agentDir, process.env).catch(failStartup);
   const [program, ...args] = command as [string, ...string[]];
   const code = await new Promise<number>((done, fail) => {
-    const child = spawn(program, args, { stdio: "inherit" });
+    const child = spawn(program, args, { stdio: "inherit", env: { ...process.env, ...variables } });
     child.on("error", fail);
     child.on("close", (exit, signal) => done(exit ?? (signal ? 1 : 0)));
   }).catch((error: NodeJS.ErrnoException) =>

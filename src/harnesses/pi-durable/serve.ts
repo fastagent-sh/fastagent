@@ -20,7 +20,8 @@ import {
   contentAbsentHere,
   resolveContent,
 } from "../../content/resolve.ts";
-import { enterEnvironment } from "../../environment/mise.ts";
+import { agentValues } from "../../value-file.ts";
+import { prepareEnvironment } from "../../environment/mise.ts";
 import { log } from "../../log.ts";
 import type { Agent } from "../../agent-api.ts";
 import { resolveOverridePath, resolveStateRoot } from "../../paths.ts";
@@ -82,11 +83,11 @@ export interface OpenedServing {
  * up to date in place where git can do so without touching the agent's work, first; then resolved again as what is now
  * on disk.
  */
-async function contentForThisRun(dir: string): Promise<ResolvedContent[]> {
+async function contentForThisRun(dir: string, env: NodeJS.ProcessEnv): Promise<ResolvedContent[]> {
   const declaration = loadContent(dir);
   for (const entry of resolveContent(dir, declaration)) {
     if (entry.kind !== "github" || !entry.clone) continue;
-    const done = await cloneContent(entry);
+    const done = await cloneContent(entry, env);
     if (done.outcome === "kept") {
       log.warn(`[fastagent] content "${entry.name}": the clone in ${entry.location} is kept as it is, ${done.reason}`);
     } else {
@@ -123,11 +124,15 @@ function openStorage(stateRoot: string, storage: ServingStorage): Promise<Storag
 export async function openServing(directory: string, options: OpenServingOptions = {}): Promise<OpenedServing> {
   const definition = await prepareDefinition(directory);
   const { dir } = definition;
-  const code = buildDefinition(definition);
+  // The agent's environment is ONE value every reader below is given, and this process's is never written: a process
+  // may run several agents, each with its own values and packages.
+  const values = agentValues(dir);
+  const code = buildDefinition(definition, { ...process.env, ...values });
   // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
-  await enterEnvironment(dir);
-  const content = await contentForThisRun(dir);
-  const stateRoot = options.stateRoot ?? resolveStateRoot(dir);
+  const environment = { ...values, ...(await prepareEnvironment(dir, { ...process.env, ...values })) };
+  const env = { ...process.env, ...environment };
+  const content = await contentForThisRun(dir, env);
+  const stateRoot = options.stateRoot ?? resolveStateRoot(dir, env);
   const models = await modelEnvironment(
     dir,
     {
@@ -135,7 +140,7 @@ export async function openServing(directory: string, options: OpenServingOptions
       ...(options.credentialStore === undefined ? {} : { credentialStore: options.credentialStore }),
     },
     code.providers,
-    { stateRoot },
+    { stateRoot, environment },
   );
   const chosen = options.storage ?? { instance: "posix" };
   const storage = await openStorage(stateRoot, chosen);
@@ -143,6 +148,7 @@ export async function openServing(directory: string, options: OpenServingOptions
     storage,
     code,
     content,
+    environment,
     models: models.models,
     ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
     ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),

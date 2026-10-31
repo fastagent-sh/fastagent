@@ -464,7 +464,9 @@ interface Service {
 
 `openAgent` does what `fastagent dev` and `start` do before they serve: it reads the definition, builds its code with
 the secrets it declares (a required secret without a value refuses), installs its declared environment, clones its
-content and opens the instance's storage, which one process holds at a time. It resolves `dir` to an absolute path.
+content and opens the instance's storage, which one process holds at a time. The agent's environment is the process's
+plus its own (its `.secrets/.env` and its declared packages), and `process.env` is never written: one process may open
+several agents. It resolves `dir` to an absolute path.
 Nothing reaches the agent until `serve`. `credentials` is where the model credentials are kept (FastAgent's
 `CredentialStore`), instead of the agent's files. `stateDir` is where the instance keeps its state (its storage, its
 channels' and schedules' state, its model lists), instead of the directory's: a host's own instance of an agent, beside

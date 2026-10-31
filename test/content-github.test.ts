@@ -381,6 +381,28 @@ describe("github content: what runs the agent clones, what reports on it does no
     }
   });
 
+  it("the opener clones in the agent's own environment, where its value file's git settings and token are", async () => {
+    const github = githubStandIn();
+    github.repo("acme/site").commit({ "README.md": "site\n" });
+    const { agentDir } = await agent();
+    await writeFile(join(agentDir, "fastagent.config.ts"), `export default {};\n`);
+    await writeFile(join(agentDir, "context.json"), `{ "content": { "site": { "github": "acme/site" } } }`);
+    // The way to GitHub is the agent's alone, and this process may reach nothing but files: a clone made in this
+    // process's environment fails, and one made in the agent's succeeds.
+    const mapping = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"];
+    await mkdir(join(agentDir, ".secrets"));
+    await writeFile(
+      join(agentDir, ".secrets", ".env"),
+      mapping.map((name) => `${name}=${process.env[name]}\n`).join(""),
+    );
+    for (const name of mapping) vi.stubEnv(name, undefined);
+    vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+
+    await openedContent(agentDir);
+    expect(readFileSync(join(agentDir, "content", "site", "README.md"), "utf8")).toBe("site\n");
+    expect(process.env.GIT_CONFIG_COUNT).toBeUndefined();
+  });
+
   it("a repository is cloned, and a directory bound here that is gone is left out and said to be", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "AGENTS.md": "APP: ship it.\n" });

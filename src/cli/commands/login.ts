@@ -6,7 +6,8 @@
  * `--deployment` runs the same login on this agent's deployed box instead (box-login.ts); `--stdio` is the box's half.
  */
 import type { AuthInteraction, AuthPrompt, Provider } from "@earendil-works/pi-ai";
-import { enterAgentEnv, dotEnvPath } from "../../env.ts";
+import { enterAgentEnv } from "../../env.ts";
+import { dotEnvPath } from "../../value-file.ts";
 import {
   type FastagentCredentialStore,
   GLOBAL_AUTH_PATH,

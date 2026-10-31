@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { dotEnvPath, loadEnvValues } from "../src/env.ts";
+import { dotEnvPath, loadEnvValues } from "../src/value-file.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 
 const calls: string[] = [];

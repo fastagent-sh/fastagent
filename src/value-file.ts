@@ -1,13 +1,67 @@
 /**
- * Writing the selected environment's value file (`.secrets/.env`, or `.secrets/production/.env` for a deployment):
- * what a command generates (a channel's secret, the Agent API's key) goes in as an active `NAME=value` line, a value
- * already set stays, and the secrets directory fastagent made carries its own `.gitignore`.
+ * The selected environment's value file (`.secrets/.env`, or `.secrets/production/.env` for a deployment), read and
+ * written; entering it into `process.env` is env.ts's. Read as data: what it declares, and what it adds to an agent's
+ * environment. Written: what a command generates (a channel's secret, the Agent API's key) goes in as an active
+ * `NAME=value` line, a value already set stays, and the secrets directory fastagent made carries its own `.gitignore`.
  */
+import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { dotEnvPath, parseEnvContent } from "./env.ts";
-import { SECRETS_DIRNAME, SECRET_FILE_MODE, exists } from "./paths.ts";
+import { SECRETS_DIRNAME, SECRET_FILE_MODE, exists, resolveSecretsDir } from "./paths.ts";
 import { baseTemplate } from "./scaffold/templates.ts";
+
+/** Parse .env content into key → value (the dialect above; last occurrence of a key wins). */
+export function parseEnvContent(content: string): Map<string, string> {
+  const parsed = new Map<string, string>();
+  for (const raw of content.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq < 1) continue; // no `=`, or an empty key
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    const quote = value[0];
+    if ((quote === '"' || quote === "'") && value.at(-1) === quote) value = value.slice(1, -1);
+    parsed.set(key, value); // in-file: last occurrence wins (Map overwrite)
+  }
+  return parsed;
+}
+
+/**
+ * READ a value file without entering it: the values as data, never `process.env`. This is how code reasons about an
+ * environment OTHER than its own — `deploy` resolves configuration in the environment being deployed, which this
+ * file declares, and merging it into the running process would put the two environments in one bag. A missing file
+ * is no values, which is normal.
+ */
+export function loadEnvValues(file: string): Map<string, string> {
+  try {
+    return parseEnvContent(readFileSync(file, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+    throw error;
+  }
+}
+
+/** The agent's `.env` file: `<resolved secrets dir>/.env`. */
+export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return join(resolveSecretsDir(agentDir, env), ".env");
+}
+
+/** The committable template: `<agentDir>/.secrets/.env.example`. */
+export function envExamplePath(agentDir: string): string {
+  return join(agentDir, SECRETS_DIRNAME, ".env.example");
+}
+
+/**
+ * What the agent's value file ({@link dotEnvPath}) adds to this process's environment, read and not entered: each
+ * variable the process does not hold, as entering the file would set it. An agent opened in a process that runs
+ * others too reads its own values through this; one that a command entered (`dev`, `start`) adds nothing here.
+ */
+export function agentValues(agentDir: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const [key, value] of loadEnvValues(dotEnvPath(agentDir))) if (!(key in process.env)) values[key] = value;
+  return values;
+}
 
 /** One variable to write: with a `value`, an active line; without one, a placeholder under its `hint`. */
 export interface ValueEntry {

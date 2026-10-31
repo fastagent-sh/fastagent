@@ -24,7 +24,7 @@ import {
 import { registerFeishuApp } from "../channels/feishu/register-app.ts";
 import { LARK_CONSOLE_URL, type LarkOnboardIO, onboardLarkApp } from "../channels/lark/onboard.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
-import { dotEnvPath, loadEnvValues, parseEnvContent } from "../env.ts";
+import { dotEnvPath, loadEnvValues, parseEnvContent } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { type Person, terminalPerson } from "./person.ts";
 import { AGENT_ENVIRONMENT_ENV } from "../paths.ts";

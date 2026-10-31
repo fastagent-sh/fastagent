@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
-import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
+import { dotEnvPath, loadEnvValues, parseEnvContent } from "./value-file.ts";
 
 /**
  * Write parsed values into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence on BOTH
@@ -11,48 +11,6 @@ import { SECRETS_DIRNAME, resolveSecretsDir } from "./paths.ts";
  */
 export function applyEnvValues(values: ReadonlyMap<string, string>): void {
   for (const [key, value] of values) if (!(key in process.env)) process.env[key] = value;
-}
-
-/** Parse .env content into key → value (the dialect above; last occurrence of a key wins). */
-export function parseEnvContent(content: string): Map<string, string> {
-  const parsed = new Map<string, string>();
-  for (const raw of content.split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq < 1) continue; // no `=`, or an empty key
-    const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    const quote = value[0];
-    if ((quote === '"' || quote === "'") && value.at(-1) === quote) value = value.slice(1, -1);
-    parsed.set(key, value); // in-file: last occurrence wins (Map overwrite)
-  }
-  return parsed;
-}
-
-/**
- * READ a value file without entering it: the values as data, never `process.env`. This is how code reasons about an
- * environment OTHER than its own — `deploy` resolves configuration in the environment being deployed, which this
- * file declares, and merging it into the running process would put the two environments in one bag. A missing file
- * is no values, which is normal.
- */
-export function loadEnvValues(file: string): Map<string, string> {
-  try {
-    return parseEnvContent(readFileSync(file, "utf8"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
-    throw error;
-  }
-}
-
-/** The agent's `.env` file: `<resolved secrets dir>/.env`. */
-export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveSecretsDir(agentDir, env), ".env");
-}
-
-/** The committable template: `<agentDir>/.secrets/.env.example`. */
-export function envExamplePath(agentDir: string): string {
-  return join(agentDir, SECRETS_DIRNAME, ".env.example");
 }
 
 /**

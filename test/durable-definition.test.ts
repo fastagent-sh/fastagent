@@ -16,7 +16,7 @@ import {
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import {
   type AssembleAgentOptions,
@@ -26,7 +26,7 @@ import {
   prepareDefinition,
   secretsManifest,
 } from "../src/harnesses/pi-durable/open.ts";
-import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
+import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 import { registrySource } from "../src/harnesses/pi-durable/registry.ts";
@@ -407,6 +407,72 @@ export default defineTool({
       });
       expect(listWakeups(stateRoot)).toEqual([]);
     });
+  });
+});
+
+describe("two agents in one process", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("each runs on its own value file: its code, its commands and its model keys, the process's left alone", async () => {
+    for (const name of ["WEATHER_KEY", "GH_TOKEN", "ANTHROPIC_API_KEY"]) vi.stubEnv(name, undefined);
+    const before = { ...process.env };
+    const agents = [
+      {
+        values: "WEATHER_KEY=k-a\nGH_TOKEN=gh-a\nANTHROPIC_API_KEY=sk-a\n",
+        key: "k-a",
+        token: "gh-a",
+        anthropic: true,
+      },
+      { values: "WEATHER_KEY=k-b\nGH_TOKEN=gh-b\n", key: "k-b", token: "gh-b", anthropic: false },
+    ].map((agent) => ({ ...agent, dir: agentPackage({ ...FILES, ".secrets/.env": agent.values }) }));
+    const opened = [];
+    for (const { dir } of agents) {
+      opened.push(await openServing(dir, { storage: "memory", credentialStore: new InMemoryCredentialStore() }));
+    }
+    try {
+      for (const [i, { dir, key, token, anthropic }] of agents.entries()) {
+        const { agent, models } = opened[i] as (typeof opened)[number];
+        const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
+        const answer = async (call: ReturnType<typeof toolCall>) => {
+          faux.setResponses([() => call, (context) => fauxAssistantMessage(lastToolResult(context))]);
+          const sessionId = (await agent.sessions.create()).id;
+          return (await agent.messages.send({ sessionId, content: "go" }, { wait: 30 })).answer?.text;
+        };
+        expect(await answer(toolCall("weather", { city: "London" }))).toBe(`London: sunny (key ${key}, region none)`);
+        expect(await answer(toolCall("bash", { command: 'printf "[%s]" "$GH_TOKEN"' }))).toContain(`[${token}]`);
+        expect((await models.authStatus("anthropic")).source).toBe(anthropic ? "ANTHROPIC_API_KEY" : undefined);
+        // A request reads it too, as Bedrock reads its region and Azure its endpoint, not only the auth before it.
+        faux.setResponses([(_context, options) => fauxAssistantMessage(`request env: ${options?.env?.GH_TOKEN}`)]);
+        const sessionId = (await agent.sessions.create()).id;
+        expect((await agent.messages.send({ sessionId, content: "go" }, { wait: 30 })).answer?.text).toBe(
+          `request env: ${token}`,
+        );
+      }
+      expect(process.env).toEqual(before);
+    } finally {
+      for (const { agent } of opened) await agent.close();
+    }
+  });
+});
+
+describe("an agent's value file names where its state and credentials are", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("as dev reads it: FASTAGENT_STATE_DIR and FASTAGENT_AUTH_PATH from .secrets/.env, the process's left alone", async () => {
+    for (const name of ["FASTAGENT_STATE_DIR", "FASTAGENT_AUTH_PATH"]) vi.stubEnv(name, undefined);
+    const elsewhere = mkdtempSync(join(tmpdir(), "fa-value-file-paths-"));
+    const dir = agentPackage({
+      ...FILES,
+      ".secrets/.env": `WEATHER_KEY=k\nGH_TOKEN=g\nFASTAGENT_STATE_DIR=${join(elsewhere, "state")}\nFASTAGENT_AUTH_PATH=${join(elsewhere, "auth.json")}\n`,
+    });
+    const opened = await openServing(dir);
+    try {
+      expect(opened.stateRoot).toBe(join(elsewhere, "state"));
+      expect(opened.models.auth).toEqual({ path: join(elsewhere, "auth.json") });
+      expect(process.env.FASTAGENT_STATE_DIR).toBeUndefined();
+    } finally {
+      await opened.agent.close();
+    }
   });
 });
 

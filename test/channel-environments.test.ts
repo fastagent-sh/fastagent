@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { dotEnvPath, loadDotEnv, loadEnvValues } from "../src/env.ts";
+import { loadDotEnv } from "../src/env.ts";
+import { dotEnvPath, loadEnvValues } from "../src/value-file.ts";
 import { resolveSecretsDir, resolveStateRoot, selectAgentEnvironment } from "../src/paths.ts";
 import { assertIndependentFeishuApps, onboardFeishuCloudApp } from "../src/cli/add-feishu.ts";
 import { feishuAppAddons, feishuAppScopes } from "../src/channels/feishu/setup-mode.ts";

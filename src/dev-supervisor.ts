@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import { AGENT_CONFIG_FILE, CONTEXT_FILE, LOCAL_CONTEXT_FILE, resolveStateRoot, isUnderDir } from "./paths.ts";
-import { dotEnvPath } from "./env.ts";
+import { dotEnvPath } from "./value-file.ts";
 import { log } from "./log.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { declaredChannels } from "./channels/discover.ts";

@@ -15,13 +15,7 @@ import { loadEnvironment } from "../content/file.ts";
 import { log } from "../log.ts";
 import { detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { aptAdvice, missingAptPackages } from "./apt.ts";
-import {
-  type DeclaredEnvironment,
-  type MissingRuntime,
-  missingPythonRuntime,
-  resolvedBackendRefusal,
-  writtenBackend,
-} from "./declare.ts";
+import { type MissingRuntime, missingPythonRuntime, resolvedBackendRefusal, writtenBackend } from "./declare.ts";
 
 /** mise's npm package for each platform it publishes one for, by Node's `${platform}-${arch}`. */
 const MISE_PACKAGES: Readonly<Record<string, string>> = {
@@ -89,19 +83,20 @@ function specOf(name: string, packages: Record<string, string>): string {
 }
 
 /**
- * Run the agent's mise with `args` in `cwd`. Its errors go to this process's stderr unless `quiet` keeps them for
- * the error, which then says what mise said; `capture` returns its stdout instead of passing it through.
+ * Run the agent's mise with `args` in `cwd`, in `env` (this process's by default). Its errors go to this process's
+ * stderr unless `quiet` keeps them for the error, which then says what mise said; `capture` returns its stdout instead
+ * of passing it through.
  */
 function runMise(
   cwd: string,
   bin: string,
   args: readonly string[],
-  options: { capture?: boolean; quiet?: boolean } = {},
+  options: { capture?: boolean; quiet?: boolean; env?: NodeJS.ProcessEnv } = {},
 ): Promise<string> {
   return new Promise((done, fail) => {
     const child = spawn(bin, args, {
       cwd,
-      env: { ...process.env, ...MISE_ENVIRONMENT },
+      env: { ...(options.env ?? process.env), ...MISE_ENVIRONMENT },
       stdio: ["inherit", options.capture ? "pipe" : process.stderr, options.quiet ? "pipe" : "inherit"],
     });
     let stdout = "";
@@ -210,6 +205,7 @@ export async function installPackages(
   bin: string,
   packages: Record<string, string>,
   newest: readonly string[] | "all" = [],
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   const names = Object.keys(packages);
   const asked = names.filter((name) => newest === "all" || newest.includes(name));
@@ -218,7 +214,7 @@ export async function installPackages(
     // A failed `where` is what mise says of a package with no install here; the install that follows reports any other
     // reason it cannot be had.
     others.map((name) =>
-      runMise(agentDir, bin, ["where", specOf(name, packages)], { capture: true, quiet: true }).then(
+      runMise(agentDir, bin, ["where", specOf(name, packages)], { capture: true, quiet: true, env }).then(
         () => true,
         () => false,
       ),
@@ -230,17 +226,20 @@ export async function installPackages(
   const installedSpecs = [...present].map((name) => specOf(name, packages));
   // A package installs with the ones it needs (a PyPI one runs uv), which mise finds in the packages it is given or on
   // the PATH. The installed ones go on the PATH: given as packages, mise would install a newer release of them.
-  await runInstall(
-    agentDir,
-    bin,
-    wanted,
-    installedSpecs.length > 0 ? await packagesEnvironment(agentDir, bin, installedSpecs) : {},
-  );
+  await runInstall(agentDir, bin, wanted, {
+    ...env,
+    ...(installedSpecs.length > 0 ? await packagesEnvironment(agentDir, bin, installedSpecs, env) : {}),
+  });
 }
 
 /** What `mise env` puts in a process's environment for `specs`: the PATH their commands are on. */
-async function packagesEnvironment(agentDir: string, bin: string, specs: string[]): Promise<Record<string, string>> {
-  return JSON.parse(await runMise(agentDir, bin, ["env", "--json", ...specs], { capture: true })) as Record<
+async function packagesEnvironment(
+  agentDir: string,
+  bin: string,
+  specs: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<Record<string, string>> {
+  return JSON.parse(await runMise(agentDir, bin, ["env", "--json", ...specs], { capture: true, env })) as Record<
     string,
     string
   >;
@@ -253,16 +252,16 @@ async function packagesEnvironment(agentDir: string, bin: string, specs: string[
 const NOT_ACTIVATED = /installed but not activated|^To install and activate, run:|^\s+mise use /;
 
 /**
- * `mise install` of `specs`, with `env` added to its environment. Its progress is passed on to this process's stderr as
+ * `mise install` of `specs`, in `env`. Its progress is passed on to this process's stderr as
  * it comes, so a runtime that takes minutes is seen to; a failure carries what mise said, every line of it, since
  * mise names the packages on its first line and the reason (a 404, a proxy, a rate limit) on the lines after.
  */
-function runInstall(agentDir: string, bin: string, specs: string[], env: Record<string, string>): Promise<void> {
+function runInstall(agentDir: string, bin: string, specs: string[], env: NodeJS.ProcessEnv): Promise<void> {
   log.info(`[fastagent] installing the agent's packages: ${specs.join(", ")}`);
   return new Promise((done, fail) => {
     const child = spawn(bin, ["install", ...specs], {
       cwd: agentDir,
-      env: { ...process.env, ...env, ...MISE_ENVIRONMENT },
+      env: { ...env, ...MISE_ENVIRONMENT },
       stdio: ["inherit", process.stderr, "pipe"],
     });
     const said: string[] = [];
@@ -307,20 +306,20 @@ function missingMise(agentDir: string): Error {
 }
 
 /**
- * Enter the agent's environment, for a process that runs it: install the declared packages that have no install here
- * yet, and put them first on this process's PATH, which every command the agent runs inherits. mise itself is not put
- * on the PATH. An agent without packages borrows the machine's commands. Apt packages are the image's to install; one
- * missing here is said, with how.
+ * The agent's declared environment, for a process that runs it: install the declared packages that have no install
+ * here yet, and answer the variables that put them first on the PATH of the commands the agent runs. mise runs in
+ * `env`, the agent's environment so far, and nothing is written into this process's: a process may run several agents.
+ * mise itself is not put on the PATH. An agent without packages borrows the machine's commands (no variables). Apt
+ * packages are the image's to install; one missing here is said, with how.
  */
-export async function enterEnvironment(agentDir: string): Promise<DeclaredEnvironment | undefined> {
+export async function prepareEnvironment(agentDir: string, env: NodeJS.ProcessEnv): Promise<Record<string, string>> {
   const declared = loadEnvironment(agentDir);
   const missingApt = missingAptPackages(declared?.aptPackages ?? []);
   if (missingApt && missingApt.length > 0) log.warn(`[fastagent] ${aptAdvice(missingApt)}`);
   const packages = declared?.packages ?? {};
-  if (Object.keys(packages).length === 0) return declared;
+  if (Object.keys(packages).length === 0) return {};
   const bin = miseBinary(agentDir);
   if (!bin) throw missingMise(agentDir);
-  await installPackages(agentDir, bin, packages);
-  Object.assign(process.env, await packagesEnvironment(agentDir, bin, packageSpecs(packages)));
-  return declared;
+  await installPackages(agentDir, bin, packages, [], env);
+  return packagesEnvironment(agentDir, bin, packageSpecs(packages), env);
 }

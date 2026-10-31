@@ -34,7 +34,7 @@ import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJs
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
-import { dotEnvPath, loadEnvValues } from "../env.ts";
+import { dotEnvPath, loadEnvValues } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
 import { declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";

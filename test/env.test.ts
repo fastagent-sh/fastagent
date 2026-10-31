@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyEnvValues, dotEnvPath, loadDotEnv, loadEnvValues } from "../src/env.ts";
+import { applyEnvValues, loadDotEnv } from "../src/env.ts";
+import { agentValues, dotEnvPath, loadEnvValues } from "../src/value-file.ts";
 
 describe("dotEnvPath (follows the resolved secrets dir)", () => {
   it("default <root>/.secrets/.env; FASTAGENT_SECRETS_DIR moves it together with auth.json", () => {
@@ -77,6 +78,21 @@ describe("loadEnvValues + applyEnvValues", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-env-bad-"));
     await mkdir(join(dir, ".env")); // a directory at the path → EISDIR, which must surface
     expect(() => loadEnvValues(join(dir, ".env"))).toThrow(expect.objectContaining({ code: "EISDIR" }));
+  });
+});
+
+describe("agentValues: what an agent's value file adds, read and not entered", () => {
+  it("is each variable the process does not hold, as loading it would enter it, and leaves the process alone", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-agent-values-"));
+    await mkdir(join(dir, ".secrets"));
+    await writeFile(join(dir, ".secrets", ".env"), "FA_HELD=from-file\nFA_ONLY_FILE=from-file\n");
+    vi.stubEnv("FA_HELD", "from-the-process");
+    try {
+      expect(agentValues(dir)).toEqual({ FA_ONLY_FILE: "from-file" });
+      expect(process.env.FA_ONLY_FILE).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
