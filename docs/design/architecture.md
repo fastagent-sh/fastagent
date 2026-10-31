@@ -179,7 +179,7 @@ directory with a `context.json` of the same format an agent's own uses:
 
 | Part | Holds |
 |---|---|
-| `content` | Repositories and directories the agent works on or knows: references (a GitHub repository at a ref), never the data |
+| `content` | Repositories and directories the agent works on: references (a GitHub repository at a ref), never the data |
 | `connectors` | MCP servers, and the names of the secrets they need |
 | `environment` | The commands and runtimes it needs |
 | `uses` | The context packages it builds on, by an alias of its own: `{ "billing": "@acme/ctx-billing@^1" }` |

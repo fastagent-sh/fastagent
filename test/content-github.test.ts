@@ -63,7 +63,6 @@ describe("github content: resolved, without touching the network or the disk", (
 
     expect(resolveOne(agentDir, { github: "acme/app" }, checkout)).toEqual({
       name: "app",
-      readonly: false,
       location: checkout,
       notices: [],
       kind: "github",
@@ -350,10 +349,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     github.repo("acme/handbook").commit({ "AGENTS.md": "HANDBOOK: be brief.\n" });
     const { agentDir } = await agent();
     await writeFile(join(agentDir, "fastagent.config.ts"), `export default {};\n`);
-    await writeFile(
-      join(agentDir, "context.json"),
-      `{ "content": { "handbook": { "github": "acme/handbook", "readonly": true } } }`,
-    );
+    await writeFile(join(agentDir, "context.json"), `{ "content": { "handbook": { "github": "acme/handbook" } } }`);
     const info = await cli(["info", "--json"], agentDir);
     expect(info.code, info.stderr).toBe(0);
     expect(JSON.parse(info.stdout).content[0].notices).toEqual(["not cloned yet: it is cloned when the agent starts"]);
@@ -434,7 +430,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     git(root, "clone", "-q", "https://github.com/acme/docs.git", checkout);
     const declared = declareContent({
       app: { github: "acme/app", ref: "main", description: "The product. Open pull requests against main." },
-      docs: { github: "acme/docs", readonly: true },
+      docs: { github: "acme/docs" },
     });
     const content = resolveContent(agentDir, {
       declared,

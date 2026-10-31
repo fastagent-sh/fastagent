@@ -8,7 +8,7 @@ status: current
 
 - Agent behavior lives in its prompt files (`SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/` and its code under
   `src/`, all in the agent directory.
-- What it works on and knows, its content, and the commands it runs, its environment, are declared in `context.json`.
+- What it works on, its content, and the commands it runs, its environment, are declared in `context.json`.
 - The model, providers and serving choices live in `fastagent.config.ts`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
@@ -133,7 +133,7 @@ export default defineAgent({
 ## Content
 
 An agent's directory is its own: its definition, its working directory, and its local instance's `.state/` and
-`.secrets/`. What it works on and knows, its content, is declared beside the config, never inferred from where the
+`.secrets/`. What it works on, its content, is declared beside the config, never inferred from where the
 directory sits, in two files:
 
 - **`context.json`** is part of the definition: committed and shared with everyone who has the agent, so it declares
@@ -145,7 +145,7 @@ directory sits, in two files:
 {
   "content": {
     "app": { "github": "acme/app", "description": "The product. Open pull requests against main." },
-    "docs": { "github": "acme/docs", "ref": "main", "readonly": true }
+    "docs": { "github": "acme/docs", "ref": "main", "description": "The product docs. Cite them." }
   }
 }
 ```
@@ -154,7 +154,7 @@ directory sits, in two files:
 {
   "content": {
     "app": { "path": "/Users/me/code/app" },
-    "notes": { "path": "~/Documents/notes", "readonly": true, "description": "My notes. Cite them." }
+    "notes": { "path": "~/Documents/notes", "description": "My notes. Cite them." }
   }
 }
 ```
@@ -166,7 +166,6 @@ Each entry is named by its key: one segment of letters, digits, `-` and `_`, uni
 | `github` | `context.json` | A repository, `owner/repo`. Required: an entry every instance reaches is a repository |
 | `ref` | `context.json` | The branch, tag or full commit to clone. Defaults to the repository's default branch |
 | `path` | `context.local.json` | A directory of this machine: absolute, `~/`, or relative to the agent directory |
-| `readonly` | both | The agent knows it and does not write it. An instruction to the agent, not a permission |
 | `description` | both | One sentence for the agent: what it is, and how to treat it. The prompt gives it beside the entry |
 
 Where the agent reaches each one on this machine:
@@ -204,8 +203,7 @@ never in one.
 
 What each entry gives the agent:
 
-- **A place in the prompt**: its name, its location, whether the agent works on it or only knows it, and its
-  `description`. The agent runs a command in it with `cd <location> && …`.
+- **A place in the prompt**: its name, its location, and its `description`. The agent runs a command in it with `cd <location> && …`.
 What a project holds stays in the project. Its `AGENTS.md` and its skills are files the agent reads when it works
 there, like any other file; none of them is added to the agent's prompt, whose instructions and skills come from the
 agent directory alone. To have the agent read the project's `AGENTS.md` before it changes anything, say so in the
@@ -229,7 +227,7 @@ FastAgent adds its own sections after it:
 |---|---|
 | Project context | The agent directory's `AGENTS.md`: how this agent is built and changed. A content entry's `AGENTS.md` is a file of that project, which the agent reads there |
 | Skills | `skills/`: each skill's name, description and location ([Agent Skills](https://agentskills.io/specification)) |
-| Content | Where the agent is and what it works on and knows ([content](#content)) |
+| Content | Where the agent is and what it works on ([content](#content)) |
 | Changing itself | On a deployed host: how long its storage lasts, and what takes effect when |
 
 All of it comes from the agent directory. Nothing is read from the machine: no `~/.pi/agent` skill, prompt template

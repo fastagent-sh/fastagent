@@ -1,5 +1,5 @@
 /**
- * `fastagent content list|add|remove`: what the agent works on and knows, as `context.json` declares it and
+ * `fastagent content list|add|remove`: what the agent works on, as `context.json` declares it and
  * `context.local.json` binds it on this machine.
  */
 import { resolve } from "node:path";

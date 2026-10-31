@@ -49,7 +49,7 @@ export class ContentNameError extends Error {
 }
 
 export interface InitAgentOptions {
-  /** What the agent works on and knows: repositories into `context.json`, this machine's directories into
+  /** What the agent works on: repositories into `context.json`, this machine's directories into
    *  `context.local.json`. */
   content?: ContentAddition[];
   /**

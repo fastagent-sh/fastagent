@@ -89,7 +89,7 @@ src/
 ├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state/content)
 ├── git.ts                  # running git, and what ONE result means (an answer, a "no", or no git at all)
-├── content/                # what an agent works on and knows — harness-neutral
+├── content/                # what an agent works on — harness-neutral
 │   ├── declare.ts          # a shared entry and a machine's binding, read and refused in ONE place (names, keys)
 │   ├── file.ts             # `context.json` + `context.local.json` read (a reader its part, an edit the whole) and written
 │   ├── mount.ts            # content/, where the clones go: the dir with its own .gitignore

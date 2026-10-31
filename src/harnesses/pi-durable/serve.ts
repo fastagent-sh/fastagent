@@ -67,7 +67,7 @@ export interface OpenedServing {
   definition: AgentDefinition;
   code: BuiltDefinition;
   models: ModelEnvironment;
-  /** What the agent works on and knows, resolved for this instance. */
+  /** What the agent works on, resolved for this instance. */
   content: readonly ResolvedContent[];
   agentDir: string;
   /** Where the instance's state is: its storage, its channels' and schedules' state, its wake-ups. */

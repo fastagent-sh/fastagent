@@ -68,7 +68,7 @@ describe("an agent with content", () => {
     const content = resolveContent(agentDir, {
       declared: [],
       bound: declareBindings(
-        { app: { path: app }, handbook: { path: handbook, readonly: true, description: "The team's style rules." } },
+        { app: { path: app }, handbook: { path: handbook, description: "The team's style rules." } },
         [],
         agentDir,
       ),
@@ -84,9 +84,8 @@ describe("an agent with content", () => {
     await askOnce(agentDir, faux.provider, content);
 
     expect(prompt).toContain(`Your working directory, ${agentDir}, is your own directory`);
-    expect(prompt).toContain(`You work on:\n- app: ${app} (a directory on this machine)`);
     expect(prompt).toContain(
-      `You know, and do not write:\n- handbook: ${handbook} (a directory on this machine) The team's style rules.`,
+      `You work on:\n- app: ${app} (a directory on this machine)\n- handbook: ${handbook} (a directory on this machine) The team's style rules.`,
     );
     // The definition is the agent's own: its AGENTS.md and skills are in the prompt, and a project's AGENTS.md and
     // skills are files in the project, read when the agent works there.
@@ -95,26 +94,6 @@ describe("an agent with content", () => {
     for (const fromContent of ["APP-AGENTS", "HANDBOOK-AGENTS", "Cut a release", "Migrate the app"]) {
       expect(prompt).not.toContain(fromContent);
     }
-  });
-
-  it("with only content it knows, it is told to write in its own directory, not in a directory it works on", async () => {
-    const { agentDir, handbook } = await layout();
-    const { faux } = makeFaux();
-    let prompt = "";
-    faux.setResponses([
-      (context) => {
-        prompt = sentPrompt(context);
-        return fauxAssistantMessage("ok");
-      },
-    ]);
-    const content = resolveContent(agentDir, {
-      declared: [],
-      bound: declareBindings({ handbook: { path: handbook, readonly: true } }, [], agentDir),
-    });
-    await askOnce(agentDir, faux.provider, content);
-    expect(prompt).toContain("You write only in your own directory: the directories above are for reading.");
-    expect(prompt).not.toContain("You work on:");
-    expect(prompt).not.toContain("belongs in a directory you work on");
   });
 
   it("with none, it is told it works only in its own directory", async () => {
@@ -160,30 +139,29 @@ describe("one resolution", () => {
       const list = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);
       return [opened.content, info.content, list.content];
     };
-    const entry = (name: string, location: string, readonly = false) => ({
+    const entry = (name: string, location: string) => ({
       name,
       kind: "local",
-      readonly,
       location,
       notices: [],
     });
     const first = [entry("app", app)];
     expect(await readers()).toEqual([first, first, first]);
 
-    const added = await cli(["content", "add", handbook, agentDir, "--readonly"], root);
+    const added = await cli(["content", "add", handbook, agentDir], root);
     expect(added.code, added.stderr).toBe(0);
-    expect(added.stderr).toContain(`knows handbook  ${handbook} (this machine only, bound in context.local.json)`);
-    const second = [...first, entry("handbook", handbook, true)];
+    expect(added.stderr).toContain(`works on handbook  ${handbook} (this machine only, bound in context.local.json)`);
+    const second = [...first, entry("handbook", handbook)];
     expect(await readers()).toEqual([second, second, second]);
     // This machine's file holds the paths, the one written by hand as it was; the shared file is not written.
     expect(JSON.parse(await readFile(join(agentDir, "context.local.json"), "utf8"))).toEqual({
-      content: { app: { path: "../app" }, handbook: { path: handbook, readonly: true } },
+      content: { app: { path: "../app" }, handbook: { path: handbook } },
     });
     await expect(lstat(join(agentDir, "context.json"))).rejects.toThrow(/ENOENT/);
 
     const removed = await cli(["content", "remove", "APP", agentDir], root);
     expect(removed.code, removed.stderr).toBe(0);
-    const third = [entry("handbook", handbook, true)];
+    const third = [entry("handbook", handbook)];
     expect(await readers()).toEqual([third, third, third]);
     // The directory it was bound to stays.
     expect((await lstat(app)).isDirectory()).toBe(true);
@@ -193,7 +171,7 @@ describe("one resolution", () => {
     const listed = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);
     expect(listed).toEqual({
       content: [],
-      absent: [{ name: "gone", path: join(root, "gone"), kind: "local", readonly: false }],
+      absent: [{ name: "gone", path: join(root, "gone"), kind: "local" }],
     });
   });
 
