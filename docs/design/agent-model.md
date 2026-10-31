@@ -228,19 +228,17 @@ Attributes:
 
 ### Rules
 
-- **Content has no read-only flag.** An agent is told what it works on, and a shell can write wherever the user can.
-  A line in the prompt does not keep it out of a directory: told it only knows a handbook and asked to add a line
-  to it, a model did (4 of 4, one model), and told firmly it declined (4 of 4). Telling is not stopping, and
-  FastAgent stops nothing here. A directory an agent must not write needs a mechanism that does (a mount, a
-  sandbox), added when a local directory needs it.
+- **Content has no read-only flag.** An agent's tools run with the user's filesystem permissions. A prompt is not
+  an access boundary: a directory the agent must not write needs an enforced restriction, such as a read-only mount
+  or a sandbox. FastAgent does not enforce one for bound local directories.
 - **A repository is the user's checkout when this machine binds one, else a clone the instance makes and brings up
   to date in place.**
   - A bound checkout is the user's: FastAgent never fetches it and never switches its branch. When it is not at
     the declared `ref`, startup says so. A binding to anything but the root of a checkout of that repository is
     refused; one to a directory that is gone is said, and the clone is used.
   - Otherwise the instance clones the repository at its declared `ref` the first time it starts, and at each later
-    start brings that clone up to date in place by git's own rules (a fetch and a fast-forward), whether the agent
-    works on it. git refuses whatever would overwrite the agent's work, and the clone is then kept
+    start brings that clone up to date in place by git's own rules (a fetch and a fast-forward). git refuses
+    whatever would overwrite the agent's work, and the clone is then kept
     as it is, with the reason; so it is when the remote cannot be reached, or when the clone is on another branch
     than declared. Bringing the agent's work and the remote together is git's, the agent's or the user's
     (synchronization, §8). The clone is never replaced, so nothing the agent did is lost to a restart.
@@ -278,7 +276,7 @@ machine in `context.local.json`:
 {
   "content": {
     "researcher": { "path": "~/Documents/researcher", "description": "Your notes and output. Keep what you find here." },
-    "papers": { "path": "~/Documents/papers", "description": "Papers to cite. Do not edit them." }
+    "papers": { "path": "~/Documents/papers", "description": "Reference papers to cite." }
   }
 }
 ```

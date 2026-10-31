@@ -14,6 +14,12 @@ probe: it never travels, the box logs itself in (`fastagent login --deployment`)
 person at a browser. So the OAuth deployment path has no live probe; it was verified by hand on all four
 hosts when it landed (#656).
 
+The content probe uses the public embedding entry (`createAgent` and `openAgent`). Run it once per model; for example,
+use `FASTAGENT_LIVE_MODEL=openai-codex/gpt-5.6-luna` and then `FASTAGENT_LIVE_MODEL=deepseek/deepseek-v4-pro` with
+`npm run test:live -- test/live/content.live.test.ts`. Credentials use the product's environment keys or
+`FASTAGENT_AUTH_PATH` pointing at the existing credential store; do not copy OAuth grants. These are local model
+checks, not deployment probes. The content files are disposable fixtures, never a person's actual project.
+
 ## Two rules
 
 **Drive a product entry, observe from outside it.** `openServing`, `deploy docker --run`,
@@ -44,6 +50,7 @@ removes must match what the fixture's branch actually creates.
 |---|---|
 | `registry` | the published tarball |
 | `model` | a real provider's stream and its errors |
+| `content` | a real model discovers bound folders (including a path with spaces and Unicode), reads a random fact, applies another folder's standard to a failing project, runs its tests and saves an accurate write-up in the notes folder in the same conversation |
 | `docker` | a real container build + boot + state volume |
 | `environment` | mise, the agent's own at its newest version, doing what the environment relies on: packages installed from the arguments alone (an author's own `mise.toml` unread), an install a version matches kept by a start and replaced by `env install`, backends resolved as the allowlist expects, no runtime compiled, a PyPI package installed once its python and uv are |
 | `tunnel` | a real Quick Tunnel carrying a request home |
