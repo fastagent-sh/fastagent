@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/container.ts";
 import { fastagentVersion } from "../src/version.ts";
 import { agentWorkspace, run } from "./cli-run.ts";
+import { CODEX_MODEL } from "./codex-model.ts";
 
 /** Whether `pid` runs: signal 0 only asks. */
 function isRunning(pid: number): boolean {
@@ -65,7 +66,7 @@ describe("cli: deploy", () => {
     // test/deploy-artifacts.test.ts; eight spawns proving it here made this the slowest and only flaky
     // test in the suite. What a subprocess is for is the WIRING: that the command actually consults it.
     const dir = await agentWorkspace("fa-deploy-ignore-", {
-      "fastagent.config.ts": `export default { model: "openai-codex/gpt-5.5" };\n`,
+      "fastagent.config.ts": `export default { model: "${CODEX_MODEL}" };\n`,
       "package.json": `{"type":"module"}`,
     });
     expect((await run(["deploy", "fly", dir])).code).toBe(0);
@@ -89,7 +90,7 @@ describe("cli: deploy", () => {
     // Every AgentCore deploy wipes the runtime's login; with nobody to redo it, the deploy would replace a serving
     // runtime with one that cannot answer. Decided up front, so no AWS command runs at all.
     const dir = await agentWorkspace("fa-deploy-ac-login-", {
-      "fastagent.config.ts": `export default { model: "openai-codex/gpt-5.5" };\n`,
+      "fastagent.config.ts": `export default { model: "${CODEX_MODEL}" };\n`,
     });
     const bin = await mkdtemp(join(tmpdir(), "fa-aws-"));
     const called = join(bin, "called");
@@ -109,7 +110,7 @@ describe("cli: deploy", () => {
 
   it("deploy agentcore --run --json goes on past that stop: its ticket has someone to redo the login", async () => {
     const dir = await agentWorkspace("fa-deploy-ac-ticket-", {
-      "fastagent.config.ts": `export default { model: "openai-codex/gpt-5.5" };\n`,
+      "fastagent.config.ts": `export default { model: "${CODEX_MODEL}" };\n`,
     });
     const bin = await mkdtemp(join(tmpdir(), "fa-aws-"));
     const called = join(bin, "called");

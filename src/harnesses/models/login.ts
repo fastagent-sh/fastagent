@@ -290,11 +290,11 @@ export const PI_DEFAULT_MODELS: Readonly<Record<string, string>> = {
   azure: "gpt-5.4",
   "openai-codex": "gpt-6.1-sol",
   radius: "balanced",
-  nvidia: "nvidia/nemotron-3-ultra-550b-a55b",
+  nvidia: "nvidia/nemotron-3.5-super-vl-120b-a12b",
   deepseek: "deepseek-v4-pro",
   google: "gemini-3.1-pro-preview",
   "google-vertex": "gemini-3.1-pro-preview",
-  "github-copilot": "gpt-5.4",
+  "github-copilot": "gpt-6.1-sol",
   openrouter: "moonshotai/kimi-k2.6",
   "vercel-ai-gateway": "zai/glm-5.1",
   xai: "grok-4.7",
@@ -320,10 +320,10 @@ export const PI_DEFAULT_MODELS: Readonly<Record<string, string>> = {
   "qwen-token-plan": "qwen3.7-max",
   "qwen-token-plan-cn": "qwen3.7-max",
   "qwen-token-plan-individual": "qwen3.8-max",
-  xiaomi: "mimo-v2.5-pro",
-  "xiaomi-token-plan-cn": "mimo-v2.5-pro",
-  "xiaomi-token-plan-ams": "mimo-v2.5-pro",
-  "xiaomi-token-plan-sgp": "mimo-v2.5-pro",
+  xiaomi: "mimo-v2.6-pro",
+  "xiaomi-token-plan-cn": "mimo-v2.6-pro",
+  "xiaomi-token-plan-ams": "mimo-v2.6-pro",
+  "xiaomi-token-plan-sgp": "mimo-v2.6-pro",
 };
 
 /** One minimal request with the key under test. */

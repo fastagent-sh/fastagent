@@ -120,7 +120,7 @@ describe("the Agent on pi-durable", () => {
     const waiting = await conversation.submit({ type: "input", content: "later" }, context);
     failNow();
     expect((await failed.wait(context)).status).toBe("unanswered");
-    // pi-durable 1.3.0 leaves it queued: the reason release.ts exists.
+    // After a model failure pi-durable's default (`afterFailedRun: "keep"`) leaves it queued: why release.ts exists.
     expect((await waiting.status(context)).status).toBe("queued");
     await before.close(context);
 

@@ -24,6 +24,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { TEMPLATE_FILE, agentcoreName, deploymentBucketName } from "../../src/deploy/agentcore/plan.ts";
 import { awsCli } from "../../src/deploy/agentcore/aws-cli.ts";
 import { CLI, aws, awsAsRunner, run } from "./env.ts";
+import { CODEX_MODEL } from "../codex-model.ts";
 
 /** The PRODUCTION classifier over the real CLI — `aws-cli.ts` decides there / gone / could not find out. */
 const cli = awsCli(awsAsRunner);
@@ -64,7 +65,7 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     // reads: the forwarder Lambda, its Function URL, the two Lambda permissions and the wake/scheduler IAM roles
     // are on every stack, and the schedule adds an `AWS::Scheduler::Schedule`. This fixture emits all of them
     // and still creates nothing.
-    await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+    await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: "${CODEX_MODEL}" };\n`);
     await mkdir(join(agentDir, "schedules"), { recursive: true });
     await writeFile(join(agentDir, "schedules", "nightly.md"), `---\ncron: "0 3 * * *"\n---\nprobe\n`);
     await writeFile(join(agentDir, "package.json"), `${JSON.stringify({ name: "p", private: true }, null, 2)}\n`);

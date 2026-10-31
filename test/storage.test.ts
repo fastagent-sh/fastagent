@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,6 +35,16 @@ it("a second process cannot open the storage one process holds, and can once it 
   );
   await held.close(BACKGROUND_CONTEXT);
   expect(await openElsewhere(path)).toBe("opened");
+});
+
+it("a storage written by a newer pi-durable is refused saying so, not with a second close's error", async () => {
+  // A deployment rolled back past a release that migrated its database (pi-durable 1.4.0 rewrote the task table).
+  const path = join(await mkdtemp(join(tmpdir(), "fa-storage-newer-")), "agent.sqlite");
+  await (await openLockedStorage(path, "posix")).close(BACKGROUND_CONTEXT);
+  const database = new DatabaseSync(path);
+  database.exec("UPDATE durable_schema SET version = version + 1");
+  database.close();
+  await expect(openLockedStorage(path, "posix")).rejects.toThrow(/schema version \d+ is newer than supported/);
 });
 
 it("an agent that fails to open lets go of the storage, so the same process can open it once fixed", async () => {
