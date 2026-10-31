@@ -176,6 +176,53 @@ describe("the Agent on pi-durable", () => {
     await agent.close();
   });
 
+  describe("closed while a message runs", () => {
+    const untilAborted = (_context: unknown, options?: { signal?: AbortSignal }) =>
+      new Promise<never>((_resolve, reject) =>
+        options?.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+
+    async function closeWhileRunning(cancelFirst: boolean) {
+      const path = temporaryStorage();
+      const open = async (reply: unknown) => {
+        const { faux, models, model } = fauxModels();
+        faux.setResponses([reply as never]);
+        return openDurableAgent({
+          storage: await openNodeSqliteStorage(path),
+          models,
+          registry: createRegistry(),
+          name: "closing",
+          model,
+        });
+      };
+      const first = await open(untilAborted);
+      const session = await first.sessions.create();
+      const sent = await first.messages.send({ sessionId: session.id, content: "go" });
+      await vi.waitFor(async () => expect((await first.sessions.get(session.id)).status).toBe("running"));
+      if (cancelFirst) await first.sessions.cancel(session.id);
+      await first.close();
+
+      const second = await open(fauxAssistantMessage("after reopen"));
+      try {
+        return await vi.waitFor(async () => {
+          const message = await second.messages.get({ sessionId: session.id, messageId: sent.id });
+          expect(message.status).not.toBe("running");
+          return message.status;
+        });
+      } finally {
+        await second.close();
+      }
+    }
+
+    it("is interrupted, and runs again when the agent is next opened", async () => {
+      expect(await closeWhileRunning(false)).toBe("completed");
+    });
+
+    it("stays canceled when it was cancelled first", async () => {
+      expect(await closeWhileRunning(true)).toBe("canceled");
+    });
+  });
+
   it("creates a session with its chosen model and thinking level in the creating commit, kept after restart", async () => {
     const path = temporaryStorage();
     const faux = fauxProvider({ models: [{ id: "default" }, { id: "chosen" }] });

@@ -82,7 +82,7 @@ function openAgent(
 interface LocalAgent extends Agent {
   serve(options?: { apiKeys?: string[] }): Promise<Service>; // channels, schedules, wake-ups, /health, and /v1 with a key
   readonly harness: Harness; // pi-durable's own API, for operating the agent
-  close(): Promise<void>; // closes what `serve` started, then releases the instance's storage
+  close(): Promise<void>; // closes what `serve` started, then releases the storage; a running message is interrupted and answered at the next open, unless cancelled first
 }
 
 interface Service {

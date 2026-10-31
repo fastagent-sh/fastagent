@@ -52,6 +52,11 @@ const agent = await openAgent("./my-agent", { model: "openai/gpt-5.5" });
 await agent.close(); // on shutdown: releases the instance's storage
 ```
 
+`close()` interrupts a message that is still running; it does not cancel it. As when a process stops (SPEC §5.4), the
+message is answered when the agent is next opened, and a tool it cut off is not run again unless it declares a second
+run safe. To end the message for good, `await agent.sessions.cancel(sessionId)` for each running session before
+`close()`: the stop is recorded at once and holds after a restart.
+
 `openAgent` is what `dev` and `start` run before they serve: it reads the definition (`SYSTEM.md`, `AGENTS.md`,
 `skills/`, `prompts/`, `src/`, `fastagent.config.ts`), builds its code with the secrets it declares, installs its
 declared [environment](configuration.md#environment) where it has no install yet and puts it first on the `PATH` of

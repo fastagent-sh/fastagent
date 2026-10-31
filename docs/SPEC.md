@@ -453,6 +453,10 @@ interface LocalAgent extends Agent {
   serve(options?: { apiKeys?: string[] }): Promise<Service>;
   /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
+  /**
+   * Closes the service, then releases the storage. A message still running is interrupted, as when the process stops
+   * (§5.4): answered when the agent is next opened, unless `sessions.cancel` was stopping it. Cancel first to end it.
+   */
   close(): Promise<void>;
 }
 
