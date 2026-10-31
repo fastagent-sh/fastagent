@@ -129,11 +129,11 @@ function createAgent(
   options?: { content?: ContentAddition[] },
 ): Promise<{ dir: string; created: string[]; repository: string; content: ResolvedContent[] }>;
 
-// What the agent works on and knows: directories of this machine and GitHub repositories, by name.
+// What the agent works on: directories of this machine and GitHub repositories, by name.
 interface ContentAddition {
   name: string; // one path segment of letters, digits, "-" and "_"; unique ignoring case
-  entry?: { github: string; ref?: string; readonly?: boolean; description?: string }; // in context.json
-  binding?: { path: string; readonly?: boolean; description?: string }; // in context.local.json, this machine's
+  entry?: { github: string; ref?: string; description?: string }; // in context.json
+  binding?: { path: string; description?: string }; // in context.local.json, this machine's
 }
 function listContent(agentDir: string): Promise<{ content: ResolvedContent[]; absent: BoundContent[] }>;
 function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit>;
@@ -147,7 +147,6 @@ interface ContentEdit {
 }
 type ResolvedContent = {
   name: string;
-  readonly: boolean;
   description?: string;
   location: string; // where the agent reaches it on this instance, absolute
   notices: string[]; // how it resolved: a checkout off its ref, a clone not made yet
@@ -155,7 +154,7 @@ type ResolvedContent = {
 // A directory this machine binds that is not here: `listContent` names it in `absent`; the agent is not told of it.
 type BoundContent = { name: string; path: string } & (
   | { kind: "checkout" } // this machine's checkout of the declared repository of the same name
-  | { kind: "local"; readonly: boolean; description?: string }
+  | { kind: "local"; description?: string }
 );
 class ContentNameError extends Error {} // a name that cannot name content, that is taken, or that the agent has not
 

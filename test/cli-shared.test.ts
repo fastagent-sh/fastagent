@@ -19,7 +19,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
     opened = {
       agentDir: "/w/agent",
       stateRoot: "/w/agent/.state",
-      content: [{ name: "app", kind: "local", readonly: false, location: "/w/app", notices: [] }],
+      content: [{ name: "app", kind: "local", location: "/w/app", notices: [] }],
       models: await modelEnvironment("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
       definition: { name: "agent", config: {} },
       code: { tools: [{ name: "fetch-url" }], extensions: [] },

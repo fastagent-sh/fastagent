@@ -8,14 +8,14 @@ status: current
 
 **Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, Slack or Feishu, handle webhook events, or put it behind your own channel.
 
-It does not ask you to rewrite an agent into a framework-specific project. An agent is a directory of its own, and a git repository from the start (`fastagent init`): grow it with `SYSTEM.md`, `AGENTS.md`, `skills/` and code under `src/` (tools, channels, schedules), declare the projects it works on and knows as its content, and FastAgent serves it as a live service. The agent can change itself the same way: what it writes into its prompt files and skills takes effect on its next message.
+It does not ask you to rewrite an agent into a framework-specific project. An agent is a directory of its own, and a git repository from the start (`fastagent init`): grow it with `SYSTEM.md`, `AGENTS.md`, `skills/` and code under `src/` (tools, channels, schedules), declare the projects it works on as its content, and FastAgent serves it as a live service. The agent can change itself the same way: what it writes into its prompt files and skills takes effect on its next message.
 
 Coding agents made it cheap to vibe useful agent directories. The next gap is serving: local agents live in terminals, but real services receive webhooks, join chats, run on a clock and keep their conversations across restarts. FastAgent connects those directories to real triggers and runtimes.
 
 ```txt
 reviewer/                   # the agent, its working directory, and a git repository
 ├── fastagent.config.ts     # the marker: defineAgent({ model, providers, … })
-├── context.json            # its content and environment: the repositories it works on and knows, the commands it runs
+├── context.json            # its content and environment: the repositories it works on, the commands it runs
 ├── context.local.json      # this machine's directories it is bound to (kept out of git and of every image)
 ├── SYSTEM.md               # the system prompt
 ├── AGENTS.md               # optional: how this agent is built and changed, a section of every prompt
@@ -37,7 +37,7 @@ machine has is bound in `context.local.json` alone: it stays here, and a deploym
 
 ## What FastAgent provides
 
-1. **The agent is a directory**: its prompt files (`SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`, its code under `src/` and reference material are files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as its [content](configuration.md#content): files the agent reads and changes there, none of which becomes part of its prompt.
+1. **The agent is a directory**: its prompt files (`SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`, its code under `src/` and reference material are files you can inspect, edit, and commit, in a repository of its own. What it works on is declared as its [content](configuration.md#content): files the agent reads and changes there, none of which becomes part of its prompt.
 2. **One API**: the [Agent API](SPEC.md), in process and over HTTP: sessions the Agent names, messages whose outcome outlives whoever sent them, and a durable history every Caller reads the same way.
 3. **One harness**: [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable), which keeps every conversation in the instance's storage and answers an accepted message after a restart. Models come from pi-ai, with your own providers in code.
 4. **Developer workflow**: `init`, `info`, `content`, `env`, `dev`, `invoke`, `schedules`, `start`, `login` / `logout` / `auth check`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`. Every check is a command a coding agent can run and read.

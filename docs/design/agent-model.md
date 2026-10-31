@@ -1,6 +1,6 @@
 ---
 title: Agent model
-description: "What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, the content it works on and knows, and how each kind of content reaches every place an agent runs. The user-facing vocabulary every later design builds on."
+description: "What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, the content it works on, and how each kind of content reaches every place an agent runs. The user-facing vocabulary every later design builds on."
 type: design-doc
 status: implemented
 ---
@@ -25,7 +25,7 @@ Each of the three is supplied by someone else: the model by a model provider, th
 by the repositories, clouds and other systems the agent works with. FastAgent defines the agent and composes the three, in its
 definition, and serves the result.
 
-What an author thinks: **I created an agent. It works on some things, and it knows others.**
+What an author thinks: **I created an agent. It works on some things.**
 
 | Concept | Is | Contains |
 |---|---|---|
@@ -33,7 +33,7 @@ What an author thinks: **I created an agent. It works on some things, and it kno
 | Model | What the agent thinks with, from a model provider | The default model and thinking level. Credentials are not part of it |
 | Harness | The loop that runs it: pi-durable | Supplied by pi-durable. The word means what it means across the ecosystem |
 | Context | What the agent works with: its content, connectors and environment | Below |
-| Content | The data: a directory the agent **works on** (writable) or **knows** (read-only) | A project, a folder, a repository. Its type says how it reaches each instance (§3) |
+| Content | The data: a directory the agent **works on** | A project, a folder, a repository. Its type says how it reaches each instance (§3) |
 | Definition | The program: who the agent is and how it works, and which model and context it uses | `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/`, `fastagent.config.ts`, `context.json`, `package.json`; §2 lists where each format comes from |
 | **Instance** | One Agent in one place: on this machine, or on one host | Its runtime state: conversations, credentials, channel state, schedule state, and what it fetched (§5). It exists while no process runs; one or more processes serve it (a `dev`, a `start`, a one-off `invoke`) |
 
@@ -78,7 +78,7 @@ them (§6) and not how widely a change is seen.
 - **Definition** is what the agent is and how it works: its identity, its skills and tools, the channels it
   answers on, the work it does on a schedule. It moves with the agent. Point the same definition at another
   project and it is the same agent working on different data.
-- **Content** is what the agent works on or knows. It stays with the project.
+- **Content** is what the agent works on. It stays with the project.
 
 A project's `AGENTS.md` and the skills it provides are content too: files in the project, which the agent reads when
 it works there, as it reads any other file. None of them is added to the agent's prompt. What the agent is told and
@@ -121,7 +121,7 @@ What FastAgent adds to the prompt does not depend on `SYSTEM.md`, because an age
 | FastAgent's section | Says |
 |---|---|
 | Skills | Each skill's name, description and location, for the model to read when a task matches |
-| Content | What the agent works on and what it knows, where each is, and how to work in it (§4) |
+| Content | What the agent works on, where each is, and how to work in it (§4) |
 | Changing itself | On a deployed host: what takes effect when, where a lasting result belongs, and how long this host keeps its files (§6) |
 
 FastAgent writes no identity line of its own: who the agent is is `SYSTEM.md`'s alone.
@@ -173,7 +173,7 @@ meaning. `init` and `fastagent content` write both ([CLI](agent-cli.md) §3, §4
 {
   "content": {
     "app": { "github": "acme/app", "description": "The product. Open pull requests against main." },
-    "handbook": { "github": "acme/handbook", "readonly": true }
+    "handbook": { "github": "acme/handbook" }
   }
 }
 ```
@@ -221,16 +221,18 @@ Attributes:
 | Attribute | Types | Meaning | Supported |
 |---|---|---|---|
 | the key | all | The entry's name: how the agent and the commands refer to it, and where a clone is (`content/<name>`). `init` and `content add` default it to the repository or folder name | yes |
-| `readonly` | all | The agent knows it and does not write it, for example a company handbook. A binding of a declared repository takes it from the declaration | yes |
-| `description` | all | One sentence for the agent: what it is and how to treat it, given in the prompt beside the entry. As `readonly` | yes |
+| `description` | all | One sentence for the agent: what it is and how to treat it, given in the prompt beside the entry. A binding of a declared repository takes it from the declaration | yes |
 | `ref` | github | Branch, tag or commit. Defaults to the default branch | yes |
 | `path` | local, and a checkout bound for a github entry | Where the directory is on this machine | yes |
 | a subdirectory | github | Only a subdirectory of the repository (monorepos) | not yet |
 
 ### Rules
 
-- **Read-only is an instruction, not enforced.** The agent is told not to write content it only knows;
-  nothing stops a shell from writing it. A read-only `github` entry is never pushed back.
+- **Content has no read-only flag.** An agent is told what it works on, and a shell can write wherever the user can.
+  A line in the prompt does not keep it out of a directory: told it only knows a handbook and asked to add a line
+  to it, a model did (4 of 4, one model), and told firmly it declined (4 of 4). Telling is not stopping, and
+  FastAgent stops nothing here. A directory an agent must not write needs a mechanism that does (a mount, a
+  sandbox), added when a local directory needs it.
 - **A repository is the user's checkout when this machine binds one, else a clone the instance makes and brings up
   to date in place.**
   - A bound checkout is the user's: FastAgent never fetches it and never switches its branch. When it is not at
@@ -238,7 +240,7 @@ Attributes:
     refused; one to a directory that is gone is said, and the clone is used.
   - Otherwise the instance clones the repository at its declared `ref` the first time it starts, and at each later
     start brings that clone up to date in place by git's own rules (a fetch and a fast-forward), whether the agent
-    works on it or only knows it. git refuses whatever would overwrite the agent's work, and the clone is then kept
+    works on it. git refuses whatever would overwrite the agent's work, and the clone is then kept
     as it is, with the reason; so it is when the remote cannot be reached, or when the clone is on another branch
     than declared. Bringing the agent's work and the remote together is git's, the agent's or the user's
     (synchronization, §8). The clone is never replaced, so nothing the agent did is lost to a restart.
@@ -276,7 +278,7 @@ machine in `context.local.json`:
 {
   "content": {
     "researcher": { "path": "~/Documents/researcher", "description": "Your notes and output. Keep what you find here." },
-    "papers": { "path": "~/Documents/papers", "readonly": true }
+    "papers": { "path": "~/Documents/papers", "description": "Papers to cite. Do not edit them." }
   }
 }
 ```
@@ -291,11 +293,10 @@ directory-sharing service would give it another home; only the type in the decla
 
 - **The working directory is the agent's own directory, everywhere.** One rule on a laptop and on a host, and an
   agent changing itself writes `skills/…` like any relative path.
-- **The agent is told what it works on and what it knows.** For each content entry: its name, its location on this
-  instance, whether it works on it or only knows it, and whether a change there reaches other instances. It is
-  told that its own directory is itself, and that a result worth keeping belongs in content it works on.
-  Writing a finding where it does not travel is how knowledge gets lost, so the agent needs to know which is
-  which.
+- **The agent is told what it works on.** For each content entry: its name, its location on this instance, and
+  whether a change there reaches other instances. It is told that its own directory is itself, and that a result
+  worth keeping belongs in content it works on. Writing a finding where it does not travel is how knowledge gets
+  lost, so the agent needs to know which is which.
 - **Commands run in a content directory with `cd`.** A shell command that belongs in a project runs as
   `cd <its location> && …`; file tools take the location directly. Measured against an agent whose working
   directory is the project, and against a shell tool with a `cwd` argument, this made no difference: three models,
@@ -387,7 +388,7 @@ belong to the tools that keep the history, not to this layer.
 |---|---|---|
 | Agent | preset | A shared definition is an Agent. Clients express "make my own copy" in their interface, not with a second noun |
 | Instance | deployment, for a running agent | Deployment is how an instance gets onto a host (§8) |
-| works on / knows | primary content | What users see says what the agent may do with content. No entry is special |
+| works on | primary content | What users see says what the agent does with content. No entry is special |
 | Content, for the data | context, for the data | *Context* is the whole the agent works with: content, connectors and environment ([agent service](agent-service.md) §3) |
 | (nothing) | workspace | Not a concept any more: the working directory is the agent's own directory, and where an instance keeps what it fetches is storage |
 | Definition | harness, for an agent's own files | Across the ecosystem a harness is the loop that runs an agent (pi-durable). What an author writes is the definition |

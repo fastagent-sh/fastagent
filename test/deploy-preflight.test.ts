@@ -416,7 +416,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (clean.ok) expect(JSON.stringify(clean.messages)).not.toMatch(/BAKE SECRETS|node_modules|\.state/);
   });
 
-  it("deploys without a directory bound only here, saying so: a warning for one it works on, a note for one it knows", async () => {
+  it("deploys without a directory bound only here, saying so, as a warning for each", async () => {
     const dir = await agent({
       "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook" } } }),
       // A checkout of a declared repository is this machine's way to it; the host clones that one.
@@ -424,7 +424,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         content: {
           handbook: { path: "/code/handbook" },
           app: { path: "/code/app" },
-          docs: { path: "/docs", readonly: true },
+          docs: { path: "/docs" },
         },
       }),
     });
@@ -436,14 +436,16 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       text:
         "works on app: a directory of this machine (/code/app, bound in context.local.json), stays here, and the " +
         "deployed agent works without it; to work on it from a host, move it to a GitHub repository and add it as " +
-        "github:owner/repo",
+        "github:owner/repo, or copy what it only needs to read there into the agent directory, which every release " +
+        "carries",
     });
     expect(pre.messages).toContainEqual({
-      level: "note",
+      level: "warn",
       text:
-        "knows docs: a directory of this machine (/docs, bound in context.local.json), stays here, and the deployed " +
-        "agent works without it; to ship what the agent reads there, copy it into the agent directory, which every " +
-        "release carries",
+        "works on docs: a directory of this machine (/docs, bound in context.local.json), stays here, and the " +
+        "deployed agent works without it; to work on it from a host, move it to a GitHub repository and add it as " +
+        "github:owner/repo, or copy what it only needs to read there into the agent directory, which every release " +
+        "carries",
     });
     expect(pre.messages.filter((m) => m.text.includes("handbook")).map((m) => m.text)).toEqual([
       "works on handbook: github acme/handbook, cloned on the host, and brought up to date in place at each start",
@@ -453,7 +455,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   it("says what each repository context becomes on the host, bakes git, and names the token it clones with", async () => {
     const dir = await agent({
       "context.json": JSON.stringify({
-        content: { app: { github: "acme/app" }, handbook: { github: "acme/handbook", ref: "main", readonly: true } },
+        content: { app: { github: "acme/app" }, handbook: { github: "acme/handbook", ref: "main" } },
       }),
     });
     const config = { model: "openai/gpt-4o-mini" };
@@ -465,7 +467,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       "works on app: github acme/app, cloned on the host, and brought up to date in place at each start",
     );
     expect(notes).toContain(
-      "knows handbook: github acme/handbook@main, cloned on the host, and brought up to date in place at each start",
+      "works on handbook: github acme/handbook@main, cloned on the host, and brought up to date in place at each start",
     );
     expect(notes).toContainEqual(
       expect.stringMatching(/^no GITHUB_TOKEN in \.secrets\/\.env: the host clones without a credential/),
