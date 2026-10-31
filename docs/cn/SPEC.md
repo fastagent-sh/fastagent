@@ -45,7 +45,7 @@ agent 怎样分步、分轮回答，不在 API 里；agent 一起处理的两条
 
 | 操作 | 做什么 |
 |---|---|
-| `info` / `usage` | agent 提供的命令、工具、模型和默认模型；整个实例的花费 |
+| `info` / `usage` | agent 提供的命令、工具、模型（含各自的上下文窗口）和默认模型；整个实例的花费 |
 | `sessions.create` | 新建空会话，或带 `forkFrom` 从某个会话的某条 entry 分叉；可以同时选模型、thinking level、追加的 `instructions` 和启用的 `tools` |
 | `sessions.get` / `list` | 会话现在的样子；按最近活动列出实例里所有会话，不管是谁建的 |
 | `sessions.update` | 改会话设置，从下一次模型请求开始生效；`null` 表示回到部署默认值 |

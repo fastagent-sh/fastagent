@@ -22,8 +22,10 @@ const at = (ms: number): Date => new Date(NOW.getTime() + ms);
  * The wake tool over `stateRoot`, run as in conversation 1 of storage "inc" (session "inc.1"), or in a conversation a
  * task owns (a subagent's), which is no session.
  */
-const wake = (stateRoot: string, params: unknown, owned = false) => {
-  const tool = wakeExtension(stateRoot, () => NOW).tools?.find(({ name }) => name === "wake") as ToolRegistration;
+const wake = (stateRoot: string, params: unknown, owned = false, ticking?: () => boolean) => {
+  const tool = wakeExtension(stateRoot, { now: () => NOW, ...(ticking ? { ticking } : {}) }).tools?.find(
+    ({ name }) => name === "wake",
+  ) as ToolRegistration;
   const api = {
     conversationId: 1,
     snapshot: async () => ({ incarnation: "inc" }),
@@ -157,6 +159,19 @@ describe("schedule/wake-tool", () => {
     const r = await root();
     expect(await wake(r, { in: "30m", prompt: "x" }, true)).toMatchObject({ isError: true });
     expect(listWakeups(r)).toHaveLength(0);
+  });
+
+  it("a wake-up no clock would fire is refused and recorded nowhere; one a running clock fires is kept", async () => {
+    const r = await root();
+    let ticking = false;
+    expect(await wake(r, { in: "30m", prompt: "x" }, false, () => ticking)).toMatchObject({
+      isError: true,
+      output: [{ text: expect.stringContaining("nothing fires wake-ups for this agent now") }],
+    });
+    expect(listWakeups(r)).toHaveLength(0);
+    ticking = true;
+    expect(await wake(r, { in: "30m", prompt: "x" }, false, () => ticking)).not.toHaveProperty("isError");
+    expect(listWakeups(r)).toHaveLength(1);
   });
 
   it("a below-minimum delay is a guardrail message, records nothing", async () => {

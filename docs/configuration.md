@@ -564,4 +564,4 @@ A real environment variable wins over the file.
 ## Not config
 
 The instance's storage is not configured: a serve, and an app's `openAgent`, keep the agent's sessions in
-`<state root>/agent.sqlite`.
+`<state root>/agent.sqlite` (an app's `stateDir` is its state root).

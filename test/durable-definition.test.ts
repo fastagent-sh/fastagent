@@ -26,6 +26,7 @@ import {
   prepareDefinition,
   secretsManifest,
 } from "../src/harnesses/pi-durable/open.ts";
+import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 import { registrySource } from "../src/harnesses/pi-durable/registry.ts";
@@ -406,6 +407,37 @@ export default defineTool({
       });
       expect(listWakeups(stateRoot)).toEqual([]);
     });
+  });
+});
+
+describe("an app's openAgent", () => {
+  it("refuses a wake-up while the app does not serve the agent, since only a serve's clock fires one", async () => {
+    const dir = agentPackage(FILES);
+    for (const [name, value] of Object.entries(ENV)) process.env[name] = value;
+    const agent = await openAgent(dir, { stateDir: join(dir, ".host-state") });
+    try {
+      const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
+      const wake = async () => {
+        faux.setResponses([
+          () => toolCall("wake", { in: "1h", prompt: "check the deploy" }),
+          (context) => fauxAssistantMessage(lastToolResult(context)),
+        ]);
+        const sessionId = (await agent.sessions.create()).id;
+        return (await agent.messages.send({ sessionId, content: "remind me" }, { wait: 30 })).answer?.text;
+      };
+      expect(await wake()).toContain("nothing fires wake-ups for this agent now");
+      expect(listWakeups(join(dir, ".host-state"))).toEqual([]);
+      const service = await agent.serve();
+      expect(await wake()).toContain("OK — I'll wake up at");
+      expect(listWakeups(join(dir, ".host-state"))).toHaveLength(1);
+      // The service closed alone, the agent still open: its clock is gone with it.
+      await service.close();
+      expect(await wake()).toContain("nothing fires wake-ups for this agent now");
+      expect(listWakeups(join(dir, ".host-state"))).toHaveLength(1);
+    } finally {
+      await agent.close();
+      for (const name of Object.keys(ENV)) delete process.env[name];
+    }
   });
 });
 

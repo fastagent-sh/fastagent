@@ -14,18 +14,16 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
+import { SignInCancelled } from "../src/sign-in-api.ts";
 import * as models from "../src/harnesses/models/models.ts";
 import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../src/harnesses/models/credentials.ts";
 import {
   type IoOption,
-  LoginCancelled,
   type LoginIO,
   LoginRefused,
   PI_DEFAULT_MODELS,
   chooseLogin,
-  login,
   loginFlow,
-  loginOptions,
   loginOptionsOver,
   loginOver,
   loginStatusText,
@@ -212,7 +210,7 @@ describe("loginFlow", () => {
     await reads.modify("codex", async () => OAUTH_CRED);
     const { io, shown } = fakeIO({ select: ["oauth", undefined] });
     await expect(loginFlow(io, { providers: PROVIDERS, authPath: await tmpAuth(), statusFrom: reads })).rejects.toThrow(
-      LoginCancelled,
+      SignInCancelled,
     );
     expect(shown[1]?.find((o) => o.value === "codex")?.label).toBe("codex ✓ configured");
   });
@@ -223,12 +221,12 @@ describe("loginFlow", () => {
         providers: PROVIDERS,
         authPath: await tmpAuth(),
       }),
-    ).rejects.toThrow(LoginCancelled);
+    ).rejects.toThrow(SignInCancelled);
   });
 
   it("asks as pi's /login asks: how to sign in, then the provider by name, in name order", async () => {
     const { io, shown } = fakeIO({ select: ["api_key", undefined] });
-    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(LoginCancelled);
+    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(SignInCancelled);
     expect(shown[0]).toEqual([
       { value: "oauth", label: "Sign in with an account" },
       { value: "api_key", label: "Sign in with an API key" },
@@ -242,7 +240,7 @@ describe("loginFlow", () => {
   it("names the legacy provider as pi does, so the ChatGPT sign-in is the one called OpenAI", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     const { io, shown } = fakeIO({ select: ["oauth", undefined] });
-    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(LoginCancelled);
+    await expect(loginFlow(io, { authPath: await tmpAuth() })).rejects.toThrow(SignInCancelled);
     expect(shown[1]?.filter(({ value }) => value.startsWith("openai")).map(({ label }) => label)).toEqual([
       "OpenAI • not configured",
       "OpenAI Codex (legacy) • not configured",
@@ -252,13 +250,19 @@ describe("loginFlow", () => {
   it("each sign-in says what authenticates its provider now, a stored credential outranking the environment", async () => {
     vi.stubEnv("OPENAI_API_KEY", "sk-env");
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-env");
-    const offered = await loginOptions(await tmpAuth(JSON.stringify({ anthropic: { type: "api_key", key: "sk" } })));
+    const offered = await loginOptionsOver(
+      await tmpAuth(JSON.stringify({ anthropic: { type: "api_key", key: "sk" } })),
+    );
     const status = (provider: string, method: string) =>
       loginStatusText(offered.find((o) => o.provider === provider && o.method === method) as never);
     expect(status("anthropic", "api_key")).toBe("✓ configured");
     expect(status("anthropic", "oauth")).toBe("API key configured");
     expect(status("openai", "api_key")).toBe("✓ env: OPENAI_API_KEY");
     expect(status("openai-codex", "oauth")).toBe("not configured");
+    // What answers once the stored one is gone, beside the status it does not decide.
+    const anthropic = offered.find((o) => o.provider === "anthropic" && o.method === "api_key");
+    expect(anthropic).toMatchObject({ status: { source: "stored credential" }, environment: "ANTHROPIC_API_KEY" });
+    expect(offered.find((o) => o.provider === "openai-codex")?.environment).toBeUndefined();
   });
 
   it("a provider is named by its id or, as pi takes it, by its name", async () => {
@@ -271,7 +275,7 @@ describe("loginFlow", () => {
 
   it("a provider named by its id or its name, offering both, is asked how with its own label", async () => {
     const { io, shown } = fakeIO({ select: [undefined] });
-    await expect(loginFlow(io, { provider: "OpenAI", authPath: await tmpAuth() })).rejects.toThrow(LoginCancelled);
+    await expect(loginFlow(io, { provider: "OpenAI", authPath: await tmpAuth() })).rejects.toThrow(SignInCancelled);
     expect(shown[0]).toEqual([
       { value: "oauth", label: "Sign in with ChatGPT" },
       { value: "api_key", label: "Sign in with an API key" },
@@ -507,7 +511,7 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
     // google's catalog opens with a Deep Research preview model, which a minimal request may not reach.
     const { interaction, events } = client(["sk-google"]);
     const probe = vi.spyOn(models, "probeApiKey").mockResolvedValue({ state: "ok" });
-    await login({ provider: "google", method: "api_key", authPath: await tmpAuth(), interaction });
+    await loginOver({ provider: "google", method: "api_key", authPath: await tmpAuth(), interaction });
     expect(probe.mock.calls[0]?.[1]).toMatchObject({ provider: "google", id: PI_DEFAULT_MODELS.google });
     expect(events.find((e) => e.type === "progress")?.message).toContain(`google/${PI_DEFAULT_MODELS.google}`);
   });
@@ -575,11 +579,11 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
 
     abort.abort();
 
-    await expect(pending).rejects.toBeInstanceOf(LoginCancelled);
+    await expect(pending).rejects.toBeInstanceOf(SignInCancelled);
     expect((await readAuth(authPath)).keyed).toEqual(previous);
   });
 
-  it("aborting while the key is being verified rejects with LoginCancelled and writes nothing", async () => {
+  it("aborting while the key is being verified rejects with SignInCancelled and writes nothing", async () => {
     const authPath = await tmpAuth();
     const abort = new AbortController();
     const { interaction, events } = client(["eu", "sk-good"], abort.signal);
@@ -603,11 +607,11 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
 
     abort.abort();
 
-    await expect(pending).rejects.toBeInstanceOf(LoginCancelled);
+    await expect(pending).rejects.toBeInstanceOf(SignInCancelled);
     expect((await readAuth(authPath).catch(() => ({}))).keyed).toBeUndefined();
   });
 
-  it("aborting the interaction's signal rejects with LoginCancelled and writes nothing", async () => {
+  it("aborting the interaction's signal rejects with SignInCancelled and writes nothing", async () => {
     const authPath = await tmpAuth();
     const abort = new AbortController();
     const { interaction, prompts } = client([], abort.signal); // never answers: waits on the prompt's signal
@@ -619,8 +623,40 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
 
     abort.abort();
 
-    await expect(pending).rejects.toBeInstanceOf(LoginCancelled);
+    await expect(pending).rejects.toBeInstanceOf(SignInCancelled);
     expect((await readAuth(authPath).catch(() => ({}))).openai).toBeUndefined();
+  });
+
+  it("a prompt rejected with SignInCancelled ends the sign-in with it, whatever error the provider makes of it", async () => {
+    const authPath = await tmpAuth();
+    // A provider that wraps whatever its prompt rejects with, as one may.
+    const wrapping = fakeProvider("codex", {
+      oauth: true,
+      onOauthLogin: async (cb) => {
+        try {
+          await cb.prompt({ type: "text", message: "Paste the code" });
+        } catch (error) {
+          throw new Error(`codex sign-in failed: ${(error as Error).message}`);
+        }
+        return OAUTH_CRED;
+      },
+    });
+    const ask = (rejection: Error): AuthInteraction => ({
+      notify: () => {},
+      prompt: async () => {
+        throw rejection;
+      },
+    });
+    const backedOut = new SignInCancelled("closed the dialog");
+    const request = { provider: "codex", method: "oauth" as const, authPath, getDeviceId: () => "d" };
+    await expect(loginOver({ ...request, interaction: ask(backedOut) }, { providers: [wrapping] })).rejects.toBe(
+      backedOut,
+    );
+    // Asking that failed is a failure, not a person's decision.
+    await expect(
+      loginOver({ ...request, interaction: ask(new Error("the window is gone")) }, { providers: [wrapping] }),
+    ).rejects.toThrow("codex sign-in failed: the window is gone");
+    expect((await readAuth(authPath).catch(() => ({}))).codex).toBeUndefined();
   });
 
   it("a prompt the provider withdraws (its callback beat manual_code) lets the flow complete", async () => {
@@ -646,6 +682,35 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
     expect(result).toEqual({ provider: "codex", method: "oauth", verified: "n/a" });
     expect(prompts[0]?.type).toBe("manual_code");
     expect((await readAuth(authPath)).codex.type).toBe("oauth");
+  });
+
+  it("a failure after the provider withdrew a prompt is the provider's, though the withdrawn prompt read as backed out", async () => {
+    const authPath = await tmpAuth();
+    const providers = [
+      fakeProvider("codex", {
+        oauth: true,
+        onOauthLogin: async (cb) => {
+          const manual = new AbortController();
+          const typed = cb.prompt({ type: "manual_code", message: "paste the code", signal: manual.signal });
+          await new Promise((resolve) => setTimeout(resolve, 5)); // the browser's callback arrives
+          manual.abort();
+          await typed.catch(() => {});
+          throw new Error("token exchange failed: 400 invalid_grant");
+        },
+      }),
+    ];
+    // As the terminal does: a prompt aborted under it reads as backed out.
+    const interaction: AuthInteraction = {
+      notify: () => {},
+      prompt: (prompt) =>
+        new Promise<string>((_resolve, reject) => {
+          prompt.signal?.addEventListener("abort", () => reject(new SignInCancelled("cancelled")));
+        }),
+    };
+
+    await expect(
+      loginOver({ provider: "codex", method: "oauth", authPath, interaction, getDeviceId: () => "d" }, { providers }),
+    ).rejects.toThrow("token exchange failed: 400 invalid_grant");
   });
 
   it("loginOptions offers each interactive method, with what the file holds for the provider", async () => {
@@ -680,11 +745,40 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
     ]);
   });
 
+  it("a failed check of the environment is said, beside a stored credential too, which still decides the status", async () => {
+    const broken = {
+      id: "broken",
+      name: "broken",
+      getModels: () => [],
+      auth: {
+        apiKey: {
+          name: "broken API key",
+          resolve: async () => {
+            throw new Error("its key command failed");
+          },
+          login: async (): Promise<Credential> => ({ type: "api_key", key: "k" }),
+        },
+      },
+    } as unknown as Provider;
+    const option = async (held: string) =>
+      (await loginOptionsOver(await tmpAuth(held), [broken])).find((o) => o.provider === "broken") as never;
+    const stored = await option(JSON.stringify({ broken: { type: "api_key", key: "sk" } }));
+    // `environment` is unknown, not empty: what answers after a sign-out could not be read.
+    const problem = "API key auth failed for provider broken: its key command failed";
+    expect(stored).toMatchObject({ status: { source: "stored credential" }, problem });
+    expect(stored).not.toHaveProperty("environment");
+    expect(loginStatusText(stored)).toBe("✓ configured");
+    const nothing = await option("{}");
+    expect(nothing).toMatchObject({ problem });
+    expect(nothing).not.toHaveProperty("status");
+    expect(loginStatusText(nothing)).toBe(`auth check failed: ${problem}`);
+  });
+
   it("loginOptions reads the credentials file once: a corrupt file warns once, not once per provider", async () => {
     const authPath = await tmpAuth("{bad");
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
-    await loginOptions(authPath);
+    await loginOptionsOver(authPath);
 
     expect(warn.mock.calls.filter(([m]) => /corrupt auth file/.test(String(m)))).toHaveLength(1);
   });

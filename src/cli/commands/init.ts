@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { displayPath } from "../../paths.ts";
-import { createAgent } from "../../authoring.ts";
+import { initAgent } from "../../authoring.ts";
 import { readContentSource } from "../../content/source.ts";
 import { failEdit } from "./content.ts";
 import { contentLines } from "../content-view.ts";
@@ -17,12 +17,12 @@ export interface InitOptions {
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
-  // Every source is read, and every entry checked (by createAgent), BEFORE anything is created.
+  // Every source is read, and every entry checked (by initAgent), BEFORE anything is created.
   const read = await Promise.resolve()
     .then(() => opts.content.map((source) => readContentSource(source, process.cwd())))
     .catch(failStartup);
   let installFailed = false;
-  const { created, content, repository } = await createAgent(dir, {
+  const { created, content, repository } = await initAgent(dir, {
     content: read.map((source) => source.addition),
     ...(opts.install
       ? {

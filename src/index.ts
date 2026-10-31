@@ -1,6 +1,7 @@
 /**
  * The package's one entry (SPEC.md §8), besides each first-party channel's: the Agent API, opening an agent
- * directory and serving it, and what an author writes.
+ * directory and serving it, what a host embedding agents needs beside them (creating one, model credentials and
+ * sign-in), and what an author writes.
  */
 export type {
   Agent,
@@ -40,8 +41,21 @@ export {
   type ServeAgentOptions,
 } from "./harnesses/pi-durable/serve.ts";
 export type { Service } from "./service.ts";
-/** What `openAgent`'s `credentials` takes: where provider credentials are kept, pi-ai's. */
-export type { CredentialStore } from "@earendil-works/pi-ai";
+export { createAgent, type CreatedAgent } from "./authoring.ts";
+export {
+  SignInCancelled,
+  type Credential,
+  type CredentialStore,
+  type ProviderAuth,
+  type SignInEvent,
+  type SignInInteraction,
+  type SignInMethod,
+  type SignInOption,
+  type SignInPrompt,
+  type SignInRequest,
+  type SignInResult,
+} from "./sign-in-api.ts";
+export { credentialFile, providerAuth, signIn, signInOptions } from "./harnesses/models/host.ts";
 
 export {
   defineAgent,

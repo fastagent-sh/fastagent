@@ -294,6 +294,8 @@ function durableAgent(
             provider: model.provider,
             modelId: model.id,
             ...(model.name ? { name: model.name } : {}),
+            // pi reads a window a model does not declare (a virtual model's, before its first answer) as 0.
+            ...(model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
           })),
           ...(options.model === undefined
             ? {}

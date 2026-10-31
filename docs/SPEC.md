@@ -87,8 +87,11 @@ interface AgentInfo {
   commands: { name: string; description?: string }[];
   /** The tools a session may enable (`tools`, §4). */
   tools: { name: string; description?: string }[];
-  /** The models a session may name: those whose provider has a credential here. */
-  models: { provider: string; modelId: string; name?: string }[];
+  /**
+   * The models a session may name: those whose provider has a credential here. `contextWindow`, in tokens, is the
+   * window the agent runs the model with (what compaction measures against), absent when the model declares none.
+   */
+  models: { provider: string; modelId: string; name?: string; contextWindow?: number }[];
   /** What a session that names no model answers with. */
   defaultModel?: { provider: string; modelId: string };
 }
@@ -426,12 +429,15 @@ The interface is §4's. The package's entry points are one per kind of user:
 
 | Import | For | Holds |
 |---|---|---|
-| `@fastagent-sh/fastagent` | An app or tool on Node or Bun | `openAgent`, the authoring functions (`defineAgent`, `defineChannel`, `defineSchedule`, `needs`), `AgentError` and the types |
+| `@fastagent-sh/fastagent` | An app or tool on Node or Bun | `openAgent`, what a host embedding agents needs beside it (`createAgent`, model credentials and sign-in), the authoring functions (`defineAgent`, `defineChannel`, `defineSchedule`, `needs`), `AgentError` and the types |
 | `@fastagent-sh/fastagent/client` | A program anywhere `fetch` runs (Node, Bun, Deno, Workers) | `connectAgent`, `AgentError` and the types |
 | `@fastagent-sh/fastagent/<channel>` | An agent's channel file | The first-party channels |
 
 ```ts
-function openAgent(dir: string, options?: { model?: string; credentials?: CredentialStore }): Promise<LocalAgent>;
+function openAgent(
+  dir: string,
+  options?: { model?: string; credentials?: CredentialStore; stateDir?: string },
+): Promise<LocalAgent>;
 function connectAgent(url: string, options: { apiKey: string }): Agent;
 
 interface LocalAgent extends Agent {
@@ -459,7 +465,10 @@ interface Service {
 `openAgent` does what `fastagent dev` and `start` do before they serve: it reads the definition, builds its code with
 the secrets it declares (a required secret without a value refuses), installs its declared environment, clones its
 content and opens the instance's storage, which one process holds at a time. It resolves `dir` to an absolute path.
-Nothing reaches the agent until `serve`.
+Nothing reaches the agent until `serve`. `credentials` is where the model credentials are kept (FastAgent's
+`CredentialStore`), instead of the agent's files. `stateDir` is where the instance keeps its state (its storage, its
+channels' and schedules' state, its model lists), instead of the directory's: a host's own instance of an agent, beside
+the one `fastagent dev` opens. Two instances of one definition do not both serve its channels and schedules.
 
 ### 8.1 Examples
 

@@ -41,9 +41,17 @@ export class AgentInfo extends Schema.Opaque<AgentInfo>()(
     commands: Schema.Array(Named),
     /** The tools a session may enable. */
     tools: Schema.Array(Named),
-    /** The models a session may name: those whose provider has a credential here. */
+    /**
+     * The models a session may name: those whose provider has a credential here. `contextWindow`, in tokens, is the
+     * window the agent runs the model with, absent when the model declares none.
+     */
     models: Schema.Array(
-      Schema.Struct({ provider: Schema.String, modelId: Schema.String, name: Schema.optionalKey(Schema.String) }),
+      Schema.Struct({
+        provider: Schema.String,
+        modelId: Schema.String,
+        name: Schema.optionalKey(Schema.String),
+        contextWindow: Schema.optionalKey(Schema.Number),
+      }),
     ),
     defaultModel: Schema.optionalKey(ModelRef),
   }),

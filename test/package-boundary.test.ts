@@ -232,6 +232,18 @@ describe("the assembly's parts stay out of the public surface", () => {
     // nothing to test against.
     const index = (await import(resolve(srcDir, "index.ts"))) as Record<string, unknown>;
     expect(typeof index.AgentError).toBe("function");
+    expect(typeof index.SignInCancelled).toBe("function");
+  });
+
+  it("the entry names no type of pi-ai: a host passes FastAgent's own", () => {
+    // What a host writes against is sign-in-api.ts, which imports nothing (below); the entry re-exporting a pi-ai type
+    // would put the harness's model library back into every host's code.
+    const source = readFileSync(resolve(srcDir, "index.ts"), "utf8");
+    expect(source).not.toMatch(/from "@earendil-works\/pi-ai/);
+    // Its types included, which the package graph below does not count.
+    expect(readFileSync(resolve(srcDir, "sign-in-api.ts"), "utf8")).not.toMatch(
+      /^\s*(?:import|export)\b[^;]*\bfrom\b/m,
+    );
   });
 
   it("no entry exports an assembly part", async () => {
@@ -307,7 +319,8 @@ describe("channels/kit is defined by who imports it", () => {
 });
 
 describe("the contracts depend on nothing", () => {
-  // agent-api.ts (what every caller speaks) and channel.ts (what a trigger implements) are the product contracts. The
+  // agent-api.ts (what every caller speaks) and channel.ts (what a trigger implements) are the product contracts, and
+  // sign-in-api.ts what a host embedding agents keeps credentials and signs in with, so it needs no harness. The
   // bar is Effect's Schema for the first, in which the Agent API is written so that its HTTP binding is built from the
   // same schemas, and ZERO for the second rather than "no harness": an agent directory's hand-written channel imports
   // ChannelModule, and the day that type drags in an HTTP framework, every such file inherits it. This is the check
@@ -315,6 +328,7 @@ describe("the contracts depend on nothing", () => {
   it("each of them pulls no package but the Agent API's Schema", () => {
     expect([...staticPackageGraph("agent-api.ts")]).toEqual(["effect/Schema"]);
     expect([...staticPackageGraph("channel.ts")]).toEqual([]);
+    expect([...staticPackageGraph("sign-in-api.ts")]).toEqual([]);
   });
 
   it("...and the mechanism that serves them depends on Effect's HTTP server alone", () => {

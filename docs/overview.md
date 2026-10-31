@@ -133,7 +133,8 @@ Implemented today:
 - Schedules (`src/schedules/`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
 - `dev`, `invoke`, `info`, `schedules`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
 - CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
-- `openAgent` and its `serve()`: an agent directory opened and served inside an app.
+- `openAgent` and its `serve()`: an agent directory opened and served inside an app; `createAgent`, model credentials
+  and sign-in for a host that runs agents for a person (a desktop app beside `fastagent dev`).
 
 Not implemented yet:
 

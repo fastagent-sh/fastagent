@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useGitIdentity, withGitIdentity } from "./git-env.ts";
 import { git, githubStandIn } from "./github-standin.ts";
-import { ContentNameError, addContent, createAgent, listContent, removeContent } from "../src/authoring.ts";
+import { ContentNameError, addContent, createAgent, initAgent, listContent, removeContent } from "../src/authoring.ts";
 import { type SourceOptions, readContentSource } from "../src/content/source.ts";
 
 /** What `content add <dir>` adds. */
@@ -72,7 +72,7 @@ describe("authoring API", () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-install-")));
     // What an install writes (a lockfile) is in the first commit, so the history starts from what runs.
     const installed = join(base, "installed");
-    await createAgent(installed, { install: async (dir) => writeFile(join(dir, "package-lock.json"), "{}\n") });
+    await initAgent(installed, { install: async (dir) => writeFile(join(dir, "package-lock.json"), "{}\n") });
     const tracked = execFileSync("git", ["ls-files"], { cwd: installed, env: withGitIdentity, encoding: "utf8" });
     expect(tracked.split("\n")).toContain("package-lock.json");
 
@@ -81,7 +81,7 @@ describe("authoring API", () => {
     const failed = join(base, "failed");
     await mkdir(join(base, "app"));
     await expect(
-      createAgent(failed, {
+      initAgent(failed, {
         content: [directory(join(base, "app"))],
         install: async () => {
           throw new Error("registry unreachable");
@@ -89,7 +89,10 @@ describe("authoring API", () => {
       }),
     ).rejects.toThrow("registry unreachable");
     expect(await readdir(failed).catch(() => [])).toEqual([]);
-    await expect(createAgent(failed)).resolves.toMatchObject({ dir: failed });
+    // What the package gives a host: the agent, without what only `init` adds.
+    const created = await createAgent(failed);
+    expect(Object.keys(created).sort()).toEqual(["created", "dir", "repository"]);
+    expect(created.dir).toBe(failed);
   });
 
   it("creates with content, edits it, and throws a name refusal as ContentNameError", async () => {
@@ -98,7 +101,7 @@ describe("authoring API", () => {
     for (const dir of [app, docs, other]) await mkdir(dir, { recursive: true });
     const agentDir = join(base, "agent");
 
-    const created = await createAgent(agentDir, { content: [directory(app)] });
+    const created = await initAgent(agentDir, { content: [directory(app)] });
     expect(created.created).not.toContain(join("extensions", "web-access.ts"));
     // A created agent is a repository of its own, whatever created it: the CLI's tests cover the cases it is not.
     expect(created.repository).toBe("created a git repository, with the scaffold as its first commit");
@@ -215,7 +218,7 @@ describe("authoring API", () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-broken-")));
     const agentDir = join(base, "agent");
     for (const dir of ["moved", "b", "c"]) await mkdir(join(base, dir));
-    await createAgent(agentDir, { content: [directory(join(base, "moved")), directory(join(base, "c"))] });
+    await initAgent(agentDir, { content: [directory(join(base, "moved")), directory(join(base, "c"))] });
     await rm(join(base, "moved"), { recursive: true });
     // Gone: this machine's own binding, so nothing is refused, and it is named as absent.
     await addContent(agentDir, directory(join(base, "b")));
@@ -243,17 +246,17 @@ describe("authoring API", () => {
     }
   });
 
-  it("createAgent refuses a name problem as ContentNameError, before it writes anything", async () => {
+  it("initAgent refuses a name problem as ContentNameError, before it writes anything", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-")));
     const [one, two, spaced] = [join(base, "a", "app"), join(base, "b", "App"), join(base, "my app")];
     for (const dir of [one, two, spaced]) await mkdir(dir, { recursive: true });
     const agentDir = join(base, "agent");
-    const taken: unknown = await createAgent(agentDir, { content: [directory(one), directory(two)] }).catch((e) => e);
+    const taken: unknown = await initAgent(agentDir, { content: [directory(one), directory(two)] }).catch((e) => e);
     expect(taken).toBeInstanceOf(ContentNameError);
     expect((taken as Error).message).toBe('this agent already has content named "app"');
-    await expect(createAgent(agentDir, { content: [directory(spaced)] })).rejects.toBeInstanceOf(ContentNameError);
+    await expect(initAgent(agentDir, { content: [directory(spaced)] })).rejects.toBeInstanceOf(ContentNameError);
     await expect(access(agentDir)).rejects.toThrow(/ENOENT/);
     // Named apart, the same directories are fine.
-    await createAgent(agentDir, { content: [directory(one), directory(two, { name: "app2" })] });
+    await initAgent(agentDir, { content: [directory(one), directory(two, { name: "app2" })] });
   });
 });

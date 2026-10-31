@@ -15,11 +15,9 @@ import {
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { findAgentDir, globalHome, selectAgentEnvironment } from "../../paths.ts";
+import { SignInCancelled, type SignInMethod, type SignInOption } from "../../sign-in-api.ts";
 import {
-  LoginCancelled,
   type LoginIO,
-  type LoginMethod,
-  type LoginOption,
   LoginRefused,
   PI_DEFAULT_MODELS,
   chooseLogin,
@@ -154,7 +152,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     ...(timeout ? { signal: timeout } : {}),
   }).catch((error: unknown): never => {
     if (timeout?.aborted) failStartup(new Error(`login timed out after ${givenTimeout}s (--timeout)`));
-    if (error instanceof LoginCancelled) {
+    if (error instanceof SignInCancelled) {
       // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
       console.error(`[fastagent] login cancelled`);
       process.exit(1);
@@ -187,13 +185,13 @@ const modelHint = (model: string, name: string) =>
   `this agent has no model: \`model: "${model}"\` in fastagent.config.ts uses ${name}'s default`;
 
 /** `--method`'s words, pi's: an account (OAuth) or an API key. */
-function methodOf(value: string): LoginMethod {
+function methodOf(value: string): SignInMethod {
   if (value === "account") return "oauth";
   if (value === "api-key") return "api_key";
   return failUsage(`--method must be account or api-key, not "${value}"`);
 }
 
-const methodWord = (method: LoginMethod) => (method === "oauth" ? "account" : "api-key");
+const methodWord = (method: SignInMethod) => (method === "oauth" ? "account" : "api-key");
 
 function secondsOf(value: string): number {
   const seconds = Number(value);
@@ -220,8 +218,8 @@ async function defaultModelHint(agentDir: string, provider: string): Promise<str
  * agent reads it, never handed through the agent (`need_user_action` naming the variables).
  */
 async function requestLogin(
-  offered: readonly LoginOption[],
-  given: { provider?: string | undefined; method?: LoginMethod | undefined },
+  offered: readonly SignInOption[],
+  given: { provider?: string | undefined; method?: SignInMethod | undefined },
   opts: LoginOptions,
   target: {
     authPath: string;
@@ -233,7 +231,7 @@ async function requestLogin(
   },
 ): Promise<void> {
   const global = opts.global ? " -g" : "";
-  let choice: LoginOption;
+  let choice: SignInOption;
   try {
     choice = await chooseLogin(offered, given, undefined);
   } catch (error) {
@@ -277,7 +275,7 @@ async function requestLogin(
  * started, so a variable set now would never reach it.
  */
 async function keyNeeded(
-  choice: LoginOption,
+  choice: SignInOption,
   opts: LoginOptions,
   target: { providers: readonly Provider[]; valueFile?: string; heldIn: (provider: string) => Promise<string> },
 ): Promise<void> {
@@ -369,7 +367,7 @@ function choiceNotGiven(error: LoginRefused, opts: LoginOptions, how: { flags: s
 
 /** The variables `choice`'s key is read from, and how to tell the person to set it. */
 async function keyToSet(
-  choice: LoginOption,
+  choice: SignInOption,
   providers: readonly Provider[],
 ): Promise<{ variables: string[]; what: string }> {
   const provider = loginProviders(providers).find((p) => p.id === choice.provider);
@@ -512,13 +510,13 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
 async function requestDeploymentLogin(
   agentDir: string,
   host: DeployHost,
-  given: { provider?: string | undefined; method?: LoginMethod | undefined },
+  given: { provider?: string | undefined; method?: SignInMethod | undefined },
   opts: LoginOptions,
   timeoutSeconds: number,
 ): Promise<void> {
   const providers = await definitionProviders(agentDir).catch(failStartup);
   const offered = await loginOptionsOver(resolveAuthPath(agentDir), providers);
-  let choice: LoginOption;
+  let choice: SignInOption;
   try {
     choice = await chooseLogin(offered, given, undefined);
   } catch (error) {
@@ -588,7 +586,7 @@ async function runStdioLogin(provider: string | undefined, opts: LoginOptions): 
   const wire = stdioLoginIO(process.stdin, process.stdout);
   const result = await stdioLogin(wire.io, provider, opts).catch(
     (error: unknown): RelayResult =>
-      error instanceof LoginCancelled
+      error instanceof SignInCancelled
         ? { ok: false, reason: "cancelled", message: "cancelled" }
         : { ok: false, reason: "failed", message: (error as Error).message },
   );

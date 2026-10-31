@@ -15,8 +15,19 @@ const said = (text: string): ToolExecutionResult => ({ output: [{ type: "text", 
 const refused = (text: string): ToolExecutionResult => ({ output: [{ type: "text", text }], isError: true });
 const NOT_A_SESSION =
   "wake-ups belong to a session, and this conversation is not one (a subagent's): nothing would wake it.";
+const NO_CLOCK =
+  "nothing fires wake-ups for this agent now: the app that opened it does not serve it, so no clock runs. Do the " +
+  "work now, or say it cannot be scheduled.";
 
-export function wakeExtension(stateRoot: string, now: () => Date = () => new Date()): Extension {
+/**
+ * `ticking` says whether a clock fires the wake-ups kept in `stateRoot` now; a wake-up nothing would fire is refused.
+ * Without it, one always does: `dev`, `start` and AgentCore serve whatever they open.
+ */
+export function wakeExtension(
+  stateRoot: string,
+  options: { now?: () => Date; ticking?: () => boolean } = {},
+): Extension {
+  const now = options.now ?? (() => new Date());
   return defineExtension({
     name: WAKE_EXTENSION,
     tools: [
@@ -45,6 +56,7 @@ export function wakeExtension(stateRoot: string, now: () => Date = () => new Dat
           }),
         }),
         execute: async (args, api, context) => {
+          if (options.ticking?.() === false) return refused(NO_CLOCK);
           if ((args.in === undefined) === (args.cron === undefined)) {
             return refused("pass exactly one of `in` (one-shot) or `cron` (recurring).");
           }

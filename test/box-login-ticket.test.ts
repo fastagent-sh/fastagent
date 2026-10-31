@@ -13,7 +13,8 @@ import { stdioLoginIO } from "../src/cli/login-relay.ts";
 import { type Ticket, checkTicket, createTicket, runTicket } from "../src/cli/ticket.ts";
 import { boxLoginStep } from "../src/cli/commands/deploy/shared.ts";
 import type { BoxShell } from "../src/deploy/box-shell.ts";
-import { LoginCancelled, loginFlow } from "../src/harnesses/models/login.ts";
+import { loginFlow } from "../src/harnesses/models/login.ts";
+import { SignInCancelled } from "../src/sign-in-api.ts";
 
 const box = vi.hoisted(() => ({ provider: undefined as unknown, commands: [] as string[], authPath: "" }));
 
@@ -34,7 +35,7 @@ const fakeShell: BoxShell = {
         (result) => half.result({ ok: true, provider: result.provider, method: result.method, path: box.authPath }),
         (error: Error) =>
           half.result(
-            error instanceof LoginCancelled
+            error instanceof SignInCancelled
               ? { ok: false, reason: "cancelled", message: "cancelled" }
               : { ok: false, reason: "failed", message: error.message },
           ),

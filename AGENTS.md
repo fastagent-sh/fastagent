@@ -29,6 +29,8 @@ one place that cannot drift away from the code it explains. Directories that hav
 src/
 ├── agent-api.ts            # the Agent API (docs/SPEC.md) as Effect Schemas: its objects, requests,
 │                           # errors and limits; imports only effect/Schema
+├── sign-in-api.ts          # model credentials and sign-in as a host embedding agents sees them: FastAgent's own
+│                           # types (CredentialStore, SignInInteraction, …), SignInCancelled; imports nothing
 ├── answer-text.ts          # a message's answer text as it streams: its deltas, plus entry text no delta carried
 ├── channel.ts              # the Channel contract: ChannelContext (agent, sessionFor, recordedSession, turn, stateDir),
 │                           # ChannelModule / Routes / LongConnection*, and defineChannel
@@ -40,8 +42,9 @@ src/
 ├── effect-port.ts          # the ONE crossing from a Promise-shaped port into Effect: port / portJoin / portAbort /
 │                           # portRequest / portCleanup / PortFailure
 ├── once.ts                 # work that runs once per process, its outcome shared (shutdown, AgentCore activation)
-├── index.ts                # the package's one entry: the Agent API, openAgent, what an author writes; every export
-│                           # named. Asserted in package-boundary.test.ts
+├── index.ts                # the package's one entry: the Agent API, openAgent, what a host embedding agents needs
+│                           # (createAgent, credentials, sign-in), what an author writes; every export named.
+│                           # Asserted in package-boundary.test.ts
 ├── client.ts               # the `/client` entry: connectAgent and the Agent API's types, for wherever fetch runs
 ├── http/                   # the Agent API over HTTP (SPEC.md §9)
 │   ├── contract.ts         # THE ONE CONTRACT (effect/http-api) the server answers from, the client calls through
@@ -97,7 +100,8 @@ src/
 │   ├── declare.ts          # the `environment` declaration, read and refused in ONE place; the backend allowlist
 │   ├── mise.ts             # the agent's OWN mise (an npm dep per platform), packages as arguments: install, enter
 │   └── apt.ts              # which declared apt packages THIS machine lacks (dpkg; Debian and Ubuntu only)
-├── authoring.ts            # creating an agent + editing its content as an API; `init`/`content` are thin wrappers
+├── authoring.ts            # creating an agent (createAgent, exported; initAgent, `init`'s) + editing its content
+│                           # as an API; `init`/`content` are thin wrappers
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape (`needs()` in code, context.json's
 │                           # variables), and what "has no value" means
 ├── atomic-write.ts         # writeFileAtomic: the ONE "whole file or none of it" write
@@ -278,7 +282,9 @@ src/
         ├── credentials.ts  # the credentials file store + which files (layers) an agent reads
         ├── environment.ts  # an agent's model environment as ONE value (credential store + models + auth status):
         │                   # every reader builds it here, never from the parts
-        └── login.ts        # signing in to a model provider, for any front end; `fastagent login` is one
+        ├── login.ts        # signing in to a model provider, for any front end; `fastagent login` is one
+        └── host.ts         # what a host calls (credentialFile, signIn, signInOptions, providerAuth): thin over
+                            # login.ts and credentials.ts, and the ONE translation of sign-in-api.ts's types to pi-ai's
 test/                       # vitest; faux models by default
 ├── agent-api-conformance.ts # the Agent API's conformance suite (docs/SPEC.md §11), run in process by
 │                           # durable-agent.test.ts over durable-subject.ts, and over HTTP by http-api.test.ts
@@ -304,7 +310,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **The API imports no harness.** `src/agent-api.ts` must not import any harness (`@earendil-works/pi-*` only under `src/harnesses/`): the consumer API is the layer that keeps a harness's changes away from clients, and keeping FastAgent's own harness code in one directory bounds what replacing the harness costs FastAgent. It does not bound what it costs an author: an agent's tools and extensions are pi-durable code, an accepted trade-off ([architecture.md](docs/design/architecture.md) §2).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. A message that cannot be answered ends `failed` with its `error` saying why, and a refused operation rejects with an `AgentError` (docs/SPEC.md §7). A stream is refused on its first read; once it has delivered anything, a failure ends it with a `stream_error` event, never a rejection a Caller would take for a refusal.
 - **One process owns an instance's state.** Durable state is the instance's storage (pi-durable's SQLite: sessions, messages, entries) and each Caller's own files under the state root (a channel's session map and turn records, the schedules' claims, wake-ups). One process opens a storage at a time, so a deployment routes every session of one storage to one process ([architecture.md](docs/design/architecture.md) §4.3). The process holds the open Agent and each Caller's queues; what a caller reads afterwards is durable before it is reported.
-- **Public surface is scoped on purpose.** `src/index.ts` is the one entry, one per kind of user beside the channel subpaths (SPEC.md §8): the Agent API, `openAgent`, and what an author writes, every export named. The contracts stay neutral: `src/agent-api.ts` imports only `effect/Schema` and `src/channel.ts` nothing. Internals (`openServing`, `serveAgent`, `openDurableAgent`, content, models and sign-in, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Public surface is scoped on purpose.** `src/index.ts` is the one entry, one per kind of user beside the channel subpaths (SPEC.md §8): the Agent API, `openAgent`, what a host embedding agents needs beside it (`createAgent`, model credentials and sign-in, in FastAgent's own types: the entry names no pi-ai type), and what an author writes, every export named. The contracts stay neutral: `src/agent-api.ts` imports only `effect/Schema`, and `src/channel.ts` and `src/sign-in-api.ts` nothing. Internals (`openServing`, `serveAgent`, `openDurableAgent`, content editing, the model environment, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **The CLI serves a person and a coding agent alike** (docs/cli.md, "Scripts and coding agents"). A coding agent
   works in turns and sees a command's output only once it ends: nothing waits on a terminal, a choice not given exits
   2 naming what to pass, and a step only a person can take returns at once (`need_user_action`, a check command,
