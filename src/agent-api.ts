@@ -43,7 +43,8 @@ export class AgentInfo extends Schema.Opaque<AgentInfo>()(
     tools: Schema.Array(Named),
     /**
      * The models a session may name: those whose provider has a credential here. `contextWindow`, in tokens, is the
-     * window the agent runs the model with, absent when the model declares none.
+     * window the agent runs the model with, absent when the model declares none. `thinkingLevels` are the levels the
+     * model supports, lowest first: `["off"]` for a model that does not reason.
      */
     models: Schema.Array(
       Schema.Struct({
@@ -51,6 +52,7 @@ export class AgentInfo extends Schema.Opaque<AgentInfo>()(
         modelId: Schema.String,
         name: Schema.optionalKey(Schema.String),
         contextWindow: Schema.optionalKey(Schema.Number),
+        thinkingLevels: Schema.Array(ThinkingLevel),
       }),
     ),
     defaultModel: Schema.optionalKey(ModelRef),

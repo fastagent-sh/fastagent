@@ -232,9 +232,9 @@ calls the Agent API; `createAgent(dir)` makes a new one, as `fastagent init` doe
   them serves the definition's channels and schedules (two would fire every schedule twice and compete for the
   channels' messages); an app beside `dev` does not call `serve()`. An instance nothing serves has no clock, so the
   agent's `wake` tool refuses a wake-up there instead of keeping one nothing would fire.
-- **Models.** `agent.info().models` are the models a session may name, each with its `contextWindow`; a provider
-  signed in to while the agent is open is in the next answer. The lists are refreshed when the agent opens, at most
-  every 4 hours.
+- **Models.** `agent.info().models` are the models a session may name, each with its `contextWindow` and the
+  `thinkingLevels` it supports; a provider signed in to while the agent is open is in the next answer. The lists are
+  refreshed when the agent opens, at most every 4 hours.
 - **Changes to the agent.** `SYSTEM.md`, `AGENTS.md`, skills and prompt templates are read for every message. Code
   under `src/` and `fastagent.config.ts` are built when the agent opens: `close()` it and open it again.
 - **Each agent's own environment.** An agent runs on this process's environment plus its own: its `.secrets/.env`

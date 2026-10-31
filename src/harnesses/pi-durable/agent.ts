@@ -4,7 +4,13 @@
  * one process owns a storage.
  */
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
-import type { ImageContent, Models, ModelThinkingLevel, TextContent } from "@earendil-works/pi-ai";
+import {
+  getSupportedThinkingLevels,
+  type ImageContent,
+  type Models,
+  type ModelThinkingLevel,
+  type TextContent,
+} from "@earendil-works/pi-ai";
 import {
   type AgentChange,
   AgentDoc,
@@ -298,6 +304,7 @@ function durableAgent(
             ...(model.name ? { name: model.name } : {}),
             // pi reads a window a model does not declare (a virtual model's, before its first answer) as 0.
             ...(model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
+            thinkingLevels: getSupportedThinkingLevels(model),
           })),
           ...(options.model === undefined
             ? {}

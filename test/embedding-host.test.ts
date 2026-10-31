@@ -222,6 +222,32 @@ describe("the models an agent offers", () => {
   });
 });
 
+describe("the thinking levels a model offers", () => {
+  it("are those the model supports: only off for a model that does not reason", async () => {
+    const { models } = makeFaux({
+      models: [
+        { id: "plain", reasoning: false },
+        { id: "reasoner", reasoning: true },
+      ],
+    });
+    const agent = await openDurableAgent({
+      storage: new MemoryStorage(),
+      models,
+      registry: createRegistry(),
+      name: "t",
+    });
+    try {
+      const offered = (await agent.info()).models;
+      expect(offered.find((model) => model.modelId === "plain")?.thinkingLevels).toEqual(["off"]);
+      const levels = offered.find((model) => model.modelId === "reasoner")?.thinkingLevels;
+      expect(levels?.[0]).toBe("off");
+      expect(levels).toContain("high");
+    } finally {
+      await agent.close();
+    }
+  });
+});
+
 describe("a host's own instance of an agent", () => {
   it("opens beside the directory's own instance, on the host's store, offering each model's context window", async () => {
     for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
