@@ -2,7 +2,8 @@
  * Creating an agent and editing its content: `fastagent init` and `fastagent content` are thin wrappers over these (and
  * `fastagent env` writes its declaration through {@link writeEnvironment}), so the rules live here, not in a command.
  * Nothing here prints or exits; every refusal is thrown with the message the CLI shows. The package exports
- * {@link createAgent}; the content and environment edits wait for context packages, whose shape they follow.
+ * {@link createAgent} and the content edits ({@link addContent}, {@link removeContent}, {@link listContent}), which
+ * give an agent its own entries, without an alias prefix; the environment's edit is not exported.
  */
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -82,14 +83,20 @@ interface ContentMaps {
  * Create an agent in `dir` as `fastagent init` does, which must be new or empty: the whole scaffold, and a git
  * repository whose first commit is what was written, since the agent changes itself and version control is how its
  * author goes back to a version that worked. It installs no dependencies; the agent opens without them.
+ *
+ * `content` gives it any number of entries, each a directory of this machine or a GitHub repository. They are all
+ * checked before anything is written, and one that is refused leaves no directory. Two entries may bind the same
+ * directory, or one inside the other; the agent then reaches it by both names.
  */
-export async function createAgent(dir: string): Promise<CreatedAgent> {
-  const { content: _, ...created } = await initAgent(dir);
-  return created;
+export async function createAgent(
+  dir: string,
+  options: { content?: ContentAddition[] } = {},
+): Promise<CreatedAgent & { content: ResolvedContent[] }> {
+  return initAgent(dir, options.content === undefined ? {} : { content: options.content });
 }
 
 /**
- * {@link createAgent} with what `fastagent init` adds: content, and the install. Every content entry is checked before
+ * {@link createAgent} with what `fastagent init` adds: the install. Every content entry is checked before
  * anything is written, and the scaffold is removed again when writing the content fails.
  */
 export async function initAgent(

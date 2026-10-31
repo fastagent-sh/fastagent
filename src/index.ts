@@ -41,7 +41,19 @@ export {
   type ServeAgentOptions,
 } from "./harnesses/pi-durable/serve.ts";
 export type { Service } from "./service.ts";
-export { createAgent, type CreatedAgent } from "./authoring.ts";
+export {
+  ContentNameError,
+  addContent,
+  createAgent,
+  listContent,
+  removeContent,
+  type ContentEdit,
+  type CreatedAgent,
+} from "./authoring.ts";
+export type { ContentAddition, SourceOptions } from "./content/source.ts";
+export { readContentSource } from "./content/source.ts";
+export type { BoundContent, ContentBinding, ContentEntry } from "./content/declare.ts";
+export type { ResolvedContent } from "./content/resolve.ts";
 export {
   SignInCancelled,
   type Credential,

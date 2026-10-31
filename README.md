@@ -152,9 +152,9 @@ The package exports the supported surface only, from one entry per kind of user,
 | The Agent API | `Agent`, `AgentError` ([Agent API](docs/SPEC.md)) | Stable within its version |
 | Directory → agent → service | `openAgent`, `LocalAgent`, `serve()`'s `Service` (`fetch`, `listen`) | Usable now, may tighten before 1.0 |
 | Over HTTP | `connectAgent` (`/client`), the `/v1` routes ([Agent API](docs/SPEC.md) §9) | Stable within its version |
-| A host embedding agents | `createAgent`, `CredentialStore`, `credentialFile`, `signIn`, `signInOptions`, `providerAuth` ([embedding](docs/embedding.md#6-a-desktop-host)) | Usable now, may tighten before 1.0 |
+| A host embedding agents | `createAgent`, `addContent`, `removeContent`, `listContent`, `CredentialStore`, `credentialFile`, `signIn`, `signInOptions`, `providerAuth` ([embedding](docs/embedding.md#6-a-desktop-host)) | Usable now, may tighten before 1.0 |
 | Authoring | `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, `readBodyCapped`, `text`, `secretEquals` | Usable now, may tighten before 1.0 |
-| Not exported | The assembly's parts (`router`, `createScheduler`), content editing, the model environment, harness internals | No compatibility promise |
+| Not exported | The assembly's parts (`router`, `createScheduler`), the environment's edit (`writeEnvironment`), the model environment, harness internals | No compatibility promise |
 
 A tool or an extension is pi-durable's own (`defineTool`, `defineExtension` from `@earendil-works/pi-durable`), and a
 custom provider is pi-ai's (`createProvider` from `@earendil-works/pi-ai`): `init` adds both packages to the agent.
