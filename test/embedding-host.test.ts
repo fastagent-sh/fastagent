@@ -274,6 +274,35 @@ describe("an agent's own content, from the package entry", () => {
     expect(addition).toEqual({ name: "notes", binding: { path: notes, readonly: true } });
   });
 
+  it("reads a GitHub repository as an entry cloned for every instance", () => {
+    const { addition, notes } = readContentSource("github:acme/app", process.cwd(), { ref: "v1", readonly: true });
+    expect(addition).toEqual({ name: "app", entry: { github: "acme/app", ref: "v1", readonly: true } });
+    expect(notes).toEqual([]);
+    expect(() => readContentSource("github:acme", process.cwd())).toThrow("names no repository");
+  });
+
+  it("refuses to remove a name the agent does not have, and says what it has", async () => {
+    const { base, app } = await folders();
+    const dir = join(base, "agent");
+    await createAgent(dir, { content: [bind("app", app)] });
+    const error = await removeContent(dir, "nope").catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ContentNameError);
+    expect((error as Error).message).toContain('no content named "nope" (this agent has: app)');
+    expect((await listContent(dir)).content.map(({ name }) => name)).toEqual(["app"]);
+  });
+
+  it("removes a repository's entry and leaves its clone, saying so", async () => {
+    const { base } = await folders();
+    const dir = join(base, "agent");
+    await createAgent(dir);
+    await addContent(dir, { name: "app", entry: { github: "acme/app" } });
+    await mkdir(join(dir, "content", "app"), { recursive: true });
+    const removed = await removeContent(dir, "app");
+    expect(removed.content).toEqual([]);
+    expect(removed.notes.join("\n")).toContain("content/app is left as it is");
+    expect(existsSync(join(dir, "content", "app"))).toBe(true);
+  });
+
   it("accepts two names for one folder, and a folder inside another", async () => {
     const { base, app } = await folders();
     const inner = join(app, "src");

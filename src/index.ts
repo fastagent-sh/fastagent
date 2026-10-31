@@ -52,7 +52,7 @@ export {
 } from "./authoring.ts";
 export type { ContentAddition, SourceOptions } from "./content/source.ts";
 export { readContentSource } from "./content/source.ts";
-export type { ContentBinding, ContentEntry } from "./content/declare.ts";
+export type { BoundContent, ContentBinding, ContentEntry } from "./content/declare.ts";
 export type { ResolvedContent } from "./content/resolve.ts";
 export {
   SignInCancelled,

@@ -139,6 +139,24 @@ function listContent(agentDir: string): Promise<{ content: ResolvedContent[]; ab
 function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit>;
 function removeContent(agentDir: string, name: string): Promise<ContentEdit>;
 function readContentSource(source: string, cwd: string, options?: SourceOptions): { addition: ContentAddition; notes: string[] };
+// What an edit leaves, and what the agent has on this instance.
+interface ContentEdit {
+  name: string; // the entry added or removed
+  content: ResolvedContent[]; // the agent's content after the edit
+  notes: string[]; // what to tell the user: a clone left in content/, a local file git does not ignore
+}
+type ResolvedContent = {
+  name: string;
+  readonly: boolean;
+  description?: string;
+  location: string; // where the agent reaches it on this instance, absolute
+  notices: string[]; // how it resolved: a checkout off its ref, a clone not made yet
+} & ({ kind: "local" } | { kind: "github"; repo: string; ref?: string; clone: boolean });
+// A directory this machine binds that is not here: `listContent` names it in `absent`; the agent is not told of it.
+type BoundContent = { name: string; path: string } & (
+  | { kind: "checkout" } // this machine's checkout of the declared repository of the same name
+  | { kind: "local"; readonly: boolean; description?: string }
+);
 class ContentNameError extends Error {} // a name that cannot name content, that is taken, or that the agent has not
 
 type Credential =
