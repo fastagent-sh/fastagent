@@ -90,8 +90,16 @@ interface AgentInfo {
   /**
    * The models a session may name: those whose provider has a credential here. `contextWindow`, in tokens, is the
    * window the agent runs the model with (what compaction measures against), absent when the model declares none.
+   * `thinkingLevels` are the levels the model supports, lowest first (`["off"]` for a model that does not reason): what
+   * a picker offers for `Session.thinkingLevel`.
    */
-  models: { provider: string; modelId: string; name?: string; contextWindow?: number }[];
+  models: {
+    provider: string;
+    modelId: string;
+    name?: string;
+    contextWindow?: number;
+    thinkingLevels: NonNullable<Session["thinkingLevel"]>[];
+  }[];
   /** What a session that names no model answers with. */
   defaultModel?: { provider: string; modelId: string };
 }
