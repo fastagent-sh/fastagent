@@ -58,7 +58,7 @@ goal needs.
 | **Third-party capabilities are pi-durable extensions**, listed in `defineAgent({ extensions })` | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. MCP servers are declared separately in [`.mcp.json`](mcp.md). Context packages (§4.2) are later work, not an MCP prerequisite |
 | **Schedules are TypeScript**: `defineSchedule({ cron, tz, prompt })`, the prompt a text or a function | A schedule is behaviour, like a tool: a prompt that depends on the time it fires, secrets it may need, and a cron the build checks, including the dialect an external clock accepts |
 | **`SYSTEM.md` is the whole prompt the author writes; `APPEND_SYSTEM.md` goes** | It added to pi-coding-agent's default prompt, which pi-durable does not have |
-| **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; planned MCP server configuration names its required values in `.mcp.json` ([MCP design](mcp.md)). A declaration may say what the secret is for and that the code runs without it (`{ name, description, optional }`). A missing required one fails the start, naming where it was declared. Whoever deploys or runs the agent reads none of that code: preparing the definition writes every declaration into one manifest, `.fastagent/secrets.json` (each name once, what it is for, whether it is optional, where it is declared), which runbooks, an `.env.example` and the deploy check are made from |
+| **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; MCP server configuration names its required values in `.mcp.json` ([MCP design](mcp.md)). A declaration may say what the secret is for and that the code runs without it (`{ name, description, optional }`). A missing required one fails the start, naming where it was declared. Whoever deploys or runs the agent reads none of that code: preparing the definition writes every declaration into one manifest, `.fastagent/secrets.json` (each name once, what it is for, whether it is optional, where it is declared), which runbooks, an `.env.example` and the deploy check are made from |
 
 **A mapping is created in one order, in one place.** With Caller-named sessions, a chat's id was its session's, so a
 redelivered first message found its message by key, and two threads created at once met in `conflict`. With sessions
@@ -107,7 +107,7 @@ my-agent/
     channels/*.ts
     schedules/*.ts                defineSchedule
   context.json  context.lock.json
-  .mcp.json                       planned MCP servers; one mcpServers map
+  .mcp.json                       MCP servers; one mcpServers map
   .fastagent/                     the generated registry and entry, not committed
   dist/                           the build output
 ```

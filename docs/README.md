@@ -29,6 +29,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 | Configure the model, providers, auth, ports, tools, channels and schedules | [Configuration](configuration.md) |
 | Embed an agent in an existing app or route | [Embedding](embedding.md) |
 | Connect Telegram, Slack, Feishu, or another channel | [Channels](channels.md) |
+| Add MCP tools and browser OAuth, in the CLI or an embedding host | [MCP servers](mcp.md) |
 | Run the agent on a cron, or let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [Schedules](configuration.md#schedules) |
 | Ship the agent to a host | [Deploy](deploy.md) |
 

@@ -153,6 +153,7 @@ The package exports the supported surface only, from one entry per kind of user,
 | Directory → agent → service | `openAgent`, `LocalAgent`, `serve()`'s `Service` (`fetch`, `listen`) | Usable now, may tighten before 1.0 |
 | Over HTTP | `connectAgent` (`/client`), the `/v1` routes ([Agent API](docs/SPEC.md) §9) | Stable within its version |
 | A host embedding agents | `createAgent`, `addContent`, `removeContent`, `listContent`, `CredentialStore`, `credentialFile`, `signIn`, `signInOptions`, `providerAuth` ([embedding](docs/embedding.md#6-a-desktop-host)) | Usable now, may tighten before 1.0 |
+| MCP tools and authorization | `inspectMcp`, `signInMcp`, `mcpGrantFile`, `McpGrantStore` ([MCP servers](docs/mcp.md)) | Usable now, may tighten before 1.0 |
 | Authoring | `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, `readBodyCapped`, `text`, `secretEquals` | Usable now, may tighten before 1.0 |
 | Not exported | The assembly's parts (`router`, `createScheduler`), the environment's edit (`writeEnvironment`), the model environment, harness internals | No compatibility promise |
 
@@ -189,7 +190,7 @@ The Agent API leaves room for capabilities that are not complete product feature
 - **Scale-out**: one process holds an instance's storage today; spreading one instance over several processes is future work.
 - **Sandboxed execution** — the coding tools, channels, and author-written code reach the local process directly; a sandbox around the complete agent process is future work.
 - **Observability export** — leveled logs exist today; an OpenTelemetry exporter does not.
-- **More channels and connectors** — community channels can use the channel kit; MCP servers as connectors are planned.
+- **More channels** — community channels can use the channel kit. External tools can also use [MCP servers](docs/mcp.md).
 - **More deploy targets** — local Docker, Fly, Railway, and AWS Bedrock AgentCore ship today; the generated container is the portable path for other hosts.
 
 See [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md) if one of these is the problem you want to work on.

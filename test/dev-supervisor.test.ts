@@ -21,6 +21,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     // Content is resolved, and the environment entered, once per process.
     expect(ignored(join(root, "context.json"))).toBe(false);
     expect(ignored(join(root, "context.local.json"))).toBe(false);
+    expect(ignored(join(root, ".mcp.json"))).toBe(false);
     expect(ignored(join(root, "mise.toml"))).toBe(true); // an author's own: the environment is not read from it
     // The environment is declared in context.json alone: a directory of that name is the author's.
     expect(ignored(join(root, "environment", "mise.lock"))).toBe(true);

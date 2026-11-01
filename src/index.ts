@@ -68,6 +68,22 @@ export {
   type SignInResult,
 } from "./sign-in-api.ts";
 export { credentialFile, providerAuth, signIn, signInOptions } from "./harnesses/models/host.ts";
+export {
+  McpError,
+  type McpErrorCode,
+  type McpOptions,
+  type McpAuthorization,
+  type McpGrantRecord,
+  type McpGrantSummary,
+  type McpGrantStore,
+  type McpGrantAccess,
+  type McpServerSummary,
+  type McpSignInRequest,
+  type McpSignInInteraction,
+} from "./mcp-api.ts";
+export { inspectMcp } from "./mcp/host.ts";
+export { signInMcp } from "./mcp/sign-in.ts";
+export { mcpGrantFile } from "./mcp/grants.ts";
 
 export {
   defineAgent,

@@ -76,7 +76,7 @@ with a `stream_error` event. It is what a channel's live preview reads.
 ```ts
 function openAgent(
   dir: string,
-  options?: { model?: string; credentials?: CredentialStore; stateDir?: string },
+  options?: { model?: string; credentials?: CredentialStore; stateDir?: string; mcp?: McpOptions },
 ): Promise<LocalAgent>;
 
 interface LocalAgent extends Agent {
@@ -117,6 +117,14 @@ from the app's own server, or `listen` for a server of the agent's own on Node's
 is the bind address, unset binds all interfaces. `close()` ends the API's event streams, stops the server, giving the
 requests in flight 500 ms before it ends them, then the long connections and the schedules; the agent's messages are
 durable and go on after a restart. An agent is served once; a `serve` that failed to start may be tried again.
+
+### MCP authorization and tools
+
+`openAgent` reads `.mcp.json` and acquires instance-owned MCP clients before registering their tools. `mcp` supplies
+an explicit `store`/`bindings` pair, optional interpolation `variables`, and the host's `fetch` policy. Close releases
+clients and joins refresh work without deleting grants. `inspectMcp`, `signInMcp`, `mcpGrantFile` and `McpError` are
+exported from the root entry; [MCP servers](mcp.md) describes their fields, OAuth flow and limits. Their types in
+`src/mcp-api.ts` import no harness or MCP SDK. These host operations are not new Agent API HTTP routes.
 
 ## What a host embedding agents needs
 

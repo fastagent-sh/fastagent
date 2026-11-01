@@ -34,10 +34,10 @@ function writeTarget(path: string): string {
   return link?.isSymbolicLink() ? resolve(dirname(path), readlinkSync(path)) : path;
 }
 
-/** Serialized cross-process read-modify-write of one file, replaced whole so its readers need no lock. */
+/** Serialized read-modify-write. `replace` commits immediately under the lock; those writes survive a later failure. */
 export async function withLockedFile<T>(
   path: string,
-  fn: (current: string | undefined) => Promise<LockResult<T>>,
+  fn: (current: string | undefined, replace: (next: string) => void) => Promise<LockResult<T>>,
   /**
    * `mode`: the replaced file's permissions; default {@link SECRET_FILE_MODE}, for the credential and catalog files.
    * `create: false` locks a file that may not exist without creating it (the lock is `<file>.lock` either way), for a
@@ -81,7 +81,12 @@ export async function withLockedFile<T>(
   try {
     throwIfCompromised();
     const current = existsSync(path) ? readFileSync(path, "utf8") : undefined;
-    const out = await fn(current);
+    const replace = (next: string) => {
+      throwIfCompromised();
+      options.signal?.throwIfAborted();
+      writeFileAtomic(writeTarget(path), next, options.mode ?? SECRET_FILE_MODE);
+    };
+    const out = await fn(current, replace);
     throwIfCompromised();
     // The last moment a caller that gave up can keep its change off disk: waiting for the lock may have outlasted it
     // (another process held the lock through the caller's timeout or cancel).
@@ -89,7 +94,7 @@ export async function withLockedFile<T>(
     // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
     // the mode before the content is reachable.
     if (out.next !== undefined) {
-      writeFileAtomic(writeTarget(path), out.next, options.mode ?? SECRET_FILE_MODE);
+      replace(out.next);
     }
     throwIfCompromised();
     result = out.result;

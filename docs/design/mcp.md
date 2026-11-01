@@ -2,14 +2,14 @@
 title: MCP servers
 description: "The MCP configuration boundary: one .mcp.json, a supported subset of mcpServers, and instance-owned runtime resources."
 type: design-doc
-status: decided boundary; implementation pending
+status: implemented subset
 ---
 
 # MCP servers
 
-The configuration boundary below is decided. MCP support is not implemented yet
-([#678](https://github.com/fastagent-sh/fastagent/issues/678)); the first-slice contract and protocol target below
-are the implementation proposal to verify before shipping. They do not change the consumer [Agent API](../SPEC.md).
+The [MCP guide](../mcp.md) describes the implemented stdio/Streamable HTTP tool subset and OAuth flow
+([#678](https://github.com/fastagent-sh/fastagent/issues/678)). This note records the decisions and evidence behind it.
+The consumer [Agent API](../SPEC.md) sessions/messages are unchanged.
 
 ## 1. Decided boundary
 
@@ -41,7 +41,7 @@ FastAgent must name its supported subset rather than claim complete compatibilit
 describes distribution and configuration possibilities; [MCPB manifests](https://github.com/modelcontextprotocol/mcpb/blob/main/MANIFEST.md)
 describe installable server bundles. Neither is an agent's resolved server configuration.
 
-## 3. First configuration subset: proposal
+## 3. First configuration subset
 
 Use JSON for local stdio servers and remote Streamable HTTP servers. For example:
 
@@ -86,7 +86,7 @@ A missing file declares no servers. Malformed JSON, unknown fields, unsupported 
 references fail with the file, server and field named. Do not guess another format or silently ignore unsupported fields.
 Do not scan parent directories, `.pi/mcp.json`, editor settings or home-directory MCP files.
 
-Proposed interpolation is `${NAME}` in string values of `command`, `args`, `env` and HTTP `headers`, resolved from this instance's effective
+Interpolation is `${NAME}` in string values of `command`, `args`, `env` and HTTP `headers`, resolved from this instance's effective
 environment. Interactive `${input:...}`, command substitutions and default-value syntax are outside this first subset;
 reject them explicitly. Do not change `process.env`. Use the existing selected-environment/secret mechanisms and include
 referenced required variables in preflight diagnostics without printing their values. Hosts needing credentials not
@@ -122,9 +122,8 @@ The SDK's own stdio transport performs discovery in a disposable sibling process
 two starts per connection were observed. Startup side effects and both children belong in acquisition/cleanup tests.
 Do not bypass the SDK's detection with type casts, invent a cached discovery verdict, or describe this as one process
 start. Before adopting the dependency, verify open failure, probe failure and close during discovery leave no children.
-The experimental pin refuses a server restricted to the old era; that is probe behavior, not yet a product policy.
-Any broader supported-version negotiation must be explicit, observable and handled by the SDK, not invented as a fallback
-after arbitrary network or authorization errors.
+The implementation pins this revision and refuses an older-only server. Any future broader supported-version policy
+must be explicit and SDK-owned, not a fallback after arbitrary network or authorization errors.
 
 This probe is **SDK-level evidence only**. The earlier full pi-durable lifecycle spike in #678 negotiated **2025-11-25**.
 Repeat the relevant cancellation, interruption/reopen and multi-instance tests with the selected SDK and public FastAgent
@@ -198,9 +197,9 @@ does not log arbitrary child programs in.
 
 ### Host API, grants and refresh ownership
 
-The proposed [authorization contract](mcp-auth.md) separates server declarations, opaque grant IDs and host-owned instance
+The [authorization contract](mcp-auth.md) separates server declarations, opaque grant IDs and host-owned instance
 bindings. It defines `inspectMcp` / `signInMcp`, the `openAgent` binding input, a CLI file adapter and the store's
-exclusive-access contract. These are design names, not current exports.
+exclusive-access contract. These operations are exported from the root entry; their types live in `src/mcp-api.ts`.
 
 Kage owns presentation, the system browser and credential storage. FastAgent owns protocol/auth mechanics, scope-consent
 requests and the local callback. Auth setup can run before the harness opens; ordinary open/tool calls cannot launch a
@@ -215,7 +214,7 @@ An agent close releases its clients only. Binding removal, whole-grant forgettin
 actions. Interactive sign-in creates a fresh grant rather than silently replacing one other agents may use. Detailed
 state transitions, tradeoffs and the controlled concurrency experiment are in [mcp-auth.md](mcp-auth.md).
 
-### Interoperability before implementation
+### Interoperability boundaries
 
 Use the SDK's OAuth machinery rather than build a second OAuth protocol stack. Verify resource metadata discovery and
 authorization-server discovery, registration selection (pre-registration or Client ID Metadata Documents; DCR only when a
@@ -229,9 +228,14 @@ loopback callback used by local Kage does not solve that boundary by itself.
 Protocol-authorized refresh/re-authorization after an authentication rejection is distinct from replaying an ambiguous
 tool call. Never replay an operation after a timeout/disconnection that may have happened after its side effect.
 
-## 7. Implementation gates
+## 7. Verification
 
-Before the feature is marked supported:
+The implemented subset is covered by `test/mcp-*.test.ts`, `test/cli-mcp.test.ts`, and the deployment/watcher checks.
+The built public entry also passed a Node 26.11.1 and Bun 1.4.4 stdio two-instance smoke test on macOS. A real Linear
+browser authorization through the CLI, public-agent calls, close isolation, forced-expiry refresh and new-process reuse
+passed on 2026-11-02; see [authorization evidence](mcp-auth.md#6-evidence-and-remaining-validation).
+
+Keep these gates when changing the subset:
 
 - Define the exact parser/interpolation contract, namespacing and supported schema/result mappings; verify representative
   Claude/Copilot-style stdio and HTTP entries, and explicit rejection of unsupported forms.
@@ -246,8 +250,8 @@ Before the feature is marked supported:
   is necessary for regressions but does not substitute for this interoperability acceptance. The Linear SDK-only flow
   above establishes the service baseline; repeat it through the implemented host API.
 - Confirm `.mcp.json` is shipped and inspected consistently by open/dev/start/deploy, with no copied credentials.
-- Verify the claimed runtime matrix with the selected dependency before publishing; the new-protocol probe covered Node
-  26.11.1 on macOS, not Bun, Windows or a cloud deployment.
+- Verify the claimed runtime matrix with the selected dependency before publishing. Windows, actual Kage UI/secure storage
+  and deployment OAuth relay have not been accepted; local loopback authorization does not prove those paths.
 
 Track implementation and evidence in [#678](https://github.com/fastagent-sh/fastagent/issues/678). Context package
 composition can be designed later without creating a second declaration format for these servers.

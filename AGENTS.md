@@ -31,6 +31,14 @@ src/
 │                           # errors and limits; imports only effect/Schema
 ├── sign-in-api.ts          # model credentials and sign-in as a host embedding agents sees them: FastAgent's own
 │                           # types (CredentialStore, SignInInteraction, …), SignInCancelled; imports nothing
+├── mcp-api.ts              # embedding-facing MCP grants, bindings, sign-in interaction and errors; imports nothing
+├── mcp/                    # MCP 2026-07-28, independent of the agent harness
+│   ├── config.ts           # .mcp.json validation, secret references and instance-local resolution
+│   ├── grants.ts           # grant records and durable writes under a shared storage lock
+│   ├── auth.ts             # OAuth discovery, target binding, serialized refresh and safe diagnostics
+│   ├── client.ts           # instance-owned stdio/HTTP clients, calls and scoped cleanup
+│   ├── host.ts             # inspectMcp, default grant storage and instance bindings
+│   └── sign-in.ts          # explicit consent, browser callback, PKCE exchange and durable grant creation
 ├── answer-text.ts          # a message's answer text as it streams: its deltas, plus entry text no delta carried
 ├── channel.ts              # the Channel contract: ChannelContext (agent, sessionFor, recordedSession, turn, stateDir),
 │                           # ChannelModule / Routes / LongConnection*, and defineChannel
@@ -278,6 +286,7 @@ src/
     │   ├── ids.ts          # every id as the storage's incarnation plus pi-durable's id, so none is ever reused;
     │   │                   # sessions.list's cursors, which no id reads as; the session id a tool runs in
     │   ├── wake.ts         # `wake` and `unwake` as pi-durable tools, installed when a serve gives the state root
+    │   ├── mcp.ts          # MCP tools as pi-durable tools, unsafe replay and actionable error details
     │   ├── defaults.ts     # the deployment's default model and thinking level, for a conversation that names none
     │   ├── parked.ts       # a task the crash-loop guard parked: its message ends `failed`, its session is freed
     │   └── release.ts      # temporary: places the messages a run that did not answer left waiting
@@ -316,7 +325,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **The API imports no harness.** `src/agent-api.ts` must not import any harness (`@earendil-works/pi-*` only under `src/harnesses/`): the consumer API is the layer that keeps a harness's changes away from clients, and keeping FastAgent's own harness code in one directory bounds what replacing the harness costs FastAgent. It does not bound what it costs an author: an agent's tools and extensions are pi-durable code, an accepted trade-off ([architecture.md](docs/design/architecture.md) §2).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. A message that cannot be answered ends `failed` with its `error` saying why, and a refused operation rejects with an `AgentError` (docs/SPEC.md §7). A stream is refused on its first read; once it has delivered anything, a failure ends it with a `stream_error` event, never a rejection a Caller would take for a refusal.
 - **One process owns an instance's state.** Durable state is the instance's storage (pi-durable's SQLite: sessions, messages, entries) and each Caller's own files under the state root (a channel's session map and turn records, the schedules' claims, wake-ups). One process opens a storage at a time, so a deployment routes every session of one storage to one process ([architecture.md](docs/design/architecture.md) §4.3). The process holds the open Agent and each Caller's queues; what a caller reads afterwards is durable before it is reported.
-- **Public surface is scoped on purpose.** `src/index.ts` is the one entry, one per kind of user beside the channel subpaths (SPEC.md §8): the Agent API, `openAgent`, what a host embedding agents needs beside it (`createAgent`, model credentials and sign-in, in FastAgent's own types: the entry names no pi-ai type), and what an author writes, every export named. The contracts stay neutral: `src/agent-api.ts` imports only `effect/Schema`, and `src/channel.ts` and `src/sign-in-api.ts` nothing. Internals (`openServing`, `serveAgent`, `openDurableAgent`, content editing, the model environment, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Public surface is scoped on purpose.** `src/index.ts` is the one entry, one per kind of user beside the channel subpaths (SPEC.md §8): the Agent API, `openAgent`, what a host embedding agents needs beside it (`createAgent`, model credentials and sign-in, in FastAgent's own types: the entry names no pi-ai type), and what an author writes, every export named. The contracts stay neutral: `src/agent-api.ts` imports only `effect/Schema`, and `src/channel.ts`, `src/sign-in-api.ts` and `src/mcp-api.ts` nothing. Internals (`openServing`, `serveAgent`, `openDurableAgent`, content editing, the model environment, the registry generator, the scheduler and router parts) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **The CLI serves a person and a coding agent alike** (docs/cli.md, "Scripts and coding agents"). A coding agent
   works in turns and sees a command's output only once it ends: nothing waits on a terminal, a choice not given exits
   2 naming what to pass, and a step only a person can take returns at once (`need_user_action`, a check command,

@@ -137,6 +137,10 @@ entry 是持久的，在哪里读到都一样。`delta`（回答正在写的部�
   agent 用工具去读它能读到的东西，包括别的聊天。
 - **会话 id 是名字，不是凭证。**
 
+MCP 配置与 OAuth 属于嵌入宿主接口，不改变 `sessions` / `messages` 或 HTTP 契约。`openAgent` 的 `mcp` 选项
+提供实例自己的授权绑定、变量和网络策略；`inspectMcp`、`signInMcp`、`mcpGrantFile` 供宿主在打开 agent 前配置授权。
+参见英文 [MCP 指南](../mcp.md)，其支持范围与限制以英文原文为准。
+
 ## 8. 和其他接口规范的对照
 
 这一节解读 [architecture.md](../design/architecture.md) §7。

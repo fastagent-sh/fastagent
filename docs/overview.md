@@ -136,8 +136,9 @@ Implemented today:
 - `openAgent` and its `serve()`: an agent directory opened and served inside an app; `createAgent`, model credentials
   and sign-in for a host that runs agents for a person (a desktop app beside `fastagent dev`).
 
+- MCP stdio/Streamable HTTP tools from `.mcp.json`, browser OAuth, and explicit instance bindings ([guide](mcp.md)).
+
 Not implemented yet:
 
 - An npm package as the deployable artifact, and context packages ([architecture.md](design/architecture.md) §4).
-- MCP servers declared in `.mcp.json` ([design](design/mcp.md), [#678](https://github.com/fastagent-sh/fastagent/issues/678)).
 - One instance spread over several processes (one process holds an instance's storage).
