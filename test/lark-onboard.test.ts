@@ -1,10 +1,19 @@
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
-  LARK_CONSOLE_URL,
   type LarkOnboardIO,
+  larkConsoleUrl,
   larkEventSecurityUrl,
   onboardLarkApp,
 } from "../src/channels/lark/onboard.ts";
+import { feishuAppAddons } from "../src/channels/feishu/setup-mode.ts";
+
+/** What a launcher link asks the platform to merge onto the app it creates. */
+function addonsOf(link: string): unknown {
+  const encoded = new URL(link).searchParams.get("addons");
+  if (encoded === null) throw new Error(`no addons in ${link}`);
+  return JSON.parse(gunzipSync(Buffer.from(encoded, "base64url")).toString("utf8"));
+}
 
 function fakeIO(answers: Array<string | undefined>): {
   io: LarkOnboardIO;
@@ -39,6 +48,27 @@ function fakeIO(answers: Array<string | undefined>): {
 
 const manual404 = async () => ({ manualReason: "config API returned HTTP 404" });
 
+describe("the launcher link", () => {
+  it("creates the app with the scopes and the event the channel needs, so nothing is ticked afterwards", () => {
+    const link = new URL(larkConsoleUrl("websocket"));
+    expect(`${link.origin}${link.pathname}`).toBe("https://open.larksuite.com/page/launcher");
+    expect(link.searchParams.get("from")).toBe("backend_oneclick");
+    // The same request Feishu's scan-to-create carries: one place says what a Feishu or Lark app needs.
+    expect(addonsOf(larkConsoleUrl("websocket"))).toEqual(feishuAppAddons("websocket"));
+    expect(addonsOf(larkConsoleUrl("websocket"))).toMatchObject({
+      scopes: {
+        tenant: expect.arrayContaining(["im:message.group_msg", "im:message:readonly", "im:chat.members:read"]),
+      },
+      events: { items: { tenant: ["im.message.receive_v1"] } },
+    });
+  });
+
+  it("asks for what the ingress needs: a webhook app also asks to register its own Request URL", () => {
+    expect(addonsOf(larkConsoleUrl("webhook"))).toEqual(feishuAppAddons("webhook"));
+    expect(larkConsoleUrl("webhook")).not.toBe(larkConsoleUrl("websocket"));
+  });
+});
+
 describe("guided Lark app onboarding", () => {
   it("opens the launcher, validates ID/secret, then captures the token while switching webhook mode", async () => {
     const fx = fakeIO([" cli_app ", " secret "]);
@@ -50,10 +80,9 @@ describe("guided Lark app onboarding", () => {
       LARK_APP_SECRET: "secret",
       LARK_VERIFICATION_TOKEN: "captured-token",
     });
-    expect(LARK_CONSOLE_URL).toBe("https://open.larksuite.com/page/launcher?from=backend_oneclick");
     expect(larkEventSecurityUrl("cli_app")).toBe("https://open.larksuite.com/app/cli_app/event?tab=safe");
     // The token captured, nothing is left for the person on the app's event page.
-    expect(fx.opened).toEqual([LARK_CONSOLE_URL]);
+    expect(fx.opened).toEqual([larkConsoleUrl("webhook")]);
     expect(fx.actions).toEqual([expect.stringMatching(/^create the app on Lark's one-click launcher/)]);
     expect(fx.prompts.map((p) => p.message)).toEqual([
       expect.stringContaining("LARK_APP_ID"),
@@ -162,7 +191,7 @@ describe("guided Lark app onboarding", () => {
       LARK_VERIFICATION_TOKEN: "new-token",
     });
     expect(fx.prompts).toHaveLength(3);
-    expect(fx.opened).toEqual([LARK_CONSOLE_URL, "https://open.larksuite.com/app/cli_new/event?tab=safe"]);
+    expect(fx.opened).toEqual([larkConsoleUrl("webhook"), "https://open.larksuite.com/app/cli_new/event?tab=safe"]);
   });
 
   it("reuses a token only with its complete existing App pair", async () => {

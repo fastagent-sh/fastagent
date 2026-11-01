@@ -22,7 +22,7 @@ import {
   isTransientFeishuRegistrationError,
 } from "../channels/feishu/feishu-api.ts";
 import { registerFeishuApp } from "../channels/feishu/register-app.ts";
-import { LARK_CONSOLE_URL, type LarkOnboardIO, onboardLarkApp } from "../channels/lark/onboard.ts";
+import { type LarkOnboardIO, larkConsoleUrl, onboardLarkApp } from "../channels/lark/onboard.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
 import { dotEnvPath, loadEnvValues, parseEnvContent } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -368,14 +368,16 @@ async function createFeishuAppFlow(
 export async function larkCredentialsNeeded(
   agentDir: string,
   again: string,
+  ingress: FeishuSubscriptionMode,
 ): Promise<{ json: Record<string, unknown>; text: string[] } | undefined> {
   const held = await activeDotEnvValues(agentDir, ["LARK_APP_ID", "LARK_APP_SECRET"]);
   if (held.LARK_APP_ID && held.LARK_APP_SECRET) return undefined;
   const valueFile = dotEnvPath(agentDir);
+  const url = larkConsoleUrl(ingress);
   return {
     json: {
       status: "need_user_action",
-      url: LARK_CONSOLE_URL,
+      url,
       variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
       value_file: valueFile,
       check_command: `${again} --json`,
@@ -385,7 +387,7 @@ export async function larkCredentialsNeeded(
         "conversation. Once they say they have, run check_command.",
     },
     text: [
-      `need_user_action: create the Lark app at ${LARK_CONSOLE_URL}`,
+      `need_user_action: create the Lark app at ${url}`,
       `  and set LARK_APP_ID and LARK_APP_SECRET in ${valueFile}`,
       `then run: ${again}`,
     ],

@@ -91,7 +91,9 @@ time: `dev --tunnel` changes only dev's Request URL, and `deploy --run` changes 
 One app still has only one subscription mode and Request URL, and two WebSocket clients on that app split its events.
 
 Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
-guided credential input, because its bound confirmation flow does not work.
+guided credential input, because its bound confirmation flow does not work. The launcher link carries the same
+`addons` as Feishu's, so a Lark app is created with the scopes and the event the channel needs; nothing is ticked in
+the console afterwards, except a scope the tenant withholds.
 Within either cloud, the ingress being prepared determines the remaining work. For WebSocket (what `add` prepares),
 the runtime credential set stops at the validated/persisted App ID/Secret pair; onboarding continues through the
 permission check and opens Events & Callbacks so the user can select long connection and publish.
@@ -464,7 +466,8 @@ picks up the current tool.
   publishing remain console actions.
 - Bound CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every
   ack renders as "Link expired"). `add lark` therefore uses the unbound launcher + guided credential
-  paste, then actively probes the config API: automatic mode/token bootstrap on success; manual
+  paste (the launcher link carries `addons`, so the app is created holding the agent scopes: checked on a real
+  international tenant, where an app created from it held all of them with none ticked), then actively probes the config API: automatic mode/token bootstrap on success; manual
   Token + Subscription mode/URL only on an explicit route-level 404.
 - Without the sensitive `im:message.group_msg` scope the platform never delivers unsummoned messages, so only @mentions summon.
 - A read of a place's history adds about 300–400 ms before a group turn starts.

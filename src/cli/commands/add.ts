@@ -294,7 +294,7 @@ const SETUP_ACTIONS: Record<"slack" | "feishu" | "lark", string> = {
 async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChannelOptions, at: AddPlan): Promise<void> {
   const { target } = at;
   if (kind === "lark") {
-    const needed = await larkCredentialsNeeded(target, at.rerun).catch(failStartup);
+    const needed = await larkCredentialsNeeded(target, at.rerun, at.ingress).catch(failStartup);
     if (needed !== undefined) {
       printReport(opts.json, needed.json, needed.text);
       process.exit(0);

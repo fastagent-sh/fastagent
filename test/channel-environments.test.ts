@@ -12,7 +12,8 @@ import { registerFeishuApp } from "../src/channels/feishu/register-app.ts";
 import { bootstrapFeishuVerificationToken } from "../src/channels/feishu/bootstrap-token.ts";
 import { text, password } from "@clack/prompts";
 
-vi.mock("../src/channels/feishu/register-app.ts", () => ({
+vi.mock("../src/channels/feishu/register-app.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/channels/feishu/register-app.ts")>()),
   registerFeishuApp: vi.fn(async () => ({
     appId: "cli_production",
     appSecret: "production_secret",

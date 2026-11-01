@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { larkConsoleUrl } from "../src/channels/lark/onboard.ts";
 import { agentWorkspace, run } from "./cli-run.ts";
 
 describe("add <channel> with no one at a terminal: the person's part, named", () => {
@@ -10,7 +11,8 @@ describe("add <channel> with no one at a terminal: the person's part, named", ()
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       status: "need_user_action",
-      url: "https://open.larksuite.com/page/launcher?from=backend_oneclick",
+      // `add` sets the app up for WebSocket: that is the link's scope set.
+      url: larkConsoleUrl("websocket"),
       variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
       value_file: join(dir, ".secrets", ".env"),
       check_command: `fastagent add lark ${dir} --json`,

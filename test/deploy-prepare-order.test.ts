@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { larkConsoleUrl } from "../src/channels/lark/onboard.ts";
 import { dotEnvPath, loadEnvValues } from "../src/value-file.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 
@@ -285,6 +286,8 @@ it("a coding agent's deploy needing a Lark app without its credentials names the
   expect(started).toEqual([]);
   expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({
     status: "need_user_action",
+    // A deployment's app is the webhook one.
+    url: larkConsoleUrl("webhook"),
     variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
     value_file: production(),
     check_command: "fastagent deploy fly --run --json",

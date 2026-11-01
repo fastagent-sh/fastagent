@@ -1,8 +1,20 @@
-import type { FeishuSubscriptionMode } from "../feishu/setup-mode.ts";
+import { encodeAddons } from "../feishu/register-app.ts";
+import { type FeishuSubscriptionMode, feishuAppAddons } from "../feishu/setup-mode.ts";
 
 /** Guided Lark-international onboarding. */
 
-export const LARK_CONSOLE_URL = "https://open.larksuite.com/page/launcher?from=backend_oneclick";
+/**
+ * Lark's one-click launcher, where the person creates the app. The launcher is unbound (the bound confirm page is broken
+ * on the international cloud), but it merges the `addons` query parameter onto the app it creates, as Feishu's does: the
+ * scopes and the event the channel needs arrive with the app, so nothing is ticked in the console afterwards. A tenant
+ * may still withhold a scope; the permission check that follows creation names it.
+ */
+export function larkConsoleUrl(ingress: FeishuSubscriptionMode): string {
+  const url = new URL("https://open.larksuite.com/page/launcher");
+  url.searchParams.set("from", "backend_oneclick");
+  url.searchParams.set("addons", encodeAddons(feishuAppAddons(ingress)));
+  return url.toString();
+}
 
 /** Directly where the fallback token lives (and where the successful automatic mode change is visible). */
 export function larkEventSecurityUrl(appId: string): string {
@@ -57,7 +69,8 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
     io.note(`Reusing Lark app ${existingId}.`);
   } else {
     io.openUrl(
-      LARK_CONSOLE_URL,
+      // No ingress named is the webhook path below (a deploy's production app).
+      larkConsoleUrl(opts.ingress ?? "webhook"),
       "create the app on Lark's one-click launcher; LARK_APP_ID and LARK_APP_SECRET are under Credentials & Basic Info",
     );
   }

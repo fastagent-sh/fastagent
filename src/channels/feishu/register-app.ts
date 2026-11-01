@@ -27,7 +27,7 @@ interface FeishuAppAddons {
 }
 
 /** JSON → gzip → base64url — the platform's fixed addons encoding. */
-function encodeAddons(addons: FeishuAppAddons): string {
+export function encodeAddons(addons: FeishuAppAddons): string {
   return gzipSync(Buffer.from(JSON.stringify(addons), "utf8"))
     .toString("base64")
     .replace(/\+/g, "-")
