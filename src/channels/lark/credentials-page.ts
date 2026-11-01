@@ -9,6 +9,7 @@ import {
   prose,
   refusal,
   sendPage,
+  setupRequestUrl,
   statusCard,
   step,
   submit,
@@ -158,7 +159,8 @@ async function startPage<T>(input: {
   let port = 0;
 
   const server = createServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const url = setupRequestUrl(request, response);
+    if (url === undefined) return;
     const host = request.headers.host ?? "";
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
       response.writeHead(421).end("misdirected request\n");

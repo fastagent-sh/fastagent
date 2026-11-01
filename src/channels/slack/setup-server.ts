@@ -8,6 +8,7 @@ import {
   prose,
   refusal,
   sendPage,
+  setupRequestUrl,
   statusCard,
   step,
   submit,
@@ -117,27 +118,41 @@ export async function startSlackSetupServer(): Promise<SlackSetupServer> {
   });
 
   const server = createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const url = setupRequestUrl(request, response);
+    if (url === undefined) return;
     if (request.method === "GET" && url.pathname === "/health") {
       response.end("ok\n");
       return;
     }
     if (request.method === "GET" && url.pathname === redirectPath) {
-      settleOAuth?.({
+      const callback = {
         code: url.searchParams.get("code") ?? undefined,
         state: url.searchParams.get("state") ?? undefined,
         error: url.searchParams.get("error") ?? undefined,
-      });
+      };
+      settleOAuth?.(callback);
       settleOAuth = undefined;
+      // The onboarding flow still has to validate state and exchange the code.
       sendPage(
         response,
         200,
-        status({
-          state: "done",
-          heading: "Slack allowed the app",
-          lede: "FastAgent is finishing the install.",
-          next: "You can close this tab and go back to your coding agent.",
-        }),
+        status(
+          callback.error !== undefined
+            ? {
+                state: "failed",
+                heading: "Slack authorization was not approved",
+                lede: callback.error
+                  ? `OAuth error: ${callback.error}`
+                  : "The callback reported an authorization error.",
+                next: "Go back to your coding agent to restart setup.",
+              }
+            : {
+                state: "working",
+                heading: "OAuth response received",
+                lede: "FastAgent still needs to verify this response and finish the installation.",
+                next: "Go back to your coding agent to check the result. You can close this tab.",
+              },
+        ),
       );
       return;
     }

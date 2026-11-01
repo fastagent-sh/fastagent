@@ -11,7 +11,16 @@
  * success only; every text is at least 4.5:1 against its background and an input's edge 3:1.
  */
 import { randomBytes } from "node:crypto";
-import type { ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+
+export function setupRequestUrl(request: IncomingMessage, response: ServerResponse): URL | undefined {
+  const url = URL.parse(request.url ?? "/", "http://127.0.0.1");
+  if (url === null) {
+    response.writeHead(400).end("invalid request URL\n");
+    return undefined;
+  }
+  return url;
+}
 
 const escapeHtml = (text: string): string =>
   text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
