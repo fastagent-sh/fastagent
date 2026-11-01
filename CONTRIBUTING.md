@@ -88,7 +88,7 @@ A PR is mergeable only when:
 - `npm run lint` is clean (Biome format/lint plus local Markdown links; run `npm run format` to auto-fix code),
 - `npm run typecheck` is clean (TypeScript with `noUnusedLocals`/`noUnusedParameters`),
 - `npm test` passes,
-- CI (`Core checks` across Node 24.15 / 24 / 26, and `CodeQL`) is green. Branch protection enforces this: a PR whose required checks have not passed cannot merge.
+- CI (`Core checks` across Node 24.15 / 26, and `CodeQL`) is green. Branch protection enforces this: a PR whose required checks have not passed cannot merge.
 
 Add or update the smallest relevant tests that prove the change. The Agent API's conformance suite lives in `test/agent-api-conformance.ts`; one-off product-scenario scripts should be run and then deleted, not committed.
 

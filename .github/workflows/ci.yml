@@ -15,8 +15,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor (RUNTIME_FLOOR in src/runtime.ts, package.json engines), its line's newest, and the next LTS.
-        node-version: ['24.15.0', '24', '26']
+        # The floor (RUNTIME_FLOOR in src/runtime.ts, package.json engines) and the next LTS. The floor's own
+        # line (`24`) is not a third entry: it only sits between these two, and a job that cannot fail
+        # differently is one more chance for a flaky test to fail the run.
+        node-version: ['24.15.0', '26']
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -31,10 +33,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Lint and typecheck do not depend on the Node version, so they run once, on the floor.
       - name: Lint
+        if: matrix.node-version == '24.15.0'
         run: npm run lint
 
       - name: Typecheck
+        if: matrix.node-version == '24.15.0'
         run: npm run typecheck
 
       - name: Test
