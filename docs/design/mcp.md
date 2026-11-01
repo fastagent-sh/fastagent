@@ -106,9 +106,9 @@ carries `.mcp.json`; dependencies belong to the agent's package/environment, not
 
 ## 4. Protocol target and evidence
 
-The candidate current-protocol target is **2026-07-28**, with the v2 TypeScript client SDK. The supported revision policy
-must also pass a real OAuth MCP service used by Kage; a stdio-only probe cannot decide it. Do not promise a hard pin or
-universal compatibility before that check. Its core is request-scoped:
+The current-protocol target is **2026-07-28**, with the v2 TypeScript client SDK. It has been exercised with local stdio
+servers and the real Linear OAuth/HTTP service below. This supports the target, not a claim of universal server
+compatibility or completed FastAgent integration. Its core is request-scoped:
 `server/discover` and request metadata replace the old `initialize` handshake. Explicit server handles, not FastAgent
 session ids or a transport connection, identify cross-call server state. See the
 [protocol changes](https://modelcontextprotocol.io/specification/2026-07-28/changelog).
@@ -129,6 +129,34 @@ after arbitrary network or authorization errors.
 This probe is **SDK-level evidence only**. The earlier full pi-durable lifecycle spike in #678 negotiated **2025-11-25**.
 Repeat the relevant cancellation, interruption/reopen and multi-instance tests with the selected SDK and public FastAgent
 assembly before shipping. Do not promote the old connection-local logging-toggle behavior into a new protocol guarantee.
+
+### Linear HTTP/OAuth interoperability
+
+On 2026-11-01, a disposable client using `@modelcontextprotocol/client@2.4.0` connected to Linear's official
+`https://mcp.linear.app/mcp/readonly` endpoint through the machine's configured HTTP proxy. This was SDK-level testing,
+not a Kage or FastAgent feature implementation. The operator completed browser authorization; no token/code was pasted
+into the conversation. The experiment recorded only protocol/status information, not returned team data.
+
+| Check | Observed result |
+|---|---|
+| Discovery and registration | Protected resource and issuer metadata matched; dynamic registration accepted a native client with a loopback callback and PKCE S256 |
+| Browser callback | State and the advertised RFC 9207 issuer were checked; tokens persisted atomically to an owner-readable temporary file (`0600`) |
+| Granted scope | `read`, with a refresh token; the reported access-token lifetime was 86100 seconds |
+| Protocol and tools | Explicit 2026-07-28 pin connected in the modern era; 38 tools were listed |
+| Tool call | `list_teams` with `limit: 1` returned successfully; no writes to Linear business data |
+| New process | A separate Node process loaded the saved grant and called the same tool without registration or browser authorization |
+| Refresh | One explicit refresh request succeeded; both access and refresh tokens rotated, scope stayed `read`, and the replacement grant worked immediately and in another new process |
+| Two clients | Two independent clients deliberately used the same grant; closing A left B able to call the tool, and did not change the persisted grant |
+
+Linear's initial 401 challenge on this read-only URL advertised `scope="read write"`, while its protected-resource
+metadata advertised only `read`. An explicit authorization request for `read` succeeded and the resulting grant served
+all tested reads. Do not silently broaden scopes from a challenge, and do not turn this service-specific observation
+into a general rule to disregard scope requirements. The host needs a scope-consent boundary.
+
+The test used an explicit SDK `refreshAuthorization` call, not a wait for natural expiry or the transport's automatic
+401 recovery. Proactive expiry handling, concurrent refresh, failed/denied authorization, reauthorization, remote
+revocation, distinct accounts and FastAgent/Kage multi-instance wiring remain acceptance work. Two SDK clients sharing
+one grant are not proof of two isolated agent instances or two accounts.
 
 ## 5. Ownership and capability scope
 
@@ -227,7 +255,8 @@ Before the feature is marked supported:
 - Verify OAuth discovery, browser sign-in/cancel/denial, restart persistence, refresh rotation and concurrent refresh,
   insufficient scope, issuer/resource changes, two accounts at one endpoint and explicit cross-agent grant bindings.
 - Complete a real Kage-style browser OAuth flow against a target MCP service and call a tool; a fake authorization server
-  is necessary for regressions but does not substitute for this interoperability acceptance.
+  is necessary for regressions but does not substitute for this interoperability acceptance. The Linear SDK-only flow
+  above establishes the service baseline; repeat it through the implemented host API.
 - Confirm `.mcp.json` is shipped and inspected consistently by open/dev/start/deploy, with no copied credentials.
 - Verify the claimed runtime matrix with the selected dependency before publishing; the new-protocol probe covered Node
   26.11.1 on macOS, not Bun, Windows or a cloud deployment.
