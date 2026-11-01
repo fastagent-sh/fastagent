@@ -200,7 +200,7 @@ src/
 │   └── lark/               # Lark compatibility/degraded edges over the Feishu engine
 │       ├── lark.ts         # thin branded adapter bound to LARK_COMPAT_CLOUD
 │       ├── onboard.ts      # unbound launcher (its link carries the agent's scopes) + credentials + manual config fallback
-│       ├── credentials-page.ts # where a person pastes the App ID and App Secret for a coding agent's setup: loopback only
+│       ├── credentials-page.ts # loopback-only setup forms: App ID/Secret and a manually copied Verification Token
 │       └── scaffold/       # `add lark` bundle
 ├── deploy/                 # `deploy docker|fly|railway|agentcore` (core.md §9). Neutral kernel at top, one
 │   │                       # directory per host. ADDING A HOST: deploy/hosts.ts says what to write and what

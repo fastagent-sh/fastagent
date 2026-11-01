@@ -257,11 +257,10 @@ describe("a Lark app through a coding agent's person", () => {
         body: new URLSearchParams({ app_id: "cli_pasted", app_secret: "good-secret" }),
       });
       expect(await taken.text()).toContain("Lark credentials verified");
-      // What it hands back to be written is the pair Lark accepted; the page wrote nothing itself.
       expect(await run).toMatchObject({ LARK_APP_ID: "cli_pasted", LARK_APP_SECRET: "good-secret" });
       expect(
         existsSync(join(dir, ".secrets", ".env")) ? await readFile(join(dir, ".secrets", ".env"), "utf8") : "",
-      ).not.toContain("good-secret");
+      ).toContain("LARK_APP_SECRET=good-secret");
       expect(carried()).toBe(true);
       // The page is gone once it has done its job.
       await expect(realFetch(page.url)).rejects.toThrow();

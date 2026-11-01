@@ -4,7 +4,11 @@
  */
 import { request } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
-import { type LarkCredentialsPage, startLarkCredentialsPage } from "../src/channels/lark/credentials-page.ts";
+import {
+  LarkCredentialsRefused,
+  type LarkCredentialsPage,
+  startLarkCredentialsPage,
+} from "../src/channels/lark/credentials-page.ts";
 
 const CONSOLE = "https://open.larksuite.com/page/launcher?from=backend_oneclick&addons=XYZ";
 const pages: LarkCredentialsPage[] = [];
@@ -86,7 +90,10 @@ it("takes a pair Lark accepts, says so, and hands it on only once that page has 
 
 it("a pair Lark refuses stays on the page: the error above the fields, the App ID kept, the Secret never put back", async () => {
   const page = await open(async () => {
-    throw new Error("app secret invalid");
+    throw new LarkCredentialsRefused("Lark refused that App ID or Secret.", {
+      fix: "Copy both again from Credentials & Basic Info.",
+      why: "Lark said: app secret invalid",
+    });
   });
   const response = await post(page.url, { app_id: "cli_abc", app_secret: "wrong-secret" });
   const html = await response.text();
@@ -94,7 +101,7 @@ it("a pair Lark refuses stays on the page: the error above the fields, the App I
   expect(html).toContain("Lark refused that App ID or Secret.");
   // What the person is told to do stays a plain sentence; what Lark said is set apart under it, for whoever has to look it up.
   expect(html).toContain(
-    ' Copy both again from Credentials &amp; Basic Info.<span class="why">Lark said: app secret invalid</span>',
+    'Copy both again from Credentials &amp; Basic Info.<span class="why">Lark said: app secret invalid</span>',
   );
   expect(html).toContain('value="cli_abc"');
   expect(html).not.toContain("wrong-secret");
@@ -115,7 +122,7 @@ it("a value that is missing is named, without asking Lark", async () => {
 
 it("shows what it was given as text, never as markup", async () => {
   const page = await open(async () => {
-    throw new Error('<img src=x onerror="alert(1)">');
+    throw new LarkCredentialsRefused('<img src=x onerror="alert(1)">');
   });
   const html = await (await post(page.url, { app_id: '"><script>alert(1)</script>', app_secret: "x" })).text();
   expect(html).not.toContain("<script>alert(1)");
@@ -147,4 +154,75 @@ it("takes no more than a short form: a large body is refused", async () => {
   const response = await post(page.url, { app_id: "cli_abc", app_secret: "x".repeat(40_000) });
   expect(response.status).toBe(413);
   expect(check).not.toHaveBeenCalled();
+});
+
+it.each(["network timeout", "permission denied writing credentials"])(
+  "fails the setup instead of requesting new credentials: %s",
+  async (message) => {
+    const failure = new Error(message);
+    const page = await open(async () => {
+      throw failure;
+    });
+    const result = page.credentials.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const html = await (await post(page.url, { app_id: "cli_abc", app_secret: "s" })).text();
+    expect(html).toContain("Setup stopped");
+    expect(html).toContain(message);
+    expect(html).not.toContain("Lark refused");
+    expect(await result).toBe(failure);
+  },
+);
+
+it.each([false, true])("settles after a browser disconnects during validation (failure=%s)", async (fails) => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const failure = new Error("validation unavailable");
+  const page = await open(async () => {
+    entered.resolve();
+    await release.promise;
+    if (fails) throw failure;
+  });
+  let outcome: unknown;
+  const result = page.credentials.then(
+    (pair) => {
+      outcome = pair;
+    },
+    (error: unknown) => {
+      outcome = error;
+    },
+  );
+  const abort = new AbortController();
+  const sent = fetch(page.url, {
+    method: "POST",
+    body: new URLSearchParams({ app_id: "cli_abc", app_secret: "s" }),
+    signal: abort.signal,
+  });
+  const interrupted = expect(sent).rejects.toThrow();
+  await entered.promise;
+  abort.abort();
+  await interrupted;
+  // Allow the socket close to reach the server before its external validation completes.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  release.resolve();
+  await vi.waitFor(() => expect(outcome).toEqual(fails ? failure : { appId: "cli_abc", appSecret: "s" }));
+  await result;
+});
+
+it("refuses a second submission while the accepted pair is being persisted", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const check = vi.fn(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  const page = await open(check);
+  const first = post(page.url, { app_id: "cli_abc", app_secret: "s" });
+  await entered.promise;
+  expect((await post(page.url, { app_id: "cli_other", app_secret: "other" })).status).toBe(409);
+  release.resolve();
+  await first;
+  expect(check).toHaveBeenCalledOnce();
+  await expect(page.credentials).resolves.toEqual({ appId: "cli_abc", appSecret: "s" });
 });

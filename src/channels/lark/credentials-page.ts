@@ -1,13 +1,6 @@
-/**
- * Where a person pastes a Lark app's App ID and App Secret, for a setup a coding agent runs: they go from the browser to
- * this process, are checked against Lark, and only then are handed on to be written. They never pass through the agent's
- * conversation, and the person never has to edit a file (a command typed into the same window as the agent is read by it).
- *
- * A one-time page on this machine: bound to loopback, its path a random secret, a request from another origin or under
- * another host name refused (a page elsewhere in the browser must not be able to post to it).
- */
+/** Loopback-only, single-use forms for Lark setup secrets; values never pass through the agent's conversation. */
 import { randomBytes } from "node:crypto";
-import { type IncomingMessage, createServer } from "node:http";
+import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import {
   field,
   formCard,
@@ -26,15 +19,23 @@ export interface LarkCredentials {
   appSecret: string;
 }
 
-export interface LarkCredentialsPage {
-  /** Where the person goes. */
+export class LarkCredentialsRefused extends Error {
+  readonly fix: string | undefined;
+  readonly why: string | undefined;
+  constructor(headline: string, options: { fix?: string; why?: string } = {}) {
+    super(headline);
+    this.name = "LarkCredentialsRefused";
+    this.fix = options.fix;
+    this.why = options.why;
+  }
+}
+
+export interface LarkCredentialsPage<T = LarkCredentials> {
   url: string;
-  /** The credentials `check` accepted. Resolves once the page that says so has been sent. */
-  credentials: Promise<LarkCredentials>;
+  credentials: Promise<T>;
   close(): Promise<void>;
 }
 
-/** A request's body, or `undefined` past 16 KB: two short values are all this page takes. */
 function readBody(request: IncomingMessage): Promise<string | undefined> {
   return new Promise((resolve) => {
     let body = "";
@@ -49,69 +50,125 @@ function readBody(request: IncomingMessage): Promise<string | undefined> {
   });
 }
 
-function form(
-  consoleUrl: string,
-  problem?: { headline: string; detail?: string; why?: string },
-  appId?: string,
-): string {
-  const invalid = problem !== undefined;
-  return formCard(
-    "Connect Lark",
-    [
-      step(
-        1,
-        "Create the app in Lark",
-        prose("It opens with the permissions and event your agent needs already set.") +
-          openButton("Open Lark", consoleUrl),
-      ),
-      step(
-        2,
-        "Paste its credentials",
-        (problem
-          ? refusal(problem.headline, problem.detail, problem.why)
-          : prose("Find them under <b>Credentials &amp; Basic Info</b>.")) +
-          field({ id: "app_id", label: "App ID", placeholder: "cli_…", ...(appId ? { value: appId } : {}), invalid }) +
-          field({ id: "app_secret", label: "App Secret", secret: true, invalid, autofocus: invalid }) +
-          submit("Save and check") +
-          privacy(),
-      ),
-    ].join(""),
-  );
-}
-
-/**
- * Serve the page. `check` is asked about each pair pasted: it throws to refuse it (the page shows why, keeps the App ID,
- * and asks again), and returns once Lark accepts it.
- */
-export async function startLarkCredentialsPage(input: {
-  /** Lark's launcher, with what the channel needs set on the app it creates. */
+export function startLarkCredentialsPage(input: {
   consoleUrl: string;
   check(credentials: LarkCredentials): Promise<void>;
 }): Promise<LarkCredentialsPage> {
-  const path = `/lark/credentials/${randomBytes(24).toString("hex")}`;
-  let settle: ((credentials: LarkCredentials) => void) | undefined;
-  const credentials = new Promise<LarkCredentials>((resolve) => {
-    settle = resolve;
+  return startPage({
+    heading: "Lark credentials verified",
+    form: (pasted, problem) =>
+      formCard(
+        "Connect Lark",
+        [
+          step(
+            1,
+            "Create the app in Lark",
+            prose("It opens with the permissions and event your agent needs already set.") +
+              openButton("Open Lark", input.consoleUrl),
+          ),
+          step(
+            2,
+            "Paste its credentials",
+            (problem
+              ? refusal(problem.message, problem.fix, problem.why)
+              : prose("Find them under <b>Credentials &amp; Basic Info</b>.")) +
+              field({
+                id: "app_id",
+                label: "App ID",
+                placeholder: "cli_…",
+                value: pasted.get("app_id") ?? "",
+                invalid: !!problem,
+              }) +
+              field({ id: "app_secret", label: "App Secret", secret: true, invalid: !!problem, autofocus: !!problem }) +
+              submit("Save and check") +
+              privacy(),
+          ),
+        ].join(""),
+      ),
+    accept: async (pasted) => {
+      const pair = { appId: (pasted.get("app_id") ?? "").trim(), appSecret: (pasted.get("app_secret") ?? "").trim() };
+      if (!pair.appId || !pair.appSecret) {
+        throw new LarkCredentialsRefused("Both values are needed.", {
+          fix: "Copy the App ID and the App Secret from Credentials & Basic Info.",
+        });
+      }
+      await input.check(pair);
+      return pair;
+    },
   });
+}
+
+export function startLarkVerificationPage(input: {
+  consoleUrl: string;
+  save(token: string): Promise<void>;
+}): Promise<LarkCredentialsPage<string>> {
+  return startPage({
+    heading: "Verification Token saved",
+    form: (_pasted, problem) =>
+      formCard(
+        "Finish Lark webhook setup",
+        [
+          step(
+            1,
+            "Copy the Verification Token",
+            prose(
+              "Find it under <b>Events &amp; Callbacks</b> → Encryption Strategy. Choose webhook mode when setting the Request URL.",
+            ) + openButton("Open Lark", input.consoleUrl),
+          ),
+          step(
+            2,
+            "Paste the token here",
+            (problem ? refusal(problem.message, problem.fix) : "") +
+              field({
+                id: "verification_token",
+                label: "Verification Token",
+                secret: true,
+                invalid: !!problem,
+                autofocus: !!problem,
+              }) +
+              submit("Save token") +
+              privacy(),
+          ),
+        ].join(""),
+      ),
+    accept: async (pasted) => {
+      const token = (pasted.get("verification_token") ?? "").trim();
+      if (!token) throw new LarkCredentialsRefused("Verification Token is required.");
+      await input.save(token);
+      return token;
+    },
+  });
+}
+
+// A browser can leave during validation, before either response event can be subscribed to.
+function afterResponse(response: ServerResponse, complete: () => void): void {
+  if (response.destroyed || response.writableFinished) complete();
+  else response.once("close", complete);
+}
+
+async function startPage<T>(input: {
+  heading: string;
+  form(pasted: URLSearchParams, problem?: LarkCredentialsRefused): string;
+  accept(pasted: URLSearchParams): Promise<T>;
+}): Promise<LarkCredentialsPage<T>> {
+  const path = `/lark/credentials/${randomBytes(24).toString("hex")}`;
+  const { promise: credentials, resolve, reject } = Promise.withResolvers<T>();
   let checking = false;
   let used = false;
   let port = 0;
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    // A DNS-rebinding page reaches this server under its own name; a form on another site posts with another origin.
     const host = request.headers.host ?? "";
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
-      response.statusCode = 421;
-      response.end("misdirected request\n");
+      response.writeHead(421).end("misdirected request\n");
       return;
     }
     if (url.pathname !== path || (request.method !== "GET" && request.method !== "POST")) {
-      response.statusCode = 404;
-      response.end("not found\n");
+      response.writeHead(404).end("not found\n");
       return;
     }
-    if (used) {
+    const expired = () =>
       sendPage(response, 404, {
         title: "FastAgent setup",
         card: statusCard({
@@ -120,65 +177,69 @@ export async function startLarkCredentialsPage(input: {
           next: "Go back to your coding agent.",
         }),
       });
+    if (used) {
+      expired();
       return;
     }
     if (request.method === "GET") {
-      sendPage(response, 200, { title: "Connect Lark — FastAgent", card: form(input.consoleUrl) });
+      sendPage(response, 200, { title: "Connect Lark — FastAgent", card: input.form(new URLSearchParams()) });
       return;
     }
     const site = request.headers["sec-fetch-site"];
     if (site !== undefined && site !== "same-origin") {
-      response.statusCode = 403;
-      response.end("forbidden\n");
+      response.writeHead(403).end("forbidden\n");
       return;
     }
     const body = await readBody(request);
     if (body === undefined) {
-      response.statusCode = 413;
-      response.end("payload too large\n");
+      response.writeHead(413).end("payload too large\n");
       return;
     }
-    const pasted = new URLSearchParams(body);
-    const pair = { appId: (pasted.get("app_id") ?? "").trim(), appSecret: (pasted.get("app_secret") ?? "").trim() };
-    const again = (headline: string, detail?: string, why?: string) =>
-      sendPage(response, 200, {
-        title: "Connect Lark — FastAgent",
-        card: form(input.consoleUrl, { headline, ...(detail ? { detail } : {}), ...(why ? { why } : {}) }, pair.appId),
-      });
-    if (!pair.appId || !pair.appSecret) {
-      again("Both values are needed.", " Copy the App ID and the App Secret from Credentials & Basic Info.");
+    if (used) {
+      expired();
       return;
     }
     if (checking) {
-      again("Still checking the last values.", " Wait a moment, then try again.");
+      response.writeHead(409).end("another submission is being checked\n");
       return;
     }
     checking = true;
+    const pasted = new URLSearchParams(body);
+    let accepted: T;
     try {
-      await input.check(pair);
+      accepted = await input.accept(pasted);
     } catch (error) {
       checking = false;
-      again(
-        "Lark refused that App ID or Secret.",
-        " Copy both again from Credentials & Basic Info.",
-        `Lark said: ${(error as Error).message}`,
-      );
+      // Only explicit input refusals stay on the form. Infrastructure and persistence errors fail the ticket.
+      if (error instanceof LarkCredentialsRefused) {
+        sendPage(response, 200, { title: "Connect Lark — FastAgent", card: input.form(pasted, error) });
+        return;
+      }
+      used = true;
+      afterResponse(response, () => reject(error));
+      sendPage(response, 200, {
+        title: "Setup stopped — FastAgent",
+        card: statusCard({
+          state: "failed",
+          heading: "Setup stopped",
+          lede: error instanceof Error ? error.message : String(error),
+          next: "Go back to your coding agent.",
+        }),
+      });
       return;
     }
     used = true;
-    // What this page can say is what it knows: the pair works. Whether the app still needs a step in Lark is the agent's to say.
+    afterResponse(response, () => resolve(accepted));
     sendPage(response, 200, {
-      title: "Lark credentials verified — FastAgent",
+      title: `${input.heading} — FastAgent`,
       card: statusCard({
         state: "done",
-        heading: "Lark credentials verified",
-        lede: "Your coding agent takes it from here, and will say if anything is left to do in Lark.",
+        heading: input.heading,
+        lede: "Your coding agent will say if anything is left to do in Lark.",
         next: "Go back to your coding agent.",
       }),
     });
-    response.once("finish", () => settle?.(pair));
   });
-
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -192,7 +253,6 @@ export async function startLarkCredentialsPage(input: {
     throw new Error("the Lark credentials page did not receive a local TCP port");
   }
   port = address.port;
-
   return {
     url: `http://127.0.0.1:${port}${path}`,
     credentials,
