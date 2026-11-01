@@ -22,12 +22,12 @@ describe("content: the declaration", () => {
   it("reads each repository by name", () => {
     expect(
       declareContent({
-        handbook: { github: "acme/handbook", readonly: true, description: "The team's rules." },
+        handbook: { github: "acme/handbook", description: "The team's rules." },
         app: { github: "acme/app", ref: "main" },
       }),
     ).toEqual([
-      { name: "handbook", repo: "acme/handbook", readonly: true, description: "The team's rules." },
-      { name: "app", repo: "acme/app", ref: "main", readonly: false },
+      { name: "handbook", repo: "acme/handbook", description: "The team's rules." },
+      { name: "app", repo: "acme/app", ref: "main" },
     ]);
     expect(declareContent(undefined)).toEqual([]);
   });
@@ -36,16 +36,17 @@ describe("content: the declaration", () => {
     ["not a map", [{ github: "a/b" }], /"content" must be an object of entries by name/],
     ["an entry that is not an object", { app: "a/b" }, /content "app" must be an object/],
     ["an unknown key", { app: { github: "a/b", readonnly: true } }, /content "app": unknown key "readonnly"/],
+    // Content the agent only reads was once a flag; it is not a thing the declaration says.
+    ["a flag that is gone", { app: { github: "a/b", readonly: true } }, /content "app": unknown key "readonly"/],
     // A machine's path is never declared in the shared file: context.local.json binds it on that machine.
     ["a path", { app: { github: "a/b", path: "/x" } }, /content "app": unknown key "path"/],
     [
       "an entry no instance but this one reaches",
-      { notes: { readonly: true } },
+      { notes: { description: "Notes." } },
       /content "notes" needs "github": context\.json is shared, .* bind a directory of this machine in context\.local\.json/,
     ],
     ["a repository not owner/repo", { app: { github: "acme" } }, /"github" must be "owner\/repo"/],
     ["a ref git would read as an option", { app: { github: "a/b", ref: "--upload-pack=x" } }, /"ref" must name/],
-    ["a non-boolean flag", { app: { github: "a/b", readonly: "yes" } }, /"readonly" must be a boolean/],
     ["an empty description", { app: { github: "a/b", description: "" } }, /"description" must be a non-empty/],
     ["a name that is not one path segment", { "my notes": { github: "a/b" } }, /a name is one path segment/],
     [
@@ -66,7 +67,7 @@ describe("content: this machine's bindings", () => {
       declareBindings(
         {
           app: { path: "/code/app" },
-          notes: { path: "~/notes", readonly: true, description: "My notes." },
+          notes: { path: "~/notes", description: "My notes." },
           drafts: { path: "../drafts" },
         },
         declared,
@@ -74,18 +75,22 @@ describe("content: this machine's bindings", () => {
       ),
     ).toEqual([
       { name: "app", path: "/code/app", kind: "checkout" },
-      { name: "notes", path: join(homedir(), "notes"), kind: "local", readonly: true, description: "My notes." },
-      { name: "drafts", path: "/agents/drafts", kind: "local", readonly: false },
+      { name: "notes", path: join(homedir(), "notes"), kind: "local", description: "My notes." },
+      { name: "drafts", path: "/agents/drafts", kind: "local" },
     ]);
   });
 
   it.each([
-    ["a binding without a path", { notes: { readonly: true } }, /content "notes": "path" must be a non-empty string/],
+    [
+      "a binding without a path",
+      { notes: { description: "Notes." } },
+      /content "notes": "path" must be a non-empty string/,
+    ],
     ["an unknown key", { notes: { path: "/x", github: "a/b" } }, /content "notes": unknown key "github"/],
     [
       "a treatment of the shared entry it binds",
-      { app: { path: "/x", readonly: true } },
-      /content "app" binds this machine's checkout .* says "readonly" for every instance: give it only "path"/,
+      { app: { path: "/x", description: "The app." } },
+      /content "app" binds this machine's checkout .* says "description" for every instance: give it only "path"/,
     ],
     ["the shared entry's name spelled otherwise", { App: { path: "/x" } }, /binds the entry context\.json names "app"/],
   ])("refuses %s, naming it", (_what, raw, message) => {
@@ -97,7 +102,7 @@ describe("content: context.json and context.local.json", () => {
   it("is read whole, every refusal naming the file; an agent without one declares nothing", async () => {
     const path = "/a/context.json";
     const file = parseContextFile(`{ "$schema": "x", "content": { "app": { "github": "acme/app" } } }`, path);
-    expect(file.declared).toEqual([{ name: "app", repo: "acme/app", readonly: false }]);
+    expect(file.declared).toEqual([{ name: "app", repo: "acme/app" }]);
     expect(parseContextFile(contextFileText(file), path)).toEqual(file);
     expect(() => parseContextFile("{ content: {} }", path)).toThrow(/^\/a\/context\.json is not valid JSON/);
     expect(() => parseContextFile("[]", path)).toThrow("/a/context.json must hold a JSON object");
@@ -118,7 +123,7 @@ describe("content: context.json and context.local.json", () => {
       path,
       `{ "content": { "app": { "github": "acme/app" } }, "environment": { "packages": { "cargo:x": "1" } } }`,
     );
-    expect(loadContent(dir)).toEqual({ declared: [{ name: "app", repo: "acme/app", readonly: false }], bound: [] });
+    expect(loadContent(dir)).toEqual({ declared: [{ name: "app", repo: "acme/app" }], bound: [] });
     expect(() => loadEnvironment(dir)).toThrow(`${path}: environment: package "cargo:x" installs with cargo:`);
     // An edit writes the whole, so it reads the whole.
     expect(() => readContextFile(dir)).toThrow(`${path}: environment: package "cargo:x"`);
@@ -136,10 +141,10 @@ describe("content: context.json and context.local.json", () => {
     const local = join(dir, "context.local.json");
     await writeFile(local, `{ "content": { "app": { "path": "/code/app" }, "notes": { "path": "notes" } } }`);
     expect(loadContent(dir)).toEqual({
-      declared: [{ name: "app", repo: "acme/app", readonly: false }],
+      declared: [{ name: "app", repo: "acme/app" }],
       bound: [
         { name: "app", path: "/code/app", kind: "checkout" },
-        { name: "notes", path: join(dir, "notes"), kind: "local", readonly: false },
+        { name: "notes", path: join(dir, "notes"), kind: "local" },
       ],
     });
     // The environment is the shared file's alone.
@@ -155,9 +160,9 @@ describe("content: what a command's <source> adds", () => {
       addition: { name: "notes", binding: { path: "/home/me/notes" } },
       notes: [],
     });
-    expect(readContentSource("/x", "/", { readonly: true, name: "n", description: "Notes." }).addition).toEqual({
+    expect(readContentSource("/x", "/", { name: "n", description: "Notes." }).addition).toEqual({
       name: "n",
-      binding: { path: "/x", readonly: true, description: "Notes." },
+      binding: { path: "/x", description: "Notes." },
     });
     expect(readContentSource("github:acme/app", "/", { ref: "main" }).addition).toEqual({
       name: "app",
@@ -184,14 +189,13 @@ describe("content: resolved for this instance", () => {
   it("a directory this machine binds is where it is; one that is gone is left out, and said to be", async () => {
     const { root, agentDir } = await layout();
     const declaration = local(agentDir, {
-      notes: { path: "../notes", readonly: true, description: "My notes." },
+      notes: { path: "../notes", description: "My notes." },
       gone: { path: join(root, "gone") },
     });
     expect(resolveContent(agentDir, declaration)).toEqual([
       {
         name: "notes",
         kind: "local",
-        readonly: true,
         description: "My notes.",
         location: join(root, "notes"),
         notices: [],

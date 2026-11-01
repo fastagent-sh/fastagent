@@ -16,8 +16,8 @@ Three rules shape every command:
   that directory sits.
 - **The local instance is implicit.** An author runs an agent; they do not create or name an instance on their
   own machine.
-- **All content is resolved out loud, in the author's words.** What the agent works on and what it knows,
-  where each one is, and what a host will get are printed, never inferred silently.
+- **All content is resolved out loud, in the author's words.** What the agent works on, where each one
+  is, and what a host will get are printed, never inferred silently.
 
 ## 1. Addressing an Agent
 
@@ -70,8 +70,8 @@ fastagent init <dir> [--content <source>]...
 ```
 
 `init` creates the agent in `<dir>` itself, which must be new or empty, and adds one content entry it works on per
-`--content`. Without `--content` the agent has none and only talks. Content it only knows is added afterwards
-with `fastagent content add --readonly`.
+`--content`. Without `--content` the agent has none and only talks. More is added afterwards with
+`fastagent content add`.
 
 | `<source>` | Declared in `context.json` | Bound in `context.local.json` | Here |
 |---|---|---|---|
@@ -113,12 +113,11 @@ The command:
 
 ```bash
 fastagent content list [agent] [--json]
-fastagent content add <source> [agent] [--readonly] [--name <n>] [--ref <r>] [--description <text>]
+fastagent content add <source> [agent] [--name <n>] [--ref <r>] [--description <text>]
 fastagent content remove <name> [agent]
 ```
 
-- `<source>` is read as in `init`: a directory, or `github:owner/repo`. `--readonly` makes it content the agent
-  knows rather than works on.
+- `<source>` is read as in `init`: a directory, or `github:owner/repo`.
 - `add` refuses a directory that contains the agent directory or sits inside it, and asks for `--name` when the
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
 - `remove` drops the entry from both files. A clone at `content/<name>` is left, and said to be: it may hold the
@@ -126,7 +125,7 @@ fastagent content remove <name> [agent]
 - An edit is checked against the content it would leave before anything is written: while another entry does not
   resolve (a file where its directory was), `add` and `remove` are refused with that entry's error. Removing the
   broken entry itself always works. A bound directory that is gone does not refuse an edit: it is left out, and said.
-- `list` groups them the way an author thinks: what the agent works on, what it knows.
+- `list` shows what the agent works on, and where each is.
 - On another machine, a declared repository is cloned; a checkout of it there is bound by adding the checkout
   (`content add <checkout>` on an agent that already declares the repository asks for another name, so the binding
   is written by hand: `{ "content": { "<name>": { "path": "<checkout>" } } }` in `context.local.json`;
@@ -134,12 +133,12 @@ fastagent content remove <name> [agent]
 
 ## 5. Running: `dev`, `start`, `invoke`
 
-Startup says what the agent works on and what it knows:
+Startup says what the agent works on:
 
 ```text
 agent     ~/agents/reviewer  (model openai/gpt-5.5)
 works on  app       ~/code/app (github acme/app, this checkout)
-knows     handbook  ~/agents/reviewer/content/handbook (github acme/handbook@main, a clone brought up to date at each start)
+works on  handbook  ~/agents/reviewer/content/handbook (github acme/handbook@main, a clone brought up to date at each start)
 instance  ~/agents/reviewer/.state
 ```
 
@@ -168,11 +167,12 @@ The definition is shipped to the host. Preflight lists what the host gets for ea
 
 ```text
 works on  app       github acme/app@main          cloned; brought up to date where git can without touching the agent's work
-knows     handbook  github acme/handbook@main     cloned; kept up to date
+works on  handbook  github acme/handbook@main     cloned; kept up to date
 works on  draft     a directory of this machine   stays here; the deployed agent works without it
           → to work on it from a host, move it to a GitHub repository (warning)
-knows     papers    a directory of this machine   stays here; the deployed agent works without it
-          → to ship what the agent reads there, copy it into the agent directory (note)
+works on  papers    a directory of this machine   stays here; the deployed agent works without it
+          → to work on it from a host, move it to a GitHub repository, or copy what it only needs to read into the
+            agent directory (warning)
 ```
 
 - **A repository is a clone the instance makes and brings up to date in place at each start**, on a host as on

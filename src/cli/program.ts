@@ -62,7 +62,7 @@ const init: CommandSpec = {
   notes:
     "An agent is a directory holding a fastagent.config.ts, and it is also the agent's working directory. " +
     "It lives in a directory of its own, never inside a project or another agent: what it works on is declared " +
-    "as its content. Add a directory it only knows later with `fastagent content add <dir> --readonly`.",
+    "as its content. Add a directory later with `fastagent content add <dir>`.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       install: f.install !== false,
@@ -508,15 +508,15 @@ const env: CommandSpec = {
 
 const content: CommandSpec = {
   name: "content",
-  summary: "list, add or remove what the agent works on and knows",
+  summary: "list, add or remove what the agent works on",
   description:
-    "Content is a directory the agent works on (or only knows, with --readonly): a GitHub repository declared " +
+    "Content is a directory the agent works on: a GitHub repository declared " +
     "by name in context.json, shared with the agent and cloned at content/<name>, or a directory of this " +
     "machine bound in context.local.json, which never leaves it.",
   subcommands: [
     {
       name: "list",
-      summary: "each content entry, where it is, and whether the agent works on it or only knows it",
+      summary: "each content entry and where it is",
       args: [AGENT_ARG],
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent content list" }],
@@ -528,15 +528,13 @@ const content: CommandSpec = {
       summary: "add a GitHub repository, or bind a directory of this machine, as content",
       args: [{ name: "<source>", description: "a directory, or github:owner/repo" }, AGENT_ARG],
       flags: [
-        { flags: "--readonly", description: "the agent knows it and does not write it" },
         { flags: "--ref <ref>", description: "a repository: the branch, tag or commit to clone" },
         { flags: "--name <name>", description: "its name (default: the directory's or repository's)" },
         { flags: "--description <text>", description: "one sentence for the agent: what it is, how to treat it" },
       ],
       examples: [
-        { cmd: "fastagent content add ~/code/app", note: "works on" },
-        { cmd: "fastagent content add ~/handbook --readonly", note: "knows" },
-        { cmd: "fastagent content add github:acme/docs --readonly", note: "knows a clone" },
+        { cmd: "fastagent content add ~/code/app", note: "a directory of this machine" },
+        { cmd: "fastagent content add github:acme/docs", note: "a clone" },
       ],
       notes:
         "The root of a GitHub checkout is declared in context.json as that repository, and bound in " +
@@ -547,7 +545,6 @@ const content: CommandSpec = {
         "directory may not contain the agent directory, nor sit inside it.",
       run: async (args, f) =>
         (await import("./commands/content.ts")).runContentAdd(args[0] as string, args[1] as string, {
-          readonly: f.readonly === true,
           ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
           ...(typeof f.name === "string" ? { name: f.name } : {}),
           ...(typeof f.description === "string" ? { description: f.description } : {}),

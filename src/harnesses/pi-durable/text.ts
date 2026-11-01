@@ -290,15 +290,13 @@ function contentKind(c: ResolvedContent): string {
   // changes stays, and reaches anyone else only when pushed. The declared ref is what it follows, not a claim about
   // where it is: a clone the agent moved elsewhere is left there.
   const clone = `a shallow clone of github ${c.repo}${c.ref ? ` (declared ${c.ref})` : ""} in your own storage`;
-  return c.readonly
-    ? `${clone}, brought up to date each time you start`
-    : `${clone}: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change`;
+  return `${clone}: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change`;
 }
 
 /**
  * Where the agent is and what it works on (agent-model.md §4): its own directory is itself, and each content entry is named
- * with its location, whether it is the agent's to change, and where a change there goes. A result written where it
- * does not last is how knowledge gets lost, so the agent is told which is which.
+ * with its location and where a change there goes. A result written where it does not last is how knowledge gets
+ * lost, so the agent is told which is which.
  */
 function contentSection({ agentDir, content }: { agentDir: string; content: readonly ResolvedContent[] }): string {
   const own =
@@ -307,15 +305,11 @@ function contentSection({ agentDir, content }: { agentDir: string; content: read
   if (content.length === 0) return `${own} Nothing else is declared for you: you work only in your own directory.`;
   const line = (c: ResolvedContent) =>
     `- ${c.name}: ${c.location} (${contentKind(c)})${c.description !== undefined ? ` ${c.description}` : ""}`;
-  const worksOn = content.filter((c) => !c.readonly);
-  const knows = content.filter((c) => c.readonly);
   return [
     own,
-    ...(worksOn.length > 0 ? ["You work on:", ...worksOn.map(line)] : []),
-    ...(knows.length > 0 ? ["You know, and do not write:", ...knows.map(line)] : []),
-    `Run a command in one of these directories with \`cd <its location> && …\`; file tools take the location directly.` +
-      (worksOn.length > 0
-        ? " A result worth keeping belongs in a directory you work on, not in your own directory."
-        : " You write only in your own directory: the directories above are for reading."),
+    "You work on:",
+    ...content.map(line),
+    `Run a command in one of these directories with \`cd <its location> && …\`; file tools take the location directly. ` +
+      `A result worth keeping belongs in a directory you work on, not in your own directory.`,
   ].join("\n");
 }

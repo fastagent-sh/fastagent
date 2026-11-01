@@ -129,11 +129,11 @@ function createAgent(
   options?: { content?: ContentAddition[] },
 ): Promise<{ dir: string; created: string[]; repository: string; content: ResolvedContent[] }>;
 
-// What the agent works on and knows: directories of this machine and GitHub repositories, by name.
+// What the agent works on: directories of this machine and GitHub repositories, by name.
 interface ContentAddition {
   name: string; // one path segment of letters, digits, "-" and "_"; unique ignoring case
-  entry?: { github: string; ref?: string; readonly?: boolean; description?: string }; // in context.json
-  binding?: { path: string; readonly?: boolean; description?: string }; // in context.local.json, this machine's
+  entry?: { github: string; ref?: string; description?: string }; // in context.json
+  binding?: { path: string; description?: string }; // in context.local.json, this machine's
 }
 function listContent(agentDir: string): Promise<{ content: ResolvedContent[]; absent: BoundContent[] }>;
 function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit>;
@@ -147,7 +147,6 @@ interface ContentEdit {
 }
 type ResolvedContent = {
   name: string;
-  readonly: boolean;
   description?: string;
   location: string; // where the agent reaches it on this instance, absolute
   notices: string[]; // how it resolved: a checkout off its ref, a clone not made yet
@@ -155,7 +154,7 @@ type ResolvedContent = {
 // A directory this machine binds that is not here: `listContent` names it in `absent`; the agent is not told of it.
 type BoundContent = { name: string; path: string } & (
   | { kind: "checkout" } // this machine's checkout of the declared repository of the same name
-  | { kind: "local"; readonly: boolean; description?: string }
+  | { kind: "local"; description?: string }
 );
 class ContentNameError extends Error {} // a name that cannot name content, that is taken, or that the agent has not
 
@@ -198,7 +197,11 @@ function providerAuth(
   as `ContentNameError`. `readContentSource` reads a path or `github:owner/repo` as the CLI's `<source>` is read, and
   names it for the directory or repository. A removed repository's clone in `content/` is left as it is. Two entries
   may bind the same directory, or one inside the other, and the agent reaches it by both names; a directory may not
-  contain the agent's own, nor lie inside it. [Content](configuration.md#content) says how the agent is told of it.
+  contain the agent's own, nor lie inside it. These functions read or edit the declaration on disk; their results
+  are not the open agent's snapshot. Changes to entries, paths or descriptions take effect at the next `openAgent`,
+  which also prepares GitHub clones. They do not update an already-open agent, even for a new session. File changes
+  inside an already-bound directory need no reopen: a tool sees them when it next reads the files.
+  [Content](configuration.md#content) says how the agent is told of it.
 - A `CredentialStore` keeps one credential per provider, whole. `modify` is its only write and runs one at a time per
   provider, because an OAuth refresh happens inside it and a rotated refresh token must never be used twice; a store it
   cannot read rejects, since answering it as empty would let the next write replace every provider's credential.

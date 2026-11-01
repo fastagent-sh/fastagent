@@ -305,25 +305,36 @@ describe("a step that outlives the command that starts it", () => {
 
   it("a step given up on for giving the person nothing to do is stopped first, so it writes nothing after", async () => {
     const sidecar = join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
-    // It takes its ticket, then shows the person nothing.
     const silent = `
       const { readFileSync, writeFileSync } = require("node:fs");
       const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "tickets", process.argv.at(-1) + ".json");
       writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), status: "working", pid: process.pid }));
       writeFileSync(${JSON.stringify(sidecar)}, String(process.pid));
       setInterval(() => {}, 1000);`;
-    const given = await startTicket({
+    const realNow = Date.now;
+    // Exercise the claimed-but-silent branch regardless of how long Node takes to start.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(realNow());
+    const pending = startTicket({
       ...request(),
       waitsFirst: true,
       whenRunning: "replace",
       command: { file: process.execPath, args: ["-e", silent, "--"], cwd: tmpdir() },
       startTimeoutMs: 1_000,
     });
-    expect(given).toMatchObject({
-      status: "failed",
-      message: expect.stringMatching(/gave the person nothing to do within 1s/),
-    });
-    expect(existsSync(sidecar) && running(Number(readFileSync(sidecar, "utf8")))).toBe(false);
+    try {
+      await vi.waitFor(() => expect(existsSync(sidecar)).toBe(true), { timeout: 10_000 });
+      const pid = Number(readFileSync(sidecar, "utf8"));
+      expect(running(pid)).toBe(true);
+      clock.mockImplementation(() => realNow() + 1_000);
+      expect(await pending).toMatchObject({
+        status: "failed",
+        message: expect.stringMatching(/gave the person nothing to do within 1s/),
+      });
+      expect(running(pid)).toBe(false);
+    } finally {
+      clock.mockRestore();
+      await pending;
+    }
   });
 
   it("a step that never takes its ticket within the start window is stopped and failed, whatever it may do", async () => {

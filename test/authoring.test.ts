@@ -112,12 +112,9 @@ describe("authoring API", () => {
     expect(await bindings()).toBe(`{\n  "content": {\n    "app": {\n      "path": "${app}"\n    }\n  }\n}\n`);
     await expect(access(join(agentDir, "context.json"))).rejects.toThrow(/ENOENT/);
 
-    const added = await addContent(agentDir, directory(docs, { readonly: true }));
+    const added = await addContent(agentDir, directory(docs));
     expect(added.name).toBe("docs");
-    expect(added.content.map((c) => [c.name, c.readonly])).toEqual([
-      ["app", false],
-      ["docs", true],
-    ]);
+    expect(added.content.map((c) => c.name)).toEqual(["app", "docs"]);
     await expect(addContent(agentDir, directory(other))).rejects.toThrow(ContentNameError);
     await expect(addContent(agentDir, directory(other, { name: "a b" }))).rejects.toThrow(ContentNameError);
     await expect(removeContent(agentDir, "nope")).rejects.toThrow(ContentNameError);
@@ -149,12 +146,12 @@ describe("authoring API", () => {
     git(base, "clone", "-q", "https://github.com/acme/app.git", checkout);
     const agentDir = join(base, "agent");
     await createAgent(agentDir);
-    const added = await addContent(agentDir, readContentSource(checkout, base, { readonly: true }).addition);
+    const added = await addContent(agentDir, readContentSource(checkout, base).addition);
     expect(added.content).toEqual([
-      expect.objectContaining({ name: "app", kind: "github", clone: false, location: checkout, readonly: true }),
+      expect.objectContaining({ name: "app", kind: "github", clone: false, location: checkout }),
     ]);
     expect(JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"))).toEqual({
-      content: { app: { github: "acme/app", readonly: true } },
+      content: { app: { github: "acme/app" } },
     });
     expect(JSON.parse(await readFile(join(agentDir, "context.local.json"), "utf8"))).toEqual({
       content: { app: { path: checkout } },

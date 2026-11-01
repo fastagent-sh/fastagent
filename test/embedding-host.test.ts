@@ -235,16 +235,13 @@ describe("an agent's own content, from the package entry", () => {
     for (const dir of made) await mkdir(dir);
     return { base, notes: made[0] as string, app: made[1] as string, handbook: made[2] as string };
   };
-  const bind = (name: string, path: string, readonly = false) => ({ name, binding: { path, readonly } });
+  const bind = (name: string, path: string) => ({ name, binding: { path } });
 
   it("is created with any number of folders, edited and listed", async () => {
     const { base, notes, app, handbook } = await folders();
     const dir = join(base, "agent");
-    const created = await createAgent(dir, { content: [bind("app", app), bind("handbook", handbook, true)] });
-    expect(created.content.map(({ name, readonly }) => ({ name, readonly }))).toEqual([
-      { name: "app", readonly: false },
-      { name: "handbook", readonly: true },
-    ]);
+    const created = await createAgent(dir, { content: [bind("app", app), bind("handbook", handbook)] });
+    expect(created.content.map(({ name }) => name)).toEqual(["app", "handbook"]);
 
     const edit = await addContent(dir, bind("notes", notes));
     expect(edit.content.map(({ name }) => name).sort()).toEqual(["app", "handbook", "notes"]);
@@ -270,13 +267,13 @@ describe("an agent's own content, from the package entry", () => {
 
   it("reads a folder as the CLI does: named for it, bound on this machine", async () => {
     const { notes } = await folders();
-    const { addition } = readContentSource(notes, process.cwd(), { readonly: true });
-    expect(addition).toEqual({ name: "notes", binding: { path: notes, readonly: true } });
+    const { addition } = readContentSource(notes, process.cwd(), { description: "My notes." });
+    expect(addition).toEqual({ name: "notes", binding: { path: notes, description: "My notes." } });
   });
 
   it("reads a GitHub repository as an entry cloned for every instance", () => {
-    const { addition, notes } = readContentSource("github:acme/app", process.cwd(), { ref: "v1", readonly: true });
-    expect(addition).toEqual({ name: "app", entry: { github: "acme/app", ref: "v1", readonly: true } });
+    const { addition, notes } = readContentSource("github:acme/app", process.cwd(), { ref: "v1" });
+    expect(addition).toEqual({ name: "app", entry: { github: "acme/app", ref: "v1" } });
     expect(notes).toEqual([]);
     expect(() => readContentSource("github:acme", process.cwd())).toThrow("names no repository");
   });

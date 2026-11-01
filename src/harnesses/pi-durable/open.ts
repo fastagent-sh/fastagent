@@ -345,7 +345,7 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
 
 export interface AssembleAgentOptions {
   storage: Storage;
-  /** What the agent works on and knows (`context.json`'s content), resolved for this instance. */
+  /** What the agent works on (`context.json`'s content), resolved for this instance. */
   content?: readonly ResolvedContent[];
   /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;

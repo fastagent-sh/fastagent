@@ -96,36 +96,26 @@ export interface DeployReport {
 /**
  * What each content entry becomes on the host, one line each, so none is missing there unsaid (agent-model.md §3). A
  * repository `context.json` declares is cloned there, as on this machine without a checkout bound. A directory only
- * this machine binds stays here: the deployed agent works without it, which the line says and says how to change. One
- * the agent works on is a warning, since the deployed agent lacks data it was meant to work on; one it only knows, a
- * note.
+ * this machine binds stays here: the deployed agent works without it, which the line says and says how to change. It
+ * is a warning, since the deployed agent lacks data it was meant to work on.
  */
 function checkContent({ declared, bound }: ContentDeclaration, storageResets: boolean, report: DeployReport): void {
   for (const entry of declared) {
     const fate = storageResets
       ? "cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost"
       : "cloned on the host, and brought up to date in place at each start";
-    report.note(`${roleOf(entry)} ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
+    report.note(`works on ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
   }
   for (const binding of bound) {
     if (binding.kind !== "local") continue;
     const stays =
-      `${roleOf(binding)} ${binding.name}: a directory of this machine (${binding.path}, bound in ` +
+      `works on ${binding.name}: a directory of this machine (${binding.path}, bound in ` +
       `${LOCAL_CONTEXT_FILE}), stays here, and the deployed agent works without it`;
-    if (binding.readonly) {
-      report.note(
-        `${stays}; to ship what the agent reads there, copy it into the agent directory, which every release carries`,
-      );
-    } else {
-      report.warn(
-        `${stays}; to work on it from a host, move it to a GitHub repository and add it as github:owner/repo`,
-      );
-    }
+    report.warn(
+      `${stays}; to work on it from a host, move it to a GitHub repository and add it as github:owner/repo, or copy ` +
+        `what it only needs to read there into the agent directory, which every release carries`,
+    );
   }
-}
-
-function roleOf(entry: { readonly: boolean }): string {
-  return entry.readonly ? "knows" : "works on";
 }
 
 /**

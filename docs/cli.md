@@ -20,7 +20,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 |---|---|
 | `init <dir>` | Create an agent in a directory of its own; `--content` declares what it works on: a directory or a GitHub repository. |
 | `info [agent]` | Show what an agent assembles into, without serving. |
-| `content list\|add\|remove` | List, add or remove what the agent works on and knows. |
+| `content list\|add\|remove` | List, add or remove what the agent works on. |
 | `env add\|remove\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
 | `models [search]` | List the model specs the agent can name. |
 | `login [provider]` | Sign in to a model provider (an account or an API key) into `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
@@ -100,7 +100,7 @@ fastagent info [agent] [--json] [--model provider/modelId]
 
 Prints what the agent builds into, without serving it:
 
-- the agent directory, its content (`works on` / `knows`, each with its location), its environment (the packages and
+- the agent directory, its content (`works on`, each with its location), its environment (the packages and
   apt packages `context.json` declares), the config path, and the model with its source (`--model`,
   `FASTAGENT_MODEL` or the config) and whether it resolves,
 - its tools, extensions, skills and commands (prompt templates and `/skill:<name>`),
@@ -119,15 +119,14 @@ missing, say) is reported, not fatal. `info` installs and clones nothing. It wri
 
 ```bash
 fastagent content list [agent] [--json]
-fastagent content add <source> [agent] [--readonly] [--ref <ref>] [--name <name>] [--description <text>]
+fastagent content add <source> [agent] [--ref <ref>] [--name <name>] [--description <text>]
 fastagent content remove <name> [agent]
 ```
 
 Edits `context.json` (what every instance reaches) and `context.local.json` (the directories of this machine the agent
 is bound to). `add` reads `<source>` the way `init --content` does: a directory (bound here), the root of a GitHub
 checkout (declared as that repository, and bound here to the checkout), or `github:owner/repo` (declared, and cloned
-at the next start). A binding is written absolute. `--readonly` makes it content the agent knows rather than works
-on; `--ref` names a repository's branch, tag or commit; `--description` gives the agent one sentence about it. An
+at the next start). A binding is written absolute. `--ref` names a repository's branch, tag or commit; `--description` gives the agent one sentence about it. An
 entry's name defaults to its directory's or repository's; `add` asks for `--name` when that name is taken (ignoring
 case) or is not one segment of letters, digits, `-` and `_`, and refuses a repository to clone when something is
 already at `content/<name>`. `add` says when git would commit `context.local.json` (an agent made before `init`

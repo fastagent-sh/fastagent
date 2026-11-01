@@ -11,7 +11,7 @@ function contentKind(c: ResolvedContent): string {
 }
 
 /**
- * The report lines for an agent's content — `works on` / `knows`, one per entry, then a `notice` line for each
+ * The report lines for an agent's content — `works on`, one per entry, then a `notice` line for each
  * thing its resolution has to say, then one for each directory this machine binds that is not here — shared by the
  * startup report, `info` and `content list`, so the three say the same thing.
  */
@@ -20,7 +20,7 @@ export function contentLines(
   absent: readonly BoundContent[] = [],
 ): [label: string, value: string][] {
   const lines = content.flatMap((c): [string, string][] => [
-    [c.readonly ? "knows" : "works on", `${c.name.padEnd(width(content))}  ${c.location} (${contentKind(c)})`],
+    ["works on", `${c.name.padEnd(width(content))}  ${c.location} (${contentKind(c)})`],
     ...c.notices.map((notice): [string, string] => ["notice", `${c.name}: ${notice}`]),
   ]);
   for (const binding of absent) lines.push(["notice", absentNotice(binding)]);

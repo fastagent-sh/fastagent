@@ -1,5 +1,5 @@
 /**
- * WHAT AN AUTHOR DECLARES an agent works on or knows, read and refused in ONE place (file.ts reads the files through
+ * WHAT AN AUTHOR DECLARES an agent works on, read and refused in ONE place (file.ts reads the files through
  * it): the `content` map of `context.json`, which is shared and so holds only repositories every instance reaches, and
  * the `content` map of `context.local.json`, the directories of this machine it is bound to. Pure: what is on the disk
  * is resolve.ts's question. docs/design/agent-model.md §3 is the rule.
@@ -14,8 +14,6 @@ export interface ContentEntry {
   github: string;
   /** The branch, tag or commit to clone. */
   ref?: string;
-  /** The agent knows it and does not write it. */
-  readonly?: boolean;
   /** One sentence for the agent: what this is, and how to treat it. */
   description?: string;
 }
@@ -26,7 +24,6 @@ export interface DeclaredContent {
   /** `owner/repo`. */
   repo: string;
   ref?: string;
-  readonly: boolean;
   description?: string;
 }
 
@@ -37,7 +34,6 @@ export interface DeclaredContent {
 export interface ContentBinding {
   /** Absolute, `~/`, or relative to the agent directory. */
   path: string;
-  readonly?: boolean;
   description?: string;
 }
 
@@ -50,7 +46,6 @@ export type BoundContent = { name: string; path: string } & (
   | {
       /** A directory only this machine has. */
       kind: "local";
-      readonly: boolean;
       description?: string;
     }
 );
@@ -65,8 +60,8 @@ export interface ContentDeclaration {
  * The keys an entry and a binding carry, in the order they are written: where it is, then how it is treated. One list
  * each, so a key the reader accepts is one the writer keeps.
  */
-const ENTRY_KEYS = ["github", "ref", "readonly", "description"] as const;
-const BINDING_KEYS = ["path", "readonly", "description"] as const;
+const ENTRY_KEYS = ["github", "ref", "description"] as const;
+const BINDING_KEYS = ["path", "description"] as const;
 
 /** A name becomes a directory name, so it is one path segment (the spelling a release's agent name has). */
 const NAME = /^[A-Za-z0-9_-]+$/;
@@ -123,18 +118,16 @@ export function declareBindings(raw: unknown, declared: readonly DeclaredContent
       if (shared.name !== name) {
         throw new Error(`${at} binds the entry ${CONTEXT_FILE} names "${shared.name}": spell it the same`);
       }
-      for (const key of ["readonly", "description"] as const) {
-        if (e[key] !== undefined) {
-          throw new Error(
-            `${at} binds this machine's checkout of the entry ${CONTEXT_FILE} declares, which says "${key}" for ` +
-              `every instance: give it only "path"`,
-          );
-        }
+      if (e.description !== undefined) {
+        throw new Error(
+          `${at} binds this machine's checkout of the entry ${CONTEXT_FILE} declares, which says "description" for ` +
+            `every instance: give it only "path"`,
+        );
       }
       return { name, path, kind: "checkout" };
     }
-    const treatment = treatmentOf(at, e);
-    return { name, path, kind: "local", ...treatment };
+    const description = descriptionOf(at, e);
+    return { name, path, kind: "local", ...(description !== undefined ? { description } : {}) };
   });
 }
 
@@ -175,14 +168,11 @@ function objectWithKeys(at: string, value: unknown, keys: readonly string[]): Re
   return e;
 }
 
-function treatmentOf(at: string, e: Record<string, unknown>): { readonly: boolean; description?: string } {
+function descriptionOf(at: string, e: Record<string, unknown>): string | undefined {
   if (e.description !== undefined && (typeof e.description !== "string" || e.description === "")) {
     throw new Error(`${at}: "description" must be a non-empty string`);
   }
-  if (e.readonly !== undefined && typeof e.readonly !== "boolean")
-    throw new Error(`${at}: "readonly" must be a boolean`);
-  const description = e.description as string | undefined;
-  return { readonly: e.readonly === true, ...(description !== undefined ? { description } : {}) };
+  return e.description as string | undefined;
 }
 
 function declareOne(name: string, entry: unknown): DeclaredContent {
@@ -193,7 +183,7 @@ function declareOne(name: string, entry: unknown): DeclaredContent {
       throw new Error(`${at}: "${key}" must be a non-empty string`);
     }
   }
-  const treatment = treatmentOf(at, e);
+  const description = descriptionOf(at, e);
   if (e.github === undefined) {
     throw new Error(
       `${at} needs "github": ${CONTEXT_FILE} is shared, so it declares only what every instance reaches — bind a ` +
@@ -205,12 +195,12 @@ function declareOne(name: string, entry: unknown): DeclaredContent {
   const ref = e.ref as string | undefined;
   // git reads a leading "-" as an option, and no branch, tag or commit name has one.
   if (ref?.startsWith("-")) throw new Error(`${at}: "ref" must name a branch, tag or commit, got "${ref}"`);
-  return { name, repo, ...(ref !== undefined ? { ref } : {}), ...treatment };
+  return { name, repo, ...(ref !== undefined ? { ref } : {}), ...(description !== undefined ? { description } : {}) };
 }
 
 /**
  * A directory the agent is bound to and the agent directory are kept apart (agent-model.md §2): a definition is
- * released, writable content is kept, and one directory cannot be both. The ONE statement of the rule; resolve.ts asks
+ * released, content is kept, and one directory cannot be both. The ONE statement of the rule; resolve.ts asks
  * it of the real paths.
  */
 export function nestingError(agentDir: string, location: string, name: string): string | undefined {

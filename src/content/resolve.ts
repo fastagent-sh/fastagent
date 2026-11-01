@@ -16,8 +16,6 @@ import { ensureContentDir } from "./mount.ts";
 export type ResolvedContent = {
   /** Unique within the agent, ignoring case; one path segment. */
   name: string;
-  /** The agent knows it and does not write it. */
-  readonly: boolean;
   /** What the declaration tells the agent about it. */
   description?: string;
   /** Where the agent reaches it on this instance, absolute. */
@@ -75,10 +73,9 @@ export function absentNotice(binding: BoundContent): string {
 }
 
 function resolveRepository(agentDir: string, entry: DeclaredContent, checkout?: BoundContent): ResolvedContent {
-  const { name, readonly, description } = entry;
+  const { name, description } = entry;
   const repository = {
     name,
-    readonly,
     ...(description !== undefined ? { description } : {}),
     kind: "github" as const,
     repo: entry.repo,
@@ -106,12 +103,11 @@ function resolveRepository(agentDir: string, entry: DeclaredContent, checkout?: 
 }
 
 function resolveLocal(agentDir: string, binding: Extract<BoundContent, { kind: "local" }>): ResolvedContent {
-  const { name, readonly, description } = binding;
+  const { name, description } = binding;
   const location = realpathSync(binding.path);
   checkBinding(agentDir, name, location);
   return {
     name,
-    readonly,
     ...(description !== undefined ? { description } : {}),
     location,
     notices: [],

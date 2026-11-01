@@ -60,15 +60,15 @@ it is declared as its **content** ([agent model](agent-model.md) §3): the repos
 `context.json`, and the directories of this machine it is bound to in `context.local.json`:
 
 ```json
-{ "content": { "app": { "github": "acme/app" }, "handbook": { "github": "acme/handbook", "readonly": true } } }
+{ "content": { "app": { "github": "acme/app" }, "handbook": { "github": "acme/handbook" } } }
 ```
 
 `src/content/` owns it, harness-neutral. `declare.ts` reads both maps and refuses in one place: unknown keys, an entry
-of `context.json` without `github`, a binding without `path` or one that redeclares a shared entry's treatment, a name
+of `context.json` without `github`, a binding without `path` or one that redeclares a shared entry's description, a name
 that is not one path segment or collides ignoring case; `file.ts` reads both files through it (`loadContent` returns the
 `ContentDeclaration`, both halves), naming the file in every refusal. The shared declaration holds no path; a path is
 `context.local.json`'s alone. `resolve.ts` answers where each entry is for this instance (`ResolvedContent`: name, kind,
-readonly, description, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per
+description, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per
 process start; the content at those locations is re-read per turn. It reads the disk and git, never the network, and
 writes nothing. The prompt's `content` section, `info`, `fastagent content list` and `openServing` all read that one
 resolution.
@@ -140,7 +140,7 @@ extension contributes the definition's:
 | `system` | `SYSTEM.md`, as written, untagged. Nothing is added to it and nothing replaces it: a machine's prompt never reaches the agent |
 | `project_context` | The agent directory's `AGENTS.md`. Never a content entry's: that is a file of the project, which the agent reads there |
 | `skills` | The definition's `skills/`, listed as pi lists them (name, description, location); the model reads a skill's `SKILL.md` when a task matches, and `/skill:<name>` loads it into the message |
-| `content` | The agent's own directory, then what it works on and knows, each with its location (agent model §4) |
+| `content` | The agent's own directory, then what it works on, each with its location (agent model §4) |
 | `self_change` | On a deployed host only: what lasts of a change the agent makes to itself, and, when it has the tool, `wake` |
 
 `prompts/<name>.md` are the prompt templates a Caller sends as `/<name>`; they and the skills are `info().commands`.

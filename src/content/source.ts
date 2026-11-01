@@ -8,7 +8,6 @@ import { type ContentBinding, type ContentEntry, isGithubRepo } from "./declare.
 import { checkoutOf, githubRepoOf } from "./git.ts";
 
 export interface SourceOptions {
-  readonly?: boolean;
   name?: string;
   /** A github entry's branch, tag or commit. */
   ref?: string;
@@ -37,7 +36,6 @@ export function readContentSource(
   options: SourceOptions = {},
 ): { addition: ContentAddition; notes: string[] } {
   const treated = {
-    ...(options.readonly ? { readonly: true } : {}),
     ...(options.description !== undefined ? { description: options.description } : {}),
   };
   const ref = options.ref !== undefined ? { ref: options.ref } : {};
