@@ -1,4 +1,5 @@
 /** `fastagent deploy docker --run` — reconcile the generated/user-owned Compose application locally. */
+import { connect } from "node:net";
 import type { BoxLoginStep } from "../box-shell.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { waitForHealth } from "../../channels/wait-health.ts";
@@ -7,7 +8,7 @@ import { TUNNEL_DNS_LAG_MS, hasTunnelConnection, parseTunnelUrl } from "../../tu
 import type { RegistrationOutcome } from "../../channels/registration.ts";
 import { registrationGate } from "../registration-gate.ts";
 import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
-import type { CliRunner } from "../runner.ts";
+import { type CliRunner, readOutput } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
 
 export interface DockerRunPlan {
@@ -53,6 +54,11 @@ type DockerAnnounce = (baseUrl: string) => Promise<{ kind: string; outcome: Regi
  * budget.
  */
 export type DockerHealthProbe = (healthUrl: string, stillStarting: () => Promise<boolean>) => Promise<boolean>;
+/**
+ * Whether something already accepts connections at `host:port`. The answer to "is the port the agent is about to
+ * publish free", asked before `up`, because afterwards a `/health` that answers cannot say whose it is.
+ */
+export type HostPortProbe = (host: string, port: number) => Promise<boolean>;
 /** A published Quick Tunnel URL, and whether its tunnel ever reported an edge connection. */
 export interface ComposeTunnel {
   url: string;
@@ -76,6 +82,35 @@ export function localUrlFromComposePort(stdout: string): string | undefined {
  */
 const defaultHealthProbe: DockerHealthProbe = (healthUrl, stillStarting) =>
   waitForHealth(healthUrl, 180_000, 500, stillStarting);
+const defaultHostPortBusy: HostPortProbe = (host, port) =>
+  new Promise((resolve) => {
+    const socket = connect({ host, port });
+    const answer = (busy: boolean) => {
+      socket.destroy();
+      resolve(busy);
+    };
+    socket.setTimeout(1_000, () => answer(false)); // a filtered port is not one something is serving
+    socket.once("connect", () => answer(true));
+    socket.once("error", () => answer(false));
+  });
+
+/**
+ * The host ports the `agent` service publishes, from `docker compose config --format json` (Compose has already
+ * normalised every short or long syntax into `ports[]`). A port with no fixed host side (`published` unset: Docker picks
+ * one) cannot collide and is left out. A wildcard bind is asked on loopback, which is where the URL we report points.
+ */
+export function agentPublishedPorts(stdout: string): { host: string; port: number }[] {
+  const config: unknown = JSON.parse(stdout);
+  const ports = (config as { services?: { agent?: { ports?: unknown } } } | null)?.services?.agent?.ports;
+  if (ports === undefined) return [];
+  if (!Array.isArray(ports)) throw new Error("services.agent.ports is not a list");
+  return ports.flatMap((entry: { published?: string | number; host_ip?: string; protocol?: string }) => {
+    const port = Number(entry?.published);
+    if (!Number.isInteger(port) || port <= 0 || (entry.protocol ?? "tcp") !== "tcp") return [];
+    const wildcard = !entry.host_ip || entry.host_ip === "0.0.0.0" || entry.host_ip === "::";
+    return [{ host: wildcard ? "127.0.0.1" : (entry.host_ip as string), port }];
+  });
+}
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -136,6 +171,7 @@ export async function deployDockerRun(
   log: (message: string) => void,
   healthProbe: DockerHealthProbe = defaultHealthProbe,
   tunnelUrlProbe: DockerTunnelUrlProbe = defaultTunnelUrlProbe,
+  hostPortBusy: HostPortProbe = defaultHostPortBusy,
 ): Promise<DockerRunOutcome> {
   const gate = (message: string): DockerRunOutcome => ({ ok: false, gate: message });
   const compose = ["compose", "-f", plan.composeFile];
@@ -183,6 +219,28 @@ export async function deployDockerRun(
       `--tunnel was requested but the kept ${plan.composeFile} has no "tunnel" service — ` +
         `edit it, delete it and regenerate, or pass --force`,
     );
+  }
+
+  // A port something else already serves would answer the `/health` this run waits for, and the run would report that
+  // process's answer as the agent's. A container this project already runs holds its own port, so only a first start
+  // (or a start after `down`) asks. Before the first side effect: a refusal leaves nothing to undo.
+  const hostPorts = await readOutput(docker, "docker", [...compose, "config", "--format", "json"], agentPublishedPorts);
+  if ("gate" in hostPorts) return gate(hostPorts.gate);
+  if (hostPorts.value.length > 0) {
+    const running = await docker([...compose, "ps", "--status", "running", "--services"], { capture: true });
+    const ours = running.code === 0 && running.stdout.split(/\s+/).includes("agent");
+    if (!ours) {
+      for (const { host, port } of hostPorts.value) {
+        if (await hostPortBusy(host, port)) {
+          return gate(
+            `${host}:${port} is already in use by another process, so the agent's published port is not free and a ` +
+              `health check there would answer for that process, not for the agent — stop it, or move the agent: ` +
+              `edit the published port in ${plan.composeFile}, or change http.port in fastagent.config.ts and re-run ` +
+              `with --force (a generated Compose file is kept otherwise)`,
+          );
+        }
+      }
+    }
   }
 
   // Quick Tunnel logs are the control-plane output (the assigned URL).

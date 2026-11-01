@@ -178,9 +178,10 @@ docker compose -f fastagent.compose.yml down     # keeps the state volume
 docker compose -f fastagent.compose.yml down -v  # destructive: deletes all state
 ```
 
-`--run` checks Docker and the daemon, gates missing values before building, builds with `--pull` (the base image is a
-floating tag) and runs `up -d`, checks the
-services, and waits for `/health`. Nothing passes through Compose's environment: the container reads
+`--run` checks Docker and the daemon, gates missing values before building, refuses when another process already
+serves the host port the agent publishes (a `/health` answered there would not be the agent's; a container this
+project already runs keeps its own port), builds with `--pull` (the base image is a floating tag) and runs `up -d`,
+checks the services, and waits for `/health`. Nothing passes through Compose's environment: the container reads
 `.secrets/production/.env` itself.
 
 Notes:
