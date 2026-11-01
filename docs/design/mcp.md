@@ -19,9 +19,9 @@ The consumer [Agent API](../SPEC.md) sessions/messages are unchanged.
 - File location does not own resources. Each opened agent instance owns its clients and resolved bindings.
   OAuth grants persist beyond open/close in a credential store controlled by the host; clients are never cached globally
   by server name or agent-directory path, and credentials are never implicitly shared between agents.
-- The first release includes **stdio and Streamable HTTP, including OAuth**. Browser sign-in is a core Kage workflow,
-  not a later enhancement or a request for the person to copy tokens into files.
-- Choose and test the protocol revision and supported capability/configuration subset before implementation.
+- The first release includes **stdio and Streamable HTTP, including OAuth**. Browser sign-in is a core CLI/embedding
+  workflow, not a later enhancement or a request for the person to copy tokens into files.
+- The protocol/configuration subset is implemented in #895 and documented in the [guide](../mcp.md).
   Registry publishing, MCPB installation and context packages are not prerequisites.
 
 A separate file lets authors reuse familiar project configuration without translating it into a FastAgent-specific
@@ -186,8 +186,8 @@ up clients already acquired, and cleanup failures remain diagnosable.
 
 ## 6. OAuth is part of the first release
 
-The required Kage experience is: choose a server, click Connect, authorize in the system browser, return to Kage, and use
-its tools. Reopening Kage reuses a still-valid grant; expiry refreshes without asking the person to paste a token.
+The required host workflow is: choose a server, start sign-in, authorize in the system browser, return to the CLI or app,
+and use its tools. Reopening reuses a still-valid grant; expiry refreshes without asking the person to paste a token.
 A denied, canceled or expired authorization reports its own result and never claims a connection succeeded.
 
 Follow the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization):
@@ -218,7 +218,7 @@ state transitions, tradeoffs and the controlled concurrency experiment are in [m
 
 Use the SDK's OAuth machinery rather than build a second OAuth protocol stack. Verify resource metadata discovery and
 authorization-server discovery, registration selection (pre-registration or Client ID Metadata Documents; DCR only when a
-chosen service needs it), callback constraints, refresh and scopes against an actual Kage target service. Do not assume
+chosen service needs it), callback constraints, refresh and scopes against an actual MCP service used through FastAgent. Do not assume
 every service supports dynamic registration or arbitrary localhost redirect URIs.
 
 For cloud instances, authorization is bound to the deployed instance's store, not silently copied from Kage's account.
@@ -246,12 +246,34 @@ Keep these gates when changing the subset:
   waiters, interrupted writes and deletion/refresh races. Include two 401s for one token generation.
 - Verify OAuth discovery, browser sign-in/cancel/denial, restart persistence, refresh rotation and concurrent refresh,
   insufficient scope, issuer/resource changes, two accounts at one endpoint and explicit cross-agent grant bindings.
-- Complete a real Kage-style browser OAuth flow against a target MCP service and call a tool; a fake authorization server
-  is necessary for regressions but does not substitute for this interoperability acceptance. The Linear SDK-only flow
-  above establishes the service baseline; repeat it through the implemented host API.
+- Complete a real browser OAuth flow against a target MCP service through the packed FastAgent CLI/public host API, then
+  call a tool. A controlled authorization server is necessary for regressions but does not replace interoperability
+  acceptance. Repeat the pre-hardening Linear baseline with the current transport.
 - Confirm `.mcp.json` is shipped and inspected consistently by open/dev/start/deploy, with no copied credentials.
 - Verify the claimed runtime matrix with the selected dependency before publishing. Windows, actual Kage UI/secure storage
   and deployment OAuth relay have not been accepted; local loopback authorization does not prove those paths.
+  Kage is a downstream consumer, not a release prerequisite or a substitute for the broader FastAgent scenario set.
 
-Track implementation and evidence in [#678](https://github.com/fastagent-sh/fastagent/issues/678). Context package
-composition can be designed later without creating a second declaration format for these servers.
+### FastAgent-owned release acceptance
+
+Use an installed FastAgent npm tarball, not a source-only SDK bridge. Run disposable agents and real server processes;
+record the candidate commit, installed dependency versions, runtime, transport and observable result. Deterministic
+models make lifecycle checks reproducible, but are not evidence of a real model choosing or executing tools.
+
+| Scenario | Acceptance evidence |
+|---|---|
+| Author and CLI | Official Filesystem/Everything servers loaded from `.mcp.json`; CLI invocation, workspace read/write, explicit unsupported-content/version refusals and secret-safe startup failures |
+| Embedded hosts | Two `openAgent` instances, including one directory with distinct state/variables; independent clients, workspace restrictions and close isolation |
+| Agent API service | MCP-backed messages through `connectAgent`; API-key refusal, persistent conversation ids and reads after restart |
+| Real model | An authenticated provider performs MCP tool calls; verify successful `tool_result` entries and actual filesystem effects, not just the final answer |
+| Cancellation and failure | Progress, cancel and another usable call; partial-open cleanup; a real process kill followed by interrupted-unsafe-call recovery without replay |
+| HTTP and identities | Anonymous/static HTTP and wrong-token refusal; distinct and explicitly shared grants over real HTTP; controlled-issuer results labelled separately from real-provider results |
+| Real OAuth and networking | Packed CLI/browser flow, durable/new-process reuse and refresh under the current transport; normal/proxy connectivity and explicit fake-IP/private-address refusal |
+| Deployed runtime | A representative Linux/container host with its own mounted state/secrets and image-carried definition; MCP calls and restart persistence, without desktop-grant copying |
+
+Keep failed observations visible until explained or explicitly scoped as a known limitation. A later successful run does
+not erase an earlier failed startup. Do not force process exit, disable network guards or increase timeouts to turn a
+failure into acceptance. Third-party app UI tests, including Kage, are separate downstream integration work.
+
+Track implementation, results and release readiness in [#678](https://github.com/fastagent-sh/fastagent/issues/678).
+Context package composition can be designed later without creating a second declaration format for these servers.

@@ -316,10 +316,13 @@ What the previous design had, and what took its place:
    one model, in process and over HTTP with an API key, with `connectAgent`, `deploy`'s key and `invoke --url`.
 4. **Done, released in 0.28.0** ([#875](https://github.com/fastagent-sh/fastagent/pull/875)). Per-agent content
    authoring through the embedding API: create an agent with folders or repositories, then read and edit its declarations.
-5. [MCP servers](mcp.md) in the agent's `.mcp.json` (`mcpServers`), over pi-durable's tool bridge, with resources owned by
-   each opened instance. The 2025-era lifecycle spike is complete; select and verify the protocol/configuration subset
-   before implementation ([#678](https://github.com/fastagent-sh/fastagent/issues/678)). No generic `Connector`, old
-   session-cache proposal, context packages or scale-out prerequisite.
+5. **Implementation merged; acceptance and release pending** ([#895](https://github.com/fastagent-sh/fastagent/pull/895)).
+   [MCP servers](mcp.md) use the agent's `.mcp.json` (`mcpServers`): stdio/Streamable HTTP tools, OAuth, instance-owned
+   clients and explicit grant bindings. The protocol and host/store contracts are implemented, not open design work.
+   Validate the packed FastAgent CLI, embedding/HTTP APIs, multi-instance lifecycle and representative deployment
+   directly, including real OAuth under the current network policy, then prepare 0.29.0
+   ([#678](https://github.com/fastagent-sh/fastagent/issues/678)). Kage is one downstream consumer, not the acceptance
+   prerequisite. No generic `Connector`, session cache, context packages or scale-out prerequisite.
 6. The artifact: `fastagent build`, and `deploy` from it.
 7. Context packages, once there is a concrete cross-agent reuse need; they depend on the artifact's build step.
 8. Shared contexts and agents working together.
