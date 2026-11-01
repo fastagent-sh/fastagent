@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   const dir = await agentWorkspace("fa-cli-mcp-", {
     ".mcp.json": JSON.stringify({ mcpServers: { test: { type: "http", url: remote.url } } }),
   });
+  execFileSync("git", ["-C", dir, "init", "-q", "--template="]);
   const home = await mkdtemp(join(tmpdir(), "fa-cli-mcp-home-"));
   const env = {
     ...process.env,
@@ -124,6 +126,23 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   expect(bindings.test).toBe(status.grant_id);
   const grants = await readFile(join(dir, ".secrets", "mcp-auth.json"), "utf8");
   expect(grants).toContain("refreshToken");
+  expect(
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "core.excludesFile=/dev/null",
+        "-C",
+        dir,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "--",
+        ".secrets/mcp-auth.json",
+      ],
+      { encoding: "utf8" },
+    ),
+  ).toBe("");
   expect(JSON.stringify(status)).not.toContain("accessToken");
   const held = await openLockedStorage(join(dir, ".state", "agent.sqlite"), "posix", "test serving instance");
   try {

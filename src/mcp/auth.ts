@@ -1,4 +1,5 @@
 /** OAuth discovery and refresh policy. Background calls never start an interactive sign-in. */
+import { getSystemErrorMap } from "node:util";
 import {
   checkResourceAllowed,
   discoverOAuthProtectedResourceMetadata,
@@ -7,7 +8,9 @@ import {
   refreshAuthorization,
   type AuthorizationServerMetadata,
   OAuthError,
+  OAuthErrorCode,
   SdkError,
+  SdkErrorCode,
   SdkHttpError,
   UnauthorizedError,
   InsufficientScopeError,
@@ -68,6 +71,77 @@ export function checkGrantTarget(record: McpGrantRecord, url: string, discovery?
   }
 }
 
+const safeReasons = new Map<string, string>([
+  ...getSystemErrorMap().values(),
+  ["ENOTFOUND", "DNS name not found"],
+  ["ERR_SSL_WRONG_VERSION_NUMBER", "TLS peer did not speak the expected protocol"],
+  ["UND_ERR_CONNECT_TIMEOUT", "connection timed out"],
+  ["UND_ERR_HEADERS_TIMEOUT", "response headers timed out"],
+  ["UND_ERR_BODY_TIMEOUT", "response body timed out"],
+  ["UND_ERR_SOCKET", "socket closed or failed"],
+  ["UND_ERR_CLOSED", "HTTP client closed"],
+  ["UND_ERR_DESTROYED", "HTTP client destroyed"],
+  ["ERR_TLS_CERT_ALTNAME_INVALID", "TLS certificate hostname mismatch"],
+  ["CERT_HAS_EXPIRED", "TLS certificate expired"],
+  ["DEPTH_ZERO_SELF_SIGNED_CERT", "untrusted self-signed TLS certificate"],
+  ["SELF_SIGNED_CERT_IN_CHAIN", "untrusted TLS certificate chain"],
+  ["UNABLE_TO_VERIFY_LEAF_SIGNATURE", "TLS certificate could not be verified"],
+  ["UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "TLS certificate issuer is not trusted"],
+]);
+const sdkCodes = new Set<string>([...Object.values(SdkErrorCode), ...Object.values(OAuthErrorCode)]);
+const errorNames = new Set([
+  "Error",
+  "TypeError",
+  "SyntaxError",
+  "RangeError",
+  "ReferenceError",
+  "URIError",
+  "EvalError",
+  "AbortError",
+  "TimeoutError",
+  "AggregateError",
+  "OAuthError",
+  "SdkError",
+]);
+
+function safeFailureReason(error: unknown): string {
+  const pending = [error];
+  const seen = new Set<Error>();
+  const reasons = new Set<string>();
+  while (pending.length) {
+    const current = pending.pop();
+    if (!(current instanceof Error) || seen.has(current)) continue;
+    seen.add(current);
+    const code = "code" in current && typeof current.code === "string" ? current.code : undefined;
+    if (code !== undefined) {
+      const reason = safeReasons.get(code);
+      if (reason !== undefined) reasons.add(`${code}: ${reason}`);
+      else if (sdkCodes.has(code)) reasons.add(code);
+    }
+    // SDK 2.4's pinned stdio probe omits structured close data; recognize only its fixed diagnostic prefix.
+    if (
+      current.message === "Connection closed during the version negotiation probe" ||
+      (current instanceof SdkError &&
+        current.code === SdkErrorCode.EraNegotiationFailed &&
+        current.message.startsWith(
+          "Version negotiation failed: the connection closed during the server/discover probe before the server offered pinned protocol version ",
+        ))
+    )
+      reasons.add("CONNECTION_CLOSED: server closed during protocol discovery");
+    if (
+      current instanceof SdkHttpError &&
+      Number.isInteger(current.status) &&
+      current.status >= 100 &&
+      current.status <= 599
+    )
+      reasons.add(`HTTP ${current.status}`);
+    pending.push(current.cause);
+    if (current instanceof AggregateError && Array.isArray(current.errors)) pending.push(...current.errors);
+  }
+  if (reasons.size) return [...reasons].join("; ");
+  return error instanceof Error ? (errorNames.has(error.name) ? error.name : "Error") : "unknown error";
+}
+
 export function mcpFailure(error: unknown, operation: string, server?: string): McpError {
   if (error instanceof McpError)
     return error.server || !server ? error : new McpError(error.code, error.message, server);
@@ -85,14 +159,8 @@ export function mcpFailure(error: unknown, operation: string, server?: string): 
       `${operation}: MCP access refused (HTTP 403); review the grant permissions`,
       server,
     );
-  // SDK and HTTP errors may include token responses; expose classification, never their raw payload or cause.
-  const code =
-    error instanceof OAuthError || error instanceof SdkError
-      ? error.code
-      : error instanceof Error
-        ? error.name
-        : "unknown error";
-  return new McpError("connection", `${operation} failed (${code})`, server);
+  // Error messages, paths, args, stderr and raw causes can contain credentials; only allowlisted facts escape.
+  return new McpError("connection", `${operation} failed (${safeFailureReason(error)})`, server);
 }
 
 export async function grantToken(input: {

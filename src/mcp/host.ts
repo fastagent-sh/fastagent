@@ -4,7 +4,8 @@ import { join, resolve } from "node:path";
 import * as Schema from "effect/Schema";
 import { type McpAuthorization, McpError, type McpOptions, type McpServerSummary } from "../mcp-api.ts";
 import { resolveSecretsDir, resolveStateRoot } from "../paths.ts";
-import { agentValues } from "../value-file.ts";
+import { agentValues, prepareSecretsDirectory, unprotectedSecretsNote } from "../value-file.ts";
+import { log } from "../log.ts";
 import { withLockedFile } from "../locked-file.ts";
 import { checkedGrant, mcpGrantFile } from "./grants.ts";
 import { type McpServer, readMcpConfiguration, checkMcpUrl } from "./config.ts";
@@ -35,7 +36,27 @@ export function mcpAuthorization(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  return { store: mcpGrantFile(join(resolveSecretsDir(dir, env), "mcp-auth.json")), bindings: decodeBindings(raw) };
+  const secretsDir = resolveSecretsDir(dir, env);
+  const file = mcpGrantFile(join(secretsDir, "mcp-auth.json"));
+  const protectedWrite = async (write: () => Promise<void>) => {
+    const unprotected = await prepareSecretsDirectory(dir, secretsDir);
+    await write();
+    if (unprotected !== undefined) log.warn(`[fastagent] ${unprotectedSecretsNote(unprotected)}`);
+  };
+  return {
+    store: {
+      ...file,
+      withGrant: (id, operation) =>
+        file.withGrant(id, (access) =>
+          operation({
+            ...access,
+            write: (record) => protectedWrite(() => access.write(record)),
+            remove: () => protectedWrite(() => access.remove()),
+          }),
+        ),
+    },
+    bindings: decodeBindings(raw),
+  };
 }
 
 export async function writeMcpBinding(stateRoot: string, server: string, id: string | undefined): Promise<void> {

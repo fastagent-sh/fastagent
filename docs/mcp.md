@@ -113,7 +113,11 @@ the browser's machine. An automatic `mcp login --deployment` relay is not provid
 a deployed instance. Prepare the target's authorization separately, or use its own static credentials.
 
 Default grants live in the selected `.secrets/mcp-auth.json`; instance bindings are under the state root in
-`mcp-bindings.json`. Grant writes are atomic and owner-readable; symlink aliases lock the same backing file. A completed login saves the grant before changing the
+`mcp-bindings.json`. Grant writes are atomic and owner-readable; symlink aliases lock the same backing file. Before a
+managed grant write, FastAgent prepares the owned secrets directory's `.gitignore`, using the same rule as value files.
+An unprotected `FASTAGENT_SECRETS_DIR` override produces a warning rather than an ignore file in the operator's directory;
+explicit `mcpGrantFile(path)` stores remain the host's responsibility. Git ignores do not untrack already committed files.
+A completed login saves the grant before changing the
 binding. Reopen a running agent to use a changed binding; sign-in does not hot-swap the identity of active calls.
 
 ```bash
@@ -183,7 +187,10 @@ different `stateDir` values have independent clients and interpolation values. C
 
 Discovery/auth network operations have a 30-second request budget; tool calls have a 60-second budget. Unsupported content
 (such as images or resource links) is a visible tool error, not silently removed. MCP stdio stderr is drained but not
-forwarded verbatim because it can contain supplied credentials; connection errors name the server and SDK classification.
+forwarded verbatim because it can contain supplied credentials. Connection errors include the server, known OS/DNS/TLS
+codes, HTTP status and SDK classification when available. For example, `ENOENT` distinguishes a missing executable/path
+from `CONNECTION_CLOSED` during protocol discovery. Only allowlisted facts from error causes are exposed; original
+messages, paths, arguments, response data and cause objects remain private.
 The SDK probes stdio protocol support in a short-lived sibling process before starting the serving process, so server
 startup can run twice. Do not put irreversible business work in server startup.
 

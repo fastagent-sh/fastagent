@@ -87,6 +87,21 @@ export function unprotectedSecretsNote(dir: string): string {
   );
 }
 
+export async function prepareSecretsDirectory(dir: string, secretsDir: string): Promise<string | undefined> {
+  await mkdir(secretsDir, { recursive: true });
+  const owned = secretsDir === join(dir, SECRETS_DIRNAME) || secretsDir === join(dir, SECRETS_DIRNAME, "production");
+  if (owned) {
+    // EEXIST preserves an existing ignore file, including one created by a concurrent writer.
+    await writeFile(join(secretsDir, ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      },
+    );
+  } else if (!(await exists(join(secretsDir, ".gitignore")))) {
+    return secretsDir;
+  }
+}
+
 /** Whether `.env` content carries a non-empty ACTIVE value for `name`. */
 function hasActiveEnvValue(content: string, name: string): boolean {
   return (parseEnvContent(content).get(name)?.trim() ?? "") !== "";
@@ -107,22 +122,7 @@ export async function writeValues(
   overwrite: readonly string[] = [],
 ): Promise<ValueWriteResult> {
   const file = dotEnvPath(dir);
-  const secretsDir = dirname(file);
-  await mkdir(secretsDir, { recursive: true });
-  // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into carries its own
-  // `.gitignore`.
-  const owned = secretsDir === join(dir, SECRETS_DIRNAME) || secretsDir === join(dir, SECRETS_DIRNAME, "production");
-  let unprotectedSecretsDir: string | undefined;
-  if (owned) {
-    // Only EEXIST is tolerable (already protected, or a concurrent writer).
-    await writeFile(join(secretsDir, ".gitignore"), baseTemplate("secrets.gitignore"), { flag: "wx" }).catch(
-      (e: NodeJS.ErrnoException) => {
-        if (e.code !== "EEXIST") throw e;
-      },
-    );
-  } else if (!(await exists(join(secretsDir, ".gitignore")))) {
-    unprotectedSecretsDir = secretsDir;
-  }
+  const unprotectedSecretsDir = await prepareSecretsDirectory(dir, dirname(file));
   let current = "";
   try {
     current = await readFile(file, "utf8");
