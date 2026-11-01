@@ -26,6 +26,16 @@ export interface LarkOnboardIO {
   openUrl(url: string, action: string): void;
   note(message: string): void;
   prompt(message: string, opts?: { hidden?: boolean }): Promise<string | undefined>;
+  /**
+   * Where the App ID and App Secret come from when no one is at a terminal to be asked: a page the person pastes them on,
+   * which asks `check` about each pair (it throws to refuse one) and resolves with the pair `check` accepted. Absent: the
+   * terminal asks.
+   */
+  collect?(input: {
+    /** Lark's launcher, with what the channel needs set on the app it creates. */
+    consoleUrl: string;
+    check(appId: string, appSecret: string): Promise<void>;
+  }): Promise<{ appId: string; appSecret: string }>;
 }
 
 interface LarkBootstrapResult {
@@ -65,27 +75,37 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
   const reuseExistingApp = Boolean(existingId && existingSecret);
 
   // Credentials are one App-scoped set.
+  // No ingress named is the webhook path below (a deploy's production app).
+  const consoleUrl = larkConsoleUrl(opts.ingress ?? "webhook");
+  let appId: string;
+  let appSecret: string;
+  let verified = false;
   if (reuseExistingApp) {
     io.note(`Reusing Lark app ${existingId}.`);
+    appId = required(existingId, "LARK_APP_ID", rerun);
+    appSecret = required(existingSecret, "LARK_APP_SECRET", rerun);
+  } else if (io.collect) {
+    // The page asks Lark about each pair as it is pasted, so a wrong one is refused where it was typed.
+    ({ appId, appSecret } = await io.collect({ consoleUrl, check: opts.verifyCredentials }));
+    verified = true;
   } else {
     io.openUrl(
-      // No ingress named is the webhook path below (a deploy's production app).
-      larkConsoleUrl(opts.ingress ?? "webhook"),
+      consoleUrl,
       "create the app on Lark's one-click launcher; LARK_APP_ID and LARK_APP_SECRET are under Credentials & Basic Info",
     );
+    appId = required(
+      await io.prompt("LARK_APP_ID (Credentials & Basic Info)", { hidden: false }),
+      "LARK_APP_ID",
+      rerun,
+    );
+    appSecret = required(
+      await io.prompt("LARK_APP_SECRET (Credentials & Basic Info)", { hidden: true }),
+      "LARK_APP_SECRET",
+      rerun,
+    );
   }
-  const appId = required(
-    reuseExistingApp ? existingId : await io.prompt("LARK_APP_ID (Credentials & Basic Info)", { hidden: false }),
-    "LARK_APP_ID",
-    rerun,
-  );
-  const appSecret = required(
-    reuseExistingApp ? existingSecret : await io.prompt("LARK_APP_SECRET (Credentials & Basic Info)", { hidden: true }),
-    "LARK_APP_SECRET",
-    rerun,
-  );
 
-  await opts.verifyCredentials(appId, appSecret);
+  if (!verified) await opts.verifyCredentials(appId, appSecret);
   const eventSecurityUrl = larkEventSecurityUrl(appId);
   io.note("App ID / Secret verified.");
   if (opts.ingress === "websocket") {

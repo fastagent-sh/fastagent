@@ -7,7 +7,6 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { larkConsoleUrl } from "../src/channels/lark/onboard.ts";
 import { dotEnvPath, loadEnvValues } from "../src/value-file.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 
@@ -279,19 +278,16 @@ it("a coding agent's deploy: refused here what can be, the rest started in a tic
   });
 });
 
-it("a coding agent's deploy needing a Lark app without its credentials names them before any ticket", async () => {
+it("a coding agent's deploy needing a Lark app without its credentials takes them in the ticket, not in a file", async () => {
   facts.channels = [{ name: "lark", ingress: "webhook" }];
   const printed = vi.spyOn(console, "log").mockImplementation(() => {});
   await expect(runDeploy("fly", dir, { run: true, json: true })).rejects.toBe(stopped);
-  expect(started).toEqual([]);
-  expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({
-    status: "need_user_action",
-    // A deployment's app is the webhook one.
-    url: larkConsoleUrl("webhook"),
-    variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
-    value_file: production(),
-    check_command: "fastagent deploy fly --run --json",
-  });
+  // The deploy is one ticket like any other: the person's page is a step of its run (add-lark-page.test.ts), and nothing
+  // is asked of them first, in the agent's conversation or in a value file.
+  expect(started).toHaveLength(1);
+  const report = String(printed.mock.calls[0]?.[0]);
+  expect(JSON.parse(report)).toMatchObject({ status: "working", deployment: "fly" });
+  expect(report).not.toContain("value_file");
 });
 
 it("the ticket's run is the whole deploy, each person's step its user's, its result the URL and the API's notes", async () => {

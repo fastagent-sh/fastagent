@@ -1,10 +1,10 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkAgentScopes, onboardFeishuCloudApp } from "../src/cli/add-feishu.ts";
 import type { Person } from "../src/cli/person.ts";
-import { larkConsoleUrl } from "../src/channels/lark/onboard.ts";
 import type { FeishuAppScope, FeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import {
   FEISHU_AGENT_SCOPES,
@@ -12,6 +12,9 @@ import {
   FEISHU_MESSAGE_RECEIVE_EVENT,
   feishuAppAddons,
 } from "../src/channels/feishu/setup-mode.ts";
+
+/** The real `fetch`, for reaching the setup's own page while the platform's API is a stand-in. */
+const realFetch = globalThis.fetch;
 
 const AGENT_SCOPES = FEISHU_AGENT_SCOPES.map((entry) => entry.request);
 const grantedAll = (): FeishuAppScope[] => AGENT_SCOPES.map((name) => ({ name, grantStatus: 1, type: "tenant" }));
@@ -175,15 +178,20 @@ describe("a Lark app through a coding agent's person", () => {
   });
 
   /** A person whose steps are recorded, and an agent dir whose dev value file holds `env`. */
-  async function larkSetup(env: string) {
+  async function larkSetup(env: string, options: { pasted?: boolean } = {}) {
     const dir = join(await mkdtemp(join(tmpdir(), "fa-lark-person-")), "fastagent");
     await mkdir(join(dir, ".secrets"), { recursive: true });
     await writeFile(join(dir, ".secrets", ".env"), env);
     vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
-    vi.stubGlobal("fetch", async (input: string | URL) => {
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("tenant_access_token"))
+      if (url.includes("tenant_access_token")) {
+        // Lark takes the pasted pair only with its right Secret.
+        const body = JSON.parse(String(init?.body ?? "{}")) as { app_secret?: string };
+        if (options.pasted && body.app_secret !== "good-secret")
+          return Response.json({ code: 10003, msg: "invalid param" });
         return Response.json({ code: 0, tenant_access_token: "T", expire: 7200 });
+      }
       if (url.includes("/application/v6/scopes")) {
         const scopes = AGENT_SCOPES.map((scope_name) => ({ scope_name, grant_status: 1 }));
         return Response.json({ code: 0, data: { scopes } });
@@ -192,12 +200,16 @@ describe("a Lark app through a coding agent's person", () => {
     });
     vi.spyOn(console, "error").mockImplementation(() => {});
     const left: { instructions: string; url?: string }[] = [];
+    const waited: { url: string; instructions: string }[] = [];
+    let carriedOn = false;
     const person: Person = {
-      waitsOn: () => {},
-      carriesOn: () => {},
+      waitsOn: (url, instructions) => waited.push({ url, instructions }),
+      carriesOn: () => {
+        carriedOn = true;
+      },
       afterwards: (instructions, url) => left.push({ instructions, ...(url === undefined ? {} : { url }) }),
     };
-    return { dir, person, left };
+    return { dir, person, lark: person, left, waited, carried: () => carriedOn };
   }
 
   it("leaves the person what they do on each page, not what the setup said it did", async () => {
@@ -215,17 +227,49 @@ describe("a Lark app through a coding agent's person", () => {
     }
   });
 
-  it("a value only the person has fails the run naming where they set it", async () => {
-    const { dir, person, left } = await larkSetup("");
+  it("the person pastes the App ID and Secret on a page of this machine's own; they are checked, then written", async () => {
+    const { dir, left, waited, carried, lark } = await larkSetup("", { pasted: true });
     try {
-      await expect(onboardFeishuCloudApp(dir, "lark", "websocket", "fastagent add lark", person)).rejects.toThrow(
-        `LARK_APP_ID (Credentials & Basic Info) is needed: ask the user to set it in ${join(dir, ".secrets", ".env")}, ` +
-          "then run `fastagent add lark` again",
-      );
+      const run = onboardFeishuCloudApp(dir, "lark", "websocket", "fastagent add lark", lark);
+      const page = await vi.waitFor(() => waited[0] ?? Promise.reject(new Error("not yet")));
+      expect(page.instructions).toContain("App ID and App Secret");
+      expect(page.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/lark\/credentials\//);
+      expect(carried()).toBe(false); // the run waits on them until the pair is good
+
+      const first = await realFetch(page.url);
+      const html = await first.text();
+      // The link to create the app carries what the channel needs, as `add feishu`'s does.
+      expect(html).toContain("backend_oneclick");
+      expect(html).toContain("addons=");
+
+      // Lark refuses a wrong Secret: the page says so, and nothing is written.
+      const refused = await realFetch(page.url, {
+        method: "POST",
+        body: new URLSearchParams({ app_id: "cli_pasted", app_secret: "wrong" }),
+      });
+      expect(await refused.text()).toContain("Lark refused that App ID or Secret.");
+      expect(
+        existsSync(join(dir, ".secrets", ".env")) ? await readFile(join(dir, ".secrets", ".env"), "utf8") : "",
+      ).not.toContain("LARK_APP_SECRET");
+
+      const taken = await realFetch(page.url, {
+        method: "POST",
+        body: new URLSearchParams({ app_id: "cli_pasted", app_secret: "good-secret" }),
+      });
+      expect(await taken.text()).toContain("Lark credentials verified");
+      // What it hands back to be written is the pair Lark accepted; the page wrote nothing itself.
+      expect(await run).toMatchObject({ LARK_APP_ID: "cli_pasted", LARK_APP_SECRET: "good-secret" });
+      expect(
+        existsSync(join(dir, ".secrets", ".env")) ? await readFile(join(dir, ".secrets", ".env"), "utf8") : "",
+      ).not.toContain("good-secret");
+      expect(carried()).toBe(true);
+      // The page is gone once it has done its job.
+      await expect(realFetch(page.url)).rejects.toThrow();
+      // What is left is the person's step in the console, not a value to type anywhere.
       expect(left).toEqual([
         {
-          instructions: expect.stringMatching(/^create the app on Lark's one-click launcher/),
-          url: larkConsoleUrl("websocket"),
+          instructions: expect.stringMatching(/^in Events & Callbacks, choose long connection/),
+          url: "https://open.larksuite.com/app/cli_pasted/event?tab=safe",
         },
       ]);
     } finally {

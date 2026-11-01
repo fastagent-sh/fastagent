@@ -1,5 +1,17 @@
 import { randomBytes } from "node:crypto";
 import { type IncomingMessage, createServer } from "node:http";
+import {
+  field,
+  formCard,
+  openButton,
+  privacy,
+  prose,
+  refusal,
+  sendPage,
+  statusCard,
+  step,
+  submit,
+} from "../../setup-page.ts";
 
 export interface SlackSetupServer {
   port: number;
@@ -25,28 +37,56 @@ export interface SlackSetupServer {
   close(): Promise<void>;
 }
 
-const escapeHtml = (text: string) =>
-  text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+/** Where Slack's App Configuration tokens are generated: the page names the section, and links to the page it is on. */
+const SLACK_APPS_URL = "https://api.slack.com/apps";
 
-const page = (body: string, head = "") =>
-  `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width">${head}` +
-  `<title>FastAgent Slack setup</title><body style="font:16px system-ui;max-width:40em;margin:3em auto;padding:0 1em">${body}`;
+const TITLE = "Connect Slack — FastAgent";
 
-function tokensForm(error?: string): string {
-  return page(
-    `<h1>Slack App Configuration token</h1>` +
-      `<ol><li>Open <a href="https://api.slack.com/apps" target=_blank rel=noopener>api.slack.com/apps</a>, then ` +
-      `<b>Your App Configuration Tokens</b> → <b>Generate Token</b> for the workspace the agent joins.</li>` +
-      `<li>Paste both tokens here.</li></ol>` +
-      `<p>FastAgent keeps them on this machine only (owner-readable), uses them to create the app and update its ` +
-      `Request URL, and never deploys them.</p>` +
-      (error ? `<p style="color:#b00"><b>${escapeHtml(error)}</b></p>` : "") +
-      `<form method=post><p><label>Access token<br><input name=access type=password required ` +
-      `placeholder="xoxe.xoxp-…" style="width:100%"></label></p><p><label>Refresh token<br><input name=refresh ` +
-      `type=password required placeholder="xoxe-…" style="width:100%"></label></p>` +
-      `<p><button>Create the Slack app</button></p></form>`,
-  );
+function tokensForm(error?: string): { title: string; card: string } {
+  return {
+    title: TITLE,
+    card: formCard(
+      "Connect Slack",
+      [
+        step(
+          1,
+          "Generate two tokens in Slack",
+          prose("Under <b>Your App Configuration Tokens</b>, choose <b>Generate Token</b> for your workspace.") +
+            openButton("Open Slack", SLACK_APPS_URL),
+        ),
+        step(
+          2,
+          "Paste them here",
+          (error ? refusal("Those tokens were not accepted.", ` ${error}`) : "") +
+            field({
+              id: "access",
+              label: "Access Token",
+              placeholder: "xoxe.xoxp-…",
+              secret: true,
+              invalid: error !== undefined,
+              autofocus: error !== undefined,
+            }) +
+            field({
+              id: "refresh",
+              label: "Refresh Token",
+              placeholder: "xoxe-…",
+              secret: true,
+              invalid: error !== undefined,
+            }) +
+            submit("Create Slack app") +
+            privacy(),
+          { bare: error === undefined },
+        ),
+      ].join(""),
+    ),
+  };
 }
+
+/** A page that says where the setup stands. */
+const status = (input: Parameters<typeof statusCard>[0], title = "FastAgent setup") => ({
+  title,
+  card: statusCard(input),
+});
 
 /** Temporary onboarding-only responder. */
 export async function startSlackSetupServer(): Promise<SlackSetupServer> {
@@ -89,36 +129,43 @@ export async function startSlackSetupServer(): Promise<SlackSetupServer> {
         error: url.searchParams.get("error") ?? undefined,
       });
       settleOAuth = undefined;
-      response.statusCode = 200;
-      response.setHeader("content-type", "text/html; charset=utf-8");
-      response.end(
-        page("<p>Slack authorization received: FastAgent is finishing the install. You can close this page.</p>"),
+      sendPage(
+        response,
+        200,
+        status({
+          state: "done",
+          heading: "Slack allowed the app",
+          lede: "FastAgent is finishing the install.",
+          next: "You can close this tab and go back to your coding agent.",
+        }),
       );
       return;
     }
     if (url.pathname === tokensPath && (request.method === "GET" || request.method === "POST")) {
-      response.setHeader("content-type", "text/html; charset=utf-8");
       if (takeTokens === undefined) {
         // Taken already, or not asked for: the page is one-time.
-        response.statusCode = 404;
-        response.end(page("<p>This page is no longer in use.</p>"));
+        sendPage(
+          response,
+          404,
+          status({ state: "failed", heading: "This page is no longer in use", next: "Go back to your coding agent." }),
+        );
         return;
       }
       if (request.method === "GET") {
-        response.end(tokensForm());
+        sendPage(response, 200, tokensForm());
         return;
       }
       readBody(request, (body) => {
         if (body === undefined) {
           response.statusCode = 413;
-          response.end(page("<p>Too large.</p>"));
+          response.end("payload too large\n");
           return;
         }
         const form = new URLSearchParams(body);
         try {
           takeTokens?.({ access: (form.get("access") ?? "").trim(), refresh: (form.get("refresh") ?? "").trim() });
         } catch (error) {
-          response.end(tokensForm((error as Error).message));
+          sendPage(response, 200, tokensForm((error as Error).message));
           return;
         }
         response.statusCode = 303;
@@ -128,16 +175,31 @@ export async function startSlackSetupServer(): Promise<SlackSetupServer> {
       return;
     }
     if (request.method === "GET" && url.pathname === nextPath) {
-      response.setHeader("content-type", "text/html; charset=utf-8");
       if (after === undefined) {
-        response.end(page("<p>Creating the Slack app…</p>", '<meta http-equiv="refresh" content="2">'));
+        // Says what comes next, so the redirect to Slack's page is no surprise.
+        sendPage(response, 200, {
+          ...status({
+            state: "working",
+            heading: "Creating your Slack app",
+            lede: "In a moment Slack will ask you to click Allow.",
+          }),
+          head: '<meta http-equiv="refresh" content="2">',
+        });
       } else if ("url" in after) {
         response.statusCode = 303;
         response.setHeader("location", after.url);
         response.end();
       } else {
-        const style = after.failed ? ' style="color:#b00"' : "";
-        response.end(page(`<p${style}><b>${escapeHtml(after.said)}</b></p><p>Return to your agent.</p>`));
+        sendPage(
+          response,
+          200,
+          status({
+            state: after.failed ? "failed" : "done",
+            heading: after.failed ? "Setup stopped" : "Done",
+            lede: after.said,
+            next: "Go back to your coding agent.",
+          }),
+        );
         lastShown?.();
       }
       return;

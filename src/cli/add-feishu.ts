@@ -22,7 +22,8 @@ import {
   isTransientFeishuRegistrationError,
 } from "../channels/feishu/feishu-api.ts";
 import { registerFeishuApp } from "../channels/feishu/register-app.ts";
-import { type LarkOnboardIO, larkConsoleUrl, onboardLarkApp } from "../channels/lark/onboard.ts";
+import { startLarkCredentialsPage } from "../channels/lark/credentials-page.ts";
+import { type LarkOnboardIO, onboardLarkApp } from "../channels/lark/onboard.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
 import { dotEnvPath, loadEnvValues, parseEnvContent } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -209,8 +210,9 @@ const larkAtTerminal: LarkOnboardIO = {
 };
 
 /**
- * Lark's guided console through a coding agent's person: a page is a step left to them, with what they do there; a
- * value it would ask for is theirs to set in the value file, and the setup continues when run again.
+ * Lark's guided console through a coding agent's person: the app is created on a page they are sent to (a step left to
+ * them, with what they do there), and the App ID and App Secret are pasted on a page of this machine's own: they go from
+ * the browser to this process, checked against Lark, never through the agent's conversation or a file the person edits.
  */
 function larkThrough(person: Person, env: string, rerun: string): LarkOnboardIO {
   return {
@@ -218,6 +220,20 @@ function larkThrough(person: Person, env: string, rerun: string): LarkOnboardIO 
     openUrl: (url, action) => person.afterwards(action, url),
     async prompt(message) {
       throw new Error(`${message} is needed: ask the user to set it in ${env}, then run \`${rerun}\` again`);
+    },
+    async collect({ consoleUrl, check }) {
+      const page = await startLarkCredentialsPage({
+        consoleUrl,
+        check: ({ appId, appSecret }) => check(appId, appSecret),
+      });
+      try {
+        person.waitsOn(page.url, "create the Lark app, then paste its App ID and App Secret on this page");
+        const pair = await page.credentials;
+        person.carriesOn();
+        return pair;
+      } finally {
+        await page.close();
+      }
     },
   };
 }
@@ -358,40 +374,6 @@ async function createFeishuAppFlow(
     if (groupSetup.publishReady) person.afterwards(publish, versionUrl);
     else person.afterwards(`after the permission work above, ${publish}: ${versionUrl}`);
   }
-}
-
-/**
- * Lark's app credentials, which only the person can get, from the app they create in Lark's console: with no one at a
- * terminal to type them, the report naming where they set them (the selected environment's file), when either is
- * absent. `again` is the command that continues once they have.
- */
-export async function larkCredentialsNeeded(
-  agentDir: string,
-  again: string,
-  ingress: FeishuSubscriptionMode,
-): Promise<{ json: Record<string, unknown>; text: string[] } | undefined> {
-  const held = await activeDotEnvValues(agentDir, ["LARK_APP_ID", "LARK_APP_SECRET"]);
-  if (held.LARK_APP_ID && held.LARK_APP_SECRET) return undefined;
-  const valueFile = dotEnvPath(agentDir);
-  const url = larkConsoleUrl(ingress);
-  return {
-    json: {
-      status: "need_user_action",
-      url,
-      variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
-      value_file: valueFile,
-      check_command: `${again} --json`,
-      agent_next_steps:
-        "Give the URL to the user so they can create the Lark app there, and ask them to set LARK_APP_ID and " +
-        `LARK_APP_SECRET (from its Credentials & Basic Info) in ${valueFile} themselves, not in this ` +
-        "conversation. Once they say they have, run check_command.",
-    },
-    text: [
-      `need_user_action: create the Lark app at ${url}`,
-      `  and set LARK_APP_ID and LARK_APP_SECRET in ${valueFile}`,
-      `then run: ${again}`,
-    ],
-  };
 }
 
 /**

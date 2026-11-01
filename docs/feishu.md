@@ -94,6 +94,10 @@ Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); 
 guided credential input, because its bound confirmation flow does not work. The launcher link carries the same
 `addons` as Feishu's, so a Lark app is created with the scopes and the event the channel needs; nothing is ticked in
 the console afterwards, except a scope the tenant withholds.
+In a coding agent's run (`add lark --json`, or a deploy that needs the app) the App ID and App Secret are pasted on a
+page the setup serves on this machine (`127.0.0.1`, no tunnel), not typed into a file: the page checks each pair against
+Lark, shows a refusal where the value was entered, and only then lets the setup write it. It needs a browser on the
+machine the CLI runs on.
 Within either cloud, the ingress being prepared determines the remaining work. For WebSocket (what `add` prepares),
 the runtime credential set stops at the validated/persisted App ID/Secret pair; onboarding continues through the
 permission check and opens Events & Callbacks so the user can select long connection and publish.

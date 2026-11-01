@@ -84,7 +84,7 @@ async function nextPage(url: string): Promise<Response> {
   return vi.waitFor(async () => {
     const response = await fetch(url, { redirect: "manual" });
     const text = response.status === 200 ? await response.clone().text() : "";
-    if (text.includes("Creating the Slack app")) throw new Error("still creating");
+    if (text.includes("Creating your Slack app")) throw new Error("still creating");
     return response;
   });
 }
