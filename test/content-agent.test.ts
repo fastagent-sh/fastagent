@@ -2,14 +2,13 @@
  * An agent with content, end to end: what the model is told, what it reads, what its tools see, and that every
  * reader of the declaration — the opener, `info`, `content list` — reads the same resolution.
  */
-import { spawn } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { InMemoryCredentialStore, type Provider, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
+import { runInProcess } from "./cli-run.ts";
 import { describe, expect, it } from "vitest";
 import { type ResolvedContent, resolveContent } from "../src/content/resolve.ts";
 import { type ContentBinding, declareBindings } from "../src/content/declare.ts";
@@ -112,18 +111,7 @@ describe("an agent with content", () => {
   });
 });
 
-const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-
-function cli(args: string[], cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => (stdout += d));
-    child.stderr.on("data", (d) => (stderr += d));
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-}
+const cli = (args: string[], cwd: string) => runInProcess(args, cwd);
 
 describe("one resolution", () => {
   it("the opener, `info --json` and `content list --json` change together when the bindings do", async () => {
