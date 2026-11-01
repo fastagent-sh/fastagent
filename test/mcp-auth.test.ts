@@ -340,8 +340,9 @@ it.each(["native-client", "https://client.test/metadata.json"])(
         }
         return remote.fetch(input, init);
       };
-      const callbacks: Promise<void>[] = [];
-      const grant = await signInMcp({
+      const authorization = Promise.withResolvers<string>();
+      const abort = new AbortController();
+      const login = signInMcp({
         agentDir: dir,
         server: "linear",
         store,
@@ -350,32 +351,44 @@ it.each(["native-client", "https://client.test/metadata.json"])(
         clientId,
         callbackPort: address.port,
         interaction: {
+          signal: abort.signal,
           confirmAuthorization: async () => true,
           notify: (event) => {
-            if (event.type !== "auth_url") return;
-            const auth = new URL(event.url);
-            expect(auth.searchParams.get("redirect_uri")).toBe(registered);
-            expect(auth.searchParams.get("client_id")).toBe(clientId);
-            expect(auth.searchParams.get("code_challenge_method")).toBe("S256");
-            const previous = authorizations.at(-1);
-            authorizations.push(event.url);
-            callbacks.push(
-              (async () => {
-                try {
-                  if (previous) expect((await remote.approve(previous)).status).toBe(400);
-                  expect((await remote.approve(event.url)).status).toBe(200);
-                  await exchanged.promise;
-                  expect((await remote.approve(event.url)).status).toBe(404);
-                } finally {
-                  release.resolve();
-                }
-              })(),
-            );
+            if (event.type === "auth_url") authorization.resolve(event.url);
           },
         },
       });
-      await Promise.all(callbacks);
-      expect((await store.read(grant.id))?.client.id).toBe(clientId);
+      const visit = async (url: string, status: number) => {
+        const response = await remote.approve(url);
+        await response.text();
+        expect(response.headers.get("connection")).toBe("close");
+        expect(response.status).toBe(status);
+      };
+      try {
+        const url = await Promise.race([
+          authorization.promise,
+          login.then(() => {
+            throw new Error("Sign-in completed without an authorization URL");
+          }),
+        ]);
+        const auth = new URL(url);
+        expect(auth.searchParams.get("redirect_uri")).toBe(registered);
+        expect(auth.searchParams.get("client_id")).toBe(clientId);
+        expect(auth.searchParams.get("code_challenge_method")).toBe("S256");
+        const previous = authorizations.at(-1);
+        authorizations.push(url);
+        if (previous) await visit(previous, 400);
+        await visit(url, 200);
+        await Promise.race([exchanged.promise, login]);
+        await visit(url, 404);
+        release.resolve();
+        const grant = await login;
+        expect((await store.read(grant.id))?.client.id).toBe(clientId);
+      } finally {
+        abort.abort();
+        release.resolve();
+        await Promise.allSettled([login]);
+      }
     }
     expect(remote.exchanges).toBe(2);
     for (const key of ["state", "code_challenge"]) {

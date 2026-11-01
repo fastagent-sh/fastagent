@@ -78,6 +78,8 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
     let portNumber = 0;
     let consumed = false;
     const listener = createServer((incoming, response) => {
+      // This one-shot listener closes after sign-in; a later flow may bind the same callback port.
+      response.setHeader("connection", "close");
       const url = setupRequestUrl(incoming, response);
       if (!url) return;
       if (
