@@ -1,12 +1,11 @@
 import { defaultExclude, defineConfig } from "vitest/config";
 
-// A handful of CLI e2e tests spawn `node src/cli.ts <cmd>` subprocesses that each cold-start the full
-// harness import graph (~0.7s+, measured; the pi packages, not TS stripping). They are deliberately few
-// — only genuine process-level contracts (exit codes, stdout/stderr discipline, read-only invariants)
-// live here; command LOGIC is unit-tested against the harness functions, not re-run through a subprocess.
-// They are split by command across several files (listed in test/cli-run.ts, their shared spawn helper):
-// vitest runs files in parallel but the tests inside one file serially, and as one file they were the
-// suite's longest path.
+// CLI tests that are about a COMMAND call it in-process (test/cli-run.ts, runInProcess); only genuine
+// process-level contracts (exit codes and stdout/stderr discipline across a real pipe, a command that outlives its
+// caller, signals) spawn `node src/cli.ts <cmd>`, and each of those cold-starts the full harness import graph (~0.7s+
+// of CPU, measured; the pi packages and Effect, not TS stripping). They are split by command across several files
+// (listed in test/cli-run.ts, their shared spawn helper): vitest runs files in parallel but the tests inside one file
+// serially, and as one file they were the suite's longest path.
 //
 // Under vitest's file-parallelism a contended machine can still push a cold-start past a tight timeout.
 // The fix is the timeout, not a parallelism cap: a 30s ceiling absorbs a slow cold-start (including a
