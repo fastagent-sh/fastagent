@@ -139,5 +139,5 @@ Implemented today:
 Not implemented yet:
 
 - An npm package as the deployable artifact, and context packages ([architecture.md](design/architecture.md) §4).
-- MCP servers as connectors ([#678](https://github.com/fastagent-sh/fastagent/issues/678)).
+- MCP servers declared in `.mcp.json` ([design](design/mcp.md), [#678](https://github.com/fastagent-sh/fastagent/issues/678)).
 - One instance spread over several processes (one process holds an instance's storage).
