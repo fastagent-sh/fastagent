@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkAgentScopes, onboardFeishuCloudApp } from "../src/cli/add-feishu.ts";
 import type { Person } from "../src/cli/person.ts";
-import { LARK_CONSOLE_URL } from "../src/channels/lark/onboard.ts";
+import { larkConsoleUrl } from "../src/channels/lark/onboard.ts";
 import type { FeishuAppScope, FeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import {
   FEISHU_AGENT_SCOPES,
@@ -223,7 +223,10 @@ describe("a Lark app through a coding agent's person", () => {
           "then run `fastagent add lark` again",
       );
       expect(left).toEqual([
-        { instructions: expect.stringMatching(/^create the app on Lark's one-click launcher/), url: LARK_CONSOLE_URL },
+        {
+          instructions: expect.stringMatching(/^create the app on Lark's one-click launcher/),
+          url: larkConsoleUrl("websocket"),
+        },
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });

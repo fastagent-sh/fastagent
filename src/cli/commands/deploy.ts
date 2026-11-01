@@ -184,8 +184,9 @@ async function deploy(
 
   if (opts.json && step === undefined) {
     // A coding agent's deploy: what this machine can refuse is refused above, at once; the rest runs in a ticket.
-    if (unprepared.some(({ kind }) => kind === "lark")) {
-      const needed = await larkCredentialsNeeded(agentDir, rerun).catch(failStartup);
+    const lark = unprepared.find(({ kind }) => kind === "lark");
+    if (lark !== undefined) {
+      const needed = await larkCredentialsNeeded(agentDir, rerun, lark.ingress).catch(failStartup);
       if (needed !== undefined) {
         printReport(true, needed.json, needed.text);
         process.exit(0);
