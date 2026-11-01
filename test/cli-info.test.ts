@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { agentWorkspace, run } from "./cli-run.ts";
+import { agentWorkspace, runInProcess } from "./cli-run.ts";
 
 /** What `info` runs with: no model from this machine's shell. */
 const withoutModel = (): NodeJS.ProcessEnv => {
@@ -20,7 +20,7 @@ describe("cli: info", () => {
       "src/channels/github.ts": 'export default () => ({ "POST /x": () => new Response("ok") });\n',
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
-    const { code, stdout } = await run(["info", dir, "--json"], undefined, withoutModel());
+    const { code, stdout } = await runInProcess(["info", dir, "--json"], undefined, withoutModel());
     expect(code).toBe(0); // an unset model is reported, not fatal
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
@@ -38,7 +38,7 @@ describe("cli: info", () => {
       variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } },
     };
     const dir = await agentWorkspace("fa-info-env-", { "context.json": JSON.stringify({ environment }) });
-    const ok = await run(["info", dir, "--json"]);
+    const ok = await runInProcess(["info", dir, "--json"]);
     expect(ok.code, ok.stderr).toBe(0);
     expect(JSON.parse(ok.stdout)).toMatchObject({
       environment,
@@ -53,15 +53,15 @@ describe("cli: info", () => {
       ],
       unsetSecrets: ["FA_TEST_HOST"],
     });
-    expect((await run(["info", dir])).stdout).toMatch(/^secrets: +FA_TEST_HOST \(context\.json\)$/m);
-    expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq 1\.8\.1, apt:chromium$/m);
+    expect((await runInProcess(["info", dir])).stdout).toMatch(/^secrets: +FA_TEST_HOST \(context\.json\)$/m);
+    expect((await runInProcess(["info", dir])).stdout).toMatch(/^environment: +jq 1\.8\.1, apt:chromium$/m);
     await writeFile(
       join(dir, "context.json"),
       JSON.stringify({ content: { notes: { github: "acme/notes" } }, environment: { packages: { "cargo:x": "1" } } }),
     );
     // The environment's variables are part of what the agent declares, so a refused environment is a definition that
     // does not open: said as the refusal dev and start stop on, never a fall back to the machine's commands.
-    const refused = await run(["info", dir, "--json"]);
+    const refused = await runInProcess(["info", dir, "--json"]);
     expect(refused.code).toBe(1);
     expect(refused.stderr).toMatch(/package "cargo:x" installs with cargo:/);
   });
@@ -77,11 +77,13 @@ describe("cli: info", () => {
     });
     await symlink(new URL("../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
 
-    const ok = JSON.parse((await run(["info", dir, "--json", "--model", "gw/m1"], undefined, withoutModel())).stdout);
+    const ok = JSON.parse(
+      (await runInProcess(["info", dir, "--json", "--model", "gw/m1"], undefined, withoutModel())).stdout,
+    );
     expect(ok.model).toBe("gw/m1");
     expect(ok.modelError).toBeNull(); // the definition's provider offers it
 
-    const bad = await run(["info", dir, "--json", "--model", "gw/not-declared"], undefined, withoutModel());
+    const bad = await runInProcess(["info", dir, "--json", "--model", "gw/not-declared"], undefined, withoutModel());
     expect(bad.code).toBe(0);
     expect(JSON.parse(bad.stdout).modelError).toBe('no provider "gw" offers "not-declared"');
   });
@@ -91,7 +93,7 @@ describe("cli: info", () => {
     const missing = await agentWorkspace("fa-info-toolfail-", {
       "src/tools/broken.ts": 'import "totally-not-a-real-package-xyz";\nexport default {};\n',
     });
-    const failed = await run(["info", missing], undefined, withoutModel());
+    const failed = await runInProcess(["info", missing], undefined, withoutModel());
     expect(failed.code).toBe(1);
     expect(failed.stderr).toMatch(/totally-not-a-real-package-xyz/);
     expect(failed.stderr).not.toMatch(/\n\s+at /); // a refusal, not a stack
@@ -100,7 +102,7 @@ describe("cli: info", () => {
     const badCron = await agentWorkspace("fa-info-schedfail-", {
       "src/schedules/bad.ts": 'export default { kind: "fastagent.schedule", cron: "not a cron", prompt: "x" };\n',
     });
-    const refused = await run(["info", badCron], undefined, withoutModel());
+    const refused = await runInProcess(["info", badCron], undefined, withoutModel());
     expect(refused.code).toBe(1);
     expect(refused.stderr).toMatch(/src\/schedules\/bad\.ts/);
   });
@@ -110,13 +112,13 @@ describe("cli: info", () => {
       "src/schedules/good.ts":
         'export default { kind: "fastagent.schedule", cron: "0 9 * * *", tz: "UTC", prompt: "digest" };\n',
     });
-    const { code, stdout } = await run(["info", dir, "--json"], undefined, withoutModel());
+    const { code, stdout } = await runInProcess(["info", dir, "--json"], undefined, withoutModel());
     expect(code).toBe(0);
     const info = JSON.parse(stdout);
     expect(info.schedules).toEqual([
       { name: "good", cron: "0 9 * * *", tz: "UTC", next: expect.stringMatching(/T09:00:00\.000Z$/) },
     ]);
-    const text = await run(["info", dir], undefined, withoutModel());
+    const text = await runInProcess(["info", dir], undefined, withoutModel());
     expect(text.stdout).toMatch(/schedules:\s+good \(next .*T09:00:00\.000Z\)/);
   });
 });
