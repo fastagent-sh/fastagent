@@ -1,13 +1,15 @@
-// The CLI as a subprocess, for the process-contract tests: cli.test.ts, cli-invoke.test.ts, cli-deploy*.test.ts,
-// cli-schedules.test.ts, cli-info.test.ts, cli-login.test.ts and cli-kernel.test.ts's end-to-end block.
-// Each run cold-starts the harness, so these tests are spread across files by command to let vitest run them
-// in parallel; one file runs its tests serially.
+// Two ways to run the CLI in a test. `run` spawns it as a PROCESS, for the contracts only a process has: exit codes
+// and stdout/stderr discipline across a real pipe (cli.test.ts, cli-kernel.test.ts's end-to-end block), a command that
+// outlives its caller (the ticket tests in cli-login/cli-deploy), a signal, a kill. `runInProcess` calls the same entry
+// in this process, for everything that is about what a COMMAND decides: ~0.5-1s of CPU cheaper per call.
+// Rule of thumb: reach for `runInProcess`; use `run` when the test would be wrong if no process were involved.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { resolveStateRoot } from "../src/paths.ts";
@@ -43,6 +45,120 @@ export function run(
     child.stderr.on("data", (d) => (stderr += d));
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+type Listener = (...args: any[]) => void;
+
+/** Thrown by the stand-in `process.exit` so the command stops where the real one would. */
+class Exited extends Error {}
+
+let inProcessQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * {@link run}'s answer without a process: the same CLI entry, called in this one, for a test whose contract is
+ * what a COMMAND decides (its exit code, what it prints, what it writes) rather than what a PROCESS does.
+ * A cold-started CLI costs ~0.5-1s of CPU; this costs the command.
+ *
+ * What it stands in for, and puts back afterwards: the working directory, the whole environment, `process.exit`
+ * (the FIRST code wins, as in a process that has exited; a command's own `catch` may call it again on the way
+ * out), `process.exitCode`, stdout/stderr, and the signal/exit listeners the command added. Runs are serialized,
+ * since they share all of that. It is stdin-less and TTY-less, as `run` is.
+ *
+ * NOT for a test that is about the process itself: a command that outlives it (a ticket's background process,
+ * which signals its process group on exit), stdout/stderr discipline across a real pipe, a signal, a crash.
+ * Those stay on {@link run}; `cli-run-parity.test.ts` pins that the two agree.
+ */
+export function runInProcess(
+  args: string[],
+  cwd?: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const turn = inProcessQueue.then(() => runOnce(args, cwd, env ?? process.env));
+  inProcessQueue = turn.catch(() => undefined);
+  return turn;
+}
+
+async function runOnce(args: string[], cwd: string | undefined, env: NodeJS.ProcessEnv) {
+  const { runCli } = await import("../src/cli/program.ts");
+  const saved = {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    exit: process.exit,
+    exitCode: process.exitCode,
+    stdoutWrite: process.stdout.write,
+    stderrWrite: process.stderr.write,
+    console: { log: console.log, info: console.info, warn: console.warn, error: console.error, debug: console.debug },
+    tty: [process.stdin, process.stdout, process.stderr].map((stream) =>
+      Object.getOwnPropertyDescriptor(stream, "isTTY"),
+    ),
+    listeners: new Map<string | symbol, Listener[]>(),
+  };
+  for (const event of process.eventNames())
+    saved.listeners.set(event, [...(process.listeners(event as never) as Listener[])]);
+  const given = { ...env }; // before anything below changes what `env` may alias (process.env itself)
+
+  let stdout = "";
+  let stderr = "";
+  let exited: number | undefined;
+  const text = (chunk: unknown): string =>
+    typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString();
+  const to =
+    (sink: "out" | "err") =>
+    (...parts: unknown[]) => {
+      const line = `${parts.map((part) => (typeof part === "string" ? part : inspect(part))).join(" ")}\n`;
+      if (sink === "out") stdout += line;
+      else stderr += line;
+    };
+  try {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, given);
+    process.chdir(cwd ?? saved.cwd);
+    process.exitCode = undefined;
+    for (const stream of [process.stdin, process.stdout, process.stderr]) {
+      Object.defineProperty(stream, "isTTY", { value: false, configurable: true });
+    }
+    process.stdout.write = ((chunk: unknown) => {
+      stdout += text(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: unknown) => {
+      stderr += text(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    console.log = console.info = console.debug = to("out");
+    console.warn = console.error = to("err");
+    process.exit = ((code?: number) => {
+      exited ??= code ?? (typeof process.exitCode === "number" ? process.exitCode : 0);
+      throw new Exited();
+    }) as typeof process.exit;
+    try {
+      await runCli(["node", "fastagent", ...args]);
+    } catch (error) {
+      if (!(error instanceof Exited)) throw error;
+    }
+    const code = exited ?? (typeof process.exitCode === "number" ? process.exitCode : 0);
+    return { code, stdout, stderr };
+  } finally {
+    process.exit = saved.exit;
+    process.stdout.write = saved.stdoutWrite;
+    process.stderr.write = saved.stderrWrite;
+    Object.assign(console, saved.console);
+    [process.stdin, process.stdout, process.stderr].forEach((stream, i) => {
+      const was = saved.tty[i];
+      if (was) Object.defineProperty(stream, "isTTY", was);
+      else delete (stream as { isTTY?: boolean }).isTTY;
+    });
+    process.chdir(saved.cwd);
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, saved.env);
+    process.exitCode = saved.exitCode;
+    for (const event of process.eventNames()) {
+      const before = saved.listeners.get(event) ?? [];
+      for (const listener of process.listeners(event as never) as Listener[]) {
+        if (!before.includes(listener)) process.removeListener(event as never, listener);
+      }
+    }
+  }
 }
 
 /**

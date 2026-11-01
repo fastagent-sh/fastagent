@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import { hermeticGit, withGitIdentity } from "./git-env.ts";
 import { describe, expect, it } from "vitest";
 import ignore from "ignore";
-import { spawn } from "node:child_process";
 import {
   access,
   chmod,
@@ -24,6 +23,7 @@ import { modelsOver } from "../src/harnesses/models/models.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../src/harnesses/pi-durable/text.ts";
+import { runInProcess } from "./cli-run.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
 
@@ -37,18 +37,11 @@ async function exists(p: string): Promise<boolean> {
   );
 }
 
-const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-
 const withIdentity = withGitIdentity;
 
 /** Run `fastagent <args>` from `cwd` to completion; return stderr (the [fastagent] report stream). */
-function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = withIdentity): Promise<string> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd, env });
-    let stderr = "";
-    child.stderr.on("data", (d) => (stderr += String(d)));
-    child.on("close", () => resolve(stderr));
-  });
+async function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = withIdentity): Promise<string> {
+  return (await runInProcess(args, cwd, env)).stderr;
 }
 
 describe("init: scaffoldAgent", () => {

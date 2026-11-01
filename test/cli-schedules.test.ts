@@ -3,7 +3,14 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveStateRoot } from "../src/paths.ts";
 import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
-import { agentWorkspace, fauxAgent as agent, killWhileLingering, lingered, run, whileServed } from "./cli-run.ts";
+import {
+  agentWorkspace,
+  fauxAgent as agent,
+  killWhileLingering,
+  lingered,
+  runInProcess,
+  whileServed,
+} from "./cli-run.ts";
 
 /** A schedule module as `defineSchedule` returns it, so the fixture needs no package of its own. */
 const schedule = (cron: string, extra = "") =>
@@ -37,7 +44,7 @@ describe("cli: schedules", () => {
     });
     if (!added.ok) throw new Error(added.error);
 
-    const text = await run(["schedules", "list", dir]);
+    const text = await runInProcess(["schedules", "list", dir]);
     expect(text.code).toBe(0);
     // When it runs next, how the last run ended, and the session its fires continue (none before the first).
     expect(text.stdout).toMatch(
@@ -47,7 +54,7 @@ describe("cli: schedules", () => {
     expect(text.stdout).toContain(`wake ${added.id}`); // labelled — a different owner, not a schedule
     expect(text.stdout).toContain("session=chat:42");
 
-    const asJson = await run(["schedules", "list", "--json", dir]);
+    const asJson = await runInProcess(["schedules", "list", "--json", dir]);
     const parsed = JSON.parse(asJson.stdout) as {
       schedules: { name: string; session: string | null; fires: { outcome?: string }[] }[];
       wakeups: { id: string }[];
@@ -61,7 +68,7 @@ describe("cli: schedules", () => {
 
   it("schedules list says which file is not a schedule, and refuses unreadable state in one line", async () => {
     const broken = await agentWorkspace("fa-list-cron-", { "src/schedules/broken.ts": schedule("not a cron") });
-    const refused = await run(["schedules", "list", broken]);
+    const refused = await runInProcess(["schedules", "list", broken]);
     expect(refused.code).toBe(1);
     expect(refused.stderr).toMatch(/src\/schedules\/broken\.ts/);
     expect(refused.stderr).not.toMatch(/\n\s+at /);
@@ -76,10 +83,10 @@ describe("cli: schedules", () => {
       join(claims, "2026-01-02T09-00-00-000Z"),
       JSON.stringify({ firedAt: "2026-01-02T09:00:00.000Z", outcome: "completed", ms: 5 }),
     );
-    const textOnly = await run(["schedules", "list", dir]);
+    const textOnly = await runInProcess(["schedules", "list", dir]);
     expect(textOnly.code, textOnly.stderr).toBe(0);
     expect(textOnly.stdout).toMatch(/last 2026-01-02T09:00:00.000Z completed/);
-    const history = await run(["schedules", "list", dir, "--json"]);
+    const history = await runInProcess(["schedules", "list", dir, "--json"]);
     expect(history.code).toBe(1);
     expect(history.stderr).toMatch(/the fire history of "daily" is unreadable/);
     await rm(claims, { recursive: true });
@@ -88,7 +95,7 @@ describe("cli: schedules", () => {
     // Node stack `readFires` throws for the serving boot's benefit.
     await mkdir(join(dir, ".state", "schedule", "claims"), { recursive: true });
     await writeFile(join(dir, ".state", "schedule", "claims", "daily"), ""); // a FILE where the dir goes
-    const unreadable = await run(["schedules", "list", dir, "--json"]);
+    const unreadable = await runInProcess(["schedules", "list", dir, "--json"]);
     expect(unreadable.code).toBe(1);
     expect(unreadable.stdout).toBe("");
     expect(unreadable.stderr).toMatch(/the fire history of "daily" is unreadable/);
@@ -103,7 +110,7 @@ const SCHEDULE = scheduleOf("write the digest");
 describe("cli: schedules run and unwake", () => {
   it("schedules run refuses to fire while a serve holds the storage", async () => {
     const dir = await agent("fa-schedules-busy-", { "src/schedules/digest.ts": SCHEDULE });
-    const refused = await whileServed(dir, () => run(["schedules", "run", "digest", dir]));
+    const refused = await whileServed(dir, () => runInProcess(["schedules", "run", "digest", dir]));
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain("another `fastagent dev`, `start` or `schedules` command of this agent");
   });
@@ -114,11 +121,11 @@ describe("cli: schedules run and unwake", () => {
     await mkdir(claims, { recursive: true });
     await writeFile(join(claims, "2026-01-01T09-00-00-000Z"), JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z" }));
 
-    const first = await run(["schedules", "run", "digest", dir]);
+    const first = await runInProcess(["schedules", "run", "digest", dir]);
     expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
-    const second = await run(["schedules", "run", "digest", dir]);
+    const second = await runInProcess(["schedules", "run", "digest", dir]);
     expect([second.code, second.stdout.trim()], second.stderr).toEqual([0, "seen 2"]);
-    const listed = JSON.parse((await run(["schedules", "list", "--json", dir])).stdout) as {
+    const listed = JSON.parse((await runInProcess(["schedules", "list", "--json", dir])).stdout) as {
       schedules: { name: string; session: string | null; fires: { outcome?: string }[] }[];
     };
     expect(listed.schedules[0]?.session).toEqual(expect.any(String));
@@ -130,13 +137,13 @@ describe("cli: schedules run and unwake", () => {
     const dir = await agentWorkspace("fa-schedules-unknown-", { "src/schedules/digest.ts": schedule("0 9 * * *") });
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.FASTAGENT_MODEL;
-    const unknown = await run(["schedules", "run", "weekly", dir], undefined, env);
+    const unknown = await runInProcess(["schedules", "run", "weekly", dir], undefined, env);
     expect([unknown.code, unknown.stderr]).toEqual([
       2,
       expect.stringMatching(/no schedule "weekly" in .*src\/schedules\/ \(declared: digest\)/),
     ]);
     expect(unknown.stderr).not.toMatch(/missing model/);
-    const known = await run(["schedules", "run", "digest", dir], undefined, env);
+    const known = await runInProcess(["schedules", "run", "digest", dir], undefined, env);
     expect([known.code, known.stderr]).toEqual([2, expect.stringMatching(/missing model/)]);
   });
 
@@ -146,12 +153,12 @@ describe("cli: schedules run and unwake", () => {
       "src/schedules/slow.ts": scheduleOf("linger over it"),
     });
     // The claim counts a cut-off answer as completed; a check does not.
-    const clipped = await run(["schedules", "run", "clipped", dir]);
+    const clipped = await runInProcess(["schedules", "run", "clipped", dir]);
     expect([clipped.code, clipped.stdout.trim()], clipped.stderr).toEqual([1, "cut sho"]);
     expect(clipped.stderr).toContain("clipped: its answer was cut off (incomplete)");
 
     await killWhileLingering(["schedules", "run", "slow", dir], dir);
-    const refused = await run(["schedules", "run", "clipped", dir]);
+    const refused = await runInProcess(["schedules", "run", "clipped", dir]);
     expect(refused.code).toBe(1);
     expect(refused.stderr).toMatch(/the storage holds 1 message\(s\) an earlier process accepted and stopped before/);
     expect(await lingered(dir)).toBe(1);
@@ -163,16 +170,16 @@ describe("cli: schedules run and unwake", () => {
     const added = addWakeup(stateRoot, { session: "a schedule's own", prompt: "check", cron: "0 * * * *" });
     if (!added.ok) throw new Error(added.error);
 
-    const refused = await whileServed(dir, () => run(["schedules", "unwake", added.id, dir]));
+    const refused = await whileServed(dir, () => runInProcess(["schedules", "unwake", added.id, dir]));
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain("is held by another process");
     expect(listWakeups(stateRoot).map((w) => w.id)).toEqual([added.id]);
 
-    const removed = await run(["schedules", "unwake", added.id, dir]);
+    const removed = await runInProcess(["schedules", "unwake", added.id, dir]);
     expect(removed.code, removed.stderr).toBe(0);
     expect(removed.stdout).toContain(`removed wake ${added.id}`);
     expect(listWakeups(stateRoot)).toEqual([]);
-    const again = await run(["schedules", "unwake", added.id, dir]);
+    const again = await runInProcess(["schedules", "unwake", added.id, dir]);
     expect(again.code).toBe(1);
     expect(again.stderr).toContain(`no pending wake-up ${added.id}`);
   });

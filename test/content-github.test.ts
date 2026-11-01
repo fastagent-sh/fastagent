@@ -1,3 +1,4 @@
+import { runInProcess } from "./cli-run.ts";
 /**
  * GitHub content against a local stand-in for GitHub (github-standin.ts): a checkout of the user's that this machine
  * binds is used as it is, and a repository with none bound here is cloned, and brought up to date at each start while
@@ -5,10 +6,9 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cloneContent, resolveContent } from "../src/content/resolve.ts";
@@ -333,16 +333,7 @@ describe("github content: a clone is brought up to date in place, never over the
 });
 
 describe("github content: what runs the agent clones, what reports on it does not", () => {
-  const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-  const cli = (args: string[], cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> =>
-    new Promise((resolve) => {
-      const child = spawn(process.execPath, [CLI, ...args], { cwd });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (d) => (stdout += d));
-      child.stderr.on("data", (d) => (stderr += d));
-      child.on("close", (code) => resolve({ code, stdout, stderr }));
-    });
+  const cli = (args: string[], cwd: string) => runInProcess(args, cwd);
 
   it("`info` reports a clone not made yet and creates nothing; the opener clones it", async () => {
     const github = githubStandIn();
