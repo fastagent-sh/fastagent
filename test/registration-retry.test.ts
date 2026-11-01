@@ -100,7 +100,7 @@ describe("retryWhile", () => {
 
 describe("registration budgets", () => {
   it("the deploy budget outlasts what a host takes to start serving", () => {
-    // railway-deploy.live.test.ts allows a real deployment 180s to answer /health, because
+    // A real deployment can take 180s to answer /health, because
     // `railway up --ci` returns when the BUILD ends. Registration failure gates the deploy, so a
     // budget shorter than that reports a working deployment as one to re-run.
     //

@@ -418,8 +418,7 @@ describe("destroy agentcore", () => {
   it("a read failure the delete REMEDIED is a warning, not a survivor", async () => {
     // The common shape: `output = text` in the caller's AWS config makes the listing unparseable while
     // `logs:DeleteLogGroup` works fine. The forwarder's group is named exactly, so `--run` deletes it by name
-    // and nothing survived — reporting `1 resource(s) survived` would fail a teardown that removed everything,
-    // and `test/live/env.ts` reads that outcome as a leak.
+    // and nothing survived — reporting `1 resource(s) survived` would fail a teardown that removed everything.
     const said: string[] = [];
     const aws = fakeAws({
       "logs describe-log-groups --log-group-name-prefix /aws/lambda": { code: 0, stdout: "not json\n" },

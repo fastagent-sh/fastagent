@@ -210,7 +210,7 @@ Dropped from the RFC, and from earlier drafts of this document:
 
 ## 12. The env addition (step 4, not scheduled)
 
-Day one is built: the credential layers (§5, §8), the value-file-only delivery (§9), and the model chain are in `src/`, and `test/live/` provisions a real deployment on each host. What remains is the day-two `--env` dimension, a pure addition with no demand behind it yet:
+Day one is built: the credential layers (§5, §8), the value-file-only delivery (§9), and the model chain are in `src/`. What remains is the day-two `--env` dimension, a pure addition with no demand behind it yet:
 
 | Work | Where |
 |---|---|
@@ -246,4 +246,4 @@ Checked boxes are covered by a test in the offline suite. The unchecked ones are
 - [x] Concurrent local projects share the global credential file safely.
 - [x] With no usable credential, **no webhook is registered**; a redeploy against a host that already holds one does not overwrite it (`--if-missing`).
 - [ ] Redeploy, rollback, restart, and session-snapshot restore all preserve the latest credentials.
-- [x] Every supported host has an end-to-end check (`test/live/{docker,fly-deploy,railway-deploy,agentcore-deploy}`: provision, serve a turn, destroy) — of deployment itself, not of the `--env` items above. They deploy an API-key model: a login on the box needs a person, so the OAuth path has no unattended check and was verified by hand on all four hosts (#656).
+- [ ] Every supported host has an end-to-end check of deployment itself (provision, serve a turn, destroy). The nightly live probes that did this were removed: they had been failing for weeks and no longer reflected the product, so a deployment is verified by hand. A login on the box needs a person, so the OAuth path has no unattended check either (verified by hand on all four hosts, #656).

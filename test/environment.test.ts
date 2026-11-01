@@ -2,8 +2,7 @@
  * The environment (src/environment/): what the `environment` of context.json may declare, and how the agent's own mise
  * installs it here and how a process that runs the agent enters it. mise itself is a stand-in here, a script at the
  * path the agent's platform package would put it: what is tested is FastAgent's side (which isolation, which
- * arguments, where, in which order, what reaches the process), not mise. What mise itself does is
- * test/live/environment.live.test.ts's.
+ * arguments, where, in which order, what reaches the process), not mise. What mise itself does is not tested here.
  */
 import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";

@@ -272,8 +272,7 @@ platform. The author never writes mise's files.
   downloads nothing. On a host, mise's data directory is on the storage (`.state/mise/`). AgentCore builds
   `linux/arm64`.
 - **mise's behavior is probed, not assumed.** Every fact above about what mise does was first a guess that a run of
-  mise overturned. The offline suite runs a stand-in; `test/live/environment.live.test.ts` runs the agent's own mise
-  at its newest version, so a mise release that changes one of them is caught there.
+  mise overturned. The offline suite runs a stand-in, so a mise release that changes one of them is not caught by it.
 - A skill script's Python libraries are not part of the environment: the script declares them inline (PEP 723) and
   runs with `uv run`, so a skill carries its own dependencies wherever it goes.
 - `deploy.apt` is gone, and the config has no `environment`.

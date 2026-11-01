@@ -13,8 +13,8 @@ export type ForwarderFireLine =
  * Parse ONE CloudWatch message into what the forwarder meant by it, or `undefined` when the line is about
  * something else (an ordinary Lambda `START`/`REPORT`, a webhook, another schedule).
  *
- * NOT UNDER `test/live/`, which is excluded from `npm test`: this is string work with no AWS in it, and the
- * defect it was extracted over was found by paying for a deployment. `$` is end-of-input in JavaScript, unlike
+ * This is string work with no AWS in it, so it is tested offline; the defect it was extracted over was found by
+ * paying for a deployment. `$` is end-of-input in JavaScript, unlike
  * Perl and Python, so an anchored pattern matched nothing real — every CloudWatch message carries a trailing
  * newline, and a timestamp and request id in front. Nothing here is anchored at either end.
  *
