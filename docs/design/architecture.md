@@ -7,8 +7,9 @@ status: implemented in part
 
 # Architecture
 
-**Status: decided; implemented through §6 step 3.** The code serves an agent on pi-durable through the
-[Agent API](../SPEC.md). The artifact (§4.1), context packages (§4.2) and what §4.4 leaves for later are not built yet;
+**Status: decided; implemented through §6 step 4.** The code serves an agent on pi-durable through the
+[Agent API](../SPEC.md), with per-agent content authoring released in 0.28.0. MCP connectors, the artifact (§4.1),
+context packages (§4.2) and what §4.4 leaves for later are not built yet;
 §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol (never released),
 a harness port, and the conformance levels behind them (§5).
 
@@ -312,9 +313,18 @@ What the previous design had, and what took its place:
    protocol, its HTTP API, `LoopPort` and the pi-coding-agent harness deleted.
 3. **Done** ([#788](https://github.com/fastagent-sh/fastagent/issues/788)). The Agent API v2 ([SPEC.md](../SPEC.md)):
    one model, in process and over HTTP with an API key, with `connectAgent`, `deploy`'s key and `invoke --url`.
-4. The artifact: `fastagent build`, and `deploy` from it.
-5. Context packages.
-6. Shared contexts and agents working together.
+4. **Done, released in 0.28.0** ([#875](https://github.com/fastagent-sh/fastagent/pull/875)). Per-agent content
+   authoring through the embedding API: create an agent with folders or repositories, then read and edit its declarations.
+5. MCP connectors in the agent's own `context.json`, over pi-durable's tool bridge. First measure resource ownership,
+   reuse across messages, cancellation, close and restart on the current harness
+   ([#678](https://github.com/fastagent-sh/fastagent/issues/678)); do not carry forward the retired harness's session-cache
+   proposal or make scale-out a prerequisite.
+6. The artifact: `fastagent build`, and `deploy` from it.
+7. Context packages, once there is a concrete cross-agent reuse need; they depend on the artifact's build step.
+8. Shared contexts and agents working together.
+
+This is the sequence tracked in [#788](https://github.com/fastagent-sh/fastagent/issues/788). Completing a phase does not
+commit the next one to implementation without revisiting its demand and scope.
 
 ### 6.1 What the spike measured
 
