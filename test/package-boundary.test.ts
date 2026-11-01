@@ -99,6 +99,14 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
     expect([...staticPackageGraph("cli.ts")]).toEqual([]);
   });
 
+  it("invoke's eager dependencies include no local harness or SQLite", () => {
+    const reached = [
+      ...staticPackageGraph("cli/commands/invoke.ts"),
+      ...staticPackageGraph("cli/commands/invoke.ts", true),
+    ];
+    expect(reached.filter((p) => p.startsWith("@earendil-works/") || p === "node:sqlite")).toEqual([]);
+  });
+
   it("the CLI-only deps live behind the lazy command modules (the guard has teeth)", () => {
     expect(staticPackageGraph("cli/program.ts")).toContain("commander"); // via kernel.ts
     expect(staticPackageGraph("cli/commands/login.ts")).toContain("@clack/prompts");

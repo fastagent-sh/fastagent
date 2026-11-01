@@ -11,7 +11,6 @@ import type { ModelThinkingLevel, Models, Provider } from "@earendil-works/pi-ai
 import {
   type Extension,
   type HarnessSettings,
-  type ModelRef,
   type Storage,
   type ToolRegistration,
   createRegistry,
@@ -28,6 +27,7 @@ import { channelModuleProblem } from "../../channels/discover.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { DEV_SERVE_ENV } from "../../serving-command.ts";
+import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isNeeds } from "./define.ts";
@@ -106,14 +106,6 @@ function checkConfig(config: unknown, file: string): AgentConfig {
     if (list !== undefined && !Array.isArray(list)) throw new Error(`${file}: "${key}" must be an array`);
   }
   return config as AgentConfig;
-}
-
-export function modelRefOf(spec: string, where: string): ModelRef {
-  const slash = typeof spec === "string" ? spec.indexOf("/") : -1;
-  if (slash < 1 || slash === spec.length - 1) {
-    throw new Error(`${where} must be "provider/modelId", got ${JSON.stringify(spec)}`);
-  }
-  return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) };
 }
 
 /** The agent package's `fastagent.config.ts`, checked; `{}` without one. */

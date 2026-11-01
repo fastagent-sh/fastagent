@@ -8,14 +8,12 @@ import { type Agent, AgentError, type MessageStreamEvent, type SessionSettings }
 import { enterAgentEnv } from "../../env.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { modelRefOf } from "../../harnesses/pi-durable/open.ts";
-import { openServing } from "../../harnesses/pi-durable/serve.ts";
+import { modelRefOf } from "../../model-ref.ts";
 import { connectAgent } from "../../http/client.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
 import { resolveStateRoot, selectAgentEnvironment } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
-import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 export interface InvokeOptions {
   model?: string;
@@ -141,6 +139,10 @@ async function remoteSession(
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
   if (opts.url !== undefined) return runRemoteInvoke(message, dirArg, { ...opts, url: opts.url });
   if (opts.key !== undefined) failUsage("--key is the key --url calls with: pass --url too");
+  const [{ openServing }, { enterAgentCommand, reportAuth }] = await Promise.all([
+    import("../../harnesses/pi-durable/serve.ts"),
+    import("../shared.ts"),
+  ]);
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
   const file = invokeStorageFile(resolveStateRoot(agentDir));
   const { agent, models, definition } = await openServing(agentDir, {

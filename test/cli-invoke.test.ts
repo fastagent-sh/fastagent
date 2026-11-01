@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { describe, expect, it } from "vitest";
 import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
@@ -116,6 +117,53 @@ async function withServedAgent(during: (dir: string, url: string) => Promise<voi
 }
 
 describe("cli: invoke --url", () => {
+  it("runs with and without --model while loading no local harness", async () => {
+    await withServedAgent(async (dir, url) => {
+      const blocker = join(dir, "refuse-harness.mjs");
+      await writeFile(
+        blocker,
+        `import { registerHooks } from "node:module";
+registerHooks({
+  load(url, context, nextLoad) {
+    if (url.includes("/harnesses/") || url.includes("/node_modules/@earendil-works/")) {
+      throw new Error("Remote invoke loaded a local harness: " + url);
+    }
+    return nextLoad(url, context);
+  },
+});\n`,
+      );
+      const env = {
+        ...process.env,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(blocker).href}`,
+      };
+      const plain = await run(["invoke", "--url", url, "--key", "the-key", "hello", dir], undefined, env);
+      expect([plain.code, plain.stdout.trim()], plain.stderr).toEqual([0, "seen 1"]);
+      const selected = await run(
+        ["invoke", "--url", url, "--key", "the-key", "--model", "gw/m2", "hello", dir],
+        undefined,
+        env,
+      );
+      expect([selected.code, selected.stdout.trim()], selected.stderr).toEqual([0, "seen 1 by m2"]);
+    });
+  });
+
+  it("rejects a malformed --model before trying the connection", async () => {
+    const dir = await agent("fa-invoke-url-model-");
+    const result = await run([
+      "invoke",
+      "--url",
+      "http://127.0.0.1:9",
+      "--key",
+      "the-key",
+      "--model",
+      "missing-provider",
+      "hello",
+      dir,
+    ]);
+    expect([result.code, result.stdout]).toEqual([2, ""]);
+    expect(result.stderr).toContain('--model must be "provider/modelId", got "missing-provider"');
+  });
+
   it("continues a served session with the model this run names", async () => {
     await withServedAgent(async (dir, url) => {
       const first = await run(["invoke", "--url", url, "--key", "the-key", "hello", dir]);
