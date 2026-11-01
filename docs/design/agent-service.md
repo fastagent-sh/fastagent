@@ -8,7 +8,7 @@ status: partly implemented
 # Agent service
 
 **Status: partly implemented.** The environment (§4) and credentials (§6) are implemented; MCP server support (§5)
-is planned ([#678](https://github.com/fastagent-sh/fastagent/issues/678)). The conceptual word "connector" below describes
+is implemented for the [documented subset](../mcp.md) ([#678](https://github.com/fastagent-sh/fastagent/issues/678)). The conceptual word "connector" below describes
 an external integration, not a public FastAgent type or configuration kind. How an agent is served, the API it is served through,
 and where it runs are [architecture.md](architecture.md)'s and the [Agent API](../SPEC.md)'s.
 
@@ -75,7 +75,7 @@ Agent = model + harness + context, composed by a definition
   harness        the loop that runs it: pi-durable
   context        everything it works with from outside, in three kinds:
     content        data it reads and writes as files, synced to where it runs: repositories, directories
-    external APIs  code tools today; planned MCP servers use .mcp.json, with credentials supplied per instance
+    external APIs  code tools and MCP servers in .mcp.json, with credentials supplied per instance
     environment    what it runs in: the commands and runtimes it needs, on every platform (context.json)
   definition     its own directory: who it is and how it works, and which model and contexts it uses
   remembers in   sessions: conversations
@@ -344,7 +344,7 @@ OpenAI's Codex base image installs its runtimes with mise.
 
 ## 5. MCP servers and external APIs
 
-[MCP server design](mcp.md) owns the configuration and lifecycle boundary. Support is not implemented yet.
+[MCP server design](mcp.md) owns the configuration and lifecycle boundary; [the guide](../mcp.md) names the supported subset.
 Servers are declared in the agent's `.mcp.json` under `mcpServers`, with a documented supported subset.
 There is no `context.json.connectors` field, generic `Connector` API, or implicit discovery of `.pi/mcp.json`,
 editor configurations or a user's global servers. Client configurations are not universally interchangeable.
@@ -381,7 +381,7 @@ the `variables` of the agent's environment (§4), every one of them required.
 | A code tool, an extension, a provider | `needs([...])` around it | Exists |
 | A channel | `needs([...])` around its module | Exists |
 | Content | Its kind's credential: `github` content reads `GITHUB_TOKEN` after git's own helpers, and may name another variable | Read; `deploy` notes when it is missing; not declared |
-| An MCP server | [`.mcp.json`](mcp.md) secret references or a host-selected OAuth grant; values resolved per instance | Not implemented; browser OAuth is required in the first release |
+| An MCP server | [`.mcp.json`](mcp.md) secret references or a host-selected OAuth grant; values resolved per instance | Implemented: browser OAuth, atomic grants and explicit instance bindings |
 | A command the agent runs (`gh`, `aws`) | The variables it reads, by name, in `environment.variables` in `context.json` (§4) | Exists |
 
 A declaration does what it does for tools and channels today:
@@ -399,13 +399,13 @@ A declaration does what it does for tools and channels today:
 |---|---|---|---|---|---|
 | A value | API keys, bot tokens, signing secrets, a GitHub App's private key | `.secrets/.env`, by env-var name | Written by the author, or by `add <channel>` | `deploy` carries the value file | Rotated by hand |
 | A grant to a model | OAuth to a model subscription | `.secrets/auth.json`, by provider | `fastagent login <provider>` | `fastagent login <provider> --deployment <host>` runs the flow on the box | Refreshed in place by the runtime |
-| A grant to an MCP server | OAuth to an MCP server | Decided with MCP (#678) | — | Open: a container's home is not on the storage a deploy keeps | — |
+| A grant to an MCP server | Browser OAuth | Selected `.secrets/mcp-auth.json`, by opaque grant ID; bindings in the state root | `fastagent mcp login <server>` or host `signInMcp` | Authorize separately on the target; a fixed callback port may be forwarded, with no automatic deployment relay or desktop grant copy | Serialized refresh with a durable rotation marker |
 
 - Values keep env-var names because every SDK and CLI reads them (`GITHUB_TOKEN`, `OPENAI_API_KEY`). Two
   declarations of one name share one value; two parts that need different values declare different names
   (`ACME_GITHUB_TOKEN`).
-- Grants exist today for model providers, including the machine-wide store `login -g` writes. Where an MCP server's
-  grant lives for a deployed agent is decided with MCP (#678).
+- Model grants may use the machine-wide store `login -g` writes. MCP grants have no global fallback: the selected
+  environment's secret directory or a host-supplied store owns them; an instance explicitly selects its bindings.
 
 ### 6.3 On whose authority
 

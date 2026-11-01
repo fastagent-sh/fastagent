@@ -1,14 +1,14 @@
 ---
 title: MCP authorization ownership
-description: "Proposed embedding contract for MCP grants, instance bindings, browser sign-in and durable refresh coordination."
+description: "Embedding contract for MCP grants, instance bindings, browser sign-in and durable refresh coordination."
 type: design-doc
-status: proposed; not implemented
+status: implemented
 ---
 
 # MCP authorization ownership
 
-This is the host/store contract proposed for [MCP support](mcp.md), following the real Linear OAuth check in
-[#678](https://github.com/fastagent-sh/fastagent/issues/678). The API names below are a design for review, not current exports.
+This is the host/store contract for [MCP support](../mcp.md), following the real Linear OAuth check in
+[#678](https://github.com/fastagent-sh/fastagent/issues/678). The exported types live in `src/mcp-api.ts`.
 The consumer Agent API's sessions/messages remain unchanged. Kage owns its UI and persistence; FastAgent owns MCP/OAuth
 mechanics and exposes its own types, without leaking SDK types into an embedding application.
 
@@ -35,11 +35,11 @@ the CLI keeps its bindings outside the definition. A supplied store/bindings pai
 to a global user's account. The first implementation snapshots bindings at open. To change a live binding, the host closes
 and reopens the affected instance; no hidden hot-swapping of credentials under an in-flight tool call.
 
-## 2. Proposed host operations
+## 2. Host operations
 
 | Operation | Result and responsibility |
 |---|---|
-| `inspectMcp(agentDir, { auth })` | Read declarations and local binding/grant metadata without opening the harness. Return server names, transport and local authorization state, never token values. This is not a network health check |
+| `inspectMcp(agentDir, { store, bindings })` | Read declarations and local binding/grant metadata without opening the harness. Return server names, transport and local authorization state, never token values. This is not a network health check |
 | `signInMcp({ agentDir, server, store, scopes, interaction })` | Discover the resource/issuer, obtain scope consent, run browser authorization, durably store a fresh grant and return its non-secret summary. Does not bind it to an agent automatically |
 | `mcpGrantFile(path)` | The CLI/default file implementation of the grant-store contract below; no global fallback |
 | `openAgent(dir, { stateDir, mcp: { store, bindings } })` | Resolve the named grants for this instance, validate their targets and open clients. Never launches browser login implicitly |
@@ -72,7 +72,7 @@ replay the old code.
 ## 3. Store contract: exclusive access with durable writes
 
 A single async `modify(current) -> next` callback is insufficient: it can serialize refreshes, but cannot persist a marker
-before the remote refresh token is consumed. The proposed primitive is an exclusive per-grant operation with explicit
+before the remote refresh token is consumed. The primitive is an exclusive per-grant operation with explicit
 writes inside it:
 
 ```ts
@@ -93,7 +93,7 @@ interface McpGrantAccess {
 ```
 
 `withGrant` must be exclusive across every caller that shares the underlying store, even if they use different store
-objects. CLI file storage provides cross-process exclusion using the existing `withLockedFile` and atomic replacement;
+objects. CLI file storage resolves file/symlink targets before taking the existing `withLockedFile` lock and uses atomic replacement;
 a Kage-backed store provides the corresponding serialization for its storage. A storage-wide lock is correct but may
 serialize unrelated grants. No process-global singleton lock is substituted for the store contract.
 
@@ -104,8 +104,7 @@ read/write/lock failures, and must never retry the operation callback automatica
 
 `McpGrantRecord` is FastAgent-owned, versioned data: resource URI, issuer, client registration, granted scopes, credential
 values, token expiry when supplied, token generation and refresh state. Credential fields are secret and only the host
-storage/protocol adapter reads them. `McpGrantSummary` omits all tokens, client secrets, codes and PKCE values. Final field
-spellings/schema are implementation work; the identity and concurrency semantics above are fixed by this proposal.
+storage/protocol adapter reads them. `McpGrantSummary` omits all tokens, client secrets, codes and PKCE values. `src/mcp-api.ts` defines the record fields; `src/mcp/grants.ts` validates persisted records without echoing credential values.
 
 ## 4. Refresh protocol
 
@@ -173,7 +172,13 @@ which then retried the consumed token and received `invalid_grant`. The experime
 and persistence; it did not kill a real process or test Kage's secure-storage adapter. The temporary code is not product
 implementation or a new permanent live suite.
 
-Before shipping, implement permanent contract tests for host/file adapters, including real process interruption, callback
-cancellation/issuer failures, deletion/refresh races and scoped error data. Then run two actual `openAgent` instances in
-one process with distinct and explicitly shared grants, verify closing one does not affect the other, and repeat the real
-Linear browser/tool flow through Kage's host interface.
+Permanent regressions now live in `test/mcp-auth.test.ts`, `test/mcp-agent.test.ts`, `test/mcp-client.test.ts` and
+`test/cli-mcp.test.ts`. They cover shared/aliased storage, callback refusal/cancellation, deletion and persistence races,
+different accounts, close isolation and unsafe replay. A real child process is killed after the fixture rotates a token
+but before its response arrives; recovery refuses the fenced token. That test ages the orphaned lock deterministically
+rather than waiting out the stale-lock window. Removing the fence makes it retry the consumed token and fail.
+
+The built CLI and public `openAgent` passed Linear read-only acceptance on 2026-11-02: browser sign-in, two instances
+sharing a grant, a call after closing the other instance, automatic refresh after forcing local expiry, and grant/session
+reuse in a new process. No model provider was called and business output was not printed. This is not natural-expiry,
+real-provider multi-account or Kage UI/secure-store acceptance; those remain separate checks.

@@ -41,9 +41,9 @@ A context has three kinds of parts, each reaching the agent its own way ([agent 
 
 - **Content** is data the agent reads and writes as files: a project, a folder, a repository. Most of this note is
   about content.
-- **External systems** are reached by code tools, extensions or, in the planned [MCP support](mcp.md), servers declared
+- **External systems** are reached by code tools, extensions or through [MCP support](../mcp.md), servers declared
   in `.mcp.json`. "Connector" in older conceptual diagrams is not a public type or a `context.json` field.
-  Credentials belong to the instance. MCP servers are not supported yet (#678).
+  Credentials belong to the instance or its host-selected grant store.
 - **The environment** is the commands and runtimes the agent runs, declared under `environment` in its `context.json`
   and installed on every instance, each at the newest release its version allows there
   ([agent service](agent-service.md) ยง4). An agent with none borrows the machine's (below).
@@ -107,10 +107,10 @@ FastAgent's, and the definition says which ([architecture.md](architecture.md) ย
 | `src/tools/`, `src/extensions/` | TypeScript modules: pi-durable's `defineTool` and `defineExtension` | pi-durable |
 | `src/channels/`, `src/schedules/`, `fastagent.config.ts` | TypeScript modules: a channel, `defineSchedule`, `defineAgent`; `needs([...])` around any module that reads a secret | FastAgent |
 | `context.json` | JSON | FastAgent |
+| `.mcp.json` | JSON, `mcpServers`; supported stdio/HTTP subset | MCP client ecosystem convention |
 | `package.json` | npm | npm |
 
-The tool standard across ecosystems is MCP, and it is not supported yet
-([#678](https://github.com/fastagent-sh/fastagent/issues/678)). `src/tools/` holds tools. `src/extensions/` holds what is
+[MCP tools](../mcp.md) are declared separately in `.mcp.json`, with instance-owned clients and explicit OAuth bindings. `src/tools/` holds tools. `src/extensions/` holds what is
 not only a tool: prompt sections, hooks, named bundles of tools.
 
 Each file of the definition has one place, so there is no order to decide between two: no `.pi/` directory, no

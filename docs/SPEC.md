@@ -433,18 +433,19 @@ for an end.
 
 ## 8. In process (TypeScript)
 
-The interface is §4's. The package's entry points are one per kind of user:
+The interface is §4's. MCP server configuration and OAuth are [host operations](mcp.md), not changes to sessions,
+messages or their HTTP binding. The package's entry points are one per kind of user:
 
 | Import | For | Holds |
 |---|---|---|
-| `@fastagent-sh/fastagent` | An app or tool on Node or Bun | `openAgent`, what a host embedding agents needs beside it (`createAgent`, model credentials and sign-in), the authoring functions (`defineAgent`, `defineChannel`, `defineSchedule`, `needs`), `AgentError` and the types |
+| `@fastagent-sh/fastagent` | An app or tool on Node or Bun | `openAgent`, what a host embedding agents needs beside it (`createAgent`, model credentials/sign-in, MCP inspection and authorization), the authoring functions (`defineAgent`, `defineChannel`, `defineSchedule`, `needs`), `AgentError` and the types |
 | `@fastagent-sh/fastagent/client` | A program anywhere `fetch` runs (Node, Bun, Deno, Workers) | `connectAgent`, `AgentError` and the types |
 | `@fastagent-sh/fastagent/<channel>` | An agent's channel file | The first-party channels |
 
 ```ts
 function openAgent(
   dir: string,
-  options?: { model?: string; credentials?: CredentialStore; stateDir?: string },
+  options?: { model?: string; credentials?: CredentialStore; stateDir?: string; mcp?: McpOptions },
 ): Promise<LocalAgent>;
 function connectAgent(url: string, options: { apiKey: string }): Agent;
 

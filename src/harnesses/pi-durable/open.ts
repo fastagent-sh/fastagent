@@ -19,6 +19,7 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { loadEnvironment } from "../../content/file.ts";
+import { mcpSecrets } from "../../mcp/config.ts";
 import type { ResolvedContent } from "../../content/resolve.ts";
 import { type DeclaredSecret, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { declaredVariables } from "../../environment/declare.ts";
@@ -157,13 +158,17 @@ function declarers(definition: AgentDefinition): { source: string; value: unknow
 }
 
 /** The secrets the definition declares, wherever: its code's `needs`, and `context.json`'s command variables. */
-export function definitionSecrets(definition: AgentDefinition): DeclaredSecret[] {
+function codeSecrets(definition: AgentDefinition): DeclaredSecret[] {
   return [
     ...declarers(definition).flatMap(({ source, value }) =>
       isNeeds(value) ? value.secrets.map((secret) => ({ ...secret, source })) : [],
     ),
     ...declaredVariables(loadEnvironment(definition.dir)),
   ];
+}
+
+export function definitionSecrets(definition: AgentDefinition): DeclaredSecret[] {
+  return [...codeSecrets(definition), ...mcpSecrets(definition.dir)];
 }
 
 /**
@@ -245,7 +250,7 @@ export interface BuiltDefinition {
  * the values it declared, and refuse one that is not what its directory holds.
  */
 export function buildDefinition(definition: AgentDefinition, env: NodeJS.ProcessEnv = process.env): BuiltDefinition {
-  const missing = missingSecrets(definitionSecrets(definition), env);
+  const missing = missingSecrets(codeSecrets(definition), env);
   if (missing.length > 0) {
     throw new Error(`missing required secrets: ${describeSecrets(missing)} (set them in the environment)`);
   }
@@ -341,6 +346,7 @@ export interface AssembleAgentOptions {
   content?: readonly ResolvedContent[];
   /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;
+  mcpTools?: ToolRegistration[];
   /**
    * pi-ai's built-ins and the definition's providers over the instance's credentials, lists refreshed: the model
    * environment's (environment.ts), so the Agent runs on the lists its startup report reads.
@@ -377,6 +383,12 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   const ownWake = [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].some(({ name }) =>
     WAKE_TOOLS.includes(name),
   );
+  const authoredNames = new Set(
+    [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].map((tool) => tool.name),
+  );
+  for (const tool of options.mcpTools ?? []) {
+    if (authoredNames.has(tool.name)) throw new Error(`MCP tool ${tool.name} conflicts with an authored tool`);
+  }
   const registry = createRegistry();
   registry.install(CodingTools);
   // After the coding tools, so a tool of the definition's own with one of their names replaces it.
@@ -384,7 +396,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     defineExtension({
       name: DEFINITION_EXTENSION,
       sections: definitionSections(dir, options.content ?? [], { wake: ownWake || options.stateRoot !== undefined }),
-      tools: code.tools,
+      tools: [...code.tools, ...(options.mcpTools ?? [])],
     }),
   );
   for (const extension of code.extensions) registry.install(extension);

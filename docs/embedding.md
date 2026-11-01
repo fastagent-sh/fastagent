@@ -71,6 +71,13 @@ answered. Nothing reaches the agent until `serve`.
 A definition is always a directory: the prompt is its `SYSTEM.md`, and its tools are modules of `src/tools/`. To
 assemble one in code, write the directory.
 
+### MCP servers
+
+An agent's `.mcp.json` adds stdio or Streamable HTTP tools. Use `inspectMcp` and `signInMcp` to drive browser OAuth in
+the host before opening an agent, then pass `mcp: { store, bindings }` to `openAgent`. Each open owns its clients;
+sharing a grant is explicit and closing an agent does not sign the user out. See [MCP servers](mcp.md) for the host
+interaction/store contract, instance variables, proxy policy and supported protocol subset.
+
 ## 2. Send a message
 
 ```ts

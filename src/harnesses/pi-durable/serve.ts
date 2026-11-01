@@ -12,6 +12,11 @@ import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
 import { piCredentials } from "../models/host.ts";
 import type { CredentialStore } from "../../sign-in-api.ts";
+import type { McpOptions } from "../../mcp-api.ts";
+import { openMcpClients, type McpClients } from "../../mcp/client.ts";
+import { resolveMcpServers } from "../../mcp/config.ts";
+import { mcpAuthorization } from "../../mcp/host.ts";
+import { mcpTools } from "./mcp.ts";
 import { loadContent } from "../../content/file.ts";
 import {
   type ResolvedContent,
@@ -37,6 +42,7 @@ import {
 import { type StorageLocking, openLockedStorage } from "./storage.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
+  mcp?: McpOptions;
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
@@ -109,7 +115,7 @@ const instanceStorageFile = (stateRoot: string) => join(stateRoot, "agent.sqlite
 export async function holdingInstance<T>(stateRoot: string, work: () => T): Promise<T> {
   const storage = await openLockedStorage(instanceStorageFile(stateRoot), "posix", INSTANCE_HOLDERS);
   try {
-    return work();
+    return await work();
   } finally {
     await storage.close(BACKGROUND_CONTEXT);
   }
@@ -144,23 +150,50 @@ export async function openServing(directory: string, options: OpenServingOptions
   );
   const chosen = options.storage ?? { instance: "posix" };
   const storage = await openStorage(stateRoot, chosen);
-  const agent = await assembleAgent(definition, {
-    storage,
-    code,
-    content,
-    environment,
-    models: models.models,
-    ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
-    ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),
-    ...(options.model === undefined ? {} : { model: options.model }),
-    ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
-    ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
-    ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
-  }).catch(async (error: unknown) => {
-    // An Agent that did not open does not own the storage, and its lock would refuse this process's next attempt.
-    await storage.close(BACKGROUND_CONTEXT);
-    throw error;
-  });
+  let mcp: McpClients | undefined;
+  let agent: DurableAgent;
+  try {
+    const mcpEnvironment = { ...env, ...options.mcp?.variables };
+    mcp = await openMcpClients(
+      resolveMcpServers(dir, mcpEnvironment),
+      mcpAuthorization(dir, env, stateRoot, options.mcp),
+      options.mcp,
+    );
+    agent = await assembleAgent(definition, {
+      mcpTools: mcpTools(mcp.tools),
+      storage,
+      code,
+      content,
+      environment,
+      models: models.models,
+      ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
+      ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
+      ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
+      ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
+    });
+  } catch (error) {
+    const failures: unknown[] = [error];
+    if (mcp) await mcp.close().catch((cleanup: unknown) => failures.push(cleanup));
+    await storage.close(BACKGROUND_CONTEXT).catch((cleanup: unknown) => failures.push(cleanup));
+    throw failures.length === 1 ? error : new AggregateError(failures, "Agent open and cleanup failed");
+  }
+  // A storage failure or a direct harness close also ends the resources this open acquired.
+  void agent.harness.closed
+    .then(() => mcp.close())
+    .catch((error: unknown) => {
+      log.warn(`[fastagent] MCP cleanup after harness shutdown failed: ${String(error)}`);
+    });
+  const closeAgent = agent.close.bind(agent);
+  let closing: Promise<void> | undefined;
+  agent.close = () =>
+    (closing ??= (async () => {
+      const failures: unknown[] = [];
+      await closeAgent().catch((error: unknown) => failures.push(error));
+      await mcp.close().catch((error: unknown) => failures.push(error));
+      if (failures.length) throw new AggregateError(failures, "Agent close failed");
+    })());
   return {
     agent,
     definition,
@@ -193,6 +226,8 @@ export interface ServeAgentOptions {
 }
 
 export interface OpenAgentOptions {
+  /** Per-instance MCP grants and interpolation values; no global credential discovery. */
+  mcp?: McpOptions;
   /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
   model?: string;
   /** Where provider credentials are kept, instead of the agent's own `.secrets/auth.json` over the machine's. */
@@ -221,6 +256,7 @@ export async function openAgent(dir: string, options: OpenAgentOptions = {}): Pr
   let ticking = false;
   const opened = await openServing(dir, {
     wakeTicking: () => ticking,
+    ...(options.mcp === undefined ? {} : { mcp: options.mcp }),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.credentials === undefined ? {} : { credentialStore: piCredentials(options.credentials) }),
     ...(options.stateDir === undefined ? {} : { stateRoot: stateDirOf(options.stateDir) }),

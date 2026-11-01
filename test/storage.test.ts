@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { expect, it } from "vitest";
-import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { openServing, holdingInstance } from "../src/harnesses/pi-durable/serve.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 
 const STORAGE = pathToFileURL(new URL("../src/harnesses/pi-durable/storage.ts", import.meta.url).pathname).href;
@@ -35,6 +35,24 @@ it("a second process cannot open the storage one process holds, and can once it 
   );
   await held.close(BACKGROUND_CONTEXT);
   expect(await openElsewhere(path)).toBe("opened");
+});
+
+it("holdingInstance keeps the lease until asynchronous state work has finished", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fa-held-state-"));
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const running = holdingInstance(dir, async () => {
+    entered.resolve();
+    await finish.promise;
+  });
+  try {
+    await entered.promise;
+    expect(await openElsewhere(join(dir, "agent.sqlite"))).toContain("held by another process");
+  } finally {
+    finish.resolve();
+    await running;
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 it("a storage written by a newer pi-durable is refused saying so, not with a second close's error", async () => {

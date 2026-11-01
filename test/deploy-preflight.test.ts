@@ -335,6 +335,25 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (pre.ok) expect(JSON.stringify(pre.messages)).not.toMatch(/ship WITHOUT the/);
   });
 
+  it("keeps declared MCP servers in the image and excludes their saved grants", async () => {
+    const dir = await agent({
+      ".mcp.json": JSON.stringify({ mcpServers: { test: { command: "node", env: { TOKEN: "$" + "{MCP_TOKEN}" } } } }),
+      ".secrets/mcp-auth.json": "{}",
+      ".dockerignore": ".mcp.json\n.secrets\n",
+    });
+    const rejected = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(rejected.ok).toBe(true);
+    if (rejected.ok) {
+      expect(rejected.messages.some((m) => m.text.includes("excludes .mcp.json"))).toBe(true);
+      expect(rejected.declaredSecrets).toContainEqual(
+        expect.objectContaining({ name: "MCP_TOKEN", source: ".mcp.json mcpServers.test" }),
+      );
+    }
+    await writeFile(join(dir, ".dockerignore"), ".secrets\n");
+    const kept = await call(dir, { model: "openai/gpt-4o-mini" });
+    if (kept.ok) expect(kept.messages.some((m) => m.text.includes("excludes .mcp.json"))).toBe(false);
+  });
+
   it("the secret checks follow FASTAGENT_SECRETS_DIR — a custom in-tree dir is gated AND excluded", async () => {
     // The name-based `**/.secrets` excludes reach a directory called `.secrets`; an override pointing
     // somewhere else in the baked tree is invisible to them, and `COPY . .` would ship the credential.

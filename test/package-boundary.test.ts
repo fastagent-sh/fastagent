@@ -241,17 +241,15 @@ describe("the assembly's parts stay out of the public surface", () => {
     const index = (await import(resolve(srcDir, "index.ts"))) as Record<string, unknown>;
     expect(typeof index.AgentError).toBe("function");
     expect(typeof index.SignInCancelled).toBe("function");
+    expect(typeof index.McpError).toBe("function");
   });
 
-  it("the entry names no type of pi-ai: a host passes FastAgent's own", () => {
-    // What a host writes against is sign-in-api.ts, which imports nothing (below); the entry re-exporting a pi-ai type
-    // would put the harness's model library back into every host's code.
+  it("the entry keeps model and MCP SDK types out of the host contracts", () => {
     const source = readFileSync(resolve(srcDir, "index.ts"), "utf8");
-    expect(source).not.toMatch(/from "@earendil-works\/pi-ai/);
-    // Its types included, which the package graph below does not count.
-    expect(readFileSync(resolve(srcDir, "sign-in-api.ts"), "utf8")).not.toMatch(
-      /^\s*(?:import|export)\b[^;]*\bfrom\b/m,
-    );
+    expect(source).not.toMatch(/from "@(?:earendil-works\/pi-ai|modelcontextprotocol\/)/);
+    for (const entry of ["sign-in-api.ts", "mcp-api.ts"]) {
+      expect(readFileSync(resolve(srcDir, entry), "utf8"), entry).not.toMatch(/^\s*(?:import|export)\b[^;]*\bfrom\b/m);
+    }
   });
 
   it("no entry exports an assembly part", async () => {
@@ -337,6 +335,7 @@ describe("the contracts depend on nothing", () => {
     expect([...staticPackageGraph("agent-api.ts")]).toEqual(["effect/Schema"]);
     expect([...staticPackageGraph("channel.ts")]).toEqual([]);
     expect([...staticPackageGraph("sign-in-api.ts")]).toEqual([]);
+    expect([...staticPackageGraph("mcp-api.ts")]).toEqual([]);
   });
 
   it("...and the mechanism that serves them depends on Effect's HTTP server alone", () => {

@@ -10,6 +10,7 @@ import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { buildDefinition, modelSpecFor, prepareDefinition, secretsManifest } from "../../harnesses/pi-durable/open.ts";
 import { readCommands } from "../../harnesses/pi-durable/text.ts";
+import { inspectMcp } from "../../mcp/host.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { contentLines } from "../content-view.ts";
@@ -71,6 +72,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
   const stateRoot = resolveStateRoot(agentDir);
   const auth = models.auth;
+  const mcp = await inspectMcp(agentDir).catch(failStartup);
 
   if (opts.json) {
     console.log(
@@ -86,6 +88,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
           tools: code?.tools.map(({ name }) => name) ?? null,
+          mcp,
           extensions: code?.extensions.map(({ name }) => name) ?? null,
           channels: code === undefined ? null : channels,
           schedules: code === undefined ? null : schedules,
@@ -115,6 +118,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const unbuilt = "(not built: a required secret has no value)";
   line("tools", code ? code.tools.map(({ name }) => name).join(", ") || "(none)" : unbuilt);
   if (code && code.extensions.length > 0) line("extensions", code.extensions.map(({ name }) => name).join(", "));
+  line(
+    "mcp",
+    mcp.map((server) => `${server.name} (${server.transport}, ${server.authorization})`).join(", ") || "(none)",
+  );
   line("channels", code ? channels.map((c) => `${c.name} (${c.ingress})`).join(", ") || "(none)" : unbuilt);
   line(
     "schedules",

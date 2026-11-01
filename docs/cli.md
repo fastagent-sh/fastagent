@@ -475,6 +475,27 @@ the token from the same app.
 
 See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 
+## `fastagent mcp`
+
+Read the agent's `.mcp.json`, authorize a remote MCP server, or remove an instance binding:
+
+```bash
+fastagent mcp list --json
+fastagent mcp login linear --scopes read --json
+fastagent mcp login --check <ticket> --json
+fastagent mcp disconnect linear --json
+```
+
+`list` reports local authorization metadata without contacting servers. `login` uses the browser and a ticket for
+coding agents; scopes must be explicit without a terminal. `--env production` selects production grants/bindings.
+`--client-id`, `--callback-port` and `--timeout` configure the browser flow. For a pre-registered client, register
+`http://127.0.0.1:<callback-port>/mcp/oauth/callback`; its path is fixed while state and PKCE stay fresh. A completed login persists credentials
+before binding them; reopen a running agent to apply the binding. No token/code is entered in the conversation.
+
+Stop the instance before `disconnect`: it refuses while another process holds the storage. It removes the binding,
+not the shared grant or the remote authorization. See [MCP servers](mcp.md) for configuration, scope limits,
+remote callback forwarding and embedding APIs.
+
 ## `fastagent add skill`
 
 ```bash
