@@ -96,6 +96,11 @@ export function isCardStreamingClosed(e: unknown): boolean {
   return e instanceof FeishuApiError && (e.code === 200850 || e.code === 300309);
 }
 
+// Lark's credential endpoint returns code 10003 for invalid app credentials; other errors remain fatal.
+export function isFeishuCredentialsRefused(e: unknown): boolean {
+  return e instanceof FeishuApiError && e.call === "tenant_access_token" && e.status === 200 && e.code === 10003;
+}
+
 /** Whether the platform origin has no application-config route at all. Onboarding uses this narrow
  * signal to fall back to a manual token/mode setup; auth/scope/network failures must remain visible. */
 export function isFeishuConfigApiMissing(e: unknown): boolean {

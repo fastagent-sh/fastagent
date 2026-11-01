@@ -442,22 +442,36 @@ user ([Scripts and coding agents](#scripts-and-coding-agents)):
 | Channel | What the person provides first | What the ticket waits on |
 |---|---|---|
 | `feishu` | nothing | confirming the new app (`url`, in a browser or in Feishu) |
-| `lark` | `LARK_APP_ID` and `LARK_APP_SECRET`, from the app they create at `url`, in the selected environment's file (`value_file`: `.secrets/.env`, or `.secrets/production/.env` with `--env production`) | nothing; the setup verifies the app and captures its Verification Token |
+| `lark` | nothing | creating the app and pasting its App ID and App Secret on the page at `url`; if automatic webhook setup is unavailable, pasting its Verification Token on a second page |
 | `slack` | nothing | pasting an App Configuration token pair on the page at `url`, which then takes the browser on to Slack's install page to click Allow |
 
-Slack's page is the setup's own, served through the temporary tunnel `add slack` opens anyway, at a one-time random
-address. The pair never passes through the agent's conversation or any `.env` file: it manages every Slack app the
-person owns in that workspace, and only this machine's CLI uses it, so it goes into the onboarding state (`0600`) and
-never deploys.
+Both pages are the setup's own, at a one-time random address, and look alike. Slack's is served through the temporary
+tunnel `add slack` opens anyway. Lark's binds only `127.0.0.1`, with no public tunnel. It checks each pair against Lark
+and saves accepted credentials to the selected environment's `.env` (`0600`) before starting webhook setup or checking
+permissions. A later failure therefore leaves the pair available for a rerun. A credential refusal stays on the form;
+network, storage and dev/production app-conflict errors stop the ticket with their actual reason.
 
-A missing first part answers `need_user_action` naming it, with the command to run again (`check_command`). Then the
-setup runs in a process of its own and the command returns its ticket: `need_user_action` while the person has a
+For a remote CLI, forward the page's port to the **same port** on your browser's machine. For SSH, run
+`ssh -N -L PORT:127.0.0.1:PORT user@host`, replacing `PORT` with the port in the ticket's `url`, then open that exact URL.
+Keep the forwarding session open until the page finishes. A later Verification Token page has a new port; forward that
+port too. Containers and remote development environments need an equivalent local TCP port forward, not a public HTTP
+preview URL (the page rejects foreign Host headers). The ticket's instructions include the port-specific SSH command.
+Without a local browser or port forwarding, interactive page setup cannot complete; this is a limitation compared with
+the previous file-entry flow. Existing credentials in the selected environment are still reused. Do not paste secrets
+into a coding-agent conversation or commands it records.
+
+Slack's pair never passes through the agent's conversation or any `.env` file: it manages every Slack app the person
+owns in that workspace, and only this machine's CLI uses it, so it goes into the onboarding state (`0600`) and never
+deploys.
+
+The setup runs in a process of its own and the command returns its ticket: `need_user_action` while the person has a
 step, `working` while there is nothing for them to do, then `done` with the variables it `written`, the
 `next_steps` and the steps left to the person (`afterwards`, such as publishing a version). `add <kind> --check
 <ticket>` reads where it stands, `--timeout <seconds>` sets how long it stays open (default 900). Running `add` again
 for the same agent, channel and environment replaces a setup waiting on the person, and answers with one at work. A
-value the setup still needs (a Lark Verification Token it could not capture) fails the ticket naming the variable to
-set before running it again.
+Lark Verification Token that could not be captured automatically is collected on a second password-input page and
+saved before setup continues. It is copied from Lark's console, not validated against a read API; the operator must use
+the token from the same app.
 
 See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 
@@ -524,9 +538,9 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
   `--check <ticket>` reads. So does a whole deploy, opted into with `deploy <host> --run --json`: a deploy's exit 0
   says it is deployed, so one paused for a person (exit 0, `need_user_action`) is never what a CI job gets without
   asking for it.
-- **A secret never passes through the agent's conversation.** The person writes it where the command names (the
-  agent's `.secrets/.env`), pastes it on a page the command's own process serves, or types it at a terminal of their
-  own.
+- **A secret never passes through the agent's conversation.** The person pastes it on a page the command's own process
+  serves, types it at a terminal of their own, or, for the values still left to a file (a model's API key, a bot
+  token), writes it where the command names (the agent's `.secrets/.env`) in a terminal the agent does not read.
 - **Results on stdout, everything else on stderr**: progress, notes, warnings and errors. A command whose result is
   data has `--json`.
 - **The exit code says how it ended**: 0, 1 or 2, as above.

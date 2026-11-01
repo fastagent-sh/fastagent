@@ -77,6 +77,8 @@ src/
 ├── model-ref.ts            # provider/modelId parsed for definitions and remote callers without loading a harness
 ├── log.ts                  # leveled logging singleton (dev=debug, start=info)
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
+├── setup-page.ts           # the pages a person pastes a credential on, one design for every channel (Slack, Lark): form
+│                           # and status cards, and the headers of a page that takes a secret
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code edits (src/, config, package.json, .env); the
 │                           # prompt files and skills are read per message
 ├── proxy.ts                # the process's outbound-fetch policy: the declared proxy, loopback exempt by default
@@ -197,7 +199,8 @@ src/
 │   │   └── scaffold/       # `add feishu` bundle (channel + feishu-send + feishu-threads)
 │   └── lark/               # Lark compatibility/degraded edges over the Feishu engine
 │       ├── lark.ts         # thin branded adapter bound to LARK_COMPAT_CLOUD
-│       ├── onboard.ts      # unbound launcher + credentials + manual config fallback
+│       ├── onboard.ts      # unbound launcher (its link carries the agent's scopes) + credentials + manual config fallback
+│       ├── credentials-page.ts # loopback-only setup forms: App ID/Secret and a manually copied Verification Token
 │       └── scaffold/       # `add lark` bundle
 ├── deploy/                 # `deploy docker|fly|railway|agentcore` (core.md §9). Neutral kernel at top, one
 │   │                       # directory per host. ADDING A HOST: deploy/hosts.ts says what to write and what

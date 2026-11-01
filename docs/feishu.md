@@ -94,13 +94,19 @@ Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); 
 guided credential input, because its bound confirmation flow does not work. The launcher link carries the same
 `addons` as Feishu's, so a Lark app is created with the scopes and the event the channel needs; nothing is ticked in
 the console afterwards, except a scope the tenant withholds.
+In a coding agent's run (`add lark --json`, or a deploy that needs the app) the App ID and App Secret are pasted on a
+page the setup serves on this machine (`127.0.0.1`, no tunnel), not typed into a file: the page checks each pair against
+Lark and saves accepted credentials before attempting webhook setup. Credential refusals stay on the form; other
+failures stop setup with their actual cause. A remote CLI needs local port forwarding: the ticket gives the SSH command
+for its page's port. See [remote setup instructions](cli.md#fastagent-add-telegramslackfeishulark).
 Within either cloud, the ingress being prepared determines the remaining work. For WebSocket (what `add` prepares),
 the runtime credential set stops at the validated/persisted App ID/Secret pair; onboarding continues through the
 permission check and opens Events & Callbacks so the user can select long connection and publish.
 For webhook (`deploy --run`, or `add --ingress webhook`), it continues through the temporary-tunnel challenge to
 capture the Verification Token and configure the Request URL. Onboarding then reads the App's scopes and, for any that is missing, opens the
 console page that requests it, pre-filled. Lark's missing config API falls back to explicit manual
-Token/mode/URL steps. Re-running a partial setup reuses the complete App ID/Secret pair rather
+Token/mode/URL steps. For a coding agent, the Verification Token is pasted on a second local page and saved without
+requiring a file edit. Re-running a partial setup reuses the complete App ID/Secret pair rather
 than creating or attaching a different app.
 
 This creates (for the feishu kind; lark mirrors it):

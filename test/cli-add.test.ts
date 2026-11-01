@@ -1,25 +1,51 @@
 import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { larkConsoleUrl } from "../src/channels/lark/onboard.ts";
-import { agentWorkspace, runInProcess } from "./cli-run.ts";
+import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
 
 describe("add <channel> with no one at a terminal: the person's part, named", () => {
-  it("lark: the app's credentials are theirs to set in the value file, and nothing is written before them", async () => {
-    const dir = await agentWorkspace("fa-add-lark-");
-    const result = await runInProcess(["add", "lark", dir, "--json"]);
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      status: "need_user_action",
-      // `add` sets the app up for WebSocket: that is the link's scope set.
-      url: larkConsoleUrl("websocket"),
-      variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
-      value_file: join(dir, ".secrets", ".env"),
-      check_command: `fastagent add lark ${dir} --json`,
-      agent_next_steps: expect.stringContaining("themselves, not in this conversation"),
+  it("lark: the App ID and Secret are pasted on a page of the setup's own, never typed into a file", async () => {
+    const dir = await agentWorkspace("fa-add-lark-", {
+      "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
     });
-    expect(existsSync(join(dir, "src", "channels", "lark.ts"))).toBe(false);
-  });
+    const home = await mkdtemp(join(tmpdir(), "fa-add-lark-home-"));
+    const result = await run(["add", "lark", dir, "--json"], undefined, { ...process.env, HOME: home });
+    const report = JSON.parse(result.stdout);
+    try {
+      expect(result.code).toBe(0);
+      expect(report).toMatchObject({
+        status: "need_user_action",
+        // A page on this machine: the browser sends the pair to this process, not through the agent's conversation.
+        url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/lark\/credentials\/[0-9a-f]{48}$/),
+        instructions: expect.stringContaining("App ID and App Secret"),
+        check_command: expect.stringContaining("add lark --check"),
+      });
+      // Nothing asks the person to edit a file, the way every secret reached a chat window before.
+      expect(result.stdout).not.toContain("value_file");
+      const page = await (await fetch(report.url)).text();
+      expect(page).toContain("Connect Lark");
+      // The app it sends them to create is created with the scopes and the event the channel needs.
+      expect(page).toContain("backend_oneclick");
+      expect(page).toContain("addons=");
+      // Waiting for the pair: none has been written anywhere.
+      expect(
+        existsSync(join(dir, ".secrets", ".env")) ? await readFile(join(dir, ".secrets", ".env"), "utf8") : "",
+      ).not.toContain("LARK_APP_ID=");
+    } finally {
+      // The ticket's own process holds the page open until the ticket ends: end it here.
+      const stored = JSON.parse(
+        await readFile(join(home, ".fastagent", ".state", "tickets", `${report.ticket}.json`), "utf8"),
+      );
+      try {
+        process.kill(-stored.pid, "SIGTERM");
+      } catch {
+        // gone already
+      }
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("a ticket that names no setup, or another command's, is a usage error naming the right command", async () => {
     const result = await runInProcess(["add", "feishu", "--check", "0123456789abcdef", "--json"]);

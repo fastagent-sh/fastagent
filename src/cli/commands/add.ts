@@ -4,7 +4,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { join, relative, resolve } from "node:path";
-import { assertIndependentFeishuApps, larkCredentialsNeeded, onboardFeishuCloudApp } from "../add-feishu.ts";
+import { assertIndependentFeishuApps, onboardFeishuCloudApp } from "../add-feishu.ts";
 import { type Person, terminalPerson } from "../person.ts";
 import { isInteractive, shellArg } from "../shared.ts";
 import {
@@ -286,20 +286,13 @@ const SETUP_ACTIONS: Record<"slack" | "feishu" | "lark", string> = {
 };
 
 /**
- * `add slack|feishu|lark` with no one at a terminal to ask, for a coding agent: what the person must provide first is
- * named (Lark's app credentials, in the file the agent reads), never asked for in the agent's conversation; then the
- * app's setup runs in a process of its own (ticket.ts), and the command returns once the person has a step to take, it
- * is done, or it is still working at it.
+ * `add slack|feishu|lark` with no one at a terminal to ask, for a coding agent: the app's setup runs in a process of its
+ * own (ticket.ts), and the command returns once the person has a step to take, it is done, or it is still working at it.
+ * What only the person has (Slack's tokens, Lark's App ID and Secret) is pasted on a page of the setup's own, never asked
+ * for in the agent's conversation and never typed into a file.
  */
 async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChannelOptions, at: AddPlan): Promise<void> {
   const { target } = at;
-  if (kind === "lark") {
-    const needed = await larkCredentialsNeeded(target, at.rerun, at.ingress).catch(failStartup);
-    if (needed !== undefined) {
-      printReport(opts.json, needed.json, needed.text);
-      process.exit(0);
-    }
-  }
   const timeout = opts.timeout === undefined ? UNATTENDED_TIMEOUT_SECONDS : Number(opts.timeout);
   if (!Number.isInteger(timeout) || timeout <= 0) failUsage(`--timeout must be a whole number of seconds`);
   const ticket = await startTicket({

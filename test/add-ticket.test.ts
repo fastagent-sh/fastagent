@@ -144,8 +144,12 @@ it("--json hands the person's part over even at a terminal: a coding agent may r
   vi.spyOn(process, "exit").mockImplementation(() => {
     throw exited;
   });
+  started.length = 0;
   await expect(runAddChannel("lark", dir, { onboard: true, json: true })).rejects.toBe(exited);
-  expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({ status: "need_user_action" });
+  // Lark's App ID and Secret are no longer asked for first, in a file: the setup's own run takes them on a page.
+  expect(started).toEqual([expect.objectContaining({ subject: expect.stringMatching(/^add:lark:dev:/) })]);
+  expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({ status: "working" });
+  expect(String(printed.mock.calls[0]?.[0])).not.toContain("value_file");
   await rm(dir, { recursive: true, force: true });
 });
 

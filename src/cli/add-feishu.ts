@@ -19,10 +19,17 @@ import {
   createFeishuApi,
   type FeishuApi,
   isFeishuConfigApiMissing,
+  isFeishuCredentialsRefused,
   isTransientFeishuRegistrationError,
 } from "../channels/feishu/feishu-api.ts";
 import { registerFeishuApp } from "../channels/feishu/register-app.ts";
-import { type LarkOnboardIO, larkConsoleUrl, onboardLarkApp } from "../channels/lark/onboard.ts";
+import {
+  LarkCredentialsRefused,
+  type LarkCredentialsPage,
+  startLarkCredentialsPage,
+  startLarkVerificationPage,
+} from "../channels/lark/credentials-page.ts";
+import { type LarkOnboardIO, onboardLarkApp } from "../channels/lark/onboard.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
 import { dotEnvPath, loadEnvValues, parseEnvContent } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -132,51 +139,59 @@ export async function onboardFeishuCloudApp(
   }
 
   // guided-console (lark): the intl cloud cannot complete the bound device flow — collect + validate.
-  const credentials = await onboardLarkApp(
-    person === terminalPerson ? larkAtTerminal : larkThrough(person, env, rerun),
-    {
-      existing,
-      ingress,
-      rerun,
-      verifyCredentials: async (appId, appSecret) => {
-        if (process.env[AGENT_ENVIRONMENT_ENV] === "production") {
-          assertIndependentFeishuApps(target, ["lark"], new Map([["LARK_APP_ID", appId]]));
-        }
-        await createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret }).verifyCredentials();
-        console.error(`[fastagent] Lark App ID / Secret verified`);
-      },
-      bootstrapWebhook: async (appId, appSecret) => {
-        const api = createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret });
-        console.error(`[fastagent] trying Lark's webhook-mode + Verification-Token bootstrap (temporary tunnel)…`);
-        try {
-          const token = await bootstrapFeishuVerificationToken({
-            api,
-            appId,
-            kind: "lark",
-            startTunnel: (port) => startCloudflareTunnel(port),
-            onTunnelReady: (url) =>
-              console.error(`[fastagent] temporary tunnel ready → ${url}; registering webhook mode now…`),
-            onPatchRetry: ({ error, attempt, attempts, retryMs }) =>
-              console.error(
-                `[fastagent] Lark could not validate the fresh tunnel yet (${String(error)}); retrying PATCH ${attempt + 1}/${attempts} in ${Math.round(retryMs / 1000)}s…`,
-              ),
-            // A route-level 404 is definitive, not edge weather: fall back immediately.
-            shouldRetryPatch: (error) => !isFeishuConfigApiMissing(error) && isTransientFeishuRegistrationError(error),
-          });
-          console.error(
-            `[fastagent] Lark Verification Token captured; Subscription mode changed to webhook in the app draft`,
-          );
-          return { token };
-        } catch (error) {
-          if (!isFeishuConfigApiMissing(error)) throw error;
-          const manualReason =
-            "This Lark app returned HTTP 404 for the application-config API, so automatic mode/token bootstrap is unavailable.";
-          console.error(`[fastagent] ${manualReason}`);
-          return { manualReason };
-        }
-      },
+  const credentials = await onboardLarkApp(person === terminalPerson ? larkAtTerminal : larkThrough(person, target), {
+    existing,
+    ingress,
+    rerun,
+    verifyCredentials: async (appId, appSecret) => {
+      if (process.env[AGENT_ENVIRONMENT_ENV] === "production") {
+        assertIndependentFeishuApps(target, ["lark"], new Map([["LARK_APP_ID", appId]]));
+      }
+      await createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret }).verifyCredentials();
+      console.error(`[fastagent] Lark App ID / Secret verified`);
     },
-  );
+    // The same boundary `add feishu` keeps: a pair given just now is written before any step that can fail, so a
+    // rerun finds it and carries on, instead of asking for it again.
+    keep: async (appId, appSecret) => {
+      const kept = {
+        LARK_APP_ID: appId,
+        LARK_APP_SECRET: appSecret,
+        ...(ingress === "webhook" ? { LARK_VERIFICATION_TOKEN: "" } : {}),
+      };
+      await appendChannelDotEnv(target, "lark", kept, Object.keys(kept), ingress);
+      console.error(`[fastagent] wrote LARK_APP_ID, LARK_APP_SECRET to ${env}`);
+    },
+    bootstrapWebhook: async (appId, appSecret) => {
+      const api = createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret });
+      console.error(`[fastagent] trying Lark's webhook-mode + Verification-Token bootstrap (temporary tunnel)…`);
+      try {
+        const token = await bootstrapFeishuVerificationToken({
+          api,
+          appId,
+          kind: "lark",
+          startTunnel: (port) => startCloudflareTunnel(port),
+          onTunnelReady: (url) =>
+            console.error(`[fastagent] temporary tunnel ready → ${url}; registering webhook mode now…`),
+          onPatchRetry: ({ error, attempt, attempts, retryMs }) =>
+            console.error(
+              `[fastagent] Lark could not validate the fresh tunnel yet (${String(error)}); retrying PATCH ${attempt + 1}/${attempts} in ${Math.round(retryMs / 1000)}s…`,
+            ),
+          // A route-level 404 is definitive, not edge weather: fall back immediately.
+          shouldRetryPatch: (error) => !isFeishuConfigApiMissing(error) && isTransientFeishuRegistrationError(error),
+        });
+        console.error(
+          `[fastagent] Lark Verification Token captured; Subscription mode changed to webhook in the app draft`,
+        );
+        return { token };
+      } catch (error) {
+        if (!isFeishuConfigApiMissing(error)) throw error;
+        const manualReason =
+          "This Lark app returned HTTP 404 for the application-config API, so automatic mode/token bootstrap is unavailable.";
+        console.error(`[fastagent] ${manualReason}`);
+        return { manualReason };
+      }
+    },
+  });
   await checkAgentScopes({
     kind: "lark",
     appId: credentials.LARK_APP_ID,
@@ -208,16 +223,57 @@ const larkAtTerminal: LarkOnboardIO = {
   },
 };
 
-/**
- * Lark's guided console through a coding agent's person: a page is a step left to them, with what they do there; a
- * value it would ask for is theirs to set in the value file, and the setup continues when run again.
- */
-function larkThrough(person: Person, env: string, rerun: string): LarkOnboardIO {
+async function waitForLarkPage<T>(person: Person, page: LarkCredentialsPage<T>, action: string): Promise<T> {
+  const port = new URL(page.url).port;
+  try {
+    person.waitsOn(
+      page.url,
+      action +
+        " If the CLI runs remotely, forward this loopback port to the same local port " +
+        `(SSH: ssh -N -L ${port}:127.0.0.1:${port} user@host), then open the same URL in your browser. ` +
+        "Keep the forwarding session open; never paste secrets into the conversation.",
+    );
+    const value = await page.credentials;
+    person.carriesOn();
+    return value;
+  } finally {
+    await page.close();
+  }
+}
+
+function larkThrough(person: Person, target: string): LarkOnboardIO {
   return {
     note: (message) => console.error(`[fastagent] ${message}`),
     openUrl: (url, action) => person.afterwards(action, url),
-    async prompt(message) {
-      throw new Error(`${message} is needed: ask the user to set it in ${env}, then run \`${rerun}\` again`);
+    async prompt() {
+      throw new Error("Lark setup must collect secrets on its page, not through terminal prompts");
+    },
+    async verificationToken(consoleUrl) {
+      const page = await startLarkVerificationPage({
+        consoleUrl,
+        save: async (token) => {
+          await appendChannelDotEnv(target, "lark", { LARK_VERIFICATION_TOKEN: token }, ["LARK_VERIFICATION_TOKEN"]);
+        },
+      });
+      return waitForLarkPage(person, page, "Paste the Lark Verification Token on this page.");
+    },
+    async collect({ consoleUrl, check }) {
+      const page = await startLarkCredentialsPage({
+        consoleUrl,
+        check: async ({ appId, appSecret }) => {
+          try {
+            await check(appId, appSecret);
+          } catch (error) {
+            // Only a known credential refusal is safe to retry on the form.
+            if (!isFeishuCredentialsRefused(error)) throw error;
+            throw new LarkCredentialsRefused("Lark refused that App ID or Secret.", {
+              fix: "Copy both again from Credentials & Basic Info.",
+              why: `Lark said: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          }
+        },
+      });
+      return waitForLarkPage(person, page, "Create the Lark app, then paste its App ID and App Secret on this page.");
     },
   };
 }
@@ -358,40 +414,6 @@ async function createFeishuAppFlow(
     if (groupSetup.publishReady) person.afterwards(publish, versionUrl);
     else person.afterwards(`after the permission work above, ${publish}: ${versionUrl}`);
   }
-}
-
-/**
- * Lark's app credentials, which only the person can get, from the app they create in Lark's console: with no one at a
- * terminal to type them, the report naming where they set them (the selected environment's file), when either is
- * absent. `again` is the command that continues once they have.
- */
-export async function larkCredentialsNeeded(
-  agentDir: string,
-  again: string,
-  ingress: FeishuSubscriptionMode,
-): Promise<{ json: Record<string, unknown>; text: string[] } | undefined> {
-  const held = await activeDotEnvValues(agentDir, ["LARK_APP_ID", "LARK_APP_SECRET"]);
-  if (held.LARK_APP_ID && held.LARK_APP_SECRET) return undefined;
-  const valueFile = dotEnvPath(agentDir);
-  const url = larkConsoleUrl(ingress);
-  return {
-    json: {
-      status: "need_user_action",
-      url,
-      variables: ["LARK_APP_ID", "LARK_APP_SECRET"],
-      value_file: valueFile,
-      check_command: `${again} --json`,
-      agent_next_steps:
-        "Give the URL to the user so they can create the Lark app there, and ask them to set LARK_APP_ID and " +
-        `LARK_APP_SECRET (from its Credentials & Basic Info) in ${valueFile} themselves, not in this ` +
-        "conversation. Once they say they have, run check_command.",
-    },
-    text: [
-      `need_user_action: create the Lark app at ${url}`,
-      `  and set LARK_APP_ID and LARK_APP_SECRET in ${valueFile}`,
-      `then run: ${again}`,
-    ],
-  };
 }
 
 /**

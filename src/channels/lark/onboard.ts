@@ -26,6 +26,13 @@ export interface LarkOnboardIO {
   openUrl(url: string, action: string): void;
   note(message: string): void;
   prompt(message: string, opts?: { hidden?: boolean }): Promise<string | undefined>;
+  verificationToken?(consoleUrl: string): Promise<string>;
+  // A page must await check before accepting the pair: it includes durable persistence.
+  collect?(input: {
+    /** Lark's launcher, with what the channel needs set on the app it creates. */
+    consoleUrl: string;
+    check(appId: string, appSecret: string): Promise<void>;
+  }): Promise<{ appId: string; appSecret: string }>;
 }
 
 interface LarkBootstrapResult {
@@ -40,6 +47,8 @@ export interface LarkOnboardOptions {
   existing?: Readonly<Record<string, string | undefined>>;
   ingress?: FeishuSubscriptionMode;
   verifyCredentials(appId: string, appSecret: string): Promise<void>;
+  // Persist a newly verified pair before any subsequent setup can fail.
+  keep?(appId: string, appSecret: string): Promise<void>;
   bootstrapWebhook?(appId: string, appSecret: string): Promise<LarkBootstrapResult>;
   /** The command that continues an interrupted setup: the one that started it (`add lark`, `deploy <host> --run`). */
   rerun?: string;
@@ -65,27 +74,39 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
   const reuseExistingApp = Boolean(existingId && existingSecret);
 
   // Credentials are one App-scoped set.
+  // No ingress named is the webhook path below (a deploy's production app).
+  const consoleUrl = larkConsoleUrl(opts.ingress ?? "webhook");
+  let appId: string;
+  let appSecret: string;
+  const verify = async (appId: string, appSecret: string) => {
+    await opts.verifyCredentials(appId, appSecret);
+    if (!reuseExistingApp) await opts.keep?.(appId, appSecret);
+  };
   if (reuseExistingApp) {
     io.note(`Reusing Lark app ${existingId}.`);
+    appId = required(existingId, "LARK_APP_ID", rerun);
+    appSecret = required(existingSecret, "LARK_APP_SECRET", rerun);
+    await verify(appId, appSecret);
+  } else if (io.collect) {
+    ({ appId, appSecret } = await io.collect({ consoleUrl, check: verify }));
   } else {
     io.openUrl(
-      // No ingress named is the webhook path below (a deploy's production app).
-      larkConsoleUrl(opts.ingress ?? "webhook"),
+      consoleUrl,
       "create the app on Lark's one-click launcher; LARK_APP_ID and LARK_APP_SECRET are under Credentials & Basic Info",
     );
+    appId = required(
+      await io.prompt("LARK_APP_ID (Credentials & Basic Info)", { hidden: false }),
+      "LARK_APP_ID",
+      rerun,
+    );
+    appSecret = required(
+      await io.prompt("LARK_APP_SECRET (Credentials & Basic Info)", { hidden: true }),
+      "LARK_APP_SECRET",
+      rerun,
+    );
+    await verify(appId, appSecret);
   }
-  const appId = required(
-    reuseExistingApp ? existingId : await io.prompt("LARK_APP_ID (Credentials & Basic Info)", { hidden: false }),
-    "LARK_APP_ID",
-    rerun,
-  );
-  const appSecret = required(
-    reuseExistingApp ? existingSecret : await io.prompt("LARK_APP_SECRET (Credentials & Basic Info)", { hidden: true }),
-    "LARK_APP_SECRET",
-    rerun,
-  );
 
-  await opts.verifyCredentials(appId, appSecret);
   const eventSecurityUrl = larkEventSecurityUrl(appId);
   io.note("App ID / Secret verified.");
   if (opts.ingress === "websocket") {
@@ -113,7 +134,9 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
   const verificationToken = required(
     bootstrap.token ||
       (reuseExistingApp ? opts.existing?.LARK_VERIFICATION_TOKEN?.trim() : undefined) ||
-      (await io.prompt("LARK_VERIFICATION_TOKEN (Events & Callbacks → Encryption Strategy)", { hidden: true })),
+      (io.verificationToken
+        ? await io.verificationToken(eventSecurityUrl)
+        : await io.prompt("LARK_VERIFICATION_TOKEN (Events & Callbacks → Encryption Strategy)", { hidden: true })),
     "LARK_VERIFICATION_TOKEN",
     rerun,
   );

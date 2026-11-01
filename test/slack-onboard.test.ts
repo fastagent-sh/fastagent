@@ -439,6 +439,37 @@ describe("Slack internal-app onboarding", () => {
     expect(exchangeCode).not.toHaveBeenCalled();
   });
 
+  it("reports callback errors and treats other callbacks as received, not validated", async () => {
+    for (const callback of [
+      { code: "code", state: "unverified-state" },
+      {},
+      { error: "access_denied" },
+      { error: "" },
+      { error: '<script>alert("error")</script>' },
+    ]) {
+      const server = await startSlackSetupServer();
+      try {
+        const url = new URL(`http://127.0.0.1:${server.port}${server.redirectPath}`);
+        for (const [key, value] of Object.entries(callback)) url.searchParams.set(key, value);
+        const html = await (await fetch(url)).text();
+        expect(html).toContain(
+          "error" in callback ? "Slack authorization was not approved" : "OAuth response received",
+        );
+        expect(html).not.toContain('class="glyph ok"');
+        expect(html).not.toContain("Slack allowed the app");
+        expect(html).not.toContain('<script>alert("error")</script>');
+        await expect(server.waitForOAuth()).resolves.toEqual({
+          code: undefined,
+          state: undefined,
+          error: undefined,
+          ...callback,
+        });
+      } finally {
+        await server.close();
+      }
+    }
+  });
+
   it("serves only the temporary challenge and one OAuth callback", async () => {
     const server = await startSlackSetupServer();
     try {

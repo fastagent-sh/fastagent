@@ -12,7 +12,6 @@ import { unmarkDevServe } from "../../serving-command.ts";
 import {
   assertIndependentFeishuApps,
   feishuAppSecretNames,
-  larkCredentialsNeeded,
   prepareFeishuApps,
   unpreparedFeishuApps,
 } from "../add-feishu.ts";
@@ -184,14 +183,6 @@ async function deploy(
 
   if (opts.json && step === undefined) {
     // A coding agent's deploy: what this machine can refuse is refused above, at once; the rest runs in a ticket.
-    const lark = unprepared.find(({ kind }) => kind === "lark");
-    if (lark !== undefined) {
-      const needed = await larkCredentialsNeeded(agentDir, rerun, lark.ingress).catch(failStartup);
-      if (needed !== undefined) {
-        printReport(true, needed.json, needed.text);
-        process.exit(0);
-      }
-    }
     const timeout = opts.timeout === undefined ? TICKET_TIMEOUT_SECONDS : Number(opts.timeout);
     if (!Number.isInteger(timeout) || timeout <= 0) failUsage("--timeout must be a whole number of seconds");
     const ticket = await startTicket({

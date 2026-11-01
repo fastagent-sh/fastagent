@@ -84,7 +84,7 @@ async function nextPage(url: string): Promise<Response> {
   return vi.waitFor(async () => {
     const response = await fetch(url, { redirect: "manual" });
     const text = response.status === 200 ? await response.clone().text() : "";
-    if (text.includes("Creating the Slack app")) throw new Error("still creating");
+    if (text.includes("Creating your Slack app")) throw new Error("still creating");
     return response;
   });
 }
@@ -112,7 +112,9 @@ it("the pair is pasted on the page, the browser goes on to Slack's install page,
   const back = new URL(local(authorize.searchParams.get("redirect_uri") as string));
   back.searchParams.set("code", "c");
   back.searchParams.set("state", authorize.searchParams.get("state") as string);
-  await fetch(back);
+  const acknowledged = await (await fetch(back)).text();
+  expect(acknowledged).toContain("OAuth response received");
+  expect(acknowledged).not.toContain("Slack allowed the app");
   await run;
 
   expect(said).toEqual([
@@ -162,7 +164,11 @@ it("a person who declines on Slack's install page stops it at once: the browser 
   const back = new URL(local(authorize.searchParams.get("redirect_uri") as string));
   back.searchParams.set("error", "access_denied");
   const declined = Date.now();
-  await fetch(back);
+  const shown = await (await fetch(back)).text();
+  expect(shown).toContain("Slack authorization was not approved");
+  expect(shown).toContain("access_denied");
+  expect(shown).toContain('class="glyph bad"');
+  expect(shown).not.toContain('class="glyph ok"');
   expect(await failed).toBe("Slack OAuth installation was not approved");
   expect(Date.now() - declined).toBeLessThan(2_000);
 });
