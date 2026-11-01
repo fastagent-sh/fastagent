@@ -16,8 +16,11 @@ are the implementation proposal to verify before shipping. They do not change th
 - Call the feature **MCP servers**. There is no generic `Connector` interface or configuration kind.
 - The agent directory's **`.mcp.json`**, with a top-level **`mcpServers`** map, is the one configuration source.
   Do not also define servers in `context.json`, `fastagent.config.ts`, or a machine-wide MCP configuration.
-- File location does not own resources. Each opened agent instance owns its clients, resolved paths and credentials;
-  nothing is cached globally by server name or agent-directory path.
+- File location does not own resources. Each opened agent instance owns its clients and resolved bindings.
+  OAuth grants persist beyond open/close in a credential store controlled by the host; clients are never cached globally
+  by server name or agent-directory path, and credentials are never implicitly shared between agents.
+- The first release includes **stdio and Streamable HTTP, including OAuth**. Browser sign-in is a core Kage workflow,
+  not a later enhancement or a request for the person to copy tokens into files.
 - Choose and test the protocol revision and supported capability/configuration subset before implementation.
   Registry publishing, MCPB installation and context packages are not prerequisites.
 
@@ -40,7 +43,7 @@ describe installable server bundles. Neither is an agent's resolved server confi
 
 ## 3. First configuration subset: proposal
 
-Start with JSON and stdio tools. A minimal example is:
+Use JSON for local stdio servers and remote Streamable HTTP servers. For example:
 
 ```json
 {
@@ -52,30 +55,43 @@ Start with JSON and stdio tools. A minimal example is:
       "env": {
         "SERVICE_TOKEN": "${SERVICE_TOKEN}"
       }
+    },
+    "workspace-service": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp"
     }
   }
 }
 ```
+
+`http` means Streamable HTTP, not the retired HTTP+SSE transport. An OAuth server can be declared by URL alone when
+its discovery and client-registration requirements permit it. Tokens and granted account identity are not configuration.
 
 The environment entry illustrates a secret reference; the filesystem server itself needs no token.
 
 | Field | First-slice meaning |
 |---|---|
 | `mcpServers` | A map from stable server names to declarations |
-| `type` | `stdio`; omission means stdio when `command` is present |
-| `command` | A non-empty executable name or path, not a shell expression |
-| `args` | An array of strings, empty when omitted |
-| `env` | Server-specific string environment values, empty when omitted; secrets use references |
+| `type` | `stdio` or `http`; omission means stdio when `command` is present |
+| `command` | stdio only: a non-empty executable name or path, not a shell expression |
+| `args` | stdio only: an array of strings, empty when omitted |
+| `env` | stdio only: server-specific string environment values; secrets use references |
+| `url` | HTTP only: the MCP endpoint |
+| `headers` | HTTP only: static header values may reference secrets; do not combine an explicit Authorization header with OAuth |
+
+Some services need a pre-registered client ID or explicit scope selection. Finalize the non-secret OAuth configuration
+subset against a real target service; do not invent a universal field shape or store client secrets in the definition.
 
 A missing file declares no servers. Malformed JSON, unknown fields, unsupported transports and unresolved variable
 references fail with the file, server and field named. Do not guess another format or silently ignore unsupported fields.
 Do not scan parent directories, `.pi/mcp.json`, editor settings or home-directory MCP files.
 
-Proposed interpolation is `${NAME}` in string values of `command`, `args` and `env`, resolved from this instance's effective
+Proposed interpolation is `${NAME}` in string values of `command`, `args`, `env` and HTTP `headers`, resolved from this instance's effective
 environment. Interactive `${input:...}`, command substitutions and default-value syntax are outside this first subset;
 reject them explicitly. Do not change `process.env`. Use the existing selected-environment/secret mechanisms and include
 referenced required variables in preflight diagnostics without printing their values. Hosts needing credentials not
-represented by that environment need an explicit instance-binding API decision, not a second server-definition source.
+represented by that environment use explicit host credential bindings, not a second server-definition source. OAuth
+access/refresh tokens are resolved from the grant store, never by expanding them into the shareable file.
 
 Resolve command paths relative to the agent directory; bare executable names use that instance's PATH. Spawn with the
 agent directory as cwd and pass arguments verbatim, without a shell. Relative path arguments then follow the server's
@@ -90,7 +106,9 @@ carries `.mcp.json`; dependencies belong to the agent's package/environment, not
 
 ## 4. Protocol target and evidence
 
-The first implementation target is **2026-07-28**, with the v2 TypeScript client SDK. Its core is request-scoped:
+The candidate current-protocol target is **2026-07-28**, with the v2 TypeScript client SDK. The supported revision policy
+must also pass a real OAuth MCP service used by Kage; a stdio-only probe cannot decide it. Do not promise a hard pin or
+universal compatibility before that check. Its core is request-scoped:
 `server/discover` and request metadata replace the old `initialize` handshake. Explicit server handles, not FastAgent
 session ids or a transport connection, identify cross-call server state. See the
 [protocol changes](https://modelcontextprotocol.io/specification/2026-07-28/changelog).
@@ -104,7 +122,9 @@ The SDK's own stdio transport performs discovery in a disposable sibling process
 two starts per connection were observed. Startup side effects and both children belong in acquisition/cleanup tests.
 Do not bypass the SDK's detection with type casts, invent a cached discovery verdict, or describe this as one process
 start. Before adopting the dependency, verify open failure, probe failure and close during discovery leave no children.
-A server restricted to the old era is refused by the pinned policy; no product-level silent downgrade is planned.
+The experimental pin refuses a server restricted to the old era; that is probe behavior, not yet a product policy.
+Any broader supported-version negotiation must be explicit, observable and handled by the SDK, not invented as a fallback
+after arbitrary network or authorization errors.
 
 This probe is **SDK-level evidence only**. The earlier full pi-durable lifecycle spike in #678 negotiated **2025-11-25**.
 Repeat the relevant cancellation, interruption/reopen and multi-instance tests with the selected SDK and public FastAgent
@@ -116,6 +136,7 @@ assembly before shipping. Do not promote the old connection-local logging-toggle
 |---|---|
 | Which servers the agent uses | `.mcp.json` in the definition |
 | Secret values and local execution environment | The selected instance/deployment or its embedding host |
+| Durable OAuth grants and refresh coordination | A host-controlled store; each instance has an explicit grant binding |
 | Consent to execute the definition and expose data | The person or embedding host |
 | Clients, transports, subprocesses and cleanup | Each open agent instance |
 | Server business data, explicit handles and their durability | The MCP server and its backing service |
@@ -127,23 +148,86 @@ server and its state; this is explicit, not a session-isolation guarantee.
 
 The first slice exposes tool discovery and invocation, input validation, text/JSON results, progress/cancellation and
 observable errors. Do not advertise capabilities that are not implemented. Unsupported result content must be reported,
-not silently filtered out. Resource/prompt browsing, sampling, elicitation, tasks, OAuth, HTTP/SSE transports, live tool-list
-updates and server-private per-session isolation are outside this slice. Reopening may refresh the declared tool snapshot.
+not silently filtered out. Streamable HTTP includes unauthenticated, static-token and OAuth-protected servers.
+Resource/prompt browsing, sampling, elicitation, tasks, legacy HTTP+SSE, live tool-list updates and server-private
+per-session isolation are outside this slice. Reopening may refresh the declared tool snapshot.
 
 Keep the existing `unsafe` replay default. Read-only/idempotency annotations alone do not authorize replay. An ambiguous
 in-flight failure is not retried silently. Cancellation stops the caller's request and signals the server; it does not
 prove remote work stopped or undo side effects. Closing an instance explicitly joins client cleanup; a failed open cleans
 up clients already acquired, and cleanup failures remain diagnosable.
 
-## 6. Implementation gates
+## 6. OAuth is part of the first release
+
+The required Kage experience is: choose a server, click Connect, authorize in the system browser, return to Kage, and use
+its tools. Reopening Kage reuses a still-valid grant; expiry refreshes without asking the person to paste a token.
+A denied, canceled or expired authorization reports its own result and never claims a connection succeeded.
+
+Follow the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization):
+HTTP resource/authorization-server discovery, authorization code with PKCE S256, state and issuer validation,
+resource/audience binding, and secure token storage. Stdio remains an environment-credential transport; MCP HTTP OAuth
+does not log arbitrary child programs in.
+
+### Host-facing boundary
+
+Kage must be able to inspect auth status, start/cancel sign-in and disconnect without first opening a fully authenticated
+agent. Opening an agent or executing an unattended tool must not secretly launch a browser or wait indefinitely for a
+person. An explicit host interaction drives browser/callback steps; CLI use adapts the same flow to its ticket model.
+Auth-required and insufficient-scope outcomes must name the server and reach the host as actionable structured results.
+The exact public host types and method names need review before implementation.
+
+FastAgent owns protocol/authentication mechanics and their consistent outcomes; Kage owns presentation, the system-browser
+action and where credentials are stored. The host contract stays in FastAgent's types, without exposing MCP SDK internals.
+The existing model-provider `CredentialStore`/`signIn` API is keyed by provider and cannot simply be reused as an MCP
+grant model. Reuse established interaction and atomic-write patterns where they fit, not the provider-keyed identity.
+
+### Grants and isolation
+
+The store must distinguish the resource server, validated authorization-server issuer, client registration, granted
+scopes and selected account/opaque grant identity. A display name such as `notion` or `github` is not an auth key, and an
+access token must not be decoded to guess the user's identity. Exact store interfaces and key encoding remain to be designed.
+
+Grant reuse across agents must be an explicit host/user binding. An agent's `close()` releases clients but does not sign
+the user out. Disconnecting one binding must not revoke or delete a grant still used by another agent. A whole-grant
+sign-out must make its impact clear; distinguish local removal from confirmed remote revocation when supported.
+Allow separate accounts for the same MCP endpoint.
+
+Serialize refreshes per grant, including rotated refresh-token persistence, rather than per client instance. A concurrent
+refresh must not overwrite or reuse a rotated token. Refresh refusal/expiry becomes a reauthorization requirement; a
+network failure remains a network failure. Changed issuers/resources, conflicting authentication modes and mismatched
+callbacks must fail visibly, not reuse a nearby credential.
+
+Credentials and pending-flow secrets stay outside `.mcp.json`, source control, model context, transcript and logs.
+A host can supply secure storage; CLI storage must be owner-readable and atomic. Use the system browser and a validated
+native callback path; do not require a user to paste an authorization code into an agent conversation.
+
+### Interoperability before implementation
+
+Use the SDK's OAuth machinery rather than build a second OAuth protocol stack. Verify resource metadata discovery and
+authorization-server discovery, registration selection (pre-registration or Client ID Metadata Documents; DCR only when a
+chosen service needs it), callback constraints, refresh and scopes against an actual Kage target service. Do not assume
+every service supports dynamic registration or arbitrary localhost redirect URIs.
+
+For cloud instances, authorization is bound to the deployed instance's store, not silently copied from Kage's account.
+Before claiming deploy OAuth support, define how the person's browser completes that remote instance's flow. The
+loopback callback used by local Kage does not solve that boundary by itself.
+
+Protocol-authorized refresh/re-authorization after an authentication rejection is distinct from replaying an ambiguous
+tool call. Never replay an operation after a timeout/disconnection that may have happened after its side effect.
+
+## 7. Implementation gates
 
 Before the feature is marked supported:
 
 - Define the exact parser/interpolation contract, namespacing and supported schema/result mappings; verify representative
-  Claude/Copilot-style stdio entries and explicit rejection of unsupported forms.
+  Claude/Copilot-style stdio and HTTP entries, and explicit rejection of unsupported forms.
 - Verify two agents in one process: different secrets/paths, independent clients, failed-open cleanup, and closing one while
   the other continues. Include two opens of the same directory with separate state.
-- Verify SDK discovery/serving process cleanup, cancellation, disconnection and restart through the public assembly.
+- Verify SDK discovery/serving process cleanup, HTTP cancellation/disconnection, and restart through the public assembly.
+- Verify OAuth discovery, browser sign-in/cancel/denial, restart persistence, refresh rotation and concurrent refresh,
+  insufficient scope, issuer/resource changes, two accounts at one endpoint and explicit cross-agent grant bindings.
+- Complete a real Kage-style browser OAuth flow against a target MCP service and call a tool; a fake authorization server
+  is necessary for regressions but does not substitute for this interoperability acceptance.
 - Confirm `.mcp.json` is shipped and inspected consistently by open/dev/start/deploy, with no copied credentials.
 - Verify the claimed runtime matrix with the selected dependency before publishing; the new-protocol probe covered Node
   26.11.1 on macOS, not Bun, Windows or a cloud deployment.

@@ -356,8 +356,9 @@ capability subset and cleanup tests must be settled before support is published.
 
 Services without MCP keep their existing authoring paths: a CLI declared in `context.json`'s environment, a skill,
 or a pi-durable tool/extension using `needs([...])` for its secrets. None requires a new integration abstraction.
-Registry/MCPB installation, OAuth, hosted MCP services and context-package composition are not prerequisites for the
-first stdio implementation.
+The first release includes stdio, Streamable HTTP and browser-based OAuth for Kage users. Registry/MCPB installation and
+context-package composition remain outside this scope. OAuth grants persist in a host-controlled store, separately from
+instance-owned clients and shareable server declarations.
 
 ## 6. Credentials
 
@@ -380,7 +381,7 @@ the `variables` of the agent's environment (§4), every one of them required.
 | A code tool, an extension, a provider | `needs([...])` around it | Exists |
 | A channel | `needs([...])` around its module | Exists |
 | Content | Its kind's credential: `github` content reads `GITHUB_TOKEN` after git's own helpers, and may name another variable | Read; `deploy` notes when it is missing; not declared |
-| An MCP server | Proposed `${VAR}` references in the supported [`.mcp.json` subset](mcp.md); values resolved per instance | Not implemented; OAuth is outside the first slice |
+| An MCP server | [`.mcp.json`](mcp.md) secret references or a host-selected OAuth grant; values resolved per instance | Not implemented; browser OAuth is required in the first release |
 | A command the agent runs (`gh`, `aws`) | The variables it reads, by name, in `environment.variables` in `context.json` (§4) | Exists |
 
 A declaration does what it does for tools and channels today:
