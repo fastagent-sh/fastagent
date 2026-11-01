@@ -101,13 +101,15 @@ const scheduleOf = (prompt: string) =>
 const SCHEDULE = scheduleOf("write the digest");
 
 describe("cli: schedules run and unwake", () => {
-  it("schedules run fires a schedule in its own session with its claim recorded, and only when no serve runs", async () => {
-    const dir = await agent("fa-schedules-run-", { "src/schedules/digest.ts": SCHEDULE });
+  it("schedules run refuses to fire while a serve holds the storage", async () => {
+    const dir = await agent("fa-schedules-busy-", { "src/schedules/digest.ts": SCHEDULE });
     const refused = await whileServed(dir, () => run(["schedules", "run", "digest", dir]));
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain("another `fastagent dev`, `start` or `schedules` command of this agent");
+  });
 
-    // A fire a stopped serve claimed and never reported is accounted for first, as a serve's boot does.
+  it("schedules run continues its session and records interrupted and completed claims", async () => {
+    const dir = await agent("fa-schedules-run-", { "src/schedules/digest.ts": SCHEDULE });
     const claims = join(resolveStateRoot(dir), "schedule", "claims", "digest");
     await mkdir(claims, { recursive: true });
     await writeFile(join(claims, "2026-01-01T09-00-00-000Z"), JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z" }));

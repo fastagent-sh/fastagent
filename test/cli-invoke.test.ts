@@ -16,9 +16,9 @@ function sessionOf(stderr: string): string {
 }
 
 describe("cli: invoke", () => {
-  it("--session continues the session an earlier run printed, beside a serve, and --json prints its events", async () => {
+  it("--session continues the session an earlier run printed, beside a serve", async () => {
     const dir = await agent("fa-invoke-session-");
-    const sessionId = await whileServed(dir, async () => {
+    await whileServed(dir, async () => {
       const first = await run(["invoke", "hello", dir]);
       expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
       const sessionId = sessionOf(first.stderr);
@@ -28,15 +28,40 @@ describe("cli: invoke", () => {
         "seen 2",
         sessionId,
       ]);
-      // A continued session answers with the model this run names.
-      const switched = await run(["invoke", "--session", sessionId, "--model", "gw/m2", "and", dir]);
-      expect(switched.stdout.trim(), switched.stderr).toBe("seen 3 by m2");
-      // Without --session, a run is a session of its own.
-      const fresh = await run(["invoke", "hello", dir]);
-      expect([fresh.stdout.trim(), sessionOf(fresh.stderr) === sessionId]).toEqual(["seen 1", false]);
-      return sessionId;
     });
+  });
 
+  it("a continued session answers with the model this run names", async () => {
+    const dir = await agent("fa-invoke-model-");
+    await whileServed(dir, async () => {
+      const first = await run(["invoke", "hello", dir]);
+      expect(first.code, first.stderr).toBe(0);
+      const sessionId = sessionOf(first.stderr);
+      const switched = await run(["invoke", "--session", sessionId, "--model", "gw/m2", "and", dir]);
+      expect([switched.code, switched.stdout.trim(), sessionOf(switched.stderr)], switched.stderr).toEqual([
+        0,
+        "seen 2 by m2",
+        sessionId,
+      ]);
+    });
+  });
+
+  it("without --session, each run starts a session of its own", async () => {
+    const dir = await agent("fa-invoke-fresh-");
+    await whileServed(dir, async () => {
+      const first = await run(["invoke", "hello", dir]);
+      const fresh = await run(["invoke", "hello", dir]);
+      expect([first.code, fresh.code], `${first.stderr}\n${fresh.stderr}`).toEqual([0, 0]);
+      expect([first.stdout.trim(), fresh.stdout.trim()]).toEqual(["seen 1", "seen 1"]);
+      expect(sessionOf(fresh.stderr)).not.toBe(sessionOf(first.stderr));
+    });
+  });
+
+  it("--json prints the message, tool events and its end on a continued session", async () => {
+    const dir = await agent("fa-invoke-json-");
+    const first = await run(["invoke", "hello", dir]);
+    expect(first.code, first.stderr).toBe(0);
+    const sessionId = sessionOf(first.stderr);
     const json = await run(["invoke", "--session", sessionId, "--json", "use a tool", dir]);
     expect(json.code, json.stderr).toBe(0);
     const lines = json.stdout
@@ -58,12 +83,15 @@ describe("cli: invoke", () => {
     expect(await lingered(dir)).toBe(1);
   });
 
-  it("refuses a session it does not hold, and runs while no other invoke of the agent does", async () => {
+  it("refuses a session it does not hold", async () => {
     const dir = await agent("fa-invoke-refused-");
     const unknown = await run(["invoke", "--session", "nope", "hello", dir]);
     expect([unknown.code, unknown.stdout]).toEqual([1, ""]);
     expect(unknown.stderr).toMatch(/--session nope: no such session in .*invoke\.sqlite/);
+  });
 
+  it("refuses to run while another invoke holds the storage", async () => {
+    const dir = await agent("fa-invoke-busy-");
     const held = await openLockedStorage(join(resolveStateRoot(dir), "invoke.sqlite"), "posix", "the test");
     try {
       const busy = await run(["invoke", "hello", dir]);
@@ -75,13 +103,21 @@ describe("cli: invoke", () => {
   });
 });
 
-describe("cli: invoke --url", () => {
-  it("checks a served agent over its Agent API as invoke checks one here: output, sessions, --json and exit code", async () => {
-    const dir = await agent("fa-invoke-url-");
-    const opened = await openAgent(dir);
+async function withServedAgent(during: (dir: string, url: string) => Promise<void>): Promise<void> {
+  const dir = await agent("fa-invoke-url-");
+  const opened = await openAgent(dir);
+  try {
     const service = await opened.serve({ apiKeys: ["the-key", "the-next-key"] });
     const url = `http://127.0.0.1:${await service.listen(0, "127.0.0.1")}`;
-    try {
+    await during(dir, url);
+  } finally {
+    await opened.close();
+  }
+}
+
+describe("cli: invoke --url", () => {
+  it("continues a served session with the model this run names", async () => {
+    await withServedAgent(async (dir, url) => {
       const first = await run(["invoke", "--url", url, "--key", "the-key", "hello", dir]);
       expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
       const sessionId = sessionOf(first.stderr);
@@ -98,10 +134,19 @@ describe("cli: invoke --url", () => {
         "and",
         dir,
       ]);
-      expect([switched.stdout.trim(), sessionOf(switched.stderr)], switched.stderr).toEqual([
+      expect([switched.code, switched.stdout.trim(), sessionOf(switched.stderr)], switched.stderr).toEqual([
+        0,
         "seen 2 by m2",
         sessionId,
       ]);
+    });
+  });
+
+  it("--json prints a served session's message and its end", async () => {
+    await withServedAgent(async (dir, url) => {
+      const first = await run(["invoke", "--url", url, "--key", "the-key", "hello", dir]);
+      expect(first.code, first.stderr).toBe(0);
+      const sessionId = sessionOf(first.stderr);
       const json = await run([
         "invoke",
         "--url",
@@ -123,23 +168,33 @@ describe("cli: invoke --url", () => {
         "message",
         expect.objectContaining({ type: "done", message: expect.objectContaining({ status: "completed" }) }),
       ]);
+    });
+  });
 
-      // Without --key: the first of the keys deploy wrote into the production values.
+  it("without --key, uses the first key in the production values", async () => {
+    await withServedAgent(async (dir, url) => {
       await mkdir(join(dir, ".secrets", "production"), { recursive: true });
       await writeFile(join(dir, ".secrets", "production", ".env"), "FASTAGENT_API_KEY=the-next-key, a-retired-key\n");
       const keyed = await run(["invoke", "--url", url, "hello", dir]);
       expect([keyed.code, keyed.stdout.trim()], keyed.stderr).toEqual([0, "seen 1"]);
+    });
+  });
 
+  it("refuses a key the served instance does not hold", async () => {
+    await withServedAgent(async (dir, url) => {
       const refused = await run(["invoke", "--url", url, "--key", "not-a-key", "hello", dir]);
       expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("unauthorized: ")]);
+    });
+  });
+
+  it("refuses a session the served instance does not hold", async () => {
+    await withServedAgent(async (dir, url) => {
       const unknown = await run(["invoke", "--url", url, "--key", "the-key", "--session", "nope", "hi", dir]);
       expect([unknown.code, unknown.stderr]).toEqual([
         1,
         expect.stringContaining(`--session nope: no such session at ${url}`),
       ]);
-    } finally {
-      await opened.close();
-    }
+    });
   });
 
   it("says where a key comes from when it has none, and takes --key only with --url", async () => {
