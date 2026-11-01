@@ -74,6 +74,7 @@ src/
 ├── telegram.ts, slack.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
 │   feishu.ts, lark.ts
 ├── bind.ts                 # the ONE reading of a bind address, as the six different questions it is
+├── model-ref.ts            # provider/modelId parsed for definitions and remote callers without loading a harness
 ├── log.ts                  # leveled logging singleton (dev=debug, start=info)
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code edits (src/, config, package.json, .env); the
