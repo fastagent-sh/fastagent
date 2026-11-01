@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { declaredChannels } from "../src/channels/discover.ts";
 import {
+  agentPublishedPorts,
   type DockerRunPlan,
   deployDockerRun,
   localUrlFromComposePort,
@@ -14,7 +15,9 @@ function fakeDocker(script: (args: string[]) => { code?: number; stdout?: string
   const docker: CliRunner = async (args, options) => {
     calls.push({ args, env: options?.env });
     const result = script(args);
-    return { code: result.code ?? 0, stdout: result.stdout ?? "" };
+    // `config --format json` is how the run learns the ports to be published; a script that says nothing publishes none.
+    const stdout = result.stdout ?? (args.includes("--format") ? '{"services":{"agent":{}}}' : "");
+    return { code: result.code ?? 0, stdout };
   };
   return { docker, calls, commands: () => calls.map((call) => call.args.join(" ")) };
 }
@@ -56,6 +59,7 @@ describe("deploy/docker/run: local Compose journey", () => {
       "compose version",
       "info",
       "compose -f fastagent.compose.yml config --services",
+      "compose -f fastagent.compose.yml config --format json",
       // The base image is a floating tag: a copy cached here may predate the runtime floor.
       "compose -f fastagent.compose.yml build --pull",
       "compose -f fastagent.compose.yml up -d",
@@ -398,7 +402,7 @@ describe("deploy/docker/run: local Compose journey", () => {
       {
         name: "service",
         script: (args) => {
-          if (args.includes("config")) return { stdout: "agent\n" };
+          if (args.includes("--services") && args.includes("config")) return { stdout: "agent\n" };
           if (args.includes("ps")) return { stdout: "" };
           return {};
         },
@@ -478,5 +482,145 @@ describe("deploy/docker/run: parsers", () => {
     expect(localUrlFromComposePort("0.0.0.0:9000\n")).toBe("http://127.0.0.1:9000");
     expect(localUrlFromComposePort("[::]:7000\n")).toBe("http://127.0.0.1:7000");
     expect(localUrlFromComposePort("")).toBeUndefined();
+  });
+});
+
+describe("deploy/docker/run: the published port must be free", () => {
+  const ports = (...published: object[]) => JSON.stringify({ services: { agent: { ports: published } } });
+  const tcp = (port: number, hostIp?: string) => ({
+    mode: "ingress",
+    target: 8787,
+    published: String(port),
+    protocol: "tcp",
+    ...(hostIp ? { host_ip: hostIp } : {}),
+  });
+  const compose = (config: string, runningBeforeUp = "") => {
+    let up = false;
+    return fakeDocker((args) => {
+      if (args.includes("up")) up = true;
+      if (args.includes("--format")) return { stdout: config };
+      if (args.includes("--services") && args.includes("config")) return { stdout: "agent\n" };
+      if (args.includes("--status")) return { stdout: up ? "agent\n" : runningBeforeUp };
+      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
+      return {};
+    });
+  };
+
+  it("refuses, before building anything, when another process already serves the port", async () => {
+    // A `/health` that answers there would be that process's, and the run would report it as the agent's.
+    const { docker, commands } = compose(ports(tcp(8787, "127.0.0.1")));
+    const asked: string[] = [];
+    const out = await deployDockerRun(
+      plan(),
+      docker,
+      () => {},
+      healthy,
+      undefined,
+      async (host, port) => {
+        asked.push(`${host}:${port}`);
+        return true;
+      },
+    );
+    expect(asked).toEqual(["127.0.0.1:8787"]);
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.gate).toMatch(/127\.0\.0\.1:8787 is already in use by another process.*--force/);
+    expect(commands().some((c) => c.endsWith(" build --pull") || c.endsWith(" up -d"))).toBe(false);
+    expect(commands()).not.toContain("compose -f fastagent.compose.yml rm -s -f tunnel");
+  });
+
+  it("does not ask when the agent container is already running: the port is its own", async () => {
+    const { docker } = compose(ports(tcp(8787)), "agent\n");
+    let asked = 0;
+    const out = await deployDockerRun(
+      plan(),
+      docker,
+      () => {},
+      healthy,
+      undefined,
+      async () => {
+        asked++;
+        return true;
+      },
+    );
+    expect(asked).toBe(0);
+    expect(out.ok).toBe(true);
+  });
+
+  it("goes on when the port is free", async () => {
+    const { docker, commands } = compose(ports(tcp(8787)));
+    const out = await deployDockerRun(
+      plan(),
+      docker,
+      () => {},
+      healthy,
+      undefined,
+      async () => false,
+    );
+    expect(out).toEqual({ ok: true, url: "http://127.0.0.1:8787" });
+    expect(commands()).toContain("compose -f fastagent.compose.yml up -d");
+  });
+
+  it("asks nothing of a topology that publishes no fixed host port", async () => {
+    const { docker } = compose(ports({ mode: "ingress", target: 8787, protocol: "tcp" }));
+    let asked = 0;
+    const out = await deployDockerRun(
+      plan(),
+      docker,
+      () => {},
+      healthy,
+      undefined,
+      async () => {
+        asked++;
+        return true;
+      },
+    );
+    expect(asked).toBe(0);
+    expect(out.ok).toBe(true);
+  });
+
+  it("gates on a Compose configuration it cannot read, rather than skipping the check", async () => {
+    const { docker, commands } = compose("not json");
+    const out = await deployDockerRun(
+      plan(),
+      docker,
+      () => {},
+      healthy,
+      undefined,
+      async () => false,
+    );
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.gate).toMatch(/config --format json.*unreadable/);
+    expect(commands()).not.toContain("compose -f fastagent.compose.yml up -d");
+  });
+});
+
+describe("deploy/docker/run: agentPublishedPorts", () => {
+  const read = (ports: unknown) => agentPublishedPorts(JSON.stringify({ services: { agent: { ports } } }));
+
+  it("reads each fixed TCP host port, a wildcard bind asked on loopback", () => {
+    expect(
+      read([
+        { published: "8787", host_ip: "127.0.0.1", protocol: "tcp" },
+        { published: 9000, host_ip: "0.0.0.0", protocol: "tcp" },
+        { published: "9001", host_ip: "::" },
+        { published: "9002", host_ip: "192.168.1.5", protocol: "tcp" },
+      ]),
+    ).toEqual([
+      { host: "127.0.0.1", port: 8787 },
+      { host: "127.0.0.1", port: 9000 },
+      { host: "127.0.0.1", port: 9001 },
+      { host: "192.168.1.5", port: 9002 },
+    ]);
+  });
+
+  it("leaves out what cannot collide: no fixed host port, and UDP", () => {
+    expect(read([{ target: 8787 }, { published: "", target: 8787 }, { published: "53", protocol: "udp" }])).toEqual([]);
+  });
+
+  it("has no ports when the agent publishes none, and refuses what it cannot read", () => {
+    expect(agentPublishedPorts('{"services":{"agent":{}}}')).toEqual([]);
+    expect(agentPublishedPorts('{"services":{}}')).toEqual([]);
+    expect(() => read("8787")).toThrow(/not a list/);
+    expect(() => agentPublishedPorts("agent")).toThrow();
   });
 });
