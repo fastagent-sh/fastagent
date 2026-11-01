@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   test:
-    name: Test (Node ${{ matrix.node-version }})
+    name: Test (Node ${{ matrix.node-version }}, shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -19,6 +19,10 @@ jobs:
         # line (`24`) is not a third entry: it only sits between these two, and a job that cannot fail
         # differently is one more chance for a flaky test to fail the run.
         node-version: ['24.15.0', '26']
+        # The suite is CPU-bound (wall ~ total CPU / cores), so two runners each take half the files:
+        # vitest's --shard splits by file, and the two halves measured within ~10% of each other in CPU.
+        # `2` here must match the `/2` in the Test step and the job name.
+        shard: [1, 2]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -33,17 +37,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Lint and typecheck do not depend on the Node version, so they run once, on the floor.
+      # Lint and typecheck do not depend on the Node version, so they run once, on the floor's first shard.
       - name: Lint
-        if: matrix.node-version == '24.15.0'
+        if: matrix.node-version == '24.15.0' && matrix.shard == 1
         run: npm run lint
 
       - name: Typecheck
-        if: matrix.node-version == '24.15.0'
+        if: matrix.node-version == '24.15.0' && matrix.shard == 1
         run: npm run typecheck
 
       - name: Test
-        run: npm test
+        run: npm test -- --shard=${{ matrix.shard }}/2
 
   package-smoke:
     name: Packed package smoke
