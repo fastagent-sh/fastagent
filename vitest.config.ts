@@ -10,9 +10,12 @@ import { defaultExclude, defineConfig } from "vitest/config";
 //
 // Under vitest's file-parallelism a contended machine can still push a cold-start past a tight timeout.
 // The fix is the timeout, not a parallelism cap: a 30s ceiling absorbs a slow cold-start (including a
-// dev machine loaded with other work) at near-zero cost — it only bites a genuinely-slow test. Capping
-// vitest's own workers (maxWorkers) was measured and rejected: it slows every run several-fold
-// (17s -> ~60s here), is a no-op on a few-core CI runner, and can't touch external CPU load anyway.
+// dev machine loaded with other work) at near-zero cost — it only bites a genuinely-slow test.
+//
+// The suite is CPU-bound, so wall time ~ total CPU / cores. Measured (8 cores): ~145s wall, ~550s CPU; on a
+// 4-vCPU CI runner the Test step takes ~125-150s. About 15 of ~165 files (the CLI subprocess ones) hold
+// ~65% of that CPU. Capping vitest's workers (maxWorkers) cannot help: it only trades wall time for less
+// contention. What does help is fewer or cheaper spawns, or more cores (`--shard`).
 //
 // `pool: "forks"` is explicit, not left to the default: it is the process isolation these
 // subprocess / process.env tests assume.
