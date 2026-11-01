@@ -52,7 +52,7 @@ const INGRESS_TYPES = { v4: ["v4", "shared_v4"], v6: ["v6"] } as const;
  * Which PUBLIC ingress families `fly ips list --json` shows — asked per family, because "has an ingress address" is
  * not the question the two allocate commands answer.
  */
-export function ingressAddresses(stdout: string): { v4: boolean; v6: boolean } {
+function ingressAddresses(stdout: string): { v4: boolean; v6: boolean } {
   const entries: unknown = JSON.parse(stdout);
   if (!Array.isArray(entries)) throw new Error(`expected a JSON array, got ${typeof entries}`);
   const has = (types: readonly string[]) =>
@@ -63,11 +63,10 @@ export function ingressAddresses(stdout: string): { v4: boolean; v6: boolean } {
 }
 
 /**
- * Whether `fly apps list --json` lists an app called `name`. flyctl capitalizes the field; the live probe
- * (test/live/fly.live.test.ts) is what pins that against real output, since an offline fixture can only repeat what
- * we already believe.
+ * Whether `fly apps list --json` lists an app called `name`. flyctl capitalizes the field, and an
+ * offline fixture can only repeat what we already believe, so a change in flyctl's output is not caught here.
  */
-export function listHasName(stdout: string, name: string): boolean {
+function listHasName(stdout: string, name: string): boolean {
   const entries: unknown = JSON.parse(stdout);
   if (!Array.isArray(entries)) throw new Error(`expected a JSON array, got ${typeof entries}`);
   return entries.some((o) => (o as { Name?: string }).Name === name);

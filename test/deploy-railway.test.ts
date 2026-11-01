@@ -139,8 +139,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("toRailwayName survives `railway add --service <name>` — and never yields an empty argument", () => {
-    // The live probe tears down the project by the name the CLI creates, so both go through this.
-    expect(toRailwayName("fastagent-live-a1b2c3d4")).toBe("fastagent-live-a1b2c3d4"); // the probe's own
+    expect(toRailwayName("fastagent-a1b2c3d4")).toBe("fastagent-a1b2c3d4"); // already a valid name
     expect(toRailwayName("My Agent (v2)")).toBe("My-Agent-v2");
     expect(toRailwayName("___")).toBe("agent"); // nothing left to name it with
   });

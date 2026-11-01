@@ -204,8 +204,7 @@ ${deployment}`;
   //
   // `*.tgz` RIDES ALONG with the manifest, because the install layer runs BEFORE `COPY . .` and a
   // `"dep": "file:./something.tgz"` resolves against the directory it is installing in. Without this the file is
-  // not there yet and the build fails on a dependency the author can see sitting in the agent directory. It is
-  // also what lets a live probe deploy the CHECKOUT (`npm pack` output) rather than the published release.
+  // not there yet and the build fails on a dependency the author can see sitting in the agent directory.
   if (isBun) {
     // `--frozen-lockfile` needs bun.lock and hard-fails without it.
     const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";

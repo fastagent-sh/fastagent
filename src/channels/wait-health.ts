@@ -1,6 +1,6 @@
 /**
  * Readiness probe for a server THIS process can reach over HTTP — the local port `deploy docker --run` just
- * published, the live probes' own origins, and the public URL a host deploy must clear before it registers a webhook
+ * published, and the public URL a host deploy must clear before it registers a webhook
  * (`publicHealthGate` in deploy/channel-ingress.ts).
  */
 import { setTimeout as sleep } from "node:timers/promises";

@@ -23,7 +23,7 @@ Code truth is `src/`.
 
 One line per file: **what it owns**. The reason it is that way lives in the file's own header — the
 one place that cannot drift away from the code it explains. Directories that have no header file
-(`src/deploy`, `test/live`) point at where theirs lives.
+(`src/deploy`) point at where theirs lives.
 
 ```
 src/
@@ -294,8 +294,7 @@ test/                       # vitest; faux models by default
 │                           # durable-agent.test.ts over durable-subject.ts, and over HTTP by http-api.test.ts
 │                           # (http-subject.ts: the same subject served, called through connectAgent)
 ├── scripted-agent.ts       # an Agent whose answers a test scripts: what channel, schedule and service tests run on
-├── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)
-└── live/                   # probes for what the offline suite FAKES — see test/live/README.md
+└── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)
 docs/                       # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```
 

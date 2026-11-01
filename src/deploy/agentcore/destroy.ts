@@ -232,7 +232,7 @@ export async function destroyAgentcoreDeployment(
   // FAILURE vs WARNING is decided by whether the resource SURVIVES it, not by whether a call failed. The
   // forwarder's group is named exactly, so a `--run` deletes it by name and the failed listing changed nothing
   // — reporting `1 resource(s) survived` for a teardown that removed everything is the same false signal as the
-  // reverse, and `test/live/env.ts` treats it as a leak. In the inventory, where no delete follows, the same
+  // reverse. In the inventory, where no delete follows, the same
   // unreadable listing DOES mean the answer is incomplete.
   const failures: string[] = [];
   const warnings: string[] = [];
