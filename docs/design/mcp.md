@@ -196,38 +196,24 @@ HTTP resource/authorization-server discovery, authorization code with PKCE S256,
 resource/audience binding, and secure token storage. Stdio remains an environment-credential transport; MCP HTTP OAuth
 does not log arbitrary child programs in.
 
-### Host-facing boundary
+### Host API, grants and refresh ownership
 
-Kage must be able to inspect auth status, start/cancel sign-in and disconnect without first opening a fully authenticated
-agent. Opening an agent or executing an unattended tool must not secretly launch a browser or wait indefinitely for a
-person. An explicit host interaction drives browser/callback steps; CLI use adapts the same flow to its ticket model.
-Auth-required and insufficient-scope outcomes must name the server and reach the host as actionable structured results.
-The exact public host types and method names need review before implementation.
+The proposed [authorization contract](mcp-auth.md) separates server declarations, opaque grant IDs and host-owned instance
+bindings. It defines `inspectMcp` / `signInMcp`, the `openAgent` binding input, a CLI file adapter and the store's
+exclusive-access contract. These are design names, not current exports.
 
-FastAgent owns protocol/authentication mechanics and their consistent outcomes; Kage owns presentation, the system-browser
-action and where credentials are stored. The host contract stays in FastAgent's types, without exposing MCP SDK internals.
-The existing model-provider `CredentialStore`/`signIn` API is keyed by provider and cannot simply be reused as an MCP
-grant model. Reuse established interaction and atomic-write patterns where they fit, not the provider-keyed identity.
+Kage owns presentation, the system browser and credential storage. FastAgent owns protocol/auth mechanics, scope-consent
+requests and the local callback. Auth setup can run before the harness opens; ordinary open/tool calls cannot launch a
+browser implicitly. The existing model-provider credential API is not used as the MCP grant key space.
 
-### Grants and isolation
+The store owns serialization for every caller sharing a grant. It permits durable writes while holding exclusive access:
+a refresh marker is saved before the remote token may be consumed, and replacement tokens before they are returned.
+Canceled waiters do not discard completed rotation; uncertain refresh outcomes require explicit recovery, not replay of an
+old token. Two 401s for one token generation reuse the newer committed generation.
 
-The store must distinguish the resource server, validated authorization-server issuer, client registration, granted
-scopes and selected account/opaque grant identity. A display name such as `notion` or `github` is not an auth key, and an
-access token must not be decoded to guess the user's identity. Exact store interfaces and key encoding remain to be designed.
-
-Grant reuse across agents must be an explicit host/user binding. An agent's `close()` releases clients but does not sign
-the user out. Disconnecting one binding must not revoke or delete a grant still used by another agent. A whole-grant
-sign-out must make its impact clear; distinguish local removal from confirmed remote revocation when supported.
-Allow separate accounts for the same MCP endpoint.
-
-Serialize refreshes per grant, including rotated refresh-token persistence, rather than per client instance. A concurrent
-refresh must not overwrite or reuse a rotated token. Refresh refusal/expiry becomes a reauthorization requirement; a
-network failure remains a network failure. Changed issuers/resources, conflicting authentication modes and mismatched
-callbacks must fail visibly, not reuse a nearby credential.
-
-Credentials and pending-flow secrets stay outside `.mcp.json`, source control, model context, transcript and logs.
-A host can supply secure storage; CLI storage must be owner-readable and atomic. Use the system browser and a validated
-native callback path; do not require a user to paste an authorization code into an agent conversation.
+An agent close releases its clients only. Binding removal, whole-grant forgetting and remote revocation are distinct
+actions. Interactive sign-in creates a fresh grant rather than silently replacing one other agents may use. Detailed
+state transitions, tradeoffs and the controlled concurrency experiment are in [mcp-auth.md](mcp-auth.md).
 
 ### Interoperability before implementation
 
@@ -252,6 +238,8 @@ Before the feature is marked supported:
 - Verify two agents in one process: different secrets/paths, independent clients, failed-open cleanup, and closing one while
   the other continues. Include two opens of the same directory with separate state.
 - Verify SDK discovery/serving process cleanup, HTTP cancellation/disconnection, and restart through the public assembly.
+- Verify the [grant-store contract](mcp-auth.md): serialization across store objects, durable refresh markers, canceled
+  waiters, interrupted writes and deletion/refresh races. Include two 401s for one token generation.
 - Verify OAuth discovery, browser sign-in/cancel/denial, restart persistence, refresh rotation and concurrent refresh,
   insufficient scope, issuer/resource changes, two accounts at one endpoint and explicit cross-agent grant bindings.
 - Complete a real Kage-style browser OAuth flow against a target MCP service and call a tool; a fake authorization server
