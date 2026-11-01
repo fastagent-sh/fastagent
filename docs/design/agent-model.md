@@ -41,8 +41,9 @@ A context has three kinds of parts, each reaching the agent its own way ([agent 
 
 - **Content** is data the agent reads and writes as files: a project, a folder, a repository. Most of this note is
   about content.
-- **Connectors** are the systems that are not files the agent reaches: an API, a service, and their credentials. The  code tools and extensions that reach them are part of the definition; the system each one reaches is the
-  connector (agent service §3.3). MCP servers are not supported yet (#678).
+- **External systems** are reached by code tools, extensions or, in the planned [MCP support](mcp.md), servers declared
+  in `.mcp.json`. "Connector" in older conceptual diagrams is not a public type or a `context.json` field.
+  Credentials belong to the instance. MCP servers are not supported yet (#678).
 - **The environment** is the commands and runtimes the agent runs, declared under `environment` in its `context.json`
   and installed on every instance, each at the newest release its version allows there
   ([agent service](agent-service.md) §4). An agent with none borrows the machine's (below).

@@ -7,8 +7,9 @@ status: partly implemented
 
 # Agent service
 
-**Status: partly implemented.** The environment (§4) and credentials (§6) are; connectors (§5) are proposed, with MCP
-([#678](https://github.com/fastagent-sh/fastagent/issues/678)). How an agent is served, the API it is served through,
+**Status: partly implemented.** The environment (§4) and credentials (§6) are implemented; MCP server support (§5)
+is planned ([#678](https://github.com/fastagent-sh/fastagent/issues/678)). The conceptual word "connector" below describes
+an external integration, not a public FastAgent type or configuration kind. How an agent is served, the API it is served through,
 and where it runs are [architecture.md](architecture.md)'s and the [Agent API](../SPEC.md)'s.
 
 Three things are hard in serving an agent, and this design spends itself on them:
@@ -74,7 +75,7 @@ Agent = model + harness + context, composed by a definition
   harness        the loop that runs it: pi-durable
   context        everything it works with from outside, in three kinds:
     content        data it reads and writes as files, synced to where it runs: repositories, directories
-    connectors     the other systems it reaches: MCP servers, APIs and their credentials (mcp.json)
+    external APIs  code tools today; planned MCP servers use .mcp.json, with credentials supplied per instance
     environment    what it runs in: the commands and runtimes it needs, on every platform (context.json)
   definition     its own directory: who it is and how it works, and which model and contexts it uses
   remembers in   sessions: conversations
@@ -341,30 +342,23 @@ Why FastAgent's own format, with mise underneath:
 
 OpenAI's Codex base image installs its runtimes with mise.
 
-## 5. Connectors are declared
+## 5. MCP servers and external APIs
 
-Today a connector is a code tool in `src/tools/` or a channel's send tool. MCP is not served yet
-([#678](https://github.com/fastagent-sh/fastagent/issues/678)). Proposed:
+[MCP server design](mcp.md) owns the configuration and lifecycle boundary. Support is not implemented yet.
+Servers are declared in the agent's `.mcp.json` under `mcpServers`, with a documented supported subset.
+There is no `context.json.connectors` field, generic `Connector` API, or implicit discovery of `.pi/mcp.json`,
+editor configurations or a user's global servers. Client configurations are not universally interchangeable.
 
-- **A service that speaks MCP** is declared in `mcp.json` at the agent's root, in pi's format, which Claude Code,
-  Cursor and VS Code share (`mcpServers`: a `command` or a `url`, `headers` or `env` that name values as `${VAR}`, and
-  a `description` the agent reads). `.pi/mcp.json` is read too, below it, as for every file pi and FastAgent both
-  have a place for. Pi brings OAuth sign-in (`mcp login`) and per-server exposure with it.
-- **A service without MCP** needs no new kind of file. Each way to reach it already has its declaration:
+Each opened instance owns its MCP clients and resolved credentials/paths. Multiple agents in one embedding process
+must not share clients implicitly; sessions within one instance may share server-held state. Protocol revision,
+capability subset and cleanup tests must be settled before support is published. The design records the current
+2026-07-28 SDK probe and the limits of the earlier 2025-era lifecycle evidence.
 
-  | The service offers | Reach it with | Declared in | Its credential |
-  |---|---|---|---|
-  | A CLI (`gh`, `aws`, `stripe`) | The CLI in the environment, and a skill that teaches it | `context.json` (`environment`), `skills/` | The variable the CLI reads |
-  | An API this agent calls | Code tools, one per operation, beside the client they share | `src/tools/` (pi-durable's `defineTool`) | `needs([...])` around the tool |
-  | An API several agents or harnesses reuse | An MCP server of one's own, run locally (stdio) or hosted | `mcp.json` | `${VAR}` in `env` or `headers` |
-  | An OpenAPI or Smithy description, or a Lambda function, on AWS | AgentCore Gateway, which turns it into an MCP server and handles the outbound authorization | `mcp.json` (`url`) | The Gateway's own |
-  | A REST call or two | A skill with a script (`curl`, Python) | `skills/` | The variable the script reads |
-
-- A context package carries the declared ones, the environment a CLI needs and MCP servers, so a team declares a
-  service once and its agents use it ([architecture.md](architecture.md) §4.2).
-- `fastagent info` lists every connector in one place, with the context it comes from: the MCP servers, the code tools
-  with the secrets they declare, and what the environment installs.
-- An MCP connection lives as long as the process or the conversation, not one turn, which is #678.
+Services without MCP keep their existing authoring paths: a CLI declared in `context.json`'s environment, a skill,
+or a pi-durable tool/extension using `needs([...])` for its secrets. None requires a new integration abstraction.
+The first release includes stdio, Streamable HTTP and browser-based OAuth for Kage users. Registry/MCPB installation and
+context-package composition remain outside this scope. OAuth grants persist in a host-controlled store, separately from
+instance-owned clients and shareable server declarations.
 
 ## 6. Credentials
 
@@ -387,7 +381,7 @@ the `variables` of the agent's environment (§4), every one of them required.
 | A code tool, an extension, a provider | `needs([...])` around it | Exists |
 | A channel | `needs([...])` around its module | Exists |
 | Content | Its kind's credential: `github` content reads `GITHUB_TOKEN` after git's own helpers, and may name another variable | Read; `deploy` notes when it is missing; not declared |
-| An MCP server | `${VAR}` in its `env` or `headers` in `mcp.json`, or an OAuth sign-in (`mcp login`) | MCP is not served yet |
+| An MCP server | [`.mcp.json`](mcp.md) secret references or a host-selected OAuth grant; values resolved per instance | Not implemented; browser OAuth is required in the first release |
 | A command the agent runs (`gh`, `aws`) | The variables it reads, by name, in `environment.variables` in `context.json` (§4) | Exists |
 
 A declaration does what it does for tools and channels today:

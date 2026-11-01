@@ -482,7 +482,8 @@ export default defineTool({
 `parameters` is a TypeBox schema: the harness validates a call's arguments against it before `execute`. A tool of the
 definition's own with a coding tool's name replaces it. Every serve also gives the agent `wake` and `unwake`
 ([self-scheduling](api-reference.md#self-scheduling)). MCP servers are not supported yet
-([#678](https://github.com/fastagent-sh/fastagent/issues/678)). `fastagent info` lists each tool with its file.
+([#678](https://github.com/fastagent-sh/fastagent/issues/678)); the planned configuration is [`.mcp.json`](design/mcp.md),
+not a field in `context.json`. `fastagent info` lists each tool with its file.
 
 A tool that needs to know which session it runs in asks `await sessionIdOf(api, context)` (from
 `@fastagent-sh/fastagent`): the id the Agent hands out, the one a channel's map records.

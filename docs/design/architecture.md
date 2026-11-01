@@ -8,7 +8,7 @@ status: implemented in part
 # Architecture
 
 **Status: decided; implemented through §6 step 4.** The code serves an agent on pi-durable through the
-[Agent API](../SPEC.md), with per-agent content authoring released in 0.28.0. MCP connectors, the artifact (§4.1),
+[Agent API](../SPEC.md), with per-agent content authoring released in 0.28.0. MCP server support, the artifact (§4.1),
 context packages (§4.2) and what §4.4 leaves for later are not built yet;
 §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol (never released),
 a harness port, and the conformance levels behind them (§5).
@@ -52,13 +52,13 @@ goal needs.
 | **Ids are encoded, never reused** | pi-durable's ids are one counter per storage, starting again from 2 in a new one, and a deploy can replace the storage (AgentCore resets its session storage; a volume can be rebuilt). An id the Agent hands out is the storage's incarnation, a random id minted when the storage is created, followed by pi-durable's id: sessions, messages and entries alike. An id kept from a storage that is gone is then `not_found` instead of someone else's conversation, and an id says which storage it belongs to, which routing across several storages needs. It is an encoding, not a lookup: nothing is stored to map one id to another. One loss it cannot cover: a storage that rolls back its newest commits keeps its incarnation, so the ids of what was rolled back are handed out again; AgentCore after a host failure is the case, accepted there (§4.3) |
 | **Sessions are listed, most recently active first; none is deleted** | A client shows an agent's conversations whatever started them: duang's sidebar lists the ones a channel or a schedule started too, which no list a Caller keeps could hold. An instance is one trust domain, so a list shows nothing its Caller could not already read. Within one storage the order needs no clock: pi-durable gives sessions, messages and entries their ids from one counter, so a session's newest id is its latest activity. Several storages behind one instance compare activity by time, designed with them (#788, scale-out on AgentCore). pi-durable has no deletion |
 | **An agent is a standard npm and TypeScript package** (§3) | The artifact is an npm package (§4.1), and an agent must be a value other code can import: an app that embeds it, a deploy by package name and version, another agent that depends on it |
-| **One configuration file, `fastagent.config.ts`, with `defineAgent()`; every field optional** | It is the `defineConfig` pattern of Vite and its peers: typed, and read by the build. The model, thinking level and tools it names are defaults: a deployment overrides them with a flag or an environment variable, and a session with pi-durable's own API |
+| **Agent behavior defaults in `fastagent.config.ts`, with `defineAgent()`; every field optional** | It is the `defineConfig` pattern of Vite and its peers: typed, and read by the build. The model, thinking level and tools it names are defaults: a deployment overrides them with a flag or an environment variable, and a session with pi-durable's own API |
 | **Code is registered by where it is, at build time**: `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/` | Every command that opens the definition generates a registry of plain imports (`.fastagent/registry.ts`; `build` will too), as TanStack Router's route tree and Next.js's route manifest are generated: nothing to import by hand, full types, and a bundler can follow it. Not a scan at run time (no types, no bundling, a loader to keep), and not `import.meta.glob`, which only Vite understands while `dev` runs on Node |
 | **The code is pi-durable's**: tools are its `defineTool` (TypeBox), extensions its `defineExtension` | With one harness, a portable layer over its tool and extension APIs would be a second API to learn for nothing |
-| **Third-party capabilities are pi-durable extensions**, listed in `defineAgent({ extensions })` | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. Contexts, skills, MCP and environments travel as context packages (§4.2) |
+| **Third-party capabilities are pi-durable extensions**, listed in `defineAgent({ extensions })` | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. MCP servers are declared separately in [`.mcp.json`](mcp.md). Context packages (§4.2) are later work, not an MCP prerequisite |
 | **Schedules are TypeScript**: `defineSchedule({ cron, tz, prompt })`, the prompt a text or a function | A schedule is behaviour, like a tool: a prompt that depends on the time it fires, secrets it may need, and a cron the build checks, including the dialect an external clock accepts |
 | **`SYSTEM.md` is the whole prompt the author writes; `APPEND_SYSTEM.md` goes** | It added to pi-coding-agent's default prompt, which pi-durable does not have |
-| **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; a context package's connectors declare theirs beside each connector. A declaration may say what the secret is for and that the code runs without it (`{ name, description, optional }`). A missing required one fails the start, naming where it was declared. Whoever deploys or runs the agent reads none of that code: preparing the definition writes every declaration into one manifest, `.fastagent/secrets.json` (each name once, what it is for, whether it is optional, where it is declared), which runbooks, an `.env.example` and the deploy check are made from |
+| **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; planned MCP server configuration names its required values in `.mcp.json` ([MCP design](mcp.md)). A declaration may say what the secret is for and that the code runs without it (`{ name, description, optional }`). A missing required one fails the start, naming where it was declared. Whoever deploys or runs the agent reads none of that code: preparing the definition writes every declaration into one manifest, `.fastagent/secrets.json` (each name once, what it is for, whether it is optional, where it is declared), which runbooks, an `.env.example` and the deploy check are made from |
 
 **A mapping is created in one order, in one place.** With Caller-named sessions, a chat's id was its session's, so a
 redelivered first message found its message by key, and two threads created at once met in `conflict`. With sessions
@@ -107,6 +107,7 @@ my-agent/
     channels/*.ts
     schedules/*.ts                defineSchedule
   context.json  context.lock.json
+  .mcp.json                       planned MCP servers; one mcpServers map
   .fastagent/                     the generated registry and entry, not committed
   dist/                           the build output
 ```
@@ -163,7 +164,7 @@ code: the built-in `wake` tool, which already keeps one-shot wake-ups in the ins
 
 ### 4.1 The artifact
 
-The artifact is an **npm package**: the built entry, the text and skills, `context.json` and its lock, the lockfile and
+The artifact is an **npm package**: the built entry, the text and skills, `.mcp.json`, `context.json` and its lock, the lockfile and
 an exact pi-durable version.
 It never holds secret values, runtime state or cloned content. A registry versions and distributes it; it can be a
 dependency of an app that embeds it, or of another agent. What a host runs is derived from it by `deploy`: an OCI
@@ -181,14 +182,12 @@ directory with a `context.json` of the same format an agent's own uses:
 | Part | Holds |
 |---|---|
 | `content` | Repositories and directories the agent works on: references (a GitHub repository at a ref), never the data |
-| `connectors` | MCP servers, and the names of the secrets they need |
 | `environment` | The commands and runtimes it needs |
 | `uses` | The context packages it builds on, by an alias of its own: `{ "billing": "@acme/ctx-billing@^1" }` |
 
 plus `skills/` for working with that context. It is distributed as an npm package or a git repository, and the agent's
 `context.json` lists it under `uses`. Building resolves `uses` into `context.lock.json` and puts the manifests and
-skills in the artifact; starting an instance clones or binds the content, installs the environment and starts the
-connectors. An instance can bind an entry to another repository or directory without a rebuild, as
+skills in the artifact; starting an instance clones or binds the content and installs the environment. An instance can bind an entry to another repository or directory without a rebuild, as
 `context.local.json` does today.
 
 **Each package is a namespace, named by the alias its user gives it**, so two packages never collide on a name:
@@ -197,11 +196,13 @@ connectors. An instance can bind an entry to another repository or directory wit
 |---|---|---|
 | Content | `content/billing/<name>` | None |
 | Skills | Offered to the model as `billing/<name>`; the `SKILL.md` on disk keeps the standard's name | None |
-| Connectors | `billing/<name>`, their tools prefixed with the alias | None |
 | Secrets | Not namespaced: an environment variable's name is global | One name is one value: two packages that need `GITHUB_TOKEN` need the same token |
 | Environment | Not namespaced: a process has one `PATH` | Constraints that cannot both hold are refused at build |
 
 The agent's own parts carry no prefix. Since the agent chooses the aliases, two aliases cannot collide either.
+
+MCP configuration is the agent's [`.mcp.json`](mcp.md), not a `connectors` field in `context.json`.
+How future packages contribute MCP declarations is deferred; packages must not create a parallel authoritative format.
 
 ### 4.3 Hosts and storage
 
@@ -315,10 +316,10 @@ What the previous design had, and what took its place:
    one model, in process and over HTTP with an API key, with `connectAgent`, `deploy`'s key and `invoke --url`.
 4. **Done, released in 0.28.0** ([#875](https://github.com/fastagent-sh/fastagent/pull/875)). Per-agent content
    authoring through the embedding API: create an agent with folders or repositories, then read and edit its declarations.
-5. MCP connectors in the agent's own `context.json`, over pi-durable's tool bridge. First measure resource ownership,
-   reuse across messages, cancellation, close and restart on the current harness
-   ([#678](https://github.com/fastagent-sh/fastagent/issues/678)); do not carry forward the retired harness's session-cache
-   proposal or make scale-out a prerequisite.
+5. [MCP servers](mcp.md) in the agent's `.mcp.json` (`mcpServers`), over pi-durable's tool bridge, with resources owned by
+   each opened instance. The 2025-era lifecycle spike is complete; select and verify the protocol/configuration subset
+   before implementation ([#678](https://github.com/fastagent-sh/fastagent/issues/678)). No generic `Connector`, old
+   session-cache proposal, context packages or scale-out prerequisite.
 6. The artifact: `fastagent build`, and `deploy` from it.
 7. Context packages, once there is a concrete cross-agent reuse need; they depend on the artifact's build step.
 8. Shared contexts and agents working together.
