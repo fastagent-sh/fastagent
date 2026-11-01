@@ -69,9 +69,19 @@ Server names contain 1–40 letters, digits, hyphens or underscores, without `__
 `mcp__<server>__<tool>`; the resulting name must fit 64 characters using letters, digits, underscores and hyphens.
 Conflicting or invalid names fail open, including collisions with authored tools.
 
-Do not commit credentials in this file. Use environment references or OAuth. The CLI uses its configured outbound proxy;
-an embedding host supplies `mcp.fetch` for its own network policy, or uses its existing global fetch implementation.
-FastAgent does not replace global fetch or mutate process environment when an app opens an agent.
+Do not commit credentials in this file. Use environment references or OAuth. The built-in, instance-owned HTTP transport
+honors `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` from the process environment, without replacing global fetch or changing
+process variables. It validates every DNS answer and pins connections (including proxy CONNECT) to the selected IP,
+preserving the original Host and TLS certificate name. It never follows HTTP redirects.
+
+Metadata-derived URLs cannot reach loopback, private, link-local or reserved addresses. A declared literal local/private
+endpoint, or localhost, permits only that exact origin; it does not authorize another local port or issuer. Hostnames
+resolving to non-public addresses are refused, including proxy fake-IP ranges such as `198.18.0.0/15`. Use a resolver that
+returns routable addresses rather than bypassing this check. Pins last for the opened instance; reopen to resolve again.
+
+An explicit `mcp.fetch` is a **trusted host transport override**, also used for discovery and refresh. URL/protocol checks
+still apply, but FastAgent cannot control that function's sockets: the host must enforce equivalent DNS pinning, private
+address and redirect protections. Existing global fetch replacements are not implicitly adopted.
 
 ## Browser OAuth from the CLI
 
@@ -88,7 +98,15 @@ At a terminal the command asks for scope consent before opening the browser.
 
 `--env production` selects independent production credentials and bindings. `--client-id` supplies a pre-registered
 public client ID or a client metadata URL. Otherwise FastAgent uses the server's dynamic registration endpoint.
-`--callback-port` selects a fixed local callback port; `--timeout` bounds the sign-in (default 900 seconds).
+`--callback-port` selects a fixed local callback port; `--timeout` bounds the sign-in (default 900 seconds). With
+`--client-id`, the callback path is always `/mcp/oauth/callback`. Register
+`http://127.0.0.1:<callback-port>/mcp/oauth/callback` in advance and choose that port when exact redirect matching is required.
+Omitting the port requires a service that permits variable loopback ports. Dynamically registered clients keep a random
+callback path. Both modes require a fresh state and PKCE challenge and accept a callback only once.
+
+Discovery first probes the MCP resource without credentials and uses its `WWW-Authenticate` `resource_metadata` hint.
+Without a hint, the SDK discovers the default well-known metadata. An unusable or ambiguous hint is refused, never
+silently replaced by default discovery. Login, opening a bound client and refresh share this discovery path.
 
 The browser callback binds only `127.0.0.1`. For a remote CLI, run it with a fixed callback port and forward that port to
 the browser's machine. An automatic `mcp login --deployment` relay is not provided. A local Kage grant is never copied into

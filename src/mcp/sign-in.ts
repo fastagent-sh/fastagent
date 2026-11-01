@@ -19,7 +19,8 @@ import * as Exit from "effect/Exit";
 import { port, portJoin, portCleanup, portError } from "../effect-port.ts";
 import { McpError, type McpGrantRecord, type McpGrantSummary, type McpSignInRequest } from "../mcp-api.ts";
 import { sendPage, setupRequestUrl, statusCard } from "../setup-page.ts";
-import { discoverMcp, mcpFetch, mcpFailure } from "./auth.ts";
+import { discoverMcp, mcpFailure } from "./auth.ts";
+import { mcpFetch, openMcpNetwork } from "./network.ts";
 import { httpServer } from "./host.ts";
 import { grantSummary } from "./grants.ts";
 
@@ -38,9 +39,13 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
     resolveMcpServers(dir, { ...process.env, ...agentValues(dir), ...request.variables }, request.server),
     request.server,
   );
-  const fetchImpl = mcpFetch(request.fetch);
   let saved: McpGrantSummary | undefined;
   const work = Effect.gen(function* () {
+    const network = yield* Effect.acquireRelease(
+      port(() => openMcpNetwork(server.url, request.fetch)),
+      (value) => portCleanup("MCP network", () => value.close()),
+    );
+    const fetchImpl = mcpFetch(server.url, network.fetch);
     const discovery = yield* port(() => discoverMcp(server.url, fetchImpl));
     if (!discovery.metadata.code_challenge_methods_supported?.includes("S256")) {
       return yield* Effect.fail(
@@ -69,7 +74,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
     if (!approved) return yield* Effect.fail(new McpError("canceled", "MCP authorization canceled", server.name));
     const callback = yield* Deferred.make<URLSearchParams, McpError>();
     const state = randomBytes(32).toString("base64url");
-    const path = `/mcp/oauth/${randomBytes(24).toString("hex")}`;
+    const path = request.clientId ? "/mcp/oauth/callback" : `/mcp/oauth/${randomBytes(24).toString("hex")}`;
     let portNumber = 0;
     let consumed = false;
     const listener = createServer((incoming, response) => {

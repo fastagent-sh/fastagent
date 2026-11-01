@@ -488,7 +488,8 @@ fastagent mcp disconnect linear --json
 
 `list` reports local authorization metadata without contacting servers. `login` uses the browser and a ticket for
 coding agents; scopes must be explicit without a terminal. `--env production` selects production grants/bindings.
-`--client-id`, `--callback-port` and `--timeout` configure the browser flow. A completed login persists credentials
+`--client-id`, `--callback-port` and `--timeout` configure the browser flow. For a pre-registered client, register
+`http://127.0.0.1:<callback-port>/mcp/oauth/callback`; its path is fixed while state and PKCE stay fresh. A completed login persists credentials
 before binding them; reopen a running agent to apply the binding. No token/code is entered in the conversation.
 
 Stop the instance before `disconnect`: it refuses while another process holds the storage. It removes the binding,

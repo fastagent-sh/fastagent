@@ -36,6 +36,7 @@ src/
 │   ├── config.ts           # .mcp.json validation, secret references and instance-local resolution
 │   ├── grants.ts           # grant records and durable writes under a shared storage lock
 │   ├── auth.ts             # OAuth discovery, target binding, serialized refresh and safe diagnostics
+│   ├── network.ts          # MCP URL policy and instance-owned HTTP transport, with DNS-validated IP pinning
 │   ├── client.ts           # instance-owned stdio/HTTP clients, calls and scoped cleanup
 │   ├── host.ts             # inspectMcp, default grant storage and instance bindings
 │   └── sign-in.ts          # explicit consent, browser callback, PKCE exchange and durable grant creation

@@ -7,7 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { mcpGrantFile } from "../src/mcp/grants.ts";
-import { grantToken, mcpFetch } from "../src/mcp/auth.ts";
+import { grantToken, discoverMcp } from "../src/mcp/auth.ts";
+import { openMcpClients } from "../src/mcp/client.ts";
+import { mcpFetch } from "../src/mcp/network.ts";
 import { signInMcp } from "../src/mcp/sign-in.ts";
 import { inspectMcp } from "../src/mcp/host.ts";
 import type { McpGrantStore } from "../src/mcp-api.ts";
@@ -30,7 +32,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 const token = (store: McpGrantStore, id: string, rejectedGeneration?: number) =>
-  grantToken({ store, id, url: remote.url, fetch: mcpFetch(remote.fetch), rejectedGeneration });
+  grantToken({ store, id, url: remote.url, fetch: mcpFetch(remote.url, remote.fetch), rejectedGeneration });
 
 it("serializes independent store objects and two 401s for the same token generation", async () => {
   await store.withGrant("shared", (tx) => tx.write(remote.grant("one", false)));
@@ -103,8 +105,11 @@ it("recovers the durable fence after a real process is killed during rotation", 
       "-e",
       `
     import { mcpGrantFile } from ${JSON.stringify(new URL("../src/mcp/grants.ts", import.meta.url).href)};
-    import { grantToken, mcpFetch } from ${JSON.stringify(new URL("../src/mcp/auth.ts", import.meta.url).href)};
-    await grantToken({store:mcpGrantFile(${JSON.stringify(file)}),id:"one",url:${JSON.stringify(remote.url)},fetch:mcpFetch()});
+    import { grantToken } from ${JSON.stringify(new URL("../src/mcp/auth.ts", import.meta.url).href)};
+    import { openMcpNetwork, mcpFetch } from ${JSON.stringify(new URL("../src/mcp/network.ts", import.meta.url).href)};
+    const network=await openMcpNetwork(${JSON.stringify(remote.url)});
+    try { await grantToken({store:mcpGrantFile(${JSON.stringify(file)}),id:"one",url:${JSON.stringify(remote.url)},fetch:mcpFetch(${JSON.stringify(remote.url)},network.fetch)}); }
+    finally { await network.close(); }
   `,
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -168,7 +173,7 @@ it("orders forgetting after an in-flight refresh", async () => {
     if (String(args[0]).endsWith("/token")) entered.resolve();
     return remote.fetch(...args);
   };
-  const refresh = grantToken({ store, id: "one", url: remote.url, fetch: mcpFetch(fetch) });
+  const refresh = grantToken({ store, id: "one", url: remote.url, fetch: mcpFetch(remote.url, fetch) });
   await entered.promise;
   const forget = store.withGrant("one", (tx) => tx.remove());
   await refresh;
@@ -200,6 +205,94 @@ it("validates the grant target before sending a token", async () => {
   await expect(token(store, "one")).rejects.toMatchObject({ code: "authorization_mismatch" });
   expect(remote.refreshes).toBe(0);
 });
+it("uses challenge-only resource metadata for sign-in, opening and 401 refresh", async () => {
+  const metadataUrl = "https://mcp.test/custom/resource-info";
+  let hinted = 0,
+    defaults = 0;
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url === remote.url && (init?.method ?? "GET") === "GET" && !new Headers(init?.headers).has("authorization"))
+      return new Response(null, {
+        status: 401,
+        headers: { "www-authenticate": `Bearer resource_metadata="${metadataUrl}"` },
+      });
+    if (url === metadataUrl) {
+      hinted++;
+      return remote.fetch(`${remote.url}/.well-known/oauth-protected-resource`);
+    }
+    if (url.includes("oauth-protected-resource")) {
+      defaults++;
+      return new Response(null, { status: 404 });
+    }
+    return remote.fetch(input, init);
+  };
+  const callbacks: Promise<Response>[] = [];
+  const grant = await signInMcp({
+    agentDir: dir,
+    server: "linear",
+    store,
+    fetch,
+    scopes: ["read"],
+    interaction: {
+      confirmAuthorization: async () => true,
+      notify: (event) => {
+        if (event.type === "auth_url") callbacks.push(remote.approve(event.url));
+      },
+    },
+  });
+  await Promise.all(callbacks);
+  const clients = await openMcpClients(
+    [{ name: "linear", type: "http", url: remote.url, headers: {} }],
+    { store, bindings: { linear: grant.id } },
+    { fetch },
+  );
+  try {
+    const record = await store.read(grant.id);
+    if (!record) throw new Error("grant missing");
+    remote.invalidate(record.accessToken);
+    const echo = clients.tools.find((tool) => tool.definition.name === "echo");
+    expect((await echo?.call({ text: "ok" }))?.content).toEqual([{ type: "text", text: "ok" }]);
+    expect(remote.refreshes).toBe(1);
+    expect(hinted).toBe(3);
+    expect(defaults).toBe(0);
+  } finally {
+    await clients.close();
+  }
+});
+
+it.each([
+  'Bearer resource_metadata="not a URL"',
+  'Bearer resource_metadata=""',
+  'Bearer resource_metadata="https://mcp.test/a", resource_metadata="https://mcp.test/b"',
+])("refuses an unusable advertised metadata hint instead of defaulting: %s", async (header) => {
+  const calls: string[] = [];
+  const fetch: typeof globalThis.fetch = async (input) => {
+    calls.push(String(input));
+    return new Response(null, { status: 401, headers: { "www-authenticate": header } });
+  };
+  await expect(discoverMcp(remote.url, mcpFetch(remote.url, fetch))).rejects.toMatchObject({ code: "protocol" });
+  expect(calls).toEqual([remote.url]);
+});
+
+it("does not turn a failed resource probe into default discovery", async () => {
+  const calls: string[] = [];
+  const fetch: typeof globalThis.fetch = async (input) => {
+    calls.push(String(input));
+    return new Response(null, { status: 503 });
+  };
+  await expect(discoverMcp(remote.url, mcpFetch(remote.url, fetch))).rejects.toMatchObject({ code: "connection" });
+  expect(calls).toEqual([remote.url]);
+});
+
+it("uses default resource discovery only when no hint is advertised", async () => {
+  const fetch: typeof globalThis.fetch = (input, init) =>
+    String(input) === remote.url
+      ? Promise.resolve(new Response(null, { status: 401, headers: { "www-authenticate": "Bearer" } }))
+      : remote.fetch(input, init);
+  expect((await discoverMcp(remote.url, mcpFetch(remote.url, fetch))).resource).toBe(remote.url);
+  expect(remote.calls.some((call) => call.includes("oauth-protected-resource"))).toBe(true);
+});
+
 it("signs in with PKCE and stores before returning, without choosing an agent binding", async () => {
   const callbacks: Promise<Response>[] = [];
   const result = await signInMcp({
@@ -225,6 +318,74 @@ it("signs in with PKCE and stores before returning, without choosing an agent bi
   expect(JSON.stringify(result)).not.toMatch(/accessToken|refreshToken/);
   expect(await inspectMcp(dir, { store, bindings: {} })).toMatchObject([{ authorization: "not_bound" }]);
 });
+it.each(["native-client", "https://client.test/metadata.json"])(
+  "uses a registerable callback for %s and rejects stale/replayed responses",
+  async (clientId) => {
+    const reservation = createServer();
+    await new Promise<void>((resolve) => reservation.listen(0, "127.0.0.1", resolve));
+    const address = reservation.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    await new Promise<void>((resolve, reject) => reservation.close((error) => (error ? reject(error) : resolve())));
+    const registered = `http://127.0.0.1:${address.port}/mcp/oauth/callback`;
+    const authorizations: string[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const exchanged = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        if (String(input).endsWith("/register"))
+          throw new Error("pre-registered clients must not dynamically register");
+        if (String(input).endsWith("/token")) {
+          exchanged.resolve();
+          await release.promise;
+        }
+        return remote.fetch(input, init);
+      };
+      const callbacks: Promise<void>[] = [];
+      const grant = await signInMcp({
+        agentDir: dir,
+        server: "linear",
+        store,
+        fetch,
+        scopes: ["read"],
+        clientId,
+        callbackPort: address.port,
+        interaction: {
+          confirmAuthorization: async () => true,
+          notify: (event) => {
+            if (event.type !== "auth_url") return;
+            const auth = new URL(event.url);
+            expect(auth.searchParams.get("redirect_uri")).toBe(registered);
+            expect(auth.searchParams.get("client_id")).toBe(clientId);
+            expect(auth.searchParams.get("code_challenge_method")).toBe("S256");
+            const previous = authorizations.at(-1);
+            authorizations.push(event.url);
+            callbacks.push(
+              (async () => {
+                try {
+                  if (previous) expect((await remote.approve(previous)).status).toBe(400);
+                  expect((await remote.approve(event.url)).status).toBe(200);
+                  await exchanged.promise;
+                  expect((await remote.approve(event.url)).status).toBe(404);
+                } finally {
+                  release.resolve();
+                }
+              })(),
+            );
+          },
+        },
+      });
+      await Promise.all(callbacks);
+      expect((await store.read(grant.id))?.client.id).toBe(clientId);
+    }
+    expect(remote.exchanges).toBe(2);
+    for (const key of ["state", "code_challenge"]) {
+      expect(new URL(authorizations[0] as string).searchParams.get(key)).not.toBe(
+        new URL(authorizations[1] as string).searchParams.get(key),
+      );
+    }
+  },
+);
+
 it.each([
   { deny: true, code: "canceled" },
   { wrongIssuer: true, code: "authorization_mismatch" },
@@ -335,7 +496,7 @@ it("persists the SDK-selected client authentication method for subsequent refres
   });
   await Promise.all(callbacks);
   expect((await store.read(grant.id))?.client.tokenEndpointAuthMethod).toBe("client_secret_post");
-  await grantToken({ store, id: grant.id, url: remote.url, fetch: mcpFetch(fetch), rejectedGeneration: 0 });
+  await grantToken({ store, id: grant.id, url: remote.url, fetch: mcpFetch(remote.url, fetch), rejectedGeneration: 0 });
   expect(tokenRequests).toBe(2);
 });
 

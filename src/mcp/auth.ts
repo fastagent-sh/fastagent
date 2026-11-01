@@ -1,7 +1,9 @@
 /** OAuth discovery and refresh policy. Background calls never start an interactive sign-in. */
 import {
   checkResourceAllowed,
-  discoverOAuthServerInfo,
+  discoverOAuthProtectedResourceMetadata,
+  discoverAuthorizationServerMetadata,
+  extractWWWAuthenticateParams,
   refreshAuthorization,
   type AuthorizationServerMetadata,
   OAuthError,
@@ -13,7 +15,7 @@ import {
   type OAuthProtectedResourceMetadata,
 } from "@modelcontextprotocol/client";
 import { McpError, type McpGrantRecord, type McpGrantStore } from "../mcp-api.ts";
-import { checkMcpUrl } from "./config.ts";
+import { checkMcpTarget } from "./network.ts";
 import { checkedGrant } from "./grants.ts";
 
 export interface McpDiscovery {
@@ -23,25 +25,20 @@ export interface McpDiscovery {
   resource: string;
 }
 
-export function mcpFetch(
-  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
-  timeoutMs = 30_000,
-): typeof globalThis.fetch {
-  return (input, init) => {
-    checkMcpUrl(input instanceof Request ? input.url : String(input));
-    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
-    return fetchImpl(input, {
-      ...init,
-      redirect: "error",
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
-    });
-  };
-}
-
 export async function discoverMcp(url: string, fetchImpl: typeof globalThis.fetch): Promise<McpDiscovery> {
-  const info = await discoverOAuthServerInfo(url, { fetchFn: fetchImpl });
-  const metadata = info.authorizationServerMetadata;
-  const resource = info.resourceMetadata;
+  const challenge = await fetchImpl(url, { headers: { Accept: "application/json, text/event-stream" } });
+  await challenge.body?.cancel();
+  if (!challenge.ok && ![401, 403, 404, 405].includes(challenge.status))
+    throw new McpError("connection", `MCP resource probe failed (HTTP ${challenge.status})`);
+  const { resourceMetadataUrl } = extractWWWAuthenticateParams(challenge);
+  const hints = challenge.headers.get("www-authenticate")?.match(/\bresource_metadata\s*=/gi) ?? [];
+  if (hints.length > 1 || (hints.length === 1 && !resourceMetadataUrl))
+    throw new McpError("protocol", "Unusable MCP resource_metadata challenge; refusing default discovery");
+  if (resourceMetadataUrl) checkMcpTarget(url, resourceMetadataUrl.href);
+  const resource = await discoverOAuthProtectedResourceMetadata(url, { resourceMetadataUrl }, fetchImpl);
+  const issuer = resource.authorization_servers?.[0] ?? new URL("/", url).href;
+  checkMcpTarget(url, issuer);
+  const metadata = await discoverAuthorizationServerMetadata(issuer, { fetchFn: fetchImpl });
   if (
     !metadata ||
     !resource ||
@@ -52,10 +49,10 @@ export async function discoverMcp(url: string, fetchImpl: typeof globalThis.fetc
       "MCP authorization discovery did not identify the configured resource and issuer",
     );
   }
-  checkMcpUrl(metadata.issuer);
-  checkMcpUrl(metadata.authorization_endpoint);
-  checkMcpUrl(metadata.token_endpoint);
-  if (metadata.registration_endpoint) checkMcpUrl(metadata.registration_endpoint);
+  checkMcpTarget(url, metadata.issuer);
+  checkMcpTarget(url, metadata.authorization_endpoint);
+  checkMcpTarget(url, metadata.token_endpoint);
+  if (metadata.registration_endpoint) checkMcpTarget(url, metadata.registration_endpoint);
   return { metadata, resourceMetadata: resource, resource: resource.resource, issuer: metadata.issuer };
 }
 

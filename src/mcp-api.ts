@@ -72,7 +72,7 @@ export interface McpOptions {
   bindings?: Readonly<Record<string, string>>;
   /** Per-instance interpolation values; never copied into process.env. */
   variables?: Readonly<Record<string, string>>;
-  /** The host's outbound network policy, also used for OAuth discovery and refresh. */
+  /** Trusted transport override: the host must enforce connection-level DNS/IP and redirect safety itself. */
   fetch?: typeof globalThis.fetch;
 }
 
@@ -109,8 +109,9 @@ export interface McpSignInRequest {
   scopes?: readonly string[];
   /** Non-secret registration choices for servers that require a pre-registered public client. */
   clientId?: string;
+  /** With clientId, register http://127.0.0.1:<port>/mcp/oauth/callback. */
   callbackPort?: number;
   timeoutSeconds?: number;
   variables?: Readonly<Record<string, string>>;
-  fetch?: typeof globalThis.fetch;
+  fetch?: McpOptions["fetch"];
 }

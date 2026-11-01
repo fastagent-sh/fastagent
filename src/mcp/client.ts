@@ -8,7 +8,8 @@ import * as Scope from "effect/Scope";
 import { portAbort, portJoin, portError } from "../effect-port.ts";
 import { McpError, type McpAuthorization, type McpOptions } from "../mcp-api.ts";
 import type { McpServer } from "./config.ts";
-import { checkGrantTarget, discoverMcp, grantToken, mcpFailure, mcpFetch } from "./auth.ts";
+import { checkGrantTarget, discoverMcp, grantToken, mcpFailure } from "./auth.ts";
+import { mcpFetch, openMcpNetwork } from "./network.ts";
 import { checkedGrant } from "./grants.ts";
 import { log } from "../log.ts";
 
@@ -44,8 +45,6 @@ export async function openMcpClients(
       await Effect.runPromise(Scope.close(lifetime, Exit.void));
       if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "MCP cleanup failed");
     })());
-  const fetchImpl = mcpFetch(options.fetch);
-  const requestFetch = mcpFetch(options.fetch, 60_000);
   let openingServer: string | undefined;
   try {
     for (const server of servers) {
@@ -86,6 +85,21 @@ export async function openMcpClients(
         // Draining prevents a noisy child from blocking. Raw stderr can contain its supplied secrets.
         transport.stderr?.on("data", () => {});
       } else {
+        const network = await openMcpNetwork(server.url, options.fetch);
+        await Effect.runPromise(
+          Scope.addFinalizer(
+            lifetime,
+            portJoin(() => network.close()).pipe(
+              Effect.catchCause((cause) =>
+                Effect.sync(() => {
+                  cleanupErrors.push(mcpFailure(portError(cause), "MCP network cleanup", server.name));
+                }),
+              ),
+            ),
+          ),
+        );
+        const fetchImpl = mcpFetch(server.url, network.fetch);
+        const requestFetch = mcpFetch(server.url, network.fetch, 60_000);
         if (grantId !== undefined && new Headers(server.headers).has("authorization"))
           throw new McpError("configuration", "Static Authorization and OAuth cannot be combined", server.name);
         if (grantId !== undefined) {
