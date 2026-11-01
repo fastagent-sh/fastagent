@@ -66,6 +66,7 @@ async function waitingStep(
     timeoutSeconds?: number;
   } = {},
 ) {
+  const claimed = join(mkdtempSync(join(tmpdir(), "fa-ticket-claimed-")), "claimed");
   const waits = `
     const { readFileSync, writeFileSync } = require("node:fs");
     const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "tickets", process.argv.at(-1) + ".json");
@@ -73,15 +74,28 @@ async function waitingStep(
     ${sidecar === undefined ? "" : `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(stubborn(sidecar))}], { stdio: "ignore" });`}
     ${sidecar === undefined ? "" : `while (!require("node:fs").existsSync(${JSON.stringify(sidecar)})) {}`}
     writeFileSync(path, JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, ${finishing ? "finishing: true, " : ""}url: "https://auth.example/a", pid: process.pid }));
+    writeFileSync(${JSON.stringify(claimed)}, "");
     setInterval(() => {}, 1000);`;
-  return startTicket({
+  const started = {
     ...request(subject, timeoutSeconds),
     waitsFirst: status === "need_user_action",
     whenRunning,
-    // A step at work is answered as it stands once the start window passes.
-    ...(status === "working" ? { startTimeoutMs: 1_000 } : {}),
     command: { file: process.execPath, args: ["-e", waits, "--"], cwd: tmpdir() },
-  });
+  };
+  if (status !== "working") return startTicket(started);
+  // A step at work is answered as it stands once the start window passes. The window is a duration, not a race with
+  // Node's start-up: hold the clock until the process has taken its ticket, however long a loaded machine takes, then
+  // let the window pass at once.
+  const realNow = Date.now;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(realNow());
+  const pending = startTicket({ ...started, startTimeoutMs: 1_000 });
+  try {
+    await vi.waitFor(() => expect(existsSync(claimed)).toBe(true), { timeout: 20_000 });
+    clock.mockImplementation(() => realNow() + 1_000);
+    return await pending;
+  } finally {
+    clock.mockRestore();
+  }
 }
 
 /** A sidecar file, to which a step's process writes the pid of what it started. */
