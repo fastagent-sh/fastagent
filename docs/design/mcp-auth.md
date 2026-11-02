@@ -182,5 +182,15 @@ The built CLI and public `openAgent` passed Linear read-only acceptance on 2026-
 sharing a grant, a call after closing the other instance, automatic refresh after forcing local expiry, and grant/session
 reuse in a new process. No model provider was called and business output was not printed. This is not natural-expiry,
 real-provider multi-account or downstream UI/secure-store acceptance. Release acceptance belongs to FastAgent's CLI,
-embedding, HTTP and deployment scenarios; Kage integration is not a prerequisite. The real-provider flow must be repeated
-after the transport's DNS/IP hardening.
+embedding, HTTP and deployment scenarios; Kage integration is not a prerequisite.
+
+The flow was repeated through the installed tarball after DNS/IP hardening, on Linux x64 / Node 24.15.0 with validated
+public addresses. Direct and CONNECT-proxy calls, shared-grant close isolation, forced-expiry refresh and reuse after
+container replacement passed. The proxy observed the pinned numeric IP; the host's fake-IP DNS path was independently
+refused. Grants stayed on the state volume, not in the pre-authorization image. Temporary grants and business-bearing
+sessions were removed without remote revocation.
+
+MCP shipped in [0.29.0](https://github.com/fastagent-sh/fastagent/releases/tag/v0.29.0). Provider-session resources can
+still outlive agent close ([#896](https://github.com/fastagent-sh/fastagent/issues/896), upstream
+[pi#11676](https://github.com/earendil-works/pi/issues/11676)); this was explicitly accepted as a known release limitation,
+not a claim that the resource cleanup bug was fixed.
