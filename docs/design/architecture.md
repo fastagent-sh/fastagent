@@ -10,7 +10,7 @@ status: implemented in part
 **Status: implemented through §6 step 5 (0.29.0); artifact/instance refactor under design.** The code serves an agent
 on pi-durable through the [Agent API](../SPEC.md), with content authoring and MCP support. The artifact (§4.1), context
 packages (§4.2) and §4.4 are not built. [Immutable artifacts and additive instances](agent-artifact.md) records the newly
-decided ownership boundary and the open export/layout/cwd design; it supersedes runtime modification of packaged files,
+decided ownership/layout/configuration model and the pending activation/public contracts; it supersedes runtime modification of packaged files,
 not the current code. §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol
 (never released), a harness port, and the conformance levels behind them (§5).
 
@@ -95,6 +95,10 @@ to another with `configure`.
 
 ## 3. The definition and its assembly
 
+**Artifact target, not current runtime behavior.** The consolidated [design](agent-artifact.md) separates program
+requirements (`environment.json`) from instance context (`context.json`), keeps the base immutable and makes `dist/`
+a complete package. `core.md` documents the current 0.29.0 source-directory implementation.
+
 ```
 my-agent/
   package.json
@@ -107,7 +111,7 @@ my-agent/
     extensions/*.ts               pi-durable defineExtension
     channels/*.ts
     schedules/*.ts                defineSchedule
-  context.json  context.lock.json
+  environment.json               program requirements; values come from the instance/host
   .mcp.json                       MCP servers; one mcpServers map
   .fastagent/                     the generated registry and entry, not committed
   dist/                           the build output
@@ -132,11 +136,11 @@ export default defineAgent({
 ```
 
 `fastagent build` generates the registry of `src/`'s four directories and an entry that exports the agent (the
-configuration and the registry), compiles them, and locks the context; `package.json`'s `exports` names that entry.
-`fastagent dev` generates the same and regenerates it as files change. Every tool found is offered unless the
-configuration leaves it out; runtime additions are a separate instance-owned mechanism under design ([agent-artifact.md](agent-artifact.md)), not edits to that registry. Each file directly in one
-of the four directories is a module and default-exports one thing (a tool, an extension, a channel, a schedule, or
-`needs(...)` around one); a helper they import lives elsewhere in `src/`, and a test file is not a module.
+configuration and the registry), compiles them and their required resources into a complete `dist/` package;
+`package.json`'s `exports` names that entry. It does not package the selected instance's context or data.
+`fastagent dev` rebuilds the same definition as source changes. A small capability has a single-file entry; a larger
+one has a directory `index.ts` with adjacent helpers/resources. Duplicate identities fail; helpers/tests do not become
+registrations. Runtime additions are instance-owned accepted capabilities, not edits to that generated registry.
 
 `openAgent(agent)` assembles it: pi-ai's built-in models with the definition's `providers` over a credential store
 (the machine's in development, the instance's `.secrets/` when deployed), a pi-durable `Harness` over the instance's
@@ -166,9 +170,10 @@ gates. Author changes produce a new base version. Recurring `wake` work remains 
 ### 4.1 The artifact
 
 The artifact is an **npm package** exporting a compiled definition with relocatable resources, not a live Agent singleton.
-It carries the authored text/skills, MCP and portable content/environment declarations. The [detailed design](agent-artifact.md)
-reviews the author/output layouts, `context.json` boundary and dependency compatibility/locking; the old assumption that
-an ordinary npm library carries and enforces its `package-lock.json` is not a settled contract.
+It carries the authored text/skills, base MCP declarations and `environment.json` requirements. The selected
+`context.json` and its data are instance inputs, not package files. The [detailed design](agent-artifact.md) fixes the
+layout/ownership boundary; exact public contracts and dependency compatibility/locking still need proof. An ordinary
+npm library does not carry/enforce its `package-lock.json`.
 It never holds secret values, runtime state or cloned content. A registry versions and distributes it; it can be a
 dependency of an app that embeds it, or of another agent. What a host runs is derived from it by `deploy`: an OCI
 image for AgentCore, Fly, Railway and Docker, a bundle where a host needs one.
@@ -178,6 +183,10 @@ bundled file (fast cold starts, but the definition is read at run time and would
 directory itself (what ships today, with no version and no dependency resolution). Each stays a derived format.
 
 ### 4.2 Context packages
+
+**Deferred direction, not a schema commitment.** The old `uses`/lock sketch below must be revisited against the
+[instance-owned context design](agent-artifact.md#4-configuration-program-requirements-and-instance-context) before any
+context-package work. It is not a reason to bake actual instance context into the program package.
 
 A context is what an agent works with, apart from who it is: no `SYSTEM.md`, no identity. A context package is a
 directory with a `context.json` of the same format an agent's own uses:
@@ -327,8 +336,9 @@ What the previous design had, and what took its place:
    accepted in the release notes. Kage is a downstream consumer, not the acceptance prerequisite. No generic `Connector`,
    session cache, context packages or scale-out prerequisite.
 6. **Design in progress** ([#900](https://github.com/fastagent-sh/fastagent/issues/900)): [immutable artifacts and additive
-   instances](agent-artifact.md), then `fastagent build` and `deploy` from the same artifact. Review the exported definition,
-   author layout/`context.json`, instance cwd and runtime-addition lifecycle before implementation.
+   instances](agent-artifact.md), then `fastagent build` and `deploy` from the same artifact. Layout/ownership and
+   program-environment versus instance-context roles are decided; finish exported types, source/provisioning support and
+   addition lifecycle contracts before implementation.
 7. Context packages, once there is a concrete cross-agent reuse need; they depend on the artifact's build step.
 8. Shared contexts and agents working together.
 

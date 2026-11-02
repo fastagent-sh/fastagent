@@ -1,85 +1,78 @@
 ---
-title: Immutable agent artifacts and additive instances
-description: "The artifact/instance refactor: compiled definitions, resource ownership, instance cwd and additive capabilities; settled boundaries and open design gates."
+title: Immutable agent artifacts and configurable instances
+description: "The artifact/instance target: a compiled definition package, environment requirements, separately selected context, private work/state and add-only capabilities."
 type: design-doc
-status: boundary decided; detailed design under review; not implemented
+status: architecture decided; activation and public contracts pending; not implemented
 ---
 
-# Immutable agent artifacts and additive instances
+# Immutable agent artifacts and configurable instances
 
-**Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900).** The product boundary below is decided.
-Export shape, directory names, public API spellings and activation mechanics remain under review. FastAgent 0.29.0 still
-opens writable author directories; this note does not claim that compiled artifacts or runtime additions are supported.
-The consumer [Agent API](../SPEC.md) sessions/messages contract is unchanged by this design PR.
+**Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900); design PR
+[#901](https://github.com/fastagent-sh/fastagent/pull/901).** The ownership model, layout principles and configuration
+roles below are decided. Exact public types, context schema, dependency resolution and capability activation require
+review/proof before implementation. FastAgent 0.29.0 still opens writable author directories; this document does not
+advertise a working artifact loader, separate environment/context files or live runtime additions.
 
-## 1. Problem and product goal
+## 1. Product and ownership model
 
-An agent author must be able to build one definition, install it as a dependency in an embedding app, and derive a
-host's deployment from the same artifact. A receiver must not need the author's checkout, credentials or local bindings.
-The hard part is ownership: a shared installed program, private instance data and an agent's new capabilities must not
-write over one another or acquire accidental shared lifetime.
+Build one agent program, install it in an embedding application, or derive a deployment from the same artifact. Each
+instance supplies its own working context, credentials, writable files and lifetime. A receiver must not need the
+author's checkout or private machine configuration. Kage is one consumer, not the product or acceptance boundary.
 
-Today `agentDir` owns the authored files, generated registry, prompt/skills, tool cwd, local bindings, default values
-and content clones. A different `stateDir` separates database/state paths, not all those other responsibilities.
-Wrapping this directory in `npm pack` does not establish the required boundary.
+```text
+Author source -> build -> immutable npm definition package
+                                  |
+                                  + instance A + context A + environment/credentials A
+                                  + instance B + context B + environment/credentials B
+```
 
-The goal is an immutable program with instance-owned additions. It is not a copy of the program that each instance may
-edit. An author may change the source and build a new version; a running instance cannot modify the installed definition.
+| Concept | Owns | Changes when |
+|---|---|---|
+| Source | The author's code, instructions, skills and requirements | The author edits it and builds |
+| Artifact | One built program version, with relocatable resources | A different package version is selected |
+| Environment requirements | Commands/runtimes and declared variable names the program needs | A new program version declares different requirements |
+| Context configuration | Which files/directories/repositories or other supported data sources an instance accesses | The user/host explicitly configures the instance |
+| Instance | Bindings, credentials, work, clones, accepted additions, sessions and caller state | That instance operates or is reconfigured |
+| Model context | The instructions, capabilities and selected information a request presents to the model | Constructed from the effective instance/request state |
 
-## 2. Settled boundaries
+A remote repository is not automatically part of a program definition. The same reviewer can work on a local checkout
+in one instance and a different remote repository in another without rebuilding its package. Small fixed reference
+material belongs in packaged assets or a skill; mutable external reference material belongs in explicitly selected
+context. Acquiring data is not permission to send every file or credential to the model.
 
-- **Route B:** compile a normal npm artifact with an importable JavaScript entry and relocatable file resources.
-- The packaged definition is immutable, including its `SYSTEM.md`, `AGENTS.md`, skills, prompts, tools, configuration,
-  content/environment declarations and MCP declarations. Importing it creates no running Agent or owned connection.
-- An instance may **add** skills, prompts, MCP integrations and tools. An addition cannot replace, shadow or merge over
-  a packaged/protected capability. No editable base copy, precedence cascade or last-writer-wins overlay is needed.
-- Supplemental instructions are not edits to `SYSTEM.md`; named prompt templates are not global system instructions.
-  Their scope and visibility must be specified separately before implementation.
-- Additions, credentials, instance bindings, working files and content clones are not part of the artifact. Updating
-  the package must not erase them. Shared user content and grants remain explicit host choices.
-- Preserve one harness, instance-owned clients, storage leases, actionable failure and conservative replay. Do not
-  introduce a neutral harness port or a generic Connector. Directory ownership is not filesystem isolation.
-- This is an incremental assembly refactor, not a rewrite of sessions/messages, channels or storage.
+## 2. Invariants
 
-FastAgent must never direct normal runtime writes or addition activation into the installed package. Test against a real
-read-only package filesystem, not just a convention in the prompt. A shell/native plugin with the host user's full
-permissions can still alter any writable file that user owns; absolute prevention against hostile code requires a
-read-only host mount, restricted identity or execution isolation. Do not claim directory separation alone enforces it.
+- **Route B:** a compiled npm package exports a definition/recipe, not a live Agent singleton.
+- The base package is immutable: original `SYSTEM.md`, `AGENTS.md`, skills, prompts, tools, configuration, environment
+  requirements and MCP declarations are not modified by a running instance.
+- Instances can add skills, prompts, MCP integrations and tools. Additions do not shadow, replace or merge over
+  packaged/protected capabilities. No editable base copy or last-writer-wins overlay is needed.
+- Named prompt templates and supplemental instructions are different capabilities. Adding instructions changes
+  behavior even without changing `SYSTEM.md`; “add-only” is not a claim that behavior or authority cannot change.
+- Updating a package must not erase instance context configuration, additions, working files, credentials or user data.
+  New name/dependency conflicts require a visible, explicit resolution, never silent deletion or replacement.
+- One harness, instance-owned clients, explicit shared grants, storage leases, actionable errors and unsafe replay
+  remain. [Agent API](../SPEC.md) sessions/messages semantics are unchanged by this design.
+- Directory ownership is not a sandbox. Normal runtime writes must never target the installed package, and acceptance
+  must use an actually read-only package filesystem. Preventing hostile shell/native code from altering files the host
+  user can write requires host permissions, read-only mounts or execution isolation.
 
-Build/release/run separation is the deployment baseline. Loading new executable code during a live process is not made
-strictly [Twelve-Factor](https://12factor.net/build-release-run) merely by putting it outside the base package. Executable
-additions need their own build/version identity and an explicit activation boundary; decide whether activation requires
-an instance/worker restart before claiming hot native-tool loading. Text/config and executable additions need separate
-proofs. The base release never changes in place in either case.
+Build/release/run separation is the baseline. Runtime additions never mutate the base release. New executable tools
+need a build/version identity and an activation boundary of their own. Loading arbitrary JS into a live process is not
+strict [Twelve-Factor](https://12factor.net/build-release-run) simply because its files sit in another directory.
+Whether activation reloads an instance/worker or changes a live registry must be proved and decided explicitly.
 
-## 3. What the package exports
+## 3. Source layout and complete output package
 
-The recommended export is a **definition value**: configuration/registrations or factories plus resource locations,
-consumed by FastAgent to open an instance. It is not an already-open Agent, a provider login, or an absolute directory
-captured from the builder. Functions make it executable JavaScript, not a serializable JSON manifest.
+The confirmed layout principles are:
 
-Pure registrations may be shared. Stateful tools/providers and all clients must be instantiated with the instance's
-inputs and lifetime. Copying an object cannot duplicate function closures. Arbitrary author imports can execute code;
-a definition import is not a safe preview of an untrusted package or a sandbox.
+1. Root declarations and `src/` code; no second author-maintained manifest of modules/capabilities.
+2. Single-file entries for small capabilities; directory entries for larger ones. Keep resources near their owner.
+3. `dist/` is a complete, self-contained publishable package. Runtime does not consult the author directory.
+4. Instance configuration/data, credentials, clones and additions do not enter that package.
+5. File placement does not decide configuration ownership; environment and context have the roles in §4.
 
-A generated static descriptor is justified only by a concrete build/discovery/inspection requirement. It must be derived,
-not a second author-maintained list of tools, capabilities or defaults. Preserve existing authoritative declarations.
-
-Review before choosing the export:
-
-- runtime compatibility and dependency ownership, including duplicate SDK/harness copies;
-- code/asset URLs after installation, linking and relocation;
-- which validation can run without instance secret values or network clients;
-- separation of package identification from the current `fastagent.config.ts` directory marker.
-
-Do not promise one frozen dependency tree in every embedding app. npm omits `package-lock.json` from published packages;
-[npm-shrinkwrap.json](https://docs.npmjs.com/cli/v11/configuring-npm/npm-shrinkwrap-json) can travel, but npm discourages it
-for ordinary libraries. Compare a host-resolved dependency contract with a separately locked deployment installation.
-No automatic conversion to shrinkwrap or bundled private runtime is decided here.
-
-## 4. Review the definition layout and `context.json`
-
-The existing author layout is a candidate, not a standard or a settled optimum:
+Recommended source layout; optional directories/files exist only when used:
 
 ```text
 agent-source/
@@ -87,152 +80,204 @@ agent-source/
   fastagent.config.ts
   SYSTEM.md  AGENTS.md
   skills/  prompts/
-  src/tools/  src/extensions/  src/channels/  src/schedules/
-  src/data/ or assets/             optional author resources, not both by requirement
-  context.json
-  .mcp.json
+  src/
+    tools/  extensions/  channels/  schedules/
+    lib/                     optional shared helpers
+  assets/                    optional definition-wide resources
+  environment.json           optional program runtime requirements
+  .mcp.json                  optional base MCP declarations
+  test/  README.md
 ```
 
-Keep open-standard files and the no-DSL author workflow. [Agent Skills](https://agentskills.io/specification) permits
-scripts, references and assets relative to each skill root. TypeScript source needs a build before Node executes it as
-a dependency; [Node refuses type stripping under `node_modules`](https://nodejs.org/api/typescript.html). Preserve relative
-asset relationships rather than assuming one bundled JS file can replace the whole definition.
+A local development instance may select a `context.json` stored nearby, but it is instance input, not a required part
+of the source or artifact. Examples must be distinguished from an active instance's private configuration.
 
-Review the four source discovery directories, helper/resource placement and whether generated output mirrors that tree.
-Do not make empty directories mandatory or require an author to restate facts derived from their files. The output
-layout must serve package imports and asset URLs; it need not reproduce every authoring filename.
+A capability can be `src/tools/search.ts` or `src/tools/search/index.ts`, not both under one identity. Its directory may
+hold helpers, JSON, templates and tests; only its entry is registered. Do not recursively treat every source file as a
+capability. Per-tool data stays with that tool; per-skill scripts/references/assets stay with the skill; `assets/` is
+for shared program resources. There is no mandatory `src/data/` directory or requirement to create all four kinds.
 
-### Is `context.json` the right boundary?
+```text
+dist/
+  package.json               generated publication metadata/exports
+  index.js  index.d.ts        generated definition entry
+  fastagent.config.js
+  SYSTEM.md  AGENTS.md
+  skills/  prompts/
+  src/                       compiled JS plus its required file resources
+  assets/
+  environment.json
+  .mcp.json
+  LICENSE                    when applicable
+```
 
-JSON is suitable for declarations edited without executing code. That does not prove that content and environment belong
-in one file, that its name communicates its purpose, or that today's local binding location is right for instances.
-MCP has its own ecosystem declaration and does not become a `connectors` field as part of this review.
+This is one output resource root, not code in one root and data recovered from the parent checkout. Preserve relative
+asset relationships. [Agent Skills](https://agentskills.io/specification) allows scripts/references/assets relative to
+the skill root. [Node refuses TS type stripping under `node_modules`](https://nodejs.org/api/typescript.html), so the
+runtime entry/module graph must be executable JS. Compiling module imports does not authorize guessing and rewriting
+paths inside arbitrary strings, skill scripts or MCP arguments. Validate/document those paths and the required runners.
 
-| Candidate | Benefit | Cost to evaluate |
+Build into clean staging, include the required code/assets, and inspect the actual tarball. npm's `files`/ignore rules
+are not secrets protection. Exclude tests, instance files, values, clones, logs and build-machine paths. No build step
+requires actual instance credentials, starts MCP/Agent clients or embeds the builder's environment values. This does
+not prove arbitrary authored files contain no hard-coded secrets or make untrusted build scripts safe.
+
+## 4. Configuration: program requirements and instance context
+
+### `environment.json`: what the program needs
+
+This optional data declaration travels with the artifact. It describes command/runtime requirements and names of
+variables used by scripts/commands. Code dependencies remain in `package.json`; module-local secret needs remain
+beside their consumers. Do not duplicate the language package manager or include actual environment/credential values.
+
+Provisioning is separate from declaration. A build/deployment or an explicitly configured host mechanism can satisfy
+requirements; startup resolves/checks the supplied environment and reports what is missing. Do not promise that installing
+an npm definition also installs arbitrary OS dependencies, silently changes the host globally or provides a cross-platform
+package resolver. The final schema, installation policy and placement of existing Debian `aptPackages` hints remain
+review items. Process-wide environment mutation cannot select an instance inside a multi-agent host.
+
+### `context.json`: what this instance works with
+
+This optional, separately selected configuration belongs to the user/instance. It is not shipped in the definition
+package and is not a combined environment/LLM-context manifest. An API-provided value and the CLI's file adapter must
+use the same resolution rules; embedding hosts need not maintain a file if they already own configuration storage.
+
+A source's location does not decide its owner: both a local path and a remote repository may be selected for one
+instance. The model receives a deliberate view of names, locations and descriptions, not all source data or secrets.
+The user's configured source stays distinct from the runtime's resolved locations, fetched revision and diagnostics.
+
+| Source | Possible acquisition | Contract still required |
 |---|---|---|
-| Keep a strict JSON content/environment declaration | Existing CLI/editing flow, harness-neutral data, one parser | Broad name and mixed responsibilities; bindings still need an instance owner |
-| Split content and environment declarations | Narrower responsibilities and validation | More files and discovery rules; only worth it if users change/read them independently |
-| Move them into typed `fastagent.config.ts` | Fewer author-facing files and TypeScript checking | Executes code to inspect/edit data; harder CLI authoring and build-time secret-free inspection |
+| Local file/directory | Bind an existing path; a container may mount it | Availability, relative-path base, ownership and enforced access |
+| Repository | Bind a checkout or clone into instance storage | Ref/update policy, authentication and protection of uncommitted work |
+| Cloud storage | Mount, download or synchronize through a supported adapter | Write-back, refresh, offline behavior and consistency; do not imply all are equivalent |
+| Cloud documents | Export/synchronize as files | Sync/format semantics; direct service operations are otherwise MCP/API tools |
 
-Choose by actual author, host and deploy workflows, not by a file-count preference. Answer which facts are portable,
-which are instance choices and which are host environment before choosing the carrier. Local paths, grant selections and
-secret values do not enter a portable declaration in any candidate. Do not add context-package composition or a new lock
-format just to justify the file. No rename, split or schema replacement is decided in this PR.
+“Mount context” is a user-facing concept, not a claim that every source uses an OS mount. Initial implementation must
+name the supported source matrix. Current directory/GitHub support is evidence for that subset, not proof of standalone
+file bindings or cloud-storage adapters. Do not silently skip an unsupported or required unavailable source.
 
-## 5. Instance root and working directory
+Replacing an instance's context selection does not replace program capabilities. Optional author-declared input names
+or requirements may be useful, but their schema and whether they belong in the first slice are not decided. Avoid a
+new generic resource framework to support a hypothetical requirement. Packaged reference assets are not instance context.
 
-The host should select one durable instance root. Resolve the owned paths from it in one place, with an optional explicit
-tool cwd when the host wants commands to start in a particular project. An external cwd remains user-owned: a package
-upgrade or instance cleanup must not replace/delete it. These are ownership requirements, not final API field names.
+Context configurations may be reused deliberately, but shared configuration is not private copies of the underlying
+data or concurrent-writer isolation. Secrets remain outside it as values; use credential references. The package and
+instance retain distinct MCP declaration/addition ownership; `.mcp.json` does not become a `connectors` field here.
 
-| Location | Owns | Lifetime |
-|---|---|---|
-| Installed artifact/resources | The selected program version | Replaced only by installing/selecting another version |
-| Instance configuration | Local content bindings, values and grant selections | Belongs to the instance, not the installed package |
-| Instance state/secrets | Database, caller bookkeeping, credential stores | Follows the instance/host's stated storage durability |
-| Instance cwd/work files | Default destination for command/file-tool work | Preserved independently of package replacement |
-| Instance additions | Accepted extra capabilities and their provenance | Retained on that instance across reopen/package changes |
-| Content | User directories or instance clones | Follows its source and explicit binding, never the package |
+## 5. Instance root, cwd and resource paths
 
-A possible internal layout is `work/`, `content/`, additions, state, secrets and local configuration under the instance
-root. Do not add a public option per subdirectory before a caller needs one. A desktop host may store credentials outside
-that tree through the existing store APIs. Host storage limits/reset behavior remain explicit, especially on AgentCore.
+The host selects a durable instance root and can explicitly select an external tool cwd. The default cwd is the
+instance's own `work/`, not the installed program. An external cwd is user-owned and cannot be deleted/replaced by a
+package upgrade or instance cleanup. Resolve this input once rather than giving every subsystem a different fallback.
 
-Define one path table before implementation:
+```text
+instance/
+  context.json               when using the file adapter
+  work/
+  content/                   instance-acquired data, not all user-owned sources
+  additions/                 accepted extra capabilities; not arbitrary work files
+  .state/
+  .secrets/                  or host-supplied credential stores
+```
 
-- module-owned data: module-relative URLs, never a builder path or process cwd;
-- skill references: that skill's root, whether packaged or instance-added;
-- command/file-tool relative paths: the resolved instance cwd;
-- local content bindings: a documented instance-config base, not whichever caller happened to start Node;
-- MCP executable/resource paths: a defined declaration base; do not change child cwd or guess which args are paths just
-  because coding tools now have a different cwd;
-- instance data passed to an MCP server: explicit bindings/variables, not implicit author-machine paths.
+This is the intended ownership map, not a promise that all hosts must store credentials in that tree or retain disks
+forever. AgentCore's storage-reset limits stay explicit. Final public option names are not selected by the directory
+names; prefer one instance root over a flag per internal subdirectory.
 
-Do not call `process.chdir()` or mutate `process.env` to select an instance. The resolved instance input must serve the
-run plane, `info`/inspection and deployment reporting alike. Take the relevant instance lease before mutating its owned
-runtime files; build caches and user-owned external directories are separate responsibilities.
-
-## 6. Additive capabilities: what is known and what needs proof
-
-Additions are durable, instance-owned inputs to the effective capability set. They do not rewrite the package's files.
-Package declarations remain authoritative for the package; accepted additions supply distinct identities, not a second
-configuration for the same server/tool. A supplemental instruction changes effective behavior even without editing a
-file, so “add-only” is not a guarantee that behavior or permissions stay unchanged.
-
-| Addition | Existing mechanism to reuse | Gate before claiming support |
-|---|---|---|
-| Skill | File-based discovery, skill-root references and prompt listing | Validate the complete directory; detect collisions; publish only a complete accepted addition |
-| Prompt template | Named command expansion | Keep it distinct from supplemental system instructions; specify visibility and collision rules |
-| MCP server | Strict declaration parser, scoped clients, tools and explicit grant bindings | Authorize separately, acquire/discover/validate before publishing; close failed acquisitions |
-| Script/command tool | Declared schema and execution environment | Prove a bounded adapter, input validation, cancellation, dependency/credential ownership and unsafe replay |
-| Native JS tool | pi-durable's application-owned registry | Prove per-instance loading, request snapshots, cleanup, recovery and runtime compatibility; arbitrary module import has side effects that cannot be rolled back |
-
-pi-durable 1.4.0 publishes immutable registry snapshots, but `install` replaces an extension of the same name. It is not an
-append-only policy and is not by itself a FastAgent hot-loading API. Existing FastAgent MCP discovery is once per open.
-Do not advertise live additions based only on these implementation hooks.
-
-The first design must specify:
-
-1. How a candidate is staged, validated and durably recorded, and exactly when it becomes effective. A browser grant is
-   saved through the existing host flow; a runtime addition cannot silently open consent UI or expand scopes.
-2. How concurrent additions serialize, which names/identities are reserved, and how clashes with packaged, built-in and
-   other added capabilities fail. No shadowing or native registry replacement may implement “add”.
-3. Which request sees the new set, without changing a running invocation's loadout; how admission, `info`, command
-   expansion and replay read that same revision. Preserve sessions with explicit tool allowlists.
-4. How a failed validation/start/activation is reported without exposing a half-loaded capability or rolling back a
-   consumed remote effect. No swallowed error, arbitrary retry or silent fallback parsing.
-5. How accepted content is sealed/identified and a later out-of-band edit is diagnosed, rather than silently becoming
-   a different tool under the same identity. This need not be an event-sourcing framework.
-6. How restart reconstructs accepted additions and diagnoses an unavailable dependency/credential/server. Decide whether
-   a required accepted addition blocks reopen or is reported unavailable; never silently skip it.
-7. How package upgrades handle a newly introduced name/dependency conflict with a retained addition. Preserve its data,
-   report the conflict and require an explicit resolution; never overwrite/delete it to make startup green.
-
-Accepted entries are not rewritten as the base definition. Replacement/removal semantics, dynamic channels/schedules,
-a general extension marketplace and automatic OS/global dependency installation are not in this first scope. Runtime
-code execution has the instance process's authority unless the host supplies a real isolation boundary.
-
-## 7. Current implementation review and spike evidence
-
-| Current boundary | Conflict with this target |
+| Path use | Base |
 |---|---|
-| `prepareDefinition` writes `.fastagent/registry.ts` and secrets manifest while opening | An installed built definition must not be rebuilt or written during instance open |
-| `loadConfig` reads only `fastagent.config.ts` | Precompiled JS configuration needs an explicit built-definition loader |
-| `agentDir` supplies cwd, value file, local bindings and clone locations | Different `stateDir` values are not enough to select independent instance environments/work files |
-| Text sections tell an agent its cwd holds its mutable definition | The base package will be immutable; prompts must describe working files and additions accurately |
-| Deploy copies the author directory and replaces the writable definition | Deploy must consume the selected artifact and preserve instance-owned additions/work/data |
-| Documentation treats runtime self-edit and vendored source as the model | Keep that as 0.29.0 history, not the target for installed artifacts |
+| Module-owned packaged asset | Module-relative URL, never builder path/process cwd |
+| Skill reference | That packaged/added skill's root |
+| Relative coding-tool file/command path | Resolved instance cwd |
+| Context file's relative source | A documented configuration-file base; finalize together with API-relative inputs |
+| MCP executable/resource path | Its declaration's documented base; do not relocate child cwd or guess args because tool cwd changed |
+| Working data passed to MCP | Explicit instance bindings/variables |
 
-Disposable probes on 0.29.0 established:
+Never call `process.chdir()` or mutate `process.env` to switch an instance. Effective paths/values are shared knowledge
+for execution, inspection and host reports. Acquire the instance lease before mutating owned runtime state, additions or
+acquired content. Reuse the existing storage and atomic-write machinery rather than a parallel state system.
 
-- A filtered source tarball ran after extraction outside the author's directory on Node 26.11.1, Bun 1.4.4 and native
-  Linux ARM64/Node 24.15.0, including tools/JSON assets, text/skills/prompts, official Filesystem MCP 2.1.0 and HTTP calls.
-- A source dependency under `node_modules` failed on Node with `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`.
-  A compiled definition/registry entry imported, but the current directory opener generated TS again; outside
-  `node_modules`, it ignored the `.js` config and reported `missing_model`. No built-definition loader was implemented.
-- A read-only definition failed when generating `.fastagent`, despite an external state directory.
-- An npm `files` allowlist still included a nested skill `.env`; `package-lock.json` was omitted. A shrinkwrap was
-  packaged when explicitly included, not proof of reproducibility across all embedding installations.
-- Two instances of one definition with different `stateDir` values shared tool cwd, relative outputs, local content
-  bindings and default values. Process cwd/environment stayed unchanged.
+## 6. Additions, activation and upgrades
 
-These are experiments, not a supported format, performance benchmark or runtime-addition acceptance. Temporary files
-and images were deleted. [#896](https://github.com/fastagent-sh/fastagent/issues/896) remains an independent provider
-resource cleanup bug; this refactor cannot claim to fix it by changing paths.
+An ordinary file written into `work/` does not automatically become an enabled tool. Candidates must be explicitly
+staged, validated and accepted. Accepted capabilities have their own identity/provenance and durable record, separate
+from package bytes and secrets. Names cannot shadow base, built-in/protected or already accepted capabilities.
 
-## 8. Design review and implementation gates
+| Capability | Reuse | Required proof |
+|---|---|---|
+| Skill | Skill discovery and root-relative resources | Complete-directory validation, collisions, acceptance/visibility |
+| Prompt template | Named command expansion | Separate supplemental instructions; explicit scope and collision rules |
+| MCP server | Strict parsing, scoped clients, explicit grants | Auth policy and acquire/discover/validate before exposure; failure cleanup |
+| Script/command tool | Execution environment, schema and unsafe replay | Bounded adapter, dependency ownership, cancellation and validation |
+| Native JS tool | Application-owned harness registry | Instance-local loading, invocation snapshots, cleanup, restart and compatibility |
 
-1. Review export/layout, `context.json` alternatives and instance paths against actual author/CLI/host/deploy tasks.
-2. Build a compiled-entry spike with read-only package resources and an explicit instance root/cwd. Verify Node/Bun,
-   package installation, assets, two opens and deployment from the same artifact.
-3. Prove additions in increasing difficulty: text, MCP acquisition, script tools, then native tools only if its lifecycle
-   can be demonstrated. Record supported activation timing; runtime addition does not necessarily mean in-place reload.
-4. Decide durable activation/recovery/upgrade-conflict behavior before implementing a public addition API. Include
-   failure injection, cancellation, instance close and unchanged base-package hashes in the tests.
-5. Move one assembly responsibility at a time. Preserve Agent API outputs/errors, auth gates, storage integrity and
-   current conformance tests; review any necessary SPEC change separately. Keep development source edits in the author
-   workflow rather than introducing another runtime definition precedence chain.
+pi-durable 1.4.0 registry snapshots are useful, but `install` can replace an extension of the same name. That is not an
+add-only policy or proof of a safe FastAgent hot-loader. Existing MCP discovery is once per open. Native module imports
+can have irreversible side effects; do not claim arbitrary in-process imports can be rolled back or safely unloaded.
 
-Out of scope: context packages, Registry/MCPB, sandbox implementation, orchestration/scale-out, a safe untrusted-package
-preview, and automatic mutation of the selected base package. Public API spellings and permanent test counts are not
-success criteria; a read-only artifact, correctly owned instance and observable addition lifecycle are.
+Before implementation, settle:
+
+1. **Activation:** durable candidate/accepted/effective ordering, atomic visibility, concurrency and the request/reopen
+   boundary. Do not change an in-flight invocation's tool implementation or break explicit session tool allowlists.
+   Admission, `info`, prompt commands and replay must agree on the effective revision.
+2. **Failure/recovery:** diagnose failed validation/start/save, partial acquisition and unavailable accepted capabilities.
+   Decide whether reopen blocks or exposes a clearly unavailable capability; never silently omit one or replay a remote
+   operation whose outcome is uncertain. Accepted bytes cannot silently change under the same identity.
+3. **Upgrade/management:** retain additions and work; detect name/runtime/dependency conflicts before selecting the new
+   package, preserve data and fail visibly. Select a compatible version or an explicit host resolution, never quietly
+   overwrite a base capability. Define whether/when an addition can be disabled or removed without changing historical
+   messages; “only add to the base” does not eliminate security/operational revocation needs.
+
+A tool/addition cannot silently initiate browser consent, choose another account, broaden scopes or modify global OS/npm
+dependencies. Existing credential/grant APIs retain their ownership and exclusive refresh rules. Dynamic channels,
+schedules, general plugin marketplaces and sandbox implementation are not implied by this first refactor.
+
+## 7. Implementation review and experiment evidence
+
+The current seams to change, not reasons to rewrite the product:
+
+| Current implementation | Required separation |
+|---|---|
+| `prepareDefinition` writes TS registry/secrets metadata on open | Build/source preparation versus loading an already-built definition |
+| Config loading expects `fastagent.config.ts` | Explicit compiled-definition entry, not filename fallback guessing |
+| `agentDir` supplies cwd, values, local bindings and clone paths | Definition resources versus resolved instance input |
+| Runtime prompt describes an editable definition in cwd | Immutable base, work/context and accepted additions |
+| Deploy copies/replaces the author directory | One selected artifact plus preserved instance data |
+| Content/environment share `context.json` and local/remote determines placement | Environment requirements versus independently selected instance context |
+
+Disposable probes on 0.29.0 showed source-tarball execution after extraction on Node 26.11.1, Bun 1.4.4 and native Linux
+ARM64/Node 24.15.0, including tools/data, skills/prompts, official Filesystem MCP 2.1.0 and Agent HTTP calls. Direct Node
+execution inside `node_modules` failed with `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`; a compiled entry imported,
+but the current opener generated TS again and ignored `.js` config outside that tree (`missing_model`). Read-only
+startup failed on `.fastagent` writes despite external state. npm packing included a nested skill `.env` and omitted
+`package-lock.json`; shrinkwrap was included when selected, not proof of all installation locking behavior.
+
+Two opens of the same definition with different `stateDir` values shared cwd, relative output files, local content
+bindings and default values; process cwd/environment remained unchanged. These are boundary experiments, not a supported
+artifact format or live-addition acceptance. Temporary files/images were deleted. [#896](https://github.com/fastagent-sh/fastagent/issues/896)
+is an independent provider-resource cleanup issue; path changes do not fix it.
+
+## 8. Remaining decisions and delivery sequence
+
+The architecture is settled; these contracts still block claiming a complete implementation design:
+
+- exported definition/public instance types, dependency compatibility and reproducible deployment installation;
+- exact environment/context schemas, context-path bases and the first supported source/provisioning matrix;
+- activation, required-capability failure/recovery, revocation and upgrade conflict behavior in §6.
+
+Recommended sequence:
+
+1. Prove a compiled `dist/` package installed under `node_modules`, with read-only resources and an explicit instance
+   root/cwd, on Node/Bun. Exercise single-file/directory entries, adjacent assets and independent instances.
+2. Implement environment/context ownership and one resolver; validate host/CLI inputs without writing the package.
+3. Derive a representative deployment from the same artifact. Preserve leases, state/secrets, external data and current
+   Agent API conformance. There is no backward-compatibility/migration layer to carry obsolete ownership rules.
+4. Prove text additions, MCP acquisition and script tools at a documented safe boundary; native tools follow only when
+   their build/lifecycle can be demonstrated. Test crashes, cancellation, failed persistence and unchanged base hashes.
+5. Review any necessary public SPEC changes separately. Completing design or passing a source-only probe does not close
+   the implementation issue or imply every source type/cloud/runtime has been accepted.
+
+Out of scope: context packages, Registry/MCPB, marketplace/discovery, orchestration/scale-out and safe untrusted-package
+execution. Success is one installable definition, correctly owned independent instances and observable context/addition
+lifecycle, not more configuration fields or an assumed hot-loading feature set.
