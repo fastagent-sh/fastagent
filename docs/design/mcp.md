@@ -248,7 +248,7 @@ Keep these gates when changing the subset:
   insufficient scope, issuer/resource changes, two accounts at one endpoint and explicit cross-agent grant bindings.
 - Complete a real browser OAuth flow against a target MCP service through the packed FastAgent CLI/public host API, then
   call a tool. A controlled authorization server is necessary for regressions but does not replace interoperability
-  acceptance. Repeat the pre-hardening Linear baseline with the current transport.
+  acceptance. Recheck current-transport interoperability when changing discovery, authorization or network policy.
 - Confirm `.mcp.json` is shipped and inspected consistently by open/dev/start/deploy, with no copied credentials.
 - Verify the claimed runtime matrix with the selected dependency before publishing. Windows, actual Kage UI/secure storage
   and deployment OAuth relay have not been accepted; local loopback authorization does not prove those paths.
@@ -270,6 +270,24 @@ models make lifecycle checks reproducible, but are not evidence of a real model 
 | HTTP and identities | Anonymous/static HTTP and wrong-token refusal; distinct and explicitly shared grants over real HTTP; controlled-issuer results labelled separately from real-provider results |
 | Real OAuth and networking | Packed CLI/browser flow, durable/new-process reuse and refresh under the current transport; normal/proxy connectivity and explicit fake-IP/private-address refusal |
 | Deployed runtime | A representative Linux/container host with its own mounted state/secrets and image-carried definition; MCP calls and restart persistence, without desktop-grant copying |
+
+The [0.29.0 release](https://github.com/fastagent-sh/fastagent/releases/tag/v0.29.0) completed this matrix using a
+tarball from candidate `56eddb70`, official Filesystem/Everything 2.1.0, pi 1.4.0, and a fresh installation resolving
+Effect 4.1.1 / Undici 8.12.3. The final release gate passed 2066 tests with two skipped. CLI/HTTP/lifecycle scenarios used
+deterministic models; separately, a real Codex model completed both MCP filesystem operations. Current-policy Linear
+read-only OAuth passed directly, through an IP-pinned CONNECT proxy, and after container replacement with its state volume.
+Distinct identities and concurrent refresh were checked with a controlled issuer over real HTTP, not multiple real accounts.
+
+Two findings remain explicit in the evidence:
+
+- [#896](https://github.com/fastagent-sh/fastagent/issues/896): provider-session resources can retain Codex's WebSocket
+  and five-minute timer after agent close. The maintainer accepted this known limitation for 0.29.0; the fix remains open.
+- The original x86-on-ARM startup failure left a time-matched ARM64 core with its PC in QEMU 7.0's allocator.
+  It is classified as an emulator-native crash, not an unexplained MCP refusal. Native ARM64 passed 20 open/close
+  cycles and five restarts; the exact QEMU trigger is unknown. Use native architecture as the accepted baseline.
+
+Temporary probes, credentials, business-bearing state, containers, volumes, candidate images and the private diagnostic
+core were removed at release closeout. Raw cores were not uploaded; Linear's remote authorization was not revoked.
 
 Keep failed observations visible until explained or explicitly scoped as a known limitation. A later successful run does
 not erase an earlier failed startup. Do not force process exit, disable network guards or increase timeouts to turn a

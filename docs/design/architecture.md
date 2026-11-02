@@ -316,13 +316,13 @@ What the previous design had, and what took its place:
    one model, in process and over HTTP with an API key, with `connectAgent`, `deploy`'s key and `invoke --url`.
 4. **Done, released in 0.28.0** ([#875](https://github.com/fastagent-sh/fastagent/pull/875)). Per-agent content
    authoring through the embedding API: create an agent with folders or repositories, then read and edit its declarations.
-5. **Implementation merged; acceptance and release pending** ([#895](https://github.com/fastagent-sh/fastagent/pull/895)).
+5. **Done, released in [0.29.0](https://github.com/fastagent-sh/fastagent/releases/tag/v0.29.0)** (#895, #898).
    [MCP servers](mcp.md) use the agent's `.mcp.json` (`mcpServers`): stdio/Streamable HTTP tools, OAuth, instance-owned
-   clients and explicit grant bindings. The protocol and host/store contracts are implemented, not open design work.
-   Validate the packed FastAgent CLI, embedding/HTTP APIs, multi-instance lifecycle and representative deployment
-   directly, including real OAuth under the current network policy, then prepare 0.29.0
-   ([#678](https://github.com/fastagent-sh/fastagent/issues/678)). Kage is one downstream consumer, not the acceptance
-   prerequisite. No generic `Connector`, session cache, context packages or scale-out prerequisite.
+   clients and explicit grant bindings. Packed CLI, embedding/HTTP APIs, multi-instance lifecycle, current-policy Linear
+   OAuth/proxy access and native container persistence passed [acceptance](https://github.com/fastagent-sh/fastagent/issues/678).
+   Provider resource cleanup remains an independent [known issue](https://github.com/fastagent-sh/fastagent/issues/896),
+   accepted in the release notes. Kage is a downstream consumer, not the acceptance prerequisite. No generic `Connector`,
+   session cache, context packages or scale-out prerequisite.
 6. The artifact: `fastagent build`, and `deploy` from it.
 7. Context packages, once there is a concrete cross-agent reuse need; they depend on the artifact's build step.
 8. Shared contexts and agents working together.
