@@ -2,15 +2,15 @@
 title: Immutable agent artifacts and configurable instances
 description: "The artifact/instance target: an immutable compiled program with default MCP/context declarations, environment requirements, instance-supplied authentication and additive configuration."
 type: design-doc
-status: architecture decided; activation and public contracts pending; not implemented
+status: architecture, paths and reopen activation decided; public formats pending; not implemented
 ---
 
 # Immutable agent artifacts and configurable instances
 
 **Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900); design PR
 [#901](https://github.com/fastagent-sh/fastagent/pull/901).** The ownership model, layout principles and configuration
-roles below are decided. Exact public types, context-source schema, dependency resolution and capability activation require
-review/proof before implementation. FastAgent 0.29.0 still opens writable author directories; this document does not
+roles, relative-path rules and first-slice reopen activation below are decided. Exact public types, context-source schema,
+installation/compatibility mechanics and lifecycle correctness still require implementation proof. FastAgent 0.29.0 still opens writable author directories; this document does not
 advertise a working artifact loader, separate environment/context files or live runtime additions.
 
 ## 1. Product and ownership model
@@ -31,7 +31,7 @@ Author source -> build -> immutable npm definition package
 | Source | The author's code, instructions, skills, environment requirements and default MCP/context declarations | The author edits it and builds |
 | Artifact | One built program version, with relocatable resources and its baseline declarations | A different package version is selected |
 | Environment requirements | Commands/runtimes and declared variable names the program needs | A new program version declares different requirements |
-| Effective MCP/context configuration | Packaged baseline plus distinct instance entries, resolved with instance authentication | A different package or accepted instance additions are selected |
+| Effective MCP/context configuration | Packaged baseline plus a validated startup snapshot of instance entries, resolved with instance authentication | A different package or additions are selected at the next explicit open |
 | Instance | Bindings, credentials, work, clones, accepted additions, sessions and caller state | That instance operates or is reconfigured |
 | Model context | The instructions, capabilities and selected information a request presents to the model | Constructed from the effective instance/request state |
 
@@ -61,7 +61,8 @@ assets. Acquiring data is not permission to send every file or credential to the
 Build/release/run separation is the baseline. Runtime additions never mutate the base release. New executable tools
 need a build/version identity and an activation boundary of their own. Loading arbitrary JS into a live process is not
 strict [Twelve-Factor](https://12factor.net/build-release-run) simply because its files sit in another directory.
-Whether activation reloads an instance/worker or changes a live registry must be proved and decided explicitly.
+The first slice activates additions at an explicit instance reopen, not by replacing a live registry. Native-code loading
+still needs owned-resource proof; reopen is not a claim that arbitrary modules can be safely unloaded.
 
 ## 3. Source layout and complete output package
 
@@ -86,14 +87,16 @@ agent-source/
     lib/                     optional shared helpers
   assets/                    optional definition-wide resources
   environment.json           optional program runtime requirements
-  .mcp.json                  optional default MCP integrations; no credential values
-  .context.json              optional default context sources; no fetched/user data
+  mcp.json                   optional default MCP integrations; no credential values
+  context.json               optional default context sources; no fetched/user data
   test/  README.md
 ```
 
 The default declarations are program input and travel with the package. Instance contributions and authentication
-remain outside it. The target filename `.context.json` is FastAgent's proposed convention, not an industry standard or
-a claim about the existing 0.29.0 `context.json` reader.
+remain outside it. Program `mcp.json` and instance `.mcp.json` are explicit, different loading locations, not filename
+aliases or fallback candidates in the same directory. `context.json` is visible on both sides. The instance MCP filename
+follows an ecosystem convention, not a protocol requirement; context naming/semantics are FastAgent's own. These target
+rules do not describe the current 0.29.0 loaders.
 
 A capability can be `src/tools/search.ts` or `src/tools/search/index.ts`, not both under one identity. Its directory may
 hold helpers, JSON, templates and tests; only its entry is registered. Do not recursively treat every source file as a
@@ -110,8 +113,8 @@ dist/
   src/                       compiled JS plus its required file resources
   assets/
   environment.json
-  .mcp.json
-  .context.json
+  mcp.json
+  context.json
   LICENSE                    when applicable
 ```
 
@@ -134,35 +137,42 @@ This optional data declaration travels with the artifact. It describes command/r
 variables used by scripts/commands. Code dependencies remain in `package.json`; module-local secret needs remain
 beside their consumers. Do not duplicate the language package manager or include actual environment/credential values.
 
-Provisioning is separate from declaration. A build/deployment or an explicitly configured host mechanism can satisfy
-requirements; startup resolves/checks the supplied environment and reports what is missing. Do not promise that installing
-an npm definition also installs arbitrary OS dependencies, silently changes the host globally or provides a cross-platform
-package resolver. The final schema, installation policy and placement of existing Debian `aptPackages` hints remain
-review items. Process-wide environment mutation cannot select an instance inside a multi-agent host.
+FastAgent's Docker build/deployment prepares the program's declared dependencies through the supported installer/backend.
+Startup checks the supplied environment and required values and reports unsatisfied declarations. A plain npm install or
+an embedded open is not permission to modify the machine globally; local provisioning follows the explicitly selected
+host/development mechanism. Supported backends/platforms and the exact schema still need proof, not another ownership model.
 
-### `.mcp.json` and `.context.json`: defaults plus instance additions
+There is no instance-side `environment.json`. Users install dependencies for their extra capabilities themselves in their
+own runtime environment; FastAgent neither installs nor manages those extra dependencies. Execution reports failures such
+as a missing command without inventing an environment to retry in. Actual values come from host input/private value files.
+Aggregate names already declared by code `needs()` or MCP references instead of requiring duplicate registration here.
+Process-wide environment mutation cannot select an instance inside a multi-agent host.
+
+### Program defaults and instance additions
 
 The program may package ordinary default declarations in both files. An instance provides key/environment values or
 explicit OAuth grant bindings for those entries, and may contribute additional entries in the corresponding format.
 There is no separate required/optional/constraint/default-provider requirement language. Author the actual baseline
 configuration instead of describing abstract slots that another framework has to fulfill.
 
-| Input | Program owns | Instance owns |
+| Program file | Instance file/input | Responsibility |
 |---|---|---|
-| `.mcp.json` | Baseline server declarations, executable/resource references and credential-variable references | Additional servers; actual values, OAuth grants and account bindings |
-| `.context.json` | Baseline supported data-source declarations | Additional sources; credentials, acquired data and resolved instance paths |
-| `environment.json` | Runtime requirements and variable names | Provisioned environment and actual values |
+| `mcp.json` | `.mcp.json` or equivalent API additions | Program default servers plus distinct extra servers; actual values, OAuth grants/account bindings stay in instance stores |
+| `context.json` | `context.json` or equivalent API additions | Program default sources plus distinct extra sources; credentials, acquired data and resolved paths remain instance-owned |
+| `environment.json` | No second declaration file | Program runtime requirements; host provisioning and actual values, with user-managed dependencies for extras |
 
 “Default” means the selected program's baseline, not permission to override a same-named entry. Compose by distinct
 names; reject collisions and never deep-merge or rewrite the base files. Supplying credentials for a base entry is
 binding its authentication, not replacing its definition. Use a deliberate new program version to change that baseline.
-A missing value, denied grant or unusable source produces the normal explicit diagnostic; it is not silently dropped
-or replaced. Activation/reopen failure timing still needs the lifecycle contract in §6.
+A missing value, denied grant or unusable configured source produces an explicit diagnostic; it is not silently dropped
+or replaced. An open that cannot assemble its configured set refuses before reporting a ready instance and cleans up
+acquired resources. Failures after a successful open remain visible under existing operation/stream semantics; they do not
+silently remove capabilities or trigger an ambiguous replay.
 
 An API-provided addition and the CLI's file adapter share the resolver; hosts need not create physical config files.
-MCP standardizes discovery/calls, not a universal package requirement schema: reuse FastAgent's supported `.mcp.json`
-subset and protocol machinery instead of introducing another MCP dependency contract. Context stays a data-source
-configuration, not a combined environment/LLM-context manifest. The model receives selected names, locations and
+MCP standardizes discovery/calls, not a universal package requirement schema: reuse FastAgent's supported configuration
+subset and protocol machinery under the explicit program/instance filenames instead of another dependency contract.
+Context stays a data-source configuration, not a combined environment/LLM-context manifest. The model receives selected names, locations and
 descriptions, not all source data or secrets. Configured sources stay distinct from acquired revision/location/state.
 
 | Source | Possible acquisition | Contract still required |
@@ -194,7 +204,7 @@ package upgrade or instance cleanup. Resolve this input once rather than giving 
 ```text
 instance/
   .mcp.json                  extra server entries, when using the file adapter
-  .context.json              extra context entries, when using the file adapter
+  context.json               extra context entries, when using the file adapter
   work/
   content/                   instance-acquired data, not all user-owned sources
   additions/                 accepted extra capabilities; not arbitrary work files
@@ -211,9 +221,18 @@ names; prefer one instance root over a flag per internal subdirectory.
 | Module-owned packaged asset | Module-relative URL, never builder path/process cwd |
 | Skill reference | That packaged/added skill's root |
 | Relative coding-tool file/command path | Resolved instance cwd |
-| Context file's relative source | A documented configuration-file base; finalize together with API-relative inputs |
-| MCP executable/resource path | Its declaration's documented base; do not relocate child cwd or guess args because tool cwd changed |
+| Relative path in a program configuration file | Directory containing that file inside the built package |
+| Relative path in an instance configuration file | Directory containing that instance file |
+| Path-valued API input without a configuration-file origin | Absolute path supplied by the host; reject a relative path instead of guessing process cwd |
+| MCP command containing a relative path | The originating declaration file's directory; bare command names use the resolved instance PATH |
+| MCP child cwd | The originating file's directory; originless API declarations require an explicit absolute child cwd, independent of coding-tool cwd |
+| MCP args | Passed verbatim; never guess/rewrite which strings are paths |
 | Working data passed to MCP | Explicit instance bindings/variables |
+
+A configuration includes its origin during resolution, even when entries are combined. Program and instance files may
+contain the same relative spelling and correctly resolve to different locations. CLI directory flags can be normalized
+at their entry boundary; do not let each subsystem rebase them later. The exact API fields carrying normalized inputs
+remain an implementation contract, not an extra filename-discovery rule.
 
 Never call `process.chdir()` or mutate `process.env` to switch an instance. Effective paths/values are shared knowledge
 for execution, inspection and host reports. Acquire the instance lease before mutating owned runtime state, additions or
@@ -221,9 +240,14 @@ acquired content. Reuse the existing storage and atomic-write machinery rather t
 
 ## 6. Additions, activation and upgrades
 
+**First-slice rule: additions become active only at the next explicit instance open.** Saved configuration or a validated
+addition does not mutate an already-open Agent. The host drains work (or explicitly cancels when it intends to stop it),
+closes that instance and opens it again to select the new startup snapshot. There is no automatic restart/reload loop.
+
 An ordinary file written into `work/` does not automatically become an enabled tool. Candidates must be explicitly
-staged, validated and accepted. Accepted capabilities have their own identity/provenance and durable record, separate
-from package bytes and secrets. Names cannot shadow base, built-in/protected or already accepted capabilities.
+staged, validated and saved; open validates/acquires the complete selected set before exposure. Accepted capabilities
+have their own identity/provenance and durable record, separate from package bytes and secrets. Names cannot shadow
+base, built-in/protected or already accepted capabilities. No live native-JS replacement/unloading is in the first slice.
 
 | Capability | Reuse | Required proof |
 |---|---|---|
@@ -237,22 +261,24 @@ pi-durable 1.4.0 registry snapshots are useful, but `install` can replace an ext
 add-only policy or proof of a safe FastAgent hot-loader. Existing MCP discovery is once per open. Native module imports
 can have irreversible side effects; do not claim arbitrary in-process imports can be rolled back or safely unloaded.
 
-Before implementation, settle:
+Implementation proof and the remaining management decision:
 
-1. **Activation:** durable candidate/accepted/effective ordering, atomic visibility, concurrency and the request/reopen
-   boundary. Do not change an in-flight invocation's tool implementation or break explicit session tool allowlists.
-   Admission, `info`, prompt commands and replay must agree on the effective revision.
-2. **Failure/recovery:** diagnose failed validation/start/save, partial acquisition and unavailable accepted capabilities.
-   Decide whether reopen blocks or exposes a clearly unavailable capability; never silently omit one or replay a remote
-   operation whose outcome is uncertain. Accepted bytes cannot silently change under the same identity.
+1. **Snapshot implementation proof:** validate and select a startup snapshot, with crash-safe saves and no half-acquired
+   exposed capability. For that open, admission, `info`, prompt commands and replay read the same selected set. Preserve
+   explicit session tool allowlists and unsafe replay. Do not let per-request text discovery bypass the reopen boundary.
+2. **Failure/recovery proof:** validation/start/save failures and unavailable configured capabilities reject the candidate
+   open, clean up partial acquisition, and retain diagnostics/data. Never silently omit one or retry a remote operation
+   whose outcome is uncertain. Accepted bytes cannot silently change under the same identity. A reopened instance still
+   follows the existing interrupted-message semantics; saving an addition is not cancellation of a running message.
 3. **Upgrade/management:** retain additions and work; detect name/runtime/dependency conflicts before selecting the new
    package, preserve data and fail visibly. Select a compatible version or an explicit host resolution, never quietly
    overwrite a base capability. Define whether/when an addition can be disabled or removed without changing historical
    messages; “only add to the base” does not eliminate security/operational revocation needs.
 
-A tool/addition cannot silently initiate browser consent, choose another account, broaden scopes or modify global OS/npm
-dependencies. Existing credential/grant APIs retain their ownership and exclusive refresh rules. Dynamic channels,
-schedules, general plugin marketplaces and sandbox implementation are not implied by this first refactor.
+FastAgent cannot silently initiate browser consent, choose another account or broaden scopes for an addition. It does not
+install/update the user's extra OS/npm dependencies; users manage their environment themselves, without a second instance
+environment declaration or global dependency mutation by the framework. Existing credential/grant APIs retain their
+ownership and exclusive refresh rules. Dynamic channels, schedules, general plugin marketplaces and sandbox implementation are not implied by this first refactor.
 
 ## 7. Implementation review and experiment evidence
 
@@ -284,8 +310,9 @@ is an independent provider-resource cleanup issue; path changes do not fix it.
 The architecture is settled; these contracts still block claiming a complete implementation design:
 
 - exported definition/public instance types, dependency compatibility and reproducible deployment installation;
-- exact environment/context-source formats, declaration-relative path bases and the first supported source/provisioning matrix;
-- activation, configured-capability failure/recovery, revocation and upgrade conflict behavior in §6.
+- exact environment/context-source formats and the first supported source/installer/platform matrix;
+- implementation proof of the decided startup snapshot, failure cleanup and persistence rules, plus explicit addition
+  revocation and upgrade-conflict management behavior in §6.
 
 Recommended sequence:
 
@@ -294,8 +321,9 @@ Recommended sequence:
 2. Implement environment/context ownership and one resolver; validate host/CLI inputs without writing the package.
 3. Derive a representative deployment from the same artifact. Preserve leases, state/secrets, external data and current
    Agent API conformance. There is no backward-compatibility/migration layer to carry obsolete ownership rules.
-4. Prove text additions, MCP acquisition and script tools at a documented safe boundary; native tools follow only when
-   their build/lifecycle can be demonstrated. Test crashes, cancellation, failed persistence and unchanged base hashes.
+4. Prove skill/prompt additions, MCP acquisition and tools through the explicit reopen boundary, not live hot-loading.
+   Native tools require build/lifecycle proof without arbitrary module unloading. Test crashes, cancellation, failed
+   persistence, stable startup views and unchanged base hashes.
 5. Review any necessary public SPEC changes separately. Completing design or passing a source-only probe does not close
    the implementation issue or imply every source type/cloud/runtime has been accepted.
 

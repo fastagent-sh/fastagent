@@ -10,8 +10,8 @@ status: implemented in part
 **Status: implemented through §6 step 5 (0.29.0); artifact/instance refactor under design.** The code serves an agent
 on pi-durable through the [Agent API](../SPEC.md), with content authoring and MCP support. The artifact (§4.1), context
 packages (§4.2) and §4.4 are not built. [Immutable artifacts and additive instances](agent-artifact.md) records the newly
-decided ownership/layout/configuration model and the pending activation/public contracts; it supersedes runtime modification of packaged files,
-not the current code. §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol
+decided ownership/layout/configuration/path model and explicit reopen activation; public formats still need proof.
+It supersedes runtime modification of packaged files as the target, not the current code. §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol
 (never released), a harness port, and the conformance levels behind them (§5).
 
 ## 1. What FastAgent is for
@@ -96,7 +96,7 @@ to another with `configure`.
 ## 3. The definition and its assembly
 
 **Artifact target, not current runtime behavior.** The consolidated [design](agent-artifact.md) separates program
-requirements (`environment.json`) from default MCP/context declarations (`.mcp.json`, `.context.json`), keeps the base
+requirements (`environment.json`) from default MCP/context declarations (`mcp.json`, `context.json`), keeps the base
 immutable and makes `dist/` a complete package. Instances supply authentication and distinct additional entries, not
 abstract requirement slots or same-name overrides. `core.md` documents the current 0.29.0 source-directory implementation.
 
@@ -113,8 +113,8 @@ my-agent/
     channels/*.ts
     schedules/*.ts                defineSchedule
   environment.json               program requirements; values come from the instance/host
-  .mcp.json                       default MCP servers; credentials supplied by instances
-  .context.json                   default context sources; data acquired by instances
+  mcp.json                        default MCP servers; instances add servers in .mcp.json
+  context.json                    default context sources; instance context.json adds sources
   .fastagent/                     the generated registry and entry, not committed
   dist/                           the build output
 ```
@@ -164,15 +164,15 @@ same wherever it runs.
 skills, prompts, tools and MCP declarations. An instance may add capabilities under its own ownership, never replace or
 shadow the packaged ones. This replaces the editable-definition target; the current source-directory behavior remains
 described in [agent-model.md §6](agent-model.md#6-an-agent-changes-itself). Text, MCP and executable-tool activation need
-different proofs; live native-code loading is not promised. The [artifact/instance design](agent-artifact.md) owns those
-gates. Author changes produce a new base version. Recurring `wake` work remains instance state, not package mutation.
+different proofs; the first slice selects a fixed startup snapshot and activates additions only after explicit instance
+reopen, not live native-code replacement. The [artifact/instance design](agent-artifact.md) owns those proof gates. Author changes produce a new base version. Recurring `wake` work remains instance state, not package mutation.
 
 ## 4. Around the agent
 
 ### 4.1 The artifact
 
 The artifact is an **npm package** exporting a compiled definition with relocatable resources, not a live Agent singleton.
-It carries authored text/skills, default `.mcp.json`/`.context.json` declarations and `environment.json` requirements.
+It carries authored text/skills, default `mcp.json`/`context.json` declarations and `environment.json` requirements.
 Instances provide authentication and distinct additions. Fetched/user data, secret values and instance additions do not
 enter the program package. The [detailed design](agent-artifact.md) fixes the
 layout/ownership boundary; exact public contracts and dependency compatibility/locking still need proof. An ordinary
@@ -340,8 +340,8 @@ What the previous design had, and what took its place:
    session cache, context packages or scale-out prerequisite.
 6. **Design in progress** ([#900](https://github.com/fastagent-sh/fastagent/issues/900)): [immutable artifacts and additive
    instances](agent-artifact.md), then `fastagent build` and `deploy` from the same artifact. Layout/ownership and
-   program-environment versus instance-context roles are decided; finish exported types, source/provisioning support and
-   addition lifecycle contracts before implementation.
+   program-environment versus instance-context roles, declaration-relative paths and explicit reopen activation are
+   decided. Finish exported formats, supported installers/sources and lifecycle implementation proofs.
 7. Context packages, once there is a concrete cross-agent reuse need; they depend on the artifact's build step.
 8. Shared contexts and agents working together.
 
