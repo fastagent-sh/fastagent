@@ -7,11 +7,12 @@ status: implemented in part
 
 # Architecture
 
-**Status: decided; implemented through §6 step 4.** The code serves an agent on pi-durable through the
-[Agent API](../SPEC.md), with per-agent content authoring released in 0.28.0. MCP server support, the artifact (§4.1),
-context packages (§4.2) and what §4.4 leaves for later are not built yet;
-§6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol (never released),
-a harness port, and the conformance levels behind them (§5).
+**Status: implemented through §6 step 5 (0.29.0); artifact/instance refactor under design.** The code serves an agent
+on pi-durable through the [Agent API](../SPEC.md), with content authoring and MCP support. The artifact (§4.1), context
+packages (§4.2) and §4.4 are not built. [Immutable artifacts and additive instances](agent-artifact.md) records the newly
+decided ownership/layout/configuration/path model and explicit reopen activation; public formats still need proof.
+It supersedes runtime modification of packaged files as the target, not the current code. §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol
+(never released), a harness port, and the conformance levels behind them (§5).
 
 ## 1. What FastAgent is for
 
@@ -94,6 +95,11 @@ to another with `configure`.
 
 ## 3. The definition and its assembly
 
+**Artifact target, not current runtime behavior.** The consolidated [design](agent-artifact.md) separates program
+requirements (`environment.json`) from default MCP/context declarations (`mcp.json`, `context.json`), keeps the base
+immutable and makes `dist/` a complete package. Instances supply authentication and distinct additional entries, not
+abstract requirement slots or same-name overrides. `core.md` documents the current 0.29.0 source-directory implementation.
+
 ```
 my-agent/
   package.json
@@ -106,8 +112,9 @@ my-agent/
     extensions/*.ts               pi-durable defineExtension
     channels/*.ts
     schedules/*.ts                defineSchedule
-  context.json  context.lock.json
-  .mcp.json                       MCP servers; one mcpServers map
+  environment.json               program requirements; values come from the instance/host
+  mcp.json                        default MCP servers; instances add servers in .mcp.json
+  context.json                    default context sources; instance context.json adds sources
   .fastagent/                     the generated registry and entry, not committed
   dist/                           the build output
 ```
@@ -131,11 +138,11 @@ export default defineAgent({
 ```
 
 `fastagent build` generates the registry of `src/`'s four directories and an entry that exports the agent (the
-configuration and the registry), compiles them, and locks the context; `package.json`'s `exports` names that entry.
-`fastagent dev` generates the same and regenerates it as files change. Every tool found is offered unless the
-configuration leaves it out; a deployment cannot add one, since code ships in the artifact. Each file directly in one
-of the four directories is a module and default-exports one thing (a tool, an extension, a channel, a schedule, or
-`needs(...)` around one); a helper they import lives elsewhere in `src/`, and a test file is not a module.
+configuration and the registry), compiles them and their required resources into a complete `dist/` package;
+`package.json`'s `exports` names that entry. It carries baseline declarations, not instance additions, credentials or data.
+`fastagent dev` rebuilds the same definition as source changes. A small capability has a single-file entry; a larger
+one has a directory `index.ts` with adjacent helpers/resources. Duplicate identities fail; helpers/tests do not become
+registrations. Runtime additions are instance-owned accepted capabilities, not edits to that generated registry.
 
 `openAgent(agent)` assembles it: pi-ai's built-in models with the definition's `providers` over a credential store
 (the machine's in development, the instance's `.secrets/` when deployed), a pi-durable `Harness` over the instance's
@@ -153,19 +160,23 @@ the agent's commands ([Agent API](../SPEC.md) §5.1). The result is the Agent
 API's `Agent`, plus `harness`. `dev`, `start` and an embedder's process call the same function, so an agent behaves the
 same wherever it runs.
 
-**An agent changing itself** ([agent-model.md](agent-model.md) §6) keeps what is text and loses what is code. Its
-text (`SYSTEM.md`, `AGENTS.md`, skills, prompt templates) is read for each request, so a change it makes takes effect on its next
-answer, and lasts until the next deployment, as today. Its code is built into the artifact, so a tool, an extension or
-a schedule it writes takes effect only through a build and a deployment, the way its author's does
-([#605](https://github.com/fastagent-sh/fastagent/issues/605)). Recurring work it sets up for itself is state, not
-code: the built-in `wake` tool, which already keeps one-shot wake-ups in the instance's state, gains a recurring form.
+**Runtime evolution: new target, not implemented.** The definition package is immutable, including its original text,
+skills, prompts, tools and MCP declarations. An instance may add capabilities under its own ownership, never replace or
+shadow the packaged ones. This replaces the editable-definition target; the current source-directory behavior remains
+described in [agent-model.md §6](agent-model.md#6-an-agent-changes-itself). Text, MCP and executable-tool activation need
+different proofs; the first slice selects a fixed startup snapshot and activates additions only after explicit instance
+reopen, not live native-code replacement. The [artifact/instance design](agent-artifact.md) owns those proof gates. Author changes produce a new base version. Recurring `wake` work remains instance state, not package mutation.
 
 ## 4. Around the agent
 
 ### 4.1 The artifact
 
-The artifact is an **npm package**: the built entry, the text and skills, `.mcp.json`, `context.json` and its lock, the lockfile and
-an exact pi-durable version.
+The artifact is an **npm package** exporting a compiled definition with relocatable resources, not a live Agent singleton.
+It carries authored text/skills, default `mcp.json`/`context.json` declarations and `environment.json` requirements.
+Instances provide authentication and distinct additions. Fetched/user data, secret values and instance additions do not
+enter the program package. The [detailed design](agent-artifact.md) fixes the
+layout/ownership boundary; exact public contracts and dependency compatibility/locking still need proof. An ordinary
+npm library does not carry/enforce its `package-lock.json`.
 It never holds secret values, runtime state or cloned content. A registry versions and distributes it; it can be a
 dependency of an app that embeds it, or of another agent. What a host runs is derived from it by `deploy`: an OCI
 image for AgentCore, Fly, Railway and Docker, a bundle where a host needs one.
@@ -175,6 +186,10 @@ bundled file (fast cold starts, but the definition is read at run time and would
 directory itself (what ships today, with no version and no dependency resolution). Each stays a derived format.
 
 ### 4.2 Context packages
+
+**Deferred direction, not a schema commitment.** The old `uses`/lock sketch below must be revisited against the
+[baseline/additive context design](agent-artifact.md#4-configuration-program-requirements-and-instance-context) before any
+context-package work. It is not a reason to bake actual instance context into the program package.
 
 A context is what an agent works with, apart from who it is: no `SYSTEM.md`, no identity. A context package is a
 directory with a `context.json` of the same format an agent's own uses:
@@ -323,7 +338,10 @@ What the previous design had, and what took its place:
    Provider resource cleanup remains an independent [known issue](https://github.com/fastagent-sh/fastagent/issues/896),
    accepted in the release notes. Kage is a downstream consumer, not the acceptance prerequisite. No generic `Connector`,
    session cache, context packages or scale-out prerequisite.
-6. The artifact: `fastagent build`, and `deploy` from it.
+6. **Design in progress** ([#900](https://github.com/fastagent-sh/fastagent/issues/900)): [immutable artifacts and additive
+   instances](agent-artifact.md), then `fastagent build` and `deploy` from the same artifact. Layout/ownership and
+   program-environment versus instance-context roles, declaration-relative paths and explicit reopen activation are
+   decided. Finish exported formats, supported installers/sources and lifecycle implementation proofs.
 7. Context packages, once there is a concrete cross-agent reuse need; they depend on the artifact's build step.
 8. Shared contexts and agents working together.
 
