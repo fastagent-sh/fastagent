@@ -31,9 +31,10 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 
 | Document | Purpose |
 |---|---|
-| [architecture.md](architecture.md) | **Decided; implemented through its §6 step 4.** What FastAgent is for, and the shape that follows: pi-durable as the only harness, the consumer [Agent API](../SPEC.md) as the one API of our own, the definition and its assembly, an npm package as the artifact, context packages, and hosts that keep state off the box. |
+| [architecture.md](architecture.md) | **Implemented through §6 step 5; artifact refactor under design.** What FastAgent is for, and the shape that follows: pi-durable as the only harness, the consumer [Agent API](../SPEC.md) as the one API of our own, the definition and its assembly, an npm package as the artifact, context packages, and hosts that keep state off the box. |
+| [agent-artifact.md](agent-artifact.md) | **Boundary decided; detailed design under review.** Immutable compiled definitions, instance-owned cwd/data and additive skills/prompts/MCP/tools; re-review author layout and `context.json` before implementation (#900). |
 | [mcp.md](mcp.md) | **Implemented subset.** One `.mcp.json` / `mcpServers` source, instance-owned clients, durable host-bound OAuth grants, protocol evidence and the proposed configuration/capability subset. |
-| [mcp-auth.md](mcp-auth.md) | **Implemented.** MCP host operations, opaque grants and instance bindings, exclusive store access, durable refresh coordination and Kage multi-agent acceptance. |
+| [mcp-auth.md](mcp-auth.md) | **Implemented.** MCP host operations, opaque grants and instance bindings, exclusive store access, durable refresh coordination and FastAgent-owned acceptance. |
 | [agent-model.md](agent-model.md) | **Implemented.** What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, the content it works on, its types, and the vocabulary later designs build on. |
 | [agent-service.md](agent-service.md) | **Partly implemented.** Agents a team builds, runs and uses together as cloud services: who it is for, the product loop, what an agent works with (content, connectors and environment; the environment under `environment` in `context.json`, installed by mise), and credentials. |
 | [agent-cli.md](agent-cli.md) | **Implemented.** The command-line side of the agent model: addressing an Agent, the local instance, what `init` declares, editing content, and what each command shows. |
