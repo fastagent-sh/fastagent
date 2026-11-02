@@ -96,8 +96,9 @@ to another with `configure`.
 ## 3. The definition and its assembly
 
 **Artifact target, not current runtime behavior.** The consolidated [design](agent-artifact.md) separates program
-requirements (`environment.json`) from instance context (`context.json`), keeps the base immutable and makes `dist/`
-a complete package. `core.md` documents the current 0.29.0 source-directory implementation.
+requirements (`environment.json`) from default MCP/context declarations (`.mcp.json`, `.context.json`), keeps the base
+immutable and makes `dist/` a complete package. Instances supply authentication and distinct additional entries, not
+abstract requirement slots or same-name overrides. `core.md` documents the current 0.29.0 source-directory implementation.
 
 ```
 my-agent/
@@ -112,7 +113,8 @@ my-agent/
     channels/*.ts
     schedules/*.ts                defineSchedule
   environment.json               program requirements; values come from the instance/host
-  .mcp.json                       MCP servers; one mcpServers map
+  .mcp.json                       default MCP servers; credentials supplied by instances
+  .context.json                   default context sources; data acquired by instances
   .fastagent/                     the generated registry and entry, not committed
   dist/                           the build output
 ```
@@ -137,7 +139,7 @@ export default defineAgent({
 
 `fastagent build` generates the registry of `src/`'s four directories and an entry that exports the agent (the
 configuration and the registry), compiles them and their required resources into a complete `dist/` package;
-`package.json`'s `exports` names that entry. It does not package the selected instance's context or data.
+`package.json`'s `exports` names that entry. It carries baseline declarations, not instance additions, credentials or data.
 `fastagent dev` rebuilds the same definition as source changes. A small capability has a single-file entry; a larger
 one has a directory `index.ts` with adjacent helpers/resources. Duplicate identities fail; helpers/tests do not become
 registrations. Runtime additions are instance-owned accepted capabilities, not edits to that generated registry.
@@ -170,8 +172,9 @@ gates. Author changes produce a new base version. Recurring `wake` work remains 
 ### 4.1 The artifact
 
 The artifact is an **npm package** exporting a compiled definition with relocatable resources, not a live Agent singleton.
-It carries the authored text/skills, base MCP declarations and `environment.json` requirements. The selected
-`context.json` and its data are instance inputs, not package files. The [detailed design](agent-artifact.md) fixes the
+It carries authored text/skills, default `.mcp.json`/`.context.json` declarations and `environment.json` requirements.
+Instances provide authentication and distinct additions. Fetched/user data, secret values and instance additions do not
+enter the program package. The [detailed design](agent-artifact.md) fixes the
 layout/ownership boundary; exact public contracts and dependency compatibility/locking still need proof. An ordinary
 npm library does not carry/enforce its `package-lock.json`.
 It never holds secret values, runtime state or cloned content. A registry versions and distributes it; it can be a
@@ -185,7 +188,7 @@ directory itself (what ships today, with no version and no dependency resolution
 ### 4.2 Context packages
 
 **Deferred direction, not a schema commitment.** The old `uses`/lock sketch below must be revisited against the
-[instance-owned context design](agent-artifact.md#4-configuration-program-requirements-and-instance-context) before any
+[baseline/additive context design](agent-artifact.md#4-configuration-program-requirements-and-instance-context) before any
 context-package work. It is not a reason to bake actual instance context into the program package.
 
 A context is what an agent works with, apart from who it is: no `SYSTEM.md`, no identity. A context package is a

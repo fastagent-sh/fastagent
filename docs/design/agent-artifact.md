@@ -1,6 +1,6 @@
 ---
 title: Immutable agent artifacts and configurable instances
-description: "The artifact/instance target: a compiled definition package, environment requirements, separately selected context, private work/state and add-only capabilities."
+description: "The artifact/instance target: an immutable compiled program with default MCP/context declarations, environment requirements, instance-supplied authentication and additive configuration."
 type: design-doc
 status: architecture decided; activation and public contracts pending; not implemented
 ---
@@ -9,42 +9,43 @@ status: architecture decided; activation and public contracts pending; not imple
 
 **Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900); design PR
 [#901](https://github.com/fastagent-sh/fastagent/pull/901).** The ownership model, layout principles and configuration
-roles below are decided. Exact public types, context schema, dependency resolution and capability activation require
+roles below are decided. Exact public types, context-source schema, dependency resolution and capability activation require
 review/proof before implementation. FastAgent 0.29.0 still opens writable author directories; this document does not
 advertise a working artifact loader, separate environment/context files or live runtime additions.
 
 ## 1. Product and ownership model
 
 Build one agent program, install it in an embedding application, or derive a deployment from the same artifact. Each
-instance supplies its own working context, credentials, writable files and lifetime. A receiver must not need the
+instance supplies authentication, additional context/capabilities, writable files and lifetime. A receiver must not need the
 author's checkout or private machine configuration. Kage is one consumer, not the product or acceptance boundary.
 
 ```text
 Author source -> build -> immutable npm definition package
                                   |
-                                  + instance A + context A + environment/credentials A
-                                  + instance B + context B + environment/credentials B
+                                  + instance A + additions A + environment/credentials A
+                                  + instance B + additions B + environment/credentials B
 ```
 
 | Concept | Owns | Changes when |
 |---|---|---|
-| Source | The author's code, instructions, skills and requirements | The author edits it and builds |
-| Artifact | One built program version, with relocatable resources | A different package version is selected |
+| Source | The author's code, instructions, skills, environment requirements and default MCP/context declarations | The author edits it and builds |
+| Artifact | One built program version, with relocatable resources and its baseline declarations | A different package version is selected |
 | Environment requirements | Commands/runtimes and declared variable names the program needs | A new program version declares different requirements |
-| Context configuration | Which files/directories/repositories or other supported data sources an instance accesses | The user/host explicitly configures the instance |
+| Effective MCP/context configuration | Packaged baseline plus distinct instance entries, resolved with instance authentication | A different package or accepted instance additions are selected |
 | Instance | Bindings, credentials, work, clones, accepted additions, sessions and caller state | That instance operates or is reconfigured |
 | Model context | The instructions, capabilities and selected information a request presents to the model | Constructed from the effective instance/request state |
 
-A remote repository is not automatically part of a program definition. The same reviewer can work on a local checkout
-in one instance and a different remote repository in another without rebuilding its package. Small fixed reference
-material belongs in packaged assets or a skill; mutable external reference material belongs in explicitly selected
-context. Acquiring data is not permission to send every file or credential to the model.
+The program can ship useful defaults directly, such as a handbook repository or a remote MCP integration. Credentials
+and fetched data do not travel with those declarations. A generic reviewer can leave its project out of the baseline;
+each instance then adds a different local or remote project without rebuilding. Location alone does not decide ownership:
+public/remote sources can be either authored defaults or instance additions. Small versioned files can remain packaged
+assets. Acquiring data is not permission to send every file or credential to the model.
 
 ## 2. Invariants
 
 - **Route B:** a compiled npm package exports a definition/recipe, not a live Agent singleton.
 - The base package is immutable: original `SYSTEM.md`, `AGENTS.md`, skills, prompts, tools, configuration, environment
-  requirements and MCP declarations are not modified by a running instance.
+  requirements and default MCP/context declarations are not modified by a running instance.
 - Instances can add skills, prompts, MCP integrations and tools. Additions do not shadow, replace or merge over
   packaged/protected capabilities. No editable base copy or last-writer-wins overlay is needed.
 - Named prompt templates and supplemental instructions are different capabilities. Adding instructions changes
@@ -85,12 +86,14 @@ agent-source/
     lib/                     optional shared helpers
   assets/                    optional definition-wide resources
   environment.json           optional program runtime requirements
-  .mcp.json                  optional base MCP declarations
+  .mcp.json                  optional default MCP integrations; no credential values
+  .context.json              optional default context sources; no fetched/user data
   test/  README.md
 ```
 
-A local development instance may select a `context.json` stored nearby, but it is instance input, not a required part
-of the source or artifact. Examples must be distinguished from an active instance's private configuration.
+The default declarations are program input and travel with the package. Instance contributions and authentication
+remain outside it. The target filename `.context.json` is FastAgent's proposed convention, not an industry standard or
+a claim about the existing 0.29.0 `context.json` reader.
 
 A capability can be `src/tools/search.ts` or `src/tools/search/index.ts`, not both under one identity. Its directory may
 hold helpers, JSON, templates and tests; only its entry is registered. Do not recursively treat every source file as a
@@ -108,6 +111,7 @@ dist/
   assets/
   environment.json
   .mcp.json
+  .context.json
   LICENSE                    when applicable
 ```
 
@@ -136,15 +140,30 @@ an npm definition also installs arbitrary OS dependencies, silently changes the 
 package resolver. The final schema, installation policy and placement of existing Debian `aptPackages` hints remain
 review items. Process-wide environment mutation cannot select an instance inside a multi-agent host.
 
-### `context.json`: what this instance works with
+### `.mcp.json` and `.context.json`: defaults plus instance additions
 
-This optional, separately selected configuration belongs to the user/instance. It is not shipped in the definition
-package and is not a combined environment/LLM-context manifest. An API-provided value and the CLI's file adapter must
-use the same resolution rules; embedding hosts need not maintain a file if they already own configuration storage.
+The program may package ordinary default declarations in both files. An instance provides key/environment values or
+explicit OAuth grant bindings for those entries, and may contribute additional entries in the corresponding format.
+There is no separate required/optional/constraint/default-provider requirement language. Author the actual baseline
+configuration instead of describing abstract slots that another framework has to fulfill.
 
-A source's location does not decide its owner: both a local path and a remote repository may be selected for one
-instance. The model receives a deliberate view of names, locations and descriptions, not all source data or secrets.
-The user's configured source stays distinct from the runtime's resolved locations, fetched revision and diagnostics.
+| Input | Program owns | Instance owns |
+|---|---|---|
+| `.mcp.json` | Baseline server declarations, executable/resource references and credential-variable references | Additional servers; actual values, OAuth grants and account bindings |
+| `.context.json` | Baseline supported data-source declarations | Additional sources; credentials, acquired data and resolved instance paths |
+| `environment.json` | Runtime requirements and variable names | Provisioned environment and actual values |
+
+“Default” means the selected program's baseline, not permission to override a same-named entry. Compose by distinct
+names; reject collisions and never deep-merge or rewrite the base files. Supplying credentials for a base entry is
+binding its authentication, not replacing its definition. Use a deliberate new program version to change that baseline.
+A missing value, denied grant or unusable source produces the normal explicit diagnostic; it is not silently dropped
+or replaced. Activation/reopen failure timing still needs the lifecycle contract in §6.
+
+An API-provided addition and the CLI's file adapter share the resolver; hosts need not create physical config files.
+MCP standardizes discovery/calls, not a universal package requirement schema: reuse FastAgent's supported `.mcp.json`
+subset and protocol machinery instead of introducing another MCP dependency contract. Context stays a data-source
+configuration, not a combined environment/LLM-context manifest. The model receives selected names, locations and
+descriptions, not all source data or secrets. Configured sources stay distinct from acquired revision/location/state.
 
 | Source | Possible acquisition | Contract still required |
 |---|---|---|
@@ -155,15 +174,16 @@ The user's configured source stays distinct from the runtime's resolved location
 
 “Mount context” is a user-facing concept, not a claim that every source uses an OS mount. Initial implementation must
 name the supported source matrix. Current directory/GitHub support is evidence for that subset, not proof of standalone
-file bindings or cloud-storage adapters. Do not silently skip an unsupported or required unavailable source.
+file bindings or cloud-storage adapters. Do not silently skip an unsupported or unavailable configured source.
 
-Replacing an instance's context selection does not replace program capabilities. Optional author-declared input names
-or requirements may be useful, but their schema and whether they belong in the first slice are not decided. Avoid a
-new generic resource framework to support a hypothetical requirement. Packaged reference assets are not instance context.
+No abstract context slots, interface constraints or automatic capability substitution are needed for this design.
+Packaged declarations may name portable sources or package resources, but never private builder paths or credential
+values. Instance-derived working paths remain explicit inputs/bindings with semantics defined by the supported format.
 
-Context configurations may be reused deliberately, but shared configuration is not private copies of the underlying
-data or concurrent-writer isolation. Secrets remain outside it as values; use credential references. The package and
-instance retain distinct MCP declaration/addition ownership; `.mcp.json` does not become a `connectors` field here.
+Context declarations may be reused deliberately, but shared configuration is not private data copies or concurrent-writer
+isolation. Credentials remain outside it as values. The package and instance have separate ownership, while each entry
+has one originating declaration; there are not two competing configurations for the same entry. MCP does not become
+a `connectors` field in the context file.
 
 ## 5. Instance root, cwd and resource paths
 
@@ -173,7 +193,8 @@ package upgrade or instance cleanup. Resolve this input once rather than giving 
 
 ```text
 instance/
-  context.json               when using the file adapter
+  .mcp.json                  extra server entries, when using the file adapter
+  .context.json              extra context entries, when using the file adapter
   work/
   content/                   instance-acquired data, not all user-owned sources
   additions/                 accepted extra capabilities; not arbitrary work files
@@ -244,7 +265,7 @@ The current seams to change, not reasons to rewrite the product:
 | `agentDir` supplies cwd, values, local bindings and clone paths | Definition resources versus resolved instance input |
 | Runtime prompt describes an editable definition in cwd | Immutable base, work/context and accepted additions |
 | Deploy copies/replaces the author directory | One selected artifact plus preserved instance data |
-| Content/environment share `context.json` and local/remote determines placement | Environment requirements versus independently selected instance context |
+| Content/environment share `context.json` and local/remote determines placement | Environment requirements versus baseline and additive context-source declarations |
 
 Disposable probes on 0.29.0 showed source-tarball execution after extraction on Node 26.11.1, Bun 1.4.4 and native Linux
 ARM64/Node 24.15.0, including tools/data, skills/prompts, official Filesystem MCP 2.1.0 and Agent HTTP calls. Direct Node
@@ -263,8 +284,8 @@ is an independent provider-resource cleanup issue; path changes do not fix it.
 The architecture is settled; these contracts still block claiming a complete implementation design:
 
 - exported definition/public instance types, dependency compatibility and reproducible deployment installation;
-- exact environment/context schemas, context-path bases and the first supported source/provisioning matrix;
-- activation, required-capability failure/recovery, revocation and upgrade conflict behavior in §6.
+- exact environment/context-source formats, declaration-relative path bases and the first supported source/provisioning matrix;
+- activation, configured-capability failure/recovery, revocation and upgrade conflict behavior in §6.
 
 Recommended sequence:
 

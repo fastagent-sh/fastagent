@@ -11,8 +11,10 @@ status: implemented
 an author declares and what an agent sees, not how it is stored or implemented, and it does not cover
 synchronization, distribution or deployment (§8). Tracking issue: [#684](https://github.com/fastagent-sh/fastagent/issues/684).
 The [artifact/instance refactor](agent-artifact.md) changes the target for installed packages: immutable definitions,
-separate instance cwd and additive capabilities; program requirements move to `environment.json`, while the user/host
-selects `context.json` independently for each instance, including local or remote sources. Those are not current 0.29.0
+separate instance cwd and additive capabilities. The program carries `environment.json` requirements and default
+`.mcp.json`/`.context.json` declarations; each instance provides authentication and distinct additions, without a separate
+requirement/constraint language. Defaults may name portable local/remote resources; instance data and secrets stay outside
+the package. Those are not current 0.29.0
 behavior; this note's own-directory, shared-content and self-edit rules describe the existing source-directory model,
 not constraints that the new design must preserve.
 
