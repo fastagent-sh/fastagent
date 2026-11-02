@@ -9,7 +9,7 @@ status: implemented
 
 This is the host/store contract for [MCP support](../mcp.md), following the real Linear OAuth check in
 [#678](https://github.com/fastagent-sh/fastagent/issues/678). The exported types live in `src/mcp-api.ts`.
-The consumer Agent API's sessions/messages remain unchanged. Kage owns its UI and persistence; FastAgent owns MCP/OAuth
+The consumer Agent API's sessions/messages remain unchanged. An embedding host owns its UI and persistence; FastAgent owns MCP/OAuth
 mechanics and exposes its own types, without leaking SDK types into an embedding application.
 
 ## 1. Three identities, three owners
@@ -181,4 +181,6 @@ rather than waiting out the stale-lock window. Removing the fence makes it retry
 The built CLI and public `openAgent` passed Linear read-only acceptance on 2026-11-02: browser sign-in, two instances
 sharing a grant, a call after closing the other instance, automatic refresh after forcing local expiry, and grant/session
 reuse in a new process. No model provider was called and business output was not printed. This is not natural-expiry,
-real-provider multi-account or Kage UI/secure-store acceptance; those remain separate checks.
+real-provider multi-account or downstream UI/secure-store acceptance. Release acceptance belongs to FastAgent's CLI,
+embedding, HTTP and deployment scenarios; Kage integration is not a prerequisite. The real-provider flow must be repeated
+after the transport's DNS/IP hardening.
