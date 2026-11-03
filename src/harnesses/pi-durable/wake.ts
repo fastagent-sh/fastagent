@@ -3,7 +3,7 @@
  * the instance's state (schedule/wakeups.ts), which the scheduler fires. A pair over one store: a definition that
  * defines either name gets neither.
  */
-import { Type } from "@earendil-works/pi-ai";
+import { num, obj, opt, str, union } from "@earendil-works/pi-schema";
 import { type Extension, type ToolExecutionResult, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { addWakeup, parseDelayMs, removeWakeup } from "../../schedule/wakeups.ts";
 import { sessionIdOf } from "./ids.ts";
@@ -41,16 +41,16 @@ export function wakeExtension(
           "same conversation with `prompt` as its instruction, tagged with the wake-up's id so you can tell it from a " +
           "user's, and you keep the full context of this conversation. Its plain reply is delivered to no one: to " +
           "reach a person it must call a delivery tool (a channel's send tool), as a scheduled job does.",
-        parameters: Type.Object({
-          in: Type.Optional(
-            Type.Union([Type.String(), Type.Number()], {
+        parameters: obj({
+          in: opt(
+            union([str(), num()], {
               description:
                 'one-shot delay: a duration string with a unit ("30m" / "2h" / "1d"), or a number of seconds',
             }),
           ),
-          cron: Type.Optional(Type.String({ description: 'recurring: a 5-field cron expression (e.g. "0 9 * * *")' })),
-          tz: Type.Optional(Type.String({ description: 'IANA timezone for `cron` (default "UTC")' })),
-          prompt: Type.String({
+          cron: opt(str({ description: 'recurring: a 5-field cron expression (e.g. "0 9 * * *")' })),
+          tz: opt(str({ description: 'IANA timezone for `cron` (default "UTC")' })),
+          prompt: str({
             minLength: 1,
             description: "the instruction for the woken message (it arrives in this same conversation)",
           }),
@@ -88,8 +88,8 @@ export function wakeExtension(
         description:
           "Cancel one of YOUR pending wake-ups (one-shot or recurring) by the id `wake` returned. Use it when a " +
           "scheduled follow-up is no longer needed, especially to stop a recurring wake once its job is done.",
-        parameters: Type.Object({
-          id: Type.String({ minLength: 1, description: "the wake-up id (returned by `wake`)" }),
+        parameters: obj({
+          id: str({ minLength: 1, description: "the wake-up id (returned by `wake`)" }),
         }),
         execute: async (args, api, context) => {
           const session = await sessionIdOf(api, context);

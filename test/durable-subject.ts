@@ -8,7 +8,6 @@ import { join } from "node:path";
 import {
   type Message,
   type TranscriptContext,
-  Type,
   createFauxCore,
   createModels,
   createProvider,
@@ -24,6 +23,7 @@ import {
   defineExtension,
   defineTool,
 } from "@earendil-works/pi-durable";
+import { obj, str } from "@earendil-works/pi-schema";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { type DurableAgent, openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
@@ -160,7 +160,7 @@ export function durableSubject(): AgentApiSubject {
     defineTool({
       name,
       description,
-      parameters: Type.Object({}),
+      parameters: obj({}),
       execute: (_args, _api, context) => {
         before();
         return new Promise<ToolExecutionResult>((resolve, reject) => {
@@ -192,7 +192,7 @@ export function durableSubject(): AgentApiSubject {
     defineTool({
       name: "stubborn",
       description: "Waits until the test lets it go, whatever its abort signal says",
-      parameters: Type.Object({}),
+      parameters: obj({}),
       execute: (_args, _api, context) =>
         new Promise<ToolExecutionResult>((resolve) => {
           held.push(() => resolve({ output: [{ type: "text", text: "done" }] }));
@@ -202,7 +202,7 @@ export function durableSubject(): AgentApiSubject {
     defineTool({
       name: "effect",
       description: "Has an effect the test counts",
-      parameters: Type.Object({}),
+      parameters: obj({}),
       execute: async () => {
         effects++;
         return { output: [{ type: "text", text: `effect ${effects}` }] };
@@ -211,7 +211,7 @@ export function durableSubject(): AgentApiSubject {
     defineTool({
       name: "stream",
       description: "Writes a few status lines while it runs, keeping only the tail of them",
-      parameters: Type.Object({}),
+      parameters: obj({}),
       outputLimits: { maxBytes: 24, retain: "tail" },
       execute: async (_args, api) => {
         for (const line of ["one\n", "two\n", "three of the lines\n"]) {
@@ -224,7 +224,7 @@ export function durableSubject(): AgentApiSubject {
     defineTool({
       name: "nested",
       description: "Calls lookup, as a codemode script does",
-      parameters: Type.Object({}),
+      parameters: obj({}),
       execute: async (_args, api, context) => {
         await api.executeTool("lookup", { city: "London" }, context);
         return { output: [{ type: "text", text: "looked up" }] };
@@ -233,7 +233,7 @@ export function durableSubject(): AgentApiSubject {
     defineTool({
       name: "lookup",
       description: "Looks a city up, slowly",
-      parameters: Type.Object({ city: Type.String() }),
+      parameters: obj({ city: str() }),
       execute: async (args) => {
         await new Promise((resolve) => setTimeout(resolve, 150));
         return { output: [{ type: "text", text: `found ${args.city}` }] };
@@ -242,7 +242,7 @@ export function durableSubject(): AgentApiSubject {
     defineTool({
       name: "finish",
       description: "Ends the run without another model call",
-      parameters: Type.Object({}),
+      parameters: obj({}),
       execute: async () => ({ output: [{ type: "text", text: "finished" }], control: { terminate: true } }),
     }),
   ];

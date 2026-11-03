@@ -21,7 +21,8 @@ export const channelBundleFiles = (kind: string): string[] =>
 
 /**
  * package.json for the complete agent: fastagent at this build's version, and the packages an agent's code is written
- * against (its tools and extensions are pi-durable code, its providers pi-ai's) at the versions this build runs.
+ * against (its tools and extensions are pi-durable code, its providers pi-ai's, its tool schemas pi-schema's) at the
+ * versions this build runs.
  */
 export function packageJson(name: string, build: { version: string; harness: Record<string, string> }): string {
   return `${JSON.stringify(

@@ -346,7 +346,7 @@ Do not commit `.env` or credentials. `fastagent info` and `fastagent dev` print 
 Code that reads a secret declares it, in the module that reads it:
 
 ```ts
-import { Type } from "@earendil-works/pi-ai";
+import { obj, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 import { needs } from "@fastagent-sh/fastagent";
 
@@ -356,7 +356,7 @@ export default needs(
     defineTool({
       name: "weather",
       description: "Current weather for a city.",
-      parameters: Type.Object({ city: Type.String() }),
+      parameters: obj({ city: str() }),
       execute: async ({ city }) => ({ output: [{ type: "text", text: await lookup(city, WEATHER_API_KEY, WEATHER_UNITS) }] }),
     }),
 );
@@ -468,13 +468,13 @@ Every agent has pi-durable's coding tools: `read`, `write`, `edit` and `bash`. T
 policy; to isolate an agent, sandbox its whole process. Its own tools are the modules of `src/tools/`:
 
 ```ts
-import { Type } from "@earendil-works/pi-ai";
+import { obj, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 
 export default defineTool({
   name: "reverse",
   description: "Reverse a text.",
-  parameters: Type.Object({ text: Type.String() }),
+  parameters: obj({ text: str() }),
   execute: async ({ text }) => ({ output: [{ type: "text", text: [...text].reverse().join("") }] }),
 });
 ```

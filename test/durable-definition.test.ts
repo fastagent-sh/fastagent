@@ -72,7 +72,7 @@ Ask for the order number, then read references/codes.md.
 `,
   "skills/Not_Valid/SKILL.md": "---\nname: Not_Valid\ndescription: broken\n---\nbody\n",
   "prompts/review.md": "---\ndescription: Review something\n---\nReview $1 carefully. Everything: $@\n",
-  "src/tools/weather.ts": `import { Type } from "@earendil-works/pi-ai";
+  "src/tools/weather.ts": `import { obj, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 import { needs } from "${DEFINE}";
 export default needs(
@@ -81,7 +81,7 @@ export default needs(
     defineTool({
       name: "weather",
       description: "Tells the weather",
-      parameters: Type.Object({ city: Type.String() }),
+      parameters: obj({ city: str() }),
       execute: async (args) => ({
         output: [{ type: "text", text: \`\${args.city}: sunny (key \${WEATHER_KEY}, region \${WEATHER_REGION ?? "none"})\` }],
       }),
@@ -167,9 +167,9 @@ export default needs(["HOOK_SECRET"], ({ HOOK_SECRET }) => () => ({ "POST /hook"
     const extension = (name: string) =>
       `import { defineExtension } from "@earendil-works/pi-durable";\nexport default defineExtension({ name: "${name}" });\n`;
     const schedule = `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "0 9 * * *", prompt: "x" });\n`;
-    const tool = `import { Type } from "@earendil-works/pi-ai";
+    const tool = `import { obj, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
-export default defineTool({ name: "look", description: "d", parameters: Type.Object({}), execute: async () => ({ output: [] }) });
+export default defineTool({ name: "look", description: "d", parameters: obj({}), execute: async () => ({ output: [] }) });
 `;
     const channel = "export default () => ({});\n";
     const cases: [Record<string, string>, string][] = [
@@ -371,12 +371,12 @@ export default defineTool({ name: "look", description: "d", parameters: Type.Obj
       );
       const ownWake = {
         ...FILES,
-        "src/tools/wake.ts": `import { Type } from "@earendil-works/pi-ai";
+        "src/tools/wake.ts": `import { obj, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 export default defineTool({
   name: "wake",
   description: "The author's own",
-  parameters: Type.Object({}),
+  parameters: obj({}),
   execute: async () => ({ output: [{ type: "text", text: "own" }] }),
 });
 `,

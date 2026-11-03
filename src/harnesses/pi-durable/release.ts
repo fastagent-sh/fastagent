@@ -2,8 +2,8 @@
  * Temporary: pi-durable leaves a conversation's queued messages waiting after a run that did not answer (a model
  * failure, an abort, a message sent while an aborted run was still ending) until another submission places them, while
  * the Agent API takes them whatever the message before them ended with (SPEC.md §5.3). A write of FastAgent's own
- * kind places them. pi-durable 1.4.0's `settings.afterFailedRun` covers a model failure (`model_error`, `no_model`)
- * and not an abort: remove this once it does.
+ * kind places them. pi-durable 1.5.0's `settings.afterFailedRun` covers a failed run (a model failure, a crash) and
+ * not an abort: remove this once it does.
  */
 import type { Context } from "@earendil-works/chord/context";
 import { type ConversationId, type Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
@@ -22,15 +22,18 @@ export const releaseWaitingQueues = (
 ): Effect.Effect<void, PortFailure, Scope.Scope> =>
   Effect.gen(function* () {
     const waiting = yield* Queue.unbounded<ConversationId>();
-    const unsubscribe = harness.subscribeCommits(({ changes }) => {
-      for (const change of changes) {
-        const record = change.type === "submission" ? change.value : undefined;
-        if (record?.type === "input" && record.status === "unanswered") {
-          Queue.offerUnsafe(waiting, record.conversationId);
+    const observation = harness.observeCommits({
+      advance: ({ changes }) => {
+        for (const change of changes) {
+          const record = change.type === "submission" ? change.value : undefined;
+          if (record?.type === "input" && record.status === "unanswered") {
+            Queue.offerUnsafe(waiting, record.conversationId);
+          }
         }
-      }
+      },
+      end: () => {},
     });
-    yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+    yield* Effect.addFinalizer(() => Effect.sync(() => observation.detach()));
     yield* Queue.take(waiting).pipe(
       Effect.flatMap((conversationId) =>
         release(harness, conversationId, context).pipe(

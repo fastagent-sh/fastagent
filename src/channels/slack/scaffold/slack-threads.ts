@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { obj, opt, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 import { sessionIdOf } from "@fastagent-sh/fastagent";
 import { slackThreads } from "@fastagent-sh/fastagent/slack";
@@ -14,9 +14,9 @@ export default defineTool({
     "question here concerns something discussed in another thread, such as whether a problem raised there was " +
     "resolved: the answer is often what a person wrote in the thread. Only this channel's threads can be read, and " +
     "only in a channel turn.",
-  parameters: Type.Object({
-    threadId: Type.Optional(
-      Type.String({
+  parameters: obj({
+    threadId: opt(
+      str({
         description: "a thread id from the list (its first message's ts, like 1712345678.123456); omit it to list",
       }),
     ),

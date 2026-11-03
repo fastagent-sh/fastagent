@@ -209,7 +209,7 @@ export default defineDefinition({
 - It is customized only through `openAgent(definition, inputs)`, never by mutation, which keeps the assembly
   deterministic.
 - An agent package declares as peers (and dev dependencies) `@fastagent-sh/fastagent` and the pi packages its code
-  imports, `@earendil-works/pi-durable` and `@earendil-works/pi-ai`, in the ranges FastAgent publishes for its own
+  imports, `@earendil-works/pi-durable`, `@earendil-works/pi-ai` and `@earendil-works/pi-schema`, in the ranges FastAgent publishes for its own
   release (`src/version.ts`), so an app holds one copy of each. FastAgent does not re-export pi's authoring API: an
   author's tools, extensions and providers are pi code, imported from pi's packages ([architecture.md](architecture.md)
   §2). Only FastAgent's own authoring surface (`defineAgent`, `needs()`, `defineSchedule`, the settings builders) comes

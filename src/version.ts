@@ -10,7 +10,7 @@ export async function fastagentVersion(): Promise<string> {
 }
 
 /** The packages an agent's code imports besides fastagent: the harness its tools and providers are written for. */
-const HARNESS_PACKAGES = ["@earendil-works/pi-durable", "@earendil-works/pi-ai"];
+const HARNESS_PACKAGES = ["@earendil-works/pi-durable", "@earendil-works/pi-ai", "@earendil-works/pi-schema"];
 
 /** This build's version, and the exact versions of the harness packages it runs, for a new agent to depend on. */
 export async function fastagentBuild(): Promise<{ version: string; harness: Record<string, string> }> {

@@ -66,22 +66,25 @@ export const trackSessions = (
     const touch = (id: ConversationId, value: number) => {
       if (value > (newest.get(id) ?? 0)) newest.set(id, value);
     };
-    // Subscribed before the scan, so a commit while it reads is not lost: either reports the newest id, and the
+    // Observed before the scan, so a commit while it reads is not lost: either reports the newest id, and the
     // larger stands. A change's conversation may be created in the same commit, so membership is not checked here.
     yield* Effect.acquireRelease(
       Effect.sync(() =>
-        harness.subscribeCommits(({ changes }) => {
-          for (const change of changes) {
-            if (change.type === "conversation") {
-              if (isSession(change.value)) sessions.add(change.value.id);
-              touch(change.value.id, change.value.id);
-            } else if (change.type === "entry" || change.type === "submission") {
-              touch(change.value.conversationId, change.value.id);
+        harness.observeCommits({
+          advance: ({ changes }) => {
+            for (const change of changes) {
+              if (change.type === "conversation") {
+                if (isSession(change.value)) sessions.add(change.value.id);
+                touch(change.value.id, change.value.id);
+              } else if (change.type === "entry" || change.type === "submission") {
+                touch(change.value.conversationId, change.value.id);
+              }
             }
-          }
+          },
+          end: () => {},
         }),
       ),
-      (unsubscribe) => Effect.sync(unsubscribe),
+      (observation) => Effect.sync(() => observation.detach()),
     );
     yield* conversations(storage, context).pipe(
       Stream.filter(isSession),
