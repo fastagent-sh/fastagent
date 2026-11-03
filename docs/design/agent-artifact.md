@@ -202,14 +202,18 @@ export default defineDefinition({
 
 - Its public type promises only `name`, `version`, the settings schema and the **declared inputs**: each secret name
   with what it is for, whether it is optional and where it is declared (`needs()`, MCP references, `context.json`'s
-  environment), and the commands the environment requires. A host shows what an instance still needs from this list
+  environment, the default model's provider), and the commands the environment requires. A host shows what an instance still needs from this list
   rather than parsing files; deploy's missing-value report uses the same list. Other fields are internal and may change
   between releases. A symbol brand lets `openAgent` recognize a built definition.
 - It is typed by its settings (`AgentDefinition<Settings>`), so an embedder's `settings` input is checked by the compiler.
 - It is customized only through `openAgent(definition, inputs)`, never by mutation, which keeps the assembly
   deterministic.
-- An agent package declares `@fastagent-sh/fastagent` as a peer and a dev dependency, so an app holds one framework
-  copy. The framework re-exports the authoring API (`defineTool`, schema builders), so that is the only peer.
+- An agent package declares as peers (and dev dependencies) `@fastagent-sh/fastagent` and the pi packages its code
+  imports, `@earendil-works/pi-durable` and `@earendil-works/pi-ai`, in the ranges FastAgent publishes for its own
+  release (`src/version.ts`), so an app holds one copy of each. FastAgent does not re-export pi's authoring API: an
+  author's tools, extensions and providers are pi code, imported from pi's packages ([architecture.md](architecture.md)
+  §2). Only FastAgent's own authoring surface (`defineAgent`, `needs()`, `defineSchedule`, the settings builders) comes
+  from `@fastagent-sh/fastagent`.
 - `format` is an integer independent of the framework's semver; `openAgent` refuses an incompatible one and names the
   version it needs. The peer range governs installation; `format` governs what opens.
 
@@ -222,7 +226,7 @@ An instance is four inputs:
 | Input | Holds | FastAgent |
 |---|---|---|
 | **Configuration** | `fastagent.json` and `.mcp.json`, or the same schema as an API object | Reads only |
-| **Secrets** | Values for the names `needs()`, MCP `${VAR}` references and `context.json`'s environment declare | Reads only; held in memory, never written |
+| **Secrets** | Values for the names `needs()`, MCP `${VAR}` references and `context.json`'s environment declare, and the model provider's variables | Reads only; held in memory, never written |
 | **State** | Sessions, model credentials, MCP grants, model lists, channel state | Writes |
 | **Workspace** | The agent's working directory: acquired content and what the agent produces | The agent writes; may be disposable |
 
@@ -259,7 +263,7 @@ Default locations:
 | Where | Configuration | Instance root |
 |---|---|---|
 | `fastagent dev` in a project | `fastagent.json` and `.mcp.json` at the project root, when present | `.fastagent/dev/` |
-| `fastagent start` and `npm start` in a project | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | `.fastagent/start/` in the project |
+| `fastagent start` and `npm start` in a project (opens the project's `dist/`) | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | `.fastagent/start/` in the project |
 | The package's `bin` (`npx @acme/reviewer`) | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | None: `--root` or `FASTAGENT_ROOT` is required |
 | Docker, Fly, Railway | `/etc/<name>/`, baked into a derived image or mounted | `/var/lib/<name>/`, the volume |
 | AgentCore | `/etc/<name>/`, baked into a derived image | `/mnt/<name>/`, SessionStorage, reset on every deploy |
@@ -270,7 +274,10 @@ the application, which here is the agent, not the framework, so several agents o
 `/var/lib/<name>/` applies where the host lets the mount point be chosen; AgentCore's SessionStorage must mount at
 exactly `/mnt/<one level>` (as `src/deploy/agentcore/plan.ts` notes), so there the root is `/mnt/<name>/`, named to
 the runtime through `FASTAGENT_ROOT`. `start`
-never reads the development `fastagent.json`: production inputs are explicit. A project-relative default is anchored to
+never reads the development `fastagent.json`: production inputs are explicit. In a project, `start` opens the
+built `dist/`, never the source (§1): it refuses, naming `fastagent build`, when `dist/` is missing or was built from
+other sources than the project now holds (the build records a fingerprint of what it read). It does not build on its
+own; the scaffold's `start` script is `fastagent build && fastagent start`. A project-relative default is anchored to
 the project the command opens (the directory holding its `fastagent.config.ts`), as `dev`'s is; outside a project there
 is nothing to anchor to. The package's `bin` and embedding therefore have no default root, because the only candidate,
 the process's cwd, would be an implicit input: running `npx @acme/reviewer` from two directories must not open two
@@ -282,8 +289,12 @@ instances.
   read-only volume) carries both files; `--mcp-config` separates them.
 - `openAgent` reads only its options, never these environment variables and never `process.env` for secret values: an
   embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice).
-  `secrets` is distinct from `credentials`, the model providers' credential store (sign-ins and API keys pi-ai
-  resolves), which today's `openAgent` already takes. An implicit read would let a stray shell variable open a
+  `secrets` is distinct from `credentials`, the model providers' credential store (sign-ins and stored API keys),
+  which today's `openAgent` already takes. A model provider's environment variable (`ANTHROPIC_API_KEY`, or a name a
+  definition's `providers` read) is a secret: the model's auth reads it from the `secrets` input, the CLI's included,
+  and never from `process.env` (today `modelsOver` falls back to `process.env`; that changes). The declared inputs
+  list the names the default model's provider reads, optional because a stored credential satisfies them too; they
+  reach the model's auth only, not child processes (§5). An implicit read would let a stray shell variable open a
   different instance, breaking assembly determinism. (Today `openAgent` falls back to `FASTAGENT_STATE_DIR`; that changes.)
 - External data the agent works on needs no separate root: it is a `path` entry under `content`, and clones live in the
   workspace.
@@ -325,8 +336,10 @@ Composition:
   name is an alias while no instance entry takes it.
   When one does, the bare name is the instance's, the program's stays listed and invocable by its full name, and the
   open reports the overlap. A program upgrade that adds a name an instance already uses therefore never stops the
-  instance from opening. Because a hyphen can also appear inside either part, two different pairs can join to the same
-  full name; the open reports that collision instead of choosing one.
+  instance from opening. One program's full names never collide with each other, since its bare names are distinct.
+  An instance's bare name can equal a program entry's full name (an instance `reviewer-review` beside a program
+  `review`). Then the instance's entry takes that name and the program's entry is not invocable; the open reports it
+  as shadowed, naming both files, and `info` lists it, so the drop is visible (§7) and an upgrade still opens.
 
 - An instance layers only on the program's defaults, never on another instance.
 
@@ -401,9 +414,12 @@ instance's own instructions, skills and prompt templates. `instructions` names f
 the agent writes elsewhere in its workspace never becomes a capability. Where the configuration directory is the
 writable instance root (a local instance, §4.6), the person and the agent can add to these directories, taking effect
 at the next open (§7); deployed, they ship in the read-only configuration (`/etc/<name>/skills/`). A directory that
-resolves to the program's own `skills/` or `prompts/`, or inside the program, is a configuration error reported at
-open: it would offer the program's capabilities twice. In a development project the root's `skills/` is the
-program's, so a development instance names other directories. `content add` writes this file by default: the
+resolves to, or inside, text the program loads (its `SYSTEM.md`, `AGENTS.md`, `skills/` or `prompts/`), and an
+`instructions` file that is one of them, is a configuration error reported at open: it would load the program's text
+twice. Other paths are allowed wherever they are. In a development project the program is the source project, so the
+root's `AGENTS.md`, `skills/` and `prompts/` are the program's and the example above is refused there; a development
+instance declares paths of its own, such as `./dev/AGENTS.md` and `./dev/skills`, which the build does not package
+(§3.4). The example is an instance configuration directory of its own (`/etc/<name>/`, a Kage folder, §4.6). `content add` writes this file by default: the
 development instance's at the project root, or the one `--config <file>` names; `--program` targets the program's `context.json` instead (§3.3). `.mcp.json` stays a file of its own because it is the ecosystem's format: entries copy from any
 server's documentation, and Claude Code working in the same directory reads the same servers, which is intended.
 
@@ -422,8 +438,8 @@ the developer's choice; the framework adds no local layer.
 
 `.fastagent/dev/` sits inside the author's repository, where git run in the workspace would otherwise find and act on
 the author's repository, while on a host there is no repository above `/var/lib/<name>/`. The child environment (§5)
-therefore sets `GIT_CEILING_DIRECTORIES` to the instance root's parent for every instance, so git discovery stops at
-the root everywhere and an agent cannot commit the author's source by walking upward. Cloud-constraint mode checks it.
+therefore sets `GIT_CEILING_DIRECTORIES` to the workspace's parent (the agent's cwd's) for every instance, so git
+discovery stops at the workspace everywhere, wherever `--workdir` or `workdir` puts it and whether or not a root is given, and an agent cannot commit the author's source by walking upward. Cloud-constraint mode checks it.
 
 `dev` loads the definition through the same assembly as a deployment and can run with cloud constraints (§1).
 
@@ -503,7 +519,7 @@ Everything downstream sees only absolute paths, so no subsystem picks its own ba
   `PATH`; `args` pass verbatim, since FastAgent cannot know which strings are paths; the child's working directory is
   the declaration file's directory. A packaged stdio server therefore starts in the read-only package; one that needs a
   writable directory is given one explicitly.
-- A stdio server given through the API (`openAgent({ mcp })`) has no declaration file: it must carry an absolute `cwd`,
+- A stdio server given through the API (`openAgent({ mcpServers })`) has no declaration file: it must carry an absolute `cwd`,
   and a command containing a path must be absolute. Otherwise the open is refused; nothing falls back to the process's
   cwd.
 - No `process.chdir()` and no `process.env` mutation select an instance.
@@ -517,7 +533,7 @@ an environment assembled from inputs, never the host process's whole `process.en
 2. the secrets the definition declares (`needs()`, `context.json`'s environment) that the `secrets` input supplies;
    undeclared names are not passed on;
 3. an MCP entry's own `env` for that server;
-4. `GIT_CEILING_DIRECTORIES` set to the instance root's parent (§4.3).
+4. `GIT_CEILING_DIRECTORIES` set to the workspace's parent (§4.3).
 
 So a stray variable in the host's shell cannot reach a command, and a declared variable reaches every one. The base
 list is part of the assembly that `info` reports.
@@ -651,6 +667,8 @@ Recorded, not solved here:
 | `config.model`, `http`, `deploy` read as fixed values | Read as program defaults under instance overrides |
 | Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | `/etc/<name>/` for configuration and `/var/lib/<name>/` as the instance root; on AgentCore `/mnt/<name>/`; the definition stays in the image |
 | `needs()` and MCP references read `{ ...process.env, ...values }` at open | Secrets are an input: the CLI's environment and `--env-file`, or `openAgent`'s `secrets` |
+| `modelsOver` resolves a provider's variable as `environment[name] \|\| process.env[name]` | The model's auth reads only the `secrets` input |
+| `start` in a project opens the source definition | `start` opens `dist/` and refuses a missing or stale one |
 
 Disposable probes on 0.29.0 executed a source tarball after extraction on Node 26.11.1, Bun 1.4.4 and native Linux ARM64
 (Node 24.15.0), including tools, data, skills, prompts, the official Filesystem MCP 2.1.0 and Agent HTTP calls. Direct
