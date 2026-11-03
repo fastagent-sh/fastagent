@@ -242,7 +242,7 @@ The operations of the Agent API ([SPEC.md](../SPEC.md)) are read from and submit
 
 | Module | Owns |
 |---|---|
-| `agent.ts` | The operations. Admission (a key's lookup, the limits and the submission) is one step per process, since one process owns a storage |
+| `agent.ts` | The operations. Admission is one step per process, since one process owns a storage: the process's limit, then one commit that looks the key up, checks the queue, takes the defaults and submits |
 | `ids.ts` | Every id handed out: the storage's incarnation, then pi-durable's id, so an id kept from a storage that is gone is `not_found` rather than someone else's (architecture.md §2); `sessions.list`' cursors; the session id a tool runs in (`sessionIdOf`) |
 | `messages.ts` | pi-durable's input submissions as messages: the request id carries the Caller's key, the settlement is how the message ended; the session as the API has it |
 | `entries.ts` | Which entries are published (messages, tool results, compactions) and which are the harness's own |

@@ -11,7 +11,6 @@ import {
   type EntryQuery,
   type EntryRecord,
   type Harness,
-  InboxDoc,
   LiveDoc,
   UsageDoc,
 } from "@earendil-works/pi-durable";
@@ -121,8 +120,6 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
       Effect.map((record) => (isInput(record) ? record : undefined)),
     );
 
-  const inbox = (conversation: Conversation) => port(() => harness.snapshot(InboxDoc, conversation.id, context));
-
   /**
    * The sessions as they are now, in one commit: each one's status, reply and settings of one moment, and a page of
    * them one turn on pi-durable's commit line, which every running session writes through too.
@@ -159,7 +156,6 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
     message,
     submission,
     submissionByKey,
-    inbox,
     session,
     sessionsOf,
   };
