@@ -383,6 +383,16 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         });
         subject.release();
       });
+
+      it("answers a key the session has seen with its message, even at the process's capacity", async () => {
+        agent = await subject.start({ inFlightPerProcess: 1 });
+        const sessionId = await newSession(agent);
+        const held = await send({ sessionId, content: "hold", idempotencyKey: "held" });
+        await expect(send({ sessionId, content: "hold", idempotencyKey: "held" })).resolves.toMatchObject({
+          id: held.id,
+        });
+        subject.release();
+      });
     });
 
     describe("Idempotency", () => {

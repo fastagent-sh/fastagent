@@ -267,11 +267,12 @@ function liveTranslator(
       events.push(...progress(outermost(slot.callId), callLine(slot.name, slot.arguments)));
     }
     const current = new Set([...tools, ...calls].map((slot) => slot.callId));
-    for (const callId of [...started, ...lines.keys(), ...nested.keys()]) {
+    for (const callId of [...started, ...lines.keys(), ...nested.keys(), ...toolArgs.keys()]) {
       if (current.has(callId)) continue;
       started.delete(callId);
       lines.delete(callId);
       nested.delete(callId);
+      toolArgs.delete(callId);
     }
     return events;
   };

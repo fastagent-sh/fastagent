@@ -353,8 +353,8 @@ function durableAgent(
     );
 
   /**
-   * Admission, one at a time per process: the process's limit, then one commit that looks the key up, checks the queue,
-   * takes the defaults and submits, so it stores all of that or none of it.
+   * Admission, one at a time per process: one commit that looks the key up, then checks the process's limit and the
+   * queue, takes the defaults and submits, so it stores all of that or none of it.
    */
   const admit = (
     request: SendRequest,
@@ -368,11 +368,9 @@ function durableAgent(
         // Before anything is written: reading or expanding a command reads the definition's files, and may throw.
         const { content, sent } = expandCommand(request.content, commands());
         const conversation = yield* conversationOf(request.sessionId);
-        if ((yield* inFlight) >= inFlightLimit) {
-          return yield* agentError("busy", `This agent already holds ${inFlightLimit} messages`, {
-            reason: "capacity",
-          });
-        }
+        // Read before the commit, which cannot read the harness, and applied after the key: a key the session has
+        // seen answers with its message whatever the process holds (SPEC.md §5.2).
+        const atCapacity = (yield* inFlight) >= inFlightLimit;
         const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
         let submitting = false;
         const admitted = yield* port(() =>
@@ -381,6 +379,7 @@ function durableAgent(
               const seen = await tx.submissionByRequest(conversation.id, requestId);
               if (isInput(seen)) return { kind: "seen", seen } as const;
             }
+            if (atCapacity) return { kind: "capacity" } as const;
             if (request.whenBusy !== "reject") {
               const inbox = await tx.doc(InboxDoc, conversation.id);
               if (queuedInputs(inbox).length >= LIMITS.queuedPerSession) return { kind: "full" } as const;
@@ -408,6 +407,11 @@ function durableAgent(
           }),
         );
         if (admitted.kind === "seen") return { message: yield* reads.message(admitted.seen), replayed: true };
+        if (admitted.kind === "capacity") {
+          return yield* agentError("busy", `This agent already holds ${inFlightLimit} messages`, {
+            reason: "capacity",
+          });
+        }
         if (admitted.kind === "full") {
           return yield* agentError("busy", `The session already has ${LIMITS.queuedPerSession} queued messages`, {
             reason: "queue_full",
