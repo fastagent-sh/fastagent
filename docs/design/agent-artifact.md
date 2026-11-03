@@ -313,15 +313,41 @@ Composition:
   uses therefore never stops the instance from opening. The command spelling under `/skill:` is settled in
   implementation.
 
+- An instance layers only on the program's defaults, never on another instance.
+
 **MCP: three different things.** A server's declaration (`command` or `url`, `args`, headers with `${VAR}`
 references) is configuration: the program's `mcp.json` declares the servers every instance connects, an instance's
 `.mcp.json` or `mcpServers` adds its own, and neither ever holds a secret value. The values those references name are
 secrets, the same input `needs()` reads; today's `McpOptions.variables` merges into `secrets`. An OAuth grant, created
-when a person authorizes in a browser and refreshed afterwards, is state: it lives in the grant store (under `.state/`
-by default, or a host's own) and an instance's binding says which grant a server uses. `mcp` keeps `store`, `bindings`
-and `fetch` ([mcp-auth.md](mcp-auth.md)). A program-declared server without its required value or grant refuses the
-open and says what is missing.
-- An instance layers only on the program's defaults, never on another instance.
+when a person authorizes in a browser and refreshed afterwards, is state. `mcp` keeps `store`, `bindings` and `fetch`
+([mcp-auth.md](mcp-auth.md)). A program-declared server without its required value or grant refuses the open and says
+what is missing.
+
+Where a static value lives depends on where the instance runs; it reaches the instance only as the `secrets` input:
+
+| Where | The value lives in | It reaches the instance through |
+|---|---|---|
+| `fastagent dev` | the project's `.secrets/.env`, never committed | the default env file |
+| `fastagent start`, the package's `bin` | an operator's owner-only file outside the configuration directory, or the process environment | `--env-file <path>` or the environment |
+| Docker | a host env file, or the environment running Compose | `env_file:` (mode A) or `environment:` names (mode B), §6.2 |
+| Fly, Railway | the platform's secrets | the platform's injected environment |
+| AgentCore | one JSON secret in Secrets Manager | its ARN in the environment, read at start |
+| An embedding app (Kage) | the app's own secure store (the macOS Keychain) | `openAgent({ secrets })` |
+
+A grant and its binding are written by the sign-in flow, not supplied by a person:
+
+| Part | What it is | Where |
+|---|---|---|
+| Grant | Access and refresh tokens | The grant store: `<root>/.state/` by default, owner-readable and never exported; or a host's own (`mcpGrantFile(path)` in an app's private directory) |
+| Binding | Which grant this instance's server uses | `<root>/.state/` by default; an app may keep bindings in its own records and pass `mcp.bindings` |
+
+A grant is created where the instance runs. Locally, `fastagent mcp login <server>` or the host's UI opens the browser.
+A deployed instance authorizes for itself and is never given a copy of a local or Kage grant, since two holders of one
+grant log each other out when either refreshes. Today that means running the login against the deployment with its
+callback port forwarded to the browser's machine; an automatic relay is a known gap (§8). A server that needs no OAuth
+uses static values instead. (0.29.0 keeps grants in `.secrets/mcp-auth.json` and bindings in the state root's
+`mcp-bindings.json`; with `.secrets/` no longer part of an instance, grants move under `.state/` beside the model
+credentials' `auth.json`.)
 
 ### 4.2 `fastagent.json` and `.mcp.json`
 
@@ -512,6 +538,11 @@ host maps it to a mount, and is otherwise refused at preflight, never silently s
 | Fly, Railway | Set through the platform's CLI | Nothing set; the platform's existing names are compared with the declared ones |
 | AgentCore | Written to one per-deployment JSON secret in Secrets Manager | `--secret-arn` names an existing secret; deploy only grants access |
 
+Both modes carry static values only. OAuth is created on the deployment itself, never carried: a model provider's login
+through `fastagent login --deployment`, an MCP server's grant by signing in against the deployed instance (§4.1; no
+automatic relay yet, §8). Deploy reports a declared OAuth server the target has no grant for as missing, alongside
+missing values.
+
 The names a deployment needs come from `needs()`, MCP references, `context.json`'s environment and the channels. Mode A
 checks the file; mode B checks the platform where it can list names, and startup's check covers the rest.
 
@@ -568,6 +599,8 @@ Recorded, not solved here:
 - Concurrent sessions share one workspace, so two can step on each other's files and git state.
 - Scale-out needs state in shared storage and a workspace per replica.
 - AgentCore keeps nothing on disk across deploys; only delivered configuration and external secrets persist there.
+- A deployed instance's MCP OAuth sign-in has no automatic relay (no `mcp login --deployment`): it runs against the
+  deployment with a forwarded callback port, and on AgentCore a grant is lost with the storage on every deploy.
 
 ## 9. Current implementation seams and evidence
 
