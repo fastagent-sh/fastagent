@@ -313,9 +313,13 @@ Composition:
   shadowed, deep-merged or written back into the program files.
 - Skills and prompt templates are namespaced instead of refused. A program's have a full name `<program>-<name>`
   (`reviewer-review`), built from the program name normalized to one segment (§4.5); an instance's are bare, since an
-  instance is what opens. A full name follows the skill-name rule like any other (lowercase letters, digits and single
-  hyphens, at most 64 characters), so `/skill:reviewer-review` needs no special syntax; the open refuses a program
-  name and skill name whose join breaks the rule. A program's bare name is an alias while no instance entry takes it.
+  instance is what opens. A full name obeys the rule of its kind, which differs. A skill name is lowercase letters,
+  digits and single hyphens, at most 64 characters (the Agent Skills rule, enforced where skills are read), so
+  `/skill:reviewer-review` needs no special syntax and the open refuses a program name and skill name whose join breaks
+  the rule. A prompt template's name is its file name, and the only constraint is that it contains no whitespace,
+  because a message's `/<name>` is matched up to the first whitespace; existing names such as `Review_PR` stay valid, and
+  the join is refused only if it would contain whitespace, which a normalized program name cannot add. A program's bare
+  name is an alias while no instance entry takes it.
   When one does, the bare name is the instance's, the program's stays listed and invocable by its full name, and the
   open reports the overlap. A program upgrade that adds a name an instance already uses therefore never stops the
   instance from opening. Because a hyphen can also appear inside either part, two different pairs can join to the same
