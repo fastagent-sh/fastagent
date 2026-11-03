@@ -28,7 +28,7 @@ the same:
 - capabilities: tools, MCP servers, extensions, channels, schedules;
 - configuration: effective model, thinking level and settings, each with its source;
 - paths and environment: declared paths resolve to the same absolute locations relative to the instance roots, and the
-  same commands and variables are required;
+  same commands and variables are required and passed to child processes (§5);
 - failure semantics: a missing input refuses the open at the same point, the same way.
 
 Acceptance:
@@ -133,7 +133,10 @@ export default defineAgent({
   Schema with static types, the same schema language pi-durable 1.5.0 uses for tool parameters (this requires moving to
   pi 1.5.0). Secrets stay with `needs()` beside the code that reads them; `settings` is for non-secret values.
 - `fastagent build` runs the configuration check, so a mistake fails before publication rather than at a host's open.
-- A literal configuration imports nothing at run time; an agent opens before `npm install`.
+- A configuration without `settings` can stay a literal with a type-only import, as today's scaffold writes it, and
+  opens before `npm install`. Declaring `settings` calls the schema builders at run time, so that configuration imports
+  `@fastagent-sh/fastagent` and needs its dependencies installed; the scaffold starts literal and the author switches to
+  `defineAgent` when adding settings.
 
 ### 3.3 `context.json` and `mcp.json`
 
@@ -235,6 +238,8 @@ Every input can be placed anywhere, so a host can mount each on the storage that
 | Instance configuration | `--config <file>` | `FASTAGENT_CONFIG` | `config` (object) |
 | MCP configuration | `--mcp-config <file>` | `FASTAGENT_MCP_CONFIG` | `mcp` (object) |
 | Secrets | `--env-file <file>` | the process environment | `secrets` (`Record<string, string>`) |
+| Child-process base environment (§5) | — | the CLI's own `PATH`, `HOME`, locale, proxy variables | `env` |
+| Instance name (§4.5) | `--name <name>` | `FASTAGENT_NAME` | `name` |
 | Instance root | `--root <dir>` | `FASTAGENT_ROOT` (replaces `FASTAGENT_STORAGE_DIR`) | `root` |
 | State, apart from the root | `--state <dir>` | `FASTAGENT_STATE_DIR` | `stateDir` |
 | Workspace, apart from the root | `--workdir <dir>` | `FASTAGENT_WORKDIR` | `workdir` |
@@ -244,7 +249,8 @@ Default locations:
 | Where | Configuration | Instance root |
 |---|---|---|
 | `fastagent dev` in a project | `fastagent.json` and `.mcp.json` at the project root, when present | `.fastagent/dev/` |
-| `fastagent start`, `npm start`, the package's `bin` | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | `.fastagent/start/` |
+| `fastagent start` and `npm start` in a project | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | `.fastagent/start/` in the project |
+| The package's `bin` (`npx @acme/reviewer`) | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | None: `--root` or `FASTAGENT_ROOT` is required |
 | Docker, Fly, Railway | `/etc/<name>/`, baked into a derived image or mounted | `/var/lib/<name>/`, the volume |
 | AgentCore | `/etc/<name>/`, baked into a derived image | `/mnt/<name>/`, SessionStorage, reset on every deploy |
 | Embedding | The `config` object; otherwise the program's defaults | None: `root`, or `stateDir` and `workdir`, are required |
@@ -254,8 +260,11 @@ the application, which here is the agent, not the framework, so several agents o
 `/var/lib/<name>/` applies where the host lets the mount point be chosen; AgentCore's SessionStorage must mount at
 exactly `/mnt/<one level>` (as `src/deploy/agentcore/plan.ts` notes), so there the root is `/mnt/<name>/`, named to
 the runtime through `FASTAGENT_ROOT`. `start`
-never reads the development `fastagent.json`: production inputs are explicit. Embedding has no default root because the
-only candidate, the process's cwd, would be an implicit input.
+never reads the development `fastagent.json`: production inputs are explicit. A project-relative default is anchored to
+the project the command opens (the directory holding its `fastagent.config.ts`), as `dev`'s is; outside a project there
+is nothing to anchor to. The package's `bin` and embedding therefore have no default root, because the only candidate,
+the process's cwd, would be an implicit input: running `npx @acme/reviewer` from two directories must not open two
+instances.
 
 - For the CLI, a flag beats its environment variable, which beats the default. Relative paths resolve once at the
   command's entry, against the directory it was started in.
@@ -264,8 +273,8 @@ only candidate, the process's cwd, would be an implicit input.
 - `openAgent` reads only its options, never these environment variables and never `process.env` for secret values: an
   embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice).
   `secrets` is distinct from `credentials`, the model providers' credential store (sign-ins and API keys pi-ai
-  resolves), which today's `openAgent` already takes. An implicit read would let a stray shell variable open a different instance, breaking assembly
-  determinism. (Today `openAgent` falls back to `FASTAGENT_STATE_DIR`; that changes.)
+  resolves), which today's `openAgent` already takes. An implicit read would let a stray shell variable open a
+  different instance, breaking assembly determinism. (Today `openAgent` falls back to `FASTAGENT_STATE_DIR`; that changes.)
 - External data the agent works on needs no separate root: it is a `path` entry under `content`, and clones live in the
   workspace.
 - `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` remain finer overrides; their defaults move under the state root.
@@ -307,8 +316,8 @@ Composition:
     "handbook": { "github": "acme/handbook", "ref": "main" },
     "data": { "path": "/srv/data" }
   },
-  "skills": ["./skills"],
-  "prompts": ["./prompts"]
+  "skills": ["./instance/skills"],
+  "prompts": ["./instance/prompts"]
 }
 ```
 
@@ -316,7 +325,10 @@ Composition:
 additional content sources (including the machine-local bindings `context.local.json` held before), and additional
 skill and prompt-template directories. `skills` and `prompts` name directories relative to `fastagent.json`, so in a
 deployment they ship inside the delivered, read-only configuration (`/etc/<name>/skills/`); they are never discovered
-in the writable workspace. `content add` writes this file by default: the development instance's at the project root,
+in the writable workspace. A directory that resolves to the program's own `skills/` or `prompts/`, or inside the
+program (the package or, in development, the project's program directories), is a configuration error reported at
+open: it would offer the program's capabilities a second time under colliding names. `content add` writes this file by
+default: the development instance's at the project root,
 or the one `--config <file>` names; `--program` targets the program's `context.json` instead (§3.3). `.mcp.json` stays a file of its own because it is the ecosystem's format: entries copy from any
 server's documentation, and Claude Code working in the same directory reads the same servers, which is intended.
 
@@ -331,6 +343,11 @@ workspace is kept apart from the source, so `dev` runs the same shape as a deplo
 by side; the names and §4.1's composition rule keep them distinct. Other environments are other inputs, given
 explicitly. How a team lays out per-environment files, what it commits and whether it keeps a personal local layer is
 the developer's choice; the framework adds no local layer.
+
+`.fastagent/dev/` sits inside the author's repository, where git run in the workspace would otherwise find and act on
+the author's repository, while on a host there is no repository above `/var/lib/<name>/`. The child environment (§5)
+therefore sets `GIT_CEILING_DIRECTORIES` to the instance root's parent for every instance, so git discovery stops at
+the root everywhere and an agent cannot commit the author's source by walking upward. Cloud-constraint mode checks it.
 
 `dev` loads the definition through the same assembly as a deployment and can run with cloud constraints (§1).
 
@@ -366,8 +383,9 @@ The app needs no files: configuration is the same schema as an object, read by t
 
 ### 4.5 Identity
 
-An instance's name is an explicit input. It defaults to the definition's name, normalized to one path segment
-(`@scope/pkg` is not one), because a deployment joins it onto storage and resource names. `config.name` is for display.
+An instance's name is an explicit input (`--name`, `FASTAGENT_NAME`, `name`; §4.1). It defaults to the definition's
+name, normalized to one path segment (`@scope/pkg` is not one), because a deployment joins it onto storage and
+resource names; two instances of one definition on one machine take distinct names. `config.name` is for display.
 
 ## 5. Paths
 
@@ -378,11 +396,28 @@ Everything downstream sees only absolute paths, so no subsystem picks its own ba
   relative one is refused rather than resolved against the process's cwd.
 - A module's packaged resource is relative to the module (`import.meta.url`); a skill's resource to the skill's root;
   a coding tool's relative path to the workspace.
-- MCP: a command containing a path resolves against its declaration file; a bare command uses the instance's `PATH`;
-  `args` pass verbatim, since FastAgent cannot know which strings are paths; the child's working directory is the
-  declaration file's directory. A packaged stdio server therefore starts in the read-only package; one that needs a
+- MCP: a command containing a path resolves against its declaration file; a bare command uses the child environment's
+  `PATH`; `args` pass verbatim, since FastAgent cannot know which strings are paths; the child's working directory is
+  the declaration file's directory. A packaged stdio server therefore starts in the read-only package; one that needs a
   writable directory is given one explicitly.
+- A stdio server given through the API (`openAgent({ mcp })`) has no declaration file: it must carry an absolute `cwd`,
+  and a command containing a path must be absolute. Otherwise the open is refused; nothing falls back to the process's
+  cwd.
 - No `process.chdir()` and no `process.env` mutation select an instance.
+
+**The child environment.** Every process the instance starts (the shell tool, stdio MCP servers, skill scripts) gets
+an environment assembled from inputs, never the host process's whole `process.env`:
+
+1. a base: `PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and the proxy variables (`HTTP_PROXY`,
+   `HTTPS_PROXY`, `NO_PROXY`). The CLI copies these from its own environment; `openAgent` takes them from its `env`
+   option, and an embedding app that wants its own passes them (`env: baseEnv(process.env)`, a helper FastAgent exports);
+2. the secrets the definition declares (`needs()`, `context.json`'s environment) that the `secrets` input supplies;
+   undeclared names are not passed on;
+3. an MCP entry's own `env` for that server;
+4. `GIT_CEILING_DIRECTORIES` set to the instance root's parent (§4.3).
+
+So a stray variable in the host's shell cannot reach a command, and a declared variable reaches every one. The base
+list is part of the assembly that `info` reports.
 
 ## 6. Cloud deployment
 
