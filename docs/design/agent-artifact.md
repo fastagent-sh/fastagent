@@ -70,7 +70,10 @@ explicit inputs below rather than whatever the process happens to find.
    instance never writes into it.
 2. **An instance is its inputs, not a directory convention.** The framework fixes which inputs an open accepts, their
    precedence, and where FastAgent writes. How a developer lays out files and what they commit is theirs.
-3. **FastAgent writes only state.** It never writes the package, the configuration it was given, or secret inputs.
+3. **A running instance writes only its state.** An open (`openAgent`, `dev`, `start`, a deployment) never writes the
+   package, the configuration it was given, or secret inputs. The CLI's editing commands (`content add`, `env add`,
+   `add <channel>`) are authoring and operating tools, not the running instance: each writes only the file it targets
+   (§3.3, §4.2, §6.2).
 4. **One file, one audience.** Program files are the author's; instance files are the deployer's.
 5. **File rule.** Code and typed defaults are TypeScript; FastAgent data a command rewrites is JSON, one file per side;
    an ecosystem-standard format (MCP) keeps its own file.
@@ -137,8 +140,10 @@ export default defineAgent({
 `context.json` keeps its current shape: `content`, the baseline sources the agent works on, and `environment`, the
 commands, runtimes and variable names it needs. Its name matches the vocabulary in
 [agent-model.md](agent-model.md): context is content, connectors and environment; connectors are `mcp.json`.
-`fastagent env add` and `fastagent content add` keep rewriting it under one lock. `context.local.json` goes away: a
-machine's own bindings belong to the instance (§4.2).
+`fastagent env add` rewrites its `environment` (the environment belongs only to the program).
+`fastagent content add --program` rewrites its `content` baseline; without `--program`, `content add` writes the
+instance configuration instead (§4.2). Both edits keep the existing lock. `context.local.json` goes away: a machine's
+own bindings belong to the instance.
 
 `mcp.json` is the default MCP servers in the standard `mcpServers` shape, with secret references by name.
 
@@ -200,11 +205,12 @@ export default defineDefinition({
 
 ### 4.1 Inputs
 
-An instance is three inputs:
+An instance is four inputs:
 
 | Input | Holds | FastAgent |
 |---|---|---|
 | **Configuration** | `fastagent.json` and `.mcp.json`, or the same schema as an API object | Reads only |
+| **Secrets** | Values for the names `needs()`, MCP `${VAR}` references and `context.json`'s environment declare | Reads only; held in memory, never written |
 | **State** | Sessions, model credentials, MCP grants, model lists, channel state | Writes |
 | **Workspace** | The agent's working directory: acquired content and what the agent produces | The agent writes; may be disposable |
 
@@ -228,7 +234,7 @@ Every input can be placed anywhere, so a host can mount each on the storage that
 |---|---|---|---|
 | Instance configuration | `--config <file>` | `FASTAGENT_CONFIG` | `config` (object) |
 | MCP configuration | `--mcp-config <file>` | `FASTAGENT_MCP_CONFIG` | `mcp` (object) |
-| Secret values | `--env-file <file>` | the process environment | given explicitly |
+| Secrets | `--env-file <file>` | the process environment | `secrets` (`Record<string, string>`) |
 | Instance root | `--root <dir>` | `FASTAGENT_ROOT` (replaces `FASTAGENT_STORAGE_DIR`) | `root` |
 | State, apart from the root | `--state <dir>` | `FASTAGENT_STATE_DIR` | `stateDir` |
 | Workspace, apart from the root | `--workdir <dir>` | `FASTAGENT_WORKDIR` | `workdir` |
@@ -240,11 +246,14 @@ Default locations:
 | `fastagent dev` in a project | `fastagent.json` and `.mcp.json` at the project root, when present | `.fastagent/dev/` |
 | `fastagent start`, `npm start`, the package's `bin` | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | `.fastagent/start/` |
 | Docker, Fly, Railway | `/etc/<name>/`, baked into a derived image or mounted | `/var/lib/<name>/`, the volume |
-| AgentCore | `/etc/<name>/`, baked into a derived image | `/var/lib/<name>/`, SessionStorage, reset on every deploy |
+| AgentCore | `/etc/<name>/`, baked into a derived image | `/mnt/<name>/`, SessionStorage, reset on every deploy |
 | Embedding | The `config` object; otherwise the program's defaults | None: `root`, or `stateDir` and `workdir`, are required |
 
 `<name>` is the instance name (§4.5). The paths follow the filesystem-hierarchy convention of naming a directory after
-the application, which here is the agent, not the framework, so several agents on one machine never collide. `start`
+the application, which here is the agent, not the framework, so several agents on one machine never collide.
+`/var/lib/<name>/` applies where the host lets the mount point be chosen; AgentCore's SessionStorage must mount at
+exactly `/mnt/<one level>` (as `src/deploy/agentcore/plan.ts` notes), so there the root is `/mnt/<name>/`, named to
+the runtime through `FASTAGENT_ROOT`. `start`
 never reads the development `fastagent.json`: production inputs are explicit. Embedding has no default root because the
 only candidate, the process's cwd, would be an implicit input.
 
@@ -252,8 +261,10 @@ only candidate, the process's cwd, would be an implicit input.
   command's entry, against the directory it was started in.
 - `.mcp.json` defaults to the instance configuration's directory, so one mounted directory (a Kubernetes ConfigMap, a
   read-only volume) carries both files; `--mcp-config` separates them.
-- `openAgent` reads only its options, never these environment variables: an embedding app that wants them reads and
-  passes them itself. An implicit read would let a stray shell variable open a different instance, breaking assembly
+- `openAgent` reads only its options, never these environment variables and never `process.env` for secret values: an
+  embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice).
+  `secrets` is distinct from `credentials`, the model providers' credential store (sign-ins and API keys pi-ai
+  resolves), which today's `openAgent` already takes. An implicit read would let a stray shell variable open a different instance, breaking assembly
   determinism. (Today `openAgent` falls back to `FASTAGENT_STATE_DIR`; that changes.)
 - External data the agent works on needs no separate root: it is a `path` entry under `content`, and clones live in the
   workspace.
@@ -294,14 +305,19 @@ Composition:
   "settings": { "repo": "acme/api" },
   "content": {
     "handbook": { "github": "acme/handbook", "ref": "main" },
-    "data": { "path": "/mnt/data" }
-  }
+    "data": { "path": "/srv/data" }
+  },
+  "skills": ["./skills"],
+  "prompts": ["./prompts"]
 }
 ```
 
-`fastagent.json` holds every FastAgent-owned instance input: overrides of the program's defaults, settings values and
-additional content sources, including the machine-local bindings `context.local.json` held before. Commands such as
-`content add` rewrite it. `.mcp.json` stays a file of its own because it is the ecosystem's format: entries copy from any
+`fastagent.json` holds every FastAgent-owned instance input: overrides of the program's defaults, settings values,
+additional content sources (including the machine-local bindings `context.local.json` held before), and additional
+skill and prompt-template directories. `skills` and `prompts` name directories relative to `fastagent.json`, so in a
+deployment they ship inside the delivered, read-only configuration (`/etc/<name>/skills/`); they are never discovered
+in the writable workspace. `content add` writes this file by default: the development instance's at the project root,
+or the one `--config <file>` names; `--program` targets the program's `context.json` instead (§3.3). `.mcp.json` stays a file of its own because it is the ecosystem's format: entries copy from any
 server's documentation, and Claude Code working in the same directory reads the same servers, which is intended.
 
 A secret value never appears in either file; both reference secrets by name.
@@ -340,7 +356,8 @@ import reviewer from "@acme/reviewer";
 const agent = await openAgent(reviewer, {
   config: { model: "anthropic/claude-x", settings: { repo: "acme/api" }, content: { /* … */ } },
   root: "/var/lib/myapp/reviewer",
-  credentials,
+  secrets: { GITHUB_TOKEN: vault.read("github") },   // values for needs() and MCP references
+  credentials,                                       // model providers' credential store
 });
 ```
 
@@ -378,8 +395,8 @@ Everything downstream sees only absolute paths, so no subsystem picks its own ba
 | Program | Per version | The image, read-only |
 | Configuration | Per deployment | Delivered with the deployment, read-only: baked into a derived image or mounted; both are supported |
 | Secrets | Per deployment, rotatable | The platform's secret storage |
-| State | Durable | `/var/lib/<name>/.state/` on a volume, or managed storage; AgentCore resets it on every deploy |
-| Workspace | Rebuildable | `/var/lib/<name>/` on a volume or a disposable disk; acquired again from content declarations at start |
+| State | Durable | `/var/lib/<name>/.state/` on a volume, or managed storage; AgentCore: `/mnt/<name>/.state/`, reset on every deploy |
+| Workspace | Rebuildable | `/var/lib/<name>/` on a volume or a disposable disk (AgentCore: `/mnt/<name>/`); acquired again from content declarations at start |
 
 A container instance:
 
@@ -387,7 +404,7 @@ A container instance:
 /app/                     the image: the program, read-only
 /etc/<name>/              configuration, read-only (derived-image layer or mount)
   fastagent.json  .mcp.json
-/var/lib/<name>/          the volume, FASTAGENT_ROOT: the agent's cwd
+/var/lib/<name>/          the volume, FASTAGENT_ROOT: the agent's cwd (/mnt/<name>/ on AgentCore)
   .state/
   content/<entry>/
   ...
@@ -439,17 +456,23 @@ what it was given.
 
 | Can add through its configuration | Cannot |
 |---|---|
-| Remote MCP servers, skills, prompt templates, scripts using runtimes already in the image | Capabilities needing OS or npm packages the image lacks |
+| Remote MCP servers, skill and prompt-template directories in the delivered configuration, scripts using runtimes already in the image | Capabilities needing OS or npm packages the image lacks |
 
 The environment belongs to the program. Users manage the dependencies of their own additions on their own machines;
 FastAgent installs nothing for them and mutates no host globally.
 
 ## 7. When additions take effect
 
-- **Text** (skills, instructions) is read per message, as today, with a check that a name does not collide with the
-  program's.
-- **Connections and executables** (MCP servers, tools) take effect at an explicit close and reopen. No automatic restart
-  and no hot replacement of loaded code.
+**Every addition takes effect at an explicit close and reopen**, which selects one snapshot of the configuration for
+the life of that open:
+
+- **Text** (instance skill and prompt-template directories) is read at open from the configuration's directories (§4.2),
+  with names checked against the program's. No per-message rescan bypasses this boundary: one would let one open
+  present different model-facing text, and let files the agent writes into its workspace become capabilities. This
+  keeps the first draft's rule and changes the current source-directory behavior, where skills and `AGENTS.md` in the
+  agent directory are read on the next message ([agent-model.md §6](agent-model.md#6-an-agent-changes-itself)).
+- **Connections and executables** (MCP servers, tools) take effect the same way. No automatic restart and no hot
+  replacement of loaded code.
 - An open that cannot assemble its configured set refuses before reporting ready, releases what it acquired and keeps
   its diagnostics. No configured capability is silently dropped.
 
@@ -472,7 +495,8 @@ Recorded, not solved here:
 | Deploy copies and replaces the author directory | Deploys the artifact plus delivered configuration; state preserved |
 | `context.local.json` and `.secrets/<env>/.env` carry instance settings | `fastagent.json` carries settings; env files carry secrets |
 | `config.model`, `http`, `deploy` read as fixed values | Read as program defaults under instance overrides |
-| Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | `/etc/<name>/` for configuration, `/var/lib/<name>/` as the instance root; the definition stays in the image |
+| Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | `/etc/<name>/` for configuration and `/var/lib/<name>/` as the instance root; on AgentCore `/mnt/<name>/`; the definition stays in the image |
+| `needs()` and MCP references read `{ ...process.env, ...values }` at open | Secrets are an input: the CLI's environment and `--env-file`, or `openAgent`'s `secrets` |
 
 Disposable probes on 0.29.0 executed a source tarball after extraction on Node 26.11.1, Bun 1.4.4 and native Linux ARM64
 (Node 24.15.0), including tools, data, skills, prompts, the official Filesystem MCP 2.1.0 and Agent HTTP calls. Direct
@@ -486,11 +510,11 @@ boundary experiments, not a supported format.
 
 1. **Artifact.** A compiled `dist/` with its `bin`, installed under `node_modules`, opened read-only with explicit
    inputs, two independent instances, on Node and Bun. Move to pi 1.5.0 and pi-schema.
-2. **Inputs.** The three-input contract with the instance root, `fastagent.json`, one resolver for API objects and
+2. **Inputs.** The four-input contract with the instance root, `fastagent.json`, one resolver for API objects and
    files, the configuration shape of §3.2, the default locations, `dev` cloud-constraint mode and the scaffold's npm
    scripts; `context.local.json` removed.
 3. **Deployment.** Derived from the same artifact with delivered configuration under `/etc/<name>/` and the instance
-   root under `/var/lib/<name>/`; secret modes A and B, missing-value guidance, AgentCore through Secrets Manager.
+   root under `/var/lib/<name>/` (`/mnt/<name>/` on AgentCore); secret modes A and B, missing-value guidance, AgentCore through Secrets Manager.
 4. **Instance additions.** Content and `.mcp.json` entries, text additions, the reopen boundary.
 5. Any public [SPEC](../SPEC.md) change is reviewed on its own.
 
