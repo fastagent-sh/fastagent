@@ -91,13 +91,13 @@ export default {
     await mkdir(join(agent, "src/tools"), { recursive: true });
     await writeFile(
       join(agent, "src/tools/context.mjs"),
-      `import { Type } from "@earendil-works/pi-ai";
+      `import { obj, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 import { sessionIdOf } from "@fastagent-sh/fastagent";
 export default defineTool({
   name: "context",
   description: "Read invocation context",
-  parameters: Type.Object({}),
+  parameters: obj({}),
   execute: async (_args, api, context) => ({
     output: [{ type: "text", text: JSON.stringify({ session: await sessionIdOf(api, context), cwd: api.env?.cwd }) }],
   }),

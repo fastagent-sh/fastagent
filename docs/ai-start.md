@@ -194,16 +194,16 @@ export function batchCount(items: number, size: number): number {
 **`src/tools/plan-batches.ts`**
 
 ```ts
-import { Type } from "@earendil-works/pi-ai";
+import { int, obj } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 import { batchCount } from "../../lib/batches.ts";
 
 export default defineTool({
   name: "plan-batches",
   description: "Count review batches for a non-negative item count and a positive batch size.",
-  parameters: Type.Object({
-    items: Type.Integer({ minimum: 0 }),
-    size: Type.Integer({ minimum: 1 }),
+  parameters: obj({
+    items: int({ minimum: 0 }),
+    size: int({ minimum: 1 }),
   }),
   execute: async ({ items, size }) => ({
     output: [{ type: "text", text: JSON.stringify({ batches: batchCount(items, size) }) }],

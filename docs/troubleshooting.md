@@ -68,7 +68,7 @@ or a refusal naming a file of `src/`.
 Check:
 
 - the agent ran `npm install`, and the packages its code imports (`@earendil-works/pi-durable`,
-  `@earendil-works/pi-ai`, its own) are in its `package.json`,
+  `@earendil-works/pi-ai`, `@earendil-works/pi-schema`, its own) are in its `package.json`,
 - `package.json` has `"type": "module"`,
 - the module sits directly in `src/tools/`, `src/extensions/`, `src/channels/` or `src/schedules/`, ends in `.ts`,
   `.mts`, `.js` or `.mjs`, and is not a test (`*.test.*`, `*.spec.*`); a helper it imports lives outside those
@@ -91,11 +91,11 @@ Codex error: Invalid schema for function 'fetch-url': In context=('properties', 
 
 OpenAI's strict tool schemas accept only these string formats: `date-time`, `time`, `date`, `duration`, `email`,
 `hostname`, `ipv4`, `ipv6`, `uuid`. Any other one fails every message on that provider, so the tool cannot be called
-at all. `Type.String({ format: "uri" })` emits it: use a pattern instead, which every provider accepts, and validate
+at all. `str({ format: "uri" })` emits it: use a pattern instead, which every provider accepts, and validate
 further in `execute` if needed:
 
 ```ts
-parameters: Type.Object({ url: Type.String({ pattern: "^https?://\\S+$" }) }),
+parameters: obj({ url: str({ pattern: "^https?://\\S+$" }) }),
 ```
 
 ## Port already in use

@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { obj, opt, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 import { sessionIdOf } from "@fastagent-sh/fastagent";
 import { feishuThreads } from "@fastagent-sh/fastagent/feishu";
@@ -14,8 +14,8 @@ export default defineTool({
     "it when a question here concerns something discussed in a thread, such as whether a problem raised there was " +
     "resolved: the answer is often what a person wrote in the thread. Only this chat's threads can be read, and " +
     "only in a group chat turn.",
-  parameters: Type.Object({
-    threadId: Type.Optional(Type.String({ description: "a thread id from the list (omt_…); omit it to list" })),
+  parameters: obj({
+    threadId: opt(str({ description: "a thread id from the list (omt_…); omit it to list" })),
   }),
   execute: async ({ threadId }, api, context) => {
     const threads = feishuThreads(await sessionIdOf(api, context));

@@ -30,7 +30,7 @@ my-agent/
 ├── SYSTEM.md                      # the system prompt: who the agent is, what it does, how it improves itself
 ├── skills/writing-great-skills/   # the example skill: how to author skills well
 ├── fastagent.config.ts            # model, providers, http
-├── package.json                   # FastAgent, pi-durable and pi-ai, installed by init
+├── package.json                   # FastAgent, pi-durable, pi-ai and pi-schema, installed by init
 ├── .secrets/.env.example          # secrets live here, never committed
 └── .gitignore
 ```
@@ -94,13 +94,13 @@ Tools are modules in `src/tools/`, each default-exporting pi-durable's `defineTo
 
 ```ts
 // src/tools/reverse.ts
-import { Type } from "@earendil-works/pi-ai";
+import { obj, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 
 export default defineTool({
   name: "reverse",
   description: "Reverse a string.",
-  parameters: Type.Object({ text: Type.String() }),
+  parameters: obj({ text: str() }),
   execute: async ({ text }) => ({ output: [{ type: "text", text: [...text].reverse().join("") }] }),
 });
 ```

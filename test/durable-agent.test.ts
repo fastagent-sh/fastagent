@@ -2,11 +2,20 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { Type, createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
-import { AgentDoc, Harness, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { num, obj } from "@earendil-works/pi-schema";
+import {
+  AgentDoc,
+  Harness,
+  type Submission,
+  createRegistry,
+  defineExtension,
+  defineTool,
+} from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
+import { RELEASE_ENTRY } from "../src/harnesses/pi-durable/entries.ts";
 import { sessionIdOf } from "../src/harnesses/pi-durable/ids.ts";
 import { agentApiConformance } from "./agent-api-conformance.ts";
 import { durableSubject } from "./durable-subject.ts";
@@ -58,17 +67,18 @@ describe("the Agent on pi-durable", () => {
       const created = await agent.sessions.create({ model });
       const conversation = await agent.conversation(created.id);
       if (conversation === undefined) throw new Error("The created session has no conversation");
-      let submitted: ReturnType<typeof conversation.submit> | undefined;
+      let submitted: Promise<Submission> | undefined;
       let insert = true;
-      const scanTasks = storage.scanTasks.bind(storage);
-      vi.spyOn(storage, "scanTasks").mockImplementation(async (...args) => {
-        const tasks = await scanTasks(...args);
-        if (insert && args[0].kind === "pi.generation" && args[0].status === "completing") {
+      const scanEntries = storage.scanEntries.bind(storage);
+      vi.spyOn(storage, "scanEntries").mockImplementation(async (...args) => {
+        const entries = await scanEntries(...args);
+        const [query] = args;
+        if (insert && query.conversationId === conversation.id && Object.keys(query).length === 1) {
           insert = false;
-          // watchEvents has captured the empty view on the mutation line; this write runs immediately after it.
+          // The view is reading its first window on the Session line; this write runs right after it.
           submitted = conversation.submit({ type: "input", content: "hi" }, context);
         }
-        return tasks;
+        return entries;
       });
       const stream = agent.sessions.events(created.id, replay ? { after: "start" } : {})[Symbol.asyncIterator]();
       try {
@@ -92,6 +102,134 @@ describe("the Agent on pi-durable", () => {
       }
     },
   );
+
+  it("starts a call whose answer is older than the window a Caller attached with, with its arguments", async () => {
+    const { faux, models, model } = fauxModels();
+    let holding = () => {};
+    const held = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const registry = createRegistry();
+    registry.install(
+      defineExtension({
+        name: "long round",
+        tools: [
+          defineTool({
+            name: "tick",
+            description: "Returns at once",
+            parameters: obj({ n: num() }),
+            execute: async () => ({ output: [{ type: "text", text: "ticked" }] }),
+          }),
+          defineTool({
+            name: "hold",
+            description: "Returns once released",
+            parameters: obj({}),
+            execute: async () => {
+              holding();
+              await released;
+              return { output: [{ type: "text", text: "held" }] };
+            },
+          }),
+        ],
+      }),
+    );
+    const calls = [
+      ...Array.from({ length: 55 }, (_, n) => fauxToolCall("tick", { n })),
+      fauxToolCall("hold", {}),
+      fauxToolCall("tick", { n: 99 }),
+    ];
+    faux.setResponses([fauxAssistantMessage(calls, { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    const agent = await openDurableAgent({
+      storage: await openNodeSqliteStorage(temporaryStorage()),
+      models,
+      registry,
+      settings: { toolExecution: "sequential" },
+      name: "long round",
+      model,
+    });
+    const { id: sessionId } = await agent.sessions.create({ model });
+    const message = await agent.messages.send({ sessionId, content: "go" });
+    await held;
+    const stream = agent.sessions.events(sessionId)[Symbol.asyncIterator]();
+    try {
+      expect((await stream.next()).value).toMatchObject({ type: "state" });
+      release();
+      const events = [];
+      for (let next = await stream.next(); !next.done; next = await stream.next()) {
+        events.push(next.value);
+        if (next.value.type === "done" || next.value.type === "stream_error") break;
+      }
+      expect(events).toContainEqual(expect.objectContaining({ type: "tool_started", name: "tick", args: { n: 99 } }));
+      expect(events.at(-1)).toMatchObject({ type: "done", message: { id: message.id, status: "completed" } });
+    } finally {
+      await stream.return?.();
+      await agent.close();
+    }
+  });
+
+  it("delivers the done of a message that was taken and answered while its Caller read nothing", async () => {
+    const { faux, models, model } = fauxModels();
+    faux.setResponses([fauxAssistantMessage("answer")]);
+    const agent = await openDurableAgent({
+      storage: await openNodeSqliteStorage(temporaryStorage()),
+      models,
+      registry: createRegistry(),
+      name: "unread",
+      model,
+    });
+    const { id: sessionId } = await agent.sessions.create({ model });
+    const stream = agent.sessions.events(sessionId)[Symbol.asyncIterator]();
+    try {
+      expect((await stream.next()).value).toMatchObject({ type: "state" });
+      const answered = await agent.messages.send({ sessionId, content: "hi" }, { wait: 30 });
+      expect(answered.status).toBe("completed");
+      const events = [];
+      for (let next = await stream.next(); !next.done; next = await stream.next()) {
+        events.push(next.value);
+        if (next.value.type === "done") break;
+      }
+      expect(events.at(-1)).toEqual({ type: "done", message: answered });
+    } finally {
+      await stream.return?.();
+      await agent.close();
+    }
+  });
+
+  it("ends a stream its Caller leaves unread for a thousand commits", async () => {
+    const { models, model } = fauxModels();
+    const agent = await openDurableAgent({
+      storage: await openNodeSqliteStorage(temporaryStorage()),
+      models,
+      registry: createRegistry(),
+      name: "behind",
+      model,
+    });
+    const created = await agent.sessions.create({ model });
+    const conversation = await agent.conversation(created.id);
+    if (conversation === undefined) throw new Error("The created session has no conversation");
+    const stream = agent.sessions.events(created.id)[Symbol.asyncIterator]();
+    try {
+      expect((await stream.next()).value).toMatchObject({ type: "state" });
+      for (let commit = 0; commit <= 1000; commit++) {
+        await conversation.submit({ type: "write", entry: { kind: RELEASE_ENTRY, edits: [] } }, context);
+      }
+      const rest = [];
+      for (let next = await stream.next(); !next.done; next = await stream.next()) rest.push(next.value);
+      expect(rest).toEqual([
+        {
+          type: "stream_error",
+          error: expect.objectContaining({ code: "unavailable", message: expect.stringContaining("fell behind") }),
+        },
+      ]);
+    } finally {
+      await stream.return?.();
+      await agent.close();
+    }
+  });
 
   it("takes a message a failed run left waiting when the process before it stopped", async () => {
     const path = temporaryStorage();
@@ -241,17 +379,22 @@ describe("the Agent on pi-durable", () => {
     let agent = await open();
     const chosen = { model: ref("chosen"), thinkingLevel: "off" as const };
     const commits: unknown[] = [];
-    const unsubscribe = agent.harness.subscribeCommits(({ changes }) => {
-      if (changes.some((change) => change.type === "conversation")) {
-        commits.push(
-          changes.flatMap((change) =>
-            change.type === "document" && change.record.kind === "pi.agent" ? [change.value] : [],
-          ),
-        );
-      }
+    const observation = agent.harness.observeCommits({
+      advance: ({ changes }) => {
+        if (changes.some((change) => change.type === "conversation")) {
+          commits.push(
+            changes.flatMap((change) =>
+              change.type === "document" && change.kind === "change" && change.record.kind === "pi.agent"
+                ? [change.value]
+                : [],
+            ),
+          );
+        }
+      },
+      end: () => {},
     });
     const created = await agent.sessions.create(chosen);
-    unsubscribe();
+    observation.detach();
     expect(commits).toEqual([[chosen]]);
     const conversation = await agent.conversation(created.id);
     if (conversation === undefined) throw new Error("The created session has no conversation");
@@ -326,7 +469,6 @@ describe("the Agent on pi-durable", () => {
   it.each([
     ["before_commit", "unconfirmed"],
     ["after_commit", "unconfirmed"],
-    ["status", "unconfirmed"],
     ["duplicate_receipt", "unavailable"],
   ] as const)(
     "rejects a send whose storage fails at %s with %s, and the same key finds what it left",
@@ -342,7 +484,7 @@ describe("the Agent on pi-durable", () => {
             defineTool({
               name: "effect",
               description: "Counts an effect",
-              parameters: Type.Object({}),
+              parameters: obj({}),
               execute: async () => {
                 effects++;
                 return { output: [{ type: "text", text: "effect recorded" }] };
@@ -372,7 +514,9 @@ describe("the Agent on pi-durable", () => {
         get(target, property) {
           if (property === "commit") {
             return async (...args: Parameters<typeof disk.commit>) => {
-              const admitsInput = args[0].some((write) => write.type === "submission" && write.value.type === "input");
+              const admitsInput = args[0].some((batch) =>
+                batch.some((write) => write.type === "submission" && write.value.type === "input"),
+              );
               if (armed && admitsInput && stage === "before_commit") failRead();
               const result = await target.commit(...args);
               if (armed && admitsInput && stage === "after_commit") failRead();
@@ -382,11 +526,7 @@ describe("the Agent on pi-durable", () => {
           const value = Reflect.get(target, property, target);
           if (typeof value !== "function") return value;
           return (...args: unknown[]) => {
-            if (
-              armed &&
-              ((property === "submission" && stage === "status") ||
-                (property === "entry" && stage === "duplicate_receipt"))
-            ) {
+            if (armed && property === "entry" && stage === "duplicate_receipt") {
               failRead();
             }
             return value.apply(target, args);
@@ -410,10 +550,9 @@ describe("the Agent on pi-durable", () => {
       if (code === "unconfirmed") {
         expect(error).toMatchObject({ retryable: false, details: { sessionId } });
         const known = (error as { details: { messageId?: string } }).details.messageId;
-        if (stage === "status") expect(known).toEqual(expect.any(String));
-        else expect(known).toBeUndefined();
+        expect(known).toBeUndefined();
       } else expect(error).toMatchObject({ retryable: true });
-      expect(await agent.harness.closed).toMatchObject({ reason: "failed" });
+      expect(await agent.harness.closed).toMatchObject({ kind: "failed" });
       await agent.close();
 
       agent = await openDurableAgent({
@@ -593,7 +732,7 @@ describe("the Agent on pi-durable", () => {
           defineTool({
             name: "spawn",
             description: "Creates a conversation its task owns",
-            parameters: Type.Object({}),
+            parameters: obj({}),
             execute: async (_args, api, toolContext) => {
               await api.commit(
                 (tx) => tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } }),

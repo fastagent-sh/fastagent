@@ -1,6 +1,7 @@
 /** MCP tools on pi-durable. No replay promise is inferred from a server's annotations. */
-import { Type, type JsonObject } from "@earendil-works/pi-ai";
+import type { JsonObject } from "@earendil-works/pi-ai";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import type { Schema } from "@earendil-works/pi-schema";
 import type { McpTool } from "../../mcp/client.ts";
 import { McpError } from "../../mcp-api.ts";
 
@@ -9,7 +10,7 @@ export function mcpTools(tools: readonly McpTool[]): ToolRegistration[] {
     defineTool({
       name: tool.name,
       description: tool.definition.description ?? `MCP tool ${tool.definition.name} from ${tool.server}`,
-      parameters: Type.Unsafe<JsonObject>(tool.definition.inputSchema),
+      parameters: tool.definition.inputSchema as Schema<JsonObject>,
       replay: "unsafe",
       execute: async (args, api, context) => {
         try {

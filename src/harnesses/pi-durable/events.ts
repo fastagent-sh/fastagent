@@ -1,19 +1,25 @@
 /**
- * `sessions.events` (SPEC.md §6.1) over pi-durable's event stream of one conversation: the entries asked for, a
- * `state` snapshot, then what each commit adds. pi-durable captures its snapshot and the registration for later
- * commits atomically, so the replay ends at the snapshot's newest entry and the live part starts after it.
+ * `sessions.events` (SPEC.md §6.1) over pi-durable's view of one conversation: the entries asked for, a `state`
+ * snapshot, then what each commit changes. The view is observed synchronously, one revision per commit, so the
+ * replay ends at the first revision's newest entry and the live part, diffed from one revision to the next, starts
+ * after it. Every revision is kept: a message that is placed and answered between two reads still gets its `done`.
  */
 import type { Context } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
-  type AgentEvent,
+  AgentDoc,
   type Conversation,
+  type ConversationDocToken,
+  type ConversationView,
   type EntryRecord,
   type Harness,
-  type MessageChange,
-  type SnapshotEvent,
+  type JsonObject,
+  InboxDoc,
+  LiveDoc,
+  type LiveState,
+  type SubmissionId,
+  UsageDoc,
   type WatchEnd,
-  watchEvents,
 } from "@earendil-works/pi-durable";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -25,7 +31,10 @@ import type { Ids } from "./ids.ts";
 import { type EndedRecord, hasEnded, isInput, sessionOf } from "./messages.ts";
 import type { Reads } from "./reads.ts";
 
-type Batch = { events: readonly AgentEvent[] } | { end: WatchEnd };
+/** Revisions a Caller may leave unread before its stream ends: pi-durable keeps no bound for a synchronous observer. */
+const UNREAD_REVISIONS = 1000;
+
+type Pending = { view: ConversationView } | { end: WatchEnd } | { behind: true };
 type Blocks = AssistantMessage["content"];
 
 export interface EventsOptions {
@@ -60,33 +69,46 @@ export function sessionEvents(
         }
         after = entry.id;
       }
-      const batches = yield* Effect.acquireRelease(Queue.bounded<Batch>(1), Queue.shutdown);
-      const watch = yield* Effect.acquireRelease(
-        port(() => watchEvents(harness, conversation.id, context)),
-        (stream) => Effect.promise(() => stream.stop()),
+      const pending = yield* Effect.acquireRelease(Queue.unbounded<Pending>(), Queue.shutdown);
+      let behind = false;
+      const observation = yield* Effect.acquireRelease(
+        port(() =>
+          harness.observeConversation(
+            conversation.id,
+            {
+              advance: (call) => {
+                if (behind || call.kind !== "value") return;
+                behind = Queue.sizeUnsafe(pending) >= UNREAD_REVISIONS;
+                Queue.offerUnsafe(pending, behind ? { behind } : { view: call.value });
+              },
+              end: (end) => {
+                Queue.offerUnsafe(pending, { end });
+              },
+            },
+            context,
+          ),
+        ),
+        (attached) => Effect.sync(() => attached.detach()),
       );
-      // Taking one batch at a time keeps pi-durable's own bound on what a slow Caller leaves undelivered.
-      watch.start((events) => Effect.runPromiseExit(Queue.offer(batches, { events })).then(() => undefined));
-      void watch.closed.then((end) => Effect.runPromiseExit(Queue.offer(batches, { end })));
 
-      const { snapshot } = watch;
-      const newest = snapshot.entries.reduce<number | undefined>(
-        (max, entry) => (max === undefined || entry.id > max ? entry.id : max),
-        undefined,
-      );
-      const live = liveTranslator(reads, maxRetries, snapshot);
+      const snapshot = observation.value;
+      const newest = newestEntry(snapshot);
+      const live = liveTranslator(harness, reads, conversation, context, maxRetries, snapshot);
       const replay =
         after === undefined || newest === undefined || after >= newest
           ? Stream.empty
           : replayed(reads, conversation, after, newest);
       const present = Stream.succeed<SessionEvent>({
         type: "state",
-        session: sessionOf(ids.encode(conversation.id), snapshot, snapshot.usage, snapshot.agent),
-      });
-      const events = Stream.fromQueue(batches).pipe(
-        Stream.mapEffect((batch) =>
-          "end" in batch ? Effect.succeed([ended(batch.end)]) : live.translate(batch.events),
+        session: sessionOf(
+          ids.encode(conversation.id),
+          docOf(snapshot, LiveDoc),
+          docOf(snapshot, UsageDoc),
+          docOf(snapshot, AgentDoc),
         ),
+      });
+      const events = Stream.fromQueue(pending).pipe(
+        Stream.mapEffect((next) => ("view" in next ? live.translate(next.view) : Effect.succeed([ended(next)]))),
         Stream.flattenIterable,
       );
       return Stream.concat(Stream.concat(replay, present), events).pipe(
@@ -104,15 +126,23 @@ export function sessionEvents(
 
 const streamError = (error: AgentError): SessionEvent => ({ type: "stream_error", error: errorData(error) });
 
-function ended(end: WatchEnd): SessionEvent {
-  switch (end.reason) {
-    case "session_failed":
-      return streamError(agentError("unavailable", `The agent's storage failed: ${String(end.error)}`));
-    case "listener_error":
-      return streamError(agentError("internal", `Following the session failed: ${end.error.message}`));
-    default:
-      return streamError(agentError("unavailable", `The agent stopped serving this session (${end.reason})`));
+function ended(end: { end: WatchEnd } | { behind: true }): SessionEvent {
+  if ("behind" in end) {
+    return streamError(agentError("unavailable", "This stream fell behind the session; continue after its last entry"));
   }
+  switch (end.end.kind) {
+    case "failed":
+      return streamError(agentError("unavailable", `The agent stopped serving this session: ${String(end.end.error)}`));
+    case "listener_error":
+      return streamError(agentError("internal", `Following the session failed: ${end.end.error.message}`));
+    default:
+      return streamError(agentError("unavailable", `The agent stopped serving this session (${end.end.kind})`));
+  }
+}
+
+/** The newest entry a view has seen: its window's last, or the one before an empty window. */
+function newestEntry(view: ConversationView): number | undefined {
+  return view.entries.at(-1)?.id ?? view.before;
 }
 
 function replayed(
@@ -132,145 +162,180 @@ function replayed(
 
 const entryEvent = (entry: Entry): SessionEvent => ({ type: "entry", entry });
 
+/** A built-in document of the view, as its token types it. */
+const docOf = <T extends JsonObject>(view: ConversationView, token: ConversationDocToken<T>): T | undefined =>
+  view.docs[token.definition.kind] as T | undefined;
+
+const liveOf = (view: ConversationView) => docOf(view, LiveDoc);
+
+/** The inputs a view has not ended: queued in its inbox, or taken by its run. */
+function unendedInputs(view: ConversationView): Set<SubmissionId> {
+  const inbox = docOf(view, InboxDoc);
+  return new Set([
+    ...(inbox?.items ?? []).flatMap((item) => (item.mode === "write" ? [] : [item.id])),
+    ...(liveOf(view)?.run?.inputs ?? []),
+  ]);
+}
+
+/** A reply's text and thinking as a Caller has been shown them. */
+const shownOf = (content: Blocks) => ({ text: replyText({ content }), thinking: thinkingOf({ content }) ?? "" });
+
 /**
- * What one commit's events add for a Caller: the reply's deltas, the tool calls that start and their status lines,
- * retries, the published entries, and a `done` for each message that ended, before the next message's entry.
+ * What one revision of the view adds for a Caller, against the revision before it: the reply's deltas, the tool calls
+ * that start and their status lines, retries, the entries appended, and a `done` for each message that ended, before
+ * the next message's entry.
  */
-function liveTranslator(reads: Reads, maxRetries: number, snapshot: SnapshotEvent) {
-  let reply: Blocks = [...((snapshot.generation?.message?.content as Blocks | undefined) ?? [])];
-  let shown = { text: replyText({ content: reply }), thinking: thinkingOf({ content: reply }) ?? "" };
-  const outputs = new Map(snapshot.tools.map((slot) => [slot.callId, slot.output ?? ""]));
-  const lines = new Map<string, string>();
-  const outer = new Map(snapshot.nestedTools.map((slot) => [slot.callId, slot.parentCallId]));
+function liveTranslator(
+  harness: Harness,
+  reads: Reads,
+  conversation: Conversation,
+  context: Context,
+  maxRetries: number,
+  snapshot: ConversationView,
+) {
+  const first = liveOf(snapshot);
+  let newest = newestEntry(snapshot);
+  let shown = shownOf((first?.generation?.message?.content as Blocks | undefined) ?? []);
+  let retry = retryKey(first);
+  let unended = unendedInputs(snapshot);
+  const toolArgs = new Map<string, Json>();
+  const started = new Set((first?.tools ?? []).filter((slot) => slot.status !== "pending").map((slot) => slot.callId));
+  const lines = new Map((first?.tools ?? []).flatMap((slot) => lineOf(slot.callId, slot.output)));
+  const nested = new Map((first?.nestedTools ?? []).map((slot) => [slot.callId, slot.parentCallId]));
   const outermost = (callId: string): string => {
-    const parent = outer.get(callId);
+    const parent = nested.get(callId);
     return parent === undefined ? callId : outermost(parent);
   };
-
-  const restart = () => {
-    reply = [];
-    shown = { text: "", thinking: "" };
+  const learnToolArgs = (records: readonly EntryRecord[]) => {
+    for (const record of records) {
+      const model = record.model?.[0];
+      if (model?.role !== "assistant") continue;
+      for (const block of model.content) if (block.type === "toolCall") toolArgs.set(block.id, block.arguments as Json);
+    }
   };
-  const deltas = (): SessionEvent[] => {
-    const now = { text: replyText({ content: reply }), thinking: thinkingOf({ content: reply }) ?? "" };
-    const added = (channel: "text" | "thinking"): SessionEvent[] =>
-      now[channel].length > shown[channel].length && now[channel].startsWith(shown[channel])
-        ? [{ type: "delta", channel, text: now[channel].slice(shown[channel].length) }]
-        : [];
+  learnToolArgs(snapshot.entries);
+  /**
+   * The answers that made calls now starting, read back through the history when the view's window began after them
+   * (a Caller attached late in a long round). A call no answer made stays unknown, and `toolEvents` refuses it.
+   */
+  const recallToolArgs = (live: LiveState | undefined): Effect.Effect<void, PortFailure> => {
+    const missing = (live?.tools ?? []).filter(
+      (slot) => slot.status !== "pending" && !started.has(slot.callId) && !toolArgs.has(slot.callId),
+    );
+    if (missing.length === 0) return Effect.void;
+    const known = () => missing.every((slot) => toolArgs.has(slot.callId));
+    return reads.history(conversation, { order: "descending" }).pipe(
+      Stream.tap((record) => Effect.sync(() => learnToolArgs([record]))),
+      Stream.takeUntil(known),
+      Stream.runDrain,
+    );
+  };
+
+  const deltas = (content: Blocks): SessionEvent[] => {
+    const now = shownOf(content);
+    const added = (channel: "text" | "thinking"): SessionEvent[] => {
+      if (now[channel].length <= shown[channel].length) return [];
+      const from = now[channel].startsWith(shown[channel]) ? shown[channel].length : 0;
+      return [{ type: "delta", channel, text: now[channel].slice(from) }];
+    };
     const events = [...added("thinking"), ...added("text")];
     shown = now;
     return events;
-  };
-  const apply = (changes: readonly MessageChange[]) => {
-    for (const change of changes) {
-      switch (change.type) {
-        case "message":
-          reply = [...change.message.content];
-          break;
-        case "text_start":
-        case "thinking_start":
-        case "toolcall_start":
-        case "block":
-          reply[change.contentIndex] = change.block;
-          break;
-        case "text_delta": {
-          const block = reply[change.contentIndex];
-          if (block?.type === "text") reply[change.contentIndex] = { ...block, text: block.text + change.delta };
-          break;
-        }
-        case "thinking_delta": {
-          const block = reply[change.contentIndex];
-          if (block?.type === "thinking") {
-            reply[change.contentIndex] = { ...block, thinking: block.thinking + change.delta };
-          }
-          break;
-        }
-        case "toolcall_delta":
-          break;
-      }
-    }
   };
   const progress = (toolCallId: string, text: string | undefined): SessionEvent[] => {
     if (text === undefined || lines.get(toolCallId) === text) return [];
     lines.set(toolCallId, text);
     return [{ type: "tool_progress", toolCallId, text }];
   };
+  const toolEvents = (live: LiveState | undefined): SessionEvent[] => {
+    const events: SessionEvent[] = [];
+    const tools = live?.tools ?? [];
+    for (const slot of tools) {
+      if (slot.status === "pending") continue;
+      if (!started.has(slot.callId)) {
+        started.add(slot.callId);
+        const args = toolArgs.get(slot.callId);
+        if (args === undefined) throw new Error(`tool call ${slot.callId} started with no answer that made it`);
+        events.push({ type: "tool_started", toolCallId: slot.callId, name: slot.name, args });
+      }
+      if (slot.status === "running") events.push(...progress(slot.callId, lastLine(slot.output ?? "")));
+    }
+    const calls = live?.nestedTools ?? [];
+    for (const slot of calls) {
+      if (nested.has(slot.callId)) continue;
+      nested.set(slot.callId, slot.parentCallId);
+      events.push(...progress(outermost(slot.callId), callLine(slot.name, slot.arguments)));
+    }
+    const current = new Set([...tools, ...calls].map((slot) => slot.callId));
+    for (const callId of [...started, ...lines.keys(), ...nested.keys(), ...toolArgs.keys()]) {
+      if (current.has(callId)) continue;
+      started.delete(callId);
+      lines.delete(callId);
+      nested.delete(callId);
+      toolArgs.delete(callId);
+    }
+    return events;
+  };
+  /** The entries `view` appended: its window's new ones, after those a window that moved past them left out. */
+  const appended = (view: ConversationView): Effect.Effect<EntryRecord[], PortFailure> =>
+    Effect.gen(function* () {
+      const fresh = view.entries.filter((entry) => newest === undefined || entry.id > newest);
+      const skipped =
+        view.before === undefined || (newest !== undefined && view.before <= newest)
+          ? []
+          : yield* reads
+              .history(conversation, {
+                order: "ascending",
+                minEntryId: ((newest ?? 0) + 1) as EntryRecord["id"],
+                maxEntryId: view.before,
+              })
+              .pipe(Stream.runCollect);
+      const records = [...skipped, ...fresh];
+      newest = records.at(-1)?.id ?? newest;
+      return records;
+    });
+  const endedMessages = (view: ConversationView, known: readonly EntryRecord[]) => {
+    const now = unendedInputs(view);
+    const gone = [...unended].filter((id) => !now.has(id));
+    unended = now;
+    return Effect.forEach(gone, (id) =>
+      port(async () => (await harness.submission(id, context))?.status(context)).pipe(
+        Effect.flatMap((record) =>
+          isInput(record) && hasEnded(record) ? reads.message(record as EndedRecord, known) : Effect.undefined,
+        ),
+      ),
+    ).pipe(Effect.map((messages) => messages.flatMap((message) => (message === undefined ? [] : [message]))));
+  };
 
   return {
-    translate: (events: readonly AgentEvent[]): Effect.Effect<SessionEvent[], PortFailure> =>
+    translate: (view: ConversationView): Effect.Effect<SessionEvent[], PortFailure> =>
       Effect.gen(function* () {
+        const records = yield* appended(view);
+        learnToolArgs(records);
+        const live = liveOf(view);
         const before: SessionEvent[] = [];
-        const entries: EntryRecord[] = [];
-        const settled: EndedRecord[] = [];
-        for (const [index, event] of events.entries()) {
-          switch (event.type) {
-            case "snapshot":
-              return [
-                streamError(
-                  agentError("unavailable", "This stream fell behind the session; continue after its last entry"),
-                ),
-              ];
-            case "message_start":
-              // An entry's own start comes right before its end; any other is a new reply being written.
-              if (events[index + 1]?.type !== "message_end" && event.message.role === "assistant") {
-                reply = [...event.message.content];
-                shown = { text: "", thinking: "" };
-                before.push(...deltas());
-              }
-              break;
-            case "message_update":
-              apply(event.changes);
-              before.push(...deltas());
-              break;
-            case "message_end":
-            case "entry_appended":
-              entries.push(event.entry);
-              if (event.entry.model?.[0]?.role === "assistant") restart();
-              break;
-            case "tool_execution_start":
-              if (event.parentToolCallId === undefined) {
-                before.push({
-                  type: "tool_started",
-                  toolCallId: event.toolCallId,
-                  name: event.toolName,
-                  args: event.args as Json,
-                });
-              } else {
-                outer.set(event.toolCallId, event.parentToolCallId);
-                before.push(...progress(outermost(event.toolCallId), callLine(event.toolName, event.args)));
-              }
-              break;
-            case "tool_execution_update": {
-              if (event.parentToolCallId !== undefined || event.output === undefined) break;
-              const output = event.output;
-              const current = outputs.get(event.toolCallId) ?? "";
-              const next = "set" in output ? output.set : current.slice(output.trimStart ?? 0) + (output.append ?? "");
-              outputs.set(event.toolCallId, next);
-              before.push(...progress(event.toolCallId, lastLine(next)));
-              break;
-            }
-            case "auto_retry_start":
-              restart();
-              before.push({
-                type: "retrying",
-                attempt: event.attempt,
-                maxAttempts: maxRetries,
-                delayMs: Math.max(0, event.at - Date.now()),
-                reason: event.errorMessage,
-              });
-              break;
-            case "tool_execution_end":
-              outputs.delete(event.toolCallId);
-              lines.delete(event.toolCallId);
-              outer.delete(event.toolCallId);
-              break;
-            case "submission":
-              if (isInput(event.record) && hasEnded(event.record)) settled.push(event.record);
-              break;
-          }
+        const nextRetry = retryKey(live);
+        if (nextRetry !== undefined && nextRetry !== retry && live?.generation?.retry !== undefined) {
+          shown = shownOf([]);
+          before.push({
+            type: "retrying",
+            attempt: live.generation.attempt,
+            maxAttempts: maxRetries,
+            delayMs: Math.max(0, live.generation.retry.at - Date.now()),
+            reason: live.generation.retry.error,
+          });
         }
-        const published = yield* reads.publish(entries.filter(isPublished));
-        const dones = yield* Effect.forEach(settled, (record) => reads.message(record, entries));
+        retry = nextRetry;
+        const reply = live?.generation?.message?.content as Blocks | undefined;
+        if (reply !== undefined) before.push(...deltas(reply));
+        if (reply === undefined || records.some((record) => record.model?.[0]?.role === "assistant")) {
+          shown = shownOf([]);
+        }
+        yield* recallToolArgs(live);
+        before.push(...toolEvents(live));
+
+        const published = yield* reads.publish(records.filter(isPublished));
+        const dones = yield* endedMessages(view, records);
         // pi-durable places the next queued message in the commit that ends a run: its message's `done` goes first.
         const next = published.findIndex((entry) => entry.kind === "user");
         const at = next === -1 ? published.length : next;
@@ -282,6 +347,17 @@ function liveTranslator(reads: Reads, maxRetries: number, snapshot: SnapshotEven
         ];
       }),
   };
+}
+
+/** Which retry a generation waits for, so each is reported once. */
+function retryKey(live: LiveState | undefined): string | undefined {
+  const generation = live?.generation;
+  return generation?.retry === undefined ? undefined : `${generation.attempt}:${generation.retry.at}`;
+}
+
+function lineOf(callId: string, output: string | undefined): [string, string][] {
+  const line = lastLine(output ?? "");
+  return line === undefined ? [] : [[callId, line]];
 }
 
 /** The last line with text, a running tool's status. pi-durable's output already has no control characters. */

@@ -304,8 +304,8 @@ export default { providers: [createProvider({ id: "openai", name: "OpenAI", mode
           method: "account",
           ticket: ticket.ticket,
           path: join(dir, ".secrets", "auth.json"),
-          model: "openai/gpt-5.5",
-          agent_next_steps: expect.stringContaining('model: "openai/gpt-5.5"'),
+          model: "openai/gpt-6.1-sol",
+          agent_next_steps: expect.stringContaining('model: "openai/gpt-6.1-sol"'),
         },
       ]);
       expect(JSON.parse(await readFile(join(dir, ".secrets", "auth.json"), "utf8")).openai).toMatchObject({

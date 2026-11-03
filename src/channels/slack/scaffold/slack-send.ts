@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { obj, opt, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 import { needs } from "@fastagent-sh/fastagent";
 import { slackTransport } from "@fastagent-sh/fastagent/slack";
@@ -22,13 +22,13 @@ export default needs(["SLACK_BOT_TOKEN"], ({ SLACK_BOT_TOKEN }) =>
       "one of `text`/`path`. channelId/threadTs come from the [slack: …] context line in a chat turn; a " +
       "scheduled or woken message has no context line, so name the destination in your instruction. A user ID " +
       "(U…) as channelId messages that user's DM; a file upload needs the DM channel ID (D…) the text send reports.",
-    parameters: Type.Object({
-      channelId: Type.String({ description: "target Slack channel ID, or a user ID (U…) to message that user's DM" }),
-      text: Type.Optional(Type.String({ description: "standard Markdown message text" })),
-      path: Type.Optional(Type.String({ description: "absolute path of a local file to upload" })),
-      title: Type.Optional(Type.String({ description: "file title (file mode only)" })),
-      initialComment: Type.Optional(Type.String({ description: "message posted with the file (file mode only)" })),
-      threadTs: Type.Optional(Type.String({ description: "thread parent timestamp, if replying in a thread" })),
+    parameters: obj({
+      channelId: str({ description: "target Slack channel ID, or a user ID (U…) to message that user's DM" }),
+      text: opt(str({ description: "standard Markdown message text" })),
+      path: opt(str({ description: "absolute path of a local file to upload" })),
+      title: opt(str({ description: "file title (file mode only)" })),
+      initialComment: opt(str({ description: "message posted with the file (file mode only)" })),
+      threadTs: opt(str({ description: "thread parent timestamp, if replying in a thread" })),
     }),
     execute: async ({ channelId, text, path, title, initialComment, threadTs }) => {
       if ((text === undefined) === (path === undefined)) throw new Error("pass exactly one of `text` or `path`");

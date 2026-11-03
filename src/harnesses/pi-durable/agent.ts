@@ -68,7 +68,6 @@ import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, isPublished, parseImageRef } from "./entries.ts";
 import { sessionEvents } from "./events.ts";
 import { type Ids, storageIds } from "./ids.ts";
-import { giveUpOnParked } from "./parked.ts";
 import { type InputRecord, isInput, queuedInputs, requestIdFor, usageOfState } from "./messages.ts";
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
@@ -129,7 +128,7 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
       registry: options.registry,
       ...(options.settings === undefined ? {} : { settings: options.settings }),
       ...(options.env === undefined ? {} : { env: options.env }),
-      onReport: (error) => log.warn(`[fastagent] pi-durable reported: ${String(error)}`),
+      onReport: (report) => log.warn(`[fastagent] pi-durable reported ${report.kind}: ${String(report.error)}`),
     },
     context,
   );
@@ -137,7 +136,6 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
   try {
     const ids = await storageIds(harness, context);
     const sessions = await Effect.runPromise(Scope.provide(trackSessions(harness, options.storage, context), lifetime));
-    await giveUpOnParked(harness, context);
     // Before `resume()`, which runs an earlier process's work. An abort enables the scheduler too, but commits first, so
     // the aborted work does not run (measured).
     const unsettled = (await harness.inspect(context)).submissions.filter(isInput);
@@ -354,7 +352,10 @@ function durableAgent(
       },
     );
 
-  /** Admission: a key's lookup, the limits, the settings and the submission, one at a time per process. */
+  /**
+   * Admission, one at a time per process: one commit that looks the key up, then checks the process's limit and the
+   * queue, takes the defaults and submits, so it stores all of that or none of it.
+   */
   const admit = (
     request: SendRequest,
   ): Effect.Effect<{ message: Message; replayed: boolean }, AgentError | PortFailure> =>
@@ -367,44 +368,62 @@ function durableAgent(
         // Before anything is written: reading or expanding a command reads the definition's files, and may throw.
         const { content, sent } = expandCommand(request.content, commands());
         const conversation = yield* conversationOf(request.sessionId);
-        if (request.idempotencyKey !== undefined) {
-          const seen = yield* reads.submissionByKey(conversation, requestId);
-          if (seen !== undefined) return { message: yield* reads.message(seen), replayed: true };
-        }
-        if ((yield* inFlight) >= inFlightLimit) {
+        // Read before the commit, which cannot read the harness, and applied after the key: a key the session has
+        // seen answers with its message whatever the process holds (SPEC.md §5.2).
+        const atCapacity = (yield* inFlight) >= inFlightLimit;
+        const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
+        let submitting = false;
+        const admitted = yield* port(() =>
+          conversation.commit(async (tx) => {
+            if (request.idempotencyKey !== undefined) {
+              const seen = await tx.submissionByRequest(conversation.id, requestId);
+              if (isInput(seen)) return { kind: "seen", seen } as const;
+            }
+            if (atCapacity) return { kind: "capacity" } as const;
+            if (request.whenBusy !== "reject") {
+              const inbox = await tx.doc(InboxDoc, conversation.id);
+              if (queuedInputs(inbox).length >= LIMITS.queuedPerSession) return { kind: "full" } as const;
+            }
+            const refused = await admitSettings(tx, conversation.id, defaults, has);
+            if (refused !== undefined) return { kind: "refused", refused } as const;
+            submitting = true;
+            const id = await conversation.submit(tx, {
+              type: "input",
+              content,
+              requestId,
+              whenBusy: request.whenBusy === "steer" ? "steer" : request.whenBusy === "reject" ? "reject" : "followUp",
+              entry: { kind: USER_ENTRY, data },
+            });
+            return { kind: "admitted", id } as const;
+          }, context),
+        ).pipe(
+          // Once the submission is in the commit, only pi-durable's explicit refusal proves nothing was recorded.
+          Effect.catchCause((cause): Effect.Effect<never, AgentError | PortFailure> => {
+            const error = portError(cause);
+            if (error instanceof ConversationBusy) {
+              return Effect.fail(agentError("busy", "The session is answering another message", { reason: "running" }));
+            }
+            return submitting ? Effect.fail(unconfirmed(conversation, undefined, error)) : Effect.failCause(cause);
+          }),
+        );
+        if (admitted.kind === "seen") return { message: yield* reads.message(admitted.seen), replayed: true };
+        if (admitted.kind === "capacity") {
           return yield* agentError("busy", `This agent already holds ${inFlightLimit} messages`, {
             reason: "capacity",
           });
         }
-        if (request.whenBusy !== "reject") {
-          const inbox = yield* reads.inbox(conversation);
-          if (queuedInputs(inbox).length >= LIMITS.queuedPerSession) {
-            return yield* agentError("busy", `The session already has ${LIMITS.queuedPerSession} queued messages`, {
-              reason: "queue_full",
-            });
-          }
+        if (admitted.kind === "full") {
+          return yield* agentError("busy", `The session already has ${LIMITS.queuedPerSession} queued messages`, {
+            reason: "queue_full",
+          });
         }
-        const refused = yield* port(() =>
-          conversation.commit((tx) => admitSettings(tx, conversation.id, defaults, has), context),
-        );
-        if (refused !== undefined) return yield* unanswerable(refused);
-        const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
-        let messageId: number | undefined;
+        if (admitted.kind === "refused") return yield* unanswerable(admitted.refused);
+        const messageId = admitted.id;
         return yield* Effect.gen(function* () {
-          const submission = yield* port(() =>
-            conversation.submit(
-              {
-                type: "input",
-                content,
-                requestId,
-                whenBusy:
-                  request.whenBusy === "steer" ? "steer" : request.whenBusy === "reject" ? "reject" : "followUp",
-                entry: { kind: USER_ENTRY, data },
-              },
-              context,
-            ),
-          );
-          messageId = submission.id;
+          const submission = yield* port(() => harness.submission(messageId, context));
+          if (submission === undefined) {
+            throw new Error(`submission ${messageId} is not in the storage it was admitted to`);
+          }
           // Counted once it is read back, whether or not that read succeeds: the wait must not be what reads the
           // storage first, or a failing read would fail it instead of answering this call.
           const record = yield* port(() => submission.status(context)).pipe(
@@ -412,17 +431,7 @@ function durableAgent(
           );
           if (!isInput(record)) throw new Error(`submission ${record.id} was admitted as a write`);
           return { message: yield* reads.message(record), replayed: false };
-        }).pipe(
-          // Once submission starts, only pi-durable's explicit refusal proves nothing was recorded.
-          Effect.catchCause((cause) => {
-            const error = portError(cause);
-            return Effect.fail(
-              messageId === undefined && error instanceof ConversationBusy
-                ? agentError("busy", "The session is answering another message", { reason: "running" })
-                : unconfirmed(conversation, messageId, error),
-            );
-          }),
-        );
+        }).pipe(Effect.catchCause((cause) => Effect.fail(unconfirmed(conversation, messageId, portError(cause)))));
       }),
     );
 

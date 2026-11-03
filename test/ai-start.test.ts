@@ -57,7 +57,6 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     for (const scope of ["@types", "@earendil-works"]) {
       await symlink(join(root, "node_modules", scope), join(agentDir, "node_modules", scope), "dir");
     }
-    await symlink(join(root, "node_modules/typebox"), join(agentDir, "node_modules/typebox"), "dir");
 
     const tsc = join(root, "node_modules/typescript/bin/tsc");
     await node([tsc, "--noEmit"], agentDir);

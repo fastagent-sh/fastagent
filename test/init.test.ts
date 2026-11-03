@@ -104,11 +104,12 @@ describe("init: scaffoldAgent", () => {
       version: string;
       dependencies: Record<string, string>;
     };
-    // Its code is pi-durable code, its providers pi-ai's: at the versions this build runs.
+    // Its code is pi-durable code, its providers pi-ai's, its tool schemas pi-schema's: at the versions this build runs.
     expect(pkg.dependencies).toEqual({
       "@fastagent-sh/fastagent": `^${real.version}`,
       "@earendil-works/pi-durable": real.dependencies["@earendil-works/pi-durable"],
       "@earendil-works/pi-ai": real.dependencies["@earendil-works/pi-ai"],
+      "@earendil-works/pi-schema": real.dependencies["@earendil-works/pi-schema"],
     });
     const standing = await readFile(join(dir, "SYSTEM.md"), "utf8");
     expect(standing).toContain("Use only the tools actually listed in your system prompt");

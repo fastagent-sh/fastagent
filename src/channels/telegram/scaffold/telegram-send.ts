@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { bool, num, obj, opt, str, union } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
 import { needs } from "@fastagent-sh/fastagent";
 import { telegramTransport } from "@fastagent-sh/fastagent/telegram";
@@ -26,14 +26,14 @@ export default needs(["TELEGRAM_BOT_TOKEN"], ({ TELEGRAM_BOT_TOKEN }) =>
       "from the [telegram: chat …] context line in a chat turn; a scheduled or woken message has no context " +
       "line, so name the destination in your instruction. What you send is shown to you in that chat's " +
       "next turn.",
-    parameters: Type.Object({
-      chatId: Type.Union([Type.String(), Type.Number()], { description: "target chat id" }),
-      text: Type.Optional(Type.String({ description: "message text to send" })),
-      path: Type.Optional(Type.String({ description: "absolute path of the local file to send" })),
-      caption: Type.Optional(Type.String({ description: "file caption (file mode only)" })),
-      asPhoto: Type.Optional(Type.Boolean({ description: "send the file as a photo (inline) instead of a document" })),
-      messageThreadId: Type.Optional(
-        Type.Number({ description: "thread to reply into (from the context line), if any" }),
+    parameters: obj({
+      chatId: union([str(), num()], { description: "target chat id" }),
+      text: opt(str({ description: "message text to send" })),
+      path: opt(str({ description: "absolute path of the local file to send" })),
+      caption: opt(str({ description: "file caption (file mode only)" })),
+      asPhoto: opt(bool({ description: "send the file as a photo (inline) instead of a document" })),
+      messageThreadId: opt(
+        num({ description: "thread to reply into (from the context line), if any" }),
       ),
     }),
     execute: async ({ chatId, text, path, caption, asPhoto, messageThreadId }) => {
