@@ -71,10 +71,11 @@ explicit inputs below rather than whatever the process happens to find.
    instance never writes into it.
 2. **An instance is its inputs, not a directory convention.** The framework fixes which inputs an open accepts, their
    precedence, and where FastAgent writes. How a developer lays out files and what they commit is theirs.
-3. **A running instance writes only its state.** An open (`openAgent`, `dev`, `start`, a deployment) never writes the
-   package, the configuration it was given, or secret inputs. The CLI's editing commands (`content add`, `env add`,
-   `add <channel>`) are authoring and operating tools, not the running instance: each writes only the file it targets
-   (§3.3, §4.2, §6.2).
+3. **FastAgent writes only state.** An open (`openAgent`, `dev`, `start`, a deployment) never writes the package, the
+   configuration it was given, or secret inputs. The agent's own tools are another matter: they act with the process's
+   authority and may write any file they can reach, a configuration inside the workspace included (§4.2). The CLI's
+   editing commands (`content add`, `env add`, `add <channel>`) are authoring and operating tools, not the running
+   instance: each writes only the file it targets (§3.3, §4.2, §6.2).
 4. **One file, one audience.** Program files are the author's; instance files are the deployer's.
 5. **File rule.** Code and typed defaults are TypeScript; FastAgent data a command rewrites is JSON, one file per side;
    an ecosystem-standard format (MCP) keeps its own file.
@@ -283,7 +284,10 @@ instances.
   different instance, breaking assembly determinism. (Today `openAgent` falls back to `FASTAGENT_STATE_DIR`; that changes.)
 - External data the agent works on needs no separate root: it is a `path` entry under `content`, and clones live in the
   workspace.
-- `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` remain finer overrides; their defaults move under the state root.
+- `FASTAGENT_AUTH_PATH` remains a finer override of where the model credentials file lives; its default is
+  `<state>/auth.json`. `FASTAGENT_SECRETS_DIR` and the `.secrets/` directory are no longer part of an instance: secrets
+  are an in-memory input (`--env-file`, the environment, `secrets`), and the two files that lived there, the model
+  credentials and the MCP grants, move under `.state/`. `.secrets/.env` remains only `dev`'s default env file (§4.3).
 
 Storage each input tolerates:
 
@@ -307,12 +311,15 @@ Composition:
 - Settings override by key: objects merge recursively, arrays replace.
 - Content and MCP entries only add. An instance entry whose name collides with a program entry is refused; nothing is
   shadowed, deep-merged or written back into the program files.
-- Skills and prompt templates are namespaced instead of refused. A program's have a full name `<program>:<name>`
-  (`reviewer:review`); an instance's are bare, since an instance is what opens. A program's bare name is an alias
-  while no instance entry takes it. When one does, the bare name is the instance's, the program's stays listed and
-  invocable by its full name, and the open reports the overlap. A program upgrade that adds a name an instance already
-  uses therefore never stops the instance from opening. The command spelling under `/skill:` is settled in
-  implementation.
+- Skills and prompt templates are namespaced instead of refused. A program's have a full name `<program>-<name>`
+  (`reviewer-review`), built from the program name normalized to one segment (§4.5); an instance's are bare, since an
+  instance is what opens. A full name follows the skill-name rule like any other (lowercase letters, digits and single
+  hyphens, at most 64 characters), so `/skill:reviewer-review` needs no special syntax; the open refuses a program
+  name and skill name whose join breaks the rule. A program's bare name is an alias while no instance entry takes it.
+  When one does, the bare name is the instance's, the program's stays listed and invocable by its full name, and the
+  open reports the overlap. A program upgrade that adds a name an instance already uses therefore never stops the
+  instance from opening. Because a hyphen can also appear inside either part, two different pairs can join to the same
+  full name; the open reports that collision instead of choosing one.
 
 - An instance layers only on the program's defaults, never on another instance.
 
@@ -413,10 +420,12 @@ the root everywhere and an agent cannot commit the author's source by walking up
 
 `dev` loads the definition through the same assembly as a deployment and can run with cloud constraints (§1).
 
-The agent's tools can write its own instance configuration in development. That is accepted: an instance is one trust
-domain, the change takes effect at the next open, and version control shows it. Deployed configuration is read-only
-(§6.1). A local host watches the declared configuration (§7) and reopens after the current turns finish, so an edit
-lands without a manual restart.
+In development the instance configuration sits at the project root and the agent's cwd is `.fastagent/dev/`, so the
+agent's tools reach the configuration only by absolute path; nothing steers them there, and an agent that does edit it
+is acceptable for the reason in §4.2 (one trust domain, effective at the next open, visible in version control). A
+local instance whose configuration directory is its instance root (§4.6) is where an agent adds its own skills in
+ordinary use. Deployed configuration is read-only (§6.1). A local host watches the declared configuration (§7) and
+reopens after the current turns finish, so an edit lands without a manual restart.
 
 Running follows the npm and web-framework conventions, three entries over one start:
 
