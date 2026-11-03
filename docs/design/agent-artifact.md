@@ -90,7 +90,7 @@ my-agent/
   package.json
   fastagent.config.ts      constants, defaults, settings schema, providers/extensions
   context.json             content baseline and environment requirements
-  mcp.json                 default MCP servers; references, never credential values
+  mcp.json                 default MCP servers; secrets as ${VAR} references (it is published)
   SYSTEM.md  AGENTS.md
   skills/  prompts/
   src/tools/ src/extensions/ src/channels/ src/schedules/
@@ -149,7 +149,8 @@ commands, runtimes and variable names it needs. Its name matches the vocabulary 
 instance configuration instead (§4.2). Both edits keep the existing lock. `context.local.json` goes away: a machine's
 own bindings belong to the instance.
 
-`mcp.json` is the default MCP servers in the standard `mcpServers` shape, with secret references by name.
+`mcp.json` is the default MCP servers in the standard `mcpServers` shape. It is published with the package, so its
+secrets are `${VAR}` references (§4.1).
 
 Language dependencies stay in `package.json`. Names already declared by `needs()` or MCP references are aggregated, not
 registered again.
@@ -317,11 +318,22 @@ Composition:
 
 **MCP: three different things.** A server's declaration (`command` or `url`, `args`, headers with `${VAR}`
 references) is configuration: the program's `mcp.json` declares the servers every instance connects, an instance's
-`.mcp.json` or `mcpServers` adds its own, and neither ever holds a secret value. The values those references name are
-secrets, the same input `needs()` reads; today's `McpOptions.variables` merges into `secrets`. An OAuth grant, created
+`.mcp.json` or `mcpServers` adds its own. The values those references name are secrets, the same input `needs()` reads; today's `McpOptions.variables` merges into `secrets`. An OAuth grant, created
 when a person authorizes in a browser and refreshed afterwards, is state. `mcp` keeps `store`, `bindings` and `fetch`
 ([mcp-auth.md](mcp-auth.md)). A program-declared server without its required value or grant refuses the open and says
 what is missing.
+
+OAuth tokens never enter an MCP file, as in every client using this format: they live in the grant store below. A
+static credential is different: the format allows a literal value in `headers` or `env`, and FastAgent accepts one, so
+an entry copied from a server's documentation works as it is. A file that travels should carry `${VAR}` references
+instead, with the value supplied as `secrets`. FastAgent cannot tell whether a string is a secret, so it warns and
+never refuses, and only where the file travels because of FastAgent:
+
+- `fastagent build` warns about a literal in the program's `mcp.json` `headers` or `env`, which is published;
+- `fastagent deploy` warns the same for an instance `.mcp.json` it bakes into an image or delivers to a host;
+- a workbench app warns the same when it exports an instance folder (Kage's "give someone the agent").
+
+An instance file that stays on its machine is its owner's choice and draws no warning.
 
 Where a static value lives depends on where the instance runs; it reaches the instance only as the `secrets` input:
 
@@ -381,7 +393,8 @@ program's, so a development instance names other directories. `content add` writ
 development instance's at the project root, or the one `--config <file>` names; `--program` targets the program's `context.json` instead (§3.3). `.mcp.json` stays a file of its own because it is the ecosystem's format: entries copy from any
 server's documentation, and Claude Code working in the same directory reads the same servers, which is intended.
 
-A secret value never appears in either file; both reference secrets by name.
+`fastagent.json` holds no secret values; secrets are referenced by name. `.mcp.json` follows the rule for MCP files in
+§4.1.
 
 ### 4.3 Development defaults
 
@@ -522,6 +535,13 @@ environment               secrets injected by the platform, or AgentCore's secre
 
 The volume no longer holds a copy of the definition (today's `/data/definition`): the program lives only in the image,
 and a volume holds only state and work.
+
+`/etc/<name>/` and `/var/lib/<name>/` are the filesystem hierarchy's configuration and variable-state directories, the
+ones systemd's `ConfigurationDirectory=` and `StateDirectory=` create, and the ones official images such as Postgres
+and Grafana use; many images mount `/data` instead, which works equally but does not separate several agents on one
+machine. The generated image creates both directories and gives them to the user it runs as, since a non-root process
+cannot create directories under `/var/lib`. `HOME` stays the user's home (§5's base environment), so files such as
+`~/.gitconfig` do not land in the instance root.
 
 Configuration on a writable volume would make the deployment and the agent compete for it, the problem #605 describes.
 Delivered read-only, it changes only by deploying again, and an agent cannot add capabilities to a served deployment.
