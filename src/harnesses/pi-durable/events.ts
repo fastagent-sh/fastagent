@@ -214,6 +214,22 @@ function liveTranslator(
     }
   };
   learnToolArgs(snapshot.entries);
+  /**
+   * The answers that made calls now starting, read back through the history when the view's window began after them
+   * (a Caller attached late in a long round). A call no answer made stays unknown, and `toolEvents` refuses it.
+   */
+  const recallToolArgs = (live: LiveState | undefined): Effect.Effect<void, PortFailure> => {
+    const missing = (live?.tools ?? []).filter(
+      (slot) => slot.status !== "pending" && !started.has(slot.callId) && !toolArgs.has(slot.callId),
+    );
+    if (missing.length === 0) return Effect.void;
+    const known = () => missing.every((slot) => toolArgs.has(slot.callId));
+    return reads.history(conversation, { order: "descending" }).pipe(
+      Stream.tap((record) => Effect.sync(() => learnToolArgs([record]))),
+      Stream.takeUntil(known),
+      Stream.runDrain,
+    );
+  };
 
   const deltas = (content: Blocks): SessionEvent[] => {
     const now = shownOf(content);
@@ -314,6 +330,7 @@ function liveTranslator(
         if (reply === undefined || records.some((record) => record.model?.[0]?.role === "assistant")) {
           shown = shownOf([]);
         }
+        yield* recallToolArgs(live);
         before.push(...toolEvents(live));
 
         const published = yield* reads.publish(records.filter(isPublished));

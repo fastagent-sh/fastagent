@@ -229,6 +229,9 @@ state root (`stateDir`: an instance of its own beside `dev`'s). It works in this
    otherwise (`unfinished`), before the scheduler starts: `invoke`, whose messages do not outlive it, aborts what a
    stopped `invoke` left (`"abort"`), so a message its user stopped is not run by the next one; `schedules run`, which
    would run that work and cut it off when it exits, refuses to open over it (`"refuse"`).
+   A model request a crash cut off counts as a failed attempt under the retry policy (`settings.retry`), the budget a
+   model error spends; with none left, and for a task a crash cut off `settings.restartLimit` times in a row, pi-durable
+   ends the run, and its message ends `failed` (`internal`, `details.reason` `interrupted` or `restart_limit`).
 
 If the Agent does not open, the storage is closed before the failure is thrown, so the same process can open it again.
 

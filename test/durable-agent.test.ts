@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
-import { obj } from "@earendil-works/pi-schema";
+import { num, obj } from "@earendil-works/pi-schema";
 import {
   AgentDoc,
   Harness,
@@ -103,6 +103,74 @@ describe("the Agent on pi-durable", () => {
     },
   );
 
+  it("starts a call whose answer is older than the window a Caller attached with, with its arguments", async () => {
+    const { faux, models, model } = fauxModels();
+    let holding = () => {};
+    const held = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const registry = createRegistry();
+    registry.install(
+      defineExtension({
+        name: "long round",
+        tools: [
+          defineTool({
+            name: "tick",
+            description: "Returns at once",
+            parameters: obj({ n: num() }),
+            execute: async () => ({ output: [{ type: "text", text: "ticked" }] }),
+          }),
+          defineTool({
+            name: "hold",
+            description: "Returns once released",
+            parameters: obj({}),
+            execute: async () => {
+              holding();
+              await released;
+              return { output: [{ type: "text", text: "held" }] };
+            },
+          }),
+        ],
+      }),
+    );
+    const calls = [
+      ...Array.from({ length: 55 }, (_, n) => fauxToolCall("tick", { n })),
+      fauxToolCall("hold", {}),
+      fauxToolCall("tick", { n: 99 }),
+    ];
+    faux.setResponses([fauxAssistantMessage(calls, { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    const agent = await openDurableAgent({
+      storage: await openNodeSqliteStorage(temporaryStorage()),
+      models,
+      registry,
+      settings: { toolExecution: "sequential" },
+      name: "long round",
+      model,
+    });
+    const { id: sessionId } = await agent.sessions.create({ model });
+    const message = await agent.messages.send({ sessionId, content: "go" });
+    await held;
+    const stream = agent.sessions.events(sessionId)[Symbol.asyncIterator]();
+    try {
+      expect((await stream.next()).value).toMatchObject({ type: "state" });
+      release();
+      const events = [];
+      for (let next = await stream.next(); !next.done; next = await stream.next()) {
+        events.push(next.value);
+        if (next.value.type === "done" || next.value.type === "stream_error") break;
+      }
+      expect(events).toContainEqual(expect.objectContaining({ type: "tool_started", name: "tick", args: { n: 99 } }));
+      expect(events.at(-1)).toMatchObject({ type: "done", message: { id: message.id, status: "completed" } });
+    } finally {
+      await stream.return?.();
+      await agent.close();
+    }
+  });
+
   it("delivers the done of a message that was taken and answered while its Caller read nothing", async () => {
     const { faux, models, model } = fauxModels();
     faux.setResponses([fauxAssistantMessage("answer")]);
@@ -131,7 +199,7 @@ describe("the Agent on pi-durable", () => {
     }
   });
 
-  it("ends a stream its Caller leaves unread for a thousand commits, after the entries it had", async () => {
+  it("ends a stream its Caller leaves unread for a thousand commits", async () => {
     const { models, model } = fauxModels();
     const agent = await openDurableAgent({
       storage: await openNodeSqliteStorage(temporaryStorage()),
