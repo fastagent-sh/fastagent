@@ -12,7 +12,7 @@ The design center is decided in `docs/design/architecture.md`: an agent is a def
 |---|---|
 | `docs/SPEC.md` | The Agent API v2, in process and over HTTP: what `src/agent-api.ts` and `src/http/` implement. Do not change its semantics without an explicit decision. |
 | `docs/design/architecture.md` | The decided architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
-| `docs/design/agent-artifact.md` | The artifact/instance target: immutable `dist/`, program `environment.json`/`mcp.json`/`context.json`, instance auth/cwd and `.mcp.json`/`context.json` additions. Paths and explicit reopen activation are decided; public formats and lifecycle proofs remain pending (#900), not current runtime behavior. |
+| `docs/design/agent-artifact.md` | The framework target (#900), not current runtime behavior: one immutable built definition assembled deterministically from explicit instance inputs. Program `fastagent.config.ts` (constants, `defaults`, `settings` schema) + `context.json` + `mcp.json`; instance `fastagent.json` + `.mcp.json`, state and workspace; deployment and secret modes. |
 | `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |

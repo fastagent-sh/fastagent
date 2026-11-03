@@ -6,9 +6,9 @@ status: current
 
 # Distribution and provenance
 
-**Scope: the current vendored-source workflow.** Route B in the [artifact/instance design](agent-artifact.md) deliberately
-crosses §6's dependency-installation trigger. Exported definitions, build metadata and durable instance-addition records
-are being reviewed there. That does not require a directory-wide agent catalog or a second author-maintained manifest.
+**Scope: the current vendored-source workflow.** Route B in the [artifact design](agent-artifact.md) deliberately
+crosses §6's dependency-installation trigger: an agent becomes an npm package an app imports, with an exported
+definition and a format version. That does not require a directory-wide agent catalog or a second author-maintained manifest.
 
 **There is no manifest of agents, and there will not be one until one of the triggers in §6 fires.** What such a
 file would hold is either derivable from the filesystem or belongs to an agent rather than to a directory
