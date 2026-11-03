@@ -132,8 +132,11 @@ export default defineAgent({
 
 - A field outside `defaults` is a constant. No separate ownership table is needed.
 - `settings` uses [`@earendil-works/pi-schema`](https://www.npmjs.com/package/@earendil-works/pi-schema): plain JSON
-  Schema with static types, the same schema language pi-durable 1.5.0 uses for tool parameters (this requires moving to
-  pi 1.5.0). Secrets stay with `needs()` beside the code that reads them; `settings` is for non-secret values.
+  Schema with static types and no dependencies of its own, so it is added as a dependency of FastAgent whatever pi
+  release is in use. It is the schema language pi-durable 1.5.0 uses for tool parameters, so tools and settings share
+  one language once FastAgent moves to 1.5.0 ([#903](https://github.com/fastagent-sh/fastagent/issues/903)); the
+  settings work does not wait for it. Secrets stay with `needs()` beside the code that reads them; `settings` is for
+  non-secret values.
 - `fastagent build` runs the configuration check, so a mistake fails before publication rather than at a host's open.
 - A configuration without `settings` can stay a literal with a type-only import, as today's scaffold writes it, and
   opens before `npm install`. Declaring `settings` calls the schema builders at run time, so that configuration imports
@@ -660,7 +663,7 @@ boundary experiments, not a supported format.
 ## 10. Delivery
 
 1. **Artifact.** A compiled `dist/` with its `bin`, installed under `node_modules`, opened read-only with explicit
-   inputs, two independent instances, on Node and Bun. Move to pi 1.5.0 and pi-schema.
+   inputs, two independent instances, on Node and Bun. Add pi-schema; the move to pi 1.5.0 is separate (#903).
 2. **Inputs.** The four-input contract with the instance root, `fastagent.json`, one resolver for API objects and
    files, the configuration shape of §3.2, the default locations, `dev` cloud-constraint mode and the scaffold's npm
    scripts; `context.local.json` removed.
