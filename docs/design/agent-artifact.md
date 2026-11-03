@@ -40,9 +40,10 @@ Acceptance:
 3. An implicit dependency (a machine file, a shell variable, the author checkout) fails at preflight or open, not first
    in the cloud.
 
-**The deployment unit is the author's project**, as for a web application. Running someone else's published agent
-package against an arbitrary directory is a product shape the artifact allows, but it is not a first-slice goal.
-Embedding is a goal: an app imports the agent's npm package and opens it.
+**The deployment unit is the author's project**, as for a web application. Embedding is a goal: an app imports an
+agent's npm package and opens instances of it. A workbench app such as Kage is that case: it bundles a program and
+each agent its user creates is an instance of it (§4.6). Opening a source project is `fastagent dev`'s alone; an app
+opens built definitions. A general product for running anyone's published package is not a first-slice goal.
 
 ### 1.1 Web-framework correspondence
 
@@ -194,7 +195,10 @@ export default defineDefinition({
 });
 ```
 
-- Its public type promises only `name`, `version` and the settings schema; other fields are internal and may change
+- Its public type promises only `name`, `version`, the settings schema and the **declared inputs**: each secret name
+  with what it is for, whether it is optional and where it is declared (`needs()`, MCP references, `context.json`'s
+  environment), and the commands the environment requires. A host shows what an instance still needs from this list
+  rather than parsing files; deploy's missing-value report uses the same list. Other fields are internal and may change
   between releases. A symbol brand lets `openAgent` recognize a built definition.
 - It is typed by its settings (`AgentDefinition<Settings>`), so an embedder's `settings` input is checked by the compiler.
 - It is customized only through `openAgent(definition, inputs)`, never by mutation, which keeps the assembly
@@ -235,8 +239,9 @@ Every input can be placed anywhere, so a host can mount each on the storage that
 
 | Input | Flag | Environment variable | `openAgent` option |
 |---|---|---|---|
-| Instance configuration | `--config <file>` | `FASTAGENT_CONFIG` | `config` (object) |
-| MCP configuration | `--mcp-config <file>` | `FASTAGENT_MCP_CONFIG` | `mcp` (object) |
+| Instance configuration | `--config <file>` | `FASTAGENT_CONFIG` | `config` (an object, or the absolute path of a `fastagent.json`) |
+| MCP server declarations | `--mcp-config <file>` | `FASTAGENT_MCP_CONFIG` | `mcpServers` (an object, or an absolute path; default `.mcp.json` beside a `config` path) |
+| MCP authorization (OAuth grant store, bindings, transport) | — | — | `mcp` |
 | Secrets | `--env-file <file>` | the process environment | `secrets` (`Record<string, string>`) |
 | Child-process base environment (§5) | — | the CLI's own `PATH`, `HOME`, locale, proxy variables | `env` |
 | Instance name (§4.5) | `--name <name>` | `FASTAGENT_NAME` | `name` |
@@ -301,6 +306,21 @@ Composition:
 - Settings override by key: objects merge recursively, arrays replace.
 - Content and MCP entries only add. An instance entry whose name collides with a program entry is refused; nothing is
   shadowed, deep-merged or written back into the program files.
+- Skills and prompt templates are namespaced instead of refused. A program's have a full name `<program>:<name>`
+  (`reviewer:review`); an instance's are bare, since an instance is what opens. A program's bare name is an alias
+  while no instance entry takes it. When one does, the bare name is the instance's, the program's stays listed and
+  invocable by its full name, and the open reports the overlap. A program upgrade that adds a name an instance already
+  uses therefore never stops the instance from opening. The command spelling under `/skill:` is settled in
+  implementation.
+
+**MCP: three different things.** A server's declaration (`command` or `url`, `args`, headers with `${VAR}`
+references) is configuration: the program's `mcp.json` declares the servers every instance connects, an instance's
+`.mcp.json` or `mcpServers` adds its own, and neither ever holds a secret value. The values those references name are
+secrets, the same input `needs()` reads; today's `McpOptions.variables` merges into `secrets`. An OAuth grant, created
+when a person authorizes in a browser and refreshed afterwards, is state: it lives in the grant store (under `.state/`
+by default, or a host's own) and an instance's binding says which grant a server uses. `mcp` keeps `store`, `bindings`
+and `fetch` ([mcp-auth.md](mcp-auth.md)). A program-declared server without its required value or grant refuses the
+open and says what is missing.
 - An instance layers only on the program's defaults, never on another instance.
 
 ### 4.2 `fastagent.json` and `.mcp.json`
@@ -316,20 +336,23 @@ Composition:
     "handbook": { "github": "acme/handbook", "ref": "main" },
     "data": { "path": "/srv/data" }
   },
-  "skills": ["./instance/skills"],
-  "prompts": ["./instance/prompts"]
+  "instructions": ["./AGENTS.md"],
+  "skills": ["./skills"],
+  "prompts": ["./prompts"]
 }
 ```
 
 `fastagent.json` holds every FastAgent-owned instance input: overrides of the program's defaults, settings values,
-additional content sources (including the machine-local bindings `context.local.json` held before), and additional
-skill and prompt-template directories. `skills` and `prompts` name directories relative to `fastagent.json`, so in a
-deployment they ship inside the delivered, read-only configuration (`/etc/<name>/skills/`); they are never discovered
-in the writable workspace. A directory that resolves to the program's own `skills/` or `prompts/`, or inside the
-program (the package or, in development, the project's program directories), is a configuration error reported at
-open: it would offer the program's capabilities a second time under colliding names. `content add` writes this file by
-default: the development instance's at the project root,
-or the one `--config <file>` names; `--program` targets the program's `context.json` instead (§3.3). `.mcp.json` stays a file of its own because it is the ecosystem's format: entries copy from any
+additional content sources (including the machine-local bindings `context.local.json` held before), and the
+instance's own instructions, skills and prompt templates. `instructions` names files added after the program's text;
+`skills` and `prompts` name directories. All are relative to `fastagent.json`, and only what is declared loads: a file
+the agent writes elsewhere in its workspace never becomes a capability. Where the configuration directory is the
+writable instance root (a local instance, §4.6), the person and the agent can add to these directories, taking effect
+at the next open (§7); deployed, they ship in the read-only configuration (`/etc/<name>/skills/`). A directory that
+resolves to the program's own `skills/` or `prompts/`, or inside the program, is a configuration error reported at
+open: it would offer the program's capabilities twice. In a development project the root's `skills/` is the
+program's, so a development instance names other directories. `content add` writes this file by default: the
+development instance's at the project root, or the one `--config <file>` names; `--program` targets the program's `context.json` instead (§3.3). `.mcp.json` stays a file of its own because it is the ecosystem's format: entries copy from any
 server's documentation, and Claude Code working in the same directory reads the same servers, which is intended.
 
 A secret value never appears in either file; both reference secrets by name.
@@ -353,7 +376,8 @@ the root everywhere and an agent cannot commit the author's source by walking up
 
 The agent's tools can write its own instance configuration in development. That is accepted: an instance is one trust
 domain, the change takes effect at the next open, and version control shows it. Deployed configuration is read-only
-(§6.1).
+(§6.1). A local host watches the declared configuration (§7) and reopens after the current turns finish, so an edit
+lands without a manual restart.
 
 Running follows the npm and web-framework conventions, three entries over one start:
 
@@ -374,18 +398,42 @@ const agent = await openAgent(reviewer, {
   config: { model: "anthropic/claude-x", settings: { repo: "acme/api" }, content: { /* … */ } },
   root: "/var/lib/myapp/reviewer",
   secrets: { GITHUB_TOKEN: vault.read("github") },   // values for needs() and MCP references
+  mcp: { bindings: { linear: grantId } },            // which OAuth grant each server uses
   credentials,                                       // model providers' credential store
 });
 ```
 
 The app needs no files: configuration is the same schema as an object, read by the same resolver the CLI uses for
-`fastagent.json`. Two opens with different inputs share nothing: no cwd, relative output, binding or default.
+`fastagent.json`; an app that keeps its instances as folders passes the file's path instead (§4.6). Two opens with different inputs share nothing: no cwd, relative output, binding or default.
 
 ### 4.5 Identity
 
 An instance's name is an explicit input (`--name`, `FASTAGENT_NAME`, `name`; §4.1). It defaults to the definition's
 name, normalized to one path segment (`@scope/pkg` is not one), because a deployment joins it onto storage and
 resource names; two instances of one definition on one machine take distinct names. `config.name` is for display.
+
+### 4.6 A workbench app: Kage
+
+Kage, a desktop workbench, bundles a program and opens one instance of it per agent its user creates. Writing
+TypeScript tools stays with `fastagent dev`; what a Kage user changes (instructions, skills, prompts, MCP servers,
+folders, model, settings) is the instance layer. An instance there is one visible folder, the same shape as a deployed
+one:
+
+```text
+~/Agents/<slug>/            instance root = workspace, writable
+  fastagent.json  .mcp.json  AGENTS.md  skills/  prompts/
+  .state/                   sessions, MCP grants (not exported)
+  ...                       what the agent produces
+```
+
+- Kage passes `root`, `name`, `config` as the path of the folder's `fastagent.json` (so its relative entries resolve
+  against the folder, and the model choice and folder bindings Kage records there are what the person and the agent
+  see), `secrets` from its own store, `env` with its proxy, `credentials` and `mcp` bindings. No secret value is written
+  into the folder.
+- `GIT_CEILING_DIRECTORIES` is `~/Agents`, so a person can keep each agent in git of its own.
+- Giving someone the agent copies the folder without `.state/`; the recipient opens it with the same program.
+- Kage watches the declared files and reopens after current turns, as `dev` does.
+- When Kage ships a newer program, names an instance already uses stay the instance's (§4.1).
 
 ## 5. Paths
 
@@ -438,7 +486,7 @@ A container instance:
 ```text
 /app/                     the image: the program, read-only
 /etc/<name>/              configuration, read-only (derived-image layer or mount)
-  fastagent.json  .mcp.json
+  fastagent.json  .mcp.json  AGENTS.md  skills/  prompts/
 /var/lib/<name>/          the volume, FASTAGENT_ROOT: the agent's cwd (/mnt/<name>/ on AgentCore)
   .state/
   content/<entry>/
@@ -501,13 +549,15 @@ FastAgent installs nothing for them and mutates no host globally.
 **Every addition takes effect at an explicit close and reopen**, which selects one snapshot of the configuration for
 the life of that open:
 
-- **Text** (instance skill and prompt-template directories) is read at open from the configuration's directories (§4.2),
-  with names checked against the program's. No per-message rescan bypasses this boundary: one would let one open
-  present different model-facing text, and let files the agent writes into its workspace become capabilities. This
+- **Text** (instance instructions, skills and prompt templates) is read at open from what the configuration declares
+  (§4.2), named as §4.1 says. No per-message rescan bypasses this boundary: one would let one open present different
+  model-facing text, and let files the agent writes anywhere in its workspace become capabilities. A local host
+  (`dev`, a workbench app) watches the declared files and reopens once the current turns finish; FastAgent provides the
+  change notification, so the edit lands without a manual restart. This
   keeps the first draft's rule and changes the current source-directory behavior, where skills and `AGENTS.md` in the
   agent directory are read on the next message ([agent-model.md §6](agent-model.md#6-an-agent-changes-itself)).
-- **Connections and executables** (MCP servers, tools) take effect the same way. No automatic restart and no hot
-  replacement of loaded code.
+- **Connections and executables** (MCP servers, tools) take effect the same way. Apart from that watched reopen, no
+  automatic restart and no hot replacement of loaded code.
 - An open that cannot assemble its configured set refuses before reporting ready, releases what it acquired and keeps
   its diagnostics. No configured capability is silently dropped.
 
@@ -561,7 +611,6 @@ Deferred until a real need:
 - Persistent capabilities an agent writes for itself, with candidate/accepted/effective states, provenance and
   revocation, packaged like `dist/` when built.
 - Persistent additions on AgentCore.
-- State compatibility across program versions (the migration counterpart of upgrades).
 - Cloud storage and cloud document content sources; the first slice is local directories and GitHub.
 - Native JavaScript additions.
 - Context packages, registries, marketplaces, orchestration and sandboxing.
