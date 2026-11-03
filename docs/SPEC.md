@@ -331,12 +331,15 @@ A reply whose tool calls ran is never an answer.
 |---|---|---|
 | The Caller stops waiting or watching | The agent goes on | Stays queued |
 | `cancel` | Stopped: `canceled` | Withdrawn: `canceled`, without an entry |
-| The process stops | Answered after the restart; `canceled` if a `cancel` was stopping it | Stays queued |
+| The process stops | Answered after the restart; `canceled` if a `cancel` was stopping it; `failed` when no retry is left for what the stop cut off (below) | Stays queued |
 
 A tool cut off by a restart is not run again unless it declares a second run safe; the agent is told it was
-interrupted and carries on. The Agent never sends a message again on its own. These promises hold as far as the
-storage keeps what it was given: storage that loses its newest writes when its host fails loses the newest messages
-with them ([architecture.md](design/architecture.md) §4.3).
+interrupted and carries on. A model call cut off by a process that dies counts as one failed attempt of the agent's
+model retries, the budget a failing model call spends; a process that closes cleanly is not charged. With no retry
+left, or once the same step was cut off by restarts too many times in a row, the message ends `failed` with
+`internal`, `details.reason` `interrupted` or `restart_limit`. The Agent never sends a message again on its own. These
+promises hold as far as the storage keeps what it was given: storage that loses its newest writes when its host fails
+loses the newest messages with them ([architecture.md](design/architecture.md) §4.3).
 
 ## 6. Watching
 
