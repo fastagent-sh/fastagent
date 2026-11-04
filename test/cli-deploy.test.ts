@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/container.ts";
-import { fastagentVersion } from "../src/version.ts";
 import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
 
@@ -231,10 +230,8 @@ describe("cli: deploy", () => {
     const current = containerArtifacts({
       releaseId: "release-one",
       agent: "any",
-      hasPackageJson: true,
       runtime: "node",
       hasLockfile: false,
-      version: await fastagentVersion(),
       apt: [],
     }).find((a) => a.path === "Dockerfile")!.content;
     const fresh = await setup(current);

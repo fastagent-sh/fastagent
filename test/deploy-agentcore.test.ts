@@ -24,10 +24,8 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   releaseId: "release-one",
   name: "my-agent",
   channels: [],
-  hasPackageJson: false,
   runtime: "node",
   hasLockfile: false,
-  version: "0.15.0",
   agent: "my-agent",
   ...over,
 });

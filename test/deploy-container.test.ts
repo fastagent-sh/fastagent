@@ -5,10 +5,8 @@ import { definitionSections } from "../src/harnesses/pi-durable/text.ts";
 
 const input = {
   releaseId: "release-one",
-  hasPackageJson: true,
   runtime: "node",
   hasLockfile: true,
-  version: "0.0.0",
   agent: "reviewer",
 } as const;
 

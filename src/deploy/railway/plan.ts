@@ -21,7 +21,7 @@ export interface RailwayPlanInput extends ContainerInput {
    * Sleeping must stay off for an outbound connection.
    */
   channels: readonly DeclaredChannel[];
-  // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from ContainerInput.
+  // Container facts (runtime, hasLockfile, bunVersion, apt) come from ContainerInput.
   /**
    * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
    * carries.
