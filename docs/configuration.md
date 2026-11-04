@@ -326,7 +326,7 @@ A change to `context.json` restarts `dev`.
 above), an MCP server's own `env` for that server, and `GIT_CEILING_DIRECTORIES` at the working directory's parent, so
 git run in the workspace does not find the repository around it. Nothing else of the shell's reaches it: an undeclared
 key (`AWS_SECRET_ACCESS_KEY`, `ANTHROPIC_API_KEY`) is not in the agent's commands, and a command that needs one declares
-it. Cloning content and installing packages are FastAgent's own and run in the full environment. A package is installed into mise's data directory on this machine
+it. Cloning content and installing packages are FastAgent's own and run in the full environment. An embedding app that declares packages gives `env` a `PATH` (`baseEnv(process.env)` does), since the packages' commands go ahead of it. A package is installed into mise's data directory on this machine
 (`~/.local/share/mise`), which other mise projects share.
 
 The image installs every declared package when it is built, at the newest release then, in a layer cached while the

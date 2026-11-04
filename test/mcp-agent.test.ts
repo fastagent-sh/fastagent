@@ -123,7 +123,22 @@ it("a stdio server gets the base, the declared secrets and its own env, and noth
   });
   const who = JSON.parse((await ask(agent, "mcp__constructor__who")).answer?.text ?? "null");
   expect(who).toMatchObject({ value: "own", declared: "declared", leaked: false });
+  // With no base given, the host's own HOME, PATH, USER and the rest do not reach the server either.
+  for (const name of ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TERM"]) expect(who.names, name).not.toContain(name);
   expect(who.ceiling).toBe(dirname(dir));
+});
+
+it("a stdio server's base is the one given, over the host's own HOME and PATH", async () => {
+  vi.stubEnv("FASTAGENT_OFFLINE", "1");
+  const dir = await directory({ mcpServers: { constructor: { command: process.execPath, args: [FIXTURE] } } });
+  const agent = await opened(dir, {
+    stateDir: join(dir, "state"),
+    secrets: {},
+    env: { HOME: "/home/instance", PATH: process.env.PATH ?? "" },
+  });
+  const who = JSON.parse((await ask(agent, "mcp__constructor__who")).answer?.text ?? "null");
+  expect(who.names).toEqual(expect.arrayContaining(["HOME", "PATH"]));
+  for (const name of ["USER", "LOGNAME", "SHELL", "TERM"]) expect(who.names, name).not.toContain(name);
 });
 
 it("HTTP clients keep bindings isolated and closing one leaves a shared grant usable", async () => {

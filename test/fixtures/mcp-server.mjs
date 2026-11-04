@@ -7,7 +7,7 @@ let calls = 0;
 serveStdio(() => {
   const server = new McpServer({ name: 'test-mcp', version: '1' });
   server.registerTool('who', { inputSchema: fromJsonSchema({ type: 'object', properties: {} }) }, async () => ({
-    content: [{ type: 'text', text: JSON.stringify({ value: process.env.MCP_VALUE, cwd: process.cwd(), pid: process.pid, calls: ++calls, leaked: process.env.UNRELATED_MCP_SECRET !== undefined, declared: process.env.FA_MCP_DECLARED, ceiling: process.env.GIT_CEILING_DIRECTORIES }) }],
+    content: [{ type: 'text', text: JSON.stringify({ value: process.env.MCP_VALUE, cwd: process.cwd(), pid: process.pid, calls: ++calls, leaked: process.env.UNRELATED_MCP_SECRET !== undefined, declared: process.env.FA_MCP_DECLARED, ceiling: process.env.GIT_CEILING_DIRECTORIES, names: Object.keys(process.env) }) }],
   }));
   server.registerTool('wait', { inputSchema: fromJsonSchema({ type: 'object', properties: { ms: { type: 'number' } }, required: ['ms'] }) }, async ({ ms }, ctx) => {
     if (process.env.MCP_EVENTS) appendFileSync(process.env.MCP_EVENTS, 'started\n');

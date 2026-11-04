@@ -44,6 +44,8 @@ const GIT_CEILING = "GIT_CEILING_DIRECTORIES";
 /** What every process the agent starts gets, before an MCP server's own `env` is added for that server. */
 export function processEnvironment(inputs: ProcessEnvironmentInputs, workspaceParent: string): Record<string, string> {
   const held = definedValues(inputs.secrets);
-  const declared = Object.fromEntries(inputs.declared.flatMap((name) => (name in held ? [[name, held[name]]] : [])));
+  const declared = Object.fromEntries(
+    inputs.declared.flatMap((name) => (Object.hasOwn(held, name) ? [[name, held[name]]] : [])),
+  );
   return { ...inputs.base, ...declared, ...inputs.packages, [GIT_CEILING]: workspaceParent };
 }

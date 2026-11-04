@@ -51,6 +51,12 @@ describe("processEnvironment", () => {
     workdir: "/srv/agent/work",
   };
 
+  it("takes a declared name only when it is held, never one that Object.prototype has", () => {
+    const result = processEnvironment({ ...inputs, declared: ["toString", "GH_TOKEN"] }, "/srv/agent");
+    expect(Object.hasOwn(result, "toString")).toBe(false);
+    expect(result.GH_TOKEN).toBe("t");
+  });
+
   it("is the base, then the declared secrets that are held, then the packages' commands, then the git ceiling", () => {
     expect(processEnvironment(inputs, "/srv/agent")).toEqual({
       PATH: "/mise/bin:/bin",
