@@ -75,7 +75,7 @@ async function agent(name: string, content: string, relocated = false) {
   const secrets = relocated ? join(root, "relocated-secrets") : join(dir, ".secrets/production");
   await mkdir(secrets, { recursive: true });
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai/gpt-4o" };\n');
+  await writeFile(join(dir, "fastagent.config.ts"), 'export default { defaults: { model: "openai/gpt-4o" } };\n');
   await buildable(dir);
   await writeFile(join(secrets, ".env"), content);
   if (relocated) vi.stubEnv("FASTAGENT_SECRETS_DIR", secrets);

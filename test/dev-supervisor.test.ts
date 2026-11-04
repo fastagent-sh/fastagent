@@ -22,6 +22,8 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "context.json"))).toBe(false);
     expect(ignored(join(root, "context.local.json"))).toBe(false);
     expect(ignored(join(root, ".mcp.json"))).toBe(false);
+    // The instance configuration `dev` reads at the root: resolved once per process, so an edit restarts the worker.
+    expect(ignored(join(root, "fastagent.json"))).toBe(false);
     expect(ignored(join(root, "mise.toml"))).toBe(true); // an author's own: the environment is not read from it
     // The environment is declared in context.json alone: a directory of that name is the author's.
     expect(ignored(join(root, "environment", "mise.lock"))).toBe(true);

@@ -29,14 +29,18 @@ import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isNeeds } from "./define.ts";
+import {
+  type EffectiveConfig,
+  type InstanceConfigSource,
+  checkProgramConfig,
+  projectInstanceConfig,
+} from "./config.ts";
 import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
 import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
 import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
 
-const CONFIG_KEYS = ["name", "description", "model", "thinkingLevel", "extensions", "providers", "http", "deploy"];
 const DEFINITION_EXTENSION = "fastagent.definition";
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 async function importDefault(path: string, what: string): Promise<unknown> {
   try {
@@ -46,71 +50,35 @@ async function importDefault(path: string, what: string): Promise<unknown> {
   }
 }
 
-/** An object whose keys are among `keys`, or the refusal naming the one that is not and the ones there are. */
-function checkKeys(value: unknown, keys: readonly string[], where: string): void {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new Error(`${where} must be an object`);
-  for (const key of Object.keys(value)) {
-    if (!keys.includes(key)) throw new Error(`${where}: unknown key "${key}" (keys: ${keys.join(", ")})`);
-  }
-}
-
-/** Refuse what a type check would have: Node strips types without checking them, so a typo reaches here. */
-function checkConfig(config: unknown, file: string): AgentConfig {
-  if (config === undefined) return {};
-  if (typeof config !== "object" || config === null || Array.isArray(config)) {
-    throw new Error(`${file} must default-export defineAgent({ ... })`);
-  }
-  checkKeys(config, CONFIG_KEYS, file);
-  const { model, thinkingLevel, extensions, providers, http, deploy } = config as AgentConfig;
-  if (http !== undefined) {
-    checkKeys(http, ["port", "api"], `${file}: "http"`);
-    const port = http.port;
-    if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) {
-      throw new Error(`${file}: "http.port" must be an integer 0-65535`);
-    }
-    if (http.api !== undefined && typeof http.api !== "boolean") {
-      throw new Error(`${file}: "http.api" must be true or false`);
-    }
-  }
-  if (deploy !== undefined) {
-    checkKeys(deploy, ["agentcore"], `${file}: "deploy"`);
-    if (deploy.agentcore !== undefined) {
-      checkKeys(deploy.agentcore, ["idleTimeoutSeconds"], `${file}: "deploy.agentcore"`);
-      // AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is refused by CloudFormation minutes
-      // into `deploy agentcore --run`, after the image build.
-      const idle = deploy.agentcore.idleTimeoutSeconds;
-      if (idle !== undefined && (!Number.isInteger(idle) || idle < 60 || idle > 1209600)) {
-        throw new Error(`${file}: "deploy.agentcore.idleTimeoutSeconds" must be an integer 60-1209600 (seconds)`);
-      }
-    }
-  }
-  if (model !== undefined) modelRefOf(model, `${file}: "model"`);
-  if (thinkingLevel !== undefined && !THINKING_LEVELS.includes(thinkingLevel)) {
-    throw new Error(`${file}: "thinkingLevel" must be one of ${THINKING_LEVELS.join(", ")}`);
-  }
-  for (const [key, list] of [
-    ["extensions", extensions],
-    ["providers", providers],
-  ] as const) {
-    if (list !== undefined && !Array.isArray(list)) throw new Error(`${file}: "${key}" must be an array`);
-  }
-  return config as AgentConfig;
-}
-
 /** The agent package's `fastagent.config.ts`, checked; `{}` without one. */
-export async function loadConfig(dir: string): Promise<AgentConfig> {
+async function loadConfig(dir: string): Promise<AgentConfig> {
   const configPath = join(dir, CONFIG_FILE);
-  return checkConfig(existsSync(configPath) ? await importDefault(configPath, CONFIG_FILE) : undefined, CONFIG_FILE);
+  return checkProgramConfig(
+    existsSync(configPath) ? await importDefault(configPath, CONFIG_FILE) : undefined,
+    CONFIG_FILE,
+  );
 }
 
 /** The default model a process here runs with: `--model` > `FASTAGENT_MODEL` > the configuration's `model`. */
 export function modelSpecFor(
-  config: AgentConfig,
+  config: Pick<EffectiveConfig, "model">,
   flag: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return flag ?? (env.FASTAGENT_MODEL || config.model);
+}
+
+/** A definition and the instance configuration it opens with: what a command resolves before it opens an agent. */
+export interface Project {
+  definition: AgentDefinition;
+  instance?: InstanceConfigSource;
+}
+
+/** The development project in `dir`, as `dev` opens it: its source and the `fastagent.json` at its root, if any. */
+export async function loadDevProject(dir: string): Promise<Project> {
+  const definition = await loadSourceDefinition(dir);
+  const instance = await projectInstanceConfig(dir);
+  return instance === undefined ? { definition } : { definition, instance };
 }
 
 /** The source project in `dir` as a definition: `fastagent.config.ts` (optional) and the modules of `src/`. */
@@ -138,9 +106,10 @@ function built<T>(
   source: string,
   value: unknown,
   values: Record<string, string | undefined>,
+  settings: Readonly<Record<string, unknown>>,
   accept: (v: unknown) => string | undefined,
 ): T {
-  const resolved = isNeeds(value) ? (value as Needs<unknown>).build(values) : value;
+  const resolved = isNeeds(value) ? (value as Needs<unknown>).build(values, settings) : value;
   const problem = accept(resolved);
   if (problem !== undefined) throw new Error(`${source}: ${problem}`);
   return resolved as T;
@@ -182,7 +151,11 @@ export interface BuiltDefinition {
  * Refuse to run while a required secret has no value, naming where it is declared; otherwise build every module with
  * the values it declared, and refuse one that is not what its directory holds.
  */
-export function buildDefinition(definition: AgentDefinition, env: NodeJS.ProcessEnv = process.env): BuiltDefinition {
+export function buildDefinition(
+  definition: AgentDefinition,
+  env: NodeJS.ProcessEnv = process.env,
+  settings: Readonly<Record<string, unknown>> = {},
+): BuiltDefinition {
   const missing = missingSecrets(codeSecrets(definition), env);
   if (missing.length > 0) {
     throw new Error(`missing required secrets: ${describeSecrets(missing)} (set them in the environment)`);
@@ -192,27 +165,27 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   const { registry, config } = definition;
   const tools = registry.tools.map(({ file, value }) => ({
     source: file,
-    ...named(built<ToolRegistration>(file, value, values(value), toolProblem)),
+    ...named(built<ToolRegistration>(file, value, values(value), settings, toolProblem)),
   }));
   const extensions = [
     ...registry.extensions.map(({ file, value }) => ({
       source: file,
-      ...named(built<Extension>(file, value, values(value), extensionProblem)),
+      ...named(built<Extension>(file, value, values(value), settings, extensionProblem)),
     })),
     ...(config.extensions ?? []).map((value, i) => {
       const source = `${CONFIG_FILE} extensions[${i}]`;
-      return { source, ...named(built<Extension>(source, value, values(value), extensionProblem)) };
+      return { source, ...named(built<Extension>(source, value, values(value), settings, extensionProblem)) };
     }),
   ];
   const channels = registry.channels.map(({ file, name, value }) => ({
     source: file,
     name,
-    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), channelProblem),
+    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), settings, channelProblem),
   }));
   const schedules = registry.schedules.map(({ file, name, value }) => ({
     source: file,
     name,
-    value: built<DefinedSchedule>(file, value, values(value), scheduleProblem),
+    value: built<DefinedSchedule>(file, value, values(value), settings, scheduleProblem),
   }));
   refuseTwins("tool", tools);
   // pi-durable replaces an extension installed under a name already taken, its tools and sections with it.
@@ -231,7 +204,7 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
     tools: tools.map(({ value }) => value),
     extensions: extensions.map(({ value }) => value),
     providers: (config.providers ?? []).map((value, i) =>
-      built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
+      built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), settings, providerProblem),
     ),
     channels: new Map(channels.map(({ name, value }) => [name, value])),
     schedules: schedules.map(({ name, value: { kind: _kind, ...config } }) => ({ name, ...config })),
@@ -243,12 +216,16 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
  * providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
  * this machine holds the values. Whatever a build refuses, this refuses too.
  */
-export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {
+export function buildDefinitionShape(
+  definition: AgentDefinition,
+  env: NodeJS.ProcessEnv,
+  settings: Readonly<Record<string, unknown>> = definition.config.defaults?.settings ?? {},
+): BuiltDefinition {
   const values: NodeJS.ProcessEnv = Object.fromEntries(
     definition.inputs.secrets.map(({ name }) => [name, "(no value here)"]),
   );
   for (const [name, value] of Object.entries(env)) if (value) values[name] = value;
-  return buildDefinition(definition, values);
+  return buildDefinition(definition, values, settings);
 }
 
 /**
@@ -281,6 +258,8 @@ export interface AssembleAgentOptions {
   workdir?: string;
   /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;
+  /** The configuration this instance opens with (`resolveConfig`). */
+  config: EffectiveConfig;
   mcpTools?: ToolRegistration[];
   /**
    * pi-ai's built-ins and the definition's providers over the instance's credentials, lists refreshed: the model
@@ -307,8 +286,8 @@ export interface AssembleAgentOptions {
 
 /** Open the definition as an Agent over `models`: the coding tools, then its own. */
 export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
-  const { dir, config } = definition;
-  const { code, models } = options;
+  const { dir } = definition;
+  const { code, models, config } = options;
   const spec = options.model ?? config.model;
   const model = spec === undefined ? undefined : modelRefOf(spec, "the default model");
   if (model !== undefined && models.getModel(model.provider, model.modelId) === undefined) {
@@ -349,7 +328,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     models,
     registry,
     name: definition.name,
-    ...(config.description === undefined ? {} : { description: config.description }),
+    ...(definition.config.description === undefined ? {} : { description: definition.config.description }),
     ...(model === undefined ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),

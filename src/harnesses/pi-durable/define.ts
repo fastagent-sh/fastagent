@@ -5,20 +5,15 @@
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
 import type { Extension } from "@earendil-works/pi-durable";
+import type { Schema } from "@earendil-works/pi-schema";
 import { isEnvName } from "../../declared-secrets.ts";
 import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
-export interface AgentConfig {
-  /** Default: `package.json`'s name. */
-  name?: string;
-  description?: string;
-  /** `"provider/modelId"`: what a session that names none answers with; a deployment may override it. */
+/** What an instance may set over the program's `defaults`, and what a program's `defaults` are (agent-artifact.md §3.2). */
+export interface AgentDefaults<Settings = unknown> {
+  /** `"provider/modelId"`: what a session that names none answers with; a flag or `FASTAGENT_MODEL` may override it. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
-  /** Third-party capabilities, installed after `src/extensions/`. */
-  extensions?: readonly (Extension | Needs<Extension>)[];
-  /** Model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
-  providers?: readonly (Provider | Needs<Provider>)[];
   http?: {
     /** The port a serve listens on, for its channels' webhooks and its health check. */
     port?: number;
@@ -30,10 +25,30 @@ export interface AgentConfig {
   };
   /** How the agent is deployed, where a host needs to be told. */
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
+  /** Values of the program's `settings`; an instance gives the rest. */
+  settings?: Partial<Settings>;
 }
 
+export interface AgentConfig<Settings = unknown> {
+  /** Constant: default `package.json`'s name. */
+  name?: string;
+  /** Constant. */
+  description?: string;
+  /** Constant: third-party capabilities, installed after `src/extensions/`. */
+  extensions?: readonly (Extension | Needs<Extension>)[];
+  /** Constant: model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
+  providers?: readonly (Provider | Needs<Provider>)[];
+  /** What each instance may choose, as an object schema (`obj({ ... })` from `@earendil-works/pi-schema`); no secrets. */
+  settings?: Schema<Settings>;
+  /** What an instance gets unless its configuration says otherwise. */
+  defaults?: AgentDefaults<Settings>;
+}
+
+/** The settings an `AgentConfig` declares: what `fastagent build` types a package's definition by. */
+export type SettingsOf<Config> = Config extends AgentConfig<infer Settings> ? Settings : unknown;
+
 /** @public */
-export function defineAgent(config: AgentConfig): AgentConfig {
+export function defineAgent<Settings = unknown>(config: AgentConfig<Settings>): AgentConfig<Settings> {
   return config;
 }
 
@@ -56,13 +71,18 @@ export type SecretValues<S extends readonly SecretSpec[]> = {
 export interface Needs<T> {
   readonly kind: "fastagent.needs";
   readonly secrets: readonly { name: string; description?: string; optional: boolean }[];
-  build(values: Record<string, string | undefined>): T;
+  build(values: Record<string, string | undefined>, settings: Readonly<Record<string, unknown>>): T;
 }
 
-/** @public */
-export function needs<const S extends readonly SecretSpec[], T>(
+/**
+ * Wrap a module so it is built when an instance opens, with the values of the secrets it declares and the instance's
+ * resolved `settings` (the program's `settings` schema, defaults and the instance's values, checked). Annotate the
+ * second parameter with `SettingsOf<typeof config>` to type it. With no secrets, `needs([], (_, settings) => ...)`.
+ * @public
+ */
+export function needs<const S extends readonly SecretSpec[], T, Settings = Readonly<Record<string, unknown>>>(
   secrets: S,
-  build: (values: SecretValues<S>) => T,
+  build: (values: SecretValues<S>, settings: Settings) => T,
 ): Needs<T> {
   const declared = secrets.map((spec) =>
     typeof spec === "string"
@@ -77,7 +97,11 @@ export function needs<const S extends readonly SecretSpec[], T>(
     // Written verbatim into env files and deploy artifacts, where a malformed name breaks somewhere far away.
     if (!isEnvName(name)) throw new Error(`needs: ${JSON.stringify(name)} is not an environment variable name`);
   }
-  return { kind: "fastagent.needs", secrets: declared, build: (values) => build(values as SecretValues<S>) };
+  return {
+    kind: "fastagent.needs",
+    secrets: declared,
+    build: (values, settings) => build(values as SecretValues<S>, settings as Settings),
+  };
 }
 
 export function isNeeds(value: unknown): value is Needs<unknown> {

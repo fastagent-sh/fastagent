@@ -17,7 +17,7 @@ import {
   isGeneratedDockerignore,
 } from "../../../deploy/container.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
-import type { AgentConfig } from "../../../harnesses/pi-durable/define.ts";
+import type { EffectiveConfig } from "../../../harnesses/pi-durable/config.ts";
 import { exists, resolveStateRoot } from "../../../paths.ts";
 import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
 import { loginOnBox, ticketLoginIO } from "../../box-login.ts";
@@ -62,7 +62,7 @@ interface DeployContext {
   /** The command that runs this deploy again, from where it ran: its agent directory and flags. */
   rerun: string;
   agentDir: string;
-  config: AgentConfig;
+  config: EffectiveConfig;
   pre: Extract<DeployPreflight, { ok: true }>;
   channels: readonly DeclaredChannel[];
   webhookChannels: readonly DeclaredChannel[];

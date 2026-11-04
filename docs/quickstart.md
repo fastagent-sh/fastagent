@@ -64,7 +64,7 @@ deploy):
 ```bash
 fastagent dev --model provider/model-id
 FASTAGENT_MODEL=provider/model-id fastagent dev
-# or set `model` in fastagent.config.ts
+# or set `defaults.model` in fastagent.config.ts
 ```
 
 ## 3. Send it a message

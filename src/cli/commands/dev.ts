@@ -6,7 +6,7 @@ import { listenForRestart, runDevSupervisor } from "../../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
-import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
+import { loadDevProject } from "../../harnesses/pi-durable/open.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
@@ -59,11 +59,13 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   const host = parseBind(opts.bind) ?? DEV_BIND;
   const tunnel = opts.tunnel ?? false;
   assertTunnelBindable(host, tunnel);
-  const opened = await loadSourceDefinition(agentDir)
-    .then((definition) => openServing(definition, { model: modelSpec }))
+  const opened = await loadDevProject(agentDir)
+    .then(({ definition, instance }) =>
+      openServing(definition, { model: modelSpec, ...(instance === undefined ? {} : { config: instance }) }),
+    )
     .catch(failStartup);
   await reportAssembly(opened, modelSpec);
-  const { config } = opened.definition;
+  const { config } = opened;
   const service = await serveAgent(opened, cliMountOptions(config)).catch(failStartup);
   serveService(
     service,

@@ -8,7 +8,8 @@ import { type AnyModel, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { keepCatalog } from "./kept-catalog.ts";
-import type { AgentConfig as FastagentConfig } from "../src/harnesses/pi-durable/define.ts";
+import { type EffectiveConfig, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
+import { defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
 
@@ -34,10 +35,24 @@ async function agent(files: Record<string, string> = {}): Promise<string> {
   return dir;
 }
 
+/** The values of a configuration a test sets; the rest is what an empty one resolves to. */
+type FastagentConfig = Pick<EffectiveConfig, "model" | "thinkingLevel" | "http" | "deploy">;
+const empty = resolveConfig(
+  defineDefinition({
+    format: 1,
+    builtWith: "0.0.0",
+    name: "empty",
+    version: "0.0.0",
+    dir: "/empty",
+    config: {},
+    registry: { tools: [], extensions: [], channels: [], schedules: [] },
+  }),
+);
+
 const call = (target: string, config: FastagentConfig, over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
   preflightDeploy({
     agentDir: target,
-    config,
+    config: { ...empty, ...config },
     run: false,
     force: false,
     ...over,
@@ -189,7 +204,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 
   it("container facts come from the AGENT DIR; git auto-baked when it ships .git", async () => {
     const agentDir = await agent({
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
       "package.json": `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
     });
     await mkdir(join(agentDir, ".git")); // the agent is a git repo — the image gets the git binary
@@ -378,7 +393,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const call2 = (over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
       preflightDeploy({
         agentDir,
-        config: { model: "openai/gpt-4o-mini" },
+        config: { ...empty, model: "openai/gpt-4o-mini" },
         run: false,
         force: false,
         ...over,

@@ -175,7 +175,7 @@ const models: CommandSpec = {
   description:
     'List every "provider/modelId" spec the agent in this directory can name (pi-ai\'s built-ins, with the models ' +
     "pi's published catalog adds to them, and the providers its fastagent.config.ts declares) — use one with " +
-    "--model or as `model` in fastagent.config.ts. Outside an agent, or with -g, list the built-ins without the " +
+    "--model or as `defaults.model` in fastagent.config.ts. Outside an agent, or with -g, list the built-ins without the " +
     "agent's providers. Every command that opens the agent refreshes the lists, asking at most every 4 hours once " +
     "one is kept; --refresh asks now, and exits 1 when it cannot.",
   args: [{ name: "[search]", description: "case-insensitive substring filter" }],

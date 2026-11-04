@@ -26,7 +26,7 @@ Set one with any of:
 ```bash
 fastagent dev --model provider/modelId
 FASTAGENT_MODEL=provider/modelId fastagent dev
-# or fastagent.config.ts: { model: "provider/modelId" }
+# or fastagent.config.ts: { defaults: { model: "provider/modelId" } }
 ```
 
 Precedence:
@@ -298,7 +298,7 @@ names it, and `dev` and `start` refuse to start.
 
 ## Deployed agent crash-loops with `missing model`
 
-`deploy` reads the model from `FASTAGENT_MODEL` in `.secrets/production/.env`, else `model` in `fastagent.config.ts`. A
+`deploy` reads the model from `FASTAGENT_MODEL` in `.secrets/production/.env`, else `defaults.model` in `fastagent.config.ts`. A
 `FASTAGENT_MODEL` exported in your shell is not read, and `deploy` has no `--model` flag. Set one of the two and
 redeploy; `deploy` prints the effective model and its source. To switch models, change it here and redeploy. See
 [Deploy](deploy.md).

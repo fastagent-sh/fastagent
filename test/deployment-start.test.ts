@@ -77,7 +77,7 @@ const model = {
   contextWindow: 32768, maxTokens: 1024,
 };
 export default {
-  model: "local/test",
+  defaults: { model: "local/test" },
   providers: [
     createProvider({
       id: "local", name: "Local", baseUrl: ${JSON.stringify(baseUrl)},

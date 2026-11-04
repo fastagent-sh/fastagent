@@ -268,7 +268,7 @@ Choose a provider and model with the owner. `fastagent models` lists available s
 Keep credentials out of chat transcripts, issue comments, source files, and logs. The CLI reads the agent's
 `.secrets/.env`, not a `.env` at its root.
 
-Set `model: "provider/model-id"` in the existing `fastagent.config.ts`, preserving its export. A terminal
+Set `defaults: { model: "provider/model-id" }` in the existing `fastagent.config.ts`, preserving its export. A terminal
 picker can also set the model; unattended invocations require an explicit model. A deployment resolves
 from two sources only — that config value, or `FASTAGENT_MODEL` in `.secrets/production/.env`, which
 `deploy` reads from the file and records in the release manifest. A `--model` flag is local to the run

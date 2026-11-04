@@ -104,6 +104,8 @@ Prints what the agent builds into, without serving it:
 - the agent directory, its content (`works on`, each with its location), its environment (the packages and
   apt packages `context.json` declares), the config path, and the model with its source (`--model`,
   `FASTAGENT_MODEL` or the config) and whether it resolves,
+- the configuration the instance resolves (`config` in `--json`): each value of the program's defaults and of the
+  project's `fastagent.json`, with its source,
 - its tools, extensions, skills and commands (prompt templates and `/skill:<name>`),
 - its channels, each with how it is reached (webhook or long connection),
 - its schedules with their next fire instant,
@@ -238,7 +240,7 @@ listed by name with what authenticates each one now (`✓ configured`, `✓ env:
 `not configured`). `[provider]` is an id or a name (`openai`, `OpenAI`); for a provider that offers both ways it asks
 which, in its own words (`Sign in with ChatGPT`). `openai-codex` is listed as pi lists it, `OpenAI Codex (legacy)`:
 a ChatGPT account signs in to `openai`. When the agent has no model, `login` prints the line that would give it pi's
-default for the provider (`model: "openai/gpt-5.5"`); it never edits `fastagent.config.ts`.
+default for the provider (`defaults: { model: "openai/gpt-5.5" }`); it never edits `fastagent.config.ts`.
 
 Without a terminal, or with `--no-input` or `--json`, a script or a coding agent signs in, and nothing is asked or
 waited on. A coding agent works in turns, so each command does its part and says what comes next, as Netlify's
@@ -538,12 +540,12 @@ Serves the project's `dist/`, never its source, without watching: it refuses, na
 is missing or was built from other sources than the project holds now (the build records a fingerprint of the code it
 read, the text and resources it copied and the modules `src/` lists; what an agent writes while it runs is none of
 them). It does not build on its own. Binds all interfaces by default. A serve answers its channels' routes, `GET /health`, and
-the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key and the definition does not say `http: { api: false }`;
+the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key and the definition does not say `defaults: { http: { api: false } }`;
 the startup report says whether it does, and why not
 ([Configuration](configuration.md#the-agent-api-over-http)).
 
 ```txt
-port:     --port > PORT > fastagent.config.ts http.port > 8787
+port:     --port > PORT > fastagent.config.ts defaults.http.port > 8787
 bind:     --bind > all interfaces
 state:    FASTAGENT_STATE_DIR   > <agent dir>/.state/production    (agent.sqlite, channel and schedule state)
 secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production

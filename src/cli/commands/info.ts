@@ -8,8 +8,9 @@ import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enterAgentEnv } from "../../env.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
+import { type EffectiveConfig, configValue, resolveConfig } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
-import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
+import { buildDefinition, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { readCommands } from "../../harnesses/pi-durable/text.ts";
 import { inspectMcp } from "../../mcp/host.ts";
 import { resolveStateRoot } from "../../paths.ts";
@@ -25,8 +26,14 @@ export interface InfoOptions {
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir); // code may read its secrets, and fetch, when it is built
-  const definition = await loadSourceDefinition(agentDir).catch(failStartup);
-  const { config } = definition;
+  const { definition, instance } = await loadDevProject(agentDir).catch(failStartup);
+  const config = (() => {
+    try {
+      return resolveConfig(definition, instance);
+    } catch (error) {
+      return failStartup(error);
+    }
+  })();
   const modelSpec = modelSpecFor(config, opts.model);
   const declared = definitionSecrets(definition);
   const unsetSecrets = missingSecrets(declared);
@@ -35,7 +42,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const code =
     unsetSecrets.length === 0
       ? await Promise.resolve()
-          .then(() => buildDefinition(definition))
+          .then(() => buildDefinition(definition, process.env, config.settings))
           .catch(failStartup)
       : undefined;
   // Reported, not fatal: `info` is how an author finds out a content entry is missing, or the environment refused.
@@ -85,6 +92,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           model: modelSpec ?? null,
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
+          config: configReport(config, opts.model),
           tools: code?.tools.map(({ name }) => name) ?? null,
           mcp,
           extensions: code?.extensions.map(({ name }) => name) ?? null,
@@ -110,7 +118,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   for (const [label, value] of contentLines(content, contentAbsent)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");
-  line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or model in fastagent.config.ts)");
+  line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or defaults.model in fastagent.config.ts)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
   const unbuilt = "(not built: a required secret has no value)";
@@ -132,6 +140,23 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   }
   line("state", stateRoot);
   if (auth) line("auth", auth.fallback === undefined ? auth.path : `${auth.path} (then ${auth.fallback})`);
+}
+
+/**
+ * Each value the configuration resolved, by its path, with where it is from: the program's defaults, the instance's
+ * file, and for the model the flag or variable that overrides both.
+ */
+function configReport(
+  config: EffectiveConfig,
+  modelFlag: string | undefined,
+): Record<string, { value: unknown; source: string }> {
+  const report = Object.fromEntries(
+    Object.entries(config.sources).map(([path, source]) => [path, { value: configValue(config, path), source }]),
+  );
+  const override = modelFlag !== undefined ? "--model" : process.env.FASTAGENT_MODEL ? "FASTAGENT_MODEL" : undefined;
+  const model = modelSpecFor(config, modelFlag);
+  if (override !== undefined && model !== undefined) report.model = { value: model, source: override };
+  return report;
 }
 
 /** The packages and apt packages an environment declares, as one line. */

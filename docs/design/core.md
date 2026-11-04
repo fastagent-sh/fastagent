@@ -197,6 +197,11 @@ its text, `context.json`, `.mcp.json` and declared environment. The instance's d
 that is written: the agent's working directory, its secrets, its content's clones and, by default, its state. A source
 project is its own instance directory. It works in this order:
 
+The configuration (`config.ts`) is the program's `defaults` with an instance's `fastagent.json` (or an object) over them,
+checked by one JSON Schema that `build` also publishes as `fastagent.schema.json`; `openServing` resolves it once, each
+value with its source, and every reader (the model, `http`, `deploy`, `info`) reads the resolved value, never the
+program's file.
+
 `fastagent build` (`build.ts`) compiles a project into `dist/` with the project's TypeScript and generates its entry,
 which calls the same `defineDefinition`, and `build.json`, the record `start` compares the project against
 (`built.ts`: a hash of the code the compiler read, the files the build copies, the modules `src/` lists and

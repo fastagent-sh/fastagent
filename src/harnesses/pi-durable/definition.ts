@@ -14,6 +14,7 @@ import { REGISTRY_KINDS, type Registry } from "./registry.ts";
 export const DEFINITION_FORMAT = 1;
 
 const DEFINITION = Symbol.for("fastagent.definition");
+declare const SETTINGS: unique symbol;
 
 /** A secret an instance must or may be given (SPEC.md §8): each name once, required when any declaration requires it. */
 interface DeclaredInput {
@@ -23,7 +24,10 @@ interface DeclaredInput {
   declaredIn: readonly string[];
 }
 
-export interface AgentDefinition {
+/** `AgentDefinition<Settings>`: typed by the program's settings, so an embedder's `settings` input is checked. */
+export interface AgentDefinition<Settings = unknown> {
+  /** Phantom: carries `Settings` to the open's input types; nothing exists at run time. */
+  readonly [SETTINGS]?: Settings;
   readonly [DEFINITION]: true;
   readonly format: number;
   /** The FastAgent version that made it: what a refusal of its format asks the opener to install. */
@@ -68,6 +72,8 @@ export function defineDefinition(spec: DefinitionSpec): AgentDefinition {
     ...spec.config,
     ...(spec.config.extensions === undefined ? {} : { extensions: Object.freeze([...spec.config.extensions]) }),
     ...(spec.config.providers === undefined ? {} : { providers: Object.freeze([...spec.config.providers]) }),
+    ...(spec.config.settings === undefined ? {} : { settings: deepFreeze(structuredClone(spec.config.settings)) }),
+    ...(spec.config.defaults === undefined ? {} : { defaults: deepFreeze(structuredClone(spec.config.defaults)) }),
   });
   return Object.freeze({
     [DEFINITION]: true as const,
@@ -76,6 +82,15 @@ export function defineDefinition(spec: DefinitionSpec): AgentDefinition {
     registry,
     inputs: Object.freeze({ secrets: Object.freeze(byName(definitionSecrets(spec))) }),
   });
+}
+
+/** Plain data, frozen all the way down: a schema and defaults are JSON, which no instance may change. */
+function deepFreeze<T>(value: T): T {
+  if (typeof value === "object" && value !== null) {
+    for (const inner of Object.values(value)) deepFreeze(inner);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 /** One input per name, in name order: required when any declaration requires it, every place it is declared. */

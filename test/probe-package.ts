@@ -24,7 +24,7 @@ const stream = (...args) => {
   return core.streamSimple(...args);
 };
 export default {
-  model: "fixture/" + core.getModel().id,
+  defaults: { model: "fixture/" + core.getModel().id },
   providers: [createProvider({ id: "fixture", auth: { apiKey: { name: "fixture", resolve: async () => ({ auth: {} }) } }, models: core.models, api: { stream, streamSimple: stream } })],
 };
 `;

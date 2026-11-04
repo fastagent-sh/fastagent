@@ -37,7 +37,7 @@ export function apiTurnedOff(config: { http?: { api?: boolean } }): boolean {
   return config.http?.api === false;
 }
 
-export const API_TURNED_OFF = "fastagent.config.ts says http.api: false";
+export const API_TURNED_OFF = "the configuration says http.api: false";
 
 export function apiKeysFrom(value: string | undefined): string[] {
   return (value ?? "")

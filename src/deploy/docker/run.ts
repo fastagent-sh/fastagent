@@ -235,7 +235,7 @@ export async function deployDockerRun(
           return gate(
             `${host}:${port} is already in use by another process, so the agent's published port is not free and a ` +
               `health check there would answer for that process, not for the agent — stop it, or move the agent: ` +
-              `edit the published port in ${plan.composeFile}, or change http.port in fastagent.config.ts and re-run ` +
+              `edit the published port in ${plan.composeFile}, or change defaults.http.port in fastagent.config.ts and re-run ` +
               `with --force (a generated Compose file is kept otherwise)`,
           );
         }

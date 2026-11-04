@@ -60,7 +60,10 @@ async function agentWorkspace(): Promise<{ host: string; agent: string }> {
   const host = await mkdtemp(join(tmpdir(), "fa-credstore-"));
   const agent = join(host, "fastagent");
   await mkdir(agent);
-  await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "anthropic/claude-sonnet-4-5" };\n`);
+  await writeFile(
+    join(agent, "fastagent.config.ts"),
+    `export default { defaults: { model: "anthropic/claude-sonnet-4-5" } };\n`,
+  );
   return { host, agent };
 }
 

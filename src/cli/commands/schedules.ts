@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import * as Effect from "effect/Effect";
 import { AgentError, hasEnded } from "../../agent-api.ts";
 import { enterAgentEnv } from "../../env.ts";
-import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
+import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { holdingInstance, openServing } from "../../harnesses/pi-durable/serve.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
@@ -98,8 +98,14 @@ export async function runScheduleNow(
     }
   });
   // Refused while the instance holds work a stopped serve left: this process would run it, and cut it off at its exit.
-  const { agent, models, schedules, stateRoot } = await loadSourceDefinition(agentDir)
-    .then((definition) => openServing(definition, { model: modelSpec, unfinished: "refuse" }))
+  const { agent, models, schedules, stateRoot } = await loadDevProject(agentDir)
+    .then(({ definition, instance }) =>
+      openServing(definition, {
+        model: modelSpec,
+        unfinished: "refuse",
+        ...(instance === undefined ? {} : { config: instance }),
+      }),
+    )
     .catch(failStartup);
   const schedule = schedules.find((s) => s.name === name);
   if (schedule === undefined) {

@@ -11,8 +11,14 @@ import { SignInCancelled } from "../sign-in-api.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
-import type { AgentDefinition } from "../harnesses/pi-durable/definition.ts";
-import { buildDefinitionShape, definitionProviders, loadConfig, modelSpecFor } from "../harnesses/pi-durable/open.ts";
+import { resolveConfig } from "../harnesses/pi-durable/config.ts";
+import {
+  type Project,
+  buildDefinitionShape,
+  definitionProviders,
+  loadDevProject,
+  modelSpecFor,
+} from "../harnesses/pi-durable/open.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { contentLines } from "./content-view.ts";
 import { deployedHost, isDeployedWorkspace } from "../paths.ts";
@@ -23,8 +29,8 @@ import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
 
-/** The definition a command runs, when it is not the source project's (`start` runs the build). */
-type LoadDefinition = (agentDir: string) => Promise<AgentDefinition>;
+/** The project a command runs, when it is not the development one (`start` runs the build). */
+type LoadProject = (agentDir: string) => Promise<Project>;
 
 /** An agent directory a command entered, and the default model that then resolves, if any. */
 export interface EnteredAgent {
@@ -42,7 +48,7 @@ export async function enterAgentDirectory(
   dirArg: string,
   opts: { model?: string; input?: boolean },
   before?: (agentDir: string) => Promise<void>,
-  load?: LoadDefinition,
+  load?: LoadProject,
 ): Promise<EnteredAgent> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir);
@@ -60,13 +66,13 @@ export async function enterAgentCommand(
   dirArg: string,
   opts: { model?: string; input?: boolean },
   before?: (agentDir: string) => Promise<void>,
-  load?: LoadDefinition,
+  load?: LoadProject,
 ): Promise<Required<EnteredAgent>> {
   const entered = await enterAgentDirectory(dirArg, opts, before, load);
   const { modelSpec } = entered;
   if (!modelSpec) {
     failUsage(
-      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai/gpt-5.5"; ` +
+      `missing model: set --model, "defaults.model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai/gpt-5.5"; ` +
         "`fastagent models` lists them)",
     );
   }
@@ -84,13 +90,10 @@ export async function reportAssembly(
   modelSpec: string,
   extras: [label: string, value: string][] = [],
 ): Promise<void> {
-  const { definition, code, models, agentDir, stateRoot } = opened;
+  const { definition, code, models, agentDir, stateRoot, config } = opened;
   reportLine("agent", `${definition.name} — ${agentDir}`);
   for (const [label, value] of contentLines(opened.content)) reportLine(label, value);
-  reportLine(
-    "model",
-    `${modelSpec}${definition.config.thinkingLevel ? ` (thinking: ${definition.config.thinkingLevel})` : ""}`,
-  );
+  reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(models, modelSpec, agentDir);
   const names = (list: readonly { name: string }[]) => list.map(({ name }) => name).join(", ") || "(none)";
   reportLine("tools", names(code.tools));
@@ -160,27 +163,33 @@ export async function reportAuth(models: ModelEnvironment, modelSpec: string, ag
 async function resolveFirstRunModel(
   agentDir: string,
   options: { model?: string; input?: boolean } = {},
-  load?: LoadDefinition,
+  load?: LoadProject,
 ): Promise<string | undefined> {
-  // A loader's refusal is the caller's to report: AgentCore runs this inside a request, where an exit kills the container.
-  const loaded = load === undefined ? undefined : await load(agentDir);
-  const config = loaded?.config ?? (await loadConfig(agentDir).catch(failStartup));
-  const configured = modelSpecFor(config, options.model);
-  if (configured) return configured;
+  const configured = async () => {
+    const project = await (load ?? loadDevProject)(agentDir);
+    return { project, config: resolveConfig(project.definition, project.instance) };
+  };
+  // A custom loader's refusal is the caller's to report: AgentCore runs this inside a request, where an exit kills the container.
+  const { project, config } = await (load === undefined ? configured().catch(failStartup) : configured());
+  const spec = modelSpecFor(config, options.model);
+  if (spec) return spec;
   if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
   if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
   const providers =
-    loaded === undefined
+    load === undefined
       ? await definitionProviders(agentDir).catch(failStartup)
-      : buildDefinitionShape(loaded, process.env).providers;
+      : buildDefinitionShape(project.definition, process.env).providers;
   const environment = await modelEnvironment(agentDir, {}, providers);
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
-  console.error(
-    `[fastagent] picked ${chosen} — set \`model: ${JSON.stringify(chosen)}\` in fastagent.config.ts to keep it`,
-  );
+  console.error(`[fastagent] picked ${chosen} — set \`${pickedModelLine(chosen)}\` in fastagent.config.ts to keep it`);
   return chosen;
+}
+
+/** The line of `fastagent.config.ts` that keeps a picked model: what the picker prints, and what it must accept. */
+export function pickedModelLine(model: string): string {
+  return `defaults: { model: ${JSON.stringify(model)} }`;
 }
 
 /** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */

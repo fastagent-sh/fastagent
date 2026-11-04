@@ -2,6 +2,7 @@
  * An agent with content, end to end: what the model is told, what it reads, what its tools see, and that every
  * reader of the declaration — the opener, `info`, `content list` — reads the same resolution.
  */
+import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +24,7 @@ async function askOnce(agentDir: string, provider: Provider, content?: readonly 
   const agent = await assembleAgent(definition, {
     storage: new MemoryStorage(),
     code: { ...buildDefinition(definition, {}), providers: [provider] },
+    config: resolveConfig(definition),
     models: modelsOver(new InMemoryCredentialStore(), [provider]),
     model: "faux/faux-1",
     ...(content === undefined ? {} : { content }),
@@ -118,7 +120,10 @@ describe("one resolution", () => {
     // A second derivation of where the content is would disagree with this one sooner or later; here every
     // reader is asked after each change of the bindings.
     const { root, agentDir, app, handbook } = await layout();
-    await writeFile(join(agentDir, "fastagent.config.ts"), `export default {\n  model: "${CODEX_MODEL}",\n};\n`);
+    await writeFile(
+      join(agentDir, "fastagent.config.ts"),
+      `export default {\n  defaults: { model: "${CODEX_MODEL}" },\n};\n`,
+    );
     await bind(agentDir, { app: { path: "../app" } });
     const readers = async () => {
       const opened = await openServing(await loadSourceDefinition(agentDir), { storage: "memory" });

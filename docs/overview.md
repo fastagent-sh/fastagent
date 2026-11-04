@@ -14,7 +14,7 @@ Coding agents made it cheap to vibe useful agent directories. The next gap is se
 
 ```txt
 reviewer/                   # the agent, its working directory, and a git repository
-├── fastagent.config.ts     # the marker: defineAgent({ model, providers, … })
+├── fastagent.config.ts     # the marker: defineAgent({ defaults, providers, … })
 ├── context.json            # its content and environment: the repositories it works on, the commands it runs
 ├── context.local.json      # this machine's directories it is bound to (kept out of git and of every image)
 ├── SYSTEM.md               # the system prompt

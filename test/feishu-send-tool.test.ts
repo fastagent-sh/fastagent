@@ -62,7 +62,7 @@ function cloudFixture(kind: "feishu" | "lark", prefix: "FEISHU" | "LARK") {
     await rm(state.cwd, { recursive: true, force: true });
   });
   const tool = (appId = state.appId) =>
-    state.declared.build({ [`${prefix}_APP_ID`]: appId, [`${prefix}_APP_SECRET`]: "env-secret" });
+    state.declared.build({ [`${prefix}_APP_ID`]: appId, [`${prefix}_APP_SECRET`]: "env-secret" }, {});
   return {
     tool,
     get cwd() {

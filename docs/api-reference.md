@@ -253,9 +253,9 @@ it is (a message in one has not ended), or kept as the code it is, at whatever s
 ## What an author writes
 
 ```ts
-function defineAgent(config: AgentConfig): AgentConfig; // fastagent.config.ts
+function defineAgent<Settings>(config: AgentConfig<Settings>): AgentConfig<Settings>; // fastagent.config.ts
 function defineSchedule(config: { cron: string; tz?: string; prompt: string | ((fire: { at: Date }) => string | Promise<string>) }): DefinedSchedule;
-function needs<const S extends readonly SecretSpec[], T>(secrets: S, build: (values: SecretValues<S>) => T): Needs<T>;
+function needs<const S extends readonly SecretSpec[], T, Settings>(secrets: S, build: (values: SecretValues<S>, settings: Settings) => T): Needs<T>;
 type SecretSpec = string | { name: string; description?: string; optional?: boolean };
 function sessionIdOf(api: ToolExecutionApi, context: Context): Promise<string | undefined>;
 ```

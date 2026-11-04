@@ -16,7 +16,7 @@ import {
   providerOf,
 } from "../harnesses/models/models.ts";
 import { modelEnvironment } from "../harnesses/models/environment.ts";
-import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
+import type { EffectiveConfig } from "../harnesses/pi-durable/config.ts";
 import { type AgentDefinition, definitionSecrets } from "../harnesses/pi-durable/definition.ts";
 import { type BuiltDefinition, buildDefinitionShape, loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { LOCAL_CONTEXT_FILE, exists } from "../paths.ts";
@@ -157,7 +157,7 @@ class DeployGate {
 
 interface PreflightInput {
   agentDir: string;
-  config: AgentConfig;
+  config: EffectiveConfig;
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
   /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
@@ -249,7 +249,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   if (!model.spec) {
     const issue =
-      `no model resolves for this deployment — set \`model: "provider/id"\` in fastagent.config.ts (it travels ` +
+      `no model resolves for this deployment — set \`defaults: { model: "provider/id" }\` in fastagent.config.ts (it travels ` +
       `in the image), or FASTAGENT_MODEL in ${valueFile} (deploy records that one in the release manifest)` +
       // Whoever has the variable set right here sees `fastagent info` report a model, so "no model resolves" reads
       // like a bug until the message says which environment was read. It states that fact WITHOUT attributing the
@@ -579,7 +579,7 @@ function checkKeptDockerfile(
     const issue =
       `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
       `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
-      `Dockerfile), or set \`model\` in fastagent.config.ts so it ships in the config instead.`;
+      `Dockerfile), or set \`defaults.model\` in fastagent.config.ts so it ships in the config instead.`;
     report.issue(issue);
   }
 }
@@ -599,7 +599,7 @@ function checkKeptDockerfile(
  * baked rather than delivered as one more platform variable that nothing would ever clear.
  */
 function resolveDeployModel(
-  config: AgentConfig,
+  config: EffectiveConfig,
   values: ReadonlyMap<string, string>,
   /** The value file AS READ (it follows `FASTAGENT_SECRETS_DIR`), so the reported source is the real one. */
   valueFile: string,

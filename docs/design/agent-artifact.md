@@ -107,7 +107,8 @@ definition-wide ones.
 ### 3.2 `fastagent.config.ts`
 
 ```ts
-import { defineAgent, obj, opt, str } from "@fastagent-sh/fastagent";
+import { defineAgent } from "@fastagent-sh/fastagent";
+import { obj, opt, str } from "@earendil-works/pi-schema";
 
 export default defineAgent({
   // Constants: what this program is. An instance cannot change them.
@@ -213,8 +214,8 @@ export default defineDefinition({
   imports, `@earendil-works/pi-durable`, `@earendil-works/pi-ai` and `@earendil-works/pi-schema`, in the ranges FastAgent publishes for its own
   release (`src/version.ts`), so an app holds one copy of each. FastAgent does not re-export pi's authoring API: an
   author's tools, extensions and providers are pi code, imported from pi's packages ([architecture.md](architecture.md)
-  §2). Only FastAgent's own authoring surface (`defineAgent`, `needs()`, `defineSchedule`, the settings builders) comes
-  from `@fastagent-sh/fastagent`.
+  §2). Only FastAgent's own authoring surface (`defineAgent`, `needs()`, `defineSchedule`) comes from
+  `@fastagent-sh/fastagent`; the settings builders are `@earendil-works/pi-schema`'s.
 - `format` is an integer independent of the framework's semver; `openAgent` refuses an incompatible one and names the
   version it needs. The peer range governs installation; `format` governs what opens.
 

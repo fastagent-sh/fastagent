@@ -10,7 +10,7 @@ let tool: ToolRegistration;
 beforeAll(async () => {
   const path = new URL("../src/channels/slack/scaffold/slack-send.ts", import.meta.url).pathname;
   const declared = ((await import(path)) as { default: Needs<ToolRegistration> }).default;
-  tool = declared.build({ SLACK_BOT_TOKEN: "xoxb-test" });
+  tool = declared.build({ SLACK_BOT_TOKEN: "xoxb-test" }, {});
 });
 
 afterEach(() => {
