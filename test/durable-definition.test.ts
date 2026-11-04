@@ -3,6 +3,7 @@
  * (SYSTEM.md, AGENTS.md, skills loaded as pi loads them, prompt templates), and the code built with its secrets.
  */
 import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -25,7 +26,7 @@ import {
   assembleAgent,
   loadSourceDefinition,
 } from "../src/harnesses/pi-durable/open.ts";
-import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { openSource } from "./open-source.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
@@ -261,6 +262,7 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       const code = buildDefinition(definition, ENV);
       const agent = await assembleAgent(definition, {
         storage: new MemoryStorage(),
+        processEnv: {},
         models: modelsOver(new InMemoryCredentialStore(), code.providers),
         code,
         config: resolveConfig(definition),
@@ -448,6 +450,7 @@ describe("two agents in one process", () => {
       opened.push(
         await openServing(await loadSourceDefinition(dir), {
           secrets: values,
+          env: {},
           storage: "memory",
           credentialStore: new InMemoryCredentialStore(),
         }),
@@ -496,6 +499,7 @@ describe("the secrets an instance is given name where its state and credentials 
         FASTAGENT_STATE_DIR: join(elsewhere, "state"),
         FASTAGENT_AUTH_PATH: join(elsewhere, "auth.json"),
       },
+      env: {},
     });
     try {
       expect(opened.stateRoot).toBe(join(elsewhere, "state"));
@@ -503,6 +507,83 @@ describe("the secrets an instance is given name where its state and credentials 
       expect(process.env.FASTAGENT_STATE_DIR).toBeUndefined();
     } finally {
       await opened.agent.close();
+    }
+  });
+});
+
+describe("the environment of the processes an agent starts", () => {
+  it("is the base given, the declared secrets and the git ceiling: nothing else of the host's", async () => {
+    vi.stubEnv("FA_HOST_ONLY", "stray-host-variable");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "stray-cloud-credential");
+    const dir = agentPackage(FILES);
+    const workdir = join(dir, "work");
+    mkdirSync(workdir);
+    const agent = await openAgent(await loadSourceDefinition(dir), {
+      workdir,
+      stateDir: join(dir, "state"),
+      env: { PATH: "/usr/bin:/bin", HOME: "/home/instance" },
+      secrets: {
+        WEATHER_KEY: "k",
+        GH_TOKEN: "gh-declared",
+        UNDECLARED_TOKEN: "not-declared",
+        FA_HOST_ONLY: "also-given",
+      },
+    });
+    try {
+      const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
+      faux.setResponses([
+        () => toolCall("bash", { command: "env" }),
+        (context) => fauxAssistantMessage(lastToolResult(context)),
+      ]);
+      const sessionId = (await agent.sessions.create()).id;
+      const end = await agent.messages.send({ sessionId, content: "go" }, { wait: 30 });
+      const seen = Object.fromEntries(
+        (end.answer?.text ?? "")
+          .split("\n")
+          .filter((line) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(line))
+          .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+      );
+      expect(seen).toMatchObject({
+        PATH: "/usr/bin:/bin",
+        HOME: "/home/instance",
+        GH_TOKEN: "gh-declared",
+        GIT_CEILING_DIRECTORIES: dir,
+      });
+      for (const name of ["UNDECLARED_TOKEN", "FA_HOST_ONLY", "AWS_SECRET_ACCESS_KEY", DEV_SERVE_ENV]) {
+        expect(seen, name).not.toHaveProperty(name);
+      }
+    } finally {
+      await agent.close();
+    }
+  });
+});
+
+describe("git discovery in the agent's working directory", () => {
+  it("stops at the workspace: a repository around it is not the agent's to act on", async () => {
+    const dir = agentPackage(FILES);
+    execFileSync("git", ["init", "-q", dir]);
+    const workdir = join(dir, "work");
+    mkdirSync(workdir);
+    const agent = await openAgent(await loadSourceDefinition(dir), {
+      workdir,
+      stateDir: join(dir, "state"),
+      env: { PATH: process.env.PATH ?? "" },
+      secrets: ENV,
+    });
+    try {
+      const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
+      const ask = async (command: string) => {
+        faux.setResponses([
+          () => toolCall("bash", { command }),
+          (context) => fauxAssistantMessage(lastToolResult(context)),
+        ]);
+        const sessionId = (await agent.sessions.create()).id;
+        return (await agent.messages.send({ sessionId, content: "go" }, { wait: 30 })).answer?.text ?? "";
+      };
+      expect(await ask("git rev-parse --show-toplevel 2>&1; true")).toContain("not a git repository");
+      expect(await ask("git init -q . && git rev-parse --show-toplevel")).toContain("work");
+    } finally {
+      await agent.close();
     }
   });
 });

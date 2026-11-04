@@ -1,6 +1,6 @@
 /** Instance-owned MCP clients. The scope also joins refreshes after a caller abandons its wait. */
 import { Client, StreamableHTTPClientTransport, type Tool, type CallToolResult } from "@modelcontextprotocol/client";
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { DEFAULT_INHERITED_ENV_VARS, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -22,6 +22,18 @@ export interface McpTool {
 export interface McpClients {
   tools: McpTool[];
   close(): Promise<void>;
+}
+
+/**
+ * The SDK starts a stdio server over `{ ...getDefaultEnvironment(), ...env }`, which adds this process's own `HOME`,
+ * `PATH`, `USER` and the like under whatever is given. Naming each of them with no value, where `env` holds none,
+ * leaves the server with exactly `env`: Node drops a variable whose value is undefined.
+ */
+function ownEnvironment(env: Record<string, string>): Record<string, string> {
+  const withheld = Object.fromEntries(
+    DEFAULT_INHERITED_ENV_VARS.filter((name) => !(name in env)).map((name) => [name, undefined]),
+  );
+  return { ...withheld, ...env } as Record<string, string>;
 }
 
 export async function openMcpClients(
@@ -79,7 +91,7 @@ export async function openMcpClients(
           command: server.command,
           args: server.args,
           cwd: server.cwd,
-          env: server.env,
+          env: ownEnvironment(server.env),
           stderr: "pipe",
         });
         // Draining prevents a noisy child from blocking. Raw stderr can contain its supplied secrets.

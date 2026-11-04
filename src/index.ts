@@ -82,6 +82,7 @@ export {
   type McpSignInRequest,
   type McpSignInInteraction,
 } from "./mcp-api.ts";
+export { baseEnv } from "./child-env.ts";
 export { inspectMcp } from "./mcp/host.ts";
 export { signInMcp } from "./mcp/sign-in.ts";
 export { mcpGrantFile } from "./mcp/grants.ts";

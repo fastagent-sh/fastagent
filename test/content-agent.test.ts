@@ -23,6 +23,7 @@ async function askOnce(agentDir: string, provider: Provider, content?: readonly 
   const definition = await loadSourceDefinition(agentDir);
   const agent = await assembleAgent(definition, {
     storage: new MemoryStorage(),
+    processEnv: {},
     code: { ...buildDefinition(definition, {}), providers: [provider] },
     config: resolveConfig(definition),
     models: modelsOver(new InMemoryCredentialStore(), [provider]),
@@ -126,7 +127,11 @@ describe("one resolution", () => {
     );
     await bind(agentDir, { app: { path: "../app" } });
     const readers = async () => {
-      const opened = await openServing(await loadSourceDefinition(agentDir), { secrets: {}, storage: "memory" });
+      const opened = await openServing(await loadSourceDefinition(agentDir), {
+        secrets: {},
+        env: {},
+        storage: "memory",
+      });
       await opened.agent.close();
       const info = JSON.parse((await cli(["info", "--json"], agentDir)).stdout);
       const list = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);

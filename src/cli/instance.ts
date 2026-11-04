@@ -5,6 +5,7 @@
  * reads one answer.
  */
 import { existsSync, mkdirSync, statSync } from "node:fs";
+import { baseEnv } from "../child-env.ts";
 import { definedValues } from "../declared-secrets.ts";
 import { enterAgentEnv } from "../env.ts";
 import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
@@ -124,11 +125,12 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
  */
 export function instanceInputs(
   agentDir: string,
-): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets"> {
+): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env"> {
   return {
     projectDir: agentDir,
     workdir: resolveWorkdir(agentDir),
     stateRoot: resolveStateRoot(agentDir),
     secrets: definedValues(process.env),
+    env: baseEnv(process.env),
   };
 }

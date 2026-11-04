@@ -303,8 +303,7 @@ needs, installed on every machine that runs it and in its image:
 - **`variables`** are the environment variables the agent's commands read, declared by name with what each is for, as code
   declares the secrets it reads with `needs`. Their values come from the environment, never from `context.json`: `.secrets/.env` here,
   and `.secrets/production/.env` for a deployment, the one file `deploy` reads and carries (a variable exported where
-  you run `deploy` does not reach the deployment). A process you start yourself also reads the variables it is started
-  with. Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
+  you run `deploy` does not reach the deployment). Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
   start without its value and name `context.json`, `deploy` refuses before it changes anything and lists each
   with its description, and `info` and `fastagent env list` say which have a value here. A value you would share across
   stages, like an enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template.
@@ -319,7 +318,15 @@ for Windows, so an agent that declares packages does not run there.
 installs the newest release its declared version allows when it first needs the package, and keeps it. `dev`,
 `start`, `invoke` and an app's [`openAgent`](embedding.md) install the declared packages that have no install matching them here yet, and put them first on the `PATH` of the agent's commands (never on the process's, which may run other agents); one already
 installed is kept, so a start needs no network. `fastagent env install` installs the newest release of each again.
-A change to `context.json` restarts `dev`. A package is installed into mise's data directory on this machine
+A change to `context.json` restarts `dev`.
+
+**What a command runs with.** A process the agent starts (the shell tool, a stdio MCP server, a skill's script) gets
+`PATH`, `HOME`, `USER`, `SHELL`, the locale, `TZ`, `TMPDIR` and the proxy variables from the environment `dev`, `start` and
+`invoke` run in, the declared packages' commands ahead on the `PATH`, the declared secrets (`needs`, and `variables`
+above), an MCP server's own `env` for that server, and `GIT_CEILING_DIRECTORIES` at the working directory's parent, so
+git run in the workspace does not find the repository around it. Nothing else of the shell's reaches it: an undeclared
+key (`AWS_SECRET_ACCESS_KEY`, `ANTHROPIC_API_KEY`) is not in the agent's commands, and a command that needs one declares
+it. Cloning content and installing packages are FastAgent's own and run in the full environment. An embedding app that declares packages gives `env` a `PATH` (`baseEnv(process.env)` does), since the packages' commands go ahead of it. A package is installed into mise's data directory on this machine
 (`~/.local/share/mise`), which other mise projects share.
 
 The image installs every declared package when it is built, at the newest release then, in a layer cached while the

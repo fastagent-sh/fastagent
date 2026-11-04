@@ -91,6 +91,7 @@ describe("a caller's credential store replaces the credentials file", () => {
 
     const opened = await openServing(await loadSourceDefinition(agent), {
       secrets: {},
+      env: {},
       credentialStore: store,
       storage: "memory",
     });
@@ -184,7 +185,7 @@ describe("a caller's credential store replaces the credentials file", () => {
     const { host, agent } = await agentWorkspace();
     const both = { authPath: join(host, "auth.json"), credentialStore: await recordingStore() };
     await expect(
-      openServing(await loadSourceDefinition(agent), { secrets: {}, ...both, storage: "memory" }),
+      openServing(await loadSourceDefinition(agent), { secrets: {}, env: {}, ...both, storage: "memory" }),
     ).rejects.toThrow(/not both/);
     await expect(modelEnvironment(undefined, both)).rejects.toThrow(/not both/);
     const interaction = { signal: new AbortController().signal, notify: () => {}, prompt: async () => "" };

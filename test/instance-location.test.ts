@@ -335,3 +335,21 @@ describe("invoke --url", () => {
     expect([result.code, result.stderr]).toEqual([2, expect.stringContaining("--root places an instance")]);
   });
 });
+
+describe("what a command opens an instance with", () => {
+  it("the process environment as its secrets, and only the base list of it as the agent's processes' base", async () => {
+    const { instanceInputs } = await import("../src/cli/instance.ts");
+    const dir = await scratch();
+    const saved = { ...process.env };
+    process.env.FA_STRAY = "stray";
+    process.env.PATH = saved.PATH ?? "/usr/bin";
+    try {
+      const inputs = instanceInputs(dir);
+      expect(inputs.secrets).toMatchObject({ FA_STRAY: "stray" });
+      expect(inputs.env).toMatchObject({ PATH: process.env.PATH });
+      expect(inputs.env).not.toHaveProperty("FA_STRAY");
+    } finally {
+      delete process.env.FA_STRAY;
+    }
+  });
+});

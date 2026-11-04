@@ -36,7 +36,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
   }
   const dir = resolve(request.agentDir);
   const server = httpServer(
-    resolveMcpServers(dir, { ...process.env, ...agentValues(dir), ...request.variables }, request.server),
+    resolveMcpServers(dir, { ...process.env, ...agentValues(dir), ...request.variables }, request.server, dir, {}),
     request.server,
   );
   let saved: McpGrantSummary | undefined;

@@ -143,6 +143,7 @@ describe("init: scaffoldAgent", () => {
     const definition = await loadSourceDefinition(dir);
     const agent = await assembleAgent(definition, {
       storage: new MemoryStorage(),
+      processEnv: {},
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
       config: resolveConfig(definition),
       models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),

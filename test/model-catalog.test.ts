@@ -288,6 +288,7 @@ describe("model catalogs", () => {
     vi.stubEnv("FASTAGENT_OFFLINE", "1");
     const serving = await openServing(await loadSourceDefinition(agent), {
       secrets: {},
+      env: {},
       storage: "memory",
       credentialStore: new InMemoryCredentialStore(),
     });
@@ -310,6 +311,7 @@ describe("model catalogs", () => {
     await expect(
       openServing(await loadSourceDefinition(agent), {
         secrets: {},
+        env: {},
         storage: "memory",
         credentialStore: new InMemoryCredentialStore(),
       }),
