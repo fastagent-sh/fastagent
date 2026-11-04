@@ -11,8 +11,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { instanceConfigSchema, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { type AgentDefinition, defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
-import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
-import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { buildable, runInProcess } from "./cli-run.ts";
 import { FIXTURES } from "./probe-package.ts";
 
@@ -170,6 +170,40 @@ export default {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("the settings of");
     expect(result.stderr).toContain("/repo missing");
+  });
+
+  it("reaches the code that asks for it: `needs` hands a module the resolved settings, beside its secrets", async () => {
+    const dir = project({
+      "fastagent.config.ts": CONFIG,
+      "fastagent.json": JSON.stringify({ settings: { repo: "acme/api" } }),
+      "src/tools/repo.ts": `import { needs } from "@fastagent-sh/fastagent";
+export default needs([], (_secrets, settings: { repo: string; digestChannel?: string }) => ({
+  name: "repo",
+  description: "the repository",
+  parameters: { type: "object", properties: {}, additionalProperties: false },
+  execute: async () => ({ output: [{ type: "text", text: settings.repo + " " + settings.digestChannel }] }),
+}));
+`,
+    });
+    await buildable(dir);
+    const { definition, instance } = await loadDevProject(dir);
+    const opened = await openServing(definition, {
+      ...(instance === undefined ? {} : { config: instance }),
+      storage: "memory",
+    });
+    try {
+      const [tool] = opened.code.tools;
+      expect((await tool?.execute({}, {} as never, {} as never))?.output).toEqual([
+        { type: "text", text: "acme/api #general" },
+      ]);
+    } finally {
+      await opened.agent.close();
+    }
+    // A build that only reads the shape (`models`, `login`) has the program's default settings, and no more.
+    const shaped = buildDefinitionShape(definition, {});
+    expect((await shaped.tools[0]?.execute({}, {} as never, {} as never))?.output).toEqual([
+      { type: "text", text: "undefined #general" },
+    ]);
   });
 
   it("is opened by `openAgent` from an object or an absolute path, and refuses a relative one", async () => {

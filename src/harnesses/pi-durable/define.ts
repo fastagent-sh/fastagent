@@ -71,13 +71,18 @@ export type SecretValues<S extends readonly SecretSpec[]> = {
 export interface Needs<T> {
   readonly kind: "fastagent.needs";
   readonly secrets: readonly { name: string; description?: string; optional: boolean }[];
-  build(values: Record<string, string | undefined>): T;
+  build(values: Record<string, string | undefined>, settings: Readonly<Record<string, unknown>>): T;
 }
 
-/** @public */
-export function needs<const S extends readonly SecretSpec[], T>(
+/**
+ * Wrap a module so it is built when an instance opens, with the values of the secrets it declares and the instance's
+ * resolved `settings` (the program's `settings` schema, defaults and the instance's values, checked). Annotate the
+ * second parameter with `SettingsOf<typeof config>` to type it. With no secrets, `needs([], (_, settings) => ...)`.
+ * @public
+ */
+export function needs<const S extends readonly SecretSpec[], T, Settings = Readonly<Record<string, unknown>>>(
   secrets: S,
-  build: (values: SecretValues<S>) => T,
+  build: (values: SecretValues<S>, settings: Settings) => T,
 ): Needs<T> {
   const declared = secrets.map((spec) =>
     typeof spec === "string"
@@ -92,7 +97,11 @@ export function needs<const S extends readonly SecretSpec[], T>(
     // Written verbatim into env files and deploy artifacts, where a malformed name breaks somewhere far away.
     if (!isEnvName(name)) throw new Error(`needs: ${JSON.stringify(name)} is not an environment variable name`);
   }
-  return { kind: "fastagent.needs", secrets: declared, build: (values) => build(values as SecretValues<S>) };
+  return {
+    kind: "fastagent.needs",
+    secrets: declared,
+    build: (values, settings) => build(values as SecretValues<S>, settings as Settings),
+  };
 }
 
 export function isNeeds(value: unknown): value is Needs<unknown> {

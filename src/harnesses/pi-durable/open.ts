@@ -106,9 +106,10 @@ function built<T>(
   source: string,
   value: unknown,
   values: Record<string, string | undefined>,
+  settings: Readonly<Record<string, unknown>>,
   accept: (v: unknown) => string | undefined,
 ): T {
-  const resolved = isNeeds(value) ? (value as Needs<unknown>).build(values) : value;
+  const resolved = isNeeds(value) ? (value as Needs<unknown>).build(values, settings) : value;
   const problem = accept(resolved);
   if (problem !== undefined) throw new Error(`${source}: ${problem}`);
   return resolved as T;
@@ -150,7 +151,11 @@ export interface BuiltDefinition {
  * Refuse to run while a required secret has no value, naming where it is declared; otherwise build every module with
  * the values it declared, and refuse one that is not what its directory holds.
  */
-export function buildDefinition(definition: AgentDefinition, env: NodeJS.ProcessEnv = process.env): BuiltDefinition {
+export function buildDefinition(
+  definition: AgentDefinition,
+  env: NodeJS.ProcessEnv = process.env,
+  settings: Readonly<Record<string, unknown>> = {},
+): BuiltDefinition {
   const missing = missingSecrets(codeSecrets(definition), env);
   if (missing.length > 0) {
     throw new Error(`missing required secrets: ${describeSecrets(missing)} (set them in the environment)`);
@@ -160,27 +165,27 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   const { registry, config } = definition;
   const tools = registry.tools.map(({ file, value }) => ({
     source: file,
-    ...named(built<ToolRegistration>(file, value, values(value), toolProblem)),
+    ...named(built<ToolRegistration>(file, value, values(value), settings, toolProblem)),
   }));
   const extensions = [
     ...registry.extensions.map(({ file, value }) => ({
       source: file,
-      ...named(built<Extension>(file, value, values(value), extensionProblem)),
+      ...named(built<Extension>(file, value, values(value), settings, extensionProblem)),
     })),
     ...(config.extensions ?? []).map((value, i) => {
       const source = `${CONFIG_FILE} extensions[${i}]`;
-      return { source, ...named(built<Extension>(source, value, values(value), extensionProblem)) };
+      return { source, ...named(built<Extension>(source, value, values(value), settings, extensionProblem)) };
     }),
   ];
   const channels = registry.channels.map(({ file, name, value }) => ({
     source: file,
     name,
-    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), channelProblem),
+    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), settings, channelProblem),
   }));
   const schedules = registry.schedules.map(({ file, name, value }) => ({
     source: file,
     name,
-    value: built<DefinedSchedule>(file, value, values(value), scheduleProblem),
+    value: built<DefinedSchedule>(file, value, values(value), settings, scheduleProblem),
   }));
   refuseTwins("tool", tools);
   // pi-durable replaces an extension installed under a name already taken, its tools and sections with it.
@@ -199,7 +204,7 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
     tools: tools.map(({ value }) => value),
     extensions: extensions.map(({ value }) => value),
     providers: (config.providers ?? []).map((value, i) =>
-      built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
+      built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), settings, providerProblem),
     ),
     channels: new Map(channels.map(({ name, value }) => [name, value])),
     schedules: schedules.map(({ name, value: { kind: _kind, ...config } }) => ({ name, ...config })),
@@ -211,12 +216,16 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
  * providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
  * this machine holds the values. Whatever a build refuses, this refuses too.
  */
-export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {
+export function buildDefinitionShape(
+  definition: AgentDefinition,
+  env: NodeJS.ProcessEnv,
+  settings: Readonly<Record<string, unknown>> = definition.config.defaults?.settings ?? {},
+): BuiltDefinition {
   const values: NodeJS.ProcessEnv = Object.fromEntries(
     definition.inputs.secrets.map(({ name }) => [name, "(no value here)"]),
   );
   for (const [name, value] of Object.entries(env)) if (value) values[name] = value;
-  return buildDefinition(definition, values);
+  return buildDefinition(definition, values, settings);
 }
 
 /**

@@ -42,7 +42,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const code =
     unsetSecrets.length === 0
       ? await Promise.resolve()
-          .then(() => buildDefinition(definition))
+          .then(() => buildDefinition(definition, process.env, config.settings))
           .catch(failStartup)
       : undefined;
   // Reported, not fatal: `info` is how an author finds out a content entry is missing, or the environment refused.

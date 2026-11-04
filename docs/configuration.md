@@ -49,6 +49,12 @@ what an instance starts with, which its own configuration may override ([instanc
 
 A provider or extension that reads a secret is wrapped in [`needs`](#secrets-in-code), like any module.
 
+Code reads the resolved settings through [`needs`](#secrets-in-code): its `build` takes them as a second argument,
+checked against the schema and typed by what you annotate it with (`SettingsOf<typeof config>` from
+`@fastagent-sh/fastagent`). A module with no secrets writes `needs([], (_, settings) => ...)`. It works for every
+module `needs` wraps (tools, extensions, channels, schedules, providers), and is built once when the instance opens.
+A command that only reads the shape of the definition (`models`, `login`) builds with the program's default settings.
+
 ### Instance configuration
 
 An instance sets its own values over the defaults in a `fastagent.json`: `model`, `thinkingLevel`, `http`, `deploy`

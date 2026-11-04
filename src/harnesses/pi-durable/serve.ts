@@ -149,7 +149,7 @@ export async function openServing(
   // The agent's environment is ONE value every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
   const values = agentValues(workdir);
-  const code = buildDefinition(definition, { ...process.env, ...values });
+  const code = buildDefinition(definition, { ...process.env, ...values }, config.settings);
   // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
   const environment = { ...values, ...(await prepareEnvironment(dir, { ...process.env, ...values })) };
   const env = { ...process.env, ...environment };

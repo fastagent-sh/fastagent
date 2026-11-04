@@ -16,7 +16,7 @@ let description: string;
 beforeAll(async () => {
   const templatePath = new URL("../src/channels/telegram/scaffold/telegram-send.ts", import.meta.url).pathname;
   const mod = (await import(templatePath)) as { default: Needs<ToolRegistration> };
-  const tool = mod.default.build({ TELEGRAM_BOT_TOKEN: "tok" });
+  const tool = mod.default.build({ TELEGRAM_BOT_TOKEN: "tok" }, {});
   execute = async (params) => {
     const result = await tool.execute(params as never, {} as never, {} as never);
     return { details: (result.output?.[0] as { text: string } | undefined)?.text };
