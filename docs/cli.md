@@ -112,8 +112,7 @@ Prints what the agent builds into, without serving it:
 
 A module that does not load, a schedule whose cron is not valid, or an environment FastAgent refuses makes `info`
 fail as `dev` and `start` would, with the reason (exit 1). Content that cannot be resolved (a bound directory is
-missing, say) is reported, not fatal. `info` installs and clones nothing. It writes nothing but the generated
-`.fastagent/`, as every command that reads the definition does.
+missing, say) is reported, not fatal. `info` installs and clones nothing, and writes nothing.
 
 ## `fastagent content`
 

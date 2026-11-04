@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import * as Effect from "effect/Effect";
 import { AgentError, hasEnded } from "../../agent-api.ts";
 import { enterAgentEnv } from "../../env.ts";
-import { buildDefinitionShape, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
+import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { holdingInstance, openServing } from "../../harnesses/pi-durable/serve.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
@@ -30,7 +30,7 @@ export async function runSchedulesList(dirArg: string, json: boolean): Promise<v
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
   // Its shape only: listing what will fire needs none of the values the code reads.
-  const { schedules } = await prepareDefinition(target)
+  const { schedules } = await loadSourceDefinition(target)
     .then((definition) => buildDefinitionShape(definition, process.env))
     .catch(failStartup);
   const sessions = scheduleSessions(stateRoot);
@@ -90,7 +90,7 @@ export async function runScheduleNow(
   // The name before the model, from the definition's shape: a script told its schedule does not exist need not set up
   // a model first.
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, async (target) => {
-    const declared = await prepareDefinition(target)
+    const declared = await loadSourceDefinition(target)
       .then((definition) => buildDefinitionShape(definition, process.env).schedules.map((s) => s.name))
       .catch(failStartup);
     if (!declared.includes(name)) {
@@ -98,10 +98,9 @@ export async function runScheduleNow(
     }
   });
   // Refused while the instance holds work a stopped serve left: this process would run it, and cut it off at its exit.
-  const { agent, models, schedules, stateRoot } = await openServing(agentDir, {
-    model: modelSpec,
-    unfinished: "refuse",
-  }).catch(failStartup);
+  const { agent, models, schedules, stateRoot } = await loadSourceDefinition(agentDir)
+    .then((definition) => openServing(definition, { model: modelSpec, unfinished: "refuse" }))
+    .catch(failStartup);
   const schedule = schedules.find((s) => s.name === name);
   if (schedule === undefined) {
     // Checked above: only an edit of src/schedules/ while this ran gets here.

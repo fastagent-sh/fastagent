@@ -12,14 +12,14 @@ import { runInProcess } from "./cli-run.ts";
 import { describe, expect, it } from "vitest";
 import { type ResolvedContent, resolveContent } from "../src/content/resolve.ts";
 import { type ContentBinding, declareBindings } from "../src/content/declare.ts";
-import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { buildDefinition, assembleAgent, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
 
 /** Send one message to the agent in `agentDir`, opened on `provider` with `content`. */
 async function askOnce(agentDir: string, provider: Provider, content?: readonly ResolvedContent[]): Promise<void> {
-  const definition = await prepareDefinition(agentDir);
+  const definition = await loadSourceDefinition(agentDir);
   const agent = await assembleAgent(definition, {
     storage: new MemoryStorage(),
     code: { ...buildDefinition(definition, {}), providers: [provider] },
@@ -121,7 +121,7 @@ describe("one resolution", () => {
     await writeFile(join(agentDir, "fastagent.config.ts"), `export default {\n  model: "${CODEX_MODEL}",\n};\n`);
     await bind(agentDir, { app: { path: "../app" } });
     const readers = async () => {
-      const opened = await openServing(agentDir, { storage: "memory" });
+      const opened = await openServing(await loadSourceDefinition(agentDir), { storage: "memory" });
       await opened.agent.close();
       const info = JSON.parse((await cli(["info", "--json"], agentDir)).stdout);
       const list = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);

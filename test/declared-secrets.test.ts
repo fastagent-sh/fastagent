@@ -5,9 +5,9 @@ import { needs } from "../src/harnesses/pi-durable/define.ts";
 describe("declared secrets: the rule", () => {
   it("reports only names with no value, grouped by the file to open", () => {
     const declared = [
-      { name: "X_API_KEY", source: "src/tools/x-post.ts" },
-      { name: "X_API_SECRET", source: "src/tools/x-post.ts" },
-      { name: "SLACK_TOKEN", source: "src/channels/slack.ts" },
+      { name: "X_API_KEY", declaredIn: "src/tools/x-post.ts", optional: false },
+      { name: "X_API_SECRET", declaredIn: "src/tools/x-post.ts", optional: false },
+      { name: "SLACK_TOKEN", declaredIn: "src/channels/slack.ts", optional: false },
     ];
     const env = { X_API_KEY: "k", X_API_SECRET: "" }; // empty counts as missing (an unset .env line)
     expect(missingSecrets(declared, env).map((s) => s.name)).toEqual(["X_API_SECRET", "SLACK_TOKEN"]);
@@ -18,11 +18,11 @@ describe("declared secrets: the rule", () => {
 
   it("never reports an optional name, unless another declaration requires it, and then names that one", () => {
     const declared = [
-      { name: "REGION", source: "src/tools/weather.ts", optional: true },
-      { name: "TOKEN", source: "src/tools/a.ts", optional: true },
-      { name: "TOKEN", source: "src/tools/b.ts" },
+      { name: "REGION", declaredIn: "src/tools/weather.ts", optional: true },
+      { name: "TOKEN", declaredIn: "src/tools/a.ts", optional: true },
+      { name: "TOKEN", declaredIn: "src/tools/b.ts", optional: false },
     ];
-    expect(missingSecrets(declared, {})).toEqual([{ name: "TOKEN", source: "src/tools/b.ts" }]);
+    expect(missingSecrets(declared, {})).toEqual([{ name: "TOKEN", declaredIn: "src/tools/b.ts", optional: false }]);
   });
 });
 

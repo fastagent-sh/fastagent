@@ -364,7 +364,7 @@ export default needs(
 
 `needs` hands the code exactly the values it declared, typed. A required one without a value refuses the start
 (`dev`, `start`, an app's `openAgent`), naming the file that declared it; `deploy` refuses before its first
-side effect. Every declaration is written into `.fastagent/secrets.json`, which `info`, `deploy` and runbooks read.
+side effect. `info` lists every declaration (`--json`: `secrets`), and `deploy`'s runbooks are made from the same list.
 The same works around a tool, an extension, a channel, a schedule or a provider.
 
 ## Ports
@@ -457,8 +457,8 @@ The definition's code is four directories, each module default-exporting one thi
 
 Any of them may be `needs([...], (values) => …)` around what it exports. A module is a `.ts`, `.mts`, `.js` or `.mjs`
 file directly in its directory; tests (`*.test.*`, `*.spec.*`) and `.d.ts` files are not modules, and a helper a module
-imports lives outside these directories (`lib/`, say). Each command that opens the agent generates
-`.fastagent/registry.ts`, plain imports of every module, from these files: there is nothing to register by hand. A
+imports lives outside these directories (`lib/`, say). Each command that opens the agent imports every module of
+these directories: there is nothing to register by hand. A
 module that does not load, or is not what its directory holds, refuses the start, naming the file; so do two modules
 of one name.
 

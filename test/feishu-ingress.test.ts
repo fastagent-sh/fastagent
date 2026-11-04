@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { channelIngress } from "../src/channels/discover.ts";
 import { feishuIngressFor } from "../src/channels/feishu/setup-mode.ts";
-import { buildDefinition, prepareDefinition, secretsManifest } from "../src/harnesses/pi-durable/open.ts";
+import { buildDefinition, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { scaffoldChannel } from "../src/scaffold/add-channel.ts";
 import { DEV_SERVE_ENV, markDevServe, servedByDev } from "../src/serving-command.ts";
 
@@ -46,8 +46,8 @@ describe("Feishu/Lark ingress: one rule, read by the channel and by everything t
         await scaffoldChannel(dir, kind);
         vi.stubEnv(DEV_SERVE_ENV, env[DEV_SERVE_ENV] ?? "");
         vi.stubEnv(`${prefix}_INGRESS`, env[`${prefix}_INGRESS`] ?? "");
-        const definition = await prepareDefinition(dir);
-        const secrets = secretsManifest(definition);
+        const definition = await loadSourceDefinition(dir);
+        const secrets = definition.inputs.secrets;
         const code = buildDefinition(definition, Object.fromEntries(secrets.map(({ name }) => [name, "set"])));
         return {
           ingress: [...code.channels.values()].map(channelIngress),

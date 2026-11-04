@@ -93,7 +93,7 @@ interface Service {
 }
 ```
 
-`openAgent` opens a directory the way `dev` and `start` do: it generates `.fastagent/` from `src/`, builds the code with
+`openAgent` opens a directory the way `dev` and `start` do: it imports the modules of `src/`, builds the code with
 the secrets it declares (a required one without a value refuses, naming where it is declared), prepares the declared
 environment, clones the content, builds the model environment over the agent's credentials (`.secrets/auth.json` over
 the machine's, or the store `credentials` gives) with its [model lists](configuration.md#model-lists) refreshed (a request to

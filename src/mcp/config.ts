@@ -87,7 +87,11 @@ function variables(value: string, server: string): string[] {
 export function mcpSecrets(dir: string): DeclaredSecret[] {
   return Object.entries(readMcpConfiguration(dir).mcpServers).flatMap(([server, config]) =>
     configStrings(config).flatMap((value) =>
-      variables(value, server).map((name) => ({ name, source: `${MCP_FILE} mcpServers.${server}` })),
+      variables(value, server).map((name) => ({
+        name,
+        declaredIn: `${MCP_FILE} mcpServers.${server}`,
+        optional: false,
+      })),
     ),
   );
 }

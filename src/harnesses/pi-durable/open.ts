@@ -1,10 +1,9 @@
 /**
- * A definition assembled onto pi-durable (architecture.md §3): its configuration and generated registry read, its
- * secrets checked as one list, its code built with them, and an Agent opened over pi-ai's built-in models with the
+ * A definition assembled onto pi-durable (architecture.md §3): a source project read as a definition, its secrets
+ * checked as one list, its code built with them, and an Agent opened over pi-ai's built-in models with the
  * text, tools and extensions installed. `dev`, `start` and an embedder call the same function.
  */
 import { existsSync } from "node:fs";
-import { writeFileAtomic } from "../../atomic-write.ts";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ModelThinkingLevel, Models, Provider } from "@earendil-works/pi-ai";
@@ -18,11 +17,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { loadEnvironment } from "../../content/file.ts";
-import { mcpSecrets } from "../../mcp/config.ts";
 import type { ResolvedContent } from "../../content/resolve.ts";
-import { type DeclaredSecret, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
-import { declaredVariables } from "../../environment/declare.ts";
+import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { channelModuleProblem } from "../../channels/discover.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
@@ -32,22 +28,14 @@ import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isNeeds } from "./define.ts";
-import { GENERATED_DIR, REGISTRY_FILE, REGISTRY_KINDS, type Registry, generateRegistry } from "./registry.ts";
+import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
+import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
 import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
 
-const SECRETS_MANIFEST_FILE = "secrets.json";
 const CONFIG_KEYS = ["name", "description", "model", "thinkingLevel", "extensions", "providers", "http", "deploy"];
 const DEFINITION_EXTENSION = "fastagent.definition";
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-/** An agent package as it was read: where it is, its configuration, and the modules its registry lists. */
-export interface AgentDefinition {
-  dir: string;
-  name: string;
-  config: AgentConfig;
-  registry: Registry;
-}
 
 async function importDefault(path: string, what: string): Promise<unknown> {
   try {
@@ -124,80 +112,23 @@ export function modelSpecFor(
   return flag ?? (env.FASTAGENT_MODEL || config.model);
 }
 
-/** Read the agent package in `dir`: `fastagent.config.ts` (optional) and `.fastagent/registry.ts`, generated first. */
-export async function loadDefinition(directory: string): Promise<AgentDefinition> {
+/** The source project in `dir` as a definition: `fastagent.config.ts` (optional) and the modules of `src/`. */
+export async function loadSourceDefinition(directory: string): Promise<AgentDefinition> {
   // Absolute, since the prompt names the definition's files by it and the agent's tools resolve a relative path against
   // the agent's own working directory, which is this one.
   const dir = resolve(directory);
   const config = await loadConfig(dir);
-  const registryPath = join(dir, GENERATED_DIR, REGISTRY_FILE);
-  if (!existsSync(registryPath)) {
-    throw new Error(`${GENERATED_DIR}/${REGISTRY_FILE} is missing: generate it from src/ before opening the agent`);
-  }
-  let registry: Registry;
-  try {
-    registry = (await import(pathToFileURL(registryPath).href)) as Registry;
-  } catch (error) {
-    // The registry imports every module, so a module that fails to load (or has no default export) fails here.
-    throw new Error(`loading src/ through ${GENERATED_DIR}/${REGISTRY_FILE}: ${(error as Error).message}`, {
-      cause: error,
-    });
-  }
-  const packageName = (await readPackageJson(dir)) as { name?: unknown };
-  const name = config.name ?? (typeof packageName.name === "string" ? packageName.name : basename(dir));
-  return { dir, name, config, registry };
-}
-
-/** Every value the definition can hold `Needs` in, with where it is: modules by file, configuration by key. */
-function declarers(definition: AgentDefinition): { source: string; value: unknown }[] {
-  return [
-    ...REGISTRY_KINDS.flatMap((kind) => definition.registry[kind].map(({ file, value }) => ({ source: file, value }))),
-    ...(definition.config.extensions ?? []).map((value, i) => ({ source: `${CONFIG_FILE} extensions[${i}]`, value })),
-    ...(definition.config.providers ?? []).map((value, i) => ({ source: `${CONFIG_FILE} providers[${i}]`, value })),
-  ];
-}
-
-/** The secrets the definition declares, wherever: its code's `needs`, and `context.json`'s command variables. */
-function codeSecrets(definition: AgentDefinition): DeclaredSecret[] {
-  return [
-    ...declarers(definition).flatMap(({ source, value }) =>
-      isNeeds(value) ? value.secrets.map((secret) => ({ ...secret, source })) : [],
-    ),
-    ...declaredVariables(loadEnvironment(definition.dir)),
-  ];
-}
-
-export function definitionSecrets(definition: AgentDefinition): DeclaredSecret[] {
-  return [...codeSecrets(definition), ...mcpSecrets(definition.dir)];
-}
-
-/**
- * The list a person deploying or running the agent reads instead of its code (`.fastagent/secrets.json`): each name
- * once, what it is for, whether the agent runs without it, and where it is declared.
- */
-export function secretsManifest(definition: AgentDefinition) {
-  const byName = new Map<string, { name: string; description?: string; optional: boolean; declaredIn: string[] }>();
-  for (const secret of definitionSecrets(definition)) {
-    const entry = byName.get(secret.name) ?? { name: secret.name, optional: true, declaredIn: [] };
-    entry.optional &&= secret.optional === true;
-    entry.declaredIn.push(secret.source);
-    if (entry.description === undefined && secret.description !== undefined) entry.description = secret.description;
-    byName.set(secret.name, entry);
-  }
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/** Generate the registry, read the definition, and write its secrets manifest beside the registry. */
-export async function prepareDefinition(dir: string): Promise<AgentDefinition> {
-  await generateRegistry(dir);
-  const definition = await loadDefinition(dir);
-  writeFileAtomic(
-    join(dir, GENERATED_DIR, SECRETS_MANIFEST_FILE),
-    `${JSON.stringify(secretsManifest(definition), null, 2)}\n`,
-    undefined,
-    true,
-  );
-  return definition;
+  const registry = await importRegistry(dir);
+  const pkg = (await readPackageJson(dir)) as { name?: unknown; version?: unknown };
+  return defineDefinition({
+    format: DEFINITION_FORMAT,
+    name: config.name ?? (typeof pkg.name === "string" ? pkg.name : basename(dir)),
+    // A source project need not be published, so it need not have a version.
+    version: typeof pkg.version === "string" ? pkg.version : "0.0.0",
+    dir,
+    config,
+    registry,
+  });
 }
 
 /** What one value is once its secrets are supplied, or why it is not what its place holds. */
@@ -312,7 +243,7 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
  */
 export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {
   const values: NodeJS.ProcessEnv = Object.fromEntries(
-    definitionSecrets(definition).map(({ name }) => [name, "(no value here)"]),
+    definition.inputs.secrets.map(({ name }) => [name, "(no value here)"]),
   );
   for (const [name, value] of Object.entries(env)) if (value) values[name] = value;
   return buildDefinition(definition, values);
@@ -325,7 +256,7 @@ export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.Pr
  * unknown there, or verified against the built-in's endpoint.
  */
 export async function definitionProviders(agentDir: string, env: NodeJS.ProcessEnv = process.env): Promise<Provider[]> {
-  return buildDefinitionShape(await prepareDefinition(agentDir), env).providers;
+  return buildDefinitionShape(await loadSourceDefinition(agentDir), env).providers;
 }
 
 const named = <T extends { name: string }>(value: T) => ({ name: value.name, value });

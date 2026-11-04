@@ -11,6 +11,7 @@ import { log } from "../src/log.ts";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { connectAgent } from "../src/http/client.ts";
 import { type ServeOptions, serveAgent } from "../src/service.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
@@ -22,7 +23,7 @@ afterAll(async () => {
 
 /** The directory opened as a serve opens it, with no storage of its own, and mounted. */
 async function createAgentService(dir: string, options: ServeOptions = {}) {
-  const served = await openServing(dir, { storage: "memory" });
+  const served = await openServing(await loadSourceDefinition(dir), { storage: "memory" });
   opened.push(served.agent);
   return serveAgent(served, options);
 }
@@ -43,7 +44,7 @@ describe("serveAgent over an opened directory", () => {
     // The prompt names the agent's files and working directory by these, and its tools resolve a relative one
     // against that working directory.
     const dir = await agentDir();
-    const served = await openServing(relative(process.cwd(), dir), { storage: "memory" });
+    const served = await openServing(await loadSourceDefinition(relative(process.cwd(), dir)), { storage: "memory" });
     opened.push(served.agent);
     expect([served.agentDir, served.definition.dir]).toEqual([dir, dir]);
   });
@@ -433,7 +434,7 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
   it("surfaces a broken channel or tool at open, rather than serving without it", async () => {
     for (const file of ["src/channels/bad.mjs", "src/tools/bad.mjs"]) {
       const dir = await agentDir({ [file]: `throw new Error("boom at import");` });
-      await expect(createAgentService(dir), file).rejects.toThrow(/loading src\/ through .*boom at import/);
+      await expect(createAgentService(dir), file).rejects.toThrow(`${file}: boom at import`);
     }
   });
 });

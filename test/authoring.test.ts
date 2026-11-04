@@ -28,9 +28,10 @@ const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 function createAndOpen(dir: string): Promise<string> {
   const script = `
     import { createAgent } from ${JSON.stringify(join(SRC, "authoring.ts"))};
+    import { loadSourceDefinition } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/open.ts"))};
     import { openServing } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/serve.ts"))};
     await createAgent(${JSON.stringify(dir)});
-    await openServing(${JSON.stringify(dir)}, { storage: "memory" }).then(
+    await loadSourceDefinition(${JSON.stringify(dir)}).then((definition) => openServing(definition, { storage: "memory" })).then(
       async (opened) => {
         await opened.agent.close();
         console.log("opened");
