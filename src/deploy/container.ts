@@ -168,6 +168,9 @@ RUN ${steps.join(" \\\n && ")}
  */
 export const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
 
+/** Why the image builds `dist/` itself: an upload that follows `.gitignore` (`railway up`) drops it, and `start` needs it. */
+const BUILD_STEP_NOTE = "# `start` opens dist/, which an upload that follows .gitignore leaves out: build it here.";
+
 function dockerfile(input: ContainerInput): string {
   // The build context is the agent directory, baked at IMAGE_DEFINITION_DIR; deps install (and the local bin lives)
   // there.
@@ -211,6 +214,8 @@ ${deployment}`;
     return `${head}COPY package.json bun.lock* *.tgz ./
 RUN ${install}
 ${environment}COPY . .
+${BUILD_STEP_NOTE}
+RUN bun run fastagent build
 CMD ["bun", "run", "fastagent", "start", "${dir}"]
 `;
   }
@@ -220,6 +225,8 @@ CMD ["bun", "run", "fastagent", "start", "${dir}"]
   return `${head}COPY package.json package-lock.json* *.tgz ./
 RUN ${install}
 ${environment}COPY . .
+${BUILD_STEP_NOTE}
+RUN ./node_modules/.bin/fastagent build
 CMD ["./node_modules/.bin/fastagent", "start", "${dir}"]
 `;
 }

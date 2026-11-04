@@ -89,7 +89,7 @@ Use the CLI:
 fastagent init my-agent
 cd my-agent
 fastagent dev
-fastagent start
+fastagent build && fastagent start
 ```
 
 Add Telegram, Slack, Feishu, or Lark when the agent should help chat users:

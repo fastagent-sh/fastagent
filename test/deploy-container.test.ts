@@ -62,6 +62,15 @@ describe("deploy/container: shared Docker context", () => {
       "gh@2\nnpm:@biomejs/biome@latest\n",
     );
     expect(dockerfile({ ...input, packages })).toBe(dockerfile({ ...input, packages: ["jq@1"] }));
+    // `start` opens dist/, which `railway up` leaves out as git-ignored: the image builds it, after the copy.
+    for (const [runtime, build] of [
+      ["node", "RUN ./node_modules/.bin/fastagent build"],
+      ["bun", "RUN bun run fastagent build"],
+    ] as const) {
+      const text = dockerfile({ ...input, runtime });
+      expect(text.indexOf("COPY . .")).toBeLessThan(text.indexOf(build));
+      expect(text.indexOf(build)).toBeLessThan(text.indexOf("CMD ["));
+    }
     for (const runtime of ["node", "bun"] as const) {
       const text = dockerfile({ ...input, runtime, packages });
       const order = ["RUN npm ci", "RUN bun install"].find((line) => text.includes(line)) as string;

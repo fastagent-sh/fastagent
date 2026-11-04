@@ -27,6 +27,8 @@ describe("cli: deploy", () => {
     const result = await runInProcess(["deploy", "docker", dir]);
     expect(result.code).toBe(0);
     expect(result.stderr).toContain("source: .secrets/production/.env");
+    // `deploy` builds first, generate-only included: the image's `start` opens dist/.
+    expect(await stat(join(dir, "dist", "index.js"))).toBeDefined();
     expect(result.stdout).toContain("PRODUCTION_ONLY");
     expect(result.stdout).not.toContain("DEV_ONLY");
     expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toContain(".secrets/production/.env");
