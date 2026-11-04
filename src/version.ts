@@ -10,14 +10,22 @@ export async function fastagentVersion(): Promise<string> {
 }
 
 /** The packages an agent's code imports besides fastagent: the harness its tools and providers are written for. */
-const HARNESS_PACKAGES = ["@earendil-works/pi-durable", "@earendil-works/pi-ai", "@earendil-works/pi-schema"];
+export const HARNESS_PACKAGES = ["@earendil-works/pi-durable", "@earendil-works/pi-ai", "@earendil-works/pi-schema"];
 
-/** This build's version, and the exact versions of the harness packages it runs, for a new agent to depend on. */
-export async function fastagentBuild(): Promise<{ version: string; harness: Record<string, string> }> {
+/**
+ * This build's version, the exact versions of the harness packages it runs, and the TypeScript `fastagent build`
+ * compiles with (FastAgent's own), for a new agent to depend on.
+ */
+export async function fastagentBuild(): Promise<{
+  version: string;
+  harness: Record<string, string>;
+  typescript: string;
+}> {
   const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
   const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as {
     version?: string;
     dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
   };
   if (typeof pkg.version !== "string" || pkg.version === "") throw new Error(`no version in ${pkgPath}`);
   const harness: Record<string, string> = {};
@@ -26,5 +34,7 @@ export async function fastagentBuild(): Promise<{ version: string; harness: Reco
     if (range === undefined) throw new Error(`${pkgPath} does not depend on ${name}`);
     harness[name] = range;
   }
-  return { version: pkg.version, harness };
+  const typescript = pkg.devDependencies?.typescript;
+  if (typescript === undefined) throw new Error(`${pkgPath} does not develop with typescript`);
+  return { version: pkg.version, harness, typescript };
 }

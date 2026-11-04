@@ -1,0 +1,177 @@
+/**
+ * The agent's self-scheduled wake-ups — the SECOND producer of scheduled invocations (the first is the author's
+ * `schedules/` files).
+ */
+import { randomUUID } from "node:crypto";
+import { log } from "../log.js";
+import { cronError, nextRun, recurringCronError } from "./cron.js";
+import { readScheduleFile, scheduleFile, writeScheduleFile } from "./state.js";
+/**
+ * Parse a delay to milliseconds: a number is SECONDS; a string MUST carry a unit — `"<n><s|m|h|d>"` ("30m", "2h",
+ * "1d").
+ */
+export function parseDelayMs(input) {
+    if (typeof input === "number")
+        return Number.isFinite(input) && input > 0 ? input * 1000 : undefined;
+    const m = input.trim().match(/^(\d+(?:\.\d+)?)\s*(s|m|h|d)$/i); // unit REQUIRED on a string
+    if (!m)
+        return undefined;
+    const mult = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2].toLowerCase()];
+    return Number(m[1]) * mult;
+}
+/** The minimum delay a wake-up may be scheduled for — rejects a busy-loop (`wake in 1s`, then again…). */
+export const MIN_WAKE_MS = 60_000; // 1 minute
+/**
+ * The cap on pending wake-ups PER SESSION — rejects one conversation's unbounded self-fan-out without letting it
+ * starve others' quota (a global cap would make one chatty session a DoS on everyone else's `wake`, since a multi-user
+ * deploy is one session per chat).
+ */
+export const MAX_PENDING_WAKEUPS = 20;
+/** A stored entry is a real Wakeup: the fields are present and `fireAt` is a parseable date. */
+function isWakeup(e) {
+    if (!e || typeof e !== "object")
+        return false;
+    const w = e;
+    return (typeof w.id === "string" &&
+        typeof w.session === "string" &&
+        typeof w.prompt === "string" &&
+        typeof w.fireAt === "string" &&
+        !Number.isNaN(Date.parse(w.fireAt)) &&
+        (w.tz === undefined || typeof w.tz === "string") &&
+        // A stored cron must PARSE: a bad one would throw inside the claim's nextRun.
+        (w.cron === undefined ||
+            (typeof w.cron === "string" && cronError(w.cron, typeof w.tz === "string" ? w.tz : undefined) === undefined)));
+}
+/** The wake-ALARM sink: notified after EVERY wakeups-store mutation. */
+let wakeupsSink;
+export function setWakeupsSink(sink) {
+    wakeupsSink = sink;
+}
+function load(stateRoot) {
+    const v = readScheduleFile(scheduleFile(stateRoot, "wakeups"));
+    if (v === undefined)
+        return []; // absent (first run) or a corrupt file readScheduleFile already warned on
+    if (!Array.isArray(v)) {
+        // Valid JSON but the wrong SHAPE (an object, say).
+        log.warn(`[schedule] wakeups store is not an array — ignoring it: ${JSON.stringify(v).slice(0, 80)}`);
+        return [];
+    }
+    const valid = [];
+    for (const e of v) {
+        if (isWakeup(e))
+            valid.push(e);
+        else
+            log.warn(`[schedule] dropping a malformed wake-up entry: ${JSON.stringify(e)}`);
+    }
+    return valid;
+}
+function save(stateRoot, wakeups) {
+    writeScheduleFile(scheduleFile(stateRoot, "wakeups"), wakeups);
+    try {
+        wakeupsSink?.(stateRoot);
+    }
+    catch (e) {
+        log.error(`[schedule] wake-alarm sink failed (store write is unaffected): ${String(e)}`);
+    }
+}
+/** The current pending wake-ups — read by the wake-alarm sink, which mirrors them into an external clock. */
+export function listWakeups(stateRoot) {
+    return load(stateRoot);
+}
+/** Add a wake-up — one-shot (`fireAt`) or recurring (`cron`/`tz`, `fireAt` = the first instant). */
+export function addWakeup(stateRoot, input, now = new Date()) {
+    let fireAtDate;
+    if (input.cron !== undefined) {
+        // A recurring wake runs FOREVER — gated harder than a one-shot, by the rule every recurring producer shares.
+        const err = recurringCronError(input.cron, input.tz);
+        if (err)
+            return { ok: false, error: `${err}${err.startsWith("this cron never") ? " — use `in` for a one-shot" : ""}.` };
+        // DERIVED from the cron — a caller-passed fireAt can't disagree with the schedule.
+        const first = nextRun(input.cron, input.tz, now);
+        if (!first)
+            return { ok: false, error: "this cron never fires again — use `in` for a one-shot." };
+        fireAtDate = first;
+    }
+    else {
+        if (!input.fireAt)
+            return { ok: false, error: "a one-shot wake needs its fire time (`in`)." };
+        if (input.fireAt.getTime() < now.getTime() + MIN_WAKE_MS) {
+            return { ok: false, error: `too soon — the minimum wake delay is ${MIN_WAKE_MS / 1000}s.` };
+        }
+        fireAtDate = input.fireAt;
+    }
+    const all = load(stateRoot);
+    const mine = all.filter((w) => w.session === input.session);
+    if (mine.length >= MAX_PENDING_WAKEUPS) {
+        // List what's pending WITH a prompt preview: "unwake one" is only actionable if the model has the ids AND can
+        // choose by meaning.
+        const pending = mine
+            .map((w) => `${w.id}${w.cron ? ` (recurring "${w.cron}")` : ""} at ${w.fireAt}: ${w.prompt.length > 60 ? `${w.prompt.slice(0, 60)}…` : w.prompt}`)
+            .join("; ");
+        return {
+            ok: false,
+            error: `too many pending wake-ups for this conversation (${MAX_PENDING_WAKEUPS}) — wait for some to fire, or unwake one. Pending: ${pending}`,
+        };
+    }
+    const id = randomUUID();
+    const fireAt = fireAtDate.toISOString();
+    save(stateRoot, [
+        ...all,
+        { id, session: input.session, prompt: input.prompt, fireAt, cron: input.cron, tz: input.tz },
+    ]);
+    return { ok: true, id, fireAt };
+}
+/**
+ * Remove ONE pending wake-up, and only from the session that made it: `unwake`, an agent cancelling its own alarm.
+ * Cancelling another conversation's silently is a cost with no matching benefit.
+ */
+export function removeWakeup(stateRoot, id, session) {
+    return removeWhere(stateRoot, (w) => w.id === id && w.session === session) !== undefined;
+}
+/**
+ * Remove ONE pending wake-up whatever session set it: the operator's `fastagent schedules unwake`, the one way out of a
+ * wake-up set in a session nobody can message (a schedule's own). Its caller holds the instance, so no serve's poll
+ * writes the store between this read and its write.
+ */
+export function removeAnyWakeup(stateRoot, id) {
+    return removeWhere(stateRoot, (w) => w.id === id);
+}
+function removeWhere(stateRoot, match) {
+    const all = load(stateRoot);
+    const index = all.findIndex(match);
+    if (index === -1)
+        return undefined;
+    const [removed] = all.splice(index, 1);
+    save(stateRoot, all);
+    return removed;
+}
+/**
+ * CLAIM the FIRST due wake-up (at or before `now`) in stored order, remove + return it, or undefined if none is due.
+ */
+export function takeFirstDueWakeup(stateRoot, now = new Date()) {
+    const all = load(stateRoot);
+    const idx = all.findIndex((w) => new Date(w.fireAt).getTime() <= now.getTime());
+    if (idx === -1)
+        return undefined;
+    const w = all[idx];
+    if (w.cron !== undefined) {
+        // RECURRING claim = ADVANCE IN PLACE: the entry STAYS in the store with fireAt pushed to the next cron instant.
+        const next = nextRun(w.cron, w.tz, now);
+        if (next)
+            all[idx] = { ...w, fireAt: next.toISOString() };
+        else
+            all.splice(idx, 1); // the cron has no next instant — this is its final occurrence
+        save(stateRoot, all);
+        return { ...w }; // THIS occurrence (original fireAt); the store already holds the next
+    }
+    all.splice(idx, 1);
+    save(stateRoot, all);
+    return w;
+}
+/**
+ * Put back a ONE-SHOT wake-up its session refused for now (the process or the session's queue was full), to fire at
+ * `fireAt`. It was taken out of the store to fire, so it does not count against the session's cap again.
+ */
+export function requeueWakeup(stateRoot, w, fireAt) {
+    save(stateRoot, [...load(stateRoot), { ...w, fireAt: fireAt.toISOString() }]);
+}

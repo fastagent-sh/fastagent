@@ -193,6 +193,9 @@ join-on-interrupt combinator that differed only in the word before `Failure`.
 messages; an app calls `openAgent(dir)`, which is it with a serve's defaults, and may give its own credential store and
 state root (`stateDir`: an instance of its own beside `dev`'s). It works in this order:
 
+`fastagent build` (`build.ts`) compiles a project into `dist/` with the project's TypeScript and generates its entry,
+which calls the same `defineDefinition`; opening a built package is the artifact work's next step.
+
 1. **The definition** (`loadSourceDefinition`, `open.ts`; `definition.ts`): the configuration and every module of
    `src/` are imported in file order, the configuration's keys are checked (nested ones included), and the result is
    one frozen value whose `inputs.secrets` lists every declared secret, each name once. Reading the definition writes

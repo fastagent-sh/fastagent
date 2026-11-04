@@ -20,17 +20,21 @@ export const channelBundleFiles = (kind: string): string[] =>
   readdirSync(channelScaffoldDir(kind)).filter((f) => f.endsWith(".ts"));
 
 /**
- * package.json for the complete agent: fastagent at this build's version, and the packages an agent's code is written
+ * package.json for the complete agent: fastagent at this build's version, the packages an agent's code is written
  * against (its tools and extensions are pi-durable code, its providers pi-ai's, its tool schemas pi-schema's) at the
- * versions this build runs.
+ * versions this build runs, and the TypeScript `fastagent build` compiles it with.
  */
-export function packageJson(name: string, build: { version: string; harness: Record<string, string> }): string {
+export function packageJson(
+  name: string,
+  build: { version: string; harness: Record<string, string>; typescript: string },
+): string {
   return `${JSON.stringify(
     {
       name,
       private: true,
       type: "module",
       dependencies: { "@fastagent-sh/fastagent": `^${build.version}`, ...build.harness },
+      devDependencies: { typescript: build.typescript },
     },
     null,
     2,

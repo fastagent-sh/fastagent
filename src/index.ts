@@ -95,6 +95,8 @@ export {
   type SecretValues,
 } from "./harnesses/pi-durable/define.ts";
 export type { ScheduleConfig } from "./schedule/schedule.ts";
+// What `fastagent build` writes into a package's generated entry, never written by hand.
+export { defineDefinition, type AgentDefinition } from "./harnesses/pi-durable/definition.ts";
 export {
   defineChannel,
   type ChannelContext,

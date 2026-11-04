@@ -1,0 +1,174 @@
+/**
+ * `fastagent build`: a source project compiled into `dist/`, the package an app or a host opens. Projects sit under
+ * test/fixtures so their imports resolve this repository's packages, TypeScript included, as an installed agent's do.
+ */
+import { execFile } from "node:child_process";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
+import { afterAll, describe, expect, it } from "vitest";
+import { buildProject } from "../src/harnesses/pi-durable/build.ts";
+import { buildDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { runInProcess } from "./cli-run.ts";
+
+const ROOT = join(import.meta.dirname, "fixtures");
+const made: string[] = [];
+afterAll(() => {
+  for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+
+function project(files: Record<string, string>): string {
+  const dir = join(ROOT, `.tmp-build-${process.pid}-${made.length}`);
+  made.push(dir);
+  const all = {
+    "package.json": JSON.stringify({
+      name: "@acme/support",
+      version: "1.2.0",
+      type: "module",
+      dependencies: { "@fastagent-sh/fastagent": "^0.29.0", "@earendil-works/pi-durable": "1.5.0", lodash: "^4" },
+    }),
+    ...files,
+  };
+  for (const [file, text] of Object.entries(all)) {
+    mkdirSync(dirname(join(dir, file)), { recursive: true });
+    writeFileSync(join(dir, file), text);
+  }
+  return dir;
+}
+
+const TOOL = `import { readFileSync } from "node:fs";
+import { obj, str } from "@earendil-works/pi-schema";
+import { defineTool } from "@earendil-works/pi-durable";
+import { shout } from "../../lib/shout.ts";
+import data from "./lookup/data.json" with { type: "json" };
+const note = readFileSync(new URL("./lookup/note.txt", import.meta.url), "utf8").trim();
+export default defineTool({
+  name: "lookup",
+  description: "Look something up.",
+  parameters: obj({ text: str() }),
+  execute: async ({ text }) => ({ output: [{ type: "text", text: [shout(text), data.unit, note].join(" ") }] }),
+});
+`;
+
+const FILES: Record<string, string> = {
+  "fastagent.config.ts": 'export default { name: "support", model: "openai/gpt-6.1-sol" };\n',
+  "SYSTEM.md": "You are Support.\n",
+  "AGENTS.md": "Be brief.\n",
+  LICENSE: "MIT\n",
+  "context.json": JSON.stringify({ environment: { variables: { LOOKUP_KEY: { description: "the lookup service" } } } }),
+  "skills/lookup/SKILL.md": "---\nname: lookup\ndescription: Look up\n---\nUse lookup.\n",
+  "skills/lookup/.env": "SKILL_TOKEN=leaked\n",
+  "prompts/review.md": "Review $1.\n",
+  "lib/shout.ts": "export const shout = (text: string): string => text.toUpperCase();\n",
+  "src/tools/lookup.ts": TOOL,
+  "src/tools/lookup/data.json": '{ "unit": "kg" }\n',
+  "src/tools/lookup/note.txt": "from the note\n",
+  "src/tools/lookup.test.ts": "throw new Error('a test is not a module');\n",
+  ".secrets/.env": "LOOKUP_KEY=secret\n",
+  ".state/agent.sqlite": "state\n",
+  "content/repo/README.md": "a clone\n",
+};
+
+const listing = (dir: string) =>
+  readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name).slice(dir.length + 1))
+    .sort();
+
+describe("fastagent build", () => {
+  it("writes dist/: the compiled code, its text and resources, and nothing of the machine's", async () => {
+    const dir = project(FILES);
+    const { dist } = await buildProject(dir);
+    expect(listing(dist)).toEqual([
+      "AGENTS.md",
+      "LICENSE",
+      "SYSTEM.md",
+      "context.json",
+      "fastagent.config.js",
+      "index.d.ts",
+      "index.js",
+      "lib/shout.js",
+      "package.json",
+      "prompts/review.md",
+      "skills/lookup/SKILL.md",
+      "src/tools/lookup.js",
+      "src/tools/lookup/data.json",
+      "src/tools/lookup/note.txt",
+    ]);
+    expect(JSON.parse(readFileSync(join(dist, "package.json"), "utf8"))).toEqual({
+      name: "@acme/support",
+      version: "1.2.0",
+      type: "module",
+      exports: { ".": { types: "./index.d.ts", default: "./index.js" } },
+      dependencies: { lodash: "^4" },
+      peerDependencies: { "@fastagent-sh/fastagent": "^0.29.0", "@earendil-works/pi-durable": "1.5.0" },
+    });
+  });
+
+  it("exports the definition from the generated entry, its modules running from dist/", async () => {
+    const { dist } = await buildProject(project(FILES));
+    const built = (await import(join(dist, "index.js"))).default;
+    expect(built).toMatchObject({ format: 1, name: "support", version: "1.2.0", dir: `${dist}/` });
+    expect(built.inputs.secrets).toEqual([
+      { name: "LOOKUP_KEY", description: "the lookup service", optional: false, declaredIn: ["context.json"] },
+    ]);
+    const [tool] = buildDefinition(built, { LOOKUP_KEY: "k" }).tools;
+    const result = await tool?.execute({ text: "hi" }, {} as never, {} as never);
+    expect(result?.output).toEqual([{ type: "text", text: "HI kg from the note" }]);
+  });
+
+  it("refuses a type error, and emits it anyway with --no-check", async () => {
+    const dir = project({ ...FILES, "lib/shout.ts": "export const shout = (text: string): number => text;\n" });
+    await expect(buildProject(dir)).rejects.toThrow(/tsc refused the project[\s\S]*lib\/shout\.ts.*TS2322/);
+    const { dist } = await buildProject(dir, { check: false });
+    expect(listing(dist)).toContain("lib/shout.js");
+  });
+
+  it("refuses what a dev serve refuses, before writing anything", async () => {
+    const dir = project({ "src/tools/bad.ts": "throw new Error('boom at import');\n" });
+    await expect(buildProject(dir)).rejects.toThrow("src/tools/bad.ts: boom at import");
+    expect(readdirSync(dir)).not.toContain("dist");
+  });
+
+  it("refuses code that imports a file outside the project, which dist/ could not hold", async () => {
+    const outside = join(import.meta.dirname, "../src/log.ts");
+    const dir = project({
+      "src/tools/far.ts": `import { log } from ${JSON.stringify(outside)};\nexport default log;\n`,
+    });
+    await expect(buildProject(dir)).rejects.toThrow(/TS6059/);
+  });
+
+  it("refuses syntax a dev serve could not run, as Node's type stripping would", async () => {
+    const dir = project({ "src/tools/level.ts": "export enum Level { Low }\nexport default {};\n" });
+    await expect(buildProject(dir)).rejects.toThrow(/TS1294/);
+  });
+
+  it("warns of a literal credential in .mcp.json, which the package publishes", async () => {
+    const dir = project({
+      ".mcp.json": JSON.stringify({
+        mcpServers: {
+          docs: { type: "http", url: "https://mcp.example.com", headers: { Authorization: "Bearer abc" } },
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: an MCP reference, not a JavaScript template
+          files: { command: "npx", env: { TOKEN: "${FILES_TOKEN}" } },
+        },
+      }),
+    });
+    const { warnings, dist } = await buildProject(dir);
+    expect(warnings).toEqual([expect.stringContaining(".mcp.json mcpServers.docs.headers.Authorization is a literal")]);
+    expect(listing(dist)).toContain(".mcp.json");
+  });
+
+  it("packs no secret file: npm pack of dist/ holds what the build wrote", async () => {
+    const { dist } = await buildProject(project(FILES));
+    const { stdout } = await promisify(execFile)("npm", ["pack", "--dry-run", "--json"], { cwd: dist });
+    const [{ files }] = JSON.parse(stdout) as [{ files: { path: string }[] }];
+    expect(files.map((file) => file.path).sort()).toEqual(listing(dist));
+  });
+
+  it("is the build command, which prints where dist/ is", async () => {
+    const dir = project(FILES);
+    const { code, stdout, stderr } = await runInProcess(["build", dir, "--json"]);
+    expect(code, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ dist: join(dir, "dist"), name: "support", version: "1.2.0", warnings: [] });
+  });
+});
