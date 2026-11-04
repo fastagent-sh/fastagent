@@ -32,12 +32,21 @@ import type { Agent } from "../../agent-api.ts";
 import { STATE_DIRNAME, resolveStateRoot } from "../../paths.ts";
 import { type Service, serveAgent } from "../../service.ts";
 import type { DurableAgent, Unfinished } from "./agent.ts";
+import {
+  type EffectiveConfig,
+  type InstanceConfig,
+  type InstanceConfigSource,
+  readInstanceConfigFile,
+  resolveConfig,
+} from "./config.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
 import { type StorageLocking, openLockedStorage } from "./storage.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
   mcp?: McpOptions;
+  /** What the instance sets over the program's defaults (`fastagent.json`, or an object); none runs on the defaults. */
+  config?: InstanceConfigSource;
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
@@ -73,6 +82,8 @@ export interface OpenedServing {
   agent: DurableAgent;
   definition: AgentDefinition;
   code: BuiltDefinition;
+  /** The configuration this instance opened with: the program's defaults and the instance's over them. */
+  config: EffectiveConfig;
   models: ModelEnvironment;
   /** What the agent works on, resolved for this instance. */
   content: readonly ResolvedContent[];
@@ -134,6 +145,7 @@ export async function openServing(
 ): Promise<OpenedServing> {
   const { dir } = definition;
   const workdir = options.workdir ?? dir;
+  const config = resolveConfig(definition, options.config);
   // The agent's environment is ONE value every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
   const values = agentValues(workdir);
@@ -167,6 +179,7 @@ export async function openServing(
       mcpTools: mcpTools(mcp.tools),
       storage,
       code,
+      config,
       content,
       workdir,
       environment,
@@ -203,6 +216,7 @@ export async function openServing(
     agent,
     definition,
     code,
+    config,
     models,
     content,
     agentDir: workdir,
@@ -233,7 +247,9 @@ export interface ServeAgentOptions {
 /** The instance root, the agent's working directory with its state in `.state/`; or the two apart (SPEC.md §8). */
 export type InstanceLocation = { root: string } | { stateDir: string; workdir: string };
 
-export type OpenAgentOptions = InstanceLocation & {
+export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
+  /** The instance configuration, over the program's defaults: an object, or the absolute path of a `fastagent.json`. */
+  config?: InstanceConfig<Settings> | string;
   /** Per-instance MCP grants and interpolation values; no global credential discovery. */
   mcp?: McpOptions;
   /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
@@ -241,6 +257,14 @@ export type OpenAgentOptions = InstanceLocation & {
   /** Where provider credentials are kept, instead of the agent's own `.secrets/auth.json` over the machine's. */
   credentials?: CredentialStore;
 };
+
+/** The `config` input as a source: an object as it is, a path (absolute, like every path here) read. */
+async function configOf(config: OpenAgentOptions["config"]): Promise<InstanceConfigSource | undefined> {
+  if (config === undefined) return undefined;
+  if (typeof config !== "string") return { values: config, label: "the config object" };
+  if (!isAbsolute(config)) throw new Error(`config must be an absolute path, and is ${JSON.stringify(config)}`);
+  return readInstanceConfigFile(config);
+}
 
 /** Where the instance is, every path absolute: a relative one would be an input the process's cwd chooses. */
 function locationOf(location: InstanceLocation): { workdir: string; stateRoot: string } {
@@ -265,13 +289,18 @@ function locationOf(location: InstanceLocation): { workdir: string; stateRoot: s
  * serve: its code built with the secrets it declares, its environment, its content and the instance's storage, which
  * one process holds at a time. Nothing reaches the agent until `serve`.
  */
-export async function openAgent(definition: AgentDefinition, options: OpenAgentOptions): Promise<LocalAgent> {
+export async function openAgent<Settings = unknown>(
+  definition: AgentDefinition<Settings>,
+  options: OpenAgentOptions<Settings>,
+): Promise<LocalAgent> {
   const { workdir, stateRoot } = locationOf(options);
+  const config = await configOf(options.config);
   // An app may never serve the agent, and then no clock fires a wake-up: `wake` is refused until it does.
   let ticking = false;
   const opened = await openServing(assertDefinition(definition), {
     workdir,
     stateRoot,
+    ...(config === undefined ? {} : { config }),
     wakeTicking: () => ticking,
     ...(options.mcp === undefined ? {} : { mcp: options.mcp }),
     ...(options.model === undefined ? {} : { model: options.model }),

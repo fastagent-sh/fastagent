@@ -22,6 +22,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
       content: [{ name: "app", kind: "local", location: "/w/app", notices: [] }],
       models: await modelEnvironment("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
       definition: { name: "agent", config: {} },
+      config: { settings: {}, sources: {} },
       code: { tools: [{ name: "fetch-url" }], extensions: [] },
       agent: { info: () => ({ commands: [{ name: "skill:release" }] }) },
     } as unknown as Parameters<typeof reportAssembly>[0];

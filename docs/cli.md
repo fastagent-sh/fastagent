@@ -104,6 +104,8 @@ Prints what the agent builds into, without serving it:
 - the agent directory, its content (`works on`, each with its location), its environment (the packages and
   apt packages `context.json` declares), the config path, and the model with its source (`--model`,
   `FASTAGENT_MODEL` or the config) and whether it resolves,
+- the configuration the instance resolves (`config` in `--json`): each value of the program's defaults and of the
+  project's `fastagent.json`, with its source,
 - its tools, extensions, skills and commands (prompt templates and `/skill:<name>`),
 - its channels, each with how it is reached (webhook or long connection),
 - its schedules with their next fire instant,
@@ -538,12 +540,12 @@ Serves the project's `dist/`, never its source, without watching: it refuses, na
 is missing or was built from other sources than the project holds now (the build records a fingerprint of the code it
 read, the text and resources it copied and the modules `src/` lists; what an agent writes while it runs is none of
 them). It does not build on its own. Binds all interfaces by default. A serve answers its channels' routes, `GET /health`, and
-the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key and the definition does not say `http: { api: false }`;
+the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key and the definition does not say `defaults: { http: { api: false } }`;
 the startup report says whether it does, and why not
 ([Configuration](configuration.md#the-agent-api-over-http)).
 
 ```txt
-port:     --port > PORT > fastagent.config.ts http.port > 8787
+port:     --port > PORT > fastagent.config.ts defaults.http.port > 8787
 bind:     --bind > all interfaces
 state:    FASTAGENT_STATE_DIR   > <agent dir>/.state/production    (agent.sqlite, channel and schedule state)
 secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production

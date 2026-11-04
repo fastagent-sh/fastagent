@@ -138,7 +138,7 @@ describe("cli: the serving report", () => {
         } as never,
         "127.0.0.1",
         8787,
-        {},
+        { settings: {}, sources: {} },
       );
     } finally {
       (process as { send?: unknown }).send = original;

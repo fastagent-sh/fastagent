@@ -5,20 +5,15 @@
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
 import type { Extension } from "@earendil-works/pi-durable";
+import type { Schema } from "@earendil-works/pi-schema";
 import { isEnvName } from "../../declared-secrets.ts";
 import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
-export interface AgentConfig {
-  /** Default: `package.json`'s name. */
-  name?: string;
-  description?: string;
-  /** `"provider/modelId"`: what a session that names none answers with; a deployment may override it. */
+/** What an instance may set over the program's `defaults`, and what a program's `defaults` are (agent-artifact.md §3.2). */
+export interface AgentDefaults<Settings = unknown> {
+  /** `"provider/modelId"`: what a session that names none answers with; a flag or `FASTAGENT_MODEL` may override it. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
-  /** Third-party capabilities, installed after `src/extensions/`. */
-  extensions?: readonly (Extension | Needs<Extension>)[];
-  /** Model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
-  providers?: readonly (Provider | Needs<Provider>)[];
   http?: {
     /** The port a serve listens on, for its channels' webhooks and its health check. */
     port?: number;
@@ -30,10 +25,30 @@ export interface AgentConfig {
   };
   /** How the agent is deployed, where a host needs to be told. */
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
+  /** Values of the program's `settings`; an instance gives the rest. */
+  settings?: Partial<Settings>;
 }
 
+export interface AgentConfig<Settings = unknown> {
+  /** Constant: default `package.json`'s name. */
+  name?: string;
+  /** Constant. */
+  description?: string;
+  /** Constant: third-party capabilities, installed after `src/extensions/`. */
+  extensions?: readonly (Extension | Needs<Extension>)[];
+  /** Constant: model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
+  providers?: readonly (Provider | Needs<Provider>)[];
+  /** What each instance may choose, as an object schema (`obj({ ... })` from `@earendil-works/pi-schema`); no secrets. */
+  settings?: Schema<Settings>;
+  /** What an instance gets unless its configuration says otherwise. */
+  defaults?: AgentDefaults<Settings>;
+}
+
+/** The settings an `AgentConfig` declares: what `fastagent build` types a package's definition by. */
+export type SettingsOf<Config> = Config extends AgentConfig<infer Settings> ? Settings : unknown;
+
 /** @public */
-export function defineAgent(config: AgentConfig): AgentConfig {
+export function defineAgent<Settings = unknown>(config: AgentConfig<Settings>): AgentConfig<Settings> {
   return config;
 }
 

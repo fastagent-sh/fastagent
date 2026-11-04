@@ -26,7 +26,7 @@ Set one with any of:
 ```bash
 fastagent dev --model provider/modelId
 FASTAGENT_MODEL=provider/modelId fastagent dev
-# or fastagent.config.ts: { model: "provider/modelId" }
+# or fastagent.config.ts: { defaults: { model: "provider/modelId" } }
 ```
 
 Precedence:

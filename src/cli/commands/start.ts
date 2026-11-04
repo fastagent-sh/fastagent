@@ -1,7 +1,6 @@
 /** Production serving. */
 import { join, resolve } from "node:path";
 import type { Agent } from "../../agent-api.ts";
-import type { AgentConfig } from "../../harnesses/pi-durable/define.ts";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
@@ -22,7 +21,8 @@ import {
 } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
-import type { AgentDefinition } from "../../harnesses/pi-durable/definition.ts";
+import type { Project } from "../../harnesses/pi-durable/open.ts";
+import type { EffectiveConfig } from "../../harnesses/pi-durable/config.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
@@ -40,7 +40,7 @@ export interface StartOptions {
 }
 
 /** What `start` opened and serves: the agent too, for a deployment's own check of what it runs. */
-type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: number; config: AgentConfig };
+type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: number; config: EffectiveConfig };
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
@@ -154,10 +154,12 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 /** Internal entry loaded from the agent's installed package after storage initialization. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   // The build, never the source (agent-artifact.md §8): refused when there is none or the project has moved on.
-  let built: Promise<AgentDefinition> | undefined;
-  const loadBuilt = (dir: string) => (built ??= loadProjectBuild(dir, { checkSources: !isDeployedWorkspace() }));
+  let built: Promise<Project> | undefined;
+  // No instance configuration yet: a start runs on the program's defaults until `--config` names one.
+  const loadBuilt = (dir: string) =>
+    (built ??= loadProjectBuild(dir, { checkSources: !isDeployedWorkspace() }).then((definition) => ({ definition })));
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, undefined, loadBuilt);
-  const opened = await openServing(await loadBuilt(agentDir), {
+  const opened = await openServing((await loadBuilt(agentDir)).definition, {
     model: modelSpec,
     workdir: agentDir,
     // AgentCore's session storage refuses SQLite's own locks; the deployment's lease makes the dotfile lock safe.
@@ -175,7 +177,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
       "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
     );
   }
-  const { config } = opened.definition;
+  const { config } = opened;
   const service = await (isAgentcoreRuntime()
     ? mountAgentcoreService(opened)
     : serveAgent(opened, cliMountOptions(config)));

@@ -98,8 +98,8 @@ describe("login: what it says when it is done", () => {
       /this agent has no model: `model: "anthropic\/claude-opus-4-8"` in fastagent\.config\.ts uses Anthropic's default/,
     );
     expect(await readFile(join(bare, "fastagent.config.ts"), "utf8")).toBe("export default {};\n");
-    expect(await login(await agentWith(`export default { model: "openai/gpt-5.5" };\n`), false)).not.toMatch(
-      /no model/,
-    );
+    expect(
+      await login(await agentWith(`export default { defaults: { model: "openai/gpt-5.5" } };\n`), false),
+    ).not.toMatch(/no model/);
   });
 });

@@ -51,7 +51,7 @@ export default defineTool({
 `;
 
 const FILES: Record<string, string> = {
-  "fastagent.config.ts": 'export default { name: "support", model: "openai/gpt-6.1-sol" };\n',
+  "fastagent.config.ts": 'export default { name: "support", defaults: { model: "openai/gpt-6.1-sol" } };\n',
   "SYSTEM.md": "You are Support.\n",
   "AGENTS.md": "Be brief.\n",
   LICENSE: "MIT\n",
@@ -85,7 +85,9 @@ describe("fastagent build", () => {
       "SYSTEM.md",
       "build.json",
       "context.json",
+      "fastagent.config.d.ts",
       "fastagent.config.js",
+      "fastagent.schema.json",
       "index.d.ts",
       "index.js",
       "lib/shout.js",
@@ -100,7 +102,10 @@ describe("fastagent build", () => {
       name: "@acme/support",
       version: "1.2.0",
       type: "module",
-      exports: { ".": { types: "./index.d.ts", default: "./index.js" } },
+      exports: {
+        ".": { types: "./index.d.ts", default: "./index.js" },
+        "./fastagent.schema.json": "./fastagent.schema.json",
+      },
       dependencies: { lodash: "^4" },
       peerDependencies: { "@fastagent-sh/fastagent": "^0.29.0", "@earendil-works/pi-durable": "1.5.0" },
     });

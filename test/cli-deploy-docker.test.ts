@@ -7,7 +7,7 @@ import { agentWorkspace, runInProcess } from "./cli-run.ts";
 describe("cli: deploy docker", () => {
   it("deploy docker generates app-only Compose and keeps user-owned Dockerfile/Compose on re-run", async () => {
     const dir = await agentWorkspace("fa-deploy-docker-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
 
@@ -37,7 +37,7 @@ describe("cli: deploy docker", () => {
 
   it("deploy docker --tunnel keeps an existing app-only topology and prints an actionable runbook", async () => {
     const dir = await agentWorkspace("fa-deploy-kept-no-tunnel-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
     expect((await runInProcess(["deploy", "docker", dir])).code).toBe(0);
     const composePath = join(dir, "fastagent.compose.yml");
@@ -57,7 +57,7 @@ describe("cli: deploy docker", () => {
 
   it("deploy docker gates --run when FASTAGENT_SECRETS_DIR sends the values away from the committed env_file", async () => {
     const dir = await agentWorkspace("fa-deploy-secrets-dir-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
     const elsewhere = await mkdtemp(join(tmpdir(), "fa-secrets-elsewhere-"));
     const env = { ...process.env, FASTAGENT_SECRETS_DIR: elsewhere };
@@ -77,7 +77,7 @@ describe("cli: deploy docker", () => {
     // determinate mismatch between what ships and what the definition says — so it stops before Docker is touched.
     // (writeArtifacts owns WHICH files are stale; this is the dispatcher's wiring of that fact to an exit code.)
     const dir = await agentWorkspace("fa-deploy-stale-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
     expect((await runInProcess(["deploy", "docker", dir])).code).toBe(0);
     const compose = join(dir, "fastagent.compose.yml");
@@ -99,7 +99,7 @@ describe("cli: deploy docker", () => {
 
   it("deploy docker --tunnel shapes Compose but does not run Docker without --run", async () => {
     const dir = await agentWorkspace("fa-deploy-tunnel-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
     const result = await runInProcess(["deploy", "docker", dir, "--tunnel"]);
     expect(result.code).toBe(0);

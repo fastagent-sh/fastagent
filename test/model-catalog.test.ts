@@ -300,7 +300,10 @@ describe("model catalogs", () => {
 
   it("an agent whose default model only a fetched list has is refused, saying why the list is not there", async () => {
     const agent = mkdtempSync(join(tmpdir(), "fa-catalog-agent-"));
-    writeFileSync(join(agent, "fastagent.config.ts"), `export default { model: "openai/gpt-released" };\n`);
+    writeFileSync(
+      join(agent, "fastagent.config.ts"),
+      `export default { defaults: { model: "openai/gpt-released" } };\n`,
+    );
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(
@@ -342,7 +345,10 @@ describe("model catalogs", () => {
 /** An agent whose kept published catalog, fetched just now, lists `model`; its default model. */
 function agentKeeping(model: AnyModel): string {
   const agent = mkdtempSync(join(tmpdir(), "fa-catalog-agent-"));
-  writeFileSync(join(agent, "fastagent.config.ts"), `export default { model: "${model.provider}/${model.id}" };\n`);
+  writeFileSync(
+    join(agent, "fastagent.config.ts"),
+    `export default { defaults: { model: "${model.provider}/${model.id}" } };\n`,
+  );
   keepCatalog(join(resolveStateRoot(agent), "models"), [model]);
   return agent;
 }

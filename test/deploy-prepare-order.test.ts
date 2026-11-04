@@ -30,7 +30,11 @@ vi.mock("../src/cli/shared.ts", async (importOriginal) => ({
 let config: Record<string, unknown> = {};
 vi.mock("../src/harnesses/pi-durable/open.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/harnesses/pi-durable/open.ts")>()),
-  loadConfig: async () => config,
+  loadSourceDefinition: async () => ({}),
+}));
+vi.mock("../src/harnesses/pi-durable/config.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/harnesses/pi-durable/config.ts")>()),
+  resolveConfig: () => ({ settings: {}, sources: {}, ...config }),
 }));
 vi.mock("../src/harnesses/pi-durable/build.ts", () => ({ buildProject: async () => ({ warnings: [] }) }));
 vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
@@ -254,7 +258,7 @@ it("gives no key to a definition that turns the API off, and says the deployment
   await runDeploy("fly", dir, {});
   expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
   await expect(readFile(production(), "utf8")).rejects.toThrow("ENOENT");
-  expect(said.join("\n")).toContain("Agent API: not served — fastagent.config.ts says http.api: false");
+  expect(said.join("\n")).toContain("Agent API: not served — the configuration says http.api: false");
 });
 
 it("a coding agent's deploy: refused here what can be, the rest started in a ticket it joins if one runs", async () => {

@@ -20,7 +20,8 @@ import { buildProject } from "../../harnesses/pi-durable/build.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
 import { unprotectedSecretsNote } from "../../value-file.ts";
-import { loadConfig } from "../../harnesses/pi-durable/open.ts";
+import { resolveConfig } from "../../harnesses/pi-durable/config.ts";
+import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive, shellArg } from "../shared.ts";
 import { terminalPerson } from "../person.ts";
@@ -136,7 +137,10 @@ async function deploy(
   if (opts.json && !opts.run) failUsage("--json reports a deploy --run drives: pass --run too");
   selectAgentEnvironment("production");
   const { agentDir } = await enterAgentDirectory(dirArg, opts);
-  const config = await loadConfig(agentDir).catch(failStartup);
+  // The program's defaults: what a deployment carries of the configuration until a deploy delivers one of its own.
+  const config = await loadSourceDefinition(agentDir)
+    .then((definition) => resolveConfig(definition))
+    .catch(failStartup);
   // Never `dev`, whatever spawned this; and what decides a channel's shape is read here as the box will read it.
   unmarkDevServe();
   const shaped = divergentSettingsGate(

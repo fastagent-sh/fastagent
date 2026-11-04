@@ -1,3 +1,4 @@
+import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { execFileSync } from "node:child_process";
 import { hermeticGit, withGitIdentity } from "./git-env.ts";
 import { describe, expect, it } from "vitest";
@@ -143,6 +144,7 @@ describe("init: scaffoldAgent", () => {
     const agent = await assembleAgent(definition, {
       storage: new MemoryStorage(),
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
+      config: resolveConfig(definition),
       models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
       model: "faux/faux-1",
     });

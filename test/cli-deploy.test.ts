@@ -19,7 +19,7 @@ function isRunning(pid: number): boolean {
 describe("cli: deploy", () => {
   it("selects the production value file and Docker env_file without reading dev values", async () => {
     const dir = await agentWorkspace("fa-deploy-env-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
       ".secrets/.env": "FASTAGENT_MODEL=not-a-model\nFEISHU_INGRESS=websocket\nDEV_ONLY=secret\n",
       ".secrets/production/.env": "FASTAGENT_MODEL=openai/gpt-4o-mini\nPRODUCTION_ONLY=value\n",
     });
@@ -35,7 +35,7 @@ describe("cli: deploy", () => {
 
   it("an unattended first deploy requires production app values rather than reusing the dev app", async () => {
     const dir = await agentWorkspace("fa-deploy-new-app-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
       ".secrets/.env": "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\nFEISHU_VERIFICATION_TOKEN=dev_token\n",
       // As \`needs\` returns it, so the fixture needs no package of its own.
       "src/channels/feishu.mjs": `export default {
@@ -67,7 +67,7 @@ describe("cli: deploy", () => {
     // test/deploy-artifacts.test.ts; eight spawns proving it here made this the slowest and only flaky
     // test in the suite. What a subprocess is for is the WIRING: that the command actually consults it.
     const dir = await agentWorkspace("fa-deploy-ignore-", {
-      "fastagent.config.ts": `export default { model: "${CODEX_MODEL}" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "${CODEX_MODEL}" } };\n`,
       "package.json": `{"type":"module"}`,
     });
     expect((await runInProcess(["deploy", "fly", dir])).code).toBe(0);
@@ -91,7 +91,7 @@ describe("cli: deploy", () => {
     // Every AgentCore deploy wipes the runtime's login; with nobody to redo it, the deploy would replace a serving
     // runtime with one that cannot answer. Decided up front, so no AWS command runs at all.
     const dir = await agentWorkspace("fa-deploy-ac-login-", {
-      "fastagent.config.ts": `export default { model: "${CODEX_MODEL}" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "${CODEX_MODEL}" } };\n`,
     });
     const bin = await mkdtemp(join(tmpdir(), "fa-aws-"));
     const called = join(bin, "called");
@@ -111,7 +111,7 @@ describe("cli: deploy", () => {
 
   it("deploy agentcore --run --json goes on past that stop: its ticket has someone to redo the login", async () => {
     const dir = await agentWorkspace("fa-deploy-ac-ticket-", {
-      "fastagent.config.ts": `export default { model: "${CODEX_MODEL}" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "${CODEX_MODEL}" } };\n`,
     });
     const bin = await mkdtemp(join(tmpdir(), "fa-aws-"));
     const called = join(bin, "called");
@@ -142,7 +142,7 @@ describe("cli: deploy", () => {
     ],
   ])("deploy %s --run --json hands a signed-out host CLI's sign-in to the person", async (host, body, expected) => {
     const dir = await agentWorkspace(`fa-deploy-${host}-login-`, {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
       ".secrets/production/.env": "OPENAI_API_KEY=sk\n",
     });
     const bin = await mkdtemp(join(tmpdir(), "fa-host-cli-"));
@@ -180,7 +180,7 @@ describe("cli: deploy", () => {
 
   it("deploy: generate mode succeeds with the WYSIWYG note; the agentDir config key is retired", async () => {
     const dir = await agentWorkspace("fa-deploy-gen-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
     const result = await runInProcess(["deploy", "fly", dir]);
     expect(result.code).toBe(0);
@@ -209,7 +209,7 @@ describe("cli: deploy", () => {
     // from container.ts (single source).
     const setup = async (dockerfileContent: string) => {
       const dir = await agentWorkspace("fa-kept-", {
-        "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+        "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
         Dockerfile: dockerfileContent,
       });
       await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");

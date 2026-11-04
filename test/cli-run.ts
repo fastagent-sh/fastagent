@@ -208,7 +208,7 @@ const reply = (context, _options, _state, model) => {
   return fauxAssistantMessage(model.id === "m1" ? "seen " + seen : "seen " + seen + " by " + model.id);
 };
 faux.setResponses(Array.from({ length: 50 }, () => reply));
-export default { model: "gw/m1", providers: [faux.provider] };
+export default { defaults: { model: "gw/m1" }, providers: [faux.provider] };
 `;
 
 /** The agent in `dir` given this repository's dependencies, for a config that imports them. */

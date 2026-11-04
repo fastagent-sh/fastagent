@@ -2,6 +2,7 @@
  * A definition assembled onto pi-durable: the definition as a value, its declared secrets, the text read per request
  * (SYSTEM.md, AGENTS.md, skills loaded as pi loads them, prompt templates), and the code built with its secrets.
  */
+import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -58,7 +59,7 @@ export const faux = fauxProvider({ provider: "fixture", models: [{ id: "m" }] })
 const FILES: Record<string, string> = {
   "model.ts": MODEL_MODULE,
   "fastagent.config.ts": `import { faux } from "./model.ts";
-export default { model: "fixture/m", thinkingLevel: "low", providers: [faux.provider] };
+export default { defaults: { model: "fixture/m", thinkingLevel: "low" }, providers: [faux.provider] };
 `,
   "SYSTEM.md": "You are Support.\n",
   "AGENTS.md": "Be brief.\n",
@@ -231,14 +232,20 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
     const configured = (config: string) =>
       loadSourceDefinition(agentPackage({ "fastagent.config.ts": `export default ${config};\n` }));
     await expect(configured("{ modle: 'a/b' }")).rejects.toThrow('unknown key "modle"');
-    // Below the top level too: a nested typo is as silent as a top-level one.
-    await expect(configured("{ http: { prot: 80 } }")).rejects.toThrow('"http": unknown key "prot" (keys: port, api)');
-    await expect(configured("{ http: { port: 70000 } }")).rejects.toThrow('"http.port" must be an integer 0-65535');
-    await expect(configured("{ deploy: { agentcore: { idleTimeoutSeconds: 30 } } }")).rejects.toThrow(
-      '"deploy.agentcore.idleTimeoutSeconds" must be an integer 60-1209600',
+    // A default the program used to declare as a constant says where it went.
+    await expect(configured("{ model: 'a/b' }")).rejects.toThrow(
+      'unknown key "model": it is a default now, under "defaults"',
     );
-    await expect(configured("{ deploy: { fly: {} } }")).rejects.toThrow('"deploy": unknown key "fly"');
-    await expect(configured("{ http: { api: 'no' } }")).rejects.toThrow('"http.api" must be true or false');
+    // Below the top level too: a nested typo is as silent as a top-level one.
+    const defaults = (values: string) => configured(`{ defaults: ${values} }`);
+    await expect(defaults("{ http: { prot: 80 } }")).rejects.toThrow("defaults: /http/prot unknown field");
+    await expect(defaults("{ http: { port: 70000 } }")).rejects.toThrow("defaults: /http/port expected <= 65535");
+    await expect(defaults("{ deploy: { agentcore: { idleTimeoutSeconds: 30 } } }")).rejects.toThrow(
+      "/deploy/agentcore/idleTimeoutSeconds expected >= 60",
+    );
+    await expect(defaults("{ deploy: { fly: {} } }")).rejects.toThrow("/deploy/fly unknown field");
+    await expect(defaults("{ http: { api: 'no' } }")).rejects.toThrow("/http/api");
+    await expect(defaults("{ model: 'nomodel' }")).rejects.toThrow('/model must be "provider/modelId"');
   });
 
   describe("opened", () => {
@@ -256,6 +263,7 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
         storage: new MemoryStorage(),
         models: modelsOver(new InMemoryCredentialStore(), code.providers),
         code,
+        config: resolveConfig(definition),
         ...options,
       });
       opened.push(agent);

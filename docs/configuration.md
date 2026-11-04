@@ -9,7 +9,8 @@ status: current
 - Agent behavior lives in its prompt files (`SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/` and its code under
   `src/`, all in the agent directory.
 - What it works on, its content, and the commands it runs, its environment, are declared in `context.json`.
-- The model, providers and serving choices live in `fastagent.config.ts`, CLI flags, and environment variables.
+- The model, providers and serving choices live in `fastagent.config.ts` (constants and defaults), an instance's
+  `fastagent.json`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
 ## Config file
@@ -20,35 +21,55 @@ An agent is identified by one filename, `fastagent.config.ts`:
 import { defineAgent } from "@fastagent-sh/fastagent";
 
 export default defineAgent({
-  model: "openai/gpt-5.5",
-  http: { port: 8787 },
+  defaults: {
+    model: "openai/gpt-5.5",
+    http: { port: 8787 },
+  },
 });
 ```
 
 `defineAgent` returns what it is given, typed. A scaffolded agent writes `export default { … } satisfies AgentConfig`
 with a type-only import instead, so it opens before `npm install`. Every key is optional; an unknown key, nested ones
-included, refuses the start.
+included, refuses the start. The constants say what the program is and an instance cannot change them; `defaults` is
+what an instance starts with, which its own configuration may override ([instance configuration](#instance-configuration)).
 
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | `package.json`'s name | The agent's name, as `info()` reports it. |
 | `description` | none | One line about the agent, as `info()` reports it. |
-| `model` | none | Default model spec, `provider/modelId` ([model selection](#model-selection)). |
-| `thinkingLevel` | the harness's | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. |
 | `providers` | `[]` | Model providers beyond pi-ai's built-ins: a self-hosted endpoint, a gateway ([custom models](#custom-models)). A provider with a built-in's id replaces it. |
 | `extensions` | `[]` | Third-party pi-durable extensions, installed after `src/extensions/` ([extensions](#extensions)). |
-| `http.port` | `8787` | Default port for `dev` / `start`. |
-| `http.api` | `true` | Whether a serve answers the [Agent API](#the-agent-api-over-http) under `/v1` with a key: `dev`, `start` and every deployment, which `deploy` gives a key. `false` keeps them to their channels and schedules, whatever key their environment holds, a host's from an earlier deploy included. Not served on AgentCore either way. |
-| `deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM (60–1209600 s). Memory bills for the idle tail; a session past it cold-starts. Changing it changes the template, so a kept `agentcore.template.yaml` needs `--force`. |
+| `settings` | none | The values each instance may choose, as an object schema built with `@earendil-works/pi-schema` (`obj({ repo: str() })`). No secrets: those are `needs`. |
+| `defaults.model` | none | Default model spec, `provider/modelId` ([model selection](#model-selection)). |
+| `defaults.thinkingLevel` | the harness's | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. |
+| `defaults.settings` | none | Values of `settings`, for the keys an instance need not give. |
+| `defaults.http.port` | `8787` | Default port for `dev` / `start`. |
+| `defaults.http.api` | `true` | Whether a serve answers the [Agent API](#the-agent-api-over-http) under `/v1` with a key: `dev`, `start` and every deployment, which `deploy` gives a key. `false` keeps them to their channels and schedules, whatever key their environment holds, a host's from an earlier deploy included. Not served on AgentCore either way. |
+| `defaults.deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM (60–1209600 s). Memory bills for the idle tail; a session past it cold-starts. Changing it changes the template, so a kept `agentcore.template.yaml` needs `--force`. |
 
 A provider or extension that reads a secret is wrapped in [`needs`](#secrets-in-code), like any module.
+
+### Instance configuration
+
+An instance sets its own values over the defaults in a `fastagent.json`: `model`, `thinkingLevel`, `http`, `deploy`
+and `settings` (the program's `settings`, partly: the defaults give the rest). Objects merge key by key and arrays
+replace. `fastagent dev` reads the `fastagent.json` at the project root when there is one; `fastagent start` reads none
+yet and runs on the defaults; an app gives `openAgent` a `config` object, or the absolute path of such a file. An
+unknown key, a value of the wrong type and a required setting no one gave each refuse the open, naming the file and the
+path (`fastagent.json: /http/port expected <= 65535`). `content`, `instructions`, `skills` and `prompts` are in the
+design but not read by this release, and are refused by name.
+
+`fastagent build` writes the JSON Schema of this file, with the program's `settings` in it, as `fastagent.schema.json`
+beside the package. Point an editor at it with `"$schema": "./node_modules/<package>/fastagent.schema.json"`.
+`fastagent info --json` reports the resolved values, each with its source: the program's defaults, the instance's file,
+or `--model` / `FASTAGENT_MODEL`.
 
 ## Model selection
 
 Model specs are `provider/modelId`. List them with `fastagent models [search]`.
 
 ```txt
-CLI --model > FASTAGENT_MODEL > fastagent.config.ts model
+CLI --model > FASTAGENT_MODEL > the instance's fastagent.json model > fastagent.config.ts defaults.model
 ```
 
 With none set, a serving command (`dev` / `start` / `invoke`) in a terminal shows the model catalog (providers with
@@ -98,7 +119,7 @@ import { defineAgent, needs } from "@fastagent-sh/fastagent";
 const baseUrl = "http://vllm.internal:8000/v1";
 
 export default defineAgent({
-  model: "mygw/deepseek-v3",
+  defaults: { model: "mygw/deepseek-v3" },
   providers: [
     needs(["MYGW_API_KEY"], ({ MYGW_API_KEY }) =>
       createProvider({

@@ -271,6 +271,8 @@ src/
     │   │                   # where SQLite's own locks fail
     │   ├── define.ts       # what an author writes: defineAgent, needs (secrets beside the code that reads them),
     │   │                   # defineSchedule
+    │   ├── config.ts       # the instance configuration: one JSON Schema, the program's defaults with an instance's over
+    │   │                   # them, each value with its source; `fastagent.schema.json`
     │   ├── definition.ts   # a definition as one frozen value: what dev loads and a build exports, its declared inputs
     │   ├── build.ts        # `fastagent build`: the project's tsc into dist/, the text and resources, the generated entry
     │   ├── built.ts        # what dist/ is: which files go into it, the build record `start` checks the project against,

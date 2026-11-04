@@ -1,120 +1,244 @@
-import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+/**
+ * The configuration of an instance (agent-artifact.md §3.2, §4.2): the program's defaults, an instance's values over
+ * them, the settings checked against the program's schema, each value with its source. What a reader of the resolved
+ * configuration does with it is that reader's test.
+ */
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { GLOBAL_AUTH_PATH, resolveAuthLayers, resolveAuthPath } from "../src/harnesses/models/credentials.ts";
-import { modelEnvironment } from "../src/harnesses/models/environment.ts";
-import { probeAuthSource } from "../src/harnesses/models/models.ts";
-import { modelSpecFor } from "../src/harnesses/pi-durable/open.ts";
-import { resolveSecretsDir, resolveStateRoot } from "../src/paths.ts";
+import { join } from "node:path";
+import { compile, int, obj, opt, str } from "@earendil-works/pi-schema";
+import { afterAll, describe, expect, it } from "vitest";
+import { buildProject } from "../src/harnesses/pi-durable/build.ts";
+import { instanceConfigSchema, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
+import { type AgentDefinition, defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
+import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
+import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { buildable, runInProcess } from "./cli-run.ts";
+import { FIXTURES } from "./probe-package.ts";
 
-describe("config: resolveStateRoot / resolveSecretsDir (the machinery dirs)", () => {
-  it("env overrides; default is the absolute in-tree .state; ~ expands", async () => {
-    const env = { FASTAGENT_STATE_DIR: "/data" } as NodeJS.ProcessEnv;
-    expect(resolveStateRoot("/app", env)).toBe("/data"); // env wins
-    expect(resolveStateRoot("relative/dir", {} as NodeJS.ProcessEnv)).toBe(resolve("relative/dir", ".state")); // absolute default
-    const { homedir } = await import("node:os");
-    expect(resolveStateRoot("/app", { FASTAGENT_STATE_DIR: "~/state" } as NodeJS.ProcessEnv)).toBe(
-      join(homedir(), "state"),
-    );
-    // A RELATIVE override is an operator knob — anchored on cwd (its sibling knobs' convention), NOT on
-    // `dir`; only the default is dir-anchored. So it ignores `dir` and resolves against process.cwd().
-    expect(resolveStateRoot("/app", { FASTAGENT_STATE_DIR: "state" } as NodeJS.ProcessEnv)).toBe(resolve("state"));
+const made: string[] = [];
+afterAll(() => {
+  for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+
+const SETTINGS = obj({ repo: str(), digestChannel: opt(str()), retries: opt(int({ minimum: 0 })) });
+
+const program = (config: object) =>
+  defineDefinition({
+    format: 1,
+    builtWith: "0.0.0",
+    name: "reviewer",
+    version: "1.0.0",
+    dir: "/program",
+    config,
+    registry: { tools: [], extensions: [], channels: [], schedules: [] },
   });
 
-  it("secrets: FASTAGENT_SECRETS_DIR wins; default is the in-tree .secrets; auth derives from it", () => {
-    expect(resolveSecretsDir("/app", {} as NodeJS.ProcessEnv)).toBe("/app/.secrets");
-    expect(resolveSecretsDir("/app", { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv)).toBe(
-      "/data/.secrets",
-    );
-    expect(resolveAuthPath("/app", undefined, { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv)).toBe(
-      "/data/.secrets/auth.json",
-    );
+const reviewer = program({
+  settings: SETTINGS,
+  defaults: {
+    model: "openai/gpt-5.5",
+    thinkingLevel: "high",
+    http: { port: 8787, api: true },
+    settings: { digestChannel: "#general" },
+  },
+});
+
+const instance = (values: unknown) => ({ values, label: "fastagent.json" });
+
+describe("resolveConfig", () => {
+  it("is the program's defaults, each from the program, when no instance gives any", () => {
+    const config = resolveConfig(program({ defaults: { model: "a/b", http: { port: 9000 } } }));
+    expect(config).toMatchObject({ model: "a/b", http: { port: 9000 }, settings: {} });
+    expect(config.sources).toEqual({ model: "program default", "http.port": "program default" });
   });
 
-  it("the global home carries the same shape, with no special case in the resolvers", async () => {
-    // `login` outside any agent hands them `~/.fastagent` directly, so `~/.state` / `~/.secrets` can
-    // never be created — not because the resolvers check for $HOME, but because nobody passes it.
-    const { homedir } = await import("node:os");
-    const global = join(homedir(), ".fastagent");
-    expect(resolveStateRoot(global, {} as NodeJS.ProcessEnv)).toBe(join(global, ".state"));
-    expect(resolveSecretsDir(global, {} as NodeJS.ProcessEnv)).toBe(join(global, ".secrets"));
+  it("puts an instance over the defaults key by key: objects merge, so a port leaves api alone", () => {
+    const config = resolveConfig(
+      reviewer,
+      instance({ model: "anthropic/claude-x", http: { port: 9000 }, settings: { repo: "acme/api" } }),
+    );
+    expect(config).toMatchObject({
+      model: "anthropic/claude-x",
+      thinkingLevel: "high",
+      http: { port: 9000, api: true },
+      settings: { repo: "acme/api", digestChannel: "#general" },
+    });
+    expect(config.sources).toEqual({
+      model: "fastagent.json",
+      thinkingLevel: "program default",
+      "http.port": "fastagent.json",
+      "http.api": "program default",
+      "settings.repo": "fastagent.json",
+      "settings.digestChannel": "program default",
+    });
+  });
+
+  it("replaces an array whole rather than merging it", () => {
+    const tagged = program({
+      settings: obj({ tags: opt({ type: "array", items: { type: "string" } } as never) }),
+      defaults: { settings: { tags: ["a", "b"] } },
+    });
+    expect(resolveConfig(tagged, instance({ settings: { tags: ["c"] } })).settings).toEqual({ tags: ["c"] });
+  });
+
+  it.each([
+    ["a key the shape does not have", { modle: "a/b" }, "fastagent.json: /modle unknown field"],
+    ["a port out of range", { http: { port: 70000 } }, "/http/port expected <= 65535"],
+    ["a model that is not provider/modelId", { model: "nomodel" }, '/model must be "provider/modelId"'],
+    ["a setting the program does not declare", { settings: { team: "x" } }, "/settings/team unknown field"],
+    ["a setting of the wrong type", { settings: { repo: 7 } }, "/settings/repo"],
+    ["content, which a later release reads", { content: {} }, "content is not read by this FastAgent yet"],
+  ])("refuses %s, naming the file and the path", (_what, values, message) => {
+    expect(() => resolveConfig(reviewer, instance({ settings: { repo: "r" }, ...values }))).toThrow(message);
+  });
+
+  it("refuses a configuration that is not an object", () => {
+    expect(() => resolveConfig(reviewer, instance([]))).toThrow("fastagent.json: (the value)");
+  });
+
+  it("refuses a required setting no one gave, naming it, and accepts it once the instance does", () => {
+    expect(() => resolveConfig(reviewer)).toThrow("the settings of reviewer: /repo missing");
+    expect(() => resolveConfig(reviewer, instance({ settings: {} }))).toThrow("/repo missing");
+    expect(resolveConfig(reviewer, instance({ settings: { repo: "r" } })).settings).toMatchObject({ repo: "r" });
+  });
+
+  it("gives a program with no settings schema none to set", () => {
+    expect(() => resolveConfig(program({}), instance({ settings: { x: 1 } }))).toThrow("/settings/x unknown field");
   });
 });
 
-describe("models: modelEnvironment honors authPath (the project-level credential seam)", () => {
-  it("reads a stored credential from the GIVEN file, not the global default or env", async () => {
-    // Point modelEnvironment at a path and it must read THAT file. "stored credential" (not the
-    // "ANTHROPIC_API_KEY" env label) proves the file at authPath won — so an empty project file
-    // genuinely reads as not-configured, which is what the startup auth report keys on.
-    const path = join(await mkdtemp(join(tmpdir(), "fa-auth-")), "auth.json");
-    await writeFile(path, JSON.stringify({ anthropic: { type: "api_key", key: "sk-test" } }));
-    expect(
-      await probeAuthSource(
-        (await modelEnvironment(undefined, { authPath: path })).models,
-        "anthropic/claude-sonnet-4-5",
-      ),
-    ).toBe("stored credential");
+describe("instanceConfigSchema", () => {
+  it("accepts what resolves and refuses what does not, with the settings partial", () => {
+    const check = compile(instanceConfigSchema(SETTINGS));
+    expect(check.check({ $schema: "./x.json", model: "a/b", settings: { repo: "r" } })).toBe(true);
+    expect(check.check({ settings: {} })).toBe(true);
+    expect(check.check({ settings: { repo: 1 } })).toBe(false);
+    expect(check.check({ http: { port: -1 } })).toBe(false);
   });
 });
 
-describe("config: resolveAuthPath (auth-file precedence)", () => {
-  it("precedence: the authPath option > FASTAGENT_AUTH_PATH > the agent default; a given value goes absolute", () => {
-    // Asserted through the ONE function commands call, not its internal override step: same coverage,
-    // one less export existing only for a test.
-    const env = { FASTAGENT_AUTH_PATH: "envauth.json" } as NodeJS.ProcessEnv;
-    expect(resolveAuthPath("/app", "flagauth.json", env)).toBe(resolve("flagauth.json")); // flag beats env
-    expect(resolveAuthPath("/app", undefined, env)).toBe(resolve("envauth.json")); // env when no flag
-    expect(resolveAuthPath("/app", undefined, {} as NodeJS.ProcessEnv)).toBe("/app/.secrets/auth.json"); // neither
-    expect(resolveAuthPath("/app", "/abs/auth.json", {} as NodeJS.ProcessEnv)).toBe("/abs/auth.json"); // absolute kept
+describe("a project's configuration", () => {
+  const project = (files: Record<string, string>) => {
+    const dir = mkdtempSync(join(FIXTURES, ".tmp-config-"));
+    made.push(dir);
+    writeFileSync(join(dir, "fastagent.config.ts"), "export default {};\n");
+    for (const [name, text] of Object.entries({ "SYSTEM.md": "x\n", ...files })) {
+      mkdirSync(join(dir, name, ".."), { recursive: true });
+      writeFileSync(join(dir, name), text);
+    }
+    return dir;
+  };
+  // A literal, as the scaffold writes it: only pi-schema is imported, so the build reads no FastAgent source.
+  const CONFIG = `import { obj, opt, str } from "@earendil-works/pi-schema";
+export default {
+  settings: obj({ repo: str(), digestChannel: opt(str()) }),
+  defaults: { model: "openai/gpt-5.5", settings: { digestChannel: "#general" } },
+};
+`;
+
+  it("refuses a configuration whose defaults break its own shape, at load and so at build", async () => {
+    const dir = project({ "fastagent.config.ts": `export default { defaults: { http: { port: "x" } } };\n` });
+    await expect(loadSourceDefinition(dir)).rejects.toThrow("fastagent.config.ts defaults: /http/port");
+    const settings = project({ "fastagent.config.ts": `export default { settings: { type: "string" } };\n` });
+    await expect(loadSourceDefinition(settings)).rejects.toThrow('"settings" must be an object schema');
   });
 
-  it("resolveAuthLayers layers the global store under the DEFAULT path only", () => {
-    // "Use this file" is an instruction, so an explicitly named path gets no second layer; the default location is
-    // a preference, so it reads the user-global store for providers it does not have.
-    const fallback = (authPath: string | undefined, env: Record<string, string>) =>
-      resolveAuthLayers("/app", authPath, env as NodeJS.ProcessEnv).fallback;
-    expect(fallback(undefined, {})).toBe(GLOBAL_AUTH_PATH);
-    expect(fallback("flagauth.json", {})).toBeUndefined();
-    expect(fallback(undefined, { FASTAGENT_AUTH_PATH: "env.json" })).toBeUndefined();
-    // FASTAGENT_SECRETS_DIR names the file just as explicitly, and is what the Fly/Railway/AgentCore artifacts set:
-    // a deployed container reads its mounted credentials, never a second layer under its own $HOME.
-    expect(fallback(undefined, { FASTAGENT_SECRETS_DIR: "/data/.secrets" })).toBeUndefined();
+  it("is reported by `info --json` with the source of each value, `fastagent.json` at the root over the defaults", async () => {
+    const dir = project({
+      "fastagent.config.ts": CONFIG,
+      "fastagent.json": JSON.stringify({ http: { port: 9001 }, settings: { repo: "acme/api" } }),
+    });
+    await buildable(dir);
+    const result = await runInProcess(["info", dir, "--json"]);
+    expect(result.code).toBe(0);
+    const { config } = JSON.parse(result.stdout) as { config: Record<string, { value: unknown; source: string }> };
+    expect(config).toEqual({
+      model: { value: "openai/gpt-5.5", source: "program default" },
+      "http.port": { value: 9001, source: join(dir, "fastagent.json") },
+      "settings.digestChannel": { value: "#general", source: "program default" },
+      "settings.repo": { value: "acme/api", source: join(dir, "fastagent.json") },
+    });
+    const flagged = JSON.parse((await runInProcess(["info", dir, "--json", "--model", "openai/gpt-4o"])).stdout);
+    expect(flagged.config.model).toEqual({ value: "openai/gpt-4o", source: "--model" });
   });
 
-  it("resolveAuthPath falls back to the workspace project auth file (not the global default)", () => {
-    expect(resolveAuthPath("/app", undefined, {} as NodeJS.ProcessEnv)).toBe("/app/.secrets/auth.json");
-    expect(resolveAuthPath("/app", undefined, { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv)).toBe(
-      "/data/.secrets/auth.json",
+  it("refuses a dev instance that lacks a required setting, naming it", async () => {
+    const dir = project({ "fastagent.config.ts": CONFIG });
+    await buildable(dir);
+    const result = await runInProcess(["info", dir, "--json"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("the settings of");
+    expect(result.stderr).toContain("/repo missing");
+  });
+
+  it("is opened by `openAgent` from an object or an absolute path, and refuses a relative one", async () => {
+    const dir = project({ "fastagent.config.ts": CONFIG });
+    await buildable(dir);
+    const { dist } = await buildProject(dir);
+    const { loadBuiltDefinition } = await import("../src/harnesses/pi-durable/built.ts");
+    const definition = await loadBuiltDefinition(dist);
+    const root = mkdtempSync(join(tmpdir(), "fa-config-open-"));
+    made.push(root);
+    await expect(openAgent(definition, { root })).rejects.toThrow("/repo missing");
+    await expect(openAgent(definition, { root, config: "fastagent.json" })).rejects.toThrow(
+      "config must be an absolute path",
     );
-    expect(resolveAuthPath("/app", "flag-auth.json", {} as NodeJS.ProcessEnv)).toBe(resolve("flag-auth.json"));
+    writeFileSync(join(root, "instance.json"), JSON.stringify({ settings: { repo: "acme/api" } }));
+    const agent = await openAgent(definition, { root, config: join(root, "instance.json") });
+    await agent.close();
+    const second = await openAgent(definition, { root, config: { settings: { repo: "acme/web" } } });
+    await second.close();
+    await expect(openAgent(definition, { root, config: join(root, "missing.json") })).rejects.toThrow(
+      "cannot read the instance configuration",
+    );
   });
 
-  it("expands a leading ~ to the home dir (a .env value never gets the shell's expansion)", async () => {
-    const { homedir } = await import("node:os");
-    const env = { FASTAGENT_AUTH_PATH: "~/.fastagent/auth.json" } as NodeJS.ProcessEnv;
-    // the footgun this guards: a bare resolve("~/x") makes a literal `<cwd>/~` dir and the secret lands there
-    expect(resolveAuthPath("/app", undefined, env)).toBe(join(homedir(), ".fastagent", "auth.json"));
-    expect(resolveAuthPath("/app", "~", {} as NodeJS.ProcessEnv)).toBe(homedir());
-    expect(resolveStateRoot("/app", { FASTAGENT_STATE_DIR: "~/s" } as NodeJS.ProcessEnv)).toBe(join(homedir(), "s"));
+  it("publishes the JSON Schema of an instance's file beside the package, settings included", async () => {
+    const dir = project({ "fastagent.config.ts": CONFIG });
+    await buildable(dir);
+    const { dist } = await buildProject(dir);
+    const schema = JSON.parse((await import("node:fs")).readFileSync(join(dist, "fastagent.schema.json"), "utf8"));
+    expect(schema.properties.settings.properties).toHaveProperty("repo");
+    expect(schema.properties.settings.required).toBeUndefined();
+    expect(schema.additionalProperties).toBe(false);
   });
 });
 
-describe("config: modelSpecFor (precedence flag > env > config)", () => {
-  it("flag beats env, env beats config", () => {
-    const env = { FASTAGENT_MODEL: "e/m" } as NodeJS.ProcessEnv;
-    expect(modelSpecFor({ model: "c/m" }, "f/m", env)).toBe("f/m");
-    expect(modelSpecFor({ model: "c/m" }, undefined, env)).toBe("e/m");
-    expect(modelSpecFor({ model: "c/m" }, undefined, {} as NodeJS.ProcessEnv)).toBe("c/m");
-    expect(modelSpecFor({}, undefined, env)).toBe("e/m");
-    expect(modelSpecFor({}, undefined, {} as NodeJS.ProcessEnv)).toBeUndefined();
-  });
-
-  it("an EMPTY FASTAGENT_MODEL is unset, not a veto over config.model", () => {
-    // `export FASTAGENT_MODEL=` in a shell or CI job, and a hand-written compose/env entry interpolating a missing
-    // variable, both arrive as "": shadowing config.model there would refuse to start a correctly configured agent.
-    const empty = { FASTAGENT_MODEL: "" } as NodeJS.ProcessEnv;
-    expect(modelSpecFor({ model: "c/m" }, undefined, empty)).toBe("c/m");
-    expect(modelSpecFor({}, undefined, empty)).toBeUndefined();
+describe("a built package's types", () => {
+  it("types the definition by the program's settings, which tsc checks an embedder's config against", async () => {
+    const dir = mkdtempSync(join(FIXTURES, ".tmp-config-types-"));
+    made.push(dir);
+    writeFileSync(join(dir, "package.json"), '{"name":"typed","type":"module"}');
+    writeFileSync(
+      join(dir, "fastagent.config.ts"),
+      `import { obj, opt, str } from "@earendil-works/pi-schema";
+export default { settings: obj({ repo: str(), digestChannel: opt(str()) }), defaults: {} };
+`,
+    );
+    await buildable(dir);
+    const { dist } = await buildProject(dir);
+    const declaration = readFileSync(join(dist, "index.d.ts"), "utf8");
+    expect(declaration).toContain("AgentDefinition<SettingsOf<typeof config>>");
+    expect(readFileSync(join(dist, "fastagent.config.d.ts"), "utf8")).toContain("repo: string");
+    const plain = mkdtempSync(join(FIXTURES, ".tmp-config-plain-"));
+    made.push(plain);
+    writeFileSync(join(plain, "package.json"), '{"name":"plain","type":"module"}');
+    await buildable(plain);
+    expect(readFileSync(join((await buildProject(plain)).dist, "index.d.ts"), "utf8")).toContain(
+      "declare const definition: AgentDefinition;",
+    );
   });
 });
+
+// Checked by `tsc`, which runs over the tests: a definition typed by its settings types an embedder's `config`.
+declare const typed: AgentDefinition<{ repo: string; digestChannel?: string }>;
+const typedSettings = () => [
+  openAgent(typed, { root: "/instance", config: { settings: { repo: "acme/api" } } }),
+  // @ts-expect-error a setting the program does not declare
+  openAgent(typed, { root: "/instance", config: { settings: { repoo: "acme/api" } } }),
+  // @ts-expect-error a setting of the wrong type
+  openAgent(typed, { root: "/instance", config: { settings: { repo: 7 } } }),
+];
+
+void typedSettings;

@@ -28,7 +28,8 @@ import {
   loginStatusText,
 } from "../../harnesses/models/login.ts";
 import { environmentAuth, keyVariables, loginProviders } from "../../harnesses/models/models.ts";
-import { definitionProviders, loadConfig, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
+import { resolveConfig } from "../../harnesses/pi-durable/config.ts";
+import { definitionProviders, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { loginOnBox, ticketLoginIO } from "../box-login.ts";
 import { deploymentLoginCommand } from "../../deploy/box-shell.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
@@ -206,7 +207,9 @@ function secondsOf(value: string): number {
  * sign-in. Printed, never written: the model belongs in the author's own config.
  */
 async function defaultModelHint(agentDir: string, provider: string): Promise<string | undefined> {
-  const config = await loadConfig(agentDir).catch(failStartup);
+  const config = await loadDevProject(agentDir)
+    .then(({ definition, instance }) => resolveConfig(definition, instance))
+    .catch(failStartup);
   if (modelSpecFor(config, undefined) !== undefined) return undefined;
   const modelId = PI_DEFAULT_MODELS[provider];
   return modelId === undefined ? undefined : `${provider}/${modelId}`;

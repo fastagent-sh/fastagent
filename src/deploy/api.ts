@@ -4,7 +4,7 @@
  * which then travels with every other value. And what a deploy reports of it.
  */
 import { randomBytes } from "node:crypto";
-import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
+import type { EffectiveConfig } from "../harnesses/pi-durable/config.ts";
 import { API_PREFIX } from "../http/contract.ts";
 import { API_KEY_VARIABLE, API_TURNED_OFF, apiKeysFrom, apiTurnedOff } from "../http/server.ts";
 import { writeValues } from "../value-file.ts";
@@ -18,7 +18,7 @@ export type DeploymentApi = { served: true; generatesKey: boolean } | { served: 
  * same setting.
  */
 export function deploymentApi(input: {
-  config: AgentConfig;
+  config: EffectiveConfig;
   /** The host serves the API at all: not AgentCore, reached only through `/invocations`. */
   hostServes: boolean;
   values: ReadonlyMap<string, string>;

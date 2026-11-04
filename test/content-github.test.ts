@@ -1,3 +1,4 @@
+import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { runInProcess } from "./cli-run.ts";
 /**
  * GitHub content against a local stand-in for GitHub (github-standin.ts): a checkout of the user's that this machine
@@ -439,6 +440,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     const running = await assembleAgent(definition, {
       storage: new MemoryStorage(),
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
+      config: resolveConfig(definition),
       models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
       model: "faux/faux-1",
       content,

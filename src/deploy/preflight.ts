@@ -16,7 +16,7 @@ import {
   providerOf,
 } from "../harnesses/models/models.ts";
 import { modelEnvironment } from "../harnesses/models/environment.ts";
-import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
+import type { EffectiveConfig } from "../harnesses/pi-durable/config.ts";
 import { type AgentDefinition, definitionSecrets } from "../harnesses/pi-durable/definition.ts";
 import { type BuiltDefinition, buildDefinitionShape, loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { LOCAL_CONTEXT_FILE, exists } from "../paths.ts";
@@ -157,7 +157,7 @@ class DeployGate {
 
 interface PreflightInput {
   agentDir: string;
-  config: AgentConfig;
+  config: EffectiveConfig;
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
   /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
@@ -599,7 +599,7 @@ function checkKeptDockerfile(
  * baked rather than delivered as one more platform variable that nothing would ever clear.
  */
 function resolveDeployModel(
-  config: AgentConfig,
+  config: EffectiveConfig,
   values: ReadonlyMap<string, string>,
   /** The value file AS READ (it follows `FASTAGENT_SECRETS_DIR`), so the reported source is the real one. */
   valueFile: string,

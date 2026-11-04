@@ -139,22 +139,24 @@ async function remoteSession(
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
   if (opts.url !== undefined) return runRemoteInvoke(message, dirArg, { ...opts, url: opts.url });
   if (opts.key !== undefined) failUsage("--key is the key --url calls with: pass --url too");
-  const [{ openServing }, { loadSourceDefinition }, { enterAgentCommand, reportAuth }] = await Promise.all([
+  const [{ openServing }, { loadDevProject }, { enterAgentCommand, reportAuth }] = await Promise.all([
     import("../../harnesses/pi-durable/serve.ts"),
     import("../../harnesses/pi-durable/open.ts"),
     import("../shared.ts"),
   ]);
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
   const file = invokeStorageFile(resolveStateRoot(agentDir));
-  const { agent, models, definition } = await openServing(await loadSourceDefinition(agentDir), {
+  const project = await loadDevProject(agentDir).catch(failStartup);
+  const { agent, models, config } = await openServing(project.definition, {
     model: modelSpec,
+    ...(project.instance === undefined ? {} : { config: project.instance }),
     storage: { file, holders: "another `fastagent invoke` of this agent" },
     // Its messages do not outlive it: one a stopped invoke left is not run again by the next.
     unfinished: "abort",
   }).catch(failStartup);
   console.error(`[fastagent] invoke: ${agentDir} (${modelSpec})`);
   await reportAuth(models, modelSpec, agentDir);
-  const { thinkingLevel } = definition.config;
+  const { thinkingLevel } = config;
   const settings = {
     model: modelRefOf(modelSpec, "the model"),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),

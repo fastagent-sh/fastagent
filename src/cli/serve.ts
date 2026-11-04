@@ -2,7 +2,7 @@
 import { answersLocalhost, bindLabel, classifyBind } from "../bind.ts";
 import type { ServedAgent, ServeOptions, Service } from "../service.ts";
 import { API_PREFIX } from "../http/contract.ts";
-import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
+import type { EffectiveConfig } from "../harnesses/pi-durable/config.ts";
 import { API_KEY_VARIABLE, API_TURNED_OFF, apiKeysFrom, apiTurnedOff } from "../http/server.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -22,7 +22,7 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean):
  * What the CLI adds to the assembly: its shutdown grace, exit on a connection that drops, and the API's keys, none
  * when the definition turns the API off, whatever key the environment holds (a host's from an earlier deploy).
  */
-export function cliMountOptions(config: AgentConfig): ServeOptions {
+export function cliMountOptions(config: EffectiveConfig): ServeOptions {
   return {
     apiKeys: apiTurnedOff(config) ? [] : apiKeysFrom(process.env[API_KEY_VARIABLE]),
     closeTimeoutMs: SHUTDOWN_GRACE_MS,
@@ -38,7 +38,7 @@ export function cliMountOptions(config: AgentConfig): ServeOptions {
 export function serveService(
   service: ServedAgent,
   bind: { port: number; host?: string },
-  posture: { tunnel: boolean; agentDir: string; stateRoot: string; config: AgentConfig },
+  posture: { tunnel: boolean; agentDir: string; stateRoot: string; config: EffectiveConfig },
 ): void {
   const { host } = bind;
   const { tunnel, agentDir, stateRoot, config } = posture;
@@ -53,7 +53,7 @@ export function reportServing(
   service: ServedAgent,
   host: string | undefined,
   boundPort: number,
-  config: AgentConfig,
+  config: EffectiveConfig,
 ): void {
   process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
   log.info(bindLine(host, boundPort));

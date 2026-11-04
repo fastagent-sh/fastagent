@@ -48,7 +48,7 @@ describe("cli: process contracts", () => {
 
   it("start serves no Agent API a definition turns off, a key the host still holds from an earlier deploy included", async () => {
     const dir = await agentWorkspace("fa-start-api-off-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini", http: { api: false } };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini", http: { api: false } } };\n`,
       ".secrets/production/.env": "FASTAGENT_API_KEY=left-on-the-host\nOPENAI_API_KEY=sk-test\n",
     });
     await built(dir);
@@ -56,7 +56,7 @@ describe("cli: process contracts", () => {
       ["start", dir, "--port", "0", "--bind", "127.0.0.1", "--no-input"],
       /Agent API: .*\n/,
       async (stderr) => {
-        expect(stderr).toContain("Agent API: not served — fastagent.config.ts says http.api: false");
+        expect(stderr).toContain("Agent API: not served — the configuration says http.api: false");
         const port = /http host on 127\.0\.0\.1:(\d+)/.exec(stderr)?.[1];
         const answer = await fetch(`http://127.0.0.1:${port}/v1/agent`, {
           headers: { authorization: "Bearer left-on-the-host" },
@@ -138,7 +138,7 @@ describe("cli: process contracts", () => {
 
   it("start fails when a declared channel cannot mount, instead of serving without it", async () => {
     const dir = await agentWorkspace("fa-cli-channel-fail-", {
-      "fastagent.config.ts": `export default { model: "openai/gpt-5.5" };\n`,
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-5.5" } };\n`,
       "src/channels/telegram.mjs": `export default () => { throw new Error("TELEGRAM_SECRET_TOKEN required"); };\n`,
     });
     await built(dir);
