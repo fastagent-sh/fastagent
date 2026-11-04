@@ -205,7 +205,8 @@ export default defineDefinition({
   environment, the default model's provider), and the commands the environment requires. A host shows what an instance still needs from this list
   rather than parsing files; deploy's missing-value report uses the same list. Other fields are internal and may change
   between releases. A symbol brand lets `openAgent` recognize a built definition.
-- It is typed by its settings (`AgentDefinition<Settings>`), so an embedder's `settings` input is checked by the compiler.
+- It is typed by its settings (`AgentDefinition<Settings>`), so the compiler checks the keys and types of an
+  embedder's `settings` input; the open checks the merged settings against the schema, refusing a missing required one.
 - It is customized only through `openAgent(definition, inputs)`, never by mutation, which keeps the assembly
   deterministic.
 - An agent package declares as peers (and dev dependencies) `@fastagent-sh/fastagent` and the pi packages its code
@@ -481,7 +482,7 @@ The app needs no files: configuration is the same schema as an object, read by t
 
 An instance's name is an explicit input (`--name`, `FASTAGENT_NAME`, `name`; §4.1). It defaults to the definition's
 name, normalized to one path segment (`@scope/pkg` is not one), because a deployment joins it onto storage and
-resource names; two instances of one definition on one machine take distinct names. `config.name` is for display.
+resource names; two instances of one definition on one machine take distinct names. `info().name` reports it.
 
 ### 4.6 A workbench app: Kage
 
