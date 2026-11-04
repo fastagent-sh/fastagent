@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { InMemoryCredentialStore, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { buildDefinition, assembleAgent, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../src/harnesses/pi-durable/text.ts";
 import { runInProcess } from "./cli-run.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
@@ -80,7 +80,7 @@ describe("init: scaffoldAgent", () => {
     // No trailing slash: `node_modules/` would miss a SYMLINKED one (this repo's own .gitignore
     // carries the same fix, for the same reason).
     expect(rootIgnore).toMatch(/^node_modules$/m);
-    expect(ig.ignores(".fastagent/registry.ts")).toBe(true); // generated each time the agent opens
+    expect(ig.ignores(".fastagent/dist/index.js")).toBe(true); // generated, never committed
     expect(await readFile(join(dir, ".secrets", ".gitignore"), "utf8")).toMatch(/^\*$/m);
 
     // .env.example documents env knobs without misleading: all-commented (sets nothing), and it
@@ -116,7 +116,7 @@ describe("init: scaffoldAgent", () => {
     expect(standing).not.toMatch(/workspace/i);
 
     // The scaffolded agent builds, from the directory itself.
-    const definition = await prepareDefinition(dir);
+    const definition = await loadSourceDefinition(dir);
     expect(definition.name).toBe("reviewer");
     expect(buildDefinition(definition, {})).toMatchObject({ tools: [], channels: new Map(), schedules: [] });
     expect(readSkills(dir).map((s) => s.name)).toEqual(["writing-great-skills"]);
@@ -136,7 +136,7 @@ describe("init: scaffoldAgent", () => {
         return fauxAssistantMessage("ok");
       },
     ]);
-    const definition = await prepareDefinition(dir);
+    const definition = await loadSourceDefinition(dir);
     const agent = await assembleAgent(definition, {
       storage: new MemoryStorage(),
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },

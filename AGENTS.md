@@ -271,7 +271,8 @@ src/
     │   │                   # where SQLite's own locks fail
     │   ├── define.ts       # what an author writes: defineAgent, needs (secrets beside the code that reads them),
     │   │                   # defineSchedule
-    │   ├── registry.ts     # the generated `.fastagent/registry.ts`: one default import per module of src/
+    │   ├── definition.ts   # a definition as one frozen value: what dev loads and a build exports, its declared inputs
+    │   ├── registry.ts     # the modules of src/ by directory, imported in file order
     │   ├── text.ts         # SYSTEM.md, AGENTS.md, skills (loaded as pi loads them) and prompt templates, read per
     │   │                   # message; the deployed agent's self-change section
     │   ├── agent.ts        # openDurableAgent: a Harness on the instance's storage, and the operations over it

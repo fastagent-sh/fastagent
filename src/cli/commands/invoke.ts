@@ -139,13 +139,14 @@ async function remoteSession(
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
   if (opts.url !== undefined) return runRemoteInvoke(message, dirArg, { ...opts, url: opts.url });
   if (opts.key !== undefined) failUsage("--key is the key --url calls with: pass --url too");
-  const [{ openServing }, { enterAgentCommand, reportAuth }] = await Promise.all([
+  const [{ openServing }, { loadSourceDefinition }, { enterAgentCommand, reportAuth }] = await Promise.all([
     import("../../harnesses/pi-durable/serve.ts"),
+    import("../../harnesses/pi-durable/open.ts"),
     import("../shared.ts"),
   ]);
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
   const file = invokeStorageFile(resolveStateRoot(agentDir));
-  const { agent, models, definition } = await openServing(agentDir, {
+  const { agent, models, definition } = await openServing(await loadSourceDefinition(agentDir), {
     model: modelSpec,
     storage: { file, holders: "another `fastagent invoke` of this agent" },
     // Its messages do not outlive it: one a stopped invoke left is not run again by the next.

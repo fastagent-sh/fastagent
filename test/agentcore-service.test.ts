@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServedAgent } from "../src/service.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
 import { openPreparedStartService } from "../src/cli/commands/start.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
@@ -20,7 +21,7 @@ async function agentDir(files: Record<string, string> = {}, config = `{ model: "
 }
 
 /** The directory opened as a serve opens it, with no storage of its own, as the mount takes it. */
-const open = (dir: string) => openServing(dir, { storage: "memory" });
+const open = async (dir: string) => openServing(await loadSourceDefinition(dir), { storage: "memory" });
 
 const DIGEST = `import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({ cron: "0 9 * * *", prompt: "hi" });\n`;

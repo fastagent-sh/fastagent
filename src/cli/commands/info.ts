@@ -8,7 +8,8 @@ import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enterAgentEnv } from "../../env.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import { buildDefinition, modelSpecFor, prepareDefinition, secretsManifest } from "../../harnesses/pi-durable/open.ts";
+import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
+import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { readCommands } from "../../harnesses/pi-durable/text.ts";
 import { inspectMcp } from "../../mcp/host.ts";
 import { resolveStateRoot } from "../../paths.ts";
@@ -24,13 +25,10 @@ export interface InfoOptions {
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir); // code may read its secrets, and fetch, when it is built
-  const definition = await prepareDefinition(agentDir).catch(failStartup);
+  const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const { config } = definition;
   const modelSpec = modelSpecFor(config, opts.model);
-  const manifest = secretsManifest(definition);
-  const declared = manifest.flatMap(({ name, optional, declaredIn }) =>
-    declaredIn.map((source) => ({ name, optional, source })),
-  );
+  const declared = definitionSecrets(definition);
   const unsetSecrets = missingSecrets(declared);
   // Built only when every required secret has a value: building is what reads them. A module that is not what its
   // directory holds is said as the refusal `dev` and `start` would stop on.
@@ -93,7 +91,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           channels: code === undefined ? null : channels,
           schedules: code === undefined ? null : schedules,
           commands,
-          secrets: manifest,
+          secrets: definition.inputs.secrets,
           unsetSecrets: unsetSecrets.map(({ name }) => name),
           stateRoot,
           authPath: auth?.path ?? null,

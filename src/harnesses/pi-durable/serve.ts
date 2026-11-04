@@ -1,8 +1,8 @@
 /**
- * An agent package opened: its definition prepared (the registry generated, the secrets manifest written), its code
- * built with its secrets, its model environment, its storage, and the Agent over them. `openAgent` is how an app opens
- * one (SPEC.md §8); `dev`, `start`, AgentCore, `invoke` and `schedules run` open it through `openServing`, which
- * also takes where the Agent keeps its sessions and what becomes of an earlier process's messages.
+ * A definition opened: its code built with its secrets, its model environment, its storage, and the Agent over them.
+ * `openAgent` is how an app opens one (SPEC.md §8); `dev`, `start`, AgentCore, `invoke` and `schedules run` open it
+ * through `openServing`, which also takes where the Agent keeps its sessions and what becomes of an earlier process's
+ * messages.
  */
 import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -32,13 +32,8 @@ import type { Agent } from "../../agent-api.ts";
 import { resolveOverridePath, resolveStateRoot } from "../../paths.ts";
 import { type Service, serveAgent } from "../../service.ts";
 import type { DurableAgent, Unfinished } from "./agent.ts";
-import {
-  type AgentDefinition,
-  type BuiltDefinition,
-  buildDefinition,
-  assembleAgent,
-  prepareDefinition,
-} from "./open.ts";
+import type { AgentDefinition } from "./definition.ts";
+import { type BuiltDefinition, assembleAgent, buildDefinition, loadSourceDefinition } from "./open.ts";
 import { type StorageLocking, openLockedStorage } from "./storage.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
@@ -127,8 +122,10 @@ function openStorage(stateRoot: string, storage: ServingStorage): Promise<Storag
   return openLockedStorage(instanceStorageFile(stateRoot), storage.instance, INSTANCE_HOLDERS);
 }
 
-export async function openServing(directory: string, options: OpenServingOptions = {}): Promise<OpenedServing> {
-  const definition = await prepareDefinition(directory);
+export async function openServing(
+  definition: AgentDefinition,
+  options: OpenServingOptions = {},
+): Promise<OpenedServing> {
   const { dir } = definition;
   // The agent's environment is ONE value every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
@@ -254,7 +251,7 @@ function stateDirOf(stateDir: string): string {
 export async function openAgent(dir: string, options: OpenAgentOptions = {}): Promise<LocalAgent> {
   // An app may never serve the agent, and then no clock fires a wake-up: `wake` is refused until it does.
   let ticking = false;
-  const opened = await openServing(dir, {
+  const opened = await openServing(await loadSourceDefinition(dir), {
     wakeTicking: () => ticking,
     ...(options.mcp === undefined ? {} : { mcp: options.mcp }),
     ...(options.model === undefined ? {} : { model: options.model }),

@@ -91,8 +91,8 @@ my-agent/                         # the agent directory; run FastAgent commands 
 ```
 
 Code goes in `src/`: `src/tools/`, `src/extensions/`, `src/channels/` and `src/schedules/`, one module per file, each
-default-exporting what its directory holds. FastAgent generates `.fastagent/registry.ts` from them each time the agent
-opens.
+default-exporting what its directory holds. FastAgent imports each of them when the agent opens; there is nothing to
+register by hand.
 
 `init` installs dependencies in the agent directory. If installation fails, run `npm install` there before
 continuing. `--no-install` defers that install.

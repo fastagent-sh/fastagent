@@ -9,6 +9,7 @@ import { runModels } from "../src/cli/commands/models.ts";
 import { catalogsIn } from "../src/harnesses/models/catalog.ts";
 import { listModels, modelsOver } from "../src/harnesses/models/models.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { PI_AI_VERSION, keepCatalog } from "./kept-catalog.ts";
 
@@ -285,7 +286,10 @@ describe("model catalogs", () => {
   it("an agent opens on a model only the published catalog has: the Agent reads the lists its report reads", async () => {
     const agent = agentKeeping(released);
     vi.stubEnv("FASTAGENT_OFFLINE", "1");
-    const serving = await openServing(agent, { storage: "memory", credentialStore: new InMemoryCredentialStore() });
+    const serving = await openServing(await loadSourceDefinition(agent), {
+      storage: "memory",
+      credentialStore: new InMemoryCredentialStore(),
+    });
     try {
       expect(serving.models.models.getModel("openai", "gpt-released")).toBeDefined();
       expect((await serving.agent.info()).defaultModel).toEqual({ provider: "openai", modelId: "gpt-released" });
@@ -300,7 +304,10 @@ describe("model catalogs", () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(
-      openServing(agent, { storage: "memory", credentialStore: new InMemoryCredentialStore() }),
+      openServing(await loadSourceDefinition(agent), {
+        storage: "memory",
+        credentialStore: new InMemoryCredentialStore(),
+      }),
     ).rejects.toThrow(
       `unknown model "openai/gpt-released": no provider "openai" offers "gpt-released", and model lists not ` +
         `refreshed (pi's published catalog: fetch failed)`,

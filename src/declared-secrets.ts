@@ -20,11 +20,11 @@ export interface DeclaredSecret {
   name: string;
   /** Where it was declared: "src/tools/x-post.ts", "fastagent.config.ts providers[0]", "context.json" — printed in
    *  runbooks and failures, so it must name a place the author can open. */
-  source: string;
+  declaredIn: string;
   /** What it is for, when the declaration says (`context.json`'s variables do): printed beside it in runbooks. */
   description?: string;
   /** The code runs without it: no start is refused for its absence. */
-  optional?: boolean;
+  optional: boolean;
 }
 
 /**
@@ -53,15 +53,15 @@ export function missingSecrets(
   declared: readonly DeclaredSecret[],
   env: NodeJS.ProcessEnv = process.env,
 ): DeclaredSecret[] {
-  return dedupeSecrets(declared.filter((s) => s.optional !== true)).filter((s) => !env[s.name]);
+  return dedupeSecrets(declared.filter((s) => !s.optional)).filter((s) => !env[s.name]);
 }
 
 /** "X_API_KEY, X_API_SECRET (src/tools/x-post.ts); SLACK_TOKEN (src/channels/slack.ts)" — grouped by the
  *  file to open, since that is the unit the author fixes. */
 export function describeSecrets(declared: readonly DeclaredSecret[]): string {
   const bySource = new Map<string, string[]>();
-  for (const { name, source } of dedupeSecrets(declared)) {
-    bySource.set(source, [...(bySource.get(source) ?? []), name]);
+  for (const { name, declaredIn } of dedupeSecrets(declared)) {
+    bySource.set(declaredIn, [...(bySource.get(declaredIn) ?? []), name]);
   }
   return [...bySource].map(([source, names]) => `${names.join(", ")} (${source})`).join("; ");
 }

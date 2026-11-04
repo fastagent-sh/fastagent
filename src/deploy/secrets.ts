@@ -67,8 +67,8 @@ export function deploymentSecrets(
     if (!secrets.some((s) => s.name === name)) secrets.push({ name, hint });
   };
   if (isEnvKey(modelAuth)) add(modelAuth, "your model provider key");
-  for (const { name, source, description } of dedupeSecrets(declared)) {
-    add(name, `required by ${source}${description ? `: ${description}` : ""}`);
+  for (const { name, declaredIn, description } of dedupeSecrets(declared)) {
+    add(name, `required by ${declaredIn}${description ? `: ${description}` : ""}`);
   }
   for (const name of Object.keys(carriedValues(values))) add(name, `from ${valueFile}`);
   return secrets;

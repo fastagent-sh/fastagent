@@ -661,7 +661,7 @@ Recorded, not solved here:
 
 | Current | Change |
 |---|---|
-| `prepareDefinition` generates the TS registry and writes the secrets manifest on open | Build prepares; open loads a built definition |
+| A source project is read as a definition value, its modules imported where they are and nothing written; `start` and embedding open the source too | Build prepares; open loads a built definition |
 | Opening expects `fastagent.config.ts` in a directory | Open accepts a built definition object |
 | `agentDir` supplies cwd, values, local bindings and clone paths | Configuration, state and workspace are separate inputs |
 | Runtime prompt describes an editable definition in cwd | Immutable program; workspace and configuration |

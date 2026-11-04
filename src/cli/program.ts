@@ -572,8 +572,7 @@ const schedules: CommandSpec = {
         "List the schedules this definition declares (defineSchedule in src/schedules/<name>.ts): the next cron " +
         "instant, how the last run ended and the session its runs continue. The agent's own pending wake-ups are listed too, prefixed " +
         "`wake`: a different owner (the STATE, not the definition), cancelled by the agent's `unwake` tool or " +
-        "`schedules unwake`. --json adds each schedule's retained fire history. It changes no state; like every " +
-        "command that reads the definition, it regenerates .fastagent/.",
+        "`schedules unwake`. --json adds each schedule's retained fire history. It changes no state.",
       args: [AGENT_ARG],
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent schedules list" }],

@@ -15,7 +15,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     }
     expect(ignored(join(root, "src", "extensions", "notify", "index.ts"))).toBe(false);
     // Generated from src/ by the worker as it starts: an edit there is the worker's own.
-    expect(ignored(join(root, ".fastagent", "registry.ts"))).toBe(true);
+    expect(ignored(join(root, ".fastagent", "dist", "index.js"))).toBe(true);
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
     // Content is resolved, and the environment entered, once per process.

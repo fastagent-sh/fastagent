@@ -113,8 +113,9 @@ function declareVariables(raw: unknown): Record<string, DeclaredVariable> {
 export function declaredVariables(environment: DeclaredEnvironment | undefined): DeclaredSecret[] {
   return Object.entries(environment?.variables ?? {}).map(([name, { description }]) => ({
     name,
-    source: CONTEXT_FILE,
+    declaredIn: CONTEXT_FILE,
     description,
+    optional: false,
   }));
 }
 

@@ -21,7 +21,7 @@ import { cloudFor } from "../../channels/feishu/cloud.ts";
 import { type FeishuSubscriptionMode, feishuIngressFor } from "../../channels/feishu/setup-mode.ts";
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
 import { channelIngress } from "../../channels/discover.ts";
-import { buildDefinitionShape, prepareDefinition } from "../../harnesses/pi-durable/open.ts";
+import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { selectAgentEnvironment, resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
@@ -384,7 +384,7 @@ async function assertChannelReadsSetting(
   shown: string,
 ): Promise<void> {
   Object.assign(process.env, setting); // the value this command writes anyway
-  const channel = await prepareDefinition(target)
+  const channel = await loadSourceDefinition(target)
     .then((definition) => buildDefinitionShape(definition, process.env).channels.get(kind))
     .catch((error: unknown) =>
       failStartup(new Error(`the agent does not build (${(error as Error).message}) — fix it and re-run`)),

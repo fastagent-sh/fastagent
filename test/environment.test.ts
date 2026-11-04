@@ -31,6 +31,7 @@ import {
 } from "../src/environment/mise.ts";
 import { addContent, writeEnvironment } from "../src/authoring.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { log } from "../src/log.ts";
 
 const savedEnv = { ...process.env };
@@ -151,8 +152,8 @@ describe("environment: what context.json may declare", () => {
     expect(declareEnvironment(environment)).toEqual(environment);
     // A variable is declared by name, with what it is for; its value comes from the environment.
     expect(declaredVariables(declareEnvironment(environment))).toEqual([
-      { name: "GITHUB_TOKEN", source: "context.json", description: "gh's token, with repo scope" },
-      { name: "http_proxy", source: "context.json", description: "x" },
+      { name: "GITHUB_TOKEN", declaredIn: "context.json", description: "gh's token, with repo scope", optional: false },
+      { name: "http_proxy", declaredIn: "context.json", description: "x", optional: false },
     ]);
   });
 
@@ -417,22 +418,22 @@ describe("environment: prepared by a process that runs the agent", () => {
 
   it("requires the variables context.json declares before the agent runs, naming the file", async () => {
     const dir = await agentDir({ variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } } });
-    const open = () => openServing(dir, { storage: "memory" });
+    const open = async () => openServing(await loadSourceDefinition(dir), { storage: "memory" });
     await expect(open()).rejects.toThrow(/missing required secrets: FA_TEST_HOST \(context\.json\)/);
     process.env.FA_TEST_HOST = "github.example.com";
     await (await open()).agent.close();
   });
 
   it("is prepared as the agent opens, in the agent's own environment, leaving this process's as it was", async () => {
-    await expect(openServing(await agentDir({ packages: { gh: "2" } }), { storage: "memory" })).rejects.toThrow(
-      /the agent has no mise installed/,
-    );
+    await expect(
+      openServing(await loadSourceDefinition(await agentDir({ packages: { gh: "2" } })), { storage: "memory" }),
+    ).rejects.toThrow(/the agent has no mise installed/);
     const dir = await agentDir({ packages: { gh: "2" } });
     const { calls } = await fakeMise(dir);
     await mkdir(join(dir, ".secrets"), { recursive: true });
     await writeFile(join(dir, ".secrets", ".env"), "FAKE_AGENT_VALUE=from-the-value-file\n");
     vi.spyOn(log, "info").mockImplementation(() => {});
-    await (await openServing(dir, { storage: "memory" })).agent.close();
+    await (await openServing(await loadSourceDefinition(dir), { storage: "memory" })).agent.close();
     // mise reached GitHub, say, with the agent's own token.
     expect((await calls()).map((call) => `${call.args.split(" ")[0]}: ${call.agentValue}`)).toEqual([
       "where: from-the-value-file",

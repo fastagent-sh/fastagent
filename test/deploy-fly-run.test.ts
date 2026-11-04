@@ -368,8 +368,8 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
 
   it("a declared name is REQUIRED: absent from the value file → missingSecrets, listed once", () => {
     const declared = [
-      { name: "GH_TOKEN", source: "tools/gh.ts" },
-      { name: "GH_TOKEN", source: "channels/digest.ts" },
+      { name: "GH_TOKEN", declaredIn: "tools/gh.ts", optional: false },
+      { name: "GH_TOKEN", declaredIn: "channels/digest.ts", optional: false },
     ];
     const present = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
@@ -393,7 +393,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     try {
       const r = assembleSecrets({
         modelAuth: "OPENAI_API_KEY",
-        declared: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
+        declared: [{ name: "GH_TOKEN", declaredIn: "tools/gh.ts", optional: false }],
         values: new Map([["OPENAI_API_KEY", "k"]]),
       });
       expect(r.secrets.GH_TOKEN).toBeUndefined();
@@ -409,7 +409,7 @@ describe("deploy/secrets: deploymentSecrets (the runbook's list)", () => {
   it("required names first, hinted by their source, then everything else the value file carries", () => {
     const list = deploymentSecrets(
       "OPENAI_API_KEY",
-      [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
+      [{ name: "GH_TOKEN", declaredIn: "tools/gh.ts", optional: false }],
       new Map(Object.entries({ OPENAI_API_KEY: "k", GH_TOKEN: "x", EXTRA: "y", FASTAGENT_STATE_DIR: "/s" })),
       "fastagent/.secrets/.env",
     );

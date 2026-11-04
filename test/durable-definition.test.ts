@@ -1,8 +1,8 @@
 /**
- * A definition assembled onto pi-durable: the generated registry, the secrets manifest, the text read per request
+ * A definition assembled onto pi-durable: the definition as a value, its declared secrets, the text read per request
  * (SYSTEM.md, AGENTS.md, skills loaded as pi loads them, prompt templates), and the code built with its secrets.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -21,15 +21,12 @@ import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import {
   type AssembleAgentOptions,
   buildDefinition,
-  loadDefinition,
   assembleAgent,
-  prepareDefinition,
-  secretsManifest,
+  loadSourceDefinition,
 } from "../src/harnesses/pi-durable/open.ts";
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
-import { registrySource } from "../src/harnesses/pi-durable/registry.ts";
 import { expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
 
 // Under test/fixtures, so the agent's modules resolve this repository's packages and its src/ by a fixed depth.
@@ -101,21 +98,22 @@ export default defineSchedule({ cron: "0 9 * * *", tz: "Europe/London", prompt: 
 const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };
 
 describe("an agent definition on pi-durable", () => {
-  it("registers each module of src/ by its default export, tests left out, the same wherever it is generated", async () => {
+  it("registers each module of src/ by its default export, tests left out, in file order, writing nothing", async () => {
     const dir = agentPackage(FILES);
-    const source = await registrySource(dir);
-    expect(source).toContain('import m0 from "../src/tools/weather.ts";');
-    expect(source).not.toContain("weather.test");
-    expect(source).toContain('{ file: "src/schedules/daily.ts", name: "daily", value: m2 }');
-    expect(await registrySource(dir)).toBe(source);
+    const before = readdirSync(dir, { recursive: true }).sort();
+    const { registry } = await loadSourceDefinition(dir);
+    expect(registry.tools.map(({ file }) => file)).toEqual(["src/tools/weather.ts"]);
+    expect(registry.schedules).toEqual([{ file: "src/schedules/daily.ts", name: "daily", value: expect.any(Object) }]);
+    expect(readdirSync(dir, { recursive: true }).sort()).toEqual(before);
   });
 
-  it("writes one manifest of the secrets it declares: what each is for, whether it is optional, where it is declared", async () => {
-    const dir = agentPackage(FILES);
-    const definition = await prepareDefinition(dir);
-    const manifest = JSON.parse(readFileSync(join(dir, ".fastagent/secrets.json"), "utf8"));
-    expect(manifest).toEqual(secretsManifest(definition));
-    expect(manifest).toEqual([
+  it("is a frozen value whose inputs list each secret once: what for, whether optional, where", async () => {
+    const definition = await loadSourceDefinition(agentPackage(FILES));
+    for (const part of [definition, definition.config, definition.registry, definition.registry.tools]) {
+      expect(Object.isFrozen(part)).toBe(true);
+    }
+    expect(Object.isFrozen(definition.registry.tools[0])).toBe(true);
+    expect(definition.inputs.secrets).toEqual([
       { name: "GH_TOKEN", description: "For gh", optional: false, declaredIn: ["context.json"] },
       {
         name: "WEATHER_KEY",
@@ -127,8 +125,20 @@ describe("an agent definition on pi-durable", () => {
     ]);
   });
 
+  it("lists a secret declared optional in one module and required in another once, as required", async () => {
+    const tool = (name: string, optional: boolean) => `import { needs } from "${DEFINE}";
+export default needs([{ name: "TOKEN", optional: ${optional} }], () => ({ name: "${name}", description: "d", parameters: {}, execute: async () => ({ output: [] }) }));
+`;
+    const definition = await loadSourceDefinition(
+      agentPackage({ "src/tools/a.ts": tool("a", true), "src/tools/b.ts": tool("b", false) }),
+    );
+    expect(definition.inputs.secrets).toEqual([
+      { name: "TOKEN", optional: false, declaredIn: ["src/tools/a.ts", "src/tools/b.ts"] },
+    ]);
+  });
+
   it("refuses to run while a required secret has no value, naming where it is declared, and not for an optional one", async () => {
-    const definition = await prepareDefinition(agentPackage(FILES));
+    const definition = await loadSourceDefinition(agentPackage(FILES));
     expect(() => buildDefinition(definition, { GH_TOKEN: "gh" })).toThrow(
       "missing required secrets: WEATHER_KEY (src/tools/weather.ts)",
     );
@@ -139,7 +149,7 @@ describe("an agent definition on pi-durable", () => {
   });
 
   it("builds its channels, a route channel and a long connection, each with the secrets it declared", async () => {
-    const definition = await prepareDefinition(
+    const definition = await loadSourceDefinition(
       agentPackage({
         "src/channels/hook.ts": `import { needs } from "${DEFINE}";
 export default needs(["HOOK_SECRET"], ({ HOOK_SECRET }) => () => ({ "POST /hook": () => new Response(HOOK_SECRET) }));
@@ -148,7 +158,7 @@ export default needs(["HOOK_SECRET"], ({ HOOK_SECRET }) => () => ({ "POST /hook"
           "export default { name: 'stream', connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };\n",
       }),
     );
-    expect(secretsManifest(definition)).toEqual([
+    expect(definition.inputs.secrets).toEqual([
       { name: "HOOK_SECRET", optional: false, declaredIn: ["src/channels/hook.ts"] },
     ]);
     expect(() => buildDefinition(definition, {})).toThrow(
@@ -195,30 +205,30 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       ],
     ];
     for (const [files, message] of cases) {
-      const definition = await prepareDefinition(agentPackage(files));
+      const definition = await loadSourceDefinition(agentPackage(files));
       expect(() => buildDefinition(definition, {})).toThrow(message);
     }
   });
 
   it("refuses a module that is not what its directory holds, a bad cron and an unknown configuration key", async () => {
-    const notATool = await prepareDefinition(agentPackage({ "src/tools/x.ts": "export default { name: 'x' };\n" }));
+    const notATool = await loadSourceDefinition(agentPackage({ "src/tools/x.ts": "export default { name: 'x' };\n" }));
     expect(() => buildDefinition(notATool, {})).toThrow("src/tools/x.ts: must default-export a tool");
-    const notAChannel = await prepareDefinition(
+    const notAChannel = await loadSourceDefinition(
       agentPackage({ "src/channels/x.ts": "export default { name: 'x' };\n" }),
     );
     expect(() => buildDefinition(notAChannel, {})).toThrow("src/channels/x.ts: must default-export (ctx) => Routes");
-    const unnamed = await prepareDefinition(
+    const unnamed = await loadSourceDefinition(
       agentPackage({ "src/channels/x.ts": "export default { name: ' ', connect() {} };\n" }),
     );
     expect(() => buildDefinition(unnamed, {})).toThrow("src/channels/x.ts: long-connection channel name");
-    const badCron = await prepareDefinition(
+    const badCron = await loadSourceDefinition(
       agentPackage({
         "src/schedules/often.ts": `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "not a cron", prompt: "x" });\n`,
       }),
     );
     expect(() => buildDefinition(badCron, {})).toThrow("src/schedules/often.ts:");
     const configured = (config: string) =>
-      prepareDefinition(agentPackage({ "fastagent.config.ts": `export default ${config};\n` }));
+      loadSourceDefinition(agentPackage({ "fastagent.config.ts": `export default ${config};\n` }));
     await expect(configured("{ modle: 'a/b' }")).rejects.toThrow('unknown key "modle"');
     // Below the top level too: a nested typo is as silent as a top-level one.
     await expect(configured("{ http: { prot: 80 } }")).rejects.toThrow('"http": unknown key "prot" (keys: port, api)');
@@ -228,7 +238,6 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
     );
     await expect(configured("{ deploy: { fly: {} } }")).rejects.toThrow('"deploy": unknown key "fly"');
     await expect(configured("{ http: { api: 'no' } }")).rejects.toThrow('"http.api" must be true or false');
-    await expect(loadDefinition(agentPackage({}))).rejects.toThrow(".fastagent/registry.ts is missing");
   });
 
   describe("opened", () => {
@@ -239,7 +248,7 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
 
     async function open(files = FILES, options: Partial<AssembleAgentOptions> = {}, opening = (dir: string) => dir) {
       const dir = agentPackage(files);
-      const definition = await prepareDefinition(opening(dir));
+      const definition = await loadSourceDefinition(opening(dir));
       const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
       const code = buildDefinition(definition, ENV);
       const agent = await assembleAgent(definition, {
@@ -427,7 +436,12 @@ describe("two agents in one process", () => {
     ].map((agent) => ({ ...agent, dir: agentPackage({ ...FILES, ".secrets/.env": agent.values }) }));
     const opened = [];
     for (const { dir } of agents) {
-      opened.push(await openServing(dir, { storage: "memory", credentialStore: new InMemoryCredentialStore() }));
+      opened.push(
+        await openServing(await loadSourceDefinition(dir), {
+          storage: "memory",
+          credentialStore: new InMemoryCredentialStore(),
+        }),
+      );
     }
     try {
       for (const [i, { dir, key, token, anthropic }] of agents.entries()) {
@@ -465,7 +479,7 @@ describe("an agent's value file names where its state and credentials are", () =
       ...FILES,
       ".secrets/.env": `WEATHER_KEY=k\nGH_TOKEN=g\nFASTAGENT_STATE_DIR=${join(elsewhere, "state")}\nFASTAGENT_AUTH_PATH=${join(elsewhere, "auth.json")}\n`,
     });
-    const opened = await openServing(dir);
+    const opened = await openServing(await loadSourceDefinition(dir));
     try {
       expect(opened.stateRoot).toBe(join(elsewhere, "state"));
       expect(opened.models.auth).toEqual({ path: join(elsewhere, "auth.json") });

@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { expect, it } from "vitest";
 import { openServing, holdingInstance } from "../src/harnesses/pi-durable/serve.ts";
+import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 
 const STORAGE = pathToFileURL(new URL("../src/harnesses/pi-durable/storage.ts", import.meta.url).pathname).href;
@@ -69,7 +70,9 @@ it("an agent that fails to open lets go of the storage, so the same process can 
   // An embedder that corrects its configuration retries in the process it runs in, which still holds the lock.
   const dir = await mkdtemp(join(tmpdir(), "fa-storage-retry-"));
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
-  await expect(openServing(dir, { model: "nope/missing" })).rejects.toThrow(/unknown model "nope\/missing"/);
-  const opened = await openServing(dir, { model: "anthropic/claude-sonnet-4-5" });
+  await expect(openServing(await loadSourceDefinition(dir), { model: "nope/missing" })).rejects.toThrow(
+    /unknown model "nope\/missing"/,
+  );
+  const opened = await openServing(await loadSourceDefinition(dir), { model: "anthropic/claude-sonnet-4-5" });
   await opened.agent.close();
 });

@@ -346,7 +346,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (rejected.ok) {
       expect(rejected.messages.some((m) => m.text.includes("excludes .mcp.json"))).toBe(true);
       expect(rejected.declaredSecrets).toContainEqual(
-        expect.objectContaining({ name: "MCP_TOKEN", source: ".mcp.json mcpServers.test" }),
+        expect.objectContaining({ name: "MCP_TOKEN", declaredIn: ".mcp.json mcpServers.test" }),
       );
     }
     await writeFile(join(dir, ".dockerignore"), ".secrets\n");
@@ -579,7 +579,7 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     if (!pre.ok) return;
     expect(pre.declaredSecrets).toContainEqual({
       name: "DISCORD_TOKEN",
-      source: "src/channels/discord.ts",
+      declaredIn: "src/channels/discord.ts",
       optional: false,
     });
     // The value file holds no DISCORD_TOKEN, and its ingress is still known.
@@ -984,9 +984,9 @@ export default needs(["X_API_KEY", "X_API_SECRET"], () => ({
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
     expect(pre.declaredSecrets).toEqual([
-      { name: "X_API_KEY", source: "src/tools/x-post.ts", optional: false },
-      { name: "X_API_SECRET", source: "src/tools/x-post.ts", optional: false },
-      { name: "GH_HOST", source: "context.json", description: "the GitHub host gh talks to" },
+      { name: "X_API_KEY", declaredIn: "src/tools/x-post.ts", optional: false },
+      { name: "X_API_SECRET", declaredIn: "src/tools/x-post.ts", optional: false },
+      { name: "GH_HOST", declaredIn: "context.json", description: "the GitHub host gh talks to", optional: false },
     ]);
     // The runbook names the file to open for a required one, and the value file for the rest.
     expect(pre.secrets).toEqual([

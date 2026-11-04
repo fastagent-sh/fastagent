@@ -18,12 +18,12 @@ import { githubRepoOf } from "../src/content/git.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { buildDefinition, assembleAgent, prepareDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { buildDefinition, assembleAgent, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 
 /** The agent in `dir` as a serve opens it, with no storage of its own: what its content resolves to. */
 async function openedContent(dir: string) {
-  const opened = await openServing(dir, { storage: "memory" });
+  const opened = await openServing(await loadSourceDefinition(dir), { storage: "memory" });
   await opened.agent.close();
   return opened.content;
 }
@@ -435,7 +435,7 @@ describe("github content: what runs the agent clones, what reports on it does no
         return fauxAssistantMessage("ok");
       },
     ]);
-    const definition = await prepareDefinition(agentDir);
+    const definition = await loadSourceDefinition(agentDir);
     const running = await assembleAgent(definition, {
       storage: new MemoryStorage(),
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
