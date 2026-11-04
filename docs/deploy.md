@@ -6,8 +6,12 @@ status: current
 
 # Deploy
 
-FastAgent has no application build step: the directory is the deployable unit. Deploying means copying the agent to
-a host with Node >= 24.15 (or Bun >= 1.4), installing dependencies, and running `fastagent start`. `fastagent deploy`
+The deployable unit is the agent directory with its built `dist/`. Deploying means copying the agent to a host with
+Node >= 24.15 (or Bun >= 1.4), installing dependencies, and running `fastagent build && fastagent start`. `deploy`
+runs `fastagent build` first, with or without `--run`, so a type error stops it before anything ships, and the generated
+Dockerfile builds `dist/` again after copying the directory, since an upload that follows `.gitignore` (`railway up`)
+leaves the git-ignored `dist/` out. A hand-written Dockerfile does the same, or its image has no build for `start` to
+open. `fastagent deploy`
 generates a container recipe and target config and prints an ordered runbook; `--run` executes it with the host's
 CLI.
 

@@ -252,7 +252,7 @@ async function addChannel(
     const action = e.required ? "set" : "optionally set";
     step(`${action} ${e.name}${value} in ${envLabel}   # ${e.hint}`);
   }
-  const serveCommand = environment === "production" ? "fastagent start" : "fastagent dev";
+  const serveCommand = environment === "production" ? "fastagent build && fastagent start" : "fastagent dev";
   for (const s of steps) {
     step(
       s

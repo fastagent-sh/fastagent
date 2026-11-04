@@ -117,16 +117,18 @@ a secret declares it with `needs` ([secrets in code](configuration.md#secrets-in
 ## 6. Serve without watch
 
 ```bash
-fastagent start
+fastagent build && fastagent start
 ```
 
-`start` serves like `dev` without watching files. There is no build step: copy the agent to a host with
-Node >= 24.15, install dependencies, and run `fastagent start`.
+`build` compiles the agent into `dist/` with the project's own TypeScript (`init` adds it); `start` serves that
+`dist/` like `dev` serves the source, without watching files, and refuses a missing or stale one. To run it on a host:
+copy the agent to a host with Node >= 24.15, install dependencies, and run `fastagent build && fastagent start`.
 
 For deployments, point the state root (the agent's storage and channel state) and the secrets dir (`.env` and
 `auth.json`) at durable storage:
 
 ```bash
+fastagent build
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 

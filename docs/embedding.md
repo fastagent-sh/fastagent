@@ -46,8 +46,9 @@ interface Agent {
 
 ```ts
 import { openAgent } from "@fastagent-sh/fastagent";
+import support from "@acme/support-agent"; // the default export of a package `fastagent build` made
 
-const agent = await openAgent("./my-agent", { model: "openai/gpt-5.5" });
+const agent = await openAgent(support, { root: "/var/lib/myapp/support", model: "openai/gpt-5.5" });
 // ...
 await agent.close(); // on shutdown: releases the instance's storage
 ```
@@ -57,19 +58,22 @@ message is answered when the agent is next opened, and a tool it cut off is not 
 run safe. To end the message for good, `await agent.sessions.cancel(sessionId)` for each running session before
 `close()`: the stop is recorded at once and holds after a restart.
 
-`openAgent` is what `dev` and `start` run before they serve: it reads the definition (`SYSTEM.md`, `AGENTS.md`,
-`skills/`, `prompts/`, `src/`, `fastagent.config.ts`), builds its code with the secrets it declares, installs its
-declared [environment](configuration.md#environment) where it has no install yet and puts it first on the `PATH` of
-the commands the agent runs, clones its content, refreshes its [model lists](configuration.md#model-lists) (a request to `https://pi.dev` of
-at most 5 s, and to a provider that fetches its own list, unless what `<agent dir>/.state/models/` keeps is less than
-4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage (`<agent dir>/.state/agent.sqlite`),
-which one process holds at a time; `stateDir` puts the instance somewhere else ([below](#6-a-desktop-host)). Without a
+`openAgent` is what `dev` and `start` run before they serve. The definition is a package's default export, read where
+it is installed and never written to: an installed package is read-only, and one definition opens as any number of
+instances. The instance is where `root` is: its working directory (what the agent writes lands there) with its state in
+`<root>/.state`; `{ stateDir, workdir }` puts the two apart ([below](#6-a-desktop-host)). Every path is absolute; a
+relative one is refused. The open builds the definition's code with the secrets it declares, installs its declared
+[environment](configuration.md#environment) where it has no install yet and puts it first on the `PATH` of the
+commands the agent runs, clones its content, refreshes its [model lists](configuration.md#model-lists) (a request to
+`https://pi.dev` of at most 5 s, and to a provider that fetches its own list, unless what `<state>/models/` keeps is
+less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage (`<state>/agent.sqlite`),
+which one process holds at a time. Without a
 `model`, the config's is the default; with none at all the agent still
 opens, and a session needs a model of its own (`sessions.create({ model })`, `sessions.update`) before a message is
 answered. Nothing reaches the agent until `serve`.
 
-A definition is always a directory: the prompt is its `SYSTEM.md`, and its tools are modules of `src/tools/`. To
-assemble one in code, write the directory.
+A definition is made from a project directory: the prompt is its `SYSTEM.md`, and its tools are modules of
+`src/tools/`. To assemble one in code, write the directory and `fastagent build` it.
 
 ### MCP servers
 
@@ -195,7 +199,7 @@ app.register(async (scope) => {
 
 ## 4. Auth
 
-`openAgent` reads the agent's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's environment
+`openAgent` reads the instance's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's environment
 variable, and then the global `~/.fastagent/.secrets/auth.json` for a provider the agent authenticates no other way
 ([order](configuration.md#auth-and-secrets)). `fastagent login` in the agent directory signs a provider in.
 
@@ -222,7 +226,7 @@ try {
 } catch (error) {
   if (!(error instanceof SignInCancelled)) throw error;
 }
-const agent = await openAgent(dir, { credentials });
+const agent = await openAgent(definition, { root, credentials });
 ```
 
 Every store is FastAgent's own type; see the [API reference](api-reference.md#what-a-host-embedding-agents-needs).
@@ -239,9 +243,9 @@ An app that runs agents for a person on their machine (a desktop client, an edit
 calls the Agent API; `createAgent(dir, { content })` makes a new one, as `fastagent init` does, with the folders and
 repositories it works on. `addContent` and `removeContent` edit those declarations later; `listContent` reads them.
 
-- **Its own instance.** `openAgent(dir, { credentials, stateDir })` with a `stateDir` of the app's (one per agent,
-  under its data directory) is an instance of the agent separate from the one `fastagent dev` opens in the same
-  directory, so both run at once. They share the definition and nothing else: each has its own sessions. Only one of
+- **Its own instance.** `openAgent(definition, { credentials, workdir, stateDir })` with a `stateDir` of the app's
+  (one per agent, under its data directory) is an instance of the agent separate from the one `fastagent dev` opens in
+  the same project, so both run at once. They share the definition and nothing else: each has its own sessions. Only one of
   them serves the definition's channels and schedules (two would fire every schedule twice and compete for the
   channels' messages); an app beside `dev` does not call `serve()`. An instance nothing serves has no clock, so the
   agent's `wake` tool refuses a wake-up there instead of keeping one nothing would fire.
@@ -252,11 +256,11 @@ repositories it works on. `addContent` and `removeContent` edit those declaratio
   Adding or removing entries, or changing their paths or descriptions, takes effect at the next open, not in a new
   session of the already-open agent. `addContent`, `removeContent` and `listContent` return the current on-disk
   declaration resolved for this machine, not the running agent's snapshot. There is no hot reload: a desktop host
-  can wait for current work to finish, then `close()` and reopen with the same `stateDir`. Cancel first only if it
+  can wait for current work to finish, then `close()` and reopen with the same `root` or `stateDir`. Cancel first only if it
   intends to stop that work. Files inside an already-bound directory are different: their changes are visible when
   a tool next reads them, without reopening.
-- **Changes to the agent.** `SYSTEM.md`, `AGENTS.md`, skills and prompt templates are read for every message. Code
-  under `src/` and `fastagent.config.ts` are built when the agent opens: `close()` it and open it again.
+- **Changes to the agent.** A package is immutable: a new version is a new `fastagent build`, installed and opened
+  again after `close()`.
 - **Each agent's own environment.** An agent runs on this process's environment plus its own: its `.secrets/.env`
   (a variable the process holds wins over the file) and its declared packages. Its code's `needs()`, its commands,
   its content's clones, its model keys and its model requests all read that, and `openAgent` writes nothing into

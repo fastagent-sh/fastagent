@@ -14,10 +14,8 @@ const base = {
   agent: "reviewer",
   appName: "bot",
   port: 8787,
-  hasPackageJson: true,
   runtime: "node",
   hasLockfile: true,
-  version: "9.9.9",
   hasCron: false,
 } as const;
 
@@ -125,18 +123,6 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(runbook(p)).not.toContain("fly volumes create");
   });
 
-  it("the markdown path pins the global install and ALWAYS uses the Node image, whatever the runtime says", () => {
-    const md = { ...base, channels: [], hasPackageJson: false } as const;
-    const docker = dockerfile(planFlyDeploy(md));
-    expect(docker).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned to the current version
-    expect(docker).not.toContain("npm ci");
-    // Even a bun agent: oven/bun has no npm, so the global install needs the node base.
-    const asBun = dockerfile(planFlyDeploy({ ...md, runtime: "bun", bunVersion: "1.4.2" }));
-    expect(asBun).toContain(`FROM ${NODE_IMAGE}\n`);
-    expect(asBun).not.toContain("oven/bun");
-    expect(asBun).toContain("npm i -g @fastagent-sh/fastagent");
-  });
-
   it("artifacts at the agent's root, its deps installed, .git shipped, explicit deploy flags", () => {
     const p = planFlyDeploy({ ...base, channels: [] });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
@@ -180,7 +166,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(runbook(p)).toContain("each release replaces /data/definition");
   });
 
-  it("a bun agent uses the bun base + bun install + bun run; markdown-only uses the pinned global CLI", () => {
+  it("a bun agent uses the bun base + bun install + bun run", () => {
     const bunDf = dockerfile(planFlyDeploy({ ...base, runtime: "bun", bunVersion: "1.4.2", channels: [] }));
     expect(bunDf).toContain("FROM oven/bun:1.4.2");
     expect(bunDf).toContain("COPY package.json bun.lock* *.tgz ./");
@@ -189,13 +175,6 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(bunDf).toContain(`CMD ["bun", "run", "fastagent", "start", "/app/definition"]`);
     // The image opens the definition by path: nothing selects an agent by name.
     expect(bunDf).not.toContain("FASTAGENT_AGENT");
-
-    const mdDf = dockerfile(planFlyDeploy({ ...base, hasPackageJson: false, channels: [] }));
-    expect(mdDf).toContain(`FROM ${NODE_IMAGE}\n`);
-    expect(mdDf).not.toContain("FASTAGENT_AGENT");
-    expect(mdDf).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned global — no deps to install
-    expect(mdDf).not.toContain("npm ci");
-    expect(mdDf).toContain(`["fastagent", "start", "/app/definition"]`);
   });
 
   it("falls back to npm install when a code agent has no lockfile (npm ci would hard-fail)", () => {

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { openAgent, type LocalAgent } from "../src/harnesses/pi-durable/serve.ts";
+import type { LocalAgent } from "../src/harnesses/pi-durable/serve.ts";
+import { openSource } from "./open-source.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { mcpGrantFile } from "../src/mcp/grants.ts";
 import { inspectMcp } from "../src/mcp/host.ts";
@@ -40,8 +41,8 @@ export default {model:"fixture/"+core.getModel().id,providers:[createProvider({i
   );
   return dir;
 }
-async function opened(dir: string, options: Parameters<typeof openAgent>[1]) {
-  const agent = await openAgent(dir, options);
+async function opened(dir: string, options: Parameters<typeof openSource>[1]) {
+  const agent = await openSource(dir, options);
   agents.push(agent);
   return agent;
 }
@@ -156,7 +157,7 @@ it("partial open cleans previously started children and releases the state lease
     },
   });
   const pidFile = join(dir, "pids");
-  await expect(openAgent(dir, { mcp: { variables: { PID_FILE: pidFile } } })).rejects.toThrow();
+  await expect(openSource(dir, { mcp: { variables: { PID_FILE: pidFile } } })).rejects.toThrow();
   const pids = (await readFile(pidFile, "utf8")).trim().split("\n").map(Number);
   await vi.waitFor(() => expect(pids.filter(alive)).toEqual([]));
   await writeFile(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: {} }));

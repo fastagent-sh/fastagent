@@ -19,10 +19,8 @@ const base = {
   valueFile: ".secrets/.env",
   projectName: "fastagent-bot",
   port: 8787,
-  hasPackageJson: true,
   runtime: "node",
   hasLockfile: true,
-  version: "9.9.9",
   tunnel: false,
 } as const;
 

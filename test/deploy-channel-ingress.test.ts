@@ -236,10 +236,8 @@ describe("every host's runbook reads the same answer", () => {
       agent: "bot",
       appName: "bot",
       port: 8787,
-      hasPackageJson: true,
       runtime: "node",
       hasLockfile: true,
-      version: "9.9.9",
       hasCron: false,
       channels,
     }).runbook.join("\n");
@@ -249,10 +247,8 @@ describe("every host's runbook reads the same answer", () => {
       releaseId: "release-one",
       agent: "bot",
       serviceName: "bot",
-      hasPackageJson: true,
       runtime: "node",
       hasLockfile: true,
-      version: "9.9.9",
       hasCron: false,
       channels,
     }).runbook.join("\n");
@@ -262,10 +258,8 @@ describe("every host's runbook reads the same answer", () => {
       releaseId: "release-one",
       name: "bot",
       channels,
-      hasPackageJson: true,
       runtime: "node",
       hasLockfile: true,
-      version: "9.9.9",
       agent: "bot",
     }).runbook.join("\n");
 

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,6 +20,10 @@ async function agent(files: Record<string, string> = {}): Promise<string> {
   await mkdir(join(dir, ".secrets"), { recursive: true });
   await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
+  await writeFile(
+    join(dir, "package.json"),
+    JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
+  );
   // Real credential files: the leak gate only fires on paths that EXIST (nothing else can be baked).
   await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");
   await writeFile(join(dir, ".secrets", ".env"), "K=v\n");
@@ -53,6 +58,15 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.ok).toBe(false);
     if (!pre.ok) expect(pre.gate).toContain('"my.agent"');
     await rm(host, { recursive: true, force: true });
+  });
+
+  it("gates an agent with no package.json, which cannot be built, before it writes or builds anything", async () => {
+    const dir = await agent();
+    await rm(join(dir, "package.json"));
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) expect(pre.gate).toMatch(/no package\.json, and a deployed agent is built/);
+    expect(existsSync(join(dir, "dist"))).toBe(false);
   });
 
   it("gates --run when NO source resolves a model (would ship a crash-loop)", async () => {
@@ -183,7 +197,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const ok = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
-      expect(ok.container.hasPackageJson).toBe(true);
       expect(ok.container.apt).toEqual(["git"]); // git baked: it ships .git
       expect(JSON.stringify(ok.messages)).toMatch(/baked as the definition/); // the WYSIWYG note is stated
     }
@@ -528,12 +541,11 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/no model resolves/) });
   });
 
-  it("computes container facts and no model WARNING when the model is in config (markdown agent)", async () => {
+  it("computes container facts and no model WARNING when the model is in config ", async () => {
     const dir = await agent();
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
-    expect(pre.container.hasPackageJson).toBe(false); // markdown/skills agent → global-install path
     expect(pre.container.runtime).toBe("node");
     expect(pre.port).toBe(8787);
     expect(pre.messages.some((m) => m.level === "warn" && /model/.test(m.text))).toBe(false);
@@ -642,6 +654,23 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     expect(variablesOnly.ok && variablesOnly.messages.map((m) => m.text).join("\n")).not.toMatch(
       /kept your hand-written/,
     );
+  });
+
+  it("warns a kept hand-written Dockerfile that never runs `fastagent build`, which Railway's upload needs", async () => {
+    const warned = (pre: Awaited<ReturnType<typeof call>>) =>
+      pre.ok && pre.messages.some((m) => m.level === "warn" && /does not run `fastagent build`/.test(m.text));
+    const without = await agent({ Dockerfile: "FROM node:24\nCOPY . .\n" });
+    expect(warned(await call(without, { model: "openai/gpt-4o-mini" }))).toBe(true);
+    for (const step of [
+      "RUN ./node_modules/.bin/fastagent build",
+      "RUN npx fastagent build",
+      "RUN bun run fastagent build",
+    ]) {
+      const withStep = await agent({ Dockerfile: `FROM node:24\nCOPY . .\n${step}\n` });
+      expect(warned(await call(withStep, { model: "openai/gpt-4o-mini" }))).toBe(false);
+    }
+    // A generated Dockerfile has the step itself, so there is nothing to say of it.
+    expect(warned(await call(await agent(), { model: "openai/gpt-4o-mini" }))).toBe(false);
   });
 
   /** The agent's mise, faked where its platform package puts it: it resolves every name to aqua and logs each lock. */
@@ -835,6 +864,7 @@ describe("preflight: a model credential that does not travel", () => {
     const dir = join(host, "agent");
     await mkdir(dir, { recursive: true });
     try {
+      await writeFile(join(dir, "package.json"), '{"type":"module"}');
       await writeFile(
         join(dir, "fastagent.config.ts"),
         `import { fauxProvider } from "@earendil-works/pi-ai";
@@ -857,6 +887,7 @@ export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" 
     const dir = join(host, "agent");
     await mkdir(join(dir, ".secrets"), { recursive: true });
     try {
+      await writeFile(join(dir, "package.json"), '{"type":"module"}');
       await writeFile(
         join(dir, "fastagent.config.ts"),
         `import { createProvider, envApiKeyAuth } from "@earendil-works/pi-ai";

@@ -11,7 +11,8 @@ import { SignInCancelled } from "../sign-in-api.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
-import { definitionProviders, loadConfig, modelSpecFor } from "../harnesses/pi-durable/open.ts";
+import type { AgentDefinition } from "../harnesses/pi-durable/definition.ts";
+import { buildDefinitionShape, definitionProviders, loadConfig, modelSpecFor } from "../harnesses/pi-durable/open.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { contentLines } from "./content-view.ts";
 import { deployedHost, isDeployedWorkspace } from "../paths.ts";
@@ -21,6 +22,9 @@ import { dotEnvPath } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
+
+/** The definition a command runs, when it is not the source project's (`start` runs the build). */
+type LoadDefinition = (agentDir: string) => Promise<AgentDefinition>;
 
 /** An agent directory a command entered, and the default model that then resolves, if any. */
 export interface EnteredAgent {
@@ -38,11 +42,12 @@ export async function enterAgentDirectory(
   dirArg: string,
   opts: { model?: string; input?: boolean },
   before?: (agentDir: string) => Promise<void>,
+  load?: LoadDefinition,
 ): Promise<EnteredAgent> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir);
   await before?.(agentDir);
-  const modelSpec = await resolveFirstRunModel(agentDir, opts);
+  const modelSpec = await resolveFirstRunModel(agentDir, opts, load);
   return { agentDir, ...(modelSpec ? { modelSpec } : {}) };
 }
 
@@ -55,8 +60,9 @@ export async function enterAgentCommand(
   dirArg: string,
   opts: { model?: string; input?: boolean },
   before?: (agentDir: string) => Promise<void>,
+  load?: LoadDefinition,
 ): Promise<Required<EnteredAgent>> {
-  const entered = await enterAgentDirectory(dirArg, opts, before);
+  const entered = await enterAgentDirectory(dirArg, opts, before, load);
   const { modelSpec } = entered;
   if (!modelSpec) {
     failUsage(
@@ -154,13 +160,19 @@ export async function reportAuth(models: ModelEnvironment, modelSpec: string, ag
 async function resolveFirstRunModel(
   agentDir: string,
   options: { model?: string; input?: boolean } = {},
+  load?: LoadDefinition,
 ): Promise<string | undefined> {
-  const config = await loadConfig(agentDir).catch(failStartup);
+  // A loader's refusal is the caller's to report: AgentCore runs this inside a request, where an exit kills the container.
+  const loaded = load === undefined ? undefined : await load(agentDir);
+  const config = loaded?.config ?? (await loadConfig(agentDir).catch(failStartup));
   const configured = modelSpecFor(config, options.model);
   if (configured) return configured;
   if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
   if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
-  const providers = await definitionProviders(agentDir).catch(failStartup);
+  const providers =
+    loaded === undefined
+      ? await definitionProviders(agentDir).catch(failStartup)
+      : buildDefinitionShape(loaded, process.env).providers;
   const environment = await modelEnvironment(agentDir, {}, providers);
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error

@@ -7,7 +7,7 @@ import { type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.
 import type { DeploymentSecret } from "../secrets.ts";
 
 export interface FlyPlanInput extends ContainerInput {
-  // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from ContainerInput.
+  // Container facts (runtime, hasLockfile, bunVersion, apt) come from ContainerInput.
   /** Fly app name — globally unique, lowercase; the CLI sanitizes it from the dir basename. */
   appName: string;
   /** The port the app listens on (config.http.port ?? 8787); fly.toml routes to it. */

@@ -26,7 +26,6 @@ import { loadContent, loadEnvironment } from "../content/file.ts";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
-import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
@@ -122,14 +121,13 @@ function checkContent({ declared, bound }: ContentDeclaration, storageResets: bo
 async function checkEnvironment(
   agentDir: string,
   packages: Record<string, string>,
-  hasPackageJson: boolean,
   pkg: { optionalDependencies?: Record<string, unknown> },
   report: DeployReport,
 ): Promise<void> {
   if (Object.keys(packages).length === 0) return;
   const linux = MISE_PACKAGE_NAMES.filter((name) => name.includes("-linux-"));
   const missing = linux.filter((name) => !(name in (pkg.optionalDependencies ?? {})));
-  if (!hasPackageJson || missing.length > 0) {
+  if (missing.length > 0) {
     report.issue(
       `context.json declares packages, and the image would have no mise to install them with: the agent's ` +
         `package.json does not list ${missing.join(", ")}. Run \`fastagent env install\` in the agent directory.`,
@@ -206,6 +204,14 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       `the agent directory "${basename(agentDir)}" cannot be deployed — a deployed agent directory ` +
         `may use only letters, digits, "-" and "_"; rename it (the fastagent.config.ts inside is what ` +
         `makes it an agent, never its name)`,
+    );
+  }
+
+  // A deployed agent is built (`start` opens `dist/`), and a build needs the project's own manifest and TypeScript.
+  if (!(await exists(join(agentDir, "package.json")))) {
+    throw new DeployGate(
+      `the agent directory has no package.json, and a deployed agent is built: \`fastagent build\` needs one with ` +
+        `"type": "module" and typescript (\`fastagent init\` writes both)`,
     );
   }
 
@@ -326,7 +332,6 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
 
   // Container facts (shared by every host) + the warnings that follow.
-  const hasPackageJson = await exists(join(agentDir, "package.json"));
   const pkg = await readPackageJson(agentDir);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
   const kept = await keptDockerfile(agentDir);
@@ -350,20 +355,15 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     ((await exists(join(agentDir, "pnpm-lock.yaml"))) || (await exists(join(agentDir, "yarn.lock"))));
   // Does the baked agent directory ship a `.git`?
   const shipsGit = await exists(join(agentDir, ".git"));
-  // After the facts: the deps sentence must match the agent's actual shape (a markdown-only agent has no package.json
-  // and installs nothing — the note must not point at a file that doesn't exist).
-  const deps = hasPackageJson
-    ? `its package.json dependencies are installed in the image`
-    : `the agent has no package.json, so no deps are installed (the pinned global CLI serves the directory)`;
   // What a RELEASE does — host-neutral, because how long the storage under it lives is the host's own answer and its
   // runbook gives it (a Fly volume outlives every deploy; AgentCore's mount does not).
   report.note(
     `the agent directory is baked as the definition (WYSIWYG — what you see is what ships, git or not, clean or ` +
-      `not); ${deps}. Every release replaces the deployed definition and leaves the instance's state and ` +
+      `not); its package.json dependencies are installed in the image. Every release replaces the deployed definition and leaves the instance's state and ` +
       `credentials in place — for how long, see this host's storage note below`,
   );
   // A code agent with no lockfile builds via a non-frozen install (ranges resolve at build time) — not reproducible.
-  if (hasPackageJson && !hasLockfile) {
+  if (!hasLockfile) {
     const lock = runtime === "bun" ? "bun.lock" : "package-lock.json";
     report.warn(
       hasOtherLock
@@ -374,7 +374,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
   // The code-path Dockerfile runs `${runner}`.
-  if (hasPackageJson && !listsFastagent(pkg)) {
+  if (!listsFastagent(pkg)) {
     report.warn(
       `package.json does not list @fastagent-sh/fastagent — the image's \`${runner}\` has no local bin to run, ` +
         `so the container fails at start. Add it to dependencies and re-run \`${install}\`.`,
@@ -385,7 +385,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   const environment = loadEnvironment(agentDir);
   const packages = environment?.packages ?? {};
-  await checkEnvironment(agentDir, packages, hasPackageJson, pkg, report);
+  await checkEnvironment(agentDir, packages, pkg, report);
   const installsPackages = Object.keys(packages).length > 0;
 
   // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository content entry is cloned on the
@@ -404,11 +404,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     releaseId: randomUUID(),
     agent: basename(agentDir),
     machineryPaths: paths.machineryPaths,
-    hasPackageJson,
     runtime,
     bunVersion,
     hasLockfile,
-    version: await fastagentVersion(),
     apt,
     ...(installsPackages ? { packages: packageSpecs(packages) } : {}),
     ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
@@ -560,6 +558,14 @@ function checkKeptDockerfile(
       `kept your hand-written Dockerfile — it installs the environment context.json declares only if it says so: ` +
         `a generated Dockerfile shows the layers (the apt packages, then \`mise install --system\` of the packages ` +
         `context.json declares).`,
+    );
+  }
+  // `start` opens dist/. Docker and Fly upload the directory as it is, but `railway up` follows .gitignore, which the
+  // scaffold gives `/dist`: without a build step of its own the image has none, and the box does not start.
+  if (!/\bfastagent(?:\s+run)?\s+build\b|\bnpm\s+run\s+build\b/.test(dockerfileText)) {
+    report.warn(
+      `your Dockerfile does not run \`fastagent build\`: \`start\` opens dist/, which an upload that follows ` +
+        `.gitignore (Railway) leaves out. Add \`RUN ./node_modules/.bin/fastagent build\` after copying the agent.`,
     );
   }
   // The INSTRUCTION is the question, not the file's authorship: `prepareStartWorkspace` returns early without

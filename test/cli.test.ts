@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentWorkspace, run, whileRunning } from "./cli-run.ts";
+import { agentWorkspace, built, run, whileRunning } from "./cli-run.ts";
 
 describe("cli: process contracts", () => {
   it("a command ENTERS the agent's environment: a proxy declared only in .env carries the definition's fetch", async () => {
@@ -51,6 +51,7 @@ describe("cli: process contracts", () => {
       "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini", http: { api: false } };\n`,
       ".secrets/production/.env": "FASTAGENT_API_KEY=left-on-the-host\nOPENAI_API_KEY=sk-test\n",
     });
+    await built(dir);
     await whileRunning(
       ["start", dir, "--port", "0", "--bind", "127.0.0.1", "--no-input"],
       /Agent API: .*\n/,
@@ -97,10 +98,11 @@ describe("cli: process contracts", () => {
 
   it("start selects production before loading config, even when spawned with dev environment marks", async () => {
     const dir = await agentWorkspace("fa-start-environment-", {
-      "fastagent.config.ts": `throw new Error("selected " + process.env.FASTAGENT_ENVIRONMENT + ":" + process.env.FEISHU_APP_ID);\n`,
+      "fastagent.config.ts": `// @ts-nocheck\nif (process.env.FASTAGENT_ENVIRONMENT === "production") throw new Error("selected " + process.env.FASTAGENT_ENVIRONMENT + ":" + process.env.FEISHU_APP_ID);\nexport default {};\n`,
       ".secrets/.env": "FEISHU_APP_ID=cli_dev\n",
       ".secrets/production/.env": "FEISHU_APP_ID=cli_production\n",
     });
+    await built(dir);
     const env: NodeJS.ProcessEnv = { ...process.env, FASTAGENT_ENVIRONMENT: "dev", FASTAGENT_DEV: "1" };
     delete env.FEISHU_APP_ID;
     const result = await run(["start", dir, "--no-input"], undefined, env);
@@ -139,6 +141,7 @@ describe("cli: process contracts", () => {
       "fastagent.config.ts": `export default { model: "openai/gpt-5.5" };\n`,
       "src/channels/telegram.mjs": `export default () => { throw new Error("TELEGRAM_SECRET_TOKEN required"); };\n`,
     });
+    await built(dir);
 
     const { code, stderr } = await run(["start", dir, "--port", "0"]);
     expect(code).toBe(1);

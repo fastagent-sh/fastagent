@@ -1,3 +1,4 @@
+import { buildable } from "./cli-run.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +35,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "fa-remote-env-"));
   await mkdir(join(dir, ".secrets", "production"), { recursive: true });
   await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai/gpt-4o" };\n');
+  await buildable(dir);
   await writeFile(join(dir, ".secrets", ".env"), "AWS_PROFILE=dev-account\nAWS_REGION=us-east-1\n");
   await writeFile(
     join(dir, ".secrets", "production", ".env"),

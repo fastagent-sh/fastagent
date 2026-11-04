@@ -112,11 +112,14 @@ function readLocalContextFile(agentDir: string, declared: readonly DeclaredConte
   return text === undefined ? { content: {}, bound: [] } : parseLocalContextFile(text, path, declared, agentDir);
 }
 
-/** The content of the agent in `agentDir`: what `context.json` declares, and what this machine binds. */
-export function loadContent(agentDir: string): ContentDeclaration {
+/**
+ * The content of the agent whose program is in `agentDir`: what its `context.json` declares, and what this machine
+ * binds in the `context.local.json` of `instanceDir` (the program's own directory unless an instance is elsewhere).
+ */
+export function loadContent(agentDir: string, instanceDir: string = agentDir): ContentDeclaration {
   const { path, text } = contextFileAt(agentDir);
   const declared = text === undefined ? [] : declarePart(path, () => declareContent(parseFile(text, path).content));
-  return { declared, bound: readLocalContextFile(agentDir, declared).bound };
+  return { declared, bound: readLocalContextFile(instanceDir, declared).bound };
 }
 
 /** The environment the agent in `agentDir` declares, or undefined when it declares none. */

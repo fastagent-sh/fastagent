@@ -199,14 +199,15 @@ const models: CommandSpec = {
 
 const start: CommandSpec = {
   name: "start",
-  summary: "run the agent in production posture (opened as dev opens it, no watching)",
+  summary: "serve the built dist/ in production posture (no watching)",
   description:
-    "Run the agent (default .) in production posture — opened as dev opens it (your directory " +
-    "is the agent), just no file-watching. model and http.port come from fastagent.config.ts.",
+    "Serve the agent's dist/ (default .) in production posture, just no file-watching; refuses a " +
+    "missing or stale dist/, naming `fastagent build`. model and http.port come from " +
+    "fastagent.config.ts.",
   args: [AGENT_ARG],
   flags: [PORT, BIND, MODEL, TUNNEL, NO_INPUT],
   examples: [
-    { cmd: "fastagent start" },
+    { cmd: "fastagent start", note: "after fastagent build" },
     { cmd: "fastagent start --tunnel", note: "host a bot from your own box, no deploy" },
   ],
   notes:

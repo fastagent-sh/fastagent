@@ -115,6 +115,9 @@ jobs:
       - name: Serve on Bun
         run: bun test/bun/serve.ts
 
+      - name: Open a built package on Bun
+        run: bun test/bun/built.ts
+
   # Stable-named aggregate gate: this is the branch-protection required check.
   # Keeping a fixed name (independent of the matrix) means adding/removing Node
   # versions never requires editing branch protection. ("Core" = the essential

@@ -5,33 +5,25 @@
  * definition's modules as static imports.
  */
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "./built.ts";
 import { readMcpConfiguration, MCP_FILE } from "../../mcp/config.ts";
-import { AGENT_CONFIG_FILE, CONTEXT_FILE, exists } from "../../paths.ts";
+import { AGENT_CONFIG_FILE, exists } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { HARNESS_PACKAGES } from "../../version.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "./definition.ts";
 import { loadSourceDefinition } from "./open.ts";
 import { REGISTRY_KINDS } from "./registry.ts";
 
-const DIST_DIR = "dist";
 const STAGING_DIR = join(".fastagent", "build");
 
 const FASTAGENT_PACKAGE = "@fastagent-sh/fastagent";
-const CODE = /\.(ts|mts|cts|tsx|js|mjs|cjs|jsx)$/;
-const TEST = /\.(test|spec)\.[a-z]+$/;
-/** What never leaves the project, wherever it is: secrets, dependencies, history, the build's own output. */
-const NEVER_COPIED = /^(\.env(\..*)?|\.secrets|node_modules|\.git|\.DS_Store)$/;
-/** The program's text and data at the project root (§3.4). */
-const ROOT_FILES = ["SYSTEM.md", "AGENTS.md", CONTEXT_FILE, MCP_FILE, "README.md"];
-const ROOT_DIRS = ["skills", "prompts", "assets"];
 /** A declaration file: types only, so the compiler emits nothing for it, wherever it is (a workspace package's). */
 const DECLARATION = /\.d\.[cm]?ts$/;
 const MIN_TYPESCRIPT = 7;
-const LICENSE = /^LICEN[CS]E(\..*)?$/i;
 
 export interface BuildOptions {
   /** Type-check the project (default). Without it, `tsc --noCheck` only emits. */
@@ -49,16 +41,18 @@ export async function buildProject(directory: string, options: BuildOptions = {}
   // The same refusals `dev` makes, before anything is written: a build of a definition that does not open is no build.
   const definition = await loadSourceDefinition(directory);
   const { dir } = definition;
+  await requireModulePackage(dir);
   const dist = join(dir, DIST_DIR);
   // Built apart and moved into place whole: a build that fails leaves the `dist/` before it as it was.
   const staging = join(dir, STAGING_DIR);
   await rm(staging, { recursive: true, force: true });
   try {
     await mkdir(staging, { recursive: true });
-    await compile(dir, staging, definition, options.check !== false);
-    await copyProgramFiles(dir, staging);
+    const code = await compile(dir, staging, definition, options.check !== false);
+    await copyFiles(dir, staging, await copyPlan(dir, code));
     await writeEntry(staging, definition);
     await writeFile(join(staging, "package.json"), await distPackageJson(dir, definition));
+    await writeFile(join(staging, BUILD_FILE), await buildRecord(dir, code));
     await rm(dist, { recursive: true, force: true });
     await rename(staging, dist);
   } catch (error) {
@@ -66,6 +60,16 @@ export async function buildProject(directory: string, options: BuildOptions = {}
     throw error;
   }
   return { dist, definition, warnings: literalMcpCredentials(dir) };
+}
+
+/** The compiler reads a `.ts` file as CommonJS without a package that says otherwise, and refuses its `import`s. */
+async function requireModulePackage(dir: string): Promise<void> {
+  if (!(await exists(join(dir, "package.json")))) {
+    throw new Error(`fastagent build needs ${join(dir, "package.json")}, with "type": "module"`);
+  }
+  if (((await readPackageJson(dir)) as { type?: unknown }).type !== "module") {
+    throw new Error(`fastagent build compiles ES modules: set "type": "module" in ${join(dir, "package.json")}`);
+  }
 }
 
 /** The project's `tsc`, by the package's own `bin`: FastAgent does not carry a compiler, as Next.js does not. */
@@ -122,28 +126,38 @@ function tscArguments(dir: string, outDir: string, roots: readonly string[], mor
 }
 
 /**
- * The files the compiler would read that `dist/` cannot hold: a source file outside the project. `tsc` reports one
- * (TS6059) yet writes its output beside it, and with `--noCheck` reports nothing and succeeds, so the program's files
- * are listed first and the build refuses before anything is emitted. Dependencies (`node_modules`, the compiler's own
- * libraries) and declaration files, which emit nothing, are not the project's source.
+ * The source files the compiler reads, split into the project's (relative, what the build records) and those outside
+ * it, which `dist/` cannot hold: `tsc` reports one (TS6059) yet writes its output beside it, and with `--noCheck`
+ * reports nothing and succeeds, so the files are listed first and the build refuses before anything is emitted.
+ * Dependencies (`node_modules`, the compiler's own libraries) and declaration files, which emit nothing, are neither.
  */
-async function sourceOutsideProject(dir: string, roots: readonly string[]): Promise<string[]> {
+async function programFiles(dir: string, roots: readonly string[]): Promise<{ inside: string[]; outside: string[] }> {
   const { output } = await run(process.execPath, tscArguments(dir, dir, roots, ["--listFilesOnly"]), dir);
-  const listed = output.split("\n").map((line) => line.trim());
-  return listed.filter((file) => {
-    if (!isAbsolute(file) || DECLARATION.test(file) || file.split(sep).includes("node_modules")) return false;
-    return relative(dir, file).startsWith("..");
-  });
+  const inside: string[] = [];
+  const outside: string[] = [];
+  for (const file of output.split("\n").map((line) => line.trim())) {
+    if (!isAbsolute(file) || file.split(sep).includes("node_modules")) continue;
+    const rel = relative(dir, file);
+    if (rel.startsWith("..")) {
+      if (!DECLARATION.test(file)) outside.push(file);
+    } else {
+      inside.push(rel.split(sep).join("/"));
+    }
+  }
+  return { inside, outside };
 }
 
-/** The configuration and every registered module, compiled with what they import; a type error fails the build. */
-async function compile(dir: string, outDir: string, definition: AgentDefinition, check: boolean): Promise<void> {
+/**
+ * The configuration and every registered module, compiled with what they import; a type error fails the build.
+ * Answers the project's source files the compiler read.
+ */
+async function compile(dir: string, outDir: string, definition: AgentDefinition, check: boolean): Promise<string[]> {
   const roots = [
     ...((await exists(join(dir, AGENT_CONFIG_FILE))) ? [AGENT_CONFIG_FILE] : []),
     ...REGISTRY_KINDS.flatMap((kind) => definition.registry[kind].map(({ file }) => file)),
   ];
-  if (roots.length === 0) return;
-  const outside = await sourceOutsideProject(dir, roots);
+  if (roots.length === 0) return [];
+  const { inside, outside } = await programFiles(dir, roots);
   if (outside.length > 0) {
     throw new Error(
       `the project imports source from outside ${dir}, which ${DIST_DIR}/ cannot hold: ${outside.join(", ")}`,
@@ -155,6 +169,7 @@ async function compile(dir: string, outDir: string, definition: AgentDefinition,
     dir,
   );
   if (code !== 0) throw new Error(`tsc refused the project (exit ${code}):\n${output.trim()}`);
+  return inside;
 }
 
 function run(command: string, args: string[], cwd: string): Promise<{ code: number | null; output: string }> {
@@ -166,48 +181,6 @@ function run(command: string, args: string[], cwd: string): Promise<{ code: numb
     child.on("error", reject);
     child.on("close", (code) => resolve({ code, output }));
   });
-}
-
-/**
- * The text and data the definition reads, and the resources beside its code: every file that is not code or a test
- * in each directory the compiler wrote to. A module's resource is relative to the module, so it lands beside it.
- */
-async function copyProgramFiles(dir: string, dist: string): Promise<void> {
-  for (const name of await readdir(dir)) {
-    if (ROOT_FILES.includes(name) || LICENSE.test(name)) await copyFile(join(dir, name), join(dist, name));
-  }
-  for (const name of ROOT_DIRS) {
-    if (await exists(join(dir, name))) await copyTree(join(dir, name), join(dist, name), () => true);
-  }
-  const compiled = (await exists(dist)) ? await readdir(dist, { withFileTypes: true }) : [];
-  for (const entry of compiled) {
-    if (!entry.isDirectory() || ROOT_DIRS.includes(entry.name)) continue;
-    await copyTree(join(dir, entry.name), join(dist, entry.name), (file) => !CODE.test(file) && !TEST.test(file));
-  }
-}
-
-/**
- * `from`'s files copied to `to`, a link followed to what it names: `dev` reads a symlinked skill, so `dist/` holds it.
- * A link back to a directory being copied is refused, naming it, rather than followed for ever.
- */
-async function copyTree(
-  from: string,
-  to: string,
-  include: (name: string) => boolean,
-  within: readonly string[] = [],
-): Promise<void> {
-  const here = await realpath(from);
-  if (within.includes(here)) throw new Error(`${from} links back to ${here}, a directory this build is copying`);
-  for (const entry of await readdir(from, { withFileTypes: true })) {
-    if (NEVER_COPIED.test(entry.name)) continue;
-    const source = join(from, entry.name);
-    const target = await stat(source);
-    if (target.isDirectory()) await copyTree(source, join(to, entry.name), include, [...within, here]);
-    else if (target.isFile() && include(entry.name)) {
-      await mkdir(to, { recursive: true });
-      await copyFile(source, join(to, entry.name));
-    }
-  }
 }
 
 /** `index.js`, the package's default export: the definition, its modules imported statically. */
@@ -234,6 +207,7 @@ async function writeEntry(dist: string, definition: AgentDefinition): Promise<vo
 
 export default defineDefinition({
   format: ${DEFINITION_FORMAT},
+  builtWith: ${JSON.stringify(definition.builtWith)},
   name: ${JSON.stringify(definition.name)},
   version: ${JSON.stringify(definition.version)},
   dir: dirname(fileURLToPath(import.meta.url)),

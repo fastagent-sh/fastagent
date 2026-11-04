@@ -7,12 +7,15 @@ import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
 import { openPreparedStartService } from "../src/cli/commands/start.ts";
+import { buildProject } from "../src/harnesses/pi-durable/build.ts";
+import { buildable } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "${CODEX_MODEL}" }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
   await writeFile(join(dir, "fastagent.config.ts"), `export default ${config};\n`);
   await writeFile(join(dir, "SYSTEM.md"), "You are a test agent.\n");
+  await buildable(dir);
   for (const [rel, body] of Object.entries(files)) {
     await mkdir(join(dir, rel, ".."), { recursive: true });
     await writeFile(join(dir, rel), body);
@@ -36,7 +39,10 @@ describe("deferred AgentCore initialization", () => {
     // On this host `openPreparedStartService` runs inside an envelope, so a `failStartup` there would
     // kill the container mid-request and the deploy driver would gate on a generic timeout instead of
     // the runtime's own error text.
-    const dir = await agentDir({ "src/channels/bad.mjs": "throw new Error('broken channel');\n" });
+    const dir = await agentDir({
+      "src/channels/bad.mjs": "export default () => { throw new Error('broken channel'); };\n",
+    });
+    await buildProject(dir);
     const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
       throw new Error("process.exit called");
     }) as never);
@@ -267,5 +273,35 @@ describe("mountAgentcoreService", () => {
     await service.close();
     // Both the shutdown hook and an explicit close can run.
     await expect(service.close()).resolves.toBeUndefined();
+  });
+});
+
+describe("a deployed box's build", () => {
+  it("opens although the agent edited the project's copy, which only a local start refuses", async () => {
+    const dir = await agentDir();
+    await buildProject(dir);
+    await writeFile(join(dir, "SYSTEM.md"), "The agent rewrote its own prompt.\n");
+    await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/built from other sources/);
+    vi.stubEnv("FASTAGENT_RELEASE_FILE", join(dir, "release.json"));
+    vi.stubEnv("FASTAGENT_STATE_DIR", join(dir, ".state"));
+    const service = await openPreparedStartService(dir, { input: false });
+    await service.close();
+  }, 120_000);
+});
+
+describe("AgentCore assembly of a project nobody built", () => {
+  it("rejects naming `fastagent build` instead of exiting the container", async () => {
+    const dir = await agentDir();
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("process.exit called");
+    }) as never);
+    try {
+      await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(
+        /holds no build: run `fastagent build`/,
+      );
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      exit.mockRestore();
+    }
   });
 });

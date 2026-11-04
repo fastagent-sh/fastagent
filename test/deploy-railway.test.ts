@@ -9,10 +9,8 @@ const base = {
   releaseId: "release-one",
   agent: "reviewer",
   serviceName: "bot",
-  hasPackageJson: true,
   runtime: "node",
   hasLockfile: true,
-  version: "9.9.9",
   hasCron: false,
 } as const;
 

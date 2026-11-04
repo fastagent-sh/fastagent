@@ -61,7 +61,7 @@ session is given one (`sessions.update`).
 
 ```bash
 fastagent dev --model openai/gpt-5.5
-FASTAGENT_MODEL=openai/gpt-5.5 fastagent start
+fastagent build && FASTAGENT_MODEL=openai/gpt-5.5 fastagent start
 ```
 
 `deploy` evaluates the same chain in production: `FASTAGENT_MODEL` from `.secrets/production/.env`, else
@@ -428,6 +428,7 @@ For a manually configured service:
 
 ```bash
 ln -sfn /data/content content   # in the agent directory, before every start: a redeploy replaces the directory
+fastagent build   # `start` opens dist/
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
@@ -562,7 +563,7 @@ agent's own pending wake-ups. A wake-up is work the agent schedules for itself w
 `start`. Per-turn traces log at `debug`, so `start` keeps end-user content out of logs unless you opt in.
 
 ```bash
-FASTAGENT_LOG_LEVEL=debug fastagent start
+fastagent build && FASTAGENT_LOG_LEVEL=debug fastagent start
 ```
 
 It is read per log line, so set it in `.secrets/.env` for dev or `.secrets/production/.env` for deployment.

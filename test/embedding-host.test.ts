@@ -23,13 +23,13 @@ import {
   createAgent,
   credentialFile,
   listContent,
-  openAgent,
   providerAuth,
   readContentSource,
   removeContent,
   signIn,
   signInOptions,
 } from "../src/index.ts";
+import { openSource } from "./open-source.ts";
 import { MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { makeFaux } from "./faux.ts";
@@ -345,19 +345,18 @@ describe("a host's own instance of an agent", () => {
     const dir = join(base, "agent");
     await mkdir(dir);
     await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
-    // Read as FASTAGENT_STATE_DIR is: `~/…` is the home directory's.
     const stateDir = join(homedir(), "host-state", "agent");
     const store = hostStore({ anthropic: { type: "api_key", key: "sk-host" } });
     // The model lists are the instance's too: a model only the host's kept list has is offered.
     const anthropic = modelsOver(new InMemoryCredentialStore()).getModels("anthropic")[0] as AnyModel;
     keepCatalog(join(stateDir, "models"), [{ ...anthropic, id: "claude-released" }]);
 
-    await expect(openAgent(dir, { stateDir: "" })).rejects.toThrow(
-      "stateDir needs the directory the instance's state is kept in",
+    await expect(openSource(dir, { stateDir: "host-state" })).rejects.toThrow(
+      'stateDir must be an absolute path, and is "host-state"',
     );
-    const hosted = await openAgent(dir, { credentials: store, stateDir: "~/host-state/agent" });
+    const hosted = await openSource(dir, { credentials: store, stateDir });
     // The directory's own instance (what `fastagent dev` opens) is not held by the host's.
-    const own = await openAgent(dir);
+    const own = await openSource(dir);
     try {
       expect(existsSync(join(stateDir, "agent.sqlite"))).toBe(true);
       const offered = (await hosted.info()).models;

@@ -88,16 +88,12 @@ export function isGeneratedDockerignore(content: string): boolean {
 export interface ContainerInput {
   /** Stable for one release; generated once by the deploy preflight, never on container restart. */
   releaseId: string;
-  /** Whether the agent has a package.json (a code agent); else a pure markdown/skills agent. */
-  hasPackageJson: boolean;
   /** The package manager the generated image targets. */
   runtime: "node" | "bun";
   /** Whether the runtime's lockfile exists (package-lock.json for npm, bun.lock/bun.lockb for bun). */
   hasLockfile: boolean;
   /** For `runtime: "bun"`, the `FROM oven/bun:<tag>` version (from packageManager `bun@x`), else `"1"`. */
   bunVersion?: string;
-  /** This fastagent version, to PIN the global install on the markdown path (reproducible redeploys). */
-  version: string;
   /**
    * The Debian packages the image installs: what FastAgent needs (git for content and a shipped `.git`, CA certificates
    * and curl for mise), then the agent's `aptPackages`.
@@ -168,6 +164,9 @@ RUN ${steps.join(" \\\n && ")}
  */
 export const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
 
+/** Why the image builds `dist/` itself: an upload that follows `.gitignore` (`railway up`) drops it, and `start` needs it. */
+const BUILD_STEP_NOTE = "# `start` opens dist/, which an upload that follows .gitignore leaves out: build it here.";
+
 function dockerfile(input: ContainerInput): string {
   // The build context is the agent directory, baked at IMAGE_DEFINITION_DIR; deps install (and the local bin lives)
   // there.
@@ -178,17 +177,6 @@ function dockerfile(input: ContainerInput): string {
   const apt = aptLayer(input.apt);
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
   const deployment = `ENV FASTAGENT_RELEASE_FILE=${dir}/${RELEASE_FILE}\nENV FASTAGENT_STORAGE_DIR=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
-  // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent` from PATH.
-  if (!input.hasPackageJson) {
-    return `${GENERATED_DOCKERFILE_MARKER}. ${layoutNote}
-# npm-based (a markdown/skills agent installs the pinned CLI globally; ${NODE_IMAGE} has npm).
-FROM ${NODE_IMAGE}
-${apt}WORKDIR ${dir}
-${deployment}RUN npm i -g @fastagent-sh/fastagent@${input.version}
-COPY . .
-CMD ["fastagent", "start", "${dir}"]
-`;
-  }
   const environment = input.packages && input.packages.length > 0 ? environmentLayer(dir) : "";
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : NODE_IMAGE;
@@ -211,6 +199,8 @@ ${deployment}`;
     return `${head}COPY package.json bun.lock* *.tgz ./
 RUN ${install}
 ${environment}COPY . .
+${BUILD_STEP_NOTE}
+RUN bun run fastagent build
 CMD ["bun", "run", "fastagent", "start", "${dir}"]
 `;
   }
@@ -220,6 +210,8 @@ CMD ["bun", "run", "fastagent", "start", "${dir}"]
   return `${head}COPY package.json package-lock.json* *.tgz ./
 RUN ${install}
 ${environment}COPY . .
+${BUILD_STEP_NOTE}
+RUN ./node_modules/.bin/fastagent build
 CMD ["./node_modules/.bin/fastagent", "start", "${dir}"]
 `;
 }

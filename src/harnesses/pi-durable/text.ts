@@ -245,13 +245,13 @@ const fileText = (path: string): string | undefined => {
 export function definitionSections(
   agentDir: string,
   content: readonly ResolvedContent[],
-  options: { wake: boolean },
+  options: { wake: boolean; workdir?: string },
 ): PromptSection[] {
   return [
     section("system", () => fileText(join(agentDir, "SYSTEM.md")), { tag: false }),
     section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
     section("skills", () => skillsPrompt(readSkills(agentDir))),
-    section("content", () => contentSection({ agentDir, content })),
+    section("content", () => contentSection({ agentDir, workdir: options.workdir ?? agentDir, content })),
     section("self_change", () => (isDeployedWorkspace() ? selfChangeSection(options.wake) : undefined)),
   ];
 }
@@ -270,13 +270,10 @@ function selfChangeSection(wake: boolean): string {
   return (
     `Your directory survives restarts, including uncommitted work; /tmp does not. ${deployment}, so anything that ` +
     `must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). ` +
-    `SYSTEM.md, AGENTS.md, skills/ and prompts/ are read for every message; changes to code in src/ (tools, ` +
-    `extensions, channels, schedules) or to configuration (fastagent.config.ts, context.json, package.json) take ` +
-    `effect when the service restarts. A tool you install yourself (apt-get, npm install -g) belongs to this machine ` +
-    `and is gone when its container is replaced. To give yourself a new capability now, write a skill — a SKILL.md in ` +
-    `your definition's skills/ directory, with any script it needs run through bash. It lasts until the next ` +
-    `deployment replaces that directory, so a capability that should outlast it belongs in the author's release: ` +
-    `propose it to them.` +
+    `Your definition (SYSTEM.md, AGENTS.md, skills/, prompts/, src/ and the configuration) is the author's release, ` +
+    `read as it was built: a change you make to a copy of it in your directory is not read. A tool you install ` +
+    `yourself (apt-get, npm install -g) belongs to this machine and is gone when its container is replaced. A ` +
+    `capability that should outlast a deployment belongs in the author's release: propose it to them.` +
     // Named only when it has the tool: naming a tool the model does not have invites calls to it.
     (wake ? " To schedule your own follow-up work, use the wake tool." : "")
   );
@@ -298,10 +295,21 @@ function contentKind(c: ResolvedContent): string {
  * with its location and where a change there goes. A result written where it does not last is how knowledge gets
  * lost, so the agent is told which is which.
  */
-function contentSection({ agentDir, content }: { agentDir: string; content: readonly ResolvedContent[] }): string {
+function contentSection({
+  agentDir,
+  workdir,
+  content,
+}: {
+  agentDir: string;
+  workdir: string;
+  content: readonly ResolvedContent[];
+}): string {
   const own =
-    `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
-    `land there unless you put them elsewhere.`;
+    workdir === agentDir
+      ? `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
+        `land there unless you put them elsewhere.`
+      : `Your working directory, ${workdir}, is your own directory: files you create land there unless you put them ` +
+        `elsewhere. Your definition is in ${agentDir}, which you read and do not change.`;
   if (content.length === 0) return `${own} Nothing else is declared for you: you work only in your own directory.`;
   const line = (c: ResolvedContent) =>
     `- ${c.name}: ${c.location} (${contentKind(c)})${c.description !== undefined ? ` ${c.description}` : ""}`;

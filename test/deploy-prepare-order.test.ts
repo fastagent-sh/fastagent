@@ -32,6 +32,7 @@ vi.mock("../src/harnesses/pi-durable/open.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/harnesses/pi-durable/open.ts")>()),
   loadConfig: async () => config,
 }));
+vi.mock("../src/harnesses/pi-durable/build.ts", () => ({ buildProject: async () => ({ warnings: [] }) }));
 vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/deploy/preflight.ts")>()),
   // The values as the real pre-flight reads them, the selected value file, over what a test sets in `facts`.

@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/container.ts";
-import { fastagentVersion } from "../src/version.ts";
 import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
 
@@ -27,6 +26,8 @@ describe("cli: deploy", () => {
     const result = await runInProcess(["deploy", "docker", dir]);
     expect(result.code).toBe(0);
     expect(result.stderr).toContain("source: .secrets/production/.env");
+    // `deploy` builds first, generate-only included: the image's `start` opens dist/.
+    expect(await stat(join(dir, "dist", "index.js"))).toBeDefined();
     expect(result.stdout).toContain("PRODUCTION_ONLY");
     expect(result.stdout).not.toContain("DEV_ONLY");
     expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toContain(".secrets/production/.env");
@@ -229,10 +230,8 @@ describe("cli: deploy", () => {
     const current = containerArtifacts({
       releaseId: "release-one",
       agent: "any",
-      hasPackageJson: false,
       runtime: "node",
       hasLockfile: false,
-      version: await fastagentVersion(),
       apt: [],
     }).find((a) => a.path === "Dockerfile")!.content;
     const fresh = await setup(current);

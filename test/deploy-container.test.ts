@@ -5,10 +5,8 @@ import { definitionSections } from "../src/harnesses/pi-durable/text.ts";
 
 const input = {
   releaseId: "release-one",
-  hasPackageJson: true,
   runtime: "node",
   hasLockfile: true,
-  version: "0.0.0",
   agent: "reviewer",
 } as const;
 
@@ -62,6 +60,15 @@ describe("deploy/container: shared Docker context", () => {
       "gh@2\nnpm:@biomejs/biome@latest\n",
     );
     expect(dockerfile({ ...input, packages })).toBe(dockerfile({ ...input, packages: ["jq@1"] }));
+    // `start` opens dist/, which `railway up` leaves out as git-ignored: the image builds it, after the copy.
+    for (const [runtime, build] of [
+      ["node", "RUN ./node_modules/.bin/fastagent build"],
+      ["bun", "RUN bun run fastagent build"],
+    ] as const) {
+      const text = dockerfile({ ...input, runtime });
+      expect(text.indexOf("COPY . .")).toBeLessThan(text.indexOf(build));
+      expect(text.indexOf(build)).toBeLessThan(text.indexOf("CMD ["));
+    }
     for (const runtime of ["node", "bun"] as const) {
       const text = dockerfile({ ...input, runtime, packages });
       const order = ["RUN npm ci", "RUN bun install"].find((line) => text.includes(line)) as string;
@@ -137,11 +144,9 @@ describe("deploy/container: shared Docker context", () => {
       process.env.FASTAGENT_RELEASE_FILE = values[0];
       expect(note()).toContain("Your directory survives restarts");
       expect(note()).toContain("Each deployment replaces your directory with the author's release");
-      // The agent's runtime path to a new capability is a skill + script, not a code reload — and that skill is
-      // gone with the definition at the next deployment, which the same sentence has to say.
-      expect(note()).toContain("To give yourself a new capability now, write a skill");
-      expect(note()).toContain("It lasts until the next deployment replaces that directory");
-      expect(note()).toContain("changes to code in src/");
+      // The definition is the release, read as built: the prompt must not invite an edit that is never read.
+      expect(note()).toContain("is the author's release, read as it was built");
+      expect(note()).not.toContain("write a skill");
       // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
       expect(note()).not.toContain("wake tool");
       expect(note(true)).toContain("use the wake tool.");
@@ -151,9 +156,7 @@ describe("deploy/container: shared Docker context", () => {
       process.env.FASTAGENT_AGENTCORE = "1";
       expect(note()).not.toContain("Each deployment replaces your directory");
       expect(note()).toContain("resets this host's storage entirely");
-      // Same path, same lifetime warning: this host's next deploy erases the definition along with the rest.
-      expect(note()).toContain("To give yourself a new capability now, write a skill");
-      expect(note()).toContain("It lasts until the next deployment replaces that directory");
+      expect(note()).toContain("is the author's release, read as it was built");
     } finally {
       for (const [key, value] of [
         ["FASTAGENT_RELEASE_FILE", before],

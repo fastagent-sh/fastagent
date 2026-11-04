@@ -104,7 +104,7 @@ Use another port:
 
 ```bash
 fastagent dev --port 8788
-fastagent start --port 8788
+fastagent build && fastagent start --port 8788
 ```
 
 For `start`, hosted environments can set `PORT`.
@@ -141,6 +141,7 @@ A redeploy that replaces the agent wipes all three. Point each at durable storag
 
 ```bash
 ln -sfn /data/content content   # in the agent directory, before every start: a redeploy replaces the directory
+fastagent build   # `start` opens dist/
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 

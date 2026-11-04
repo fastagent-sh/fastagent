@@ -16,6 +16,7 @@ import {
   unpreparedFeishuApps,
 } from "../add-feishu.ts";
 import { displayPath, selectAgentEnvironment } from "../../paths.ts";
+import { buildProject } from "../../harnesses/pi-durable/build.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
 import { unprotectedSecretsNote } from "../../value-file.ts";
@@ -263,6 +264,9 @@ async function deploy(
       pre = await preflight();
     }
     for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
+    // The box starts the build, never the source: dist/ is made here, from what the image will hold.
+    const built = await buildProject(agentDir).catch(failStartup);
+    for (const warning of built.warnings) console.error(`[fastagent] warn: ${warning}`);
     const { channels } = pre;
     warnHostOnlyFlags(host, opts);
     // What follows is the host's work: a deadline meant for the person must never cut it halfway. Its own steps for

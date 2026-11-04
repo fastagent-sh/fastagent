@@ -24,7 +24,8 @@ import {
   assembleAgent,
   loadSourceDefinition,
 } from "../src/harnesses/pi-durable/open.ts";
-import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { openSource } from "./open-source.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 import { expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
@@ -494,7 +495,7 @@ describe("an app's openAgent", () => {
   it("refuses a wake-up while the app does not serve the agent, since only a serve's clock fires one", async () => {
     const dir = agentPackage(FILES);
     for (const [name, value] of Object.entries(ENV)) process.env[name] = value;
-    const agent = await openAgent(dir, { stateDir: join(dir, ".host-state") });
+    const agent = await openSource(dir, { stateDir: join(dir, ".host-state") });
     try {
       const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
       const wake = async () => {

@@ -1,3 +1,4 @@
+import { buildable } from "./cli-run.ts";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,6 +76,7 @@ async function agent(name: string, content: string, relocated = false) {
   await mkdir(secrets, { recursive: true });
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai/gpt-4o" };\n');
+  await buildable(dir);
   await writeFile(join(secrets, ".env"), content);
   if (relocated) vi.stubEnv("FASTAGENT_SECRETS_DIR", secrets);
   return { dir, file: join(secrets, ".env") };

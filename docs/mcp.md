@@ -153,7 +153,7 @@ const grant = await signInMcp({
 // Persist this choice in the host's instance record, not in .mcp.json.
 const mcp = { store, bindings: { linear: grant.id } };
 const state = await inspectMcp(agentDir, mcp);
-const agent = await openAgent(agentDir, { stateDir: instanceStateDir, mcp });
+const agent = await openAgent(definition, { workdir, stateDir: instanceStateDir, mcp });
 ```
 
 The callback functions in this example belong to the host UI. `confirmAuthorization` receives the server, resource,

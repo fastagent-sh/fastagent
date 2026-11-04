@@ -144,12 +144,12 @@ extension contributes the definition's:
 
 `prompts/<name>.md` are the prompt templates a Caller sends as `/<name>`; they and the skills are `info().commands`.
 
-**The text is read for every message; the code is not.** `SYSTEM.md`, `AGENTS.md`, `skills/` and `prompts/` take effect
-on the next message. The code in `src/`, the configuration and `package.json` take effect when the process restarts:
-`dev` restarts its worker on an edit, `start` at the next start or release. So an agent that gives itself a new
-capability while it runs writes a skill, whose script it runs through `bash`, read fresh every message; a tool or a
-schedule of its own is code, which waits for the author's release; and its own follow-up work is `wake` (§8). A skill
-it writes lives in the definition, so it lasts until the next deployment replaces it, and the deployed prompt says so.
+**The text is read for every message in `dev`; a built package is read as built.** From a source project, `SYSTEM.md`,
+`AGENTS.md`, `skills/` and `prompts/` take effect on the next message, and the code in `src/`, the configuration and
+`package.json` when `dev` restarts its worker. `start` and a deployment read `dist/`, so an edit to the project's copy
+is not read; a deployed agent's prompt says so, and a capability of its own waits for the author's release. A local
+`start` refuses a `dist/` older than the project; a deployed box does not check, since the agent works in that copy.
+Its own follow-up work is `wake` (§8). Skills an instance adds for itself are deferred (agent-artifact.md).
 
 ### Decisions behind the agent model
 
@@ -188,13 +188,19 @@ join-on-interrupt combinator that differed only in the word before `Failure`.
 
 ## 3. Assembly: the definition onto pi-durable
 
-`openServing(dir, options)` (`harnesses/pi-durable/serve.ts`) opens a directory. `dev`, `start`, `invoke`,
-`schedules run` and AgentCore call it, with where the Agent keeps its sessions and what becomes of an earlier process's
-messages; an app calls `openAgent(dir)`, which is it with a serve's defaults, and may give its own credential store and
-state root (`stateDir`: an instance of its own beside `dev`'s). It works in this order:
+`openServing(definition, options)` (`harnesses/pi-durable/serve.ts`) opens a definition as one instance. `dev`,
+`invoke` and `schedules run` give it the source project's (`loadSourceDefinition`), `start` and AgentCore the project's
+built `dist/` (`loadProjectBuild`, `built.ts`), with where the Agent keeps its sessions and what becomes of an earlier
+process's messages; an app calls `openAgent(definition, { root })`, which is it with a serve's defaults, and may give
+its own credential store and `{ stateDir, workdir }`. The definition's own directory (`definition.dir`) is only read:
+its text, `context.json`, `.mcp.json` and declared environment. The instance's directory (`workdir`) holds everything
+that is written: the agent's working directory, its secrets, its content's clones and, by default, its state. A source
+project is its own instance directory. It works in this order:
 
 `fastagent build` (`build.ts`) compiles a project into `dist/` with the project's TypeScript and generates its entry,
-which calls the same `defineDefinition`; opening a built package is the artifact work's next step.
+which calls the same `defineDefinition`, and `build.json`, the record `start` compares the project against
+(`built.ts`: a hash of the code the compiler read, the files the build copies, the modules `src/` lists and
+`package.json`). `deploy` builds first, so the image holds the `dist/` its `start` opens.
 
 1. **The definition** (`loadSourceDefinition`, `open.ts`; `definition.ts`): the configuration and every module of
    `src/` are imported in file order, the configuration's keys are checked (nested ones included), and the result is

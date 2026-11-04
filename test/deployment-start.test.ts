@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 
 // This test pays a project compile plus TWO cold harness starts in child processes: ~3s on an idle
 // machine, but a full `npm test` run puts a fork on every core and has been measured past the old 30s
@@ -72,7 +73,7 @@ it("retries interrupted installs, opens the deployed agent's runtime and preserv
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 const model = {
   id: "test", name: "Test", api: "openai-completions", provider: "local", baseUrl: ${JSON.stringify(baseUrl)},
-  reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  reasoning: false, input: ["text" as const], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 32768, maxTokens: 1024,
 };
 export default {
@@ -103,6 +104,10 @@ export default defineTool({
   }),
 });`,
     );
+    // What `deploy` does before the image: the box starts the build, which holds the definition's compiled code.
+    await symlink(join(repo, "node_modules/typescript"), join(agent, "node_modules/typescript"), "dir");
+    await symlink(join(repo, "node_modules/@typescript"), join(agent, "node_modules/@typescript"), "dir");
+    await buildProject(agent);
     const manifest = join(dir, "release.json");
     await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "reviewer" }));
     await mkdir(join(root, ".secrets"), { recursive: true });

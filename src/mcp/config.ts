@@ -135,6 +135,8 @@ export function resolveMcpServers(
   dir: string,
   env: Readonly<Record<string, string | undefined>>,
   only?: string,
+  /** Where a stdio server runs: the instance's directory when the definition's own is read-only. */
+  cwd: string = dir,
 ): McpServer[] {
   const config = readMcpConfiguration(dir);
   return Object.entries(config.mcpServers)
@@ -164,7 +166,7 @@ export function resolveMcpServers(
         type: "stdio",
         command,
         args: (server.args ?? []).map(expand),
-        cwd: resolve(dir),
+        cwd: resolve(cwd),
         env: {
           ...Object.fromEntries(
             INHERITED.flatMap((key) => (env[key] === undefined ? [] : [[key, env[key] as string]])),
