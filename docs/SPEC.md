@@ -470,13 +470,17 @@ interface AgentDefinition<Settings = unknown> {
   };
 }
 
+/** Each name once, however many places declare it. */
 interface DeclaredSecret {
   name: string;
   description?: string;
-  /** A stored credential satisfies a model provider's variable, so it is optional. */
+  /**
+   * Whether the instance runs without it: true only when every declaration says so. A stored credential satisfies a
+   * model provider's variable, so it is optional.
+   */
   optional: boolean;
-  /** Where it is declared: a module of `src/`, `mcp.json`, `context.json`, the default model's provider. */
-  declaredIn: string;
+  /** Every place it is declared: a module of `src/`, `mcp.json`, `context.json`, the default model's provider. */
+  declaredIn: string[];
 }
 
 type InstanceInputs<Settings = unknown> = {
