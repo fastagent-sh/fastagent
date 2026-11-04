@@ -656,6 +656,23 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     );
   });
 
+  it("warns a kept hand-written Dockerfile that never runs `fastagent build`, which Railway's upload needs", async () => {
+    const warned = (pre: Awaited<ReturnType<typeof call>>) =>
+      pre.ok && pre.messages.some((m) => m.level === "warn" && /does not run `fastagent build`/.test(m.text));
+    const without = await agent({ Dockerfile: "FROM node:24\nCOPY . .\n" });
+    expect(warned(await call(without, { model: "openai/gpt-4o-mini" }))).toBe(true);
+    for (const step of [
+      "RUN ./node_modules/.bin/fastagent build",
+      "RUN npx fastagent build",
+      "RUN bun run fastagent build",
+    ]) {
+      const withStep = await agent({ Dockerfile: `FROM node:24\nCOPY . .\n${step}\n` });
+      expect(warned(await call(withStep, { model: "openai/gpt-4o-mini" }))).toBe(false);
+    }
+    // A generated Dockerfile has the step itself, so there is nothing to say of it.
+    expect(warned(await call(await agent(), { model: "openai/gpt-4o-mini" }))).toBe(false);
+  });
+
   /** The agent's mise, faked where its platform package puts it: it resolves every name to aqua and logs each lock. */
   async function installMise(dir: string): Promise<() => Promise<string>> {
     const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);

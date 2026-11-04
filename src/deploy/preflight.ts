@@ -560,6 +560,14 @@ function checkKeptDockerfile(
         `context.json declares).`,
     );
   }
+  // `start` opens dist/. Docker and Fly upload the directory as it is, but `railway up` follows .gitignore, which the
+  // scaffold gives `/dist`: without a build step of its own the image has none, and the box does not start.
+  if (!/\bfastagent(?:\s+run)?\s+build\b|\bnpm\s+run\s+build\b/.test(dockerfileText)) {
+    report.warn(
+      `your Dockerfile does not run \`fastagent build\`: \`start\` opens dist/, which an upload that follows ` +
+        `.gitignore (Railway) leaves out. Add \`RUN ./node_modules/.bin/fastagent build\` after copying the agent.`,
+    );
+  }
   // The INSTRUCTION is the question, not the file's authorship: `prepareStartWorkspace` returns early without
   // FASTAGENT_RELEASE_FILE, so a Dockerfile that sets it reads the manifest whoever wrote it. This gates rather
   // than warns because it is about FastAgent's OWN delivery arriving — the model would be reported here and
