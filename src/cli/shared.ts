@@ -24,6 +24,7 @@ import { contentLines } from "./content-view.ts";
 import { deployedHost, isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { enterAgentEnv } from "../env.ts";
+import { type InstanceFlags, enterInstanceLocation } from "./instance.ts";
 import { dotEnvPath } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
@@ -46,12 +47,13 @@ export interface EnteredAgent {
  */
 export async function enterAgentDirectory(
   dirArg: string,
-  opts: { model?: string; input?: boolean },
+  opts: { model?: string; input?: boolean; instance?: InstanceFlags },
   before?: (agentDir: string) => Promise<void>,
   load?: LoadProject,
 ): Promise<EnteredAgent> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir);
+  enterInstanceLocation(opts.instance);
   await before?.(agentDir);
   const modelSpec = await resolveFirstRunModel(agentDir, opts, load);
   return { agentDir, ...(modelSpec ? { modelSpec } : {}) };
@@ -64,7 +66,7 @@ export async function enterAgentDirectory(
  */
 export async function enterAgentCommand(
   dirArg: string,
-  opts: { model?: string; input?: boolean },
+  opts: { model?: string; input?: boolean; instance?: InstanceFlags },
   before?: (agentDir: string) => Promise<void>,
   load?: LoadProject,
 ): Promise<Required<EnteredAgent>> {
@@ -90,8 +92,8 @@ export async function reportAssembly(
   modelSpec: string,
   extras: [label: string, value: string][] = [],
 ): Promise<void> {
-  const { definition, code, models, agentDir, stateRoot, config } = opened;
-  reportLine("agent", `${definition.name} — ${agentDir}`);
+  const { definition, code, models, agentDir, workdir, stateRoot, config } = opened;
+  reportLine("agent", `${definition.name} — ${workdir}`);
   for (const [label, value] of contentLines(opened.content)) reportLine(label, value);
   reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(models, modelSpec, agentDir);

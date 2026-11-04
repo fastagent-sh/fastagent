@@ -6,6 +6,7 @@ import { loadContent, loadEnvironment } from "../../content/file.ts";
 import { type ResolvedContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enterAgentEnv } from "../../env.ts";
+import { type InstanceFlags, enterInstanceLocation } from "../instance.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { type EffectiveConfig, configValue, resolveConfig } from "../../harnesses/pi-durable/config.ts";
@@ -13,7 +14,7 @@ import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { readCommands } from "../../harnesses/pi-durable/text.ts";
 import { inspectMcp } from "../../mcp/host.ts";
-import { resolveStateRoot } from "../../paths.ts";
+import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { contentLines } from "../content-view.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
@@ -21,11 +22,14 @@ import { agentDirOrExit, failStartup } from "../fail.ts";
 export interface InfoOptions {
   json?: boolean;
   model?: string;
+  instance?: InstanceFlags;
 }
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir); // code may read its secrets, and fetch, when it is built
+  enterInstanceLocation(opts.instance);
+  const workdir = resolveWorkdir(agentDir);
   const { definition, instance } = await loadDevProject(agentDir).catch(failStartup);
   const config = (() => {
     try {
@@ -51,7 +55,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   let contentError: string | undefined;
   try {
     const declaration = loadContent(agentDir);
-    content = resolveContent(agentDir, declaration);
+    content = resolveContent(workdir, declaration);
     contentAbsent = contentAbsentHere(declaration);
   } catch (error) {
     contentError = (error as Error).message;
@@ -101,6 +105,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           commands,
           secrets: definition.inputs.secrets,
           unsetSecrets: unsetSecrets.map(({ name }) => name),
+          workdir,
           stateRoot,
           authPath: auth?.path ?? null,
           fallbackAuthPath: auth?.fallback ?? null,
@@ -138,6 +143,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   if (unsetSecrets.length > 0) {
     cont(`⚠ dev, start and deployments refuse to boot until set: ${unsetSecrets.map((s) => s.name).join(", ")}`);
   }
+  line("workdir", workdir);
   line("state", stateRoot);
   if (auth) line("auth", auth.fallback === undefined ? auth.path : `${auth.path} (then ${auth.fallback})`);
 }

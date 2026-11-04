@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type Schema, bool, compile, int, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { modelRefOf } from "../../model-ref.ts";
-import { INSTANCE_CONFIG_FILE } from "../../paths.ts";
+import { INSTANCE_CONFIG_ENV, INSTANCE_CONFIG_FILE, resolveOverridePath } from "../../paths.ts";
 import type { AgentConfig, AgentDefaults } from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
 
@@ -156,6 +156,14 @@ export async function readInstanceConfigFile(path: string): Promise<InstanceConf
   } catch (error) {
     throw new Error(`${path} is not JSON: ${(error as Error).message}`, { cause: error });
   }
+}
+
+/** The configuration `FASTAGENT_CONFIG` names, when it names one. */
+export async function namedInstanceConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<InstanceConfigSource | undefined> {
+  const path = resolveOverridePath(env[INSTANCE_CONFIG_ENV]);
+  return path === undefined ? undefined : readInstanceConfigFile(path);
 }
 
 /** The `fastagent.json` a development project holds at its root, when it holds one. */

@@ -66,7 +66,12 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    * opened with a directory of its own.
    */
   workdir?: string;
-  /** The instance's state root, over `FASTAGENT_STATE_DIR` and the working directory's own. */
+  /**
+   * The directory whose `.secrets/` (values, model credentials, MCP grants), `context.local.json` and default state
+   * root the instance reads. Default: the working directory. Temporary: secrets and content become inputs of their own.
+   */
+  projectDir?: string;
+  /** The instance's state root, over `FASTAGENT_STATE_DIR` and the project directory's own. */
   stateRoot?: string;
   /** Whether a clock fires the instance's wake-ups now (`assembleAgent`'s `wakeTicking`). Default always. */
   wakeTicking?: () => boolean;
@@ -87,7 +92,10 @@ export interface OpenedServing {
   models: ModelEnvironment;
   /** What the agent works on, resolved for this instance. */
   content: readonly ResolvedContent[];
+  /** The project directory: whose `.secrets/` and `context.local.json` the instance reads. */
   agentDir: string;
+  /** The agent's working directory. */
+  workdir: string;
   /** Where the instance's state is: its storage, its channels' and schedules' state, its wake-ups. */
   stateRoot: string;
   /** The definition's channels and schedules, as `serveAgent` serves them: `serveAgent(opened)`. */
@@ -101,8 +109,13 @@ export interface OpenedServing {
  * up to date in place where git can do so without touching the agent's work, first; then resolved again as what is now
  * on disk.
  */
-async function contentForThisRun(dir: string, workdir: string, env: NodeJS.ProcessEnv): Promise<ResolvedContent[]> {
-  const declaration = loadContent(dir, workdir);
+async function contentForThisRun(
+  dir: string,
+  projectDir: string,
+  workdir: string,
+  env: NodeJS.ProcessEnv,
+): Promise<ResolvedContent[]> {
+  const declaration = loadContent(dir, projectDir);
   for (const entry of resolveContent(workdir, declaration)) {
     if (entry.kind !== "github" || !entry.clone) continue;
     const done = await cloneContent(entry, env);
@@ -145,18 +158,19 @@ export async function openServing(
 ): Promise<OpenedServing> {
   const { dir } = definition;
   const workdir = options.workdir ?? dir;
+  const projectDir = options.projectDir ?? workdir;
   const config = resolveConfig(definition, options.config);
   // The agent's environment is ONE value every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
-  const values = agentValues(workdir);
+  const values = agentValues(projectDir);
   const code = buildDefinition(definition, { ...process.env, ...values }, config.settings);
   // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
   const environment = { ...values, ...(await prepareEnvironment(dir, { ...process.env, ...values })) };
   const env = { ...process.env, ...environment };
-  const content = await contentForThisRun(dir, workdir, env);
-  const stateRoot = options.stateRoot ?? resolveStateRoot(workdir, env);
+  const content = await contentForThisRun(dir, projectDir, workdir, env);
+  const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
   const models = await modelEnvironment(
-    workdir,
+    projectDir,
     {
       ...(options.authPath === undefined ? {} : { authPath: options.authPath }),
       ...(options.credentialStore === undefined ? {} : { credentialStore: options.credentialStore }),
@@ -172,7 +186,7 @@ export async function openServing(
     const mcpEnvironment = { ...env, ...options.mcp?.variables };
     mcp = await openMcpClients(
       resolveMcpServers(dir, mcpEnvironment, undefined, workdir),
-      mcpAuthorization(workdir, env, stateRoot, options.mcp),
+      mcpAuthorization(projectDir, env, stateRoot, options.mcp),
       options.mcp,
     );
     agent = await assembleAgent(definition, {
@@ -219,7 +233,8 @@ export async function openServing(
     config,
     models,
     content,
-    agentDir: workdir,
+    agentDir: projectDir,
+    workdir,
     stateRoot,
     channels: code.channels,
     schedules: code.schedules,
