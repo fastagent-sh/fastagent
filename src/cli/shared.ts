@@ -2,6 +2,7 @@
  * Helpers shared across command modules: interactivity gates, port parsing, the startup auth report, first-run model
  * resolution, and the login terminal IO.
  */
+import { definedValues } from "../declared-secrets.ts";
 import { resolve } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import type { Models, Provider } from "@earendil-works/pi-ai";
@@ -23,8 +24,7 @@ import { formatAuthReport } from "./auth-view.ts";
 import { contentLines } from "./content-view.ts";
 import { deployedHost, isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
-import { enterAgentEnv } from "../env.ts";
-import { type InstanceFlags, enterInstanceLocation } from "./instance.ts";
+import { type InstanceFlags, enterInstance } from "./instance.ts";
 import { dotEnvPath } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
@@ -52,8 +52,7 @@ export async function enterAgentDirectory(
   load?: LoadProject,
 ): Promise<EnteredAgent> {
   const agentDir = agentDirOrExit(resolve(dirArg));
-  enterAgentEnv(agentDir);
-  enterInstanceLocation(opts.instance);
+  enterInstance(agentDir, opts.instance);
   await before?.(agentDir);
   const modelSpec = await resolveFirstRunModel(agentDir, opts, load);
   return { agentDir, ...(modelSpec ? { modelSpec } : {}) };
@@ -179,9 +178,9 @@ async function resolveFirstRunModel(
   if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
   const providers =
     load === undefined
-      ? await definitionProviders(agentDir).catch(failStartup)
+      ? await definitionProviders(agentDir, process.env).catch(failStartup)
       : buildDefinitionShape(project.definition, process.env).providers;
-  const environment = await modelEnvironment(agentDir, {}, providers);
+  const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(process.env) });
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it

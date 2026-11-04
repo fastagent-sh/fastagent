@@ -25,7 +25,7 @@ import type { Project } from "../../harnesses/pi-durable/open.ts";
 import type { EffectiveConfig } from "../../harnesses/pi-durable/config.ts";
 import { namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
-import { type InstanceFlags, instanceLocation } from "../instance.ts";
+import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
 import { failStartup } from "../fail.ts";
@@ -165,7 +165,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
   const config = await namedInstanceConfig();
   const opened = await openServing((await loadBuilt(agentDir)).definition, {
     model: modelSpec,
-    ...instanceLocation(agentDir),
+    ...instanceInputs(agentDir),
     ...(config === undefined ? {} : { config }),
     // AgentCore's session storage refuses SQLite's own locks; the deployment's lease makes the dotfile lock safe.
     storage: { instance: isAgentcoreRuntime() ? "leased-dotfile" : "posix" },

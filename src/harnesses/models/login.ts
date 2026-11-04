@@ -6,6 +6,7 @@
  * ({@link loginFlow}: terminal menus, then {@link loginOver}); `login --deployment` drives the same flow on a deployed
  * box over a relay (cli/login-relay.ts).
  */
+import { definedValues } from "../../declared-secrets.ts";
 import {
   type AuthEvent,
   type AuthInteraction,
@@ -53,8 +54,8 @@ export async function loginOptionsOver(
   // ONE read of the store: `list` is metadata only, and reading per provider would repeat a corrupt file's warning for
   // every provider.
   const held = new Map((await storeOf(credentials).list()).map((info) => [info.providerId, info.type] as const));
-  // The environment alone, over no store: what authenticates a provider nothing is stored for.
-  const environment = modelsOver(new InMemoryCredentialStore(), providers);
+  // The environment alone, over no store: what authenticates a provider nothing is stored for, here the host's own.
+  const environment = modelsOver(new InMemoryCredentialStore(), providers, undefined, definedValues(process.env));
   const offered: SignInOption[] = [];
   for (const provider of loginProviders(providers)) {
     const methods = (["oauth", "api_key"] as const).filter(
@@ -184,7 +185,8 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   // The key under test lives here, not in the file, until it passes.
   const trial = new InMemoryCredentialStore();
   // Only a key needs the registry: it is checked with one request before it is kept.
-  const models: Models | undefined = method === "api_key" ? modelsOver(trial, providers) : undefined;
+  const models: Models | undefined =
+    method === "api_key" ? modelsOver(trial, providers, undefined, definedValues(process.env)) : undefined;
   const store = request.credentialStore ?? fastagentCredentialStore(request.authPath);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;

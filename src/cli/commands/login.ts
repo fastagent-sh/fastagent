@@ -5,6 +5,7 @@
  * waits: what it needs is named, and a person's step is handed back with a ticket to check (ticket.ts).
  * `--deployment` runs the same login on this agent's deployed box instead (box-login.ts); `--stdio` is the box's half.
  */
+import { definedValues } from "../../declared-secrets.ts";
 import type { AuthInteraction, AuthPrompt, Provider } from "@earendil-works/pi-ai";
 import { enterAgentEnv } from "../../env.ts";
 import { dotEnvPath } from "../../value-file.ts";
@@ -105,7 +106,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   const ownAgent = opts.global ? undefined : agentDir;
   // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint. Not for
   // `-g`: the global file serves every agent on this machine, so no one agent's providers decide what it holds.
-  const providersOf = () => (ownAgent ? definitionProviders(ownAgent) : Promise.resolve([]));
+  const providersOf = () => (ownAgent ? definitionProviders(ownAgent, process.env) : Promise.resolve([]));
   if (opts.ticket !== undefined) {
     // The process `startTicket` started: it takes the ticket before loading the definition, then signs in.
     await runTicket(opts.ticket, async (step) => {
@@ -131,7 +132,8 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   }
   // What the agent reads, its file over the global one, is what authenticates each provider for it now.
   const statusFrom = ownAgent
-    ? ((await modelEnvironment(ownAgent, {}, providers)).credentials as FastagentCredentialStore)
+    ? ((await modelEnvironment(ownAgent, {}, providers, { environment: definedValues(process.env) }))
+        .credentials as FastagentCredentialStore)
     : authPath;
   if (opts.input === false || opts.json === true || !isInteractive()) {
     const offered = await loginOptionsOver(statusFrom, providers);
@@ -518,7 +520,7 @@ async function requestDeploymentLogin(
   opts: LoginOptions,
   timeoutSeconds: number,
 ): Promise<void> {
-  const providers = await definitionProviders(agentDir).catch(failStartup);
+  const providers = await definitionProviders(agentDir, process.env).catch(failStartup);
   const offered = await loginOptionsOver(resolveAuthPath(agentDir), providers);
   let choice: SignInOption;
   try {
@@ -611,8 +613,8 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   enterAgentEnv(agentDir);
   // The model environment the serving Agent reads (openServing), its definition's providers included, so "logged in"
   // means what the server will use, and a provider only the definition declares can be signed in to.
-  const providers = await definitionProviders(agentDir);
-  const models = await modelEnvironment(agentDir, {}, providers);
+  const providers = await definitionProviders(agentDir, process.env);
+  const models = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(process.env) });
   const auth = models.auth as NonNullable<typeof models.auth>;
   if (opts.ifMissing && provider) {
     // The server's own answer (`authStatus`), the one its startup report prints. Known ceiling: nothing is asked of

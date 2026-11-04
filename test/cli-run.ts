@@ -3,6 +3,7 @@
 // outlives its caller (the ticket tests in cli-login/cli-deploy), a signal, a kill. `runInProcess` calls the same entry
 // in this process, for everything that is about what a COMMAND decides: ~0.5-1s of CPU cheaper per call.
 // Rule of thumb: reach for `runInProcess`; use `run` when the test would be wrong if no process were involved.
+import { useValueFile } from "../src/value-file.ts";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
@@ -175,6 +176,7 @@ async function runOnce(args: string[], cwd: string | undefined, env: NodeJS.Proc
       else delete (stream as { isTTY?: boolean }).isTTY;
     });
     process.chdir(saved.cwd);
+    useValueFile(undefined); // a command's --env-file is that command's: the next in this process starts on the default
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, saved.env);
     process.exitCode = saved.exitCode;

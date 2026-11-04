@@ -79,8 +79,8 @@ function inEnvironment(provider: Provider, environment: Readonly<Record<string, 
 }
 
 /**
- * The built-ins plus `providers` (a same id replaces a built-in), over any credential store, in `environment`: what
- * the agent's environment adds to this process's, read before it by a provider's auth and by each request. With
+ * The built-ins plus `providers` (a same id replaces a built-in), over any credential store, in `environment`: the
+ * values a provider's auth reads its keys from, and each request is given. With
  * `catalogs`, the lists its refresh brings up to date; without, the ones this pi-ai was built with.
  */
 export function modelsOver(
@@ -91,8 +91,8 @@ export function modelsOver(
 ): Models {
   const models = createModels({
     credentials,
-    // As a request reads it (pi's getProviderEnvValue): the request's env first, then this process's.
-    authContext: authContextIn((name) => environment[name] || process.env[name]),
+    // The values given, and none of this process's: an instance's keys are its own, whoever else runs here.
+    authContext: authContextIn((name) => environment[name]),
     ...(catalogs ? { modelsStore: catalogs.fetched } : {}),
   });
   for (const builtIn of builtinProviders()) {

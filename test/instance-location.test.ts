@@ -4,6 +4,7 @@
  * says is config.test.ts's.
  */
 import { existsSync, realpathSync } from "node:fs";
+import { createServer } from "node:http";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -224,5 +225,113 @@ describe("the configuration a command is given", () => {
     await writeFile(named, JSON.stringify({ thinkingLevel: "high" }));
     const found = await runInProcess(["info", dir, "--json"], undefined, { ...process.env, FASTAGENT_CONFIG: named });
     expect(JSON.parse(found.stdout).thinkingLevel).toBe("high");
+  });
+});
+
+describe("--env-file: the file an agent's secrets are read from", () => {
+  const needing = {
+    "src/tools/hello.ts": `import { needs } from "@fastagent-sh/fastagent";
+export default needs([{ name: "FA_ENVFILE_KEY" }], () => ({ name: "hello", description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ output: [] }) }));
+`,
+  };
+
+  it("replaces the default value file: info finds the secret there and nowhere else", async () => {
+    const dir = await agentWorkspace("fa-envfile-info-", {
+      ...needing,
+      ".secrets/.env": "FA_ENVFILE_KEY=from-the-default\n",
+    });
+    const other = join(await scratch(), "other.env");
+    await writeFile(other, "SOMETHING_ELSE=1\n");
+    const unset = async (args: string[]) => {
+      const result = await runInProcess(["info", dir, "--json", ...args]);
+      expect(result.code, result.stderr).toBe(0);
+      return (JSON.parse(result.stdout) as { unsetSecrets: string[] }).unsetSecrets;
+    };
+    expect(await unset([])).toEqual([]);
+    expect(await unset(["--env-file", other])).toEqual(["FA_ENVFILE_KEY"]);
+    const named = join(await scratch(), "named.env");
+    await writeFile(named, "FA_ENVFILE_KEY=from-the-named\n");
+    expect(await unset(["--env-file", named])).toEqual([]);
+  });
+
+  it("refuses a file that is not there, naming it, rather than starting with no secrets", async () => {
+    const dir = await agentWorkspace("fa-envfile-missing-");
+    const absent = join(await scratch(), "absent.env");
+    const result = await runInProcess(["info", dir, "--env-file", absent]);
+    expect([result.code, result.stderr]).toEqual([2, expect.stringContaining(`--env-file ${absent} is not a file`)]);
+    expect((await runInProcess(["info", dir, "--env-file", ""])).stderr).toContain("--env-file needs a path");
+  });
+
+  it("is that command's alone: a stray FASTAGENT_ENV_FILE in the shell changes nothing, and the next command is back on the default", async () => {
+    const dir = await agentWorkspace("fa-envfile-own-", {
+      ".secrets/.env": "FA_ENVFILE_KEY=from-the-default\n",
+      ...needing,
+    });
+    const elsewhere = join(await scratch(), "else.env");
+    await writeFile(elsewhere, "SOMETHING_ELSE=1\n");
+    const unset = async (args: string[], env?: NodeJS.ProcessEnv) => {
+      const result = await runInProcess(["info", dir, "--json", ...args], undefined, env);
+      return (JSON.parse(result.stdout) as { unsetSecrets: string[] }).unsetSecrets;
+    };
+    expect(await unset(["--env-file", elsewhere])).toEqual(["FA_ENVFILE_KEY"]);
+    expect(await unset([])).toEqual([]);
+    expect(await unset([], { ...process.env, FASTAGENT_ENV_FILE: elsewhere })).toEqual([]);
+  });
+
+  it("invoke reads the secrets its model needs from it", async () => {
+    const dir = await fauxAgent("fa-envfile-invoke-", needing);
+    const refused = await runInProcess(["invoke", "hello", dir]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("missing required secrets: FA_ENVFILE_KEY (src/tools/hello.ts)");
+    const file = join(await scratch(), "values.env");
+    await writeFile(file, "FA_ENVFILE_KEY=k\n");
+    const answered = await runInProcess(["invoke", "hello", dir, "--env-file", file]);
+    expect([answered.code, answered.stdout.trim()], answered.stderr).toEqual([0, "seen 1"]);
+  });
+});
+
+describe("invoke --url", () => {
+  const serverSeeing = async (during: (url: string) => Promise<void>) => {
+    const seen: (string | undefined)[] = [];
+    const server = createServer((req, res) => {
+      seen.push(req.headers.authorization);
+      res.writeHead(503, { "content-type": "text/plain" });
+      res.end("refused");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      await during(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    return seen;
+  };
+
+  it("calls with the key of the --env-file it is given, over the project's production one", async () => {
+    const dir = await agentWorkspace("fa-envfile-url-", {
+      ".secrets/production/.env": "FASTAGENT_API_KEY=from-default\n",
+    });
+    const file = join(await scratch(), "key.env");
+    await writeFile(file, "FASTAGENT_API_KEY=from-the-file\n");
+    const seen = await serverSeeing(async (url) => {
+      await runInProcess(["invoke", "hi", dir, "--url", url, "--env-file", file]);
+    });
+    expect(seen[0]).toBe("Bearer from-the-file");
+  });
+
+  it("refuses a flag that places an instance, since it opens none", async () => {
+    const dir = await agentWorkspace("fa-envfile-url-root-");
+    const result = await runInProcess([
+      "invoke",
+      "hi",
+      dir,
+      "--url",
+      "http://127.0.0.1:9",
+      "--key",
+      "k",
+      "--root",
+      "/x",
+    ]);
+    expect([result.code, result.stderr]).toEqual([2, expect.stringContaining("--root places an instance")]);
   });
 });

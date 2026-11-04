@@ -89,7 +89,11 @@ describe("a caller's credential store replaces the credentials file", () => {
     const { agent } = await agentWorkspace();
     const store = await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } });
 
-    const opened = await openServing(await loadSourceDefinition(agent), { credentialStore: store, storage: "memory" });
+    const opened = await openServing(await loadSourceDefinition(agent), {
+      secrets: {},
+      credentialStore: store,
+      storage: "memory",
+    });
     try {
       expect(opened.models.auth).toBeUndefined(); // no file is in use, so none is reported
       expect((await opened.models.authStatus("anthropic")).source).toBe("stored credential");
@@ -103,12 +107,17 @@ describe("a caller's credential store replaces the credentials file", () => {
   it("the store replaces the files, not the environment: an env key still authenticates, below a stored one", async () => {
     // Emptying the store does not sign a provider out while its env variable is set (docs/api-reference.md).
     noAnthropicEnv();
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-env");
-    const { models: empty } = await modelEnvironment(undefined, { credentialStore: await recordingStore() });
-    expect(await probeAuthSource(empty, "anthropic/claude-sonnet-4-5")).toBe("ANTHROPIC_API_KEY");
-    const { models: stored } = await modelEnvironment(undefined, {
-      credentialStore: await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } }),
+    const environment = { ANTHROPIC_API_KEY: "sk-from-env" };
+    const { models: empty } = await modelEnvironment(undefined, { credentialStore: await recordingStore() }, [], {
+      environment,
     });
+    expect(await probeAuthSource(empty, "anthropic/claude-sonnet-4-5")).toBe("ANTHROPIC_API_KEY");
+    const { models: stored } = await modelEnvironment(
+      undefined,
+      { credentialStore: await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } }) },
+      [],
+      { environment },
+    );
     expect((await stored.getAuth("anthropic"))?.auth.apiKey).toBe("sk-from-store");
   });
 
@@ -174,9 +183,9 @@ describe("a caller's credential store replaces the credentials file", () => {
   it("refuses both sources, and a login with neither", async () => {
     const { host, agent } = await agentWorkspace();
     const both = { authPath: join(host, "auth.json"), credentialStore: await recordingStore() };
-    await expect(openServing(await loadSourceDefinition(agent), { ...both, storage: "memory" })).rejects.toThrow(
-      /not both/,
-    );
+    await expect(
+      openServing(await loadSourceDefinition(agent), { secrets: {}, ...both, storage: "memory" }),
+    ).rejects.toThrow(/not both/);
     await expect(modelEnvironment(undefined, both)).rejects.toThrow(/not both/);
     const interaction = { signal: new AbortController().signal, notify: () => {}, prompt: async () => "" };
     await expect(loginOver({ provider: "openai", method: "api_key", interaction, ...both } as never)).rejects.toThrow(

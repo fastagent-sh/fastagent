@@ -102,7 +102,7 @@ export async function runEnvList(opts: { json?: boolean } = {}): Promise<void> {
   }
   const missing = missingAptPackages(declared.aptPackages);
   if (missing && missing.length > 0) log.warn(`[fastagent] ${aptAdvice(missing)}`);
-  const unset = missingSecrets(variables).map(({ name }) => name);
+  const unset = missingSecrets(variables, process.env).map(({ name }) => name);
   if (unset.length > 0) {
     log.warn(
       `[fastagent] no value here for ${unset.join(", ")}: dev and start refuse to run until they have one — set ` +

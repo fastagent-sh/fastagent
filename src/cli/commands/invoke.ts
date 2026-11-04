@@ -14,7 +14,7 @@ import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
 import { resolveStateRoot, selectAgentEnvironment } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
-import { type InstanceFlags, instanceLocation } from "../instance.ts";
+import { type InstanceFlags, enterEnvFile, instanceInputs } from "../instance.ts";
 
 export interface InvokeOptions {
   model?: string;
@@ -105,6 +105,10 @@ function enterForUrl(dirArg: string, key: string | undefined, url: string): stri
 /** `--url`: the message sent to a served agent over its Agent API, in a session there; nothing opens here. */
 async function runRemoteInvoke(message: string, dirArg: string, opts: InvokeOptions & { url: string }) {
   const { url } = opts;
+  const { envFile, ...placed } = opts.instance ?? {};
+  for (const flag of Object.keys(placed))
+    failUsage(`--${flag} places an instance this run opens, and --url opens none`);
+  enterEnvFile(envFile);
   let settings: SessionSettings | undefined;
   try {
     settings = opts.model === undefined ? undefined : { model: modelRefOf(opts.model, "--model") };
@@ -151,7 +155,7 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   const project = await loadDevProject(agentDir).catch(failStartup);
   const { agent, models, config } = await openServing(project.definition, {
     model: modelSpec,
-    ...instanceLocation(agentDir),
+    ...instanceInputs(agentDir),
     ...(project.instance === undefined ? {} : { config: project.instance }),
     storage: { file, holders: "another `fastagent invoke` of this agent" },
     // Its messages do not outlive it: one a stopped invoke left is not run again by the next.

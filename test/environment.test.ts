@@ -418,22 +418,27 @@ describe("environment: prepared by a process that runs the agent", () => {
 
   it("requires the variables context.json declares before the agent runs, naming the file", async () => {
     const dir = await agentDir({ variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } } });
-    const open = async () => openServing(await loadSourceDefinition(dir), { storage: "memory" });
-    await expect(open()).rejects.toThrow(/missing required secrets: FA_TEST_HOST \(context\.json\)/);
+    const open = async (secrets: Record<string, string>) =>
+      openServing(await loadSourceDefinition(dir), { secrets, storage: "memory" });
+    await expect(open({})).rejects.toThrow(/missing required secrets: FA_TEST_HOST \(context\.json\)/);
+    // The process's own environment is not where an instance's values come from.
     process.env.FA_TEST_HOST = "github.example.com";
-    await (await open()).agent.close();
+    await expect(open({})).rejects.toThrow(/missing required secrets: FA_TEST_HOST/);
+    await (await open({ FA_TEST_HOST: "github.example.com" })).agent.close();
   });
 
   it("is prepared as the agent opens, in the agent's own environment, leaving this process's as it was", async () => {
     await expect(
-      openServing(await loadSourceDefinition(await agentDir({ packages: { gh: "2" } })), { storage: "memory" }),
+      openServing(await loadSourceDefinition(await agentDir({ packages: { gh: "2" } })), {
+        secrets: {},
+        storage: "memory",
+      }),
     ).rejects.toThrow(/the agent has no mise installed/);
     const dir = await agentDir({ packages: { gh: "2" } });
     const { calls } = await fakeMise(dir);
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    await writeFile(join(dir, ".secrets", ".env"), "FAKE_AGENT_VALUE=from-the-value-file\n");
     vi.spyOn(log, "info").mockImplementation(() => {});
-    await (await openServing(await loadSourceDefinition(dir), { storage: "memory" })).agent.close();
+    const secrets = { FAKE_AGENT_VALUE: "from-the-value-file" };
+    await (await openServing(await loadSourceDefinition(dir), { secrets, storage: "memory" })).agent.close();
     // mise reached GitHub, say, with the agent's own token.
     expect((await calls()).map((call) => `${call.args.split(" ")[0]}: ${call.agentValue}`)).toEqual([
       "where: from-the-value-file",

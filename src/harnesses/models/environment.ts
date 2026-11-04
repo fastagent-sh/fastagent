@@ -59,8 +59,9 @@ export interface ModelEnvironment {
  * The model environment of the agent in `agentDir` (or, without one, of a caller with no directory: the named or global
  * credentials file). A supplied `credentialStore` is used as given; otherwise the files: the directory's own layers
  * ({@link resolveAuthLayers}), or the named file, or the global one. `providers` are the definition's. `environment` is
- * what the agent's environment adds to this process's: its keys, the requests' settings, and where its files are
- * (`FASTAGENT_AUTH_PATH`, `FASTAGENT_STATE_DIR`) are all read there first. The model lists are refreshed before it
+ * the one source of the values a provider authenticates with and of the requests' settings, which this process's
+ * environment never adds to; where its files are (`FASTAGENT_AUTH_PATH`, `FASTAGENT_STATE_DIR`) is still read from
+ * this process's first. The model lists are refreshed before it
  * resolves, kept in the instance's state root (`stateRoot`, else the directory's); `force` asks the network even when
  * they are fresh.
  */
@@ -105,7 +106,7 @@ export async function modelEnvironment(
       // `read` never refreshes: this is the kind on file, whatever became of it.
       const stored = (await credentials.read(provider))?.type;
       const fromEnvironment =
-        stored === undefined ? undefined : (await environmentAuth(provider, env, undefined, providers))?.source;
+        stored === undefined ? undefined : (await environmentAuth(provider, environment, undefined, providers))?.source;
       const shadowed =
         resolved.source !== undefined && fromEnvironment !== resolved.source ? fromEnvironment : undefined;
       return {

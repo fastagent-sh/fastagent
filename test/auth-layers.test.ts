@@ -18,8 +18,8 @@ function writeAuth(path: string, key: string): string {
 }
 
 /** The key a message of the agent in `dir` would send to anthropic, if any. */
-async function anthropicKey(dir: string): Promise<string | undefined> {
-  const { models } = await modelEnvironment(dir);
+async function anthropicKey(dir: string, environment: Record<string, string> = {}): Promise<string | undefined> {
+  const { models } = await modelEnvironment(dir, {}, [], { environment });
   const model = models.getProvider("anthropic")?.getModels()[0];
   if (!model) throw new Error("pi-ai has no anthropic model");
   return (await models.getAuth(model))?.auth.apiKey;
@@ -63,9 +63,10 @@ describe("an agent reads credentials through its layers", () => {
     vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
     writeAuth(GLOBAL, "global-login");
     const dir = agentDir();
-    vi.stubEnv("ANTHROPIC_API_KEY", "project-env");
-    expect(await anthropicKey(dir)).toBe("project-env");
-    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    expect(await anthropicKey(dir, { ANTHROPIC_API_KEY: "project-env" })).toBe("project-env");
+    expect(await anthropicKey(dir, { ANTHROPIC_API_KEY: "" })).toBe("global-login");
+    // A key in this process's own environment is not the instance's: only what it is given authenticates.
+    vi.stubEnv("ANTHROPIC_API_KEY", "stray");
     expect(await anthropicKey(dir)).toBe("global-login");
   });
 });

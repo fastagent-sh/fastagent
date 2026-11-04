@@ -16,7 +16,7 @@ export async function runLogout(provider: string | undefined, opts: { global?: b
   enterAgentEnv(agentDir ?? globalHome());
   const authPath = opts.global ? GLOBAL_AUTH_PATH : resolveAuthPath(agentDir ?? globalHome());
   const store = fastagentCredentialStore(authPath);
-  const known = loginProviders(agentDir ? await definitionProviders(agentDir).catch(failStartup) : []);
+  const known = loginProviders(agentDir ? await definitionProviders(agentDir, process.env).catch(failStartup) : []);
   const stored = (await store.list())
     .map(({ providerId, type }) => ({
       id: providerId,

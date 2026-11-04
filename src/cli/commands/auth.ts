@@ -3,6 +3,7 @@
  * or a coding agent: `ready`, `not_ready` or `invalid` on stdout, exit 0, 1 or 2. The answer is the one the agent's
  * messages would get (`ModelEnvironment.authStatus`, a due refresh included).
  */
+import { definedValues } from "../../declared-secrets.ts";
 import type { Provider } from "@earendil-works/pi-ai";
 import { enterAgentEnv } from "../../env.ts";
 import { type ModelEnvironment, modelEnvironment } from "../../harnesses/models/environment.ts";
@@ -31,11 +32,11 @@ export async function runAuthCheck(opts: { provider?: string; model?: string; gl
   let providers: Provider[] = [];
   if (agentDir) {
     enterAgentEnv(agentDir);
-    providers = await definitionProviders(agentDir).catch(failStartup);
+    providers = await definitionProviders(agentDir, process.env).catch(failStartup);
   } else {
     installProxyFetch();
   }
-  const environment = await modelEnvironment(agentDir, {}, providers);
+  const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(process.env) });
   let provider = opts.provider;
   let modelId: string | undefined;
   if (opts.model !== undefined) {

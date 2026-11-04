@@ -42,9 +42,21 @@ export function loadEnvValues(file: string): Map<string, string> {
   }
 }
 
-/** The agent's `.env` file: `<resolved secrets dir>/.env`. */
+/**
+ * The value file this process's command was told to use (`--env-file`). Process state set at the command's entry, not
+ * an environment variable: a variable would be read from a shell, by commands that never took the flag, and by what
+ * the agent runs. A `dev` worker is spawned with its supervisor's arguments and takes the flag itself.
+ */
+let selectedValueFile: string | undefined;
+
+/** Use `path` as the agent's value file from here on, or the default again. */
+export function useValueFile(path: string | undefined): void {
+  selectedValueFile = path;
+}
+
+/** The agent's `.env` file: the one `--env-file` named, else `<resolved secrets dir>/.env`. */
 export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveSecretsDir(agentDir, env), ".env");
+  return selectedValueFile ?? join(resolveSecretsDir(agentDir, env), ".env");
 }
 
 /** The committable template: `<agentDir>/.secrets/.env.example`. */

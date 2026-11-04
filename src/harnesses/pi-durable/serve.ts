@@ -25,7 +25,7 @@ import {
   contentAbsentHere,
   resolveContent,
 } from "../../content/resolve.ts";
-import { agentValues } from "../../value-file.ts";
+import { definedValues } from "../../declared-secrets.ts";
 import { prepareEnvironment } from "../../environment/mise.ts";
 import { log } from "../../log.ts";
 import type { Agent } from "../../agent-api.ts";
@@ -45,6 +45,12 @@ import { type StorageLocking, openLockedStorage } from "./storage.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
   mcp?: McpOptions;
+  /**
+   * The values the instance's code, its MCP servers and its model's authentication read by name (`needs`, `${VAR}`,
+   * a provider's variable): the one source of them, never this process's environment. A caller that wants its own
+   * passes it (`process.env`).
+   */
+  secrets: Readonly<Record<string, string | undefined>>;
   /** What the instance sets over the program's defaults (`fastagent.json`, or an object); none runs on the defaults. */
   config?: InstanceConfigSource;
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
@@ -152,20 +158,17 @@ function openStorage(stateRoot: string, storage: ServingStorage): Promise<Storag
   return openLockedStorage(instanceStorageFile(stateRoot), storage.instance, INSTANCE_HOLDERS);
 }
 
-export async function openServing(
-  definition: AgentDefinition,
-  options: OpenServingOptions = {},
-): Promise<OpenedServing> {
+export async function openServing(definition: AgentDefinition, options: OpenServingOptions): Promise<OpenedServing> {
   const { dir } = definition;
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
   const config = resolveConfig(definition, options.config);
   // The agent's environment is ONE value every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
-  const values = agentValues(projectDir);
-  const code = buildDefinition(definition, { ...process.env, ...values }, config.settings);
+  const secrets = definedValues(options.secrets);
+  const code = buildDefinition(definition, secrets, config.settings);
   // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
-  const environment = { ...values, ...(await prepareEnvironment(dir, { ...process.env, ...values })) };
+  const environment = { ...secrets, ...(await prepareEnvironment(dir, { ...process.env, ...secrets })) };
   const env = { ...process.env, ...environment };
   const content = await contentForThisRun(dir, projectDir, workdir, env);
   const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
@@ -183,7 +186,7 @@ export async function openServing(
   let mcp: McpClients | undefined;
   let agent: DurableAgent;
   try {
-    const mcpEnvironment = { ...env, ...options.mcp?.variables };
+    const mcpEnvironment = { ...secrets, ...options.mcp?.variables };
     mcp = await openMcpClients(
       resolveMcpServers(dir, mcpEnvironment, undefined, workdir),
       mcpAuthorization(projectDir, env, stateRoot, options.mcp),
@@ -265,6 +268,12 @@ export type InstanceLocation = { root: string } | { stateDir: string; workdir: s
 export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
   /** The instance configuration, over the program's defaults: an object, or the absolute path of a `fastagent.json`. */
   config?: InstanceConfig<Settings> | string;
+  /**
+   * The values the agent's code (`needs`), its MCP servers (`${VAR}`) and its model's authentication read by name. The
+   * only source of them: nothing is read from the process's environment or from a file, so pass what the agent needs
+   * (`process.env` is a choice an app can make).
+   */
+  secrets?: Readonly<Record<string, string | undefined>>;
   /** Per-instance MCP grants and interpolation values; no global credential discovery. */
   mcp?: McpOptions;
   /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
@@ -315,6 +324,7 @@ export async function openAgent<Settings = unknown>(
   const opened = await openServing(assertDefinition(definition), {
     workdir,
     stateRoot,
+    secrets: options.secrets ?? {},
     ...(config === undefined ? {} : { config }),
     wakeTicking: () => ticking,
     ...(options.mcp === undefined ? {} : { mcp: options.mcp }),

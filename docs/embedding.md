@@ -48,7 +48,11 @@ interface Agent {
 import { openAgent } from "@fastagent-sh/fastagent";
 import support from "@acme/support-agent"; // the default export of a package `fastagent build` made
 
-const agent = await openAgent(support, { root: "/var/lib/myapp/support", model: "openai/gpt-5.5" });
+const agent = await openAgent(support, {
+  root: "/var/lib/myapp/support",
+  secrets: { ZENDESK_TOKEN: vault.read("zendesk") }, // what the agent's code and model read by name
+  model: "openai/gpt-5.5",
+});
 // ...
 await agent.close(); // on shutdown: releases the instance's storage
 ```
@@ -199,11 +203,11 @@ app.register(async (scope) => {
 
 ## 4. Auth
 
-`openAgent` reads the instance's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's environment
-variable, and then the global `~/.fastagent/.secrets/auth.json` for a provider the agent authenticates no other way
+`openAgent` reads the instance's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's variable from
+`secrets`, and then the global `~/.fastagent/.secrets/auth.json` for a provider the agent authenticates no other way
 ([order](configuration.md#auth-and-secrets)). `fastagent login` in the agent directory signs a provider in.
 
-`credentials` replaces the files with a `CredentialStore` of your own, refreshes included; environment variables and a
+`credentials` replaces the files with a `CredentialStore` of your own, refreshes included; the provider variables in `secrets` and a
 provider's own auth still apply. Implement one over an OS keychain or Electron `safeStorage`, or keep FastAgent's file
 somewhere of your choosing with `credentialFile(path)`. To sign a person in from your own UI, list the ways with
 `signInOptions(store)` and run one with `signIn`, which asks and tells through your interaction:
@@ -261,11 +265,10 @@ repositories it works on. `addContent` and `removeContent` edit those declaratio
   a tool next reads them, without reopening.
 - **Changes to the agent.** A package is immutable: a new version is a new `fastagent build`, installed and opened
   again after `close()`.
-- **Each agent's own environment.** An agent runs on this process's environment plus its own: its `.secrets/.env`
-  (a variable the process holds wins over the file) and its declared packages. Its code's `needs()`, its commands,
-  its content's clones, its model keys and its model requests all read that, and `openAgent` writes nothing into
-  `process.env`, so agents
-  opened in one process keep their values and packages apart. Code that reads `process.env` itself sees the process's
+- **Each agent's own secrets.** An agent's code (`needs()`), its MCP `${VAR}` references, its model keys and its model
+  requests read the `secrets` it is opened with, and nothing of this process's environment or of a `.env` file; its
+  commands and its content's clones run with this process's environment plus those and its declared packages.
+  `openAgent` writes nothing into `process.env`, so agents opened in one process keep their values and packages apart. Code that reads `process.env` itself sees the process's
   alone: an agent's code takes its values with `needs()`. The process is still one: a tool that blocks it or crashes
   it does so for every agent in it.
 

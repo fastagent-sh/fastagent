@@ -155,10 +155,10 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
   log.info(
     `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); SYSTEM.md, AGENTS.md, skills/ and prompts/ go live without a restart`,
   );
-  // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely.
+  // FASTAGENT_SECRETS_DIR or --env-file can move the `.env` OUT of the agent dir entirely.
   if (!isUnderDir(dotEnvPath(agentDir), agentDir)) {
     log.warn(
-      `[fastagent] .env lives outside the agent dir (FASTAGENT_SECRETS_DIR → ${dotEnvPath(agentDir)}) — it is NOT watched; restart dev after editing it`,
+      `[fastagent] .env lives outside the agent dir (FASTAGENT_SECRETS_DIR or --env-file → ${dotEnvPath(agentDir)}) — it is NOT watched; restart dev after editing it`,
     );
   }
 

@@ -76,7 +76,13 @@ with a `stream_error` event. It is what a channel's live preview reads.
 ```ts
 function openAgent(
   definition: AgentDefinition, // an agent package's default export, which `fastagent build` generates
-  options: InstanceLocation & { model?: string; credentials?: CredentialStore; mcp?: McpOptions },
+  options: InstanceLocation & {
+    secrets?: Record<string, string | undefined>;
+    config?: InstanceConfig | string;
+    model?: string;
+    credentials?: CredentialStore;
+    mcp?: McpOptions;
+  },
 ): Promise<LocalAgent>;
 
 // Every path absolute. `root` is the working directory with its state in `<root>/.state`; or the two apart.
@@ -104,12 +110,13 @@ the machine's, or the store `credentials` gives) with its [model lists](configur
 is less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage,
 `<state root>/agent.sqlite`, which one process holds at a time: a second opener is refused. The state root is
 `stateDir`, else `<root>/.state`, and the agent's working directory is `workdir`, else `root`; the definition's own
-files are only read. Everything it reads from an environment (the
-secrets, the model keys and what each model request reads, such as Bedrock's region or Azure's endpoint, what its
-commands and its content's clones run with, `FASTAGENT_STATE_DIR` and `FASTAGENT_AUTH_PATH`) is this process's plus the
-agent's own:
-its `.secrets/.env`, where the process does not hold a variable, and its declared packages. Nothing is written into
-`process.env`, so one process can open several agents. `model` is the default for a session that names
+files are only read. `secrets` is the one source of the values the agent reads by name: its code's `needs()`, an MCP
+`${VAR}` reference, and its model's authentication and what each model request reads, such as Bedrock's region or
+Azure's endpoint. The open reads none of them from this process's environment or from a file, so an app passes what the
+agent needs (`secrets: process.env` is a choice it can make); without one a required secret refuses the open. The
+commands the agent runs and its content's clones still run with this process's environment plus `secrets` and the
+declared packages (the next release gives them an environment of their own). Nothing is written into `process.env`,
+so one process can open several agents. `model` is the default for a session that names
 none; without one anywhere, a message is refused `missing_model` until its session is given one (`sessions.update`).
 Nothing reaches the agent until `serve`, and its `wake` tool refuses a wake-up until then: only a serve's clock fires
 one.
