@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { SECRETS_DIRNAME, SECRET_FILE_MODE, exists, resolveOverridePath, resolveSecretsDir } from "./paths.ts";
+import { SECRETS_DIRNAME, SECRET_FILE_MODE, exists, resolveSecretsDir } from "./paths.ts";
 import { baseTemplate } from "./scaffold/templates.ts";
 
 /** Parse .env content into key → value (the dialect above; last occurrence of a key wins). */
@@ -42,12 +42,21 @@ export function loadEnvValues(file: string): Map<string, string> {
   }
 }
 
-/** The value file a command was told to use (`--env-file`), carried in the environment so a `dev` worker has it too. */
-export const ENV_FILE_ENV = "FASTAGENT_ENV_FILE";
+/**
+ * The value file this process's command was told to use (`--env-file`). Process state set at the command's entry, not
+ * an environment variable: a variable would be read from a shell, by commands that never took the flag, and by what
+ * the agent runs. A `dev` worker is spawned with its supervisor's arguments and takes the flag itself.
+ */
+let selectedValueFile: string | undefined;
+
+/** Use `path` as the agent's value file from here on, or the default again. */
+export function useValueFile(path: string | undefined): void {
+  selectedValueFile = path;
+}
 
 /** The agent's `.env` file: the one `--env-file` named, else `<resolved secrets dir>/.env`. */
 export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env[ENV_FILE_ENV]) ?? join(resolveSecretsDir(agentDir, env), ".env");
+  return selectedValueFile ?? join(resolveSecretsDir(agentDir, env), ".env");
 }
 
 /** The committable template: `<agentDir>/.secrets/.env.example`. */

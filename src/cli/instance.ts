@@ -17,7 +17,7 @@ import {
   resolveStateRoot,
   resolveWorkdir,
 } from "../paths.ts";
-import { ENV_FILE_ENV } from "../value-file.ts";
+import { useValueFile } from "../value-file.ts";
 import { failUsage } from "./fail.ts";
 import type { FlagSpec } from "./kernel.ts";
 
@@ -78,13 +78,19 @@ export const ENV_FILE_FLAG: FlagSpec = {
   description: "the file the agent's secrets are read from, over the default (.secrets/.env); it must exist",
 };
 
-/** `--env-file`, settled before the agent's values are entered: absolute, and a file that exists. */
-function enterEnvFile(given: string | undefined): void {
-  if (given === undefined) return;
+/**
+ * `--env-file`, settled before the agent's values are entered: absolute, and a file that exists. Without the flag the
+ * command's default file is used again, whatever an earlier command in this process chose.
+ */
+export function enterEnvFile(given: string | undefined): void {
+  if (given === undefined) {
+    useValueFile(undefined);
+    return;
+  }
   if (given.trim() === "") failUsage("--env-file needs a path");
   const path = resolveOverridePath(given) as string;
   if (!existsSync(path) || !statSync(path).isFile()) failUsage(`--env-file ${path} is not a file`);
-  process.env[ENV_FILE_ENV] = path;
+  useValueFile(path);
 }
 
 /**
