@@ -17,7 +17,7 @@ import {
 } from "../harnesses/models/models.ts";
 import { modelEnvironment } from "../harnesses/models/environment.ts";
 import type { AgentConfig } from "../harnesses/pi-durable/define.ts";
-import type { AgentDefinition } from "../harnesses/pi-durable/definition.ts";
+import { type AgentDefinition, definitionSecrets } from "../harnesses/pi-durable/definition.ts";
 import { type BuiltDefinition, buildDefinitionShape, loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { LOCAL_CONTEXT_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, channelIngress } from "../channels/discover.ts";
@@ -259,7 +259,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   const modelSpec = model.spec;
 
-  const declaredSecrets = definition ? definition.inputs.secrets : declaredVariables(loadEnvironment(agentDir));
+  const declaredSecrets = definition ? definitionSecrets(definition) : declaredVariables(loadEnvironment(agentDir));
   const code = definition ? buildShapes(definition, values, report) : undefined;
   const channels = [...(code?.channels ?? [])].map(
     ([name, module]): DeclaredChannel => ({

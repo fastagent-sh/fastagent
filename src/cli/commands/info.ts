@@ -8,6 +8,7 @@ import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enterAgentEnv } from "../../env.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
+import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { readCommands } from "../../harnesses/pi-durable/text.ts";
 import { inspectMcp } from "../../mcp/host.ts";
@@ -27,7 +28,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const { config } = definition;
   const modelSpec = modelSpecFor(config, opts.model);
-  const declared = definition.inputs.secrets;
+  const declared = definitionSecrets(definition);
   const unsetSecrets = missingSecrets(declared);
   // Built only when every required secret has a value: building is what reads them. A module that is not what its
   // directory holds is said as the refusal `dev` and `start` would stop on.
@@ -90,7 +91,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           channels: code === undefined ? null : channels,
           schedules: code === undefined ? null : schedules,
           commands,
-          secrets: declared,
+          secrets: definition.inputs.secrets,
           unsetSecrets: unsetSecrets.map(({ name }) => name),
           stateRoot,
           authPath: auth?.path ?? null,

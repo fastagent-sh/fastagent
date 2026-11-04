@@ -984,15 +984,15 @@ export default needs(["X_API_KEY", "X_API_SECRET"], () => ({
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
     expect(pre.declaredSecrets).toEqual([
-      { name: "GH_HOST", declaredIn: "context.json", description: "the GitHub host gh talks to", optional: false },
       { name: "X_API_KEY", declaredIn: "src/tools/x-post.ts", optional: false },
       { name: "X_API_SECRET", declaredIn: "src/tools/x-post.ts", optional: false },
+      { name: "GH_HOST", declaredIn: "context.json", description: "the GitHub host gh talks to", optional: false },
     ]);
     // The runbook names the file to open for a required one, and the value file for the rest.
     expect(pre.secrets).toEqual([
-      { name: "GH_HOST", hint: "required by context.json: the GitHub host gh talks to" },
       { name: "X_API_KEY", hint: "required by src/tools/x-post.ts" },
       { name: "X_API_SECRET", hint: "required by src/tools/x-post.ts" },
+      { name: "GH_HOST", hint: "required by context.json: the GitHub host gh talks to" },
       { name: "GH_TOKEN", hint: "from .secrets/.env" },
     ]);
   });

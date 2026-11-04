@@ -107,18 +107,33 @@ describe("an agent definition on pi-durable", () => {
     expect(readdirSync(dir, { recursive: true }).sort()).toEqual(before);
   });
 
-  it("is a frozen value whose inputs list every secret it declares: what for, whether optional, where", async () => {
+  it("is a frozen value whose inputs list each secret once: what for, whether optional, where", async () => {
     const definition = await loadSourceDefinition(agentPackage(FILES));
-    expect(Object.isFrozen(definition)).toBe(true);
+    for (const part of [definition, definition.config, definition.registry, definition.registry.tools]) {
+      expect(Object.isFrozen(part)).toBe(true);
+    }
+    expect(Object.isFrozen(definition.registry.tools[0])).toBe(true);
     expect(definition.inputs.secrets).toEqual([
-      { name: "GH_TOKEN", description: "For gh", optional: false, declaredIn: "context.json" },
+      { name: "GH_TOKEN", description: "For gh", optional: false, declaredIn: ["context.json"] },
       {
         name: "WEATHER_KEY",
         description: "The weather service's API key",
         optional: false,
-        declaredIn: "src/tools/weather.ts",
+        declaredIn: ["src/tools/weather.ts"],
       },
-      { name: "WEATHER_REGION", optional: true, declaredIn: "src/tools/weather.ts" },
+      { name: "WEATHER_REGION", optional: true, declaredIn: ["src/tools/weather.ts"] },
+    ]);
+  });
+
+  it("lists a secret declared optional in one module and required in another once, as required", async () => {
+    const tool = (name: string, optional: boolean) => `import { needs } from "${DEFINE}";
+export default needs([{ name: "TOKEN", optional: ${optional} }], () => ({ name: "${name}", description: "d", parameters: {}, execute: async () => ({ output: [] }) }));
+`;
+    const definition = await loadSourceDefinition(
+      agentPackage({ "src/tools/a.ts": tool("a", true), "src/tools/b.ts": tool("b", false) }),
+    );
+    expect(definition.inputs.secrets).toEqual([
+      { name: "TOKEN", optional: false, declaredIn: ["src/tools/a.ts", "src/tools/b.ts"] },
     ]);
   });
 
@@ -144,7 +159,7 @@ export default needs(["HOOK_SECRET"], ({ HOOK_SECRET }) => () => ({ "POST /hook"
       }),
     );
     expect(definition.inputs.secrets).toEqual([
-      { name: "HOOK_SECRET", optional: false, declaredIn: "src/channels/hook.ts" },
+      { name: "HOOK_SECRET", optional: false, declaredIn: ["src/channels/hook.ts"] },
     ]);
     expect(() => buildDefinition(definition, {})).toThrow(
       "missing required secrets: HOOK_SECRET (src/channels/hook.ts)",

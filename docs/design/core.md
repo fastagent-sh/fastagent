@@ -195,7 +195,8 @@ state root (`stateDir`: an instance of its own beside `dev`'s). It works in this
 
 1. **The definition** (`loadSourceDefinition`, `open.ts`; `definition.ts`): the configuration and every module of
    `src/` are imported in file order, the configuration's keys are checked (nested ones included), and the result is
-   one frozen value whose `inputs.secrets` lists every declared secret. Opening writes nothing into the project.
+   one frozen value whose `inputs.secrets` lists every declared secret, each name once. Reading the definition writes
+   nothing into the project.
 2. **Its code** (`buildDefinition`): a required secret without a value refuses the start, naming where it is declared;
    each module wrapped in `needs([...])` is built with exactly the values it declared; each module must be what its
    directory holds; two tools, extensions, channels or schedules of one name are refused, as is an extension named like

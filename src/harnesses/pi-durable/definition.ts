@@ -15,6 +15,14 @@ export const DEFINITION_FORMAT = 1;
 
 const DEFINITION = Symbol.for("fastagent.definition");
 
+/** A secret an instance must or may be given (SPEC.md §8): each name once, required when any declaration requires it. */
+interface DeclaredInput {
+  name: string;
+  description?: string;
+  optional: boolean;
+  declaredIn: readonly string[];
+}
+
 export interface AgentDefinition {
   readonly [DEFINITION]: true;
   readonly format: number;
@@ -24,19 +32,48 @@ export interface AgentDefinition {
   readonly dir: string;
   readonly config: AgentConfig;
   readonly registry: Registry;
-  /** What an instance must or may be given: every secret, wherever it is declared. */
-  readonly inputs: { readonly secrets: readonly DeclaredSecret[] };
+  readonly inputs: { readonly secrets: readonly DeclaredInput[] };
 }
 
 type DefinitionSpec = Omit<AgentDefinition, typeof DEFINITION | "inputs">;
 
+/** The value, frozen down to its lists and entries; the modules' own exports stay as their authors made them. */
 export function defineDefinition(spec: DefinitionSpec): AgentDefinition {
-  const secrets = [...codeSecrets(spec), ...mcpSecrets(spec.dir)].sort((a, b) => a.name.localeCompare(b.name));
+  const registry = Object.freeze(
+    Object.fromEntries(
+      REGISTRY_KINDS.map((kind) => [
+        kind,
+        Object.freeze(spec.registry[kind].map((entry) => Object.freeze({ ...entry }))),
+      ]),
+    ) as Registry,
+  );
+  const config = Object.freeze({
+    ...spec.config,
+    ...(spec.config.extensions === undefined ? {} : { extensions: Object.freeze([...spec.config.extensions]) }),
+    ...(spec.config.providers === undefined ? {} : { providers: Object.freeze([...spec.config.providers]) }),
+  });
   return Object.freeze({
     [DEFINITION]: true as const,
     ...spec,
-    inputs: Object.freeze({ secrets: Object.freeze(secrets) }),
+    config,
+    registry,
+    inputs: Object.freeze({ secrets: Object.freeze(byName(definitionSecrets(spec))) }),
   });
+}
+
+/** One input per name, in name order: required when any declaration requires it, every place it is declared. */
+function byName(declared: readonly DeclaredSecret[]): DeclaredInput[] {
+  const inputs = new Map<string, { name: string; description?: string; optional: boolean; declaredIn: string[] }>();
+  for (const { name, description, optional, declaredIn } of declared) {
+    const input = inputs.get(name) ?? { name, optional: true, declaredIn: [] };
+    input.optional &&= optional;
+    input.declaredIn.push(declaredIn);
+    if (input.description === undefined && description !== undefined) input.description = description;
+    inputs.set(name, input);
+  }
+  return [...inputs.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((input) => Object.freeze({ ...input, declaredIn: Object.freeze(input.declaredIn) }));
 }
 
 /** Every value the definition can hold `Needs` in, with where it is: modules by file, configuration by key. */
@@ -48,12 +85,19 @@ function declarers({ registry, config }: Pick<DefinitionSpec, "registry" | "conf
   ];
 }
 
+type Declaring = Pick<DefinitionSpec, "registry" | "config" | "dir">;
+
 /** The secrets the definition's code reads (`needs()`) and its commands do (`context.json`'s variables). */
-export function codeSecrets(definition: Pick<DefinitionSpec, "registry" | "config" | "dir">): DeclaredSecret[] {
+export function codeSecrets(definition: Declaring): DeclaredSecret[] {
   return [
     ...declarers(definition).flatMap(({ declaredIn, value }) =>
       isNeeds(value) ? value.secrets.map((secret) => ({ ...secret, declaredIn })) : [],
     ),
     ...declaredVariables(loadEnvironment(definition.dir)),
   ];
+}
+
+/** Every declaration of a secret, each where it is: the code's, then `mcp.json`'s references. */
+export function definitionSecrets(definition: Declaring): DeclaredSecret[] {
+  return [...codeSecrets(definition), ...mcpSecrets(definition.dir)];
 }

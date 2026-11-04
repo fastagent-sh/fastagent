@@ -47,7 +47,7 @@ describe("cli: info", () => {
         {
           name: "FA_TEST_HOST",
           optional: false,
-          declaredIn: "context.json",
+          declaredIn: ["context.json"],
           description: "the GitHub host gh talks to",
         },
       ],
