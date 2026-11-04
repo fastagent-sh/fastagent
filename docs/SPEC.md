@@ -437,8 +437,10 @@ for an end.
 
 ## 8. In process (TypeScript)
 
-This section is the surface of the release that closes [#900](https://github.com/fastagent-sh/fastagent/issues/900);
-until then, `openAgent(dir, options)` opens an agent directory instead.
+This section is the surface of the release that closes [#900](https://github.com/fastagent-sh/fastagent/issues/900).
+Until then `openAgent` takes the definition and the instance location below, plus `model`, `credentials` and `mcp`; the
+other inputs (`config`, `mcpServers`, `secrets`, `env`, `name`) are not read yet, and an open still reads the process's
+environment, the instance's `.secrets/` and its `context.local.json`.
 
 The interface is §4's. MCP server configuration and OAuth are [host operations](mcp.md), not changes to sessions,
 messages or their HTTP binding. The package's entry points are one per kind of user:
