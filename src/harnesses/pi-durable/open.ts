@@ -33,6 +33,7 @@ import {
   type EffectiveConfig,
   type InstanceConfigSource,
   checkProgramConfig,
+  namedInstanceConfig,
   projectInstanceConfig,
 } from "./config.ts";
 import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
@@ -77,7 +78,7 @@ export interface Project {
 /** The development project in `dir`, as `dev` opens it: its source and the `fastagent.json` at its root, if any. */
 export async function loadDevProject(dir: string): Promise<Project> {
   const definition = await loadSourceDefinition(dir);
-  const instance = await projectInstanceConfig(dir);
+  const instance = (await namedInstanceConfig()) ?? (await projectInstanceConfig(dir));
   return instance === undefined ? { definition } : { definition, instance };
 }
 

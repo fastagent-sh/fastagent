@@ -450,6 +450,20 @@ keeps a serve from answering the API with a key its environment still holds.
   it, they are never part of the definition, and `content/.gitignore` and `deploy` keep them out. It has no
   override: a place that wants it elsewhere links `content/` there.
 
+### Where an instance lives
+
+An instance has a working directory, where the agent runs and `content/` clones land, and a state root. By default both
+are the agent directory, as above. `--root <dir>` (`FASTAGENT_ROOT`) makes `<dir>` the working directory with the state
+in `<dir>/.state`; `--state <dir>` (`FASTAGENT_STATE_DIR`) and `--workdir <dir>` (`FASTAGENT_WORKDIR`) place either apart
+from it, a flag over its variable, and a variable over the default. The commands that open an instance or read its state
+take them: `dev`, `start`, `invoke`, `info` and `schedules`. A relative path resolves once, against the directory the
+command started in, and a root or workdir that does not exist is created. `--config <file>` (`FASTAGENT_CONFIG`) names
+the [instance configuration](#instance-configuration) for `dev`, `start`, `invoke`, `info` and `schedules run`; `dev`
+and the others read the `fastagent.json` at the project root without it, and `start` reads none.
+
+What stays in the project for now: `.secrets/` (the `.env`, `auth.json`, MCP grants) and `context.local.json`, whatever
+the root. Secrets and content become inputs of the instance in later releases.
+
 Generated deployments keep the deployed definition at `<persistent-root>/definition/`, replaced by every release,
 with `.state/`, `.secrets/` and `content/` beside it; each release links its own `content/` to that one.
 The root is `/data` on Docker, Fly and Railway and `/mnt/data` on AgentCore (reset by every deploy — see
@@ -464,7 +478,7 @@ FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent 
 ```
 
 ```txt
-state root: FASTAGENT_STATE_DIR    > <agent dir>/.state (production: .state/production)
+state root: FASTAGENT_STATE_DIR    > <root>/.state > <agent dir>/.state (production: .state/production)
 secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets (production: .secrets/production)
 content:    <agent dir>/content/<name> (a clone), or the directory context.local.json binds
 storage:    <state root>/agent.sqlite

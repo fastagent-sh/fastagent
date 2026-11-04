@@ -18,6 +18,7 @@ import { latestFire, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeAnyWakeup } from "../../schedule/wakeups.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { exitCodeOf } from "../invoke-stream.ts";
+import { type InstanceFlags, enterInstanceLocation, instanceLocation } from "../instance.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 /**
@@ -25,9 +26,10 @@ import { enterAgentCommand, reportAuth } from "../shared.ts";
  * in the retained window cannot fail it; `--json` adds each schedule's whole retained fire history (the claims under
  * `schedule/claims/<name>/`). What a run SAID is in its session, once it has fired.
  */
-export async function runSchedulesList(dirArg: string, json: boolean): Promise<void> {
+export async function runSchedulesList(dirArg: string, json: boolean, instance?: InstanceFlags): Promise<void> {
   const target = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
+  enterInstanceLocation(instance);
   const stateRoot = resolveStateRoot(target);
   // Its shape only: listing what will fire needs none of the values the code reads.
   const { schedules } = await loadSourceDefinition(target)
@@ -85,7 +87,7 @@ export async function runSchedulesList(dirArg: string, json: boolean): Promise<v
 export async function runScheduleNow(
   name: string,
   dirArg: string,
-  opts: { model?: string; input?: boolean },
+  opts: { model?: string; input?: boolean; instance?: InstanceFlags },
 ): Promise<void> {
   // The name before the model, from the definition's shape: a script told its schedule does not exist need not set up
   // a model first.
@@ -102,6 +104,7 @@ export async function runScheduleNow(
     .then(({ definition, instance }) =>
       openServing(definition, {
         model: modelSpec,
+        ...instanceLocation(agentDir),
         unfinished: "refuse",
         ...(instance === undefined ? {} : { config: instance }),
       }),
@@ -141,9 +144,10 @@ export async function runScheduleNow(
  * the agent (a schedule's own session). It holds the instance's storage while it writes, so it is refused while a serve
  * of the instance runs, whose poll writes the same store.
  */
-export async function runUnwake(id: string, dirArg: string): Promise<void> {
+export async function runUnwake(id: string, dirArg: string, instance?: InstanceFlags): Promise<void> {
   const target = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(target);
+  enterInstanceLocation(instance);
   const stateRoot = resolveStateRoot(target);
   const removed = await holdingInstance(stateRoot, () => removeAnyWakeup(stateRoot, id)).catch(failStartup);
   if (removed === undefined) {

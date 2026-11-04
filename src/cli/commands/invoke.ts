@@ -14,6 +14,7 @@ import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
 import { resolveStateRoot, selectAgentEnvironment } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
+import { type InstanceFlags, instanceLocation } from "../instance.ts";
 
 export interface InvokeOptions {
   model?: string;
@@ -25,6 +26,7 @@ export interface InvokeOptions {
   url?: string;
   /** The key `url` is called with; else the first in the agent's production values. */
   key?: string;
+  instance?: InstanceFlags;
 }
 
 /**
@@ -149,6 +151,7 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   const project = await loadDevProject(agentDir).catch(failStartup);
   const { agent, models, config } = await openServing(project.definition, {
     model: modelSpec,
+    ...instanceLocation(agentDir),
     ...(project.instance === undefined ? {} : { config: project.instance }),
     storage: { file, holders: "another `fastagent invoke` of this agent" },
     // Its messages do not outlive it: one a stopped invoke left is not run again by the next.

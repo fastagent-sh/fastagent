@@ -11,6 +11,7 @@ import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
+import { type InstanceFlags, instanceLocation } from "../instance.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 /**
@@ -28,6 +29,7 @@ export interface DevOptions {
   tunnel?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
+  instance?: InstanceFlags;
 }
 
 export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
@@ -61,7 +63,11 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   assertTunnelBindable(host, tunnel);
   const opened = await loadDevProject(agentDir)
     .then(({ definition, instance }) =>
-      openServing(definition, { model: modelSpec, ...(instance === undefined ? {} : { config: instance }) }),
+      openServing(definition, {
+        model: modelSpec,
+        ...instanceLocation(agentDir),
+        ...(instance === undefined ? {} : { config: instance }),
+      }),
     )
     .catch(failStartup);
   await reportAssembly(opened, modelSpec);

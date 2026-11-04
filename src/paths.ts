@@ -150,12 +150,28 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
   return resolve(expanded);
 }
 
+/** Where an instance is, from the environment: the root, or its state and its workspace apart (agent-artifact.md §4.1). */
+export const INSTANCE_ROOT_ENV = "FASTAGENT_ROOT";
+export const INSTANCE_WORKDIR_ENV = "FASTAGENT_WORKDIR";
+export const INSTANCE_STATE_ENV = "FASTAGENT_STATE_DIR";
+export const INSTANCE_CONFIG_ENV = "FASTAGENT_CONFIG";
+
 /**
  * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/):
- * Explicit paths win; production otherwise uses `.state/production`, dev uses `.state`.
+ * the state directory, else `.state` in the instance root; with neither, production uses `.state/production` in the
+ * agent dir and dev uses `.state`.
  */
 export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? environmentPath(dir, STATE_DIRNAME, env);
+  const root = resolveOverridePath(env[INSTANCE_ROOT_ENV]);
+  return (
+    resolveOverridePath(env[INSTANCE_STATE_ENV]) ??
+    (root === undefined ? environmentPath(dir, STATE_DIRNAME, env) : join(root, STATE_DIRNAME))
+  );
+}
+
+/** The agent's working directory: the workspace directory, else the instance root, else the agent dir itself. */
+export function resolveWorkdir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveOverridePath(env[INSTANCE_WORKDIR_ENV]) ?? resolveOverridePath(env[INSTANCE_ROOT_ENV]) ?? resolve(dir);
 }
 
 /** Where fastagent clones the content entry `name` of the agent in `dir`. */

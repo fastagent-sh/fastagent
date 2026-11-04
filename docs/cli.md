@@ -96,7 +96,7 @@ A `fastagent.config.ts` makes a directory an agent, whatever its name. Its conte
 ## `fastagent info`
 
 ```bash
-fastagent info [agent] [--json] [--model provider/modelId]
+fastagent info [agent] [--json] [--model provider/modelId] [--root dir] [--state dir] [--workdir dir] [--config file]
 ```
 
 Prints what the agent builds into, without serving it:
@@ -330,6 +330,7 @@ global one, then the environment, with a login due a refresh refreshed. `--json`
 
 ```bash
 fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-input]
+               [--root dir] [--state dir] [--workdir dir] [--config file]
 ```
 
 Serves the agent locally: its channels, schedules and wake-ups. `SYSTEM.md`, `AGENTS.md`, `skills/` and `prompts/` are
@@ -351,6 +352,7 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 
 ```bash
 fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--json] [--session <id>]
+                                 [--root dir] [--state dir] [--workdir dir] [--config file]
 fastagent invoke <message> [agent] --url <base> [--key <key>] [--model provider/modelId] [--json] [--session <id>]
 ```
 
@@ -383,7 +385,7 @@ given and grows with them; delete it, while no `invoke` runs, to start from none
 ## `fastagent schedules list`
 
 ```bash
-fastagent schedules list [agent] [--json]
+fastagent schedules list [agent] [--json] [--root dir] [--state dir] [--workdir dir]
 ```
 
 Lists every schedule (`src/schedules/<name>.ts`, see [Schedules](configuration.md#schedules)) with its next cron
@@ -404,6 +406,7 @@ What the agent said is in the schedule's session, in the instance's storage. A f
 
 ```bash
 fastagent schedules run <name> [agent] [--model provider/modelId] [--no-input]
+                       [--root dir] [--state dir] [--workdir dir] [--config file]
 ```
 
 Fires the schedule `<name>` now, the way its clock would: in the schedule's own session, with its claim and its
@@ -421,7 +424,7 @@ fires a schedule of this machine's instance; a deployed one keeps its own state.
 ## `fastagent schedules unwake`
 
 ```bash
-fastagent schedules unwake <id> [agent]
+fastagent schedules unwake <id> [agent] [--root dir] [--state dir] [--workdir dir]
 ```
 
 Cancels the pending wake-up `<id>` (`schedules list` shows the ids), whatever session set it. The agent cancels its
@@ -534,6 +537,7 @@ from the machine's skill directories. `--update` overwrites an existing one.
 
 ```bash
 fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
+                [--root dir] [--state dir] [--workdir dir] [--config file]
 ```
 
 Serves the project's `dist/`, never its source, without watching: it refuses, naming `fastagent build`, when `dist/`
@@ -547,10 +551,19 @@ the startup report says whether it does, and why not
 ```txt
 port:     --port > PORT > fastagent.config.ts defaults.http.port > 8787
 bind:     --bind > all interfaces
-state:    FASTAGENT_STATE_DIR   > <agent dir>/.state/production    (agent.sqlite, channel and schedule state)
-secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production
-content:  <agent dir>/content/<name> (clones; a host has no context.local.json)
+state:    --state > FASTAGENT_STATE_DIR > <root>/.state > <agent dir>/.state/production
+          (agent.sqlite, channel and schedule state)
+workdir:  --workdir > FASTAGENT_WORKDIR > <root> > <agent dir>   (the agent's cwd; content/ clones land here)
+root:     --root > FASTAGENT_ROOT
+config:   --config > FASTAGENT_CONFIG > none: start never reads the project's fastagent.json
+secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production   (still the project's, whatever the root)
+content:  <workdir>/content/<name> (clones; a host has no context.local.json)
 ```
+
+The same `--root`, `--state` and `--workdir` place the instance for `dev`, `invoke`, `info` and `schedules`
+(`list`, `run`, `unwake`), and `--config` names the configuration for `dev`, `invoke`, `info` and `schedules run`;
+a relative path resolves once, against the directory the command started in, and the root and workdir are created
+when missing. [Configuration](configuration.md#where-an-instance-lives) says what each holds.
 
 ## Global options
 

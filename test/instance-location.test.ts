@@ -1,0 +1,195 @@
+/**
+ * Where an instance is, as a command's flags and the environment place it (agent-artifact.md §4.1): the resolvers'
+ * precedence, and that each command that opens or reads an instance follows them. The merge of what the configuration
+ * says is config.test.ts's.
+ */
+import { existsSync, realpathSync } from "node:fs";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { resolveStateRoot, resolveWorkdir } from "../src/paths.ts";
+import { addWakeup } from "../src/schedule/wakeups.ts";
+import { agentWorkspace, built, fauxAgent, runInProcess, whileRunning } from "./cli-run.ts";
+
+const scratch = () => mkdtemp(join(tmpdir(), "fa-instance-"));
+
+describe("the resolvers", () => {
+  const dir = "/project";
+
+  it("state: the state directory, else .state in the root, else the project's own", () => {
+    expect(resolveStateRoot(dir, {})).toBe("/project/.state");
+    expect(resolveStateRoot(dir, { FASTAGENT_ENVIRONMENT: "production" })).toBe("/project/.state/production");
+    expect(resolveStateRoot(dir, { FASTAGENT_ROOT: "/r" })).toBe("/r/.state");
+    expect(resolveStateRoot(dir, { FASTAGENT_ROOT: "/r", FASTAGENT_STATE_DIR: "/s" })).toBe("/s");
+    expect(resolveStateRoot(dir, { FASTAGENT_STATE_DIR: "/s" })).toBe("/s");
+  });
+
+  it("working directory: the workspace directory, else the root, else the project", () => {
+    expect(resolveWorkdir(dir, {})).toBe("/project");
+    expect(resolveWorkdir(dir, { FASTAGENT_ROOT: "/r" })).toBe("/r");
+    expect(resolveWorkdir(dir, { FASTAGENT_ROOT: "/r", FASTAGENT_WORKDIR: "/w" })).toBe("/w");
+    expect(resolveWorkdir(dir, { FASTAGENT_WORKDIR: "/w" })).toBe("/w");
+  });
+});
+
+describe("info reports where the instance is", () => {
+  const where = async (args: string[], cwd?: string, env: NodeJS.ProcessEnv = process.env) => {
+    const dir = await agentWorkspace("fa-instance-info-");
+    const result = await runInProcess(["info", dir, "--json", ...args], cwd, env);
+    expect(result.code, result.stderr).toBe(0);
+    const { workdir, stateRoot } = JSON.parse(result.stdout) as { workdir: string; stateRoot: string };
+    return { dir, workdir, stateRoot };
+  };
+
+  it("a root places the working directory and, in it, the state", async () => {
+    const root = join(await scratch(), "root");
+    const found = await where(["--root", root]);
+    expect([found.workdir, found.stateRoot]).toEqual([root, join(root, ".state")]);
+    expect(existsSync(root)).toBe(true); // made, as an instance's root is
+  });
+
+  it("the state and the workdir move apart from the root and from each other", async () => {
+    const root = await scratch();
+    const state = await scratch();
+    const workdir = await scratch();
+    const found = await where(["--root", root, "--state", state, "--workdir", workdir]);
+    expect([found.workdir, found.stateRoot]).toEqual([workdir, state]);
+  });
+
+  it("with no flag: the project is the working directory and holds the state, as before", async () => {
+    const found = await where([]);
+    expect([found.workdir, found.stateRoot]).toEqual([found.dir, join(found.dir, ".state")]);
+  });
+
+  it("a flag beats its environment variable, which beats the default", async () => {
+    const fromEnv = await scratch();
+    const fromFlag = await scratch();
+    const env = { ...process.env, FASTAGENT_ROOT: fromEnv };
+    expect((await where([], undefined, env)).workdir).toBe(fromEnv);
+    expect((await where(["--root", fromFlag], undefined, env)).workdir).toBe(fromFlag);
+  });
+
+  it("a relative path is resolved once, against the directory the command started in", async () => {
+    const start = await scratch();
+    const found = await where(["--root", "inst"], start);
+    expect(found.workdir).toBe(join(realpathSync(start), "inst"));
+  });
+
+  it("a flag with no path is a usage error", async () => {
+    const dir = await agentWorkspace("fa-instance-empty-");
+    const result = await runInProcess(["info", dir, "--root", ""]);
+    expect([result.code, result.stderr]).toEqual([2, expect.stringContaining("--root needs a path")]);
+  });
+});
+
+describe("commands that open an instance", () => {
+  it("invoke runs in the root and keeps its state there, leaving the project's own untouched", async () => {
+    const dir = await fauxAgent("fa-instance-invoke-");
+    const root = join(await scratch(), "root");
+    const result = await runInProcess(["invoke", "hello", dir, "--root", root]);
+    expect([result.code, result.stdout.trim()], result.stderr).toEqual([0, "seen 1"]);
+    expect(existsSync(join(root, ".state", "invoke.sqlite"))).toBe(true);
+    expect(existsSync(join(dir, ".state"))).toBe(false);
+  });
+
+  it("invoke's tools run in the working directory it is given, not the project", async () => {
+    const dir = await fauxAgent("fa-instance-workdir-");
+    const workdir = await scratch();
+    await writeFile(join(workdir, "SYSTEM.md"), "READ-FROM-THE-WORKDIR\n");
+    const result = await runInProcess(["invoke", "use a tool", dir, "--workdir", workdir, "--json"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain("READ-FROM-THE-WORKDIR");
+  });
+
+  it("start serves the built project from the root, with the state and the configuration it names", async () => {
+    const dir = await agentWorkspace("fa-instance-start-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      ".secrets/production/.env": "OPENAI_API_KEY=sk-test\n",
+    });
+    await built(dir);
+    const root = await scratch();
+    const state = await scratch();
+    const config = join(await scratch(), "fastagent.json");
+    await writeFile(config, JSON.stringify({ http: { api: false } }));
+    await whileRunning(
+      [
+        "start",
+        dir,
+        "--port",
+        "0",
+        "--bind",
+        "127.0.0.1",
+        "--no-input",
+        "--root",
+        root,
+        "--state",
+        state,
+        "--config",
+        config,
+      ],
+      /Agent API: .*\n/,
+      async (stderr) => {
+        expect(stderr).toContain(` — ${root}\n`);
+        expect(stderr).toContain(`state:       ${state}`);
+        expect(stderr).toContain("Agent API: not served — the configuration says http.api: false");
+      },
+    );
+    expect(existsSync(join(state, "agent.sqlite"))).toBe(true);
+    expect(existsSync(join(dir, ".state"))).toBe(false);
+  });
+
+  it("start does not read the project's fastagent.json: only the configuration it is given", async () => {
+    const dir = await agentWorkspace("fa-instance-start-own-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "fastagent.json": JSON.stringify({ http: { api: false } }),
+      ".secrets/production/.env": "OPENAI_API_KEY=sk-test\nFASTAGENT_API_KEY=k\n",
+    });
+    await built(dir);
+    await whileRunning(
+      ["start", dir, "--port", "0", "--bind", "127.0.0.1", "--no-input"],
+      /Agent API: .*\n/,
+      async (stderr) => expect(stderr).not.toContain("not served"),
+    );
+  });
+
+  it("schedules list and unwake read the state they are pointed at", async () => {
+    const dir = await agentWorkspace("fa-instance-schedules-");
+    const state = await scratch();
+    const added = addWakeup(state, { session: "chat:1", prompt: "check", fireAt: new Date(Date.now() + 3_600_000) });
+    if (!added.ok) throw new Error(added.error);
+    const listed = await runInProcess(["schedules", "list", dir, "--state", state]);
+    expect(listed.stdout).toContain(`wake ${added.id}`);
+    expect((await runInProcess(["schedules", "list", dir])).stdout).not.toContain("wake ");
+    const removed = await runInProcess(["schedules", "unwake", added.id, dir, "--state", state]);
+    expect([removed.code, removed.stdout], removed.stderr).toEqual([0, expect.stringContaining(`removed wake`)]);
+  });
+});
+
+describe("the configuration a command is given", () => {
+  it("--config names the instance configuration, over the project's own, and a missing file refuses", async () => {
+    const dir = await agentWorkspace("fa-instance-config-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "fastagent.json": JSON.stringify({ thinkingLevel: "low" }),
+    });
+    const named = join(await scratch(), "other.json");
+    await writeFile(named, JSON.stringify({ thinkingLevel: "high" }));
+    const project = await runInProcess(["info", dir, "--json"]);
+    expect(JSON.parse(project.stdout).thinkingLevel).toBe("low");
+    const over = await runInProcess(["info", dir, "--json", "--config", named]);
+    expect(JSON.parse(over.stdout).config.thinkingLevel).toEqual({ value: "high", source: named });
+    const missing = await runInProcess(["info", dir, "--json", "--config", join(dirname(named), "absent.json")]);
+    expect(missing.code).not.toBe(0);
+    expect(missing.stderr).toContain("absent.json");
+  });
+
+  it("FASTAGENT_CONFIG is the same input as --config", async () => {
+    const dir = await agentWorkspace("fa-instance-config-env-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    const named = join(await scratch(), "env.json");
+    await writeFile(named, JSON.stringify({ thinkingLevel: "high" }));
+    const found = await runInProcess(["info", dir, "--json"], undefined, { ...process.env, FASTAGENT_CONFIG: named });
+    expect(JSON.parse(found.stdout).thinkingLevel).toBe("high");
+  });
+});

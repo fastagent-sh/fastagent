@@ -7,6 +7,7 @@ import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } fr
 import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
 import { unsupportedRuntime } from "../runtime.ts";
 import { failStartup } from "./fail.ts";
+import { CONFIG_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 const AGENT_ARG = {
@@ -79,7 +80,16 @@ const dev: CommandSpec = {
     "(src/, fastagent.config.ts, package.json, .secrets/.env) restart the worker once its running messages finish. " +
     "Files the agent writes as work product never trigger a restart.",
   args: [AGENT_ARG],
-  flags: [PORT, BIND, MODEL, { flags: "--no-watch", description: "serve once, no file-watching" }, TUNNEL, NO_INPUT],
+  flags: [
+    PORT,
+    BIND,
+    MODEL,
+    { flags: "--no-watch", description: "serve once, no file-watching" },
+    TUNNEL,
+    NO_INPUT,
+    ...INSTANCE_FLAGS,
+    CONFIG_FLAG,
+  ],
   examples: [
     { cmd: "fastagent dev" },
     { cmd: "fastagent dev --tunnel", note: "public URL + registered/guided webhooks" },
@@ -92,6 +102,7 @@ const dev: CommandSpec = {
       watch: f.watch !== false,
       tunnel: f.tunnel === true,
       input: f.input !== false,
+      instance: instanceFlags(f),
     }),
 };
 
@@ -103,12 +114,13 @@ const info: CommandSpec = {
     "secrets, content — WITHOUT opening or serving it. An unset model or secret is reported, not fatal. " +
     "Run it first when something looks off.",
   args: [AGENT_ARG],
-  flags: [JSON_FLAG, MODEL],
+  flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, CONFIG_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (args, f) =>
     (await import("./commands/info.ts")).runInfo(args[0] as string, {
       json: f.json === true,
       model: f.model as string | undefined,
+      instance: instanceFlags(f),
     }),
 };
 
@@ -151,6 +163,8 @@ const invoke: CommandSpec = {
     { flags: "--session <id>", description: "continue the session an earlier invoke printed" },
     { flags: "--url <base>", description: "send to the agent served at <base>, over its Agent API" },
     { flags: "--key <key>", description: "the API key for --url (default: the agent's production one)" },
+    ...INSTANCE_FLAGS,
+    CONFIG_FLAG,
   ],
   examples: [
     { cmd: `fastagent invoke "summarize today's inbox"` },
@@ -166,6 +180,7 @@ const invoke: CommandSpec = {
       ...(typeof f.session === "string" ? { session: f.session } : {}),
       ...(typeof f.url === "string" ? { url: f.url } : {}),
       ...(typeof f.key === "string" ? { key: f.key } : {}),
+      instance: instanceFlags(f),
     }),
 };
 
@@ -203,9 +218,20 @@ const start: CommandSpec = {
   description:
     "Serve the agent's dist/ (default .) in production posture, just no file-watching; refuses a " +
     "missing or stale dist/, naming `fastagent build`. model and http.port come from " +
-    "fastagent.config.ts.",
+    "defaults in fastagent.config.ts, over which --config's fastagent.json sets the instance's own.",
   args: [AGENT_ARG],
-  flags: [PORT, BIND, MODEL, TUNNEL, NO_INPUT],
+  flags: [
+    PORT,
+    BIND,
+    MODEL,
+    TUNNEL,
+    NO_INPUT,
+    ...INSTANCE_FLAGS,
+    {
+      ...CONFIG_FLAG,
+      description: "the instance configuration, a fastagent.json (FASTAGENT_CONFIG); start never reads the project's",
+    },
+  ],
   examples: [
     { cmd: "fastagent start", note: "after fastagent build" },
     { cmd: "fastagent start --tunnel", note: "host a bot from your own box, no deploy" },
@@ -214,12 +240,15 @@ const start: CommandSpec = {
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
     "  bind:     --bind > all interfaces (dev: 127.0.0.1)\n" +
-    "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state/production\n" +
+    "  state:    --state > FASTAGENT_STATE_DIR > <root>/.state >\n" +
+    "            <agent dir>/.state/production\n" +
     "            the agent's storage (agent.sqlite), channels, schedules; use a\n" +
     "            mounted volume so a redeploy never wipes it\n" +
+    "  workdir:  --workdir > FASTAGENT_WORKDIR > --root > <agent dir>\n" +
+    "  config:   --config > FASTAGENT_CONFIG > none (never fastagent.json)\n" +
     "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production\n" +
     "            .env + auth.json\n" +
-    "  content:  <agent dir>/content/<name> — a clone of github content; a\n" +
+    "  content:  <workdir>/content/<name> — a clone of github content; a\n" +
     "            deployment links content/ to its volume\n" +
     "  auth:     FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
     "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +
@@ -231,6 +260,7 @@ const start: CommandSpec = {
       model: f.model as string | undefined,
       tunnel: f.tunnel === true,
       input: f.input !== false,
+      instance: instanceFlags(f),
     }),
 };
 
@@ -593,10 +623,14 @@ const schedules: CommandSpec = {
         "`wake`: a different owner (the STATE, not the definition), cancelled by the agent's `unwake` tool or " +
         "`schedules unwake`. --json adds each schedule's retained fire history. It changes no state.",
       args: [AGENT_ARG],
-      flags: [JSON_FLAG],
+      flags: [JSON_FLAG, ...INSTANCE_FLAGS],
       examples: [{ cmd: "fastagent schedules list" }],
       run: async (args, flags) =>
-        (await import("./commands/schedules.ts")).runSchedulesList(args[0] as string, flags.json === true),
+        (await import("./commands/schedules.ts")).runSchedulesList(
+          args[0] as string,
+          flags.json === true,
+          instanceFlags(flags),
+        ),
     },
     {
       name: "run",
@@ -616,12 +650,15 @@ const schedules: CommandSpec = {
             "it took after that",
         },
         NO_INPUT,
+        ...INSTANCE_FLAGS,
+        CONFIG_FLAG,
       ],
       examples: [{ cmd: "fastagent schedules run daily-digest" }],
       run: async (args, f) =>
         (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, args[1] as string, {
           model: f.model as string | undefined,
           input: f.input !== false,
+          instance: instanceFlags(f),
         }),
     },
     {
@@ -632,8 +669,10 @@ const schedules: CommandSpec = {
         "one set where nobody can message the agent, such as a schedule's own session. It is refused while `dev` " +
         "or `start` serves this agent, since a serve's clock writes the same store.",
       args: [{ name: "<id>", description: "the wake-up's id" }, AGENT_ARG],
+      flags: [...INSTANCE_FLAGS],
       examples: [{ cmd: "fastagent schedules unwake 3f1c…" }],
-      run: async (args) => (await import("./commands/schedules.ts")).runUnwake(args[0] as string, args[1] as string),
+      run: async (args, f) =>
+        (await import("./commands/schedules.ts")).runUnwake(args[0] as string, args[1] as string, instanceFlags(f)),
     },
   ],
 };
