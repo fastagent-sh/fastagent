@@ -6,7 +6,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compile, int, obj, opt, str } from "@earendil-works/pi-schema";
+import { compile, int, map, obj, opt, str, unknown } from "@earendil-works/pi-schema";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { instanceConfigSchema, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
@@ -143,6 +143,13 @@ export default {
     await expect(loadSourceDefinition(dir)).rejects.toThrow("fastagent.config.ts defaults: /http/port");
     const settings = project({ "fastagent.config.ts": `export default { settings: { type: "string" } };\n` });
     await expect(loadSourceDefinition(settings)).rejects.toThrow('"settings" must be an object schema');
+  });
+
+  it("refuses a `__proto__` key instead of merging it into Object.prototype", () => {
+    const definition = program({ settings: obj({ extra: opt(map(unknown())) }) });
+    const hostile = JSON.parse('{"settings":{"extra":{"__proto__":{"polluted":"yes"}}}}');
+    expect(() => resolveConfig(definition, { values: hostile, label: "fastagent.json" })).toThrow(/__proto__/);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it("accepts the line the model picker tells a person to keep, pasted as it is printed", async () => {

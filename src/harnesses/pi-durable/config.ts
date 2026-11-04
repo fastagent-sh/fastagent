@@ -188,6 +188,7 @@ function overlay(
 ): void {
   for (const [key, value] of Object.entries(layer)) {
     const path = at === "" ? key : `${at}.${key}`;
+    if (key === "__proto__") throw new Error(`${label}: ${path} is not a setting: "__proto__" cannot be a key`);
     if (!isRecord(value)) {
       into[key] = value;
       sources[path] = label;
