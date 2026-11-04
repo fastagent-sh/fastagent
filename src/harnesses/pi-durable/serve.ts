@@ -92,7 +92,10 @@ export interface OpenedServing {
   models: ModelEnvironment;
   /** What the agent works on, resolved for this instance. */
   content: readonly ResolvedContent[];
+  /** The project directory: whose `.secrets/` and `context.local.json` the instance reads. */
   agentDir: string;
+  /** The agent's working directory. */
+  workdir: string;
   /** Where the instance's state is: its storage, its channels' and schedules' state, its wake-ups. */
   stateRoot: string;
   /** The definition's channels and schedules, as `serveAgent` serves them: `serveAgent(opened)`. */
@@ -230,7 +233,8 @@ export async function openServing(
     config,
     models,
     content,
-    agentDir: workdir,
+    agentDir: projectDir,
+    workdir,
     stateRoot,
     channels: code.channels,
     schedules: code.schedules,

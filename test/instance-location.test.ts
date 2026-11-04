@@ -76,6 +76,20 @@ describe("info reports where the instance is", () => {
     expect(found.workdir).toBe(join(realpathSync(start), "inst"));
   });
 
+  it("a root that cannot be a directory refuses in one line, naming the flag and the path", async () => {
+    const dir = await agentWorkspace("fa-instance-notdir-");
+    const file = join(await scratch(), "afile");
+    await writeFile(file, "");
+    for (const path of [file, join(file, "sub")]) {
+      const result = await runInProcess(["info", dir, "--root", path]);
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain(`--root ${path} cannot be used as a directory`);
+      expect(result.stderr).not.toContain("at mkdirSync");
+    }
+    const viaVariable = await runInProcess(["info", dir], undefined, { ...process.env, FASTAGENT_WORKDIR: file });
+    expect(viaVariable.stderr).toContain(`FASTAGENT_WORKDIR ${file} cannot be used as a directory`);
+  });
+
   it("a flag with no path is a usage error", async () => {
     const dir = await agentWorkspace("fa-instance-empty-");
     const result = await runInProcess(["info", dir, "--root", ""]);
@@ -137,6 +151,25 @@ describe("commands that open an instance", () => {
     );
     expect(existsSync(join(state, "agent.sqlite"))).toBe(true);
     expect(existsSync(join(dir, ".state"))).toBe(false);
+  });
+
+  it("start names the project's value file, not the root's, where credentials are looked for", async () => {
+    const dir = await agentWorkspace("fa-instance-hint-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    await built(dir);
+    const root = await scratch();
+    const env = { ...process.env };
+    delete env.OPENAI_API_KEY;
+    await whileRunning(
+      ["start", dir, "--port", "0", "--bind", "127.0.0.1", "--no-input", "--root", root],
+      /Agent API: .*\n/,
+      async (stderr) => {
+        expect(stderr).toContain(`in ${join(dir, ".secrets", "production", ".env")}`);
+        expect(stderr).not.toContain(join(root, ".secrets"));
+      },
+      env,
+    );
   });
 
   it("start does not read the project's fastagent.json: only the configuration it is given", async () => {

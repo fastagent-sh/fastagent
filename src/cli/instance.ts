@@ -60,6 +60,14 @@ export function instanceFlags(flags: Record<string, unknown>): InstanceFlags {
   return picked;
 }
 
+function makeDirectory(path: string, source: string): void {
+  try {
+    mkdirSync(path, { recursive: true });
+  } catch (error) {
+    failUsage(`${source} ${path} cannot be used as a directory: ${(error as Error).message}`);
+  }
+}
+
 /**
  * Settle the instance's location: a flag beats its environment variable, a relative path is resolved against the
  * directory the command was started in (here, once), and the directories named are made. Refuses a flag with no path.
@@ -71,7 +79,7 @@ export function enterInstanceLocation(flags: InstanceFlags = {}): void {
     const path = resolveOverridePath(given ?? process.env[variable]);
     if (path === undefined) continue;
     process.env[variable] = path;
-    if (key === "root" || key === "workdir") mkdirSync(path, { recursive: true });
+    if (key === "root" || key === "workdir") makeDirectory(path, given === undefined ? variable : flag);
   }
 }
 

@@ -92,8 +92,8 @@ export async function reportAssembly(
   modelSpec: string,
   extras: [label: string, value: string][] = [],
 ): Promise<void> {
-  const { definition, code, models, agentDir, stateRoot, config } = opened;
-  reportLine("agent", `${definition.name} — ${agentDir}`);
+  const { definition, code, models, agentDir, workdir, stateRoot, config } = opened;
+  reportLine("agent", `${definition.name} — ${workdir}`);
   for (const [label, value] of contentLines(opened.content)) reportLine(label, value);
   reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(models, modelSpec, agentDir);
