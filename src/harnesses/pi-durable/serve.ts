@@ -4,7 +4,7 @@
  * through `openServing`, which also takes where the Agent keeps its sessions and what becomes of an earlier process's
  * messages.
  */
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type Harness, MemoryStorage, type Storage } from "@earendil-works/pi-durable";
@@ -25,6 +25,7 @@ import {
   contentAbsentHere,
   resolveContent,
 } from "../../content/resolve.ts";
+import { processEnvironment } from "../../child-env.ts";
 import { definedValues } from "../../declared-secrets.ts";
 import { prepareEnvironment } from "../../environment/mise.ts";
 import { log } from "../../log.ts";
@@ -51,6 +52,12 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    * passes it (`process.env`).
    */
   secrets: Readonly<Record<string, string | undefined>>;
+  /**
+   * The base environment of the processes the agent starts (`baseEnv(process.env)` is the CLI's): the commands of
+   * its declared packages come ahead on its `PATH`, and the declared secrets are added to it. Nothing else of this
+   * process's reaches them.
+   */
+  env: Readonly<Record<string, string>>;
   /** What the instance sets over the program's defaults (`fastagent.json`, or an object); none runs on the defaults. */
   config?: InstanceConfigSource;
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
@@ -163,13 +170,24 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
   const config = resolveConfig(definition, options.config);
-  // The agent's environment is ONE value every reader below is given, and this process's is never written: a process
+  // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
   const secrets = definedValues(options.secrets);
   const code = buildDefinition(definition, secrets, config.settings);
-  // The commands the agent runs, as `context.json`'s environment declares them, before anything can run one.
-  const environment = { ...secrets, ...(await prepareEnvironment(dir, { ...process.env, ...secrets })) };
-  const env = { ...process.env, ...environment };
+  // FastAgent's own work for the instance (installing packages, cloning content, finding its files) runs in this
+  // process's environment and the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
+  const env = { ...process.env, ...secrets };
+  const packages = await prepareEnvironment(dir, env, { ...env, PATH: options.env.PATH });
+  const processEnv = processEnvironment(
+    {
+      base: options.env,
+      secrets,
+      declared: definition.inputs.secrets.map(({ name }) => name),
+      packages,
+      workdir,
+    },
+    dirname(workdir),
+  );
   const content = await contentForThisRun(dir, projectDir, workdir, env);
   const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
   const models = await modelEnvironment(
@@ -179,7 +197,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       ...(options.credentialStore === undefined ? {} : { credentialStore: options.credentialStore }),
     },
     code.providers,
-    { stateRoot, environment },
+    { stateRoot, environment: secrets },
   );
   const chosen = options.storage ?? { instance: "posix" };
   const storage = await openStorage(stateRoot, chosen);
@@ -188,7 +206,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   try {
     const mcpEnvironment = { ...secrets, ...options.mcp?.variables };
     mcp = await openMcpClients(
-      resolveMcpServers(dir, mcpEnvironment, undefined, workdir),
+      resolveMcpServers(dir, mcpEnvironment, undefined, workdir, processEnv),
       mcpAuthorization(projectDir, env, stateRoot, options.mcp),
       options.mcp,
     );
@@ -199,7 +217,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       config,
       content,
       workdir,
-      environment,
+      processEnv,
       models: models.models,
       ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
       ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),
@@ -274,6 +292,12 @@ export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
    * (`process.env` is a choice an app can make).
    */
   secrets?: Readonly<Record<string, string | undefined>>;
+  /**
+   * The base environment of the processes the agent starts (its commands, stdio MCP servers, skill scripts). Default:
+   * empty; `baseEnv(process.env)` is an app's own. The commands of the agent's declared packages come ahead on its
+   * `PATH`, and the secrets the definition declares are added; nothing else of the host's reaches them.
+   */
+  env?: Readonly<Record<string, string>>;
   /** Per-instance MCP grants and interpolation values; no global credential discovery. */
   mcp?: McpOptions;
   /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
@@ -325,6 +349,7 @@ export async function openAgent<Settings = unknown>(
     workdir,
     stateRoot,
     secrets: options.secrets ?? {},
+    env: options.env ?? {},
     ...(config === undefined ? {} : { config }),
     wakeTicking: () => ticking,
     ...(options.mcp === undefined ? {} : { mcp: options.mcp }),

@@ -1,7 +1,7 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: MCP configuration uses literal environment references.
 import { mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import type { LocalAgent } from "../src/harnesses/pi-durable/serve.ts";
@@ -104,6 +104,26 @@ it("an MCP ${VAR} reference is resolved from the instance's secrets, never from 
   expect(JSON.parse((await ask(agent, "mcp__constructor__who")).answer?.text ?? "null")).toMatchObject({
     value: "from-the-secrets",
   });
+});
+
+it("a stdio server gets the base, the declared secrets and its own env, and nothing else of the host's", async () => {
+  vi.stubEnv("FASTAGENT_OFFLINE", "1");
+  vi.stubEnv("UNRELATED_MCP_SECRET", "do-not-forward");
+  const dir = await directory({
+    mcpServers: { constructor: { command: process.execPath, args: [FIXTURE], env: { MCP_VALUE: "own" } } },
+  });
+  await writeFile(
+    join(dir, "context.json"),
+    JSON.stringify({ environment: { variables: { FA_MCP_DECLARED: { description: "for the server" } } } }),
+  );
+  const agent = await opened(dir, {
+    stateDir: join(dir, "state"),
+    secrets: { FA_MCP_DECLARED: "declared", UNRELATED_MCP_SECRET: "given-but-undeclared" },
+    env: {},
+  });
+  const who = JSON.parse((await ask(agent, "mcp__constructor__who")).answer?.text ?? "null");
+  expect(who).toMatchObject({ value: "own", declared: "declared", leaked: false });
+  expect(who.ceiling).toBe(dirname(dir));
 });
 
 it("HTTP clients keep bindings isolated and closing one leaves a shared grant usable", async () => {

@@ -24,7 +24,7 @@ import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 
 /** The agent in `dir` as a serve opens it, with no storage of its own: what its content resolves to. */
 async function openedContent(dir: string, secrets: Record<string, string> = {}) {
-  const opened = await openServing(await loadSourceDefinition(dir), { secrets, storage: "memory" });
+  const opened = await openServing(await loadSourceDefinition(dir), { secrets, env: {}, storage: "memory" });
   await opened.agent.close();
   return opened.content;
 }
@@ -435,6 +435,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     const definition = await loadSourceDefinition(agentDir);
     const running = await assembleAgent(definition, {
       storage: new MemoryStorage(),
+      processEnv: {},
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
       config: resolveConfig(definition),
       models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),

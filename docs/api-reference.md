@@ -78,6 +78,7 @@ function openAgent(
   definition: AgentDefinition, // an agent package's default export, which `fastagent build` generates
   options: InstanceLocation & {
     secrets?: Record<string, string | undefined>;
+    env?: Record<string, string>; // the base environment of the processes the agent starts; `baseEnv(process.env)` is an app's own
     config?: InstanceConfig | string;
     model?: string;
     credentials?: CredentialStore;
@@ -113,10 +114,15 @@ is less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the insta
 files are only read. `secrets` is the one source of the values the agent reads by name: its code's `needs()`, an MCP
 `${VAR}` reference, and its model's authentication and what each model request reads, such as Bedrock's region or
 Azure's endpoint. The open reads none of them from this process's environment or from a file, so an app passes what the
-agent needs (`secrets: process.env` is a choice it can make); without one a required secret refuses the open. The
-commands the agent runs and its content's clones still run with this process's environment plus `secrets` and the
-declared packages (the next release gives them an environment of their own). Nothing is written into `process.env`,
-so one process can open several agents. `model` is the default for a session that names
+agent needs (`secrets: process.env` is a choice it can make); without one a required secret refuses the open. A
+process the agent starts (the shell tool, a stdio MCP server, a skill's script) gets `env` (default: empty), the
+commands of its declared packages ahead on its `PATH`, the values `secrets` holds for the names the definition
+declares (`needs()` and `context.json`'s environment), a stdio MCP server's own `env`, and `GIT_CEILING_DIRECTORIES` at
+the workspace's parent, so git stops at the workspace. Nothing else of this process's reaches it. `baseEnv(source)`
+returns the variables of the base list that `source` holds (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_*`, `TZ`,
+`TMPDIR`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`). Cloning content and installing packages are FastAgent's own and run
+in this process's environment plus `secrets`. Nothing is written into `process.env`, so one process can open several
+agents. `model` is the default for a session that names
 none; without one anywhere, a message is refused `missing_model` until its session is given one (`sessions.update`).
 Nothing reaches the agent until `serve`, and its `wake` tool refuses a wake-up until then: only a serve's clock fires
 one.

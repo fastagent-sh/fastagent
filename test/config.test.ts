@@ -202,6 +202,7 @@ export default needs([], (_secrets, settings: { repo: string; digestChannel?: st
     const { definition, instance } = await loadDevProject(dir);
     const opened = await openServing(definition, {
       secrets: {},
+      env: {},
       ...(instance === undefined ? {} : { config: instance }),
       storage: "memory",
     });

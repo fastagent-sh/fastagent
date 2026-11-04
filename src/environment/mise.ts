@@ -312,7 +312,12 @@ function missingMise(agentDir: string): Error {
  * mise itself is not put on the PATH. An agent without packages borrows the machine's commands (no variables). Apt
  * packages are the image's to install; one missing here is said, with how.
  */
-export async function prepareEnvironment(agentDir: string, env: NodeJS.ProcessEnv): Promise<Record<string, string>> {
+export async function prepareEnvironment(
+  agentDir: string,
+  env: NodeJS.ProcessEnv,
+  /** What the packages' `PATH` is computed over: the agent's own, which is not the installer's. */
+  commandsEnv: NodeJS.ProcessEnv = env,
+): Promise<Record<string, string>> {
   const declared = loadEnvironment(agentDir);
   const missingApt = missingAptPackages(declared?.aptPackages ?? []);
   if (missingApt && missingApt.length > 0) log.warn(`[fastagent] ${aptAdvice(missingApt)}`);
@@ -321,5 +326,5 @@ export async function prepareEnvironment(agentDir: string, env: NodeJS.ProcessEn
   const bin = miseBinary(agentDir);
   if (!bin) throw missingMise(agentDir);
   await installPackages(agentDir, bin, packages, [], env);
-  return packagesEnvironment(agentDir, bin, packageSpecs(packages), env);
+  return packagesEnvironment(agentDir, bin, packageSpecs(packages), commandsEnv);
 }

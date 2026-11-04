@@ -15,7 +15,6 @@ import {
   createRegistry,
   defineExtension,
 } from "@earendil-works/pi-durable";
-import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type { ResolvedContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
@@ -24,7 +23,7 @@ import { channelModuleProblem } from "../../channels/discover.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { fastagentVersion } from "../../version.ts";
-import { DEV_SERVE_ENV } from "../../serving-command.ts";
+import { InstanceExecutionEnv } from "./execution-env.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
@@ -278,11 +277,8 @@ export interface AssembleAgentOptions {
   /** Whether that scheduler runs now: an app's `openAgent` runs one only while it serves. Default always. */
   wakeTicking?: () => boolean;
   unfinished?: Unfinished;
-  /**
-   * What the agent's environment adds to this process's, for the commands it runs: its value file's variables and its
-   * packages' PATH.
-   */
-  environment?: Readonly<Record<string, string>>;
+  /** The whole environment of the processes the agent starts (child-env.ts): nothing of this process's is added. */
+  processEnv: Readonly<Record<string, string>>;
 }
 
 /** Open the definition as an Agent over `models`: the coding tools, then its own. */
@@ -335,11 +331,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
-    env: ({ cwd }) =>
-      new NodeExecutionEnv({
-        cwd: cwd ?? options.workdir ?? dir,
-        shellEnv: { ...options.environment, [DEV_SERVE_ENV]: undefined },
-      }),
+    env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
     commands: () => readCommands(dir),
   });
 }

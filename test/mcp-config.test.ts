@@ -20,12 +20,13 @@ it("reads only the explicit file, with instance variables and no ambient secret 
       remote: { type: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer ${TOKEN}" } },
     },
   });
-  const resolved = resolveMcpServers(dir, {
-    ROOT: "/project one",
-    TOKEN: "secret",
-    PATH: "/bin",
-    OTHER_PROVIDER_SECRET: "hidden",
-  });
+  const resolved = resolveMcpServers(
+    dir,
+    { ROOT: "/project one", TOKEN: "secret", PATH: "/not-a-process-env", OTHER_PROVIDER_SECRET: "hidden" },
+    undefined,
+    dir,
+    { PATH: "/bin" },
+  );
   expect(resolved[0]).toEqual({
     name: "local",
     type: "stdio",
@@ -52,7 +53,7 @@ it.each([
 });
 it("names missing variables, but never the configured secret values", async () => {
   await file({ mcpServers: { x: { command: "node", env: { TOKEN: "${MISSING}" } } } });
-  expect(() => resolveMcpServers(dir, {})).toThrow("x requires MISSING");
+  expect(() => resolveMcpServers(dir, {}, undefined, dir, {})).toThrow("x requires MISSING");
 });
 it("refuses malformed JSON instead of treating it as absent", async () => {
   await writeFile(join(dir, ".mcp.json"), "{");

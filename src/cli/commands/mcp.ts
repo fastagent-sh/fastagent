@@ -87,7 +87,7 @@ export async function runMcp(
     );
     return;
   }
-  httpServer(resolveMcpServers(target, context.environment, server), server);
+  httpServer(resolveMcpServers(target, context.environment, server, target, {}), server);
   const seconds = options.timeout === undefined ? 900 : Number(options.timeout);
   if (!Number.isInteger(seconds) || seconds <= 0)
     return failUsage("--timeout must be a positive whole number of seconds");
