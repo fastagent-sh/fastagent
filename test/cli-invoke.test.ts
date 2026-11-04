@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { describe, expect, it } from "vitest";
-import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
+import { openSource } from "./open-source.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { fauxAgent as agent, killWhileLingering, lingered, runInProcess, whileServed } from "./cli-run.ts";
@@ -106,7 +106,7 @@ describe("cli: invoke", () => {
 
 async function withServedAgent(during: (dir: string, url: string) => Promise<void>): Promise<void> {
   const dir = await agent("fa-invoke-url-");
-  const opened = await openAgent(dir);
+  const opened = await openSource(dir);
   try {
     const service = await opened.serve({ apiKeys: ["the-key", "the-next-key"] });
     const url = `http://127.0.0.1:${await service.listen(0, "127.0.0.1")}`;

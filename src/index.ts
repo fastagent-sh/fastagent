@@ -36,6 +36,7 @@ export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 
 export {
   openAgent,
+  type InstanceLocation,
   type LocalAgent,
   type OpenAgentOptions,
   type ServeAgentOptions,

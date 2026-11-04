@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
+import { agentWorkspace, run, runInProcess, withRepoModules } from "./cli-run.ts";
 
 describe("cli: login and models", () => {
   it("login OUTSIDE an agent announces the global credential — the scope switch is never silent", async () => {
@@ -147,7 +147,7 @@ echo '{"type":"result","ok":true,"provider":"openai","method":"oauth","path":"/d
         '  build: () => fauxProvider({ provider: "gw", models: [{ id: "m1" }] }).provider,\n' +
         "}] };\n",
     });
-    await symlink(new URL("../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
+    await withRepoModules(dir);
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.FA_TEST_GATEWAY_KEY;
     const listed = await runInProcess(["models", "gw/"], dir, env);

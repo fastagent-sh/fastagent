@@ -5,16 +5,41 @@
 // Rule of thumb: reach for `runInProcess`; use `run` when the test would be wrong if no process were involved.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+
+const REPO_MODULES = new URL("../node_modules", import.meta.url).pathname;
+
+/** What `init` gives a project that `fastagent build` (and so `deploy` and `start`) needs: an ES module package and TypeScript. */
+export async function buildable(dir: string): Promise<void> {
+  await writeFile(join(dir, "package.json"), '{"type":"module"}\n');
+  await mkdir(join(dir, "node_modules", "@fastagent-sh"), { recursive: true });
+  await symlink(
+    new URL("./fixtures/fastagent-shim", import.meta.url).pathname,
+    join(dir, "node_modules", "@fastagent-sh", "fastagent"),
+    "dir",
+  );
+  await mkdir(join(dir, "node_modules", "@typescript"), { recursive: true });
+  await symlink(join(REPO_MODULES, "typescript"), join(dir, "node_modules", "typescript"), "dir");
+  for (const entry of await readdir(join(REPO_MODULES, "@typescript"))) {
+    await symlink(join(REPO_MODULES, "@typescript", entry), join(dir, "node_modules", "@typescript", entry), "dir");
+  }
+}
+
+/** The agent in `dir` built into its `dist/`, which `start` opens: what `fastagent build` or `npm start` has done. */
+export async function built(dir: string): Promise<string> {
+  await buildProject(dir);
+  return dir;
+}
 
 /** An agent directory, as `init` produces one; `files` land in it. */
 export async function agentWorkspace(prefix: string, files: Record<string, string> = {}): Promise<string> {
@@ -23,6 +48,7 @@ export async function agentWorkspace(prefix: string, files: Record<string, strin
   await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
   await writeFile(join(dir, ".secrets", "auth.json"), "{}\n"); // a real credential to leak
+  await buildable(dir);
   for (const [name, content] of Object.entries(files)) {
     await mkdir(join(dir, dirname(name)), { recursive: true });
     await writeFile(join(dir, name), content);
@@ -185,9 +211,15 @@ faux.setResponses(Array.from({ length: 50 }, () => reply));
 export default { model: "gw/m1", providers: [faux.provider] };
 `;
 
+/** The agent in `dir` given this repository's dependencies, for a config that imports them. */
+export async function withRepoModules(dir: string): Promise<void> {
+  await rm(join(dir, "node_modules"), { recursive: true });
+  await symlink(REPO_MODULES, join(dir, "node_modules"), "dir");
+}
+
 export async function fauxAgent(prefix: string, files: Record<string, string> = {}): Promise<string> {
   const dir = await agentWorkspace(prefix, { "fastagent.config.ts": FAUX_CONFIG, ...files });
-  await symlink(new URL("../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
+  await withRepoModules(dir);
   return dir;
 }
 

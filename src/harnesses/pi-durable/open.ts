@@ -23,6 +23,7 @@ import type { ChannelModule, LongConnectionChannelModule } from "../../channel.t
 import { channelModuleProblem } from "../../channels/discover.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
+import { fastagentVersion } from "../../version.ts";
 import { DEV_SERVE_ENV } from "../../serving-command.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
@@ -122,6 +123,7 @@ export async function loadSourceDefinition(directory: string): Promise<AgentDefi
   const pkg = (await readPackageJson(dir)) as { name?: unknown; version?: unknown };
   return defineDefinition({
     format: DEFINITION_FORMAT,
+    builtWith: await fastagentVersion(),
     name: config.name ?? (typeof pkg.name === "string" ? pkg.name : basename(dir)),
     // A source project need not be published, so it need not have a version.
     version: typeof pkg.version === "string" ? pkg.version : "0.0.0",
@@ -275,6 +277,8 @@ export interface AssembleAgentOptions {
   storage: Storage;
   /** What the agent works on (`context.json`'s content), resolved for this instance. */
   content?: readonly ResolvedContent[];
+  /** The agent's working directory: the definition's own, unless the instance is elsewhere. */
+  workdir?: string;
   /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;
   mcpTools?: ToolRegistration[];
@@ -326,7 +330,10 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   registry.install(
     defineExtension({
       name: DEFINITION_EXTENSION,
-      sections: definitionSections(dir, options.content ?? [], { wake: ownWake || options.stateRoot !== undefined }),
+      sections: definitionSections(dir, options.content ?? [], {
+        wake: ownWake || options.stateRoot !== undefined,
+        workdir: options.workdir ?? dir,
+      }),
       tools: [...code.tools, ...(options.mcpTools ?? [])],
     }),
   );
@@ -349,7 +356,10 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
     env: ({ cwd }) =>
-      new NodeExecutionEnv({ cwd: cwd ?? dir, shellEnv: { ...options.environment, [DEV_SERVE_ENV]: undefined } }),
+      new NodeExecutionEnv({
+        cwd: cwd ?? options.workdir ?? dir,
+        shellEnv: { ...options.environment, [DEV_SERVE_ENV]: undefined },
+      }),
     commands: () => readCommands(dir),
   });
 }

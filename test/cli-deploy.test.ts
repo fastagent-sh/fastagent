@@ -229,7 +229,7 @@ describe("cli: deploy", () => {
     const current = containerArtifacts({
       releaseId: "release-one",
       agent: "any",
-      hasPackageJson: false,
+      hasPackageJson: true,
       runtime: "node",
       hasLockfile: false,
       version: await fastagentVersion(),

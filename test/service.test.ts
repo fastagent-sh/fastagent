@@ -10,7 +10,8 @@ import { join, relative } from "node:path";
 import { log } from "../src/log.ts";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
-import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { openSource } from "./open-source.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { connectAgent } from "../src/http/client.ts";
 import { type ServeOptions, serveAgent } from "../src/service.ts";
@@ -442,12 +443,12 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
 describe("openAgent: an agent directory opened in an app", () => {
   it("serves the Agent API under /v1 beside its routes only with a key, and keeps /v1 from a channel", async () => {
     const dir = await agentDir();
-    const unkeyed = await openAgent(dir);
+    const unkeyed = await openSource(dir);
     const plain = await unkeyed.serve();
     expect((await plain.fetch(new Request("http://app/v1/agent"))).status).toBe(404);
     await unkeyed.close();
 
-    const keyed = await openAgent(dir);
+    const keyed = await openSource(dir);
     const service = await keyed.serve({ apiKeys: ["k"] });
     const info = await service.fetch(new Request("http://app/v1/agent", { headers: { authorization: "Bearer k" } }));
     expect(await info.json()).toMatchObject({ name: expect.any(String) });
@@ -455,7 +456,7 @@ describe("openAgent: an agent directory opened in an app", () => {
     expect((await service.fetch(new Request("http://app/health"))).status).toBe(200);
     await keyed.close();
 
-    const watched = await openAgent(dir);
+    const watched = await openSource(dir);
     const listening = await watched.serve({ apiKeys: ["k"] });
     const port = await listening.listen(0, "127.0.0.1");
     const { id } = await watched.sessions.create();
@@ -472,13 +473,13 @@ describe("openAgent: an agent directory opened in an app", () => {
       error: { code: "unavailable", message: "the service is closing" },
     });
 
-    const unset = await openAgent(dir);
+    const unset = await openSource(dir);
     await expect(unset.serve({ apiKeys: [process.env.FASTAGENT_TEST_UNSET_KEY ?? ""] })).rejects.toThrow(
       "the Agent API needs at least one key, and no key may be empty",
     );
     await unset.close();
 
-    const claiming = await openAgent(
+    const claiming = await openSource(
       await agentDir({
         "src/channels/claims.mjs": `export default () => ({ "POST /v1/hook": () => new Response("ok") });`,
       }),
@@ -489,7 +490,7 @@ describe("openAgent: an agent directory opened in an app", () => {
 
   it("serves its routes in process and on a server of its own, and closes both before it lets the storage go", async () => {
     const dir = await agentDir();
-    const agent = await openAgent(dir);
+    const agent = await openSource(dir);
     const session = await agent.sessions.create();
     expect(await agent.sessions.get(session.id)).toMatchObject({ id: session.id, status: "idle" });
 
@@ -505,17 +506,17 @@ describe("openAgent: an agent directory opened in an app", () => {
     await agent.close();
     await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
     // The instance's storage is free again: another process (here, another open) may hold it.
-    const again = await openAgent(dir);
+    const again = await openSource(dir);
     expect(await again.sessions.get(session.id)).toMatchObject({ id: session.id });
     await again.close();
   });
 
   it("refuses to serve once it is closed, or while it closes: nothing would close that service", async () => {
     const dir = await agentDir();
-    const closed = await openAgent(dir);
+    const closed = await openSource(dir);
     await closed.close();
     await expect(closed.serve()).rejects.toThrow("this agent is closed");
-    const closing = await openAgent(dir);
+    const closing = await openSource(dir);
     const going = closing.close();
     await expect(closing.serve()).rejects.toThrow("this agent is closed");
     await going;
@@ -524,7 +525,7 @@ describe("openAgent: an agent directory opened in an app", () => {
   it("serves again after a serve that failed to start, and listens again after a bind that failed", async () => {
     const flag = globalThis as Record<string, unknown>;
     flag.__faFailServe = true;
-    const agent = await openAgent(
+    const agent = await openSource(
       await agentDir({
         "src/channels/flaky.mjs": `export default () => {
           if (globalThis.__faFailServe) throw new Error("dial refused");
@@ -537,7 +538,7 @@ describe("openAgent: an agent directory opened in an app", () => {
       flag.__faFailServe = false;
       const service = await agent.serve();
       const taken = await service.listen(0, "127.0.0.1");
-      const other = await openAgent(await agentDir());
+      const other = await openSource(await agentDir());
       try {
         const second = await other.serve();
         await expect(second.listen(taken, "127.0.0.1")).rejects.toMatchObject({ code: "EADDRINUSE" });

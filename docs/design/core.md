@@ -188,13 +188,19 @@ join-on-interrupt combinator that differed only in the word before `Failure`.
 
 ## 3. Assembly: the definition onto pi-durable
 
-`openServing(dir, options)` (`harnesses/pi-durable/serve.ts`) opens a directory. `dev`, `start`, `invoke`,
-`schedules run` and AgentCore call it, with where the Agent keeps its sessions and what becomes of an earlier process's
-messages; an app calls `openAgent(dir)`, which is it with a serve's defaults, and may give its own credential store and
-state root (`stateDir`: an instance of its own beside `dev`'s). It works in this order:
+`openServing(definition, options)` (`harnesses/pi-durable/serve.ts`) opens a definition as one instance. `dev`,
+`invoke` and `schedules run` give it the source project's (`loadSourceDefinition`), `start` and AgentCore the project's
+built `dist/` (`loadProjectBuild`, `built.ts`), with where the Agent keeps its sessions and what becomes of an earlier
+process's messages; an app calls `openAgent(definition, { root })`, which is it with a serve's defaults, and may give
+its own credential store and `{ stateDir, workdir }`. The definition's own directory (`definition.dir`) is only read:
+its text, `context.json`, `.mcp.json` and declared environment. The instance's directory (`workdir`) holds everything
+that is written: the agent's working directory, its secrets, its content's clones and, by default, its state. A source
+project is its own instance directory. It works in this order:
 
 `fastagent build` (`build.ts`) compiles a project into `dist/` with the project's TypeScript and generates its entry,
-which calls the same `defineDefinition`; opening a built package is the artifact work's next step.
+which calls the same `defineDefinition`, and `build.json`, the record `start` compares the project against
+(`built.ts`: a hash of the code the compiler read, the files the build copies, the modules `src/` lists and
+`package.json`). `deploy` builds first, so the image holds the `dist/` its `start` opens.
 
 1. **The definition** (`loadSourceDefinition`, `open.ts`; `definition.ts`): the configuration and every module of
    `src/` are imported in file order, the configuration's keys are checked (nested ones included), and the result is

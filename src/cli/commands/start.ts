@@ -14,7 +14,8 @@ import {
 } from "../../deploy/workspace.ts";
 import { selectAgentEnvironment, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
-import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
+import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
+import type { AgentDefinition } from "../../harnesses/pi-durable/definition.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
@@ -145,9 +146,13 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 
 /** Internal entry loaded from the agent's installed package after storage initialization. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
-  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
-  const opened = await openServing(await loadSourceDefinition(agentDir), {
+  // The build, never the source (agent-artifact.md §8): refused when there is none or the project has moved on.
+  let built: Promise<AgentDefinition> | undefined;
+  const loadBuilt = (dir: string) => (built ??= loadProjectBuild(dir));
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, undefined, loadBuilt);
+  const opened = await openServing(await loadBuilt(agentDir), {
     model: modelSpec,
+    workdir: agentDir,
     // AgentCore's session storage refuses SQLite's own locks; the deployment's lease makes the dotfile lock safe.
     storage: { instance: isAgentcoreRuntime() ? "leased-dotfile" : "posix" },
   });

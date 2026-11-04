@@ -245,13 +245,13 @@ const fileText = (path: string): string | undefined => {
 export function definitionSections(
   agentDir: string,
   content: readonly ResolvedContent[],
-  options: { wake: boolean },
+  options: { wake: boolean; workdir?: string },
 ): PromptSection[] {
   return [
     section("system", () => fileText(join(agentDir, "SYSTEM.md")), { tag: false }),
     section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
     section("skills", () => skillsPrompt(readSkills(agentDir))),
-    section("content", () => contentSection({ agentDir, content })),
+    section("content", () => contentSection({ agentDir, workdir: options.workdir ?? agentDir, content })),
     section("self_change", () => (isDeployedWorkspace() ? selfChangeSection(options.wake) : undefined)),
   ];
 }
@@ -298,10 +298,21 @@ function contentKind(c: ResolvedContent): string {
  * with its location and where a change there goes. A result written where it does not last is how knowledge gets
  * lost, so the agent is told which is which.
  */
-function contentSection({ agentDir, content }: { agentDir: string; content: readonly ResolvedContent[] }): string {
+function contentSection({
+  agentDir,
+  workdir,
+  content,
+}: {
+  agentDir: string;
+  workdir: string;
+  content: readonly ResolvedContent[];
+}): string {
   const own =
-    `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
-    `land there unless you put them elsewhere.`;
+    workdir === agentDir
+      ? `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
+        `land there unless you put them elsewhere.`
+      : `Your working directory, ${workdir}, is your own directory: files you create land there unless you put them ` +
+        `elsewhere. Your definition is in ${agentDir}, which you read and do not change.`;
   if (content.length === 0) return `${own} Nothing else is declared for you: you work only in your own directory.`;
   const line = (c: ResolvedContent) =>
     `- ${c.name}: ${c.location} (${contentKind(c)})${c.description !== undefined ? ` ${c.description}` : ""}`;

@@ -74,7 +74,7 @@ Use FastAgent as a library and call the agent in process:
 ```ts
 import { openAgent } from "@fastagent-sh/fastagent";
 
-const agent = await openAgent("./agent", { model: "openai/gpt-5.5" });
+const agent = await openAgent(agentPackage, { root: "/var/lib/app/agent", model: "openai/gpt-5.5" });
 const session = await agent.sessions.create();
 // agent.messages.send({ sessionId: session.id, content }, { wait }) for the answer, or messages.stream() as written
 ```

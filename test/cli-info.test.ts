@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { stat, symlink, writeFile } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { agentWorkspace, runInProcess } from "./cli-run.ts";
+import { agentWorkspace, runInProcess, withRepoModules } from "./cli-run.ts";
 
 /** What `info` runs with: no model from this machine's shell. */
 const withoutModel = (): NodeJS.ProcessEnv => {
@@ -75,7 +75,7 @@ describe("cli: info", () => {
         'import { fauxProvider } from "@earendil-works/pi-ai";\n' +
         'export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" }] }).provider] };\n',
     });
-    await symlink(new URL("../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
+    await withRepoModules(dir);
 
     const ok = JSON.parse(
       (await runInProcess(["info", dir, "--json", "--model", "gw/m1"], undefined, withoutModel())).stdout,

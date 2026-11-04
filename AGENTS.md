@@ -263,8 +263,8 @@ src/
     ├── pi-durable/         # the Agent API on pi-durable, in process
     │   ├── open.ts         # a definition (config + generated registry) assembled into an Agent; the secrets
     │   │                   # gate and manifest; pi-ai's built-in models with the definition's providers
-    │   ├── serve.ts        # openAgent (an app's: LocalAgent, served with `serve()`) over openServing, a directory
-    │   │                   # opened (definition, code, models, content, storage, Agent), which dev, start,
+    │   ├── serve.ts        # openAgent (an app's: LocalAgent, served with `serve()`) over openServing, a definition
+    │   │                   # opened as an instance (code, models, content, storage, Agent), which dev, start,
     │   │                   # AgentCore, invoke and `schedules run` call with their storage; holding the instance for
     │   │                   # a command that writes its state outside a serve
     │   ├── storage.ts      # a SQLite database one process holds (the instance's, `invoke`'s), and its lock
@@ -273,6 +273,8 @@ src/
     │   │                   # defineSchedule
     │   ├── definition.ts   # a definition as one frozen value: what dev loads and a build exports, its declared inputs
     │   ├── build.ts        # `fastagent build`: the project's tsc into dist/, the text and resources, the generated entry
+    │   ├── built.ts        # what dist/ is: which files go into it, the build record `start` checks the project against,
+    │   │                   # and the opener of a built package (`loadProjectBuild`, `loadBuiltDefinition`)
     │   ├── registry.ts     # the modules of src/ by directory, imported in file order
     │   ├── text.ts         # SYSTEM.md, AGENTS.md, skills (loaded as pi loads them) and prompt templates, read per
     │   │                   # message; the deployed agent's self-change section
@@ -309,6 +311,9 @@ test/                       # vitest; faux models by default
 │                           # durable-agent.test.ts over durable-subject.ts, and over HTTP by http-api.test.ts
 │                           # (http-subject.ts: the same subject served, called through connectAgent)
 ├── scripted-agent.ts       # an Agent whose answers a test scripts: what channel, schedule and service tests run on
+├── probe-package.ts       # a package built and installed under an app's node_modules: what built-package.test.ts and
+│                           # bun/built.ts open as instances (a spawned CLI's `@fastagent-sh/fastagent` is fixtures/fastagent-shim)
+├── open-source.ts          # `openSource(dir)`: the source project in `dir` opened as an instance rooted there
 └── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)
 docs/                       # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```

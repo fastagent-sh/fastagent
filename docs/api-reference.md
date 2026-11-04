@@ -71,13 +71,16 @@ its session's events from its own `user` entry through its `done` (`delta`, `too
 that message from wherever it is. A refused send rejects the first read; a stream that cannot go on after that ends
 with a `stream_error` event. It is what a channel's live preview reads.
 
-## Opening and serving an agent directory
+## Opening and serving an agent
 
 ```ts
 function openAgent(
-  dir: string,
-  options?: { model?: string; credentials?: CredentialStore; stateDir?: string; mcp?: McpOptions },
+  definition: AgentDefinition, // an agent package's default export, which `fastagent build` generates
+  options: InstanceLocation & { model?: string; credentials?: CredentialStore; mcp?: McpOptions },
 ): Promise<LocalAgent>;
+
+// Every path absolute. `root` is the working directory with its state in `<root>/.state`; or the two apart.
+type InstanceLocation = { root: string } | { stateDir: string; workdir: string };
 
 interface LocalAgent extends Agent {
   serve(options?: { apiKeys?: string[] }): Promise<Service>; // channels, schedules, wake-ups, /health, and /v1 with a key
@@ -93,14 +96,15 @@ interface Service {
 }
 ```
 
-`openAgent` opens a directory the way `dev` and `start` do: it imports the modules of `src/`, builds the code with
-the secrets it declares (a required one without a value refuses, naming where it is declared), prepares the declared
+`openAgent` opens one instance of a definition the way `dev` and `start` do: a definition `fastagent build` made for
+another format is refused, naming the FastAgent version that opens it. It builds the code with the secrets it declares (a required one without a value refuses, naming where it is declared), prepares the declared
 environment, clones the content, builds the model environment over the agent's credentials (`.secrets/auth.json` over
 the machine's, or the store `credentials` gives) with its [model lists](configuration.md#model-lists) refreshed (a request to
 `https://pi.dev` of at most 5 s, and to a provider that fetches its own list, unless what `<state root>/models/` keeps
 is less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage,
 `<state root>/agent.sqlite`, which one process holds at a time: a second opener is refused. The state root is
-`stateDir`, else `FASTAGENT_STATE_DIR`, else the agent's `.state/`. Everything it reads from an environment (the
+`stateDir`, else `<root>/.state`, and the agent's working directory is `workdir`, else `root`; the definition's own
+files are only read. Everything it reads from an environment (the
 secrets, the model keys and what each model request reads, such as Bedrock's region or Azure's endpoint, what its
 commands and its content's clones run with, `FASTAGENT_STATE_DIR` and `FASTAGENT_AUTH_PATH`) is this process's plus the
 agent's own:

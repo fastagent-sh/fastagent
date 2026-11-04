@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CommandSpec } from "../src/cli/kernel.ts";
 import { buildCliProgram, specs } from "../src/cli/program.ts";
-import { agentWorkspace, run } from "./cli-run.ts";
+import { agentWorkspace, built, run } from "./cli-run.ts";
 
 /**
  * The commander kernel: specs-as-data rendered through buildProgram. In-process tests drive the
@@ -316,7 +316,7 @@ describe("cli end to end: the thin entry", () => {
   });
 
   it("exit codes follow responsibility: bad --port flag → 2 (usage), bad PORT env → 1 (config)", async () => {
-    const dir = await agentWorkspace("fa-kernel-port-");
+    const dir = await built(await agentWorkspace("fa-kernel-port-"));
     const flag = await run(["start", dir, "--port", "abc"]);
     expect(flag.code).toBe(2);
     expect(flag.stderr).toMatch(/invalid --port/);

@@ -212,7 +212,7 @@ export interface ServeOptions {
 /** What the assembly serves. */
 export interface ServableAgent {
   agent: Agent;
-  /** The definition's directory: the agent's working directory. */
+  /** The instance's directory: the agent's working directory. */
   agentDir: string;
   /** Where durable state lives (channel state, schedule fires, wake-ups). */
   stateRoot: string;

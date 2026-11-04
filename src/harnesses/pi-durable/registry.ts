@@ -41,6 +41,13 @@ async function modulesIn(dir: string, kind: RegistryKind): Promise<{ file: strin
   });
 }
 
+/** The module files of the source project in `dir`, project-relative, in the order the registry imports them. */
+export async function registryFiles(dir: string): Promise<string[]> {
+  return (await Promise.all(REGISTRY_KINDS.map((kind) => modulesIn(dir, kind)))).flatMap((files) =>
+    files.map(({ file }) => file),
+  );
+}
+
 /** Import every module of the source project in `dir`, in the order the files sort, so each opens the same way. */
 export async function importRegistry(dir: string): Promise<Registry> {
   const registry = {} as Record<RegistryKind, RegisteredModule[]>;

@@ -661,8 +661,7 @@ Recorded, not solved here:
 
 | Current | Change |
 |---|---|
-| A source project is read as a definition value, its modules imported where they are and nothing written; `start` and embedding open the source too | Build prepares; open loads a built definition |
-| Opening expects `fastagent.config.ts` in a directory | Open accepts a built definition object |
+| A source project is read as a definition value, its modules imported where they are and nothing written; `start` opens the project's `dist/`, and `openAgent` takes a definition | Build prepares; open loads a built definition |
 | `agentDir` supplies cwd, values, local bindings and clone paths | Configuration, state and workspace are separate inputs |
 | Runtime prompt describes an editable definition in cwd | Immutable program; workspace and configuration |
 | Deploy copies and replaces the author directory | Deploys the artifact plus delivered configuration; state preserved |
@@ -671,7 +670,6 @@ Recorded, not solved here:
 | Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | `/etc/<name>/` for configuration and `/var/lib/<name>/` as the instance root; on AgentCore `/mnt/<name>/`; the definition stays in the image |
 | `needs()` and MCP references read `{ ...process.env, ...values }` at open | Secrets are an input: the CLI's environment and `--env-file`, or `openAgent`'s `secrets` |
 | `modelsOver` resolves a provider's variable as `environment[name] \|\| process.env[name]` | The model's auth reads only the `secrets` input |
-| `start` in a project opens the source definition | `start` opens `dist/` and refuses a missing or stale one |
 
 Disposable probes on 0.29.0 executed a source tarball after extraction on Node 26.11.1, Bun 1.4.4 and native Linux ARM64
 (Node 24.15.0), including tools, data, skills, prompts, the official Filesystem MCP 2.1.0 and Agent HTTP calls. Direct

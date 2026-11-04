@@ -534,7 +534,10 @@ from the machine's skill directories. `--update` overwrites an existing one.
 fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
 ```
 
-Serves without watching. Binds all interfaces by default. A serve answers its channels' routes, `GET /health`, and
+Serves the project's `dist/`, never its source, without watching: it refuses, naming `fastagent build`, when `dist/`
+is missing or was built from other sources than the project holds now (the build records a fingerprint of the code it
+read, the text and resources it copied and the modules `src/` lists; what an agent writes while it runs is none of
+them). It does not build on its own. Binds all interfaces by default. A serve answers its channels' routes, `GET /health`, and
 the Agent API under `/v1` when `FASTAGENT_API_KEY` holds a key and the definition does not say `http: { api: false }`;
 the startup report says whether it does, and why not
 ([Configuration](configuration.md#the-agent-api-over-http)).

@@ -83,6 +83,7 @@ describe("fastagent build", () => {
       "AGENTS.md",
       "LICENSE",
       "SYSTEM.md",
+      "build.json",
       "context.json",
       "fastagent.config.js",
       "index.d.ts",
@@ -108,7 +109,13 @@ describe("fastagent build", () => {
   it("exports the definition from the generated entry, its modules running from dist/", async () => {
     const { dist } = await buildProject(project(FILES));
     const built = (await import(join(dist, "index.js"))).default;
-    expect(built).toMatchObject({ format: 1, name: "support", version: "1.2.0", dir: dist });
+    expect(built).toMatchObject({
+      format: 1,
+      builtWith: expect.any(String),
+      name: "support",
+      version: "1.2.0",
+      dir: dist,
+    });
     expect(built.inputs.secrets).toEqual([
       { name: "LOOKUP_KEY", description: "the lookup service", optional: false, declaredIn: ["context.json"] },
     ]);

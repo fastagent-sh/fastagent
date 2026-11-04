@@ -26,6 +26,8 @@ interface DeclaredInput {
 export interface AgentDefinition {
   readonly [DEFINITION]: true;
   readonly format: number;
+  /** The FastAgent version that made it: what a refusal of its format asks the opener to install. */
+  readonly builtWith: string;
   readonly name: string;
   readonly version: string;
   /** Absolute: the program's files, its text, `context.json` and `mcp.json`. */
@@ -33,6 +35,21 @@ export interface AgentDefinition {
   readonly config: AgentConfig;
   readonly registry: Registry;
   readonly inputs: { readonly secrets: readonly DeclaredInput[] };
+}
+
+/** The value an opener was given, checked to be a definition this FastAgent assembles; a refusal says why. */
+export function assertDefinition(value: unknown): AgentDefinition {
+  if (typeof value !== "object" || value === null || !(DEFINITION in value)) {
+    throw new Error("openAgent needs an agent package's default export (a definition `fastagent build` made)");
+  }
+  const definition = value as AgentDefinition;
+  if (definition.format !== DEFINITION_FORMAT) {
+    throw new Error(
+      `${definition.name} was built as definition format ${definition.format}, and this FastAgent opens format ` +
+        `${DEFINITION_FORMAT}: install @fastagent-sh/fastagent ${definition.builtWith}`,
+    );
+  }
+  return definition;
 }
 
 type DefinitionSpec = Omit<AgentDefinition, typeof DEFINITION | "inputs">;
