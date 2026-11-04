@@ -3,7 +3,7 @@
  * test/fixtures so their imports resolve this repository's packages, TypeScript included, as an installed agent's do.
  */
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
@@ -143,6 +143,54 @@ describe("fastagent build", () => {
       expect(readdirSync(outside)).toEqual(["shout.ts"]);
       expect(readdirSync(dir)).not.toContain("dist");
     }
+  });
+
+  it("builds a project that links a workspace package, whose declarations emit nothing", async () => {
+    const shared = join(ROOT, `.tmp-workspace-${process.pid}`);
+    made.push(shared);
+    mkdirSync(join(shared, "dist"), { recursive: true });
+    writeFileSync(
+      join(shared, "package.json"),
+      JSON.stringify({ name: "@acme/shared", type: "module", exports: { ".": "./dist/index.js" } }),
+    );
+    writeFileSync(join(shared, "dist/index.js"), "export const unit = 'kg';\n");
+    writeFileSync(join(shared, "dist/index.d.ts"), "export declare const unit: string;\n");
+    const dir = project({
+      ...FILES,
+      "src/tools/unit.ts": `import { unit } from "@acme/shared";\nexport default { name: "unit", value: unit };\n`,
+    });
+    mkdirSync(join(dir, "node_modules/@acme"), { recursive: true });
+    symlinkSync(shared, join(dir, "node_modules/@acme/shared"));
+    const { dist } = await buildProject(dir);
+    expect(listing(dist)).toContain("src/tools/unit.js");
+    expect(readdirSync(join(shared, "dist"))).toEqual(["index.d.ts", "index.js"]);
+  });
+
+  it("copies a symlinked skill as the files it names, and refuses a link back into what it copies", async () => {
+    const shared = join(ROOT, `.tmp-skills-${process.pid}`);
+    made.push(shared);
+    mkdirSync(join(shared, "review"), { recursive: true });
+    writeFileSync(join(shared, "review/SKILL.md"), "---\nname: review\ndescription: Review\n---\nReview.\n");
+    const dir = project(FILES);
+    symlinkSync(join(shared, "review"), join(dir, "skills/review"));
+    const { dist } = await buildProject(dir);
+    expect(readFileSync(join(dist, "skills/review/SKILL.md"), "utf8")).toContain("Review.");
+    expect(lstatSync(join(dist, "skills/review")).isSymbolicLink()).toBe(false);
+    symlinkSync(join(dir, "skills"), join(dir, "skills/loop"));
+    await expect(buildProject(dir)).rejects.toThrow(
+      /skills\/loop links back to .*skills, a directory this build is copying/,
+    );
+  });
+
+  it("names the TypeScript it needs when the project's is older", async () => {
+    const dir = project(FILES);
+    const old = join(dir, "node_modules/typescript");
+    mkdirSync(join(old, "bin"), { recursive: true });
+    writeFileSync(
+      join(old, "package.json"),
+      JSON.stringify({ name: "typescript", version: "5.9.2", bin: { tsc: "./bin/tsc" } }),
+    );
+    await expect(buildProject(dir)).rejects.toThrow(/needs TypeScript 7 or newer; .* has 5\.9\.2/);
   });
 
   it("leaves the dist/ before it as it was when a build fails", async () => {

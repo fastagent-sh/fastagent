@@ -5,7 +5,7 @@
  * definition's modules as static imports.
  */
 import { spawn } from "node:child_process";
-import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -28,6 +28,9 @@ const NEVER_COPIED = /^(\.env(\..*)?|\.secrets|node_modules|\.git|\.DS_Store)$/;
 /** The program's text and data at the project root (§3.4). */
 const ROOT_FILES = ["SYSTEM.md", "AGENTS.md", CONTEXT_FILE, MCP_FILE, "README.md"];
 const ROOT_DIRS = ["skills", "prompts", "assets"];
+/** A declaration file: types only, so the compiler emits nothing for it, wherever it is (a workspace package's). */
+const DECLARATION = /\.d\.[cm]?ts$/;
+const MIN_TYPESCRIPT = 7;
 const LICENSE = /^LICEN[CS]E(\..*)?$/i;
 
 export interface BuildOptions {
@@ -51,6 +54,7 @@ export async function buildProject(directory: string, options: BuildOptions = {}
   const staging = join(dir, STAGING_DIR);
   await rm(staging, { recursive: true, force: true });
   try {
+    await mkdir(staging, { recursive: true });
     await compile(dir, staging, definition, options.check !== false);
     await copyProgramFiles(dir, staging);
     await writeEntry(staging, definition);
@@ -68,8 +72,14 @@ export async function buildProject(directory: string, options: BuildOptions = {}
 function projectTsc(dir: string): string {
   try {
     const manifest = createRequire(join(dir, "package.json")).resolve("typescript/package.json");
-    const { bin } = JSON.parse(readFileSync(manifest, "utf8")) as { bin?: { tsc?: string } };
+    const { bin, version } = JSON.parse(readFileSync(manifest, "utf8")) as { bin?: { tsc?: string }; version?: string };
     if (bin?.tsc === undefined) throw new Error(`${manifest} has no tsc`);
+    // The options the build sets (--ignoreConfig, --erasableSyntaxOnly, --rewriteRelativeImportExtensions) are 7's.
+    if (!(Number.parseInt(version ?? "", 10) >= MIN_TYPESCRIPT)) {
+      throw new Error(
+        `fastagent build needs TypeScript ${MIN_TYPESCRIPT} or newer; ${dir} has ${version ?? "an unknown version"}`,
+      );
+    }
     return join(dirname(manifest), bin.tsc);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") throw error;
@@ -115,13 +125,13 @@ function tscArguments(dir: string, outDir: string, roots: readonly string[], mor
  * The files the compiler would read that `dist/` cannot hold: a source file outside the project. `tsc` reports one
  * (TS6059) yet writes its output beside it, and with `--noCheck` reports nothing and succeeds, so the program's files
  * are listed first and the build refuses before anything is emitted. Dependencies (`node_modules`, the compiler's own
- * libraries) are not the project's source.
+ * libraries) and declaration files, which emit nothing, are not the project's source.
  */
 async function sourceOutsideProject(dir: string, roots: readonly string[]): Promise<string[]> {
   const { output } = await run(process.execPath, tscArguments(dir, dir, roots, ["--listFilesOnly"]), dir);
   const listed = output.split("\n").map((line) => line.trim());
   return listed.filter((file) => {
-    if (!isAbsolute(file) || file.split(sep).includes("node_modules")) return false;
+    if (!isAbsolute(file) || DECLARATION.test(file) || file.split(sep).includes("node_modules")) return false;
     return relative(dir, file).startsWith("..");
   });
 }
@@ -164,7 +174,7 @@ function run(command: string, args: string[], cwd: string): Promise<{ code: numb
  */
 async function copyProgramFiles(dir: string, dist: string): Promise<void> {
   for (const name of await readdir(dir)) {
-    if (ROOT_FILES.includes(name) || LICENSE.test(name)) await cp(join(dir, name), join(dist, name));
+    if (ROOT_FILES.includes(name) || LICENSE.test(name)) await copyFile(join(dir, name), join(dist, name));
   }
   for (const name of ROOT_DIRS) {
     if (await exists(join(dir, name))) await copyTree(join(dir, name), join(dist, name), () => true);
@@ -176,14 +186,26 @@ async function copyProgramFiles(dir: string, dist: string): Promise<void> {
   }
 }
 
-async function copyTree(from: string, to: string, include: (name: string) => boolean): Promise<void> {
+/**
+ * `from`'s files copied to `to`, a link followed to what it names: `dev` reads a symlinked skill, so `dist/` holds it.
+ * A link back to a directory being copied is refused, naming it, rather than followed for ever.
+ */
+async function copyTree(
+  from: string,
+  to: string,
+  include: (name: string) => boolean,
+  within: readonly string[] = [],
+): Promise<void> {
+  const here = await realpath(from);
+  if (within.includes(here)) throw new Error(`${from} links back to ${here}, a directory this build is copying`);
   for (const entry of await readdir(from, { withFileTypes: true })) {
     if (NEVER_COPIED.test(entry.name)) continue;
     const source = join(from, entry.name);
-    if (entry.isDirectory()) await copyTree(source, join(to, entry.name), include);
-    else if (entry.isFile() && include(entry.name)) {
+    const target = await stat(source);
+    if (target.isDirectory()) await copyTree(source, join(to, entry.name), include, [...within, here]);
+    else if (target.isFile() && include(entry.name)) {
       await mkdir(to, { recursive: true });
-      await cp(source, join(to, entry.name));
+      await copyFile(source, join(to, entry.name));
     }
   }
 }
