@@ -431,22 +431,23 @@ export default defineTool({
 describe("two agents in one process", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("each runs on its own value file: its code, its commands and its model keys, the process's left alone", async () => {
+  it("each runs on its own secrets: its code, its commands and its model keys, the process's left alone", async () => {
     for (const name of ["WEATHER_KEY", "GH_TOKEN", "ANTHROPIC_API_KEY"]) vi.stubEnv(name, undefined);
     const before = { ...process.env };
     const agents = [
       {
-        values: "WEATHER_KEY=k-a\nGH_TOKEN=gh-a\nANTHROPIC_API_KEY=sk-a\n",
+        values: { WEATHER_KEY: "k-a", GH_TOKEN: "gh-a", ANTHROPIC_API_KEY: "sk-a" },
         key: "k-a",
         token: "gh-a",
         anthropic: true,
       },
-      { values: "WEATHER_KEY=k-b\nGH_TOKEN=gh-b\n", key: "k-b", token: "gh-b", anthropic: false },
-    ].map((agent) => ({ ...agent, dir: agentPackage({ ...FILES, ".secrets/.env": agent.values }) }));
+      { values: { WEATHER_KEY: "k-b", GH_TOKEN: "gh-b" }, key: "k-b", token: "gh-b", anthropic: false },
+    ].map((agent) => ({ ...agent, dir: agentPackage(FILES) }));
     const opened = [];
-    for (const { dir } of agents) {
+    for (const { dir, values } of agents) {
       opened.push(
         await openServing(await loadSourceDefinition(dir), {
+          secrets: values,
           storage: "memory",
           credentialStore: new InMemoryCredentialStore(),
         }),
@@ -478,17 +479,24 @@ describe("two agents in one process", () => {
   });
 });
 
-describe("an agent's value file names where its state and credentials are", () => {
+describe("the secrets an instance is given name where its state and credentials are", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("as dev reads it: FASTAGENT_STATE_DIR and FASTAGENT_AUTH_PATH from .secrets/.env, the process's left alone", async () => {
+  it("FASTAGENT_STATE_DIR and FASTAGENT_AUTH_PATH among them, the process's left alone, and no file of the agent read", async () => {
     for (const name of ["FASTAGENT_STATE_DIR", "FASTAGENT_AUTH_PATH"]) vi.stubEnv(name, undefined);
     const elsewhere = mkdtempSync(join(tmpdir(), "fa-value-file-paths-"));
     const dir = agentPackage({
       ...FILES,
-      ".secrets/.env": `WEATHER_KEY=k\nGH_TOKEN=g\nFASTAGENT_STATE_DIR=${join(elsewhere, "state")}\nFASTAGENT_AUTH_PATH=${join(elsewhere, "auth.json")}\n`,
+      ".secrets/.env": `FASTAGENT_STATE_DIR=${join(elsewhere, "from-the-file")}\n`,
     });
-    const opened = await openServing(await loadSourceDefinition(dir));
+    const opened = await openServing(await loadSourceDefinition(dir), {
+      secrets: {
+        WEATHER_KEY: "k",
+        GH_TOKEN: "g",
+        FASTAGENT_STATE_DIR: join(elsewhere, "state"),
+        FASTAGENT_AUTH_PATH: join(elsewhere, "auth.json"),
+      },
+    });
     try {
       expect(opened.stateRoot).toBe(join(elsewhere, "state"));
       expect(opened.models.auth).toEqual({ path: join(elsewhere, "auth.json") });

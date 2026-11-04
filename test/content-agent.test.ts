@@ -126,7 +126,7 @@ describe("one resolution", () => {
     );
     await bind(agentDir, { app: { path: "../app" } });
     const readers = async () => {
-      const opened = await openServing(await loadSourceDefinition(agentDir), { storage: "memory" });
+      const opened = await openServing(await loadSourceDefinition(agentDir), { secrets: {}, storage: "memory" });
       await opened.agent.close();
       const info = JSON.parse((await cli(["info", "--json"], agentDir)).stdout);
       const list = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);

@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { SECRETS_DIRNAME, SECRET_FILE_MODE, exists, resolveSecretsDir } from "./paths.ts";
+import { SECRETS_DIRNAME, SECRET_FILE_MODE, exists, resolveOverridePath, resolveSecretsDir } from "./paths.ts";
 import { baseTemplate } from "./scaffold/templates.ts";
 
 /** Parse .env content into key → value (the dialect above; last occurrence of a key wins). */
@@ -42,9 +42,12 @@ export function loadEnvValues(file: string): Map<string, string> {
   }
 }
 
-/** The agent's `.env` file: `<resolved secrets dir>/.env`. */
+/** The value file a command was told to use (`--env-file`), carried in the environment so a `dev` worker has it too. */
+export const ENV_FILE_ENV = "FASTAGENT_ENV_FILE";
+
+/** The agent's `.env` file: the one `--env-file` named, else `<resolved secrets dir>/.env`. */
 export function dotEnvPath(agentDir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveSecretsDir(agentDir, env), ".env");
+  return resolveOverridePath(env[ENV_FILE_ENV]) ?? join(resolveSecretsDir(agentDir, env), ".env");
 }
 
 /** The committable template: `<agentDir>/.secrets/.env.example`. */

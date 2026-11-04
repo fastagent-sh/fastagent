@@ -24,7 +24,7 @@ afterAll(async () => {
 
 /** The directory opened as a serve opens it, with no storage of its own, and mounted. */
 async function createAgentService(dir: string, options: ServeOptions = {}) {
-  const served = await openServing(await loadSourceDefinition(dir), { storage: "memory" });
+  const served = await openServing(await loadSourceDefinition(dir), { secrets: {}, storage: "memory" });
   opened.push(served.agent);
   return serveAgent(served, options);
 }
@@ -48,7 +48,10 @@ describe("serveAgent over an opened directory", () => {
     // The prompt names the agent's files and working directory by these, and its tools resolve a relative one
     // against that working directory.
     const dir = await agentDir();
-    const served = await openServing(await loadSourceDefinition(relative(process.cwd(), dir)), { storage: "memory" });
+    const served = await openServing(await loadSourceDefinition(relative(process.cwd(), dir)), {
+      secrets: {},
+      storage: "memory",
+    });
     opened.push(served.agent);
     expect([served.agentDir, served.definition.dir]).toEqual([dir, dir]);
   });

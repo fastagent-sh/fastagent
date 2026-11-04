@@ -372,6 +372,11 @@ read at all.
 
 Do not commit `.env` or credentials. `fastagent info` and `fastagent dev` print the resolved auth source.
 
+`--env-file <file>` (on `dev`, `start`, `invoke`, `info` and `schedules run`) reads the agent's values from that file
+instead of the default one for the command, and refuses a file that is not there. The values a command's instance
+reads by name are those of its process environment after the file is loaded; an app that embeds an agent passes them
+as `openAgent`'s `secrets` and nothing is read from `process.env` for it.
+
 ### Secrets in code
 
 Code that reads a secret declares it, in the module that reads it:

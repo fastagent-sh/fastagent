@@ -47,12 +47,16 @@ export function dedupeSecrets(declared: readonly DeclaredSecret[]): DeclaredSecr
   return declared.filter((s) => !seen.has(s.name) && seen.add(s.name));
 }
 
+/** The values of `secrets` that are set: what an environment is made of, since a name given no value is not one. */
+export function definedValues(secrets: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(secrets).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+}
+
 /** Required names with no value in `env` — empty string counts as missing (an unset `.env` line). A name some
  *  declaration requires is required, whatever another says. */
-export function missingSecrets(
-  declared: readonly DeclaredSecret[],
-  env: NodeJS.ProcessEnv = process.env,
-): DeclaredSecret[] {
+export function missingSecrets(declared: readonly DeclaredSecret[], env: NodeJS.ProcessEnv): DeclaredSecret[] {
   return dedupeSecrets(declared.filter((s) => !s.optional)).filter((s) => !env[s.name]);
 }
 

@@ -4,7 +4,9 @@
  * `dev` worker inherits them, and every reader after (`resolveStateRoot`, `resolveWorkdir`, the instance configuration)
  * reads one answer.
  */
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
+import { definedValues } from "../declared-secrets.ts";
+import { enterAgentEnv } from "../env.ts";
 import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
 import {
   INSTANCE_CONFIG_ENV,
@@ -15,6 +17,7 @@ import {
   resolveStateRoot,
   resolveWorkdir,
 } from "../paths.ts";
+import { ENV_FILE_ENV } from "../value-file.ts";
 import { failUsage } from "./fail.ts";
 import type { FlagSpec } from "./kernel.ts";
 
@@ -24,6 +27,7 @@ export interface InstanceFlags {
   state?: string;
   workdir?: string;
   config?: string;
+  envFile?: string;
 }
 
 const INSTANCE_LOCATION: readonly (readonly [keyof InstanceFlags, string, string])[] = [
@@ -54,7 +58,7 @@ export const CONFIG_FLAG: FlagSpec = {
 
 export function instanceFlags(flags: Record<string, unknown>): InstanceFlags {
   const picked: InstanceFlags = {};
-  for (const [key] of INSTANCE_LOCATION) {
+  for (const key of [...INSTANCE_LOCATION.map(([name]) => name), "envFile" as const]) {
     if (typeof flags[key] === "string") picked[key] = flags[key];
   }
   return picked;
@@ -68,11 +72,36 @@ function makeDirectory(path: string, source: string): void {
   }
 }
 
+/** `--env-file`: the file the agent's values are read from, for a command that opens the agent or reads them. */
+export const ENV_FILE_FLAG: FlagSpec = {
+  flags: "--env-file <file>",
+  description: "the file the agent's secrets are read from, over the default (.secrets/.env); it must exist",
+};
+
+/** `--env-file`, settled before the agent's values are entered: absolute, and a file that exists. */
+function enterEnvFile(given: string | undefined): void {
+  if (given === undefined) return;
+  if (given.trim() === "") failUsage("--env-file needs a path");
+  const path = resolveOverridePath(given) as string;
+  if (!existsSync(path) || !statSync(path).isFile()) failUsage(`--env-file ${path} is not a file`);
+  process.env[ENV_FILE_ENV] = path;
+}
+
+/**
+ * Enter the agent's directory as a command runs it: the value file, whose values become this process's environment
+ * and so the instance's secrets, then where the instance is.
+ */
+export function enterInstance(agentDir: string, flags: InstanceFlags = {}): void {
+  enterEnvFile(flags.envFile);
+  enterAgentEnv(agentDir);
+  enterInstanceLocation(flags);
+}
+
 /**
  * Settle the instance's location: a flag beats its environment variable, a relative path is resolved against the
  * directory the command was started in (here, once), and the directories named are made. Refuses a flag with no path.
  */
-export function enterInstanceLocation(flags: InstanceFlags = {}): void {
+function enterInstanceLocation(flags: InstanceFlags = {}): void {
   for (const [key, flag, variable] of INSTANCE_LOCATION) {
     const given = flags[key];
     if (given !== undefined && given.trim() === "") failUsage(`${flag} needs a path`);
@@ -83,7 +112,17 @@ export function enterInstanceLocation(flags: InstanceFlags = {}): void {
   }
 }
 
-/** Where `openServing` puts the instance of the agent in `agentDir`, as the flags and variables entered above say. */
-export function instanceLocation(agentDir: string): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot"> {
-  return { projectDir: agentDir, workdir: resolveWorkdir(agentDir), stateRoot: resolveStateRoot(agentDir) };
+/**
+ * What `openServing` is given for the agent in `agentDir`, as the flags and variables entered above say: where the
+ * instance is, and its secrets, which for a command are its environment once the value file is entered.
+ */
+export function instanceInputs(
+  agentDir: string,
+): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets"> {
+  return {
+    projectDir: agentDir,
+    workdir: resolveWorkdir(agentDir),
+    stateRoot: resolveStateRoot(agentDir),
+    secrets: definedValues(process.env),
+  };
 }

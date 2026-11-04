@@ -8,7 +8,6 @@
 import { resolve } from "node:path";
 import * as Effect from "effect/Effect";
 import { AgentError, hasEnded } from "../../agent-api.ts";
-import { enterAgentEnv } from "../../env.ts";
 import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { holdingInstance, openServing } from "../../harnesses/pi-durable/serve.ts";
 import { resolveStateRoot } from "../../paths.ts";
@@ -18,7 +17,7 @@ import { latestFire, readFires } from "../../schedule/state.ts";
 import { listWakeups, removeAnyWakeup } from "../../schedule/wakeups.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { exitCodeOf } from "../invoke-stream.ts";
-import { type InstanceFlags, enterInstanceLocation, instanceLocation } from "../instance.ts";
+import { type InstanceFlags, enterInstance, instanceInputs } from "../instance.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 /**
@@ -28,8 +27,7 @@ import { enterAgentCommand, reportAuth } from "../shared.ts";
  */
 export async function runSchedulesList(dirArg: string, json: boolean, instance?: InstanceFlags): Promise<void> {
   const target = agentDirOrExit(resolve(dirArg));
-  enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
-  enterInstanceLocation(instance);
+  enterInstance(target, instance); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
   // Its shape only: listing what will fire needs none of the values the code reads.
   const { schedules } = await loadSourceDefinition(target)
@@ -104,7 +102,7 @@ export async function runScheduleNow(
     .then(({ definition, instance }) =>
       openServing(definition, {
         model: modelSpec,
-        ...instanceLocation(agentDir),
+        ...instanceInputs(agentDir),
         unfinished: "refuse",
         ...(instance === undefined ? {} : { config: instance }),
       }),
@@ -146,8 +144,7 @@ export async function runScheduleNow(
  */
 export async function runUnwake(id: string, dirArg: string, instance?: InstanceFlags): Promise<void> {
   const target = agentDirOrExit(resolve(dirArg));
-  enterAgentEnv(target);
-  enterInstanceLocation(instance);
+  enterInstance(target, instance);
   const stateRoot = resolveStateRoot(target);
   const removed = await holdingInstance(stateRoot, () => removeAnyWakeup(stateRoot, id)).catch(failStartup);
   if (removed === undefined) {

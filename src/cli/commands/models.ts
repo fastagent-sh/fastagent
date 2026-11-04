@@ -3,6 +3,7 @@
  * published catalogs, and the providers its definition declares), or, outside an agent, the built-ins; `[search]`
  * filters by substring. `--refresh` asks the network for the lists even when the kept ones are fresh.
  */
+import { definedValues } from "../../declared-secrets.ts";
 import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { listModels, providerOf } from "../../harnesses/models/models.ts";
@@ -22,7 +23,7 @@ export async function runModels(
   let providers: Provider[] = [];
   if (agentDir) {
     enterAgentEnv(agentDir); // a provider in code may read its secrets when it is built
-    providers = await definitionProviders(agentDir).catch(failStartup);
+    providers = await definitionProviders(agentDir, process.env).catch(failStartup);
   } else {
     installProxyFetch();
   }
@@ -31,7 +32,7 @@ export async function runModels(
     agentDir,
     agentDir ? {} : { credentialStore: new InMemoryCredentialStore() },
     providers,
-    { force: opts.refresh === true },
+    { force: opts.refresh === true, environment: definedValues(process.env) },
   );
   const { lines, error } = formatModelsCommand(listModels(environment.models), search);
   if (opts.json) {

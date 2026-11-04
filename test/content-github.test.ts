@@ -23,8 +23,8 @@ import { buildDefinition, assembleAgent, loadSourceDefinition } from "../src/har
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 
 /** The agent in `dir` as a serve opens it, with no storage of its own: what its content resolves to. */
-async function openedContent(dir: string) {
-  const opened = await openServing(await loadSourceDefinition(dir), { storage: "memory" });
+async function openedContent(dir: string, secrets: Record<string, string> = {}) {
+  const opened = await openServing(await loadSourceDefinition(dir), { secrets, storage: "memory" });
   await opened.agent.close();
   return opened.content;
 }
@@ -369,7 +369,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     }
   });
 
-  it("the opener clones in the agent's own environment, where its value file's git settings and token are", async () => {
+  it("the opener clones in the agent's own environment, where the git settings and token it is given are", async () => {
     const github = githubStandIn();
     github.repo("acme/site").commit({ "README.md": "site\n" });
     const { agentDir } = await agent();
@@ -378,15 +378,11 @@ describe("github content: what runs the agent clones, what reports on it does no
     // The way to GitHub is the agent's alone, and this process may reach nothing but files: a clone made in this
     // process's environment fails, and one made in the agent's succeeds.
     const mapping = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"];
-    await mkdir(join(agentDir, ".secrets"));
-    await writeFile(
-      join(agentDir, ".secrets", ".env"),
-      mapping.map((name) => `${name}=${process.env[name]}\n`).join(""),
-    );
+    const own = Object.fromEntries(mapping.map((name) => [name, process.env[name] as string]));
     for (const name of mapping) vi.stubEnv(name, undefined);
     vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
 
-    await openedContent(agentDir);
+    await openedContent(agentDir, own);
     expect(readFileSync(join(agentDir, "content", "site", "README.md"), "utf8")).toBe("site\n");
     expect(process.env.GIT_CONFIG_COUNT).toBeUndefined();
   });

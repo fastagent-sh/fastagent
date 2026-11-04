@@ -11,7 +11,7 @@ import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
-import { type InstanceFlags, instanceLocation } from "../instance.ts";
+import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 /**
@@ -65,7 +65,7 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
     .then(({ definition, instance }) =>
       openServing(definition, {
         model: modelSpec,
-        ...instanceLocation(agentDir),
+        ...instanceInputs(agentDir),
         ...(instance === undefined ? {} : { config: instance }),
       }),
     )

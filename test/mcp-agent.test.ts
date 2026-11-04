@@ -93,6 +93,19 @@ it("two opens of one definition own independent stdio clients and interpolation 
   const pids = (await readFile(pidFile, "utf8")).trim().split("\n").map(Number);
   await vi.waitFor(() => expect(pids.filter(alive)).toEqual([]));
 });
+it("an MCP ${VAR} reference is resolved from the instance's secrets, never from the process's environment", async () => {
+  vi.stubEnv("FASTAGENT_OFFLINE", "1");
+  vi.stubEnv("FA_MCP_REF", "from-the-process");
+  const dir = await directory({
+    mcpServers: { constructor: { command: process.execPath, args: [FIXTURE], env: { MCP_VALUE: "${FA_MCP_REF}" } } },
+  });
+  await expect(openSource(dir, { secrets: {} })).rejects.toThrow(/FA_MCP_REF/);
+  const agent = await opened(dir, { secrets: { FA_MCP_REF: "from-the-secrets" } });
+  expect(JSON.parse((await ask(agent, "mcp__constructor__who")).answer?.text ?? "null")).toMatchObject({
+    value: "from-the-secrets",
+  });
+});
+
 it("HTTP clients keep bindings isolated and closing one leaves a shared grant usable", async () => {
   vi.stubEnv("FASTAGENT_OFFLINE", "1");
   const remote = mcpFixture();

@@ -179,10 +179,10 @@ describe("reportAuth (which layer the line names)", () => {
     // The runtime never reads the global file for it, so the line must not point there either.
     const held = layers();
     writeFileSync(held.fallback, `${JSON.stringify({ anthropic: { type: "api_key", key: "global" } })}\n`);
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-project");
     const out: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
-    await reportAuth(await modelEnvironment(held.dir), "anthropic/claude-sonnet-4-5", held.dir);
+    const environment = { environment: { ANTHROPIC_API_KEY: "sk-project" } };
+    await reportAuth(await modelEnvironment(held.dir, {}, [], environment), "anthropic/claude-sonnet-4-5", held.dir);
     const line = out.find((l) => l.includes("auth:")) ?? "";
     expect(line).not.toContain(held.fallback);
     expect(line).toContain("ANTHROPIC_API_KEY");

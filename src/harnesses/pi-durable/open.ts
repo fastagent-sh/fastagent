@@ -154,7 +154,7 @@ export interface BuiltDefinition {
  */
 export function buildDefinition(
   definition: AgentDefinition,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
   settings: Readonly<Record<string, unknown>> = {},
 ): BuiltDefinition {
   const missing = missingSecrets(codeSecrets(definition), env);
@@ -235,7 +235,7 @@ export function buildDefinitionShape(
  * it needs no secret the serve would. Without these a provider in code, or one replacing a built-in's id, would be
  * unknown there, or verified against the built-in's endpoint.
  */
-export async function definitionProviders(agentDir: string, env: NodeJS.ProcessEnv = process.env): Promise<Provider[]> {
+export async function definitionProviders(agentDir: string, env: NodeJS.ProcessEnv): Promise<Provider[]> {
   return buildDefinitionShape(await loadSourceDefinition(agentDir), env).providers;
 }
 

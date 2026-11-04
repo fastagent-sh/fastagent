@@ -5,6 +5,7 @@
  * is here, written without casts and with every function checked as a function, so it stops compiling when the two
  * drift apart.
  */
+import { definedValues } from "../../declared-secrets.ts";
 import type {
   AuthEvent,
   AuthInteraction,
@@ -101,7 +102,8 @@ export function signIn(request: SignInRequest): Promise<SignInResult> {
  * does; rejects when resolving fails, such as a refresh the provider refused.
  */
 export async function providerAuth(credentials: CredentialStore, provider: string): Promise<ProviderAuth | undefined> {
-  const models = modelsOver(piCredentials(credentials));
+  // The host's own environment: the answer is what a request this process sends authenticates with.
+  const models = modelsOver(piCredentials(credentials), [], undefined, definedValues(process.env));
   if (models.getProvider(provider) === undefined) throw new Error(`unknown provider "${provider}"`);
   const checked = await models.checkAuth(provider);
   if (checked === undefined) return undefined;

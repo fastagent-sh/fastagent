@@ -287,6 +287,7 @@ describe("model catalogs", () => {
     const agent = agentKeeping(released);
     vi.stubEnv("FASTAGENT_OFFLINE", "1");
     const serving = await openServing(await loadSourceDefinition(agent), {
+      secrets: {},
       storage: "memory",
       credentialStore: new InMemoryCredentialStore(),
     });
@@ -308,6 +309,7 @@ describe("model catalogs", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(
       openServing(await loadSourceDefinition(agent), {
+        secrets: {},
         storage: "memory",
         credentialStore: new InMemoryCredentialStore(),
       }),

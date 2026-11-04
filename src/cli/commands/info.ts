@@ -1,12 +1,12 @@
 /** `fastagent info [agent] [--json]`: print what the directory builds into, WITHOUT opening or serving the agent. */
+import { definedValues } from "../../declared-secrets.ts";
 import { resolve } from "node:path";
 import { channelIngress } from "../../channels/discover.ts";
 import type { BoundContent } from "../../content/declare.ts";
 import { loadContent, loadEnvironment } from "../../content/file.ts";
 import { type ResolvedContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
-import { enterAgentEnv } from "../../env.ts";
-import { type InstanceFlags, enterInstanceLocation } from "../instance.ts";
+import { type InstanceFlags, enterInstance } from "../instance.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { type EffectiveConfig, configValue, resolveConfig } from "../../harnesses/pi-durable/config.ts";
@@ -27,8 +27,7 @@ export interface InfoOptions {
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const agentDir = agentDirOrExit(resolve(dirArg));
-  enterAgentEnv(agentDir); // code may read its secrets, and fetch, when it is built
-  enterInstanceLocation(opts.instance);
+  enterInstance(agentDir, opts.instance); // code may read its secrets, and fetch, when it is built
   const workdir = resolveWorkdir(agentDir);
   const { definition, instance } = await loadDevProject(agentDir).catch(failStartup);
   const config = (() => {
@@ -40,7 +39,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   })();
   const modelSpec = modelSpecFor(config, opts.model);
   const declared = definitionSecrets(definition);
-  const unsetSecrets = missingSecrets(declared);
+  const unsetSecrets = missingSecrets(declared, process.env);
   // Built only when every required secret has a value: building is what reads them. A module that is not what its
   // directory holds is said as the refusal `dev` and `start` would stop on.
   const code =
@@ -62,7 +61,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   }
   // Read already, by the definition's secrets: a refused environment is a definition that does not open.
   const environment = loadEnvironment(agentDir);
-  const models = await modelEnvironment(agentDir, {}, code?.providers ?? []);
+  const models = await modelEnvironment(agentDir, {}, code?.providers ?? [], {
+    environment: definedValues(process.env),
+  });
   const slash = modelSpec?.indexOf("/") ?? -1;
   const modelError =
     modelSpec === undefined || models.models.getModel(modelSpec.slice(0, slash), modelSpec.slice(slash + 1))

@@ -7,7 +7,7 @@ import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } fr
 import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
 import { unsupportedRuntime } from "../runtime.ts";
 import { failStartup } from "./fail.ts";
-import { CONFIG_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
+import { CONFIG_FLAG, ENV_FILE_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 const AGENT_ARG = {
@@ -89,6 +89,7 @@ const dev: CommandSpec = {
     NO_INPUT,
     ...INSTANCE_FLAGS,
     CONFIG_FLAG,
+    ENV_FILE_FLAG,
   ],
   examples: [
     { cmd: "fastagent dev" },
@@ -114,7 +115,7 @@ const info: CommandSpec = {
     "secrets, content — WITHOUT opening or serving it. An unset model or secret is reported, not fatal. " +
     "Run it first when something looks off.",
   args: [AGENT_ARG],
-  flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, CONFIG_FLAG],
+  flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, CONFIG_FLAG, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (args, f) =>
     (await import("./commands/info.ts")).runInfo(args[0] as string, {
@@ -165,6 +166,7 @@ const invoke: CommandSpec = {
     { flags: "--key <key>", description: "the API key for --url (default: the agent's production one)" },
     ...INSTANCE_FLAGS,
     CONFIG_FLAG,
+    ENV_FILE_FLAG,
   ],
   examples: [
     { cmd: `fastagent invoke "summarize today's inbox"` },
@@ -231,6 +233,7 @@ const start: CommandSpec = {
       ...CONFIG_FLAG,
       description: "the instance configuration, a fastagent.json (FASTAGENT_CONFIG); start never reads the project's",
     },
+    ENV_FILE_FLAG,
   ],
   examples: [
     { cmd: "fastagent start", note: "after fastagent build" },
@@ -246,7 +249,7 @@ const start: CommandSpec = {
     "            mounted volume so a redeploy never wipes it\n" +
     "  workdir:  --workdir > FASTAGENT_WORKDIR > --root > <agent dir>\n" +
     "  config:   --config > FASTAGENT_CONFIG > none (never fastagent.json)\n" +
-    "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production\n" +
+    "  secrets:  --env-file > FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production\n" +
     "            .env + auth.json\n" +
     "  content:  <workdir>/content/<name> — a clone of github content; a\n" +
     "            deployment links content/ to its volume\n" +
@@ -652,6 +655,7 @@ const schedules: CommandSpec = {
         NO_INPUT,
         ...INSTANCE_FLAGS,
         CONFIG_FLAG,
+        ENV_FILE_FLAG,
       ],
       examples: [{ cmd: "fastagent schedules run daily-digest" }],
       run: async (args, f) =>

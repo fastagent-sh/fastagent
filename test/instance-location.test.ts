@@ -226,3 +226,49 @@ describe("the configuration a command is given", () => {
     expect(JSON.parse(found.stdout).thinkingLevel).toBe("high");
   });
 });
+
+describe("--env-file: the file an agent's secrets are read from", () => {
+  const needing = {
+    "src/tools/hello.ts": `import { needs } from "@fastagent-sh/fastagent";
+export default needs([{ name: "FA_ENVFILE_KEY" }], () => ({ name: "hello", description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ output: [] }) }));
+`,
+  };
+
+  it("replaces the default value file: info finds the secret there and nowhere else", async () => {
+    const dir = await agentWorkspace("fa-envfile-info-", {
+      ...needing,
+      ".secrets/.env": "FA_ENVFILE_KEY=from-the-default\n",
+    });
+    const other = join(await scratch(), "other.env");
+    await writeFile(other, "SOMETHING_ELSE=1\n");
+    const unset = async (args: string[]) => {
+      const result = await runInProcess(["info", dir, "--json", ...args]);
+      expect(result.code, result.stderr).toBe(0);
+      return (JSON.parse(result.stdout) as { unsetSecrets: string[] }).unsetSecrets;
+    };
+    expect(await unset([])).toEqual([]);
+    expect(await unset(["--env-file", other])).toEqual(["FA_ENVFILE_KEY"]);
+    const named = join(await scratch(), "named.env");
+    await writeFile(named, "FA_ENVFILE_KEY=from-the-named\n");
+    expect(await unset(["--env-file", named])).toEqual([]);
+  });
+
+  it("refuses a file that is not there, naming it, rather than starting with no secrets", async () => {
+    const dir = await agentWorkspace("fa-envfile-missing-");
+    const absent = join(await scratch(), "absent.env");
+    const result = await runInProcess(["info", dir, "--env-file", absent]);
+    expect([result.code, result.stderr]).toEqual([2, expect.stringContaining(`--env-file ${absent} is not a file`)]);
+    expect((await runInProcess(["info", dir, "--env-file", ""])).stderr).toContain("--env-file needs a path");
+  });
+
+  it("invoke reads the secrets its model needs from it", async () => {
+    const dir = await fauxAgent("fa-envfile-invoke-", needing);
+    const refused = await runInProcess(["invoke", "hello", dir]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("missing required secrets: FA_ENVFILE_KEY (src/tools/hello.ts)");
+    const file = join(await scratch(), "values.env");
+    await writeFile(file, "FA_ENVFILE_KEY=k\n");
+    const answered = await runInProcess(["invoke", "hello", dir, "--env-file", file]);
+    expect([answered.code, answered.stdout.trim()], answered.stderr).toEqual([0, "seen 1"]);
+  });
+});

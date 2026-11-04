@@ -138,11 +138,11 @@ describe("authStatus: the one answer to what authenticates a provider for an age
   });
   const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
   /** An agent dir whose credentials file holds `stored` (the file is the only layer, as on a deployed box). */
-  async function agentStoring(stored: Record<string, unknown>) {
+  async function agentStoring(stored: Record<string, unknown>, environment: Record<string, string> = {}) {
     const agentDir = await mkdtemp(join(tmpdir(), "fa-auth-status-"));
     const path = join(agentDir, "auth.json");
     await writeFile(path, JSON.stringify(stored));
-    return { models: await modelEnvironment(agentDir, { authPath: path }), path };
+    return { models: await modelEnvironment(agentDir, { authPath: path }, [], { environment }), path };
   }
 
   it("a live stored login, or nothing: what the startup report and a box's --if-missing both read", async () => {
@@ -204,13 +204,13 @@ describe("authStatus: the one answer to what authenticates a provider for an age
   it("a key in the environment authenticates with nothing on file, and goes unused beside a stored login", async () => {
     // A platform variable (`fly secrets set …`), or a key added to the value file after the box was logged in: pi lets
     // the stored credential own its provider, which is the case a deployment needs spelled out.
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-the-environment");
-    const bare = await agentStoring({});
+    const environment = { ANTHROPIC_API_KEY: "sk-from-the-environment" };
+    const bare = await agentStoring({}, environment);
     expect(await bare.models.authStatus("anthropic")).toEqual({
       path: bare.path,
       source: "ANTHROPIC_API_KEY",
     });
-    const held = await agentStoring({ anthropic: oauth });
+    const held = await agentStoring({ anthropic: oauth }, environment);
     expect(await held.models.authStatus("anthropic")).toEqual({
       path: held.path,
       source: "OAuth",
