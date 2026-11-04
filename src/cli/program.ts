@@ -112,6 +112,24 @@ const info: CommandSpec = {
     }),
 };
 
+const build: CommandSpec = {
+  name: "build",
+  summary: "compile the agent into dist/, the package an app or a host opens",
+  description:
+    "Compile the agent (default .) into dist/: its code with the project's TypeScript (type-checked, per file), its " +
+    "text, skills, prompts, assets and the resources beside its code, and a generated entry (index.js) whose default " +
+    "export is the definition. It refuses what dev refuses, and a type error. dist/ is replaced whole; it holds no " +
+    "secret, state or clone.",
+  args: [AGENT_ARG],
+  flags: [{ flags: "--no-check", description: "emit without type-checking (tsc --noCheck)" }, JSON_FLAG],
+  examples: [{ cmd: "fastagent build" }, { cmd: "fastagent build --json", note: "for CI" }],
+  run: async (args, f) =>
+    (await import("./commands/build.ts")).runBuild(args[0] as string, {
+      check: f.check !== false,
+      json: f.json === true,
+    }),
+};
+
 const invoke: CommandSpec = {
   name: "invoke",
   summary: "send ONE message to the agent and exit",
@@ -882,6 +900,7 @@ export const specs: readonly CommandSpec[] = [
   models,
   mcp,
   info,
+  build,
   content,
   env,
   invoke,

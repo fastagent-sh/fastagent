@@ -20,6 +20,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 |---|---|
 | `init <dir>` | Create an agent in a directory of its own; `--content` declares what it works on: a directory or a GitHub repository. |
 | `info [agent]` | Show what an agent assembles into, without serving. |
+| `build [agent]` | Compile the agent into `dist/`, the package an app or a host opens. |
 | `content list\|add\|remove` | List, add or remove what the agent works on. |
 | `env add\|remove\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
 | `models [search]` | List the model specs the agent can name. |
@@ -114,6 +115,28 @@ A module that does not load, a schedule whose cron is not valid, or an environme
 fail as `dev` and `start` would, with the reason (exit 1). Content that cannot be resolved (a bound directory is
 missing, say) is reported, not fatal. `info` installs and clones nothing; it writes only the model lists it refreshes
 in the state root (`<state root>/models/`).
+
+## `fastagent build`
+
+```bash
+fastagent build [agent] [--no-check] [--json]
+```
+
+Compiles the agent into `dist/`, a package of its own ([agent-artifact.md](design/agent-artifact.md) §3.4):
+
+- its configuration and the modules of `src/`, with what they import, compiled per file by the project's own
+  TypeScript (`npm install --save-dev typescript`; `init` adds it). FastAgent sets the compiler's options and does not
+  read `tsconfig.json`, which stays the editor's. It needs TypeScript 7 or newer. A type error fails the build (`--no-check` emits anyway), and so does
+  syntax `dev` could not run (an `enum`, a parameter property) or an import from outside the project;
+- `SYSTEM.md`, `AGENTS.md`, `context.json`, `.mcp.json`, `README.md`, a license, `skills/`, `prompts/`, `assets/`, and
+  every other file in a directory the code was compiled into (a module's resource, read by `import.meta.url`); a
+  symlink is copied as the file or directory it names, and one that links back into what is being copied is refused;
+- `index.js`, whose default export is the definition, and `package.json`: the project's name, version and own
+  dependencies, with FastAgent and the pi packages as peers.
+
+It refuses what `dev` refuses before writing anything, and replaces `dist/` whole. No `.env`, `.secrets/`, state,
+clone or `node_modules` is copied. A header or environment value in `.mcp.json` with no `${VAR}` in it is warned
+about: the package publishes the file. Prints where `dist/` is; `--json` adds the name, version and warnings.
 
 ## `fastagent content`
 

@@ -103,6 +103,7 @@ describe("init: scaffoldAgent", () => {
     const real = JSON.parse(await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")) as {
       version: string;
       dependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
     };
     // Its code is pi-durable code, its providers pi-ai's, its tool schemas pi-schema's: at the versions this build runs.
     expect(pkg.dependencies).toEqual({
@@ -111,6 +112,8 @@ describe("init: scaffoldAgent", () => {
       "@earendil-works/pi-ai": real.dependencies["@earendil-works/pi-ai"],
       "@earendil-works/pi-schema": real.dependencies["@earendil-works/pi-schema"],
     });
+    // `fastagent build` compiles with the agent's own TypeScript, the one FastAgent develops with.
+    expect(pkg.devDependencies).toEqual({ typescript: real.devDependencies.typescript });
     const standing = await readFile(join(dir, "SYSTEM.md"), "utf8");
     expect(standing).toContain("Use only the tools actually listed in your system prompt");
     expect(standing).not.toMatch(/workspace/i);

@@ -272,6 +272,7 @@ src/
     │   ├── define.ts       # what an author writes: defineAgent, needs (secrets beside the code that reads them),
     │   │                   # defineSchedule
     │   ├── definition.ts   # a definition as one frozen value: what dev loads and a build exports, its declared inputs
+    │   ├── build.ts        # `fastagent build`: the project's tsc into dist/, the text and resources, the generated entry
     │   ├── registry.ts     # the modules of src/ by directory, imported in file order
     │   ├── text.ts         # SYSTEM.md, AGENTS.md, skills (loaded as pi loads them) and prompt templates, read per
     │   │                   # message; the deployed agent's self-change section
