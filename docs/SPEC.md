@@ -35,7 +35,7 @@ Everything else in this document is naming and shape around those four.
 
 | Caller | Where | What it does |
 |---|---|---|
-| An app that embeds the agent | In process | Opens the agent directory and calls it like an SDK |
+| An app that embeds the agent | In process | Opens an instance of a built definition and calls it like an SDK |
 | A program elsewhere | HTTP | Sends a message and waits, polls, or streams the answer |
 | A client that shows conversations | HTTP | Lists sessions, reads history, watches a session |
 | A channel (Telegram, Slack, Feishu, custom) | In process | Maps a chat to a session, sends, replies |
@@ -44,8 +44,8 @@ Everything else in this document is naming and shape around those four.
 ### 1.2 One model, two bindings
 
 The API is one model: an `Agent` with `sessions` and `messages`. It is bound twice, in process as a TypeScript
-interface (§8) and over HTTP (§9), with the same names, the same objects and the same errors. An agent opened from its
-directory and one reached over HTTP are the same interface, so a Caller moves between them by changing the line that
+interface (§8) and over HTTP (§9), with the same names, the same objects and the same errors. An agent opened in
+process and one reached over HTTP are the same interface, so a Caller moves between them by changing the line that
 obtains the agent.
 
 ## 2. Concepts
@@ -487,7 +487,7 @@ type InstanceInputs<Settings = unknown> = {
    * `.mcp.json` beside a `config` path. A stdio server given as an object carries an absolute `cwd`.
    */
   mcpServers?: { mcpServers: Record<string, object> } | string;
-  /** Values for the declared secrets. Nothing else reaches the agent's code, its MCP servers or its model's auth. */
+  /** Secret values: the declared names, and model providers' variables. No variable of the host's reaches the agent. */
   secrets?: Record<string, string>;
   /** The base environment of the processes the agent starts. Default: empty. `baseEnv(process.env)` is the app's. */
   env?: Record<string, string>;
@@ -536,7 +536,7 @@ interface Service {
   fetch(request: Request): Promise<Response>;
   /**
    * Or a server of its own, Node's `http` server or `Bun.serve`: the one way to start one. Answers the port it bound.
-   * Default port: the instance configuration's `http.port`.
+   * Default port: the instance configuration's `http.port`, else 8787.
    */
   listen(port?: number, host?: string): Promise<number>;
   ready: Promise<void>;
@@ -551,7 +551,8 @@ interface Service {
 `openAgent` opens one instance of a built definition, the default export of an agent's package
 (`import support from "@acme/support"`), from its inputs and nothing else. It reads no environment variable, no
 `process.env` value and no file its inputs do not name, and it writes neither `process.env` nor the package: one process
-may open several instances, and two opens with different inputs share nothing. Every path it is given is absolute; a
+may open several instances, and two opens share nothing their inputs do not name (two given one `workdir` share
+that workspace, which is the caller's to avoid). Every path it is given is absolute; a
 relative one is refused rather than resolved against the process's working directory.
 
 - A definition `fastagent build` made for another format refuses, naming the FastAgent version it needs.
@@ -562,18 +563,22 @@ relative one is refused rather than resolved against the process's working direc
   The compiler checks the keys and types `config.settings` gives, not that every required one is there.
 - `content`, `instructions`, `skills` and `prompts` add to the program's. A content entry whose name the program
   declares refuses the open. A program's skills and prompt templates are also named `<program>-<name>`, `<program>`
-  being the definition's name as one segment (`reviewer-review`); the bare name is the program's while the instance
-  has no entry of that name, and the instance's when it does. An instance entry named like a program entry's full name
-  takes that name, and the program's entry is not offered; the open reports each overlap. `info().commands` lists the
-  names a message may start with (§5.1).
+  being the definition's name as one segment (`reviewer-review`). An instance entry takes its own name from the
+  program: one named like a program entry's bare name takes that bare name, and the program's entry keeps its full
+  name; one named like a program entry's full name takes that, and the program's entry is not offered under either
+  name. Otherwise a program entry is offered under both. The open reports each overlap, and `info().commands` lists
+  the names a message may start with (§5.1).
 - `secrets` holds values, `credentials` the model providers' stored sign-ins and keys. A required secret without a
-  value refuses the open and names it. A model provider's variable is a secret, read by the model's auth alone.
+  value refuses the open and names it. The model's auth reads a provider's variable from `secrets`, for whichever
+  provider a session's model is; the declared inputs list only the default model's, as optional. A name `secrets`
+  holds that nothing declares or reads is ignored.
 - The state is the instance's storage, its channels' and schedules' state, its model lists, its model credentials
   (when `credentials` is absent) and MCP grants; the workspace is the agent's working directory, where its content is
   cloned and what it produces lands.
-- A process the agent starts (a command, a stdio MCP server, a skill's script) gets `env`, the values `secrets` holds
-  for the names the definition's code (`needs()`) and `context.json`'s environment declare, a stdio MCP server's own
-  `env`, and `GIT_CEILING_DIRECTORIES` at the workspace's parent; nothing else of the host's. A model provider's
+- A process the agent starts (a command, a stdio MCP server, a skill's script) gets `env`, with the commands of the
+  declared environment ahead on its `PATH`; the values `secrets` holds for the names the definition's code (`needs()`)
+  and `context.json`'s environment declare; a stdio MCP server's own `env`; and `GIT_CEILING_DIRECTORIES` at the
+  workspace's parent. Nothing else of the host's reaches it. A model provider's
   variable and a value an MCP declaration references in its headers reach no process.
 - `name` names the instance: `info().name` is it, and what FastAgent creates for the instance outside its root is
   named after it.
