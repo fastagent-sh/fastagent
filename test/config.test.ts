@@ -13,6 +13,7 @@ import { instanceConfigSchema, resolveConfig } from "../src/harnesses/pi-durable
 import { type AgentDefinition, defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { pickedModelLine } from "../src/cli/shared.ts";
 import { buildable, runInProcess } from "./cli-run.ts";
 import { FIXTURES } from "./probe-package.ts";
 
@@ -142,6 +143,11 @@ export default {
     await expect(loadSourceDefinition(dir)).rejects.toThrow("fastagent.config.ts defaults: /http/port");
     const settings = project({ "fastagent.config.ts": `export default { settings: { type: "string" } };\n` });
     await expect(loadSourceDefinition(settings)).rejects.toThrow('"settings" must be an object schema');
+  });
+
+  it("accepts the line the model picker tells a person to keep, pasted as it is printed", async () => {
+    const dir = project({ "fastagent.config.ts": `export default { ${pickedModelLine("openai/gpt-5.5")} };\n` });
+    expect((await loadSourceDefinition(dir)).config.defaults?.model).toBe("openai/gpt-5.5");
   });
 
   it("is reported by `info --json` with the source of each value, `fastagent.json` at the root over the defaults", async () => {

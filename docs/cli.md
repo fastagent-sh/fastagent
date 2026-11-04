@@ -240,7 +240,7 @@ listed by name with what authenticates each one now (`✓ configured`, `✓ env:
 `not configured`). `[provider]` is an id or a name (`openai`, `OpenAI`); for a provider that offers both ways it asks
 which, in its own words (`Sign in with ChatGPT`). `openai-codex` is listed as pi lists it, `OpenAI Codex (legacy)`:
 a ChatGPT account signs in to `openai`. When the agent has no model, `login` prints the line that would give it pi's
-default for the provider (`model: "openai/gpt-5.5"`); it never edits `fastagent.config.ts`.
+default for the provider (`defaults: { model: "openai/gpt-5.5" }`); it never edits `fastagent.config.ts`.
 
 Without a terminal, or with `--no-input` or `--json`, a script or a coding agent signs in, and nothing is asked or
 waited on. A coding agent works in turns, so each command does its part and says what comes next, as Netlify's

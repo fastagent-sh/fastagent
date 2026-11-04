@@ -54,6 +54,8 @@ export const LOCAL_CONTEXT_FILE = "context.local.json";
  * author writes (`tools/`, `channels/`) still accepts `.ts`/`.js`/`.mjs` — that is THEIR code.
  */
 export const AGENT_CONFIG_FILE = "fastagent.config.ts";
+/** The instance configuration a development project holds beside its `fastagent.config.ts`. */
+export const INSTANCE_CONFIG_FILE = "fastagent.json";
 
 /**
  * "Not there" and "could not look" are different answers, and only the first may read as an absence: an agent

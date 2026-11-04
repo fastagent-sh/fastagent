@@ -65,6 +65,10 @@ unknown key, a value of the wrong type and a required setting no one gave each r
 path (`fastagent.json: /http/port expected <= 65535`). `content`, `instructions`, `skills` and `prompts` are in the
 design but not read by this release, and are refused by name.
 
+Until `--config` exists, `start` and `deploy` open a program on its defaults alone, so a program whose `settings` has a
+required key with no default cannot be started or deployed yet: it opens with `dev` (its `fastagent.json`) or
+`openAgent` (its `config`). Give every setting a default in `defaults.settings` to start it.
+
 `fastagent build` writes the JSON Schema of this file, with the program's `settings` in it, as `fastagent.schema.json`
 beside the package. Point an editor at it with `"$schema": "./node_modules/<package>/fastagent.schema.json"`.
 `fastagent info --json` reports the resolved values, each with its source: the program's defaults, the instance's file,

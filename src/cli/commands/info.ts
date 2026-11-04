@@ -118,7 +118,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   for (const [label, value] of contentLines(content, contentAbsent)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");
-  line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or model in fastagent.config.ts)");
+  line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or defaults.model in fastagent.config.ts)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
   const unbuilt = "(not built: a required secret has no value)";

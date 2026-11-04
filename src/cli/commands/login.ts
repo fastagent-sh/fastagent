@@ -184,7 +184,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
 }
 
 const modelHint = (model: string, name: string) =>
-  `this agent has no model: \`model: "${model}"\` in fastagent.config.ts uses ${name}'s default`;
+  `this agent has no model: \`defaults: { model: "${model}" }\` in fastagent.config.ts uses ${name}'s default`;
 
 /** `--method`'s words, pi's: an account (OAuth) or an API key. */
 function methodOf(value: string): SignInMethod {

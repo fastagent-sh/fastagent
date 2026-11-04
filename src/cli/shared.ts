@@ -72,7 +72,7 @@ export async function enterAgentCommand(
   const { modelSpec } = entered;
   if (!modelSpec) {
     failUsage(
-      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai/gpt-5.5"; ` +
+      `missing model: set --model, "defaults.model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai/gpt-5.5"; ` +
         "`fastagent models` lists them)",
     );
   }
@@ -183,10 +183,13 @@ async function resolveFirstRunModel(
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
-  console.error(
-    `[fastagent] picked ${chosen} — set \`model: ${JSON.stringify(chosen)}\` in fastagent.config.ts to keep it`,
-  );
+  console.error(`[fastagent] picked ${chosen} — set \`${pickedModelLine(chosen)}\` in fastagent.config.ts to keep it`);
   return chosen;
+}
+
+/** The line of `fastagent.config.ts` that keeps a picked model: what the picker prints, and what it must accept. */
+export function pickedModelLine(model: string): string {
+  return `defaults: { model: ${JSON.stringify(model)} }`;
 }
 
 /** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */

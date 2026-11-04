@@ -95,7 +95,7 @@ describe("login: what it says when it is done", () => {
     vi.stubEnv("FASTAGENT_MODEL", "");
     const bare = await agentWith("export default {};\n");
     expect(await login(bare, false)).toMatch(
-      /this agent has no model: `model: "anthropic\/claude-opus-4-8"` in fastagent\.config\.ts uses Anthropic's default/,
+      /this agent has no model: `defaults: \{ model: "anthropic\/claude-opus-4-8" \}` in fastagent\.config\.ts uses Anthropic's default/,
     );
     expect(await readFile(join(bare, "fastagent.config.ts"), "utf8")).toBe("export default {};\n");
     expect(

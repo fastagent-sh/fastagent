@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type Schema, bool, compile, int, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { modelRefOf } from "../../model-ref.ts";
+import { INSTANCE_CONFIG_FILE } from "../../paths.ts";
 import type { AgentConfig, AgentDefaults } from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
 
@@ -21,9 +22,6 @@ export interface InstanceConfigSource {
   values: unknown;
   label: string;
 }
-
-/** The instance configuration a development project holds beside its `fastagent.config.ts`. */
-const INSTANCE_CONFIG_FILE = "fastagent.json";
 
 const THINKING_LEVELS = [
   "off",
