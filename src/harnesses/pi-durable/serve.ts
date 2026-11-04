@@ -250,6 +250,9 @@ function locationOf(location: InstanceLocation): { workdir: string; stateRoot: s
     }
     return path;
   };
+  if ("root" in location && ("stateDir" in location || "workdir" in location)) {
+    throw new Error("give the instance a root, or a stateDir and a workdir, not both");
+  }
   if ("root" in location) {
     const root = absolute(location.root, "root");
     return { workdir: root, stateRoot: join(root, STATE_DIRNAME) };

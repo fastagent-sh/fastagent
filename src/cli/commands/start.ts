@@ -12,7 +12,14 @@ import {
   parseDeploymentRelease,
   prepareDeployment,
 } from "../../deploy/workspace.ts";
-import { selectAgentEnvironment, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
+import {
+  selectAgentEnvironment,
+  resolveSecretsDir,
+  isAgentcoreRuntime,
+  isDeployedWorkspace,
+  isUnderDir,
+  exists,
+} from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
 import type { AgentDefinition } from "../../harnesses/pi-durable/definition.ts";
@@ -148,7 +155,7 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   // The build, never the source (agent-artifact.md §8): refused when there is none or the project has moved on.
   let built: Promise<AgentDefinition> | undefined;
-  const loadBuilt = (dir: string) => (built ??= loadProjectBuild(dir));
+  const loadBuilt = (dir: string) => (built ??= loadProjectBuild(dir, { checkSources: !isDeployedWorkspace() }));
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, undefined, loadBuilt);
   const opened = await openServing(await loadBuilt(agentDir), {
     model: modelSpec,

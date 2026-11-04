@@ -270,13 +270,10 @@ function selfChangeSection(wake: boolean): string {
   return (
     `Your directory survives restarts, including uncommitted work; /tmp does not. ${deployment}, so anything that ` +
     `must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). ` +
-    `SYSTEM.md, AGENTS.md, skills/ and prompts/ are read for every message; changes to code in src/ (tools, ` +
-    `extensions, channels, schedules) or to configuration (fastagent.config.ts, context.json, package.json) take ` +
-    `effect when the service restarts. A tool you install yourself (apt-get, npm install -g) belongs to this machine ` +
-    `and is gone when its container is replaced. To give yourself a new capability now, write a skill — a SKILL.md in ` +
-    `your definition's skills/ directory, with any script it needs run through bash. It lasts until the next ` +
-    `deployment replaces that directory, so a capability that should outlast it belongs in the author's release: ` +
-    `propose it to them.` +
+    `Your definition (SYSTEM.md, AGENTS.md, skills/, prompts/, src/ and the configuration) is the author's release, ` +
+    `read as it was built: a change you make to a copy of it in your directory is not read. A tool you install ` +
+    `yourself (apt-get, npm install -g) belongs to this machine and is gone when its container is replaced. A ` +
+    `capability that should outlast a deployment belongs in the author's release: propose it to them.` +
     // Named only when it has the tool: naming a tool the model does not have invites calls to it.
     (wake ? " To schedule your own follow-up work, use the wake tool." : "")
   );

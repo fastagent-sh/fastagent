@@ -275,3 +275,33 @@ describe("mountAgentcoreService", () => {
     await expect(service.close()).resolves.toBeUndefined();
   });
 });
+
+describe("a deployed box's build", () => {
+  it("opens although the agent edited the project's copy, which only a local start refuses", async () => {
+    const dir = await agentDir();
+    await buildProject(dir);
+    await writeFile(join(dir, "SYSTEM.md"), "The agent rewrote its own prompt.\n");
+    await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/built from other sources/);
+    vi.stubEnv("FASTAGENT_RELEASE_FILE", join(dir, "release.json"));
+    vi.stubEnv("FASTAGENT_STATE_DIR", join(dir, ".state"));
+    const service = await openPreparedStartService(dir, { input: false });
+    await service.close();
+  }, 120_000);
+});
+
+describe("AgentCore assembly of a project nobody built", () => {
+  it("rejects naming `fastagent build` instead of exiting the container", async () => {
+    const dir = await agentDir();
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("process.exit called");
+    }) as never);
+    try {
+      await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(
+        /holds no build: run `fastagent build`/,
+      );
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      exit.mockRestore();
+    }
+  });
+});

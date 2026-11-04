@@ -144,12 +144,12 @@ extension contributes the definition's:
 
 `prompts/<name>.md` are the prompt templates a Caller sends as `/<name>`; they and the skills are `info().commands`.
 
-**The text is read for every message; the code is not.** `SYSTEM.md`, `AGENTS.md`, `skills/` and `prompts/` take effect
-on the next message. The code in `src/`, the configuration and `package.json` take effect when the process restarts:
-`dev` restarts its worker on an edit, `start` at the next start or release. So an agent that gives itself a new
-capability while it runs writes a skill, whose script it runs through `bash`, read fresh every message; a tool or a
-schedule of its own is code, which waits for the author's release; and its own follow-up work is `wake` (§8). A skill
-it writes lives in the definition, so it lasts until the next deployment replaces it, and the deployed prompt says so.
+**The text is read for every message in `dev`; a built package is read as built.** From a source project, `SYSTEM.md`,
+`AGENTS.md`, `skills/` and `prompts/` take effect on the next message, and the code in `src/`, the configuration and
+`package.json` when `dev` restarts its worker. `start` and a deployment read `dist/`, so an edit to the project's copy
+is not read; a deployed agent's prompt says so, and a capability of its own waits for the author's release. A local
+`start` refuses a `dist/` older than the project; a deployed box does not check, since the agent works in that copy.
+Its own follow-up work is `wake` (§8). Skills an instance adds for itself are deferred (agent-artifact.md).
 
 ### Decisions behind the agent model
 

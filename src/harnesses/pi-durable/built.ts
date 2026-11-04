@@ -109,19 +109,27 @@ export async function buildRecord(dir: string, code: readonly string[]): Promise
 }
 
 /** Why `dist/` of the project in `dir` cannot be opened, or nothing when it is the build of the project as it is. */
-async function builtProblem(dir: string): Promise<string | undefined> {
+async function builtProblem(dir: string, checkSources: boolean): Promise<string | undefined> {
   const rebuild = "run `fastagent build`";
   const dist = join(dir, DIST_DIR);
   if (!(await exists(join(dist, BUILD_FILE)))) return `${dist} holds no build: ${rebuild}`;
+  if (!checkSources) return undefined;
   const record = JSON.parse(await readFile(join(dist, BUILD_FILE), "utf8")) as BuildRecord;
   return (await fingerprintOf(dir, record.code)) === record.fingerprint
     ? undefined
     : `${dist} was built from other sources than ${dir} holds now: ${rebuild}`;
 }
 
-/** The definition of the project's `dist/`: refused, naming `fastagent build`, when there is none or it is stale. */
-export async function loadProjectBuild(directory: string): Promise<AgentDefinition> {
-  const problem = await builtProblem(directory);
+/**
+ * The definition of the project's `dist/`: refused, naming `fastagent build`, when there is none or, with
+ * `checkSources`, when the project has moved on from it. A deployed box's project is the release's copy, which the
+ * agent works in and edits, so only a local `start` asks whether the author forgot to build.
+ */
+export async function loadProjectBuild(
+  directory: string,
+  { checkSources }: { checkSources: boolean },
+): Promise<AgentDefinition> {
+  const problem = await builtProblem(directory, checkSources);
   if (problem !== undefined) throw new Error(problem);
   return loadBuiltDefinition(join(directory, DIST_DIR));
 }

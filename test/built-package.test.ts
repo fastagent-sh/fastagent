@@ -104,6 +104,9 @@ describe("an installed package, opened as instances", () => {
     await expect(openAgent(definition, { root: "relative/root" })).rejects.toThrow(
       'root must be an absolute path, and is "relative/root"',
     );
+    await expect(openAgent(definition, { root, stateDir: join(root, "s"), workdir: root } as never)).rejects.toThrow(
+      "give the instance a root, or a stateDir and a workdir, not both",
+    );
     await expect(openAgent(definition, { stateDir: join(root, "s"), workdir: "w" })).rejects.toThrow(
       'workdir must be an absolute path, and is "w"',
     );
@@ -154,17 +157,34 @@ describe("a project's build is the one `start` opens only while the project is w
   });
 
   it("refuses a project nobody built, naming the command", async () => {
-    await expect(loadProjectBuild(project)).rejects.toThrow(/dist holds no build: run `fastagent build`/);
+    await expect(loadProjectBuild(project, { checkSources: true })).rejects.toThrow(
+      /dist holds no build: run `fastagent build`/,
+    );
   });
 
   it("opens a fresh build, and keeps opening it while the agent runs and writes beside it", async () => {
     await buildProject(project);
-    expect((await loadProjectBuild(project)).name).toBe("stale");
+    expect((await loadProjectBuild(project, { checkSources: true })).name).toBe("stale");
     for (const written of [".state/agent.sqlite", ".secrets/.env", "content/repo/README.md", "out.txt"]) {
       mkdirSync(join(project, written, ".."), { recursive: true });
       writeFileSync(join(project, written), "runtime");
     }
-    expect((await loadProjectBuild(project)).name).toBe("stale");
+    expect((await loadProjectBuild(project, { checkSources: true })).name).toBe("stale");
+  });
+
+  it("opens a build whose project the agent has edited when the box does not check sources, but never a missing one", async () => {
+    await buildProject(project);
+    writeFileSync(join(project, "SYSTEM.md"), "the agent edited this\n");
+    mkdirSync(join(project, "skills/mine"), { recursive: true });
+    writeFileSync(join(project, "skills/mine/SKILL.md"), "---\nname: mine\ndescription: Mine\n---\nMine.\n");
+    expect((await loadProjectBuild(project, { checkSources: false })).name).toBe("stale");
+    rmSync(join(project, "dist"), { recursive: true });
+    await expect(loadProjectBuild(project, { checkSources: false })).rejects.toThrow(
+      /holds no build: run `fastagent build`/,
+    );
+    await buildProject(project);
+    rmSync(join(project, "skills/mine"), { recursive: true });
+    writeFileSync(join(project, "SYSTEM.md"), "v1\n");
   });
 
   it.each([
@@ -179,10 +199,10 @@ describe("a project's build is the one `start` opens only while the project is w
     const path = join(project, file);
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, file === "src/tools/t.ts" ? `${readFileSync(path, "utf8")}${content}` : content);
-    await expect(loadProjectBuild(project)).rejects.toThrow(
+    await expect(loadProjectBuild(project, { checkSources: true })).rejects.toThrow(
       /was built from other sources than .* holds now: run `fastagent build`/,
     );
     await buildProject(project);
-    expect((await loadProjectBuild(project)).name).toBe("stale");
+    expect((await loadProjectBuild(project, { checkSources: true })).name).toBe("stale");
   });
 });

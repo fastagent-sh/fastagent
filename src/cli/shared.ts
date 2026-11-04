@@ -162,16 +162,17 @@ async function resolveFirstRunModel(
   options: { model?: string; input?: boolean } = {},
   load?: LoadDefinition,
 ): Promise<string | undefined> {
-  const loaded = load === undefined ? undefined : await load(agentDir).catch(failStartup);
+  // A loader's refusal is the caller's to report: AgentCore runs this inside a request, where an exit kills the container.
+  const loaded = load === undefined ? undefined : await load(agentDir);
   const config = loaded?.config ?? (await loadConfig(agentDir).catch(failStartup));
   const configured = modelSpecFor(config, options.model);
   if (configured) return configured;
   if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
   if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
-  const providers = await (loaded === undefined
-    ? definitionProviders(agentDir)
-    : Promise.resolve().then(() => buildDefinitionShape(loaded, process.env).providers)
-  ).catch(failStartup);
+  const providers =
+    loaded === undefined
+      ? await definitionProviders(agentDir).catch(failStartup)
+      : buildDefinitionShape(loaded, process.env).providers;
   const environment = await modelEnvironment(agentDir, {}, providers);
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error
