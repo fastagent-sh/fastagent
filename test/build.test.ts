@@ -108,7 +108,7 @@ describe("fastagent build", () => {
   it("exports the definition from the generated entry, its modules running from dist/", async () => {
     const { dist } = await buildProject(project(FILES));
     const built = (await import(join(dist, "index.js"))).default;
-    expect(built).toMatchObject({ format: 1, name: "support", version: "1.2.0", dir: `${dist}/` });
+    expect(built).toMatchObject({ format: 1, name: "support", version: "1.2.0", dir: dist });
     expect(built.inputs.secrets).toEqual([
       { name: "LOOKUP_KEY", description: "the lookup service", optional: false, declaredIn: ["context.json"] },
     ]);
@@ -130,12 +130,29 @@ describe("fastagent build", () => {
     expect(readdirSync(dir)).not.toContain("dist");
   });
 
-  it("refuses code that imports a file outside the project, which dist/ could not hold", async () => {
-    const outside = join(import.meta.dirname, "../src/log.ts");
+  it("refuses source outside the project, with or without the type check, and writes nothing beside it", async () => {
+    const outside = join(ROOT, `.tmp-shared-${process.pid}`);
+    made.push(outside);
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "shout.ts"), "export const shout = (text: string): string => text;\n");
     const dir = project({
-      "src/tools/far.ts": `import { log } from ${JSON.stringify(outside)};\nexport default log;\n`,
+      "src/tools/far.ts": `import { shout } from ${JSON.stringify(join(outside, "shout.ts"))};\nexport default shout;\n`,
     });
-    await expect(buildProject(dir)).rejects.toThrow(/TS6059/);
+    for (const check of [true, false]) {
+      await expect(buildProject(dir, { check })).rejects.toThrow(/imports source from outside .*shout\.ts/);
+      expect(readdirSync(outside)).toEqual(["shout.ts"]);
+      expect(readdirSync(dir)).not.toContain("dist");
+    }
+  });
+
+  it("leaves the dist/ before it as it was when a build fails", async () => {
+    const dir = project(FILES);
+    const { dist } = await buildProject(dir);
+    const before = listing(dist);
+    writeFileSync(join(dir, "lib/shout.ts"), "export const shout = (text: string): number => text;\n");
+    await expect(buildProject(dir)).rejects.toThrow(/tsc refused the project/);
+    expect(listing(dist)).toEqual(before);
+    expect(readdirSync(join(dir, ".fastagent"))).toEqual([]);
   });
 
   it("refuses syntax a dev serve could not run, as Node's type stripping would", async () => {
@@ -158,11 +175,13 @@ describe("fastagent build", () => {
     expect(listing(dist)).toContain(".mcp.json");
   });
 
-  it("packs no secret file: npm pack of dist/ holds what the build wrote", async () => {
+  it("packs all of dist/ and no secret file: npm pack holds what the build wrote, none of it a .env", async () => {
     const { dist } = await buildProject(project(FILES));
     const { stdout } = await promisify(execFile)("npm", ["pack", "--dry-run", "--json"], { cwd: dist });
     const [{ files }] = JSON.parse(stdout) as [{ files: { path: string }[] }];
-    expect(files.map((file) => file.path).sort()).toEqual(listing(dist));
+    const packed = files.map((file) => file.path).sort();
+    expect(packed).toEqual(listing(dist));
+    expect(packed.filter((file) => /(^|\/)(\.env|\.secrets)/.test(file))).toEqual([]);
   });
 
   it("is the build command, which prints where dist/ is", async () => {

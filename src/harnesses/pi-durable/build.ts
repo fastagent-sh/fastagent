@@ -5,10 +5,10 @@
  * definition's modules as static imports.
  */
 import { spawn } from "node:child_process";
-import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { readMcpConfiguration, MCP_FILE } from "../../mcp/config.ts";
 import { AGENT_CONFIG_FILE, CONTEXT_FILE, exists } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
@@ -18,6 +18,7 @@ import { loadSourceDefinition } from "./open.ts";
 import { REGISTRY_KINDS } from "./registry.ts";
 
 const DIST_DIR = "dist";
+const STAGING_DIR = join(".fastagent", "build");
 
 const FASTAGENT_PACKAGE = "@fastagent-sh/fastagent";
 const CODE = /\.(ts|mts|cts|tsx|js|mjs|cjs|jsx)$/;
@@ -46,11 +47,20 @@ export async function buildProject(directory: string, options: BuildOptions = {}
   const definition = await loadSourceDefinition(directory);
   const { dir } = definition;
   const dist = join(dir, DIST_DIR);
-  await rm(dist, { recursive: true, force: true });
-  await compile(dir, dist, definition, options.check !== false);
-  await copyProgramFiles(dir, dist);
-  await writeEntry(dist, definition);
-  await writeFile(join(dist, "package.json"), await distPackageJson(dir, definition));
+  // Built apart and moved into place whole: a build that fails leaves the `dist/` before it as it was.
+  const staging = join(dir, STAGING_DIR);
+  await rm(staging, { recursive: true, force: true });
+  try {
+    await compile(dir, staging, definition, options.check !== false);
+    await copyProgramFiles(dir, staging);
+    await writeEntry(staging, definition);
+    await writeFile(join(staging, "package.json"), await distPackageJson(dir, definition));
+    await rm(dist, { recursive: true, force: true });
+    await rename(staging, dist);
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
   return { dist, definition, warnings: literalMcpCredentials(dir) };
 }
 
@@ -70,16 +80,10 @@ function projectTsc(dir: string): string {
   }
 }
 
-/** The configuration and every registered module, compiled with what they import; a type error fails the build. */
-async function compile(dir: string, dist: string, definition: AgentDefinition, check: boolean): Promise<void> {
-  const roots = [
-    ...((await exists(join(dir, AGENT_CONFIG_FILE))) ? [AGENT_CONFIG_FILE] : []),
-    ...REGISTRY_KINDS.flatMap((kind) => definition.registry[kind].map(({ file }) => file)),
-  ];
-  if (roots.length === 0) return;
-  const args = [
+/** What the compiler is run with: FastAgent sets it, and the author's `tsconfig.json` is the editor's. */
+function tscArguments(dir: string, outDir: string, roots: readonly string[], more: readonly string[]): string[] {
+  return [
     projectTsc(dir),
-    // The author's tsconfig.json is the editor's: what is built, and how, is FastAgent's.
     "--ignoreConfig",
     "--pretty",
     "false",
@@ -101,11 +105,45 @@ async function compile(dir: string, dist: string, definition: AgentDefinition, c
     "--rootDir",
     dir,
     "--outDir",
-    dist,
-    ...(check ? [] : ["--noCheck"]),
+    outDir,
+    ...more,
     ...roots.map((file) => join(dir, file)),
   ];
-  const { code, output } = await run(process.execPath, args, dir);
+}
+
+/**
+ * The files the compiler would read that `dist/` cannot hold: a source file outside the project. `tsc` reports one
+ * (TS6059) yet writes its output beside it, and with `--noCheck` reports nothing and succeeds, so the program's files
+ * are listed first and the build refuses before anything is emitted. Dependencies (`node_modules`, the compiler's own
+ * libraries) are not the project's source.
+ */
+async function sourceOutsideProject(dir: string, roots: readonly string[]): Promise<string[]> {
+  const { output } = await run(process.execPath, tscArguments(dir, dir, roots, ["--listFilesOnly"]), dir);
+  const listed = output.split("\n").map((line) => line.trim());
+  return listed.filter((file) => {
+    if (!isAbsolute(file) || file.split(sep).includes("node_modules")) return false;
+    return relative(dir, file).startsWith("..");
+  });
+}
+
+/** The configuration and every registered module, compiled with what they import; a type error fails the build. */
+async function compile(dir: string, outDir: string, definition: AgentDefinition, check: boolean): Promise<void> {
+  const roots = [
+    ...((await exists(join(dir, AGENT_CONFIG_FILE))) ? [AGENT_CONFIG_FILE] : []),
+    ...REGISTRY_KINDS.flatMap((kind) => definition.registry[kind].map(({ file }) => file)),
+  ];
+  if (roots.length === 0) return;
+  const outside = await sourceOutsideProject(dir, roots);
+  if (outside.length > 0) {
+    throw new Error(
+      `the project imports source from outside ${dir}, which ${DIST_DIR}/ cannot hold: ${outside.join(", ")}`,
+    );
+  }
+  const { code, output } = await run(
+    process.execPath,
+    tscArguments(dir, outDir, roots, check ? [] : ["--noCheck"]),
+    dir,
+  );
   if (code !== 0) throw new Error(`tsc refused the project (exit ${code}):\n${output.trim()}`);
 }
 
@@ -155,6 +193,7 @@ async function writeEntry(dist: string, definition: AgentDefinition): Promise<vo
   const emitted = (file: string) => `./${file.replace(/\.(ts|mts)$/, (ext) => (ext === ".mts" ? ".mjs" : ".js"))}`;
   const lines = [
     "// Generated by fastagent build: do not edit.",
+    'import { dirname } from "node:path";',
     'import { fileURLToPath } from "node:url";',
     `import { defineDefinition } from ${JSON.stringify(FASTAGENT_PACKAGE)};`,
   ];
@@ -175,7 +214,7 @@ export default defineDefinition({
   format: ${DEFINITION_FORMAT},
   name: ${JSON.stringify(definition.name)},
   version: ${JSON.stringify(definition.version)},
-  dir: fileURLToPath(new URL(".", import.meta.url)),
+  dir: dirname(fileURLToPath(import.meta.url)),
   config: ${hasConfig ? "config ?? {}" : "{}"},
   registry: {
 ${kinds.map((kind) => `  ${kind}`).join("\n")}
