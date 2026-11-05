@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { declaredChannels } from "../src/channels/discover.ts";
+import { webhookKinds } from "../src/channels/webhooks.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import { planAgentcoreDeploy } from "../src/deploy/agentcore/plan.ts";
 import {
+  confirmWebhooks,
   loginGate,
   publicHealthGate,
   registerWebhooks,
-  webhookKinds,
   webhookPaths,
   webhookRunbook,
 } from "../src/deploy/channel-ingress.ts";
@@ -229,6 +230,89 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
   });
 });
 
+describe("deploy/channel-ingress: what a box that points its own channels made of them", () => {
+  it("reads the box's /health until nothing is pending, then gates on what it reports", async () => {
+    const reads = [
+      undefined, // not answering yet
+      [{ channel: "telegram", outcome: "pending" as const }],
+      [
+        { channel: "telegram", outcome: "registered" as const },
+        { channel: "lark", outcome: "manual" as const },
+      ],
+    ];
+    const probe = vi.fn(async (_url: string) => reads.shift() ?? []);
+    const logs: string[] = [];
+    const left: string[] = [];
+    const gate = await confirmWebhooks({
+      baseUrl: "https://x",
+      // The platforms reach it at another URL (a custom domain): every step names that one, never the host's.
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("telegram", "lark"),
+      registrars: { leave: (step) => left.push(step) },
+      log: (m) => logs.push(m),
+      retryHint: "re-run",
+      probe,
+      intervalMs: 0,
+    });
+    expect(gate).toBeUndefined();
+    expect(probe).toHaveBeenCalledWith("https://x/health");
+    expect(probe).toHaveBeenCalledTimes(3);
+    expect(logs.join("\n")).toContain("the selected production telegram app now delivers to this deployment");
+    // The step a person acts on is said here, and handed to a coding agent's user; why is in the box's log.
+    expect(left).toEqual([
+      expect.stringContaining(
+        "lark: set the event Request URL in the developer console (Events & Callbacks) → https://agent.acme.com/lark",
+      ),
+    ]);
+  });
+
+  it("a channel the box reports failed, or never ends, gates the run", async () => {
+    const failed = await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://x",
+      channels: webhook("telegram"),
+      registrars: {},
+      log: () => {},
+      retryHint: "re-run",
+      probe: async () => [{ channel: "telegram", outcome: "failed" }],
+      intervalMs: 0,
+    });
+    expect(failed).toMatch(/webhook registration failed for: telegram/);
+    const logs: string[] = [];
+    const stuck = await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://x",
+      channels: webhook("feishu"),
+      registrars: {},
+      log: (m) => logs.push(m),
+      retryHint: "re-run",
+      probe: async () => [{ channel: "feishu", outcome: "pending" }],
+      timeoutMs: 0,
+      intervalMs: 0,
+    });
+    expect(stuck).toMatch(/webhook registration failed for: feishu/);
+    expect(logs.join("\n")).toContain("feishu: the box did not report its registration within the wait");
+  });
+
+  it("sets Slack's Request URL from this machine, since no credential on the box can", async () => {
+    const slack = vi.fn(registered);
+    const probe = vi.fn(async () => []);
+    const gate = await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("slack"),
+      registrars: { slack },
+      log: () => {},
+      retryHint: "re-run",
+      probe,
+    });
+    expect(gate).toBeUndefined();
+    expect(slack).toHaveBeenCalledWith("https://agent.acme.com");
+    // Nothing of the box's to wait for.
+    expect(probe).not.toHaveBeenCalled();
+  });
+});
+
 describe("every host's runbook reads the same answer", () => {
   const fly = (channels: ReturnType<typeof webhook>) =>
     planFlyDeploy({
@@ -263,9 +347,12 @@ describe("every host's runbook reads the same answer", () => {
       agent: "bot",
     }).runbook.join("\n");
 
-  it("fly: a long-connection telegram gets no setWebhook step", () => {
-    expect(fly(webhook("telegram"))).toContain("setWebhook");
-    expect(fly(longConnection("telegram"))).not.toContain("setWebhook");
+  it("fly: the box points its own channels, so only Slack's is a person's step", () => {
+    const out = fly(webhook("telegram", "slack"));
+    expect(out).not.toContain("setWebhook");
+    expect(out).toContain("The box points telegram at https://bot.fly.dev itself");
+    expect(out).toContain("Request URL = https://bot.fly.dev/slack");
+    expect(fly(longConnection("telegram"))).not.toContain("The box points");
   });
 
   it("railway: with nothing left to point at a domain, the mint step goes too", () => {

@@ -125,6 +125,8 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
       `# Public URL — Railway mints a *.up.railway.app domain (NOT deterministic). Generate it, then read`,
       `# the printed https URL and use it as <your-domain> in the webhook step(s) below:`,
       `railway domain`,
+      `# Or, before \`railway up\`, set it as http.publicUrl in the configuration \`deploy --config\` delivers, and`,
+      `# re-run \`fastagent deploy railway\`: the box then points Telegram, Feishu and Lark there itself.`,
       ...steps,
     );
   }

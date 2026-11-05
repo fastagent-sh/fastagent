@@ -10,6 +10,7 @@ import {
   missingValuesGate,
 } from "../src/deploy/secrets.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
+import { boxReporting } from "./box-webhooks.ts";
 
 /** A fake flyctl: records every call, returns per-command scripted results (default code 0, empty out). */
 function fakeFly(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
@@ -42,7 +43,7 @@ const run = (
   fly: CliRunner,
   tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
   healthy: () => Promise<boolean> = async () => true,
-) => deployFlyRun(p, fly, () => {}, { telegram: tg }, healthy);
+) => deployFlyRun(p, fly, () => {}, {}, healthy, boxReporting({ telegram: tg }));
 
 describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   it("happy path: auth → create app+address → set secrets → deploy → telegram webhook", async () => {
@@ -116,7 +117,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       plan({ boxLogin: { command: LOGIN, run: async () => undefined } }),
       fly,
       (m) => logs.push(m),
-      { telegram: vi.fn() },
+      {},
       async () => false,
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining(`log it in: ${LOGIN}`) });
@@ -208,7 +209,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
 
   // What is fly's here is the URL the shared registrar is handed and the gate becoming this run's
   // outcome; WHICH channels register, and how manual/failed outcomes read, is deploy-channel-ingress.
-  it("registers at the fly URL, and a terminal failure becomes the run's gate", async () => {
+  it("reads what the box registered at the fly URL, and a terminal failure becomes the run's gate", async () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" ? { stdout: "[]" } : {}));
     const registerFeishu = vi.fn(
       async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
@@ -218,12 +219,12 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       plan({ channels: declaredChannels(["telegram", "feishu"]) }),
       fly,
       () => {},
-      {
-        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
-        feishu: // telegram registration ends with the webhook NOT set
-          registerFeishu,
-      },
+      {},
       async () => true,
+      boxReporting({
+        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"), // the box's telegram webhook is NOT set
+        feishu: registerFeishu,
+      }),
     );
 
     // Exit 0 here would tell a coding agent "done" while the agent can't receive messages.

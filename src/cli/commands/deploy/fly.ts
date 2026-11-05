@@ -14,6 +14,7 @@ import { readTextIfExists } from "../../../paths.ts";
 import { residencyFor } from "../../../deploy/residency.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
+import { withPublicUrl } from "../../../deploy/container.ts";
 import { failStartup } from "../../fail.ts";
 import { FLY_LOGIN, hostLogin } from "./host-login.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
@@ -57,6 +58,8 @@ export const flyHost: HostDeploy = {
         console.error(`[fastagent] warn: ${msg}`);
       }
     }
+    const reachedAt = `https://${appName}.fly.dev`;
+    const delivered = withPublicUrl(container.config, reachedAt);
     const plan = planFlyDeploy({
       appName,
       port,
@@ -65,9 +68,11 @@ export const flyHost: HostDeploy = {
       secrets: pre.secrets,
       hasCron,
       ...container,
+      // The app's URL is known before the build, so the image names it: the box points its own channels there.
+      config: delivered.config,
+      publicUrl: delivered.publicUrl,
     });
     await write(plan.artifacts, { force: !!opts.force });
-    const reachedAt = `https://${appName}.fly.dev`;
     if (opts.run) {
       await runDeployFly({
         agentDir,
@@ -80,6 +85,7 @@ export const flyHost: HostDeploy = {
         declaredSecrets,
         values,
         valueFile,
+        publicUrl: delivered.publicUrl,
       });
       return reachedAt;
     }
@@ -103,6 +109,8 @@ async function runDeployFly(params: {
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
   valueFile: string;
+  /** The `http.publicUrl` the image delivers: the platforms reach the box there. */
+  publicUrl: string;
 }): Promise<void> {
   const { agentDir, appName, channels } = params;
   const fly = spawnRunner("fly", agentDir);
@@ -129,6 +137,7 @@ async function runDeployFly(params: {
       ...boxLoginStep("fly", params, () => flyShell(appName, agentDir)),
       ...hostLogin(FLY_LOGIN, params.answerer, agentDir),
       forAgent: `${params.rerun} --json`,
+      publicUrl: params.publicUrl,
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),

@@ -250,9 +250,12 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     expect(dockerfile).toContain(
       "COPY fastagent.deploy/ /etc/fastagent/\nENV FASTAGENT_CONFIG=/etc/fastagent/fastagent.json",
     );
+    // With the app's URL as its http.publicUrl, which Fly's is known before the build: the box points its channels
+    // there.
+    const flyUrl = expect.stringMatching(/^https:\/\/fa-deploy-config-[a-z0-9-]+\.fly\.dev$/);
     expect(JSON.parse(await readFile(join(dir, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
       settings: { repo: "acme/api" },
-      http: { api: false },
+      http: { api: false, publicUrl: flyUrl },
     });
     // The project's own development configuration stays out of the image.
     const ignore = await readFile(join(dir, ".dockerignore"), "utf8");
@@ -266,8 +269,20 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     expect(again.code, again.stderr).toBe(0);
     expect(JSON.parse(await readFile(join(dir, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
       settings: { repo: "acme/web" },
+      http: { publicUrl: flyUrl },
     });
-    // Without --config, none: the program's defaults, never what an earlier deploy delivered.
+    // An operator's own URL (a custom domain) is theirs to name, and kept.
+    await writeFile(
+      config,
+      JSON.stringify({ settings: { repo: "acme/web" }, http: { publicUrl: "https://agent.acme.com" } }),
+    );
+    const own = await runInProcess(["deploy", "fly", dir, "--config", config]);
+    expect(own.code, own.stderr).toBe(0);
+    expect(JSON.parse(await readFile(join(dir, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
+      settings: { repo: "acme/web" },
+      http: { publicUrl: "https://agent.acme.com" },
+    });
+    // Without --config, only the host's URL: the program's defaults, never what an earlier deploy delivered.
     const other = await agentWorkspace("fa-deploy-config-none-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
@@ -275,7 +290,9 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     expect((await runInProcess(["deploy", "fly", other, "--config", config])).code).toBe(0);
     const plain = await runInProcess(["deploy", "fly", other]);
     expect(plain.code, plain.stderr).toBe(0);
-    expect(JSON.parse(await readFile(join(other, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({});
+    expect(JSON.parse(await readFile(join(other, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
+      http: { publicUrl: expect.stringMatching(/\.fly\.dev$/) },
+    });
 
     const missing = await runInProcess(["deploy", "fly", dir, "--config", join(dirname(config), "absent.json")]);
     expect([missing.code, missing.stderr]).toEqual([1, expect.stringContaining("absent.json")]);

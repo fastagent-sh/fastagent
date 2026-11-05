@@ -1,5 +1,6 @@
 /** `fastagent deploy fly` — the Fly.io deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
+import { webhookKinds } from "../../channels/webhooks.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
@@ -29,6 +30,8 @@ export interface FlyPlanInput extends ContainerInput {
   secrets?: readonly DeploymentSecret[];
   /** `schedules/` declares a schedule — one of the things that forces a machine up (deploy/residency.ts). */
   hasCron: boolean;
+  /** The `http.publicUrl` the image delivers, where the platforms reach the box; default the app's own URL. */
+  publicUrl?: string;
 }
 
 export interface FlyPlan {
@@ -150,8 +153,23 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     );
   }
 
-  // The fastagent-only post-step: point each channel at the live URL.
-  const steps = webhookRunbook(`https://${appName}.fly.dev`, channels);
+  // The box points the channels its own credentials can at its `http.publicUrl`; only Slack's is a person's step.
+  const appUrl = `https://${appName}.fly.dev`;
+  const publicUrl = input.publicUrl ?? appUrl;
+  const own = webhookKinds(channels).filter((kind) => kind !== "slack");
+  const steps = [
+    ...(own.length > 0
+      ? [
+          `# The box points ${own.join(", ")} at ${publicUrl} itself, on every start; its /health says how each`,
+          `# one went (a step only a person can take, Lark's console where its config API answers 404, is in its log):`,
+          `curl -fsS ${appUrl}/health`,
+        ]
+      : []),
+    ...webhookRunbook(
+      publicUrl,
+      channels.filter((channel) => channel.name === "slack"),
+    ),
+  ];
   const post = steps.length > 0 ? [`# After deploy:`, ...steps] : [];
   if (post.length > 0) runbook.push(``, ...post);
 

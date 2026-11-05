@@ -10,6 +10,7 @@ import {
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
+import { boxReporting } from "./box-webhooks.ts";
 
 /** `railway volume list --json` as the CLI prints it: the whole project's volumes. */
 const volumes = (...vs: { serviceName: string | null; mountPath?: string; status?: string }[]) =>
@@ -44,6 +45,7 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   channels: [],
   intoLinked: false,
   forAgent: "fastagent deploy railway ../bot --into-linked --run --json",
+  deliverPublicUrl: async (url) => url,
   ...over,
 });
 
@@ -64,29 +66,39 @@ const run = (
     p,
     railway,
     () => {},
-    { telegram: tg },
+    {},
     healthy,
     async () => {},
+    boxReporting({ telegram: tg }),
   );
 
 describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () => {
-  it("fresh (unlinked): auth → init+add+volume → variables → up → domain → telegram webhook", async () => {
+  it("fresh (unlinked): auth → init+add+volume → variables → domain → up → telegram webhook", async () => {
     const { railway, cmds } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" }; // unlinked → create
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
+    const delivered: { url: string; before: string[] }[] = [];
     const out = await run(
       plan({
         channels: declaredChannels(["telegram"]),
         secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
+        deliverPublicUrl: async (url) => {
+          delivered.push({ url, before: cmds() });
+          return url;
+        },
       }),
       railway,
       tg,
     );
 
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
+    // Delivered before the upload builds the image that reads it.
+    expect(delivered).toEqual([
+      { url: "https://bot-production.up.railway.app", before: expect.not.arrayContaining(["up --ci --service bot"]) },
+    ]);
     expect(cmds()).toEqual([
       "whoami",
       "status --json",
@@ -98,8 +110,9 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "volume list --json",
       "volume add --mount-path /data",
       "volume list --json", // attached to `bot` and Ready before the deploy that needs it
-      "up --ci --service bot",
-      "domain --json --service bot", // bare `domain` only — NOT `domain list` (destructive on older CLIs)
+      // The domain before the upload, so the image delivers it as its http.publicUrl.
+      "domain --json --service bot",
+      "up --ci --service bot", // bare `domain` only — NOT `domain list` (destructive on older CLIs)
     ]);
     expect(tg).toHaveBeenCalledWith("https://bot-production.up.railway.app");
   });
@@ -155,12 +168,13 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       plan({ channels: declaredChannels(["telegram", "feishu"]) }),
       railway,
       () => {},
-      {
-        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
-        feishu: // telegram registration ends with the webhook NOT set
-          registerFeishu,
-      },
+      {},
       async () => true,
+      async () => {},
+      boxReporting({
+        telegram: vi.fn(async (): Promise<RegistrationOutcome> => "failed"), // the box's telegram webhook is NOT set
+        feishu: registerFeishu,
+      }),
     );
 
     // Exit 0 here would tell a coding agent "done" while the agent can't receive messages.
@@ -184,7 +198,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       plan({ secrets: { OPENAI_API_KEY: "sk", X_API_KEY: "x" } }),
       railway,
       (message) => logs.push(message),
-      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
+      {},
       async () => true,
     );
     expect(logs.join("\n")).toContain("2 secret(s): OPENAI_API_KEY, X_API_KEY");
@@ -333,7 +347,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       plan({ intoLinked: true }),
       railway,
       (m) => logs.push(m),
-      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
+      {},
       async () => true,
     );
     expect(logs.join("\n")).toMatch(/--into-linked.*isn't linked|creating a fresh/i);

@@ -153,6 +153,14 @@ await agent.close(); // closes the service, then releases the storage
 `http` server or `Bun.serve`; `close()` ends the API's event streams, gives the requests in flight 500 ms, then ends
 them and stops the channels and schedules.
 
+A webhook channel (Telegram, Feishu, Lark) is pointed at its platform by the instance itself. `listen` does it once the
+serve is ready, at the configuration's `http.publicUrl`. An app that mounts `fetch` on its own server calls
+`service.registerWebhooks()` once that server answers and the serve is ready, since a platform checks the URL as it is
+set; give it the public base, mount prefix included, if the configuration names none
+(`service.registerWebhooks("https://example.com/agent")`). It answers each channel's outcome, and
+`service.webhooks` keeps the last one. Slack's Request URL is the app's own setting: its outcome is `manual`, with the
+URL to set.
+
 ### Mounting `fetch` in your app
 
 `service.fetch` mounts wherever your host speaks `(Request) => Response`. On a host that speaks Node's `(req, res)`,

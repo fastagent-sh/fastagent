@@ -57,6 +57,9 @@ const CONTENT_ENTRY = union([
   }),
 ]);
 
+/** An absolute `https://` URL without a trailing slash, query or fragment: what `<publicUrl>/<path>` is built from. */
+const PUBLIC_URL_PATTERN = "^https://[^/?#\\s]+(/[^?#\\s]*[^/?#\\s])?$";
+
 /** The program's `settings` with no property required: an instance gives some of them, the program's defaults the rest. */
 function partial(settings: Schema): Schema {
   const { required: _required, ...rest } = settings as Record<string, unknown>;
@@ -72,6 +75,14 @@ function shape(settings: Schema | undefined) {
       obj({
         port: opt(int({ minimum: 0, maximum: 65535, description: "The port a serve listens on" })),
         api: opt(bool({ description: "Whether a serve answers the Agent API under /v1" })),
+        publicUrl: opt(
+          str({
+            description:
+              "The public base URL the platforms reach this instance at, any mount prefix included: the serve " +
+              "points each webhook channel there",
+            pattern: PUBLIC_URL_PATTERN,
+          }),
+        ),
       }),
     ),
     deploy: opt(
@@ -206,7 +217,7 @@ export async function projectInstanceConfig(dir: string): Promise<InstanceConfig
 export interface EffectiveConfig {
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
-  http?: { port?: number; api?: boolean };
+  http?: { port?: number; api?: boolean; publicUrl?: string };
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
   channels?: Readonly<Record<string, { ingress?: Ingress }>>;
   settings: Readonly<Record<string, unknown>>;

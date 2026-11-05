@@ -92,9 +92,13 @@ serves no API either way.
 
 ## Chat channels
 
-A deployment receives its chat channels by webhook: `--run` points each channel's app at the deployment's URL once
-it answers `/health` (Telegram, Slack apps `add slack` created, Feishu; Lark when its config API allows), and prints
-the steps it could not do.
+A deployment receives its chat channels by webhook. On Fly and Railway the box points Telegram, Feishu and Lark (when
+its config API allows) at its own URL on every start, with its own credentials: `deploy` delivers that URL as the
+configuration's `http.publicUrl` (Fly's `https://<app>.fly.dev`; Railway's domain, created before `railway up`) unless
+`--config` names one, a custom domain say, and `--run` reads what the box made of each one from its `/health`. Slack's
+Request URL, which no credential on the box can change, `--run` sets from this machine for an app `add slack`
+created. On AgentCore and Docker `--run` still points them itself once the deployment answers `/health`. Each run
+prints the steps it could not do.
 
 - **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
   `.secrets/production/.env`. Production never falls back to dev values. Put production provider keys and other
