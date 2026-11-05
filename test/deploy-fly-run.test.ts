@@ -354,6 +354,10 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
           // This machine's paths and the model (which rides the release manifest) never travel.
           PORT: "3000",
           FASTAGENT_STATE_DIR: "/Users/me/state",
+          // Where the instance is: the box's own, and its configuration the image's /etc/fastagent/.
+          FASTAGENT_CONFIG: "/Users/me/prod.json",
+          FASTAGENT_ROOT: "/Users/me/instance",
+          FASTAGENT_WORKDIR: "/Users/me/work",
           FASTAGENT_SECRETS_DIR: "/Users/me/secrets",
           FASTAGENT_MODEL: "openai/gpt-5",
           FASTAGENT_ENV_2: "stale",
