@@ -642,8 +642,9 @@ What `deploy` read values for becomes a name or configuration:
 - **A channel's shape** (webhook or connection) is configuration, `channels.<name>.ingress`, which `deploy` reads as
   the box will; unset, a deployment receives by webhook, since a host that scales to zero wakes on a request.
 - **Webhook registration** is the serving process's own, at the public URL its configuration names, for the
-  platforms whose app credentials can set it (Telegram, Feishu, Lark); Slack's Request URL is synced from a person's
-  machine, and `deploy` only compares ([channel-setup.md](channel-setup.md) §5).
+  platforms whose app credentials can set it (Telegram, Feishu, Lark); Slack's Request URL a person pastes once on
+  the app's page, and the instance confirms it from the platform's signed request ([channel-setup.md](channel-setup.md)
+  §5).
 - **A channel's platform app** is set up per instance by `fastagent channels setup <name>`, which writes its
   credentials to the target's store; `deploy` runs it for a target that lacks them ([channel-setup.md](channel-setup.md)
   §2). The check that a production Feishu or Lark app is not the development one runs at that setup, which holds both
