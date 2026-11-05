@@ -639,16 +639,18 @@ What `deploy` read values for becomes a name or configuration:
 - **The model** is configuration (`defaults.model`, a delivered `--config`); the release manifest records no model.
 - **The model's credential route** (a variable on the target, or a login on the box): whether the target has the
   provider's variable name.
-- **A channel's shape** (webhook or WebSocket) is configuration, `channels.<name>.ingress`, which `deploy` reads as
+- **A channel's shape** (webhook or connection) is configuration, `channels.<name>.ingress`, which `deploy` reads as
   the box will; unset, a deployment receives by webhook, since a host that scales to zero wakes on a request.
-- **Webhook registration** runs on the box, which holds the bot's token, through the host's shell (the one
-  `login --deployment` uses), with the URL `deploy` learned.
-- **A production Feishu or Lark app** that deploy creates is written to the target's store. The check that it is not
-  the development app runs then, the one time deploy holds both App IDs; an app set by hand is the operator's to keep
-  apart.
+- **Webhook registration** is the serving process's own, at the public URL its configuration names, for the
+  platforms whose app credentials can set it (Telegram, Feishu, Lark); Slack's Request URL is synced from a person's
+  machine, and `deploy` only compares ([channel-setup.md](channel-setup.md) §5).
+- **A channel's platform app** is set up per instance by `fastagent channels setup <name>`, which writes its
+  credentials to the target's store; `deploy` runs it for a target that lacks them ([channel-setup.md](channel-setup.md)
+  §2). The check that a production Feishu or Lark app is not the development one runs at that setup, which holds both
+  App IDs; an app set by hand is the operator's to keep apart.
 
-The production value file stays what local `start` reads and Docker's store: `add <channel> --env production` keeps
-writing there, and another host's values are set with `fastagent secrets`.
+The production value file stays what local `start` reads and Docker's store; another host's values are set with
+`fastagent secrets`.
 
 OAuth is created on the deployment itself and never carried: a model provider's login through
 `fastagent login --deployment`, an MCP server's grant by signing in against the deployed instance (§4.1; no automatic
