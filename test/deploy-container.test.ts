@@ -146,7 +146,8 @@ describe("deploy/container: shared Docker context", () => {
       expect(note()).not.toContain("survives restarts");
       process.env.FASTAGENT_RELEASE_FILE = values[0];
       expect(note()).toContain("Your directory survives restarts");
-      expect(note()).toContain("Each deployment replaces your directory with the author's release");
+      // The directory is the host's storage, which a new release keeps; the definition is the image's.
+      expect(note()).toContain("Your directory is this host's storage and survives deployments of a new version");
       // The definition is the release, read as built: the prompt must not invite an edit that is never read.
       expect(note()).toContain("is the author's release, read as it was built");
       expect(note()).not.toContain("write a skill");
@@ -157,7 +158,7 @@ describe("deploy/container: shared Docker context", () => {
       expect(note()).toContain("A tool you install yourself (apt-get, npm install -g) belongs to this machine");
       // The host whose storage a deploy RESETS says so, rather than the release replacing only the directory.
       process.env.FASTAGENT_AGENTCORE = "1";
-      expect(note()).not.toContain("Each deployment replaces your directory");
+      expect(note()).not.toContain("survives deployments of a new version");
       expect(note()).toContain("resets this host's storage entirely");
       expect(note()).toContain("is the author's release, read as it was built");
     } finally {

@@ -106,7 +106,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     `# Fly app names are GLOBALLY unique: if this fails as taken, set a unique "app" in fly.toml and`,
     `# re-run \`fastagent deploy fly\` — the runbook follows fly.toml's app name.`,
     `fly apps create ${appName}`,
-    `# The volume (definition, state, credentials — kept across stop/suspend/redeploy) is created by the deploy`,
+    `# The volume (the agent's working directory, state, credentials — kept across stop/suspend/redeploy) is created by the deploy`,
     `# below, in primary_region and sized by [mounts].initial_size. Creating it yourself first pins it to a host`,
     `# picked without the machine, which can fail the deploy with "insufficient resources … existing volume".`,
     ``,
@@ -135,7 +135,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   );
   runbook.push(
     ``,
-    `# The volume keeps .state and .secrets across restarts and deploys; each release replaces /data/definition.`,
+    `# The volume is the agent's working directory: it keeps its work, .state and .secrets across restarts and deploys.`,
     imageHasGit(input)
       ? `# Git is installed (the definition ships its .git, github content is cloned here, or context.json declares it in aptPackages).`
       : `# To give the agent git, declare it: fastagent env add apt:git`,

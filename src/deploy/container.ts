@@ -1,7 +1,7 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
 import { CONTENT_DIRNAME, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { RUNTIME_FLOOR } from "../runtime.ts";
-import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
+import { RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 import { MISE_ENVIRONMENT } from "../environment/mise.ts";
 import { BOX_CLI_PREDATES } from "./box-shell.ts";
 
@@ -38,10 +38,11 @@ export const IMAGE_DEFINITION_DIR = "/app/definition";
 
 /**
  * The shell command that runs `fastagent login --stdio <args>` inside a running generated image, as the server there
- * would see it: in the deployed agent directory, with the storage and credential paths resolved by the same defaults
+ * would see it: in the image's agent directory, with the storage and credential paths resolved by the same defaults
  * `prepareStartWorkspace` applies. A host's own shell does not reliably hand those over — its session may not start
  * in the server's directory, and the platform's variables are the only ones it inherits. `storage` names the root
- * outright for a shell that inherits none of them. The CLI is the one the server runs: the agent's own install when
+ * outright for a shell that inherits none of them; `program` is where the image has the agent, the generated one's
+ * by default. The CLI is the one the server runs: the agent's own install when
  * it has one (under Bun when the image is Bun's), else the pinned global.
  *
  * That own install may predate `login --stdio` (an agent pinned to an older release, deployed by a newer CLI). It then
@@ -49,8 +50,11 @@ export const IMAGE_DEFINITION_DIR = "/app/definition";
  * result line), so the command answers for it: one result line naming the mismatch, instead of a shell that ended
  * with nothing to say. No quote or backtick in it: hosts wrap this whole line in `sh -c '…'`.
  */
-export function boxLoginCommand(args: readonly string[], storage?: string): string {
-  for (const value of [...args, ...(storage ? [storage] : [])]) {
+export function boxLoginCommand(
+  args: readonly string[],
+  { storage, program = IMAGE_DEFINITION_DIR }: { storage?: string; program?: string } = {},
+): string {
+  for (const value of [...args, ...(storage ? [storage] : []), program]) {
     if (!/^[\w.@/-]+$/.test(value)) throw new Error(`cannot pass ${JSON.stringify(value)} to a shell on the box`);
   }
   return [
@@ -60,7 +64,7 @@ export function boxLoginCommand(args: readonly string[], storage?: string): stri
           `root="\${FASTAGENT_STORAGE_DIR:-${STORAGE_DIR}}"`,
           `export FASTAGENT_SECRETS_DIR="\${FASTAGENT_SECRETS_DIR:-$root/.secrets}"`,
         ]),
-    `cd "$root/${DEPLOYED_DEFINITION_DIR}" || exit 1`,
+    `cd "${program}" || exit 1`,
     `f=fastagent`,
     `if [ -x node_modules/.bin/fastagent ]; then f=node_modules/.bin/fastagent; if command -v bun >/dev/null; then f="bun run fastagent"; fi; fi`,
     `$f login --stdio ${args.join(" ")}`,

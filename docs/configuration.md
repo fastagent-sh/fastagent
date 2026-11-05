@@ -473,24 +473,23 @@ are in the project's `.fastagent/dev/` for `dev` and `.fastagent/start/` for `st
 in `<dir>/.state`; `--state <dir>` (`FASTAGENT_STATE_DIR`) and `--workdir <dir>` (`FASTAGENT_WORKDIR`) place either apart
 from it, a flag over its variable, and a variable over the default. The commands that open an instance or read its state
 take them: `dev`, `start`, `invoke`, `info` and `schedules`. A relative path resolves once, against the directory the
-command started in (on a deployed box, the deployed definition's directory, which `start` enters first), and a root or workdir that does not exist is created; one that cannot be (a file, a read-only parent) refuses. `--config <file>` (`FASTAGENT_CONFIG`) names
+command started in (in a generated image, its `WORKDIR`, `/app/definition`), and a root or workdir that does not exist is created; one that cannot be (a file, a read-only parent) refuses. `--config <file>` (`FASTAGENT_CONFIG`) names
 the [instance configuration](#instance-configuration) for `dev`, `start`, `invoke`, `info` and `schedules run`; `dev`
 and the others read the `fastagent.json` at the project root without it, and `start` reads none.
 
 What stays in the project for now: `.secrets/` (the `.env`, `auth.json`, MCP grants), whatever the root. They move into
 the instance with the deploy layout in a later release.
 
-Generated deployments keep the deployed definition at `<persistent-root>/definition/`, replaced by every release,
-with `.state/`, `.secrets/` and `content/` beside it; each release links its own `content/` to that one.
-The root is `/data` on Docker, Fly and Railway and `/mnt/data` on AgentCore (reset by every deploy — see
+Generated deployments run the definition where the image has it and make the persistent root the instance's root: the
+agent's working directory, with `.state/`, `.secrets/` and `content/` in it, kept across releases. The root is `/data`
+on Docker, Fly and Railway and `/mnt/data` on AgentCore (reset by every deploy — see
 [Deploy](deploy.md#aws-bedrock-agentcore)).
 
 For a manually configured service:
 
 ```bash
-ln -sfn /data/content content   # in the agent directory, before every start: a redeploy replaces the directory
 fastagent build   # `start` opens dist/
-FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
+FASTAGENT_ROOT=/data FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
 ```txt

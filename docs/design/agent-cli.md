@@ -178,7 +178,7 @@ works on  papers    a directory of this machine   stays here; the deployed agent
   clone goes with it, and preflight says what of the agent's work is lost.
 - **A local directory does not reach a host, and the deploy goes ahead without it** ([agent model](agent-model.md)
   §3): preflight names it, a warning for one the agent works on. The instance's `fastagent.json` stays out of the
-  image, so the host is never told of it. The agent directory does reach a host, as the definition each release replaces.
+  image, so the host is never told of it. The agent directory does reach a host, as the definition each release's image holds.
 - **A `github` entry's credential is `GITHUB_TOKEN` in `.secrets/production/.env`**, which travels with the other values;
   only a private repository, or an agent that pushes, needs it.
 

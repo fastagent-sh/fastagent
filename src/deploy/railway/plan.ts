@@ -109,7 +109,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   }
   runbook.push(
     ``,
-    `# The volume keeps .state and .secrets across restarts and deploys; each release replaces /data/definition.`,
+    `# The volume is the agent's working directory: it keeps its work, .state and .secrets across restarts and deploys.`,
     input.shipsGit
       ? `# Railway uploads may strip .git, so the deployed definition may have no history.`
       : imageHasGit(input)

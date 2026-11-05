@@ -1,25 +1,25 @@
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import { buildable } from "./cli-run.ts";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 
-// This test pays a project compile plus TWO cold harness starts in child processes: ~3s on an idle
-// machine, but a full `npm test` run puts a fork on every core and has been measured past the old 30s
-// ceiling. The budget is raised, not the parallelism (vitest.config.ts states why). The child ceiling
-// stays the tighter of the two so a hung child is reported as itself, not as an opaque test timeout.
+// This test pays a project compile plus a cold harness start in a child process: ~3s on an idle machine, but a full
+// `npm test` run puts a fork on every core and has been measured past the old 30s ceiling. The budget is raised, not
+// the parallelism (vitest.config.ts states why). The child ceiling stays the tighter of the two so a hung child is
+// reported as itself, not as an opaque test timeout.
 const CHILD_TIMEOUT_MS = 45_000;
 
-it("retries interrupted installs, opens the deployed agent's runtime and preserves tool context and rotated credentials", async () => {
+it("opens the image's program with the storage as the instance root, its credentials and the tool context kept", async () => {
   const repo = dirname(dirname(fileURLToPath(import.meta.url)));
   const dir = await mkdtemp(join(tmpdir(), "fa-deployment-start-"));
   const root = join(dir, "data"),
     agent = join(dir, "image", "definition"); // the image's baked definition
-  const packageDir = join(agent, "node_modules/@fastagent-sh/fastagent");
   const exec = promisify(execFile);
   let requests = 0;
   const server = createServer(async (req, res) => {
@@ -49,23 +49,23 @@ it("retries interrupted installs, opens the deployed agent's runtime and preserv
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as { port: number }).port;
   try {
-    await mkdir(packageDir, { recursive: true });
-    await exec(process.execPath, [
-      join(repo, "node_modules/typescript/bin/tsc"),
-      "-p",
-      join(repo, "tsconfig.build.json"),
-      "--outDir",
-      join(packageDir, "dist"),
-    ]);
-    await symlink(join(repo, "node_modules"), join(packageDir, "node_modules"), "dir");
-    await writeFile(
-      join(packageDir, "package.json"),
-      JSON.stringify({ name: "@fastagent-sh/fastagent", version: "0.0.0", type: "module", exports: "./dist/index.js" }),
-    );
-    await mkdir(join(agent, "node_modules/.bin"));
+    await mkdir(agent, { recursive: true });
+    await buildable(agent);
     // The packages the agent's own code imports, as its install would bring them.
     await symlink(join(repo, "node_modules/@earendil-works"), join(agent, "node_modules/@earendil-works"), "dir");
-    await writeFile(join(agent, "package.json"), '{"type":"module"}');
+    // The agent's own FastAgent, installed as a package (a link to the source would be read by the build as the
+    // project's own code): the one the image's CLI runs, and so the one its tools' `sessionIdOf` must be.
+    const installed = join(agent, "node_modules/@fastagent-sh/fastagent");
+    await rm(installed, { recursive: true });
+    await mkdir(installed, { recursive: true });
+    await writeFile(
+      join(installed, "package.json"),
+      '{"name":"@fastagent-sh/fastagent","type":"module","exports":"./index.js"}',
+    );
+    await writeFile(
+      join(installed, "index.js"),
+      `export * from ${JSON.stringify(pathToFileURL(join(repo, "src/index.ts")).href)};\n`,
+    );
     const baseUrl = `http://127.0.0.1:${port}/v1`;
     await writeFile(
       join(agent, "fastagent.config.ts"),
@@ -104,9 +104,7 @@ export default defineTool({
   }),
 });`,
     );
-    // What `deploy` does before the image: the box starts the build, which holds the definition's compiled code.
-    await symlink(join(repo, "node_modules/typescript"), join(agent, "node_modules/typescript"), "dir");
-    await symlink(join(repo, "node_modules/@typescript"), join(agent, "node_modules/@typescript"), "dir");
+    // What the image does: it builds the definition, and the box opens that build where the image has it.
     await buildProject(agent);
     const manifest = join(dir, "release.json");
     await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "reviewer" }));
@@ -122,62 +120,31 @@ export default defineTool({
       )
         delete env[key];
     }
-    const bin = join(dir, "bin");
-    const attempts = join(dir, "install-attempts");
-    await mkdir(bin);
-    await writeFile(
-      join(bin, "npm"),
-      `#!/bin/sh
-mkdir -p node_modules/.bin
-printf installed > node_modules/.bin/fastagent
-if [ -f "$INSTALL_ATTEMPTS" ]; then
-  printf 'retry\\n' >> "$INSTALL_ATTEMPTS"
-else
-  printf 'failed\\n' > "$INSTALL_ATTEMPTS"
-  echo 'injected install failure' >&2
-  exit 1
-fi
-`,
-      { mode: 0o755 },
-    );
     Object.assign(env, {
-      PATH: `${bin}:${env.PATH}`,
-      INSTALL_ATTEMPTS: attempts,
       FASTAGENT_RELEASE_FILE: manifest,
       FASTAGENT_STORAGE_DIR: root,
     });
-    const workspaceUrl = pathToFileURL(join(packageDir, "dist/deploy/workspace.js")).href;
-    const startUrl = pathToFileURL(join(packageDir, "dist/cli/commands/start.js")).href;
-    // Native Node resolution is essential: a test loader can deduplicate the two package installations.
+    const workspaceUrl = pathToFileURL(join(repo, "src/deploy/workspace.ts")).href;
+    const startUrl = pathToFileURL(join(repo, "src/cli/commands/start.ts")).href;
+    // A test machine has no mount to take: the storage is claimed as on a box, without the mount and the lease.
     const script = `
-import { mock } from "node:test";
-import { strict as assert } from "node:assert";
 const storage = await import(${JSON.stringify(`${workspaceUrl}?actual`)});
+const { mock } = await import("node:test");
 mock.module(${JSON.stringify(workspaceUrl)}, { namedExports: { ...storage,
-  prepareDeployment: (source, root, release) => storage.applyDeploymentRelease(source, root, release)
+  prepareDeployment: (root, release) => storage.claimDeploymentStorage(root, release)
 } });
 const { openStartService } = await import(${JSON.stringify(startUrl)});
-if (process.argv[1] === "fail") {
-  await assert.rejects(openStartService(${JSON.stringify(agent)}, { input: false }), /dependency install failed/);
-} else {
 const service = await openStartService(${JSON.stringify(agent)}, { input: false });
 try {
   const created = await service.agent.sessions.create();
   const end = await service.agent.messages.send({ sessionId: created.id, content: "Read my context" }, { wait: 60 });
   const page = await service.agent.sessions.entries(created.id);
-  // Where \`prepareStartWorkspace\` pointed the machinery: the storage, beside the replaced definition.
-  const { realpathSync } = await import("node:fs");
-  console.log(JSON.stringify({ sessionId: created.id, end, entries: page.data, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR, content: realpathSync("content") }));
+  console.log(JSON.stringify({ sessionId: created.id, end, entries: page.data, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR }));
 } finally {
   await service.close();
   await service.agent.close();
 }
-}
 `;
-    await exec(process.execPath, ["--experimental-test-module-mocks", "--input-type=module", "-e", script, "fail"], {
-      env,
-      timeout: CHILD_TIMEOUT_MS,
-    });
     const out = await exec(
       process.execPath,
       ["--experimental-test-module-mocks", "--input-type=module", "-e", script],
@@ -189,25 +156,23 @@ try {
       entries: { kind: string; data: unknown }[];
       state: string;
       mise: string;
-      content: string;
     };
-    // Every machinery dir lands on the storage, never in `definition/`, which each release replaces: a clone there
-    // would take the agent's unpushed work with it. content/ is the storage's, through the link the release carries.
+    // Every machinery dir lands on the storage, the instance's root: nothing of the instance is written into the image.
     expect(reported).toMatchObject({
       state: join(root, ".state"),
       // The tools the agent adds on the host: on the storage, so a new container still has them.
       mise: join(root, ".state", "mise"),
-      content: join(await realpath(root), "content"),
     });
     expect(reported.end).toMatchObject({ status: "completed" });
     const result = JSON.stringify(reported.entries.find((entry) => entry.kind === "tool_result")?.data ?? "");
     // The tool knows the session it runs in.
     expect(result).toContain(reported.sessionId);
-    // The tool's working directory is the deployed definition on the storage, not the image's copy.
-    expect(result).toContain(`\\"cwd\\":\\"${join(root, "definition")}\\"`);
+    // The tool's working directory is the storage, which every release keeps; the image holds only the program.
+    expect(result).toContain(`\\"cwd\\":\\"${root}\\"`);
+    expect(JSON.parse(await readFile(join(root, ".deployment", "applied.json"), "utf8"))).toMatchObject({ id: "one" });
+    await expect(readFile(join(root, "definition", "SYSTEM.md"))).rejects.toThrow(/ENOENT/);
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe(rotated);
     expect(requests).toBe(2);
-    expect(await readFile(attempts, "utf8")).toBe("failed\nretry\n");
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { readdirSync, readlinkSync } from "node:fs";
 import { once } from "node:events";
@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  applyDeploymentRelease,
   applyReleaseEnv,
+  claimDeploymentStorage,
   assertStorageMounted,
   leaseDeployment,
   parseDeploymentRelease,
@@ -19,16 +19,13 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 const release = (id: string): DeploymentRelease => ({ version: 1, id, agent: "fastagent" });
-/** The image's baked definition (`source`) and the host's storage (`root`). */
+/** The host's storage (`root`). */
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), "fa-deployed-storage-"));
   dirs.push(dir);
-  const source = join(dir, "image", "definition"),
-    root = join(dir, "data");
-  await mkdir(join(source, "skills"), { recursive: true });
-  await writeFile(join(source, "SYSTEM.md"), "release one");
-  await writeFile(join(source, "skills/old.md"), "old skill");
-  return { dir, source, root };
+  const root = join(dir, "data");
+  await mkdir(join(root, ".deployment"), { recursive: true });
+  return { dir, root };
 }
 
 // Deployed storage is Linux-only; these checks exercise the real kernel and util-linux flock.
@@ -104,93 +101,30 @@ describe.runIf(process.platform === "linux")("deployment lease", () => {
   });
 });
 
-describe("deployed storage lifecycle", () => {
-  it("keeps the definition across a restart, replaces it whole on a new release, and never touches state", async () => {
-    const { source, root } = await fixture();
-    const definition = await applyDeploymentRelease(source, root, release("one"));
-    expect(definition).toBe(join(root, "definition"));
-    // What the agent wrote into itself lasts until the next release, not past it.
-    await writeFile(join(definition, "SYSTEM.md"), "self improvement");
-    await writeFile(join(definition, "scratch.txt"), "written by a turn");
-    await symlink("SYSTEM.md", join(definition, "system-link"));
+describe("deployed storage", () => {
+  it("is claimed by its agent across releases, and nothing on it is touched", async () => {
+    const { root } = await fixture();
     for (const dir of [".state", ".secrets"]) await mkdir(join(root, dir));
     await writeFile(join(root, ".state/session.json"), "conversation");
     await writeFile(join(root, ".secrets/auth.json"), "rotated credential");
-    await applyDeploymentRelease(source, root, release("one")); // a restart of the same release
-    expect(await readFile(join(definition, "SYSTEM.md"), "utf8")).toBe("self improvement");
-    expect(await readFile(join(definition, "system-link"), "utf8")).toBe("self improvement");
-
-    await writeFile(join(source, "SYSTEM.md"), "release two");
-    await rm(join(source, "skills/old.md"));
-    await applyDeploymentRelease(source, root, release("two"));
-    expect(await readFile(join(definition, "SYSTEM.md"), "utf8")).toBe("release two");
-    expect(await readdir(join(definition, "skills"))).toEqual([]);
-    expect(await readdir(definition)).not.toContain("scratch.txt");
+    await writeFile(join(root, "work.md"), "the agent's work");
+    await claimDeploymentStorage(root, release("one"));
+    await claimDeploymentStorage(root, release("one")); // a restart of the same release
+    await claimDeploymentStorage(root, release("two"));
+    expect(JSON.parse(await readFile(join(root, ".deployment/applied.json"), "utf8"))).toEqual(release("two"));
     expect(await readFile(join(root, ".state/session.json"), "utf8")).toBe("conversation");
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe("rotated credential");
+    expect(await readFile(join(root, "work.md"), "utf8")).toBe("the agent's work");
   });
 
-  it("links each release's content/ to the storage's, which outlives every release", async () => {
-    const { source, root } = await fixture();
-    const definition = await applyDeploymentRelease(source, root, release("one"));
-    expect(await readlink(join(definition, "content"))).toBe(join("..", "content"));
-    await mkdir(join(definition, "content", "app"));
-    await writeFile(join(definition, "content", "app", "work.md"), "the agent's clone");
-    await writeFile(join(source, "SYSTEM.md"), "release two");
-    await applyDeploymentRelease(source, root, release("two"));
-    expect(await readFile(join(definition, "content", "app", "work.md"), "utf8")).toBe("the agent's clone");
-    expect(await readFile(join(root, "content", "app", "work.md"), "utf8")).toBe("the agent's clone");
-
-    // A release that holds content/ of its own would put the build machine's links and clones where the storage's go.
-    await mkdir(join(source, "content"));
-    await expect(applyDeploymentRelease(source, root, release("three"))).rejects.toThrow(
-      "the release holds content/, which a deploy keeps out of the image — rebuild it",
-    );
-  });
-
-  it("recovers an interrupted definition update, whichever step it stopped at", async () => {
-    for (const point of ["before-switch", "after-old-move", "after-new-move"]) {
-      const { source, root } = await fixture();
-      const definition = await applyDeploymentRelease(source, root, release("one"));
-      const meta = join(root, ".deployment");
-      await mkdir(join(meta, "staged"));
-      await writeFile(join(meta, "staged/SYSTEM.md"), "complete new definition");
-      await writeFile(join(meta, "pending.json"), JSON.stringify(release("two")));
-      if (point !== "before-switch") await rename(definition, join(meta, "previous"));
-      if (point === "after-new-move") await rename(join(meta, "staged"), definition);
-      await applyDeploymentRelease(source, root, release("two"));
-      expect(await readFile(join(definition, "SYSTEM.md"), "utf8"), point).toBe("complete new definition");
-      expect(await readdir(meta), point).toEqual(["applied.json"]);
-    }
-  });
-
-  it("refuses a definition it does not own, and storage an earlier FastAgent laid out", async () => {
-    const unowned = await fixture();
-    await mkdir(join(unowned.root, "definition"), { recursive: true });
-    await writeFile(join(unowned.root, "definition/precious"), "keep");
-    await expect(applyDeploymentRelease(unowned.source, unowned.root, release("one"))).rejects.toThrow(
-      "unowned definition",
-    );
-    expect(await readFile(join(unowned.root, "definition/precious"), "utf8")).toBe("keep");
-
-    // An earlier layout kept the agent's whole workspace in base/; this one would leave it behind unread.
-    const former = await fixture();
-    await mkdir(join(former.root, "base"), { recursive: true });
-    await writeFile(join(former.root, "base/work.txt"), "keep");
-    await expect(applyDeploymentRelease(former.source, former.root, release("one"))).rejects.toThrow(
-      /base holds a workspace from an earlier FastAgent/,
-    );
-    expect(await readFile(join(former.root, "base/work.txt"), "utf8")).toBe("keep");
-  });
-
-  it("refuses corrupt metadata and changing the selected agent", async () => {
-    const { source, root } = await fixture();
-    await applyDeploymentRelease(source, root, release("one"));
-    await expect(applyDeploymentRelease(source, root, { ...release("two"), agent: "other" })).rejects.toThrow(
-      "belongs to fastagent",
+  it("refuses another agent's storage, and corrupt metadata", async () => {
+    const { root } = await fixture();
+    await claimDeploymentStorage(root, release("one"));
+    await expect(claimDeploymentStorage(root, { ...release("two"), agent: "other" })).rejects.toThrow(
+      "deployment selects other, but this storage belongs to fastagent",
     );
     await writeFile(join(root, ".deployment/applied.json"), "broken");
-    await expect(applyDeploymentRelease(source, root, release("two"))).rejects.toThrow();
+    await expect(claimDeploymentStorage(root, release("two"))).rejects.toThrow();
     // The manifest's agent name is one path segment.
     expect(() => parseDeploymentRelease(JSON.stringify({ ...release("one"), agent: "../outside" }))).toThrow();
   });
@@ -199,7 +133,6 @@ describe("deployed storage lifecycle", () => {
 describe("storage boundary", () => {
   it("does not mistake a directory for a mounted volume", async () => {
     const { root } = await fixture();
-    await mkdir(root);
     await expect(assertStorageMounted(root)).rejects.toThrow();
   });
 });

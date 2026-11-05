@@ -24,7 +24,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(runbook(p)).toContain(
       "railway variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets\n",
     );
-    expect(runbook(p)).toContain("each release replaces /data/definition");
+    expect(runbook(p)).toContain("The volume is the agent's working directory: it keeps its work");
   });
 
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {

@@ -140,9 +140,8 @@ content/        # <working directory>/content (default <agent dir>/.fastagent/de
 A redeploy that replaces the agent wipes all three. Point each at durable storage (generated deployments do):
 
 ```bash
-ln -sfn /data/content content   # in the agent directory, before every start: a redeploy replaces the directory
 fastagent build   # `start` opens dist/
-FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
+FASTAGENT_ROOT=/data FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
 The storage lives under the state root. Set `FASTAGENT_SECRETS_DIR` too, or a rotated `auth.json` stays in the agent
