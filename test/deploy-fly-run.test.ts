@@ -382,6 +382,9 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     expect(deploymentSecrets(undefined, [optional], new Map(), ".env")).toEqual([
       { name: "SENTRY_DSN", hint: "optional, read by tools/report.ts" },
     ]);
+    expect(deploymentSecrets(undefined, [optional, required], new Map(), ".env")).toEqual([
+      { name: "SENTRY_DSN", hint: "required by channels/digest.ts" },
+    ]);
   });
 
   it("a declared name is REQUIRED: absent from the value file → missingSecrets, listed once", () => {

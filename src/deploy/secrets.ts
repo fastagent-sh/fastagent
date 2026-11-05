@@ -70,7 +70,11 @@ export function deploymentSecrets(
     if (!secrets.some((s) => s.name === name)) secrets.push({ name, hint });
   };
   if (isEnvKey(modelAuth)) add(modelAuth, "your model provider key");
-  for (const { name, declaredIn, description, optional } of dedupeSecrets(declared)) {
+  for (const { name } of dedupeSecrets(declared)) {
+    // Hinted by a declaration that requires it, when one does: a name some declaration requires is required.
+    const declarations = declared.filter((s) => s.name === name);
+    const { declaredIn, description, optional } =
+      declarations.find((s) => !s.optional) ?? (declarations[0] as DeclaredSecret);
     add(
       name,
       `${optional ? "optional, read by" : "required by"} ${declaredIn}${description ? `: ${description}` : ""}`,
