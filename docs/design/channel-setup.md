@@ -35,7 +35,9 @@ instance's state.
   names in `.secrets/.env.example`. It creates no app, writes no value and no instance configuration. Its flags
   `--env`, `--ingress`, `--config`, `--no-onboard` and `--replace-config` go. At a terminal it then runs
   `channels setup <channel>` for the **development** instance, so one command still leaves a working dev bot;
-  `--no-setup` skips that. A production instance is never set up through `add`.
+  `--no-setup` skips that. With no terminal, and with `--json`, it changes the program only and names
+  `fastagent channels setup <channel> --json` in its next steps: the person's part of a setup is that command's
+  ticket, never `add`'s. A production instance is never set up through `add`.
 - **`fastagent channels setup <name>` sets up one instance's app**, and is safe to run again: every run syncs.
   - It creates the app (Slack's manifest API, Feishu's scan-to-create, Lark's guided console, Telegram's BotFather by
     hand), or links an existing one (`--app <id> --team <id>` for Slack).
@@ -61,7 +63,7 @@ CLI), and **CI**.
 | | Receive, send, `setWebhook` | Bot token, secret token | **Instance**, registering itself (§5) |
 | Feishu | Create the app | Scan-to-create (device authorization); nothing is kept | Person |
 | | Receive, send; set the Request URL (v7 PATCH); check scopes | **App ID and App Secret**, the app's own | **Instance** |
-| | Capture the Verification Token | No read API; only the `url_verification` challenge | Person's machine, at setup, through a throwaway tunnel |
+| | Capture the Verification Token | No read API; only the `url_verification` challenge | Person's machine, at setup, through a throwaway tunnel, and only when the store has none |
 | | Tenant approval, version publish | The console only | Person (the instance reports `manual`) |
 | Lark | Create the app | Guided console, credentials pasted; nothing is kept | Person |
 | | Set the Request URL | The config API often answers 404 | Instance tries; on 404 it reports `manual` |
@@ -73,6 +75,11 @@ The Feishu Verification Token is captured at setup and not by the instance regis
 public and stable, so accepting the first challenge's token there would let anyone who posts a forged challenge first
 plant theirs; the throwaway tunnel's URL is random and lives for one capture.
 
+Capturing re-points the app's Request URL at the tunnel, so it must not run against an app that is serving: setup
+captures only when the instance's store has no Verification Token, and afterwards sets the Request URL to
+`http.publicUrl` when the configuration has one, or says that the instance re-points it when it next starts. A run
+that only re-syncs leaves the URL alone.
+
 ## 4. Where each record lives
 
 The Slack onboarding record (`<state root>/channels/slack/onboarding.json`) holds data with four different owners, and
@@ -82,10 +89,13 @@ machine, describes a production instance from a laptop, and once lost leaves no 
 
 | Data | Nature | Lives in |
 |---|---|---|
-| Which app: Slack `appId`, `teamId`, and the digest of the manifest last synced | The instance's binding; not secret; must survive a state reset; shared by everyone who operates the instance | **Instance configuration**: `channels.slack.app: { id, team, manifest }`, delivered with `--config` (Slack CLI's `apps.json`) |
+| Which app: Slack `appId`, `teamId`, and the digest of the manifest last synced | The instance's binding; not secret; must survive a state reset; shared by everyone who operates the instance | **Instance configuration**: `channels.<name>.app: { id, team, manifest }`, delivered with `--config` (Slack CLI's `apps.json`) |
 | Slack signing secret and bot token; Feishu and Lark App ID, App Secret, Verification Token, Encrypt Key; Telegram bot and secret tokens | Runtime credentials | **The instance's store** (agent-artifact.md §6.2) |
 | Slack configuration token, its refresh token and expiry | A person's developer credential for one workspace; one holder; never on a box | **The person's credential store**: `~/.fastagent/.secrets/slack.json`, by team ID, owner-only (beside the machine's model credentials, `~/.fastagent/.secrets/auth.json`) |
 | Slack client ID and secret, `createAttemptedAt`, `installedAt` | What setup needs to install again and to resume | The person's credential store, by app ID |
+
+`channels.<name>.app` is Slack's only: `id` is the app ID, `team` the workspace's team ID, and `manifest` the digest of
+the manifest last synced; the configuration refuses it on a channel that is not a Slack one.
 
 Feishu, Lark and Telegram keep nothing on the person's machine: creation leaves no developer credential, and the
 App ID and Secret are the instance's. The Feishu App ID is not secret, but it stays in the store, read with the
@@ -113,9 +123,11 @@ A development agent on a laptop can read `~/.fastagent/.secrets/`, as it can `~/
 ## 5. Keeping the platform pointed at the instance
 
 **Telegram, Feishu and Lark: the instance registers itself.** Once it listens, the serving process points each webhook
-channel at its public URL, reading first (`getWebhookInfo`; Feishu's current configuration) and writing only what
-differs. Frameworks do the same at startup (python-telegram-bot's `run_webhook`). A restart repairs a URL that drifted,
-and `dev --tunnel` already works this way, so dev and production share the path.
+channel at its public URL, and sets it on every start rather than reading it first: Telegram's `getWebhookInfo` does
+not return the `secret_token`, so a rotated secret behind an unchanged URL would read as nothing to do and every update
+would then be refused; Feishu's v7 configuration route accepts only a PATCH. Both calls are idempotent. Frameworks do
+the same at startup (python-telegram-bot's `run_webhook`). A restart repairs a URL or secret that drifted, and
+`dev --tunnel` already works this way, so dev and production share the path.
 
 - **The public URL is an explicit input, never inferred** from the environment, because the same package runs
   embedded under a prefix (`https://x.fly.dev/agent`) and on laptops holding production credentials, where a guessed
@@ -136,7 +148,7 @@ and `dev --tunnel` already works this way, so dev and production share the path.
 bot token cannot change.
 
 - `channels setup slack` builds the manifest from the program (the channel's scopes and events) and the instance (the
-  app's name, `http.publicUrl`), syncs it with the configuration token, and records its digest in the binding.
+  app's name, `http.publicUrl`), syncs it with the configuration token, and records its digest in the binding (`channels.<name>.app.manifest`).
 - Before overwriting, it compares the manifest on Slack with the one it last synced; a change made in the Slack console
   is asked about at a terminal, handed to the person with `--json`, and stops otherwise (Slack CLI asks the same).
 - `deploy`, CI included, computes the manifest this deployment needs and compares it with the recorded digest. Equal,
@@ -187,7 +199,8 @@ through hooks, and its login is its own.
 
 ## 10. Delivery
 
-1. The SPEC change: `http.publicUrl`, `service.registerWebhooks()` and its outcome.
+1. The SPEC change: `http.publicUrl`, `InstanceConfig.channels.<name>.app`, `service.registerWebhooks()` and its
+   outcome.
 2. The instance registering itself (Telegram, Feishu, Lark), the URL sources, `/health`'s outcome.
 3. `channels setup` and `add` changing only the program; Feishu production-app creation out of `deploy`; the Slack
    records moved (§4); `fastagent.json` in the scaffold's `.gitignore`.
