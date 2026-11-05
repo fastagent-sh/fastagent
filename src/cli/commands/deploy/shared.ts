@@ -29,6 +29,8 @@ export interface DeployOptions {
   tunnel?: boolean;
   force?: boolean;
   intoLinked?: boolean;
+  /** `--config <file>`: the instance configuration the deployment delivers. */
+  config?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;
   /** `--json`: a coding agent's `--run`, run in a ticket that hands each step only a person can take to its user. */
@@ -164,7 +166,11 @@ export async function planArtifacts(
   for (const a of artifacts) {
     const abs = join(target, a.path);
     // Pure build output, not operator-owned configuration. It must track the generated template/runbook.
-    if (BUILD_OUTPUTS.includes(basename(a.path)) || options.alwaysWrite?.includes(a.path)) {
+    if (
+      BUILD_OUTPUTS.includes(a.path) ||
+      BUILD_OUTPUTS.includes(basename(a.path)) ||
+      options.alwaysWrite?.includes(a.path)
+    ) {
       write(a.path, abs, a.content);
       continue;
     }

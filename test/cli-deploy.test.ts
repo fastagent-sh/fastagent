@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/container.ts";
 import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
@@ -200,6 +200,66 @@ describe("cli: deploy", () => {
     const rejected = await runInProcess(["deploy", "fly", legacy]);
     expect(rejected.code).toBe(1);
     expect(rejected.stderr).toMatch(/unknown key "agentDir"/);
+  });
+
+  it("deploy --config delivers the instance configuration into the image's /etc/fastagent/, and decides with it", async () => {
+    const dir = await agentWorkspace("fa-deploy-config-", {
+      "fastagent.config.ts": `import { obj, str } from "@earendil-works/pi-schema";
+export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    await mkdir(join(dir, "node_modules", "@earendil-works"), { recursive: true });
+    const { symlink } = await import("node:fs/promises");
+    await symlink(
+      new URL("../node_modules/@earendil-works/pi-schema", import.meta.url).pathname,
+      join(dir, "node_modules", "@earendil-works", "pi-schema"),
+      "dir",
+    );
+    // A required setting no default gives: the program alone does not deploy, as the box would not start.
+    const bare = await runInProcess(["deploy", "fly", dir]);
+    expect([bare.code, bare.stderr]).toEqual([1, expect.stringContaining("/repo missing")]);
+
+    const config = join(await mkdtemp(join(tmpdir(), "fa-deploy-config-file-")), "production.json");
+    await writeFile(config, JSON.stringify({ settings: { repo: "acme/api" }, http: { api: false } }));
+    const delivered = await runInProcess(["deploy", "fly", dir, "--config", config]);
+    expect(delivered.code, delivered.stderr).toBe(0);
+    // The configuration decides the deployment's own choices: here, no Agent API key.
+    expect(delivered.stderr).toMatch(/Agent API: not served/);
+    const manifest = JSON.parse(await readFile(join(dir, "fastagent.release.json"), "utf8"));
+    // In a directory of its own, apart from the program's, which the image copies to /etc/fastagent/ and names.
+    expect(manifest.config).toBeUndefined();
+    const dockerfile = await readFile(join(dir, "Dockerfile"), "utf8");
+    expect(dockerfile).toContain(
+      "COPY fastagent.deploy/ /etc/fastagent/\nENV FASTAGENT_CONFIG=/etc/fastagent/fastagent.json",
+    );
+    expect(JSON.parse(await readFile(join(dir, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
+      settings: { repo: "acme/api" },
+      http: { api: false },
+    });
+    // The project's own development configuration stays out of the image.
+    const ignore = await readFile(join(dir, ".dockerignore"), "utf8");
+    expect(ignore).toMatch(/^\/fastagent\.json$/m);
+    const { default: ignoreMatcher } = await import("ignore");
+    expect(ignoreMatcher().add(ignore).ignores("fastagent.deploy/fastagent.json")).toBe(false);
+
+    // Every deploy writes it again, whoever wrote it before: a build output, never a file kept as the author's.
+    await writeFile(config, JSON.stringify({ settings: { repo: "acme/web" } }));
+    const again = await runInProcess(["deploy", "fly", dir, "--config", config]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(JSON.parse(await readFile(join(dir, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
+      settings: { repo: "acme/web" },
+    });
+    // Without --config, none: the program's defaults, never what an earlier deploy delivered.
+    const other = await agentWorkspace("fa-deploy-config-none-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    await writeFile(config, JSON.stringify({ thinkingLevel: "high" }));
+    expect((await runInProcess(["deploy", "fly", other, "--config", config])).code).toBe(0);
+    const plain = await runInProcess(["deploy", "fly", other]);
+    expect(plain.code, plain.stderr).toBe(0);
+    expect(JSON.parse(await readFile(join(other, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({});
+
+    const missing = await runInProcess(["deploy", "fly", dir, "--config", join(dirname(config), "absent.json")]);
+    expect([missing.code, missing.stderr]).toEqual([1, expect.stringContaining("absent.json")]);
   });
 
   it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {

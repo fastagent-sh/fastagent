@@ -129,6 +129,7 @@ describe("deploy/fly: planFlyDeploy", () => {
       ".dockerignore",
       "Dockerfile",
       "Dockerfile.dockerignore",
+      "fastagent.deploy/fastagent.json",
       "fastagent.packages",
       "fastagent.release.json",
       "fly.toml",

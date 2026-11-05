@@ -104,7 +104,7 @@ describe("deploy/container: shared Docker context", () => {
   it("records a value-file model in the release manifest, and nothing when the config named it", () => {
     // The carrier is the manifest, not the Dockerfile: every host writes it unconditionally (`alwaysWrite`), it is
     // rewritten by every deploy so it cannot go stale, and nothing on the way in can interpolate a shell.
-    const manifest = (i: typeof input & { modelSpec?: string }) =>
+    const manifest = (i: typeof input & { modelSpec?: string; config?: string }) =>
       JSON.parse(containerArtifacts(i).find((a) => a.path.endsWith("fastagent.release.json"))!.content);
     expect(manifest({ ...input, modelSpec: "baseten/zai-org/GLM-5.3" })).toEqual({
       version: 1,
@@ -113,6 +113,18 @@ describe("deploy/container: shared Docker context", () => {
       model: "baseten/zai-org/GLM-5.3",
     });
     expect(manifest(input).model).toBeUndefined();
+    // A delivered configuration is a directory of its own, which the image copies and names; the manifest says nothing
+    // of it. Without one it is `{}`, so one an earlier deploy delivered never ships again.
+    const file = (i: typeof input & { config?: string }) =>
+      containerArtifacts(i).find((a) => a.path === "fastagent.deploy/fastagent.json")?.content;
+    expect(file({ ...input, config: '{"thinkingLevel":"high"}' })).toBe('{"thinkingLevel":"high"}');
+    expect(file(input)).toBe("{}\n");
+    expect(manifest({ ...input, config: "{}" }).config).toBeUndefined();
+    const generated = containerArtifacts(input).find((a) => a.path === "Dockerfile")!.content;
+    // After the build, so a change of configuration builds nothing again.
+    expect(generated.indexOf("COPY fastagent.deploy/ /etc/fastagent/")).toBeGreaterThan(
+      generated.indexOf("fastagent build"),
+    );
     // It is NOT in the image's instructions — a credential could never ride this carrier, and neither does this.
     const dockerfile = containerArtifacts({ ...input, modelSpec: "openai/gpt-4o-mini" }).find(
       (a) => a.path === "Dockerfile",

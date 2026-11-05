@@ -59,15 +59,14 @@ A command that only reads the shape of the definition (`models`, `login`) builds
 
 An instance sets its own values over the defaults in a `fastagent.json`: `model`, `thinkingLevel`, `http`, `deploy`
 and `settings` (the program's `settings`, partly: the defaults give the rest). Objects merge key by key and arrays
-replace. `fastagent dev` reads the `fastagent.json` at the project root when there is one; `fastagent start` reads none
-yet and runs on the defaults; an app gives `openAgent` a `config` object, or the absolute path of such a file. An
+replace. `fastagent dev` reads the `fastagent.json` at the project root when there is one; `fastagent start` and
+`fastagent deploy` read only the one `--config` names, and otherwise run on the defaults; an app gives `openAgent` a `config` object, or the absolute path of such a file. An
 unknown key, a value of the wrong type and a required setting no one gave each refuse the open, naming the file and the
-path (`fastagent.json: /http/port expected <= 65535`). `content`, `instructions`, `skills` and `prompts` are in the
-design but not read by this release, and are refused by name.
+path (`fastagent.json: /http/port expected <= 65535`). Its `content` adds to the program's ([Content](#content)).
+`instructions`, `skills` and `prompts` are in the design but not read by this release, and are refused by name.
 
-Until `--config` exists, `start` and `deploy` open a program on its defaults alone, so a program whose `settings` has a
-required key with no default cannot be started or deployed yet: it opens with `dev` (its `fastagent.json`) or
-`openAgent` (its `config`). Give every setting a default in `defaults.settings` to start it.
+A program whose `settings` has a required key with no default starts and deploys only with a configuration that gives
+it: `start --config <file>`, `deploy --config <file>`.
 
 `fastagent build` writes the JSON Schema of this file, with the program's `settings` in it, as `fastagent.schema.json`
 beside the package. Point an editor at it with `"$schema": "./node_modules/<package>/fastagent.schema.json"`.
@@ -245,10 +244,11 @@ already-bound directory need no restart: the agent sees them when its tools next
 
 A deployed host links its
 `content/` to its storage, so each repository is a clone there, made and kept up to date the same way, and outlives
-each release ([deploy](deploy.md#before-you-deploy)). What `fastagent.json` adds, a directory or a repository, stays
-here for now: the deployed agent works without it, and `deploy` says so by name. To give a host what the agent only
-reads there, copy it into the agent directory, which every release ships; to have the agent work on it from a host,
-declare the repository in `context.json` (`fastagent content add --program github:owner/repo`).
+each release ([deploy](deploy.md#before-you-deploy)). The project's own `fastagent.json` is the development
+instance's and stays here; a deployment's repositories come from `context.json` and the configuration `deploy --config`
+delivers. A directory of this machine never reaches a host: `deploy` refuses one in the delivered configuration. To give
+a host what the agent only reads there, copy it into the agent directory, which every release ships; to have the agent
+work on it from a host, declare it as a repository.
 
 ## The system prompt
 

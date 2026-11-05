@@ -269,8 +269,8 @@ Default locations:
 | `fastagent dev` in a project | `fastagent.json` and `.mcp.json` at the project root, when present | `.fastagent/dev/` |
 | `fastagent start` and `npm start` in a project (opens the project's `dist/`) | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | `.fastagent/start/` in the project |
 | The package's `bin` (`npx @acme/reviewer`) | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | None: `--root` or `FASTAGENT_ROOT` is required |
-| Docker, Fly, Railway | `/etc/<name>/`, baked into a derived image or mounted | `/data/`, the volume |
-| AgentCore | `/etc/<name>/`, baked into a derived image | `/mnt/data/`, SessionStorage, reset on every deploy |
+| Docker, Fly, Railway | `/etc/fastagent/`, what `deploy --config` delivers in the image; otherwise the program's defaults | `/data/`, the volume |
+| AgentCore | `/etc/fastagent/`, what `deploy --config` delivers in the image; otherwise the program's defaults | `/mnt/data/`, SessionStorage, reset on every deploy |
 | Embedding | The `config` object; otherwise the program's defaults | None: `root`, or `stateDir` and `workdir`, are required |
 
 `<name>` is the instance name (§4.5). A host's instance root is `/data` (AgentCore's SessionStorage must mount at
@@ -415,13 +415,13 @@ instance's own instructions, skills and prompt templates. `instructions` names f
 `skills` and `prompts` name directories. All are relative to `fastagent.json`, and only what is declared loads: a file
 the agent writes elsewhere in its workspace never becomes a capability. Where the configuration directory is the
 writable instance root (a local instance, §4.6), the person and the agent can add to these directories, taking effect
-at the next open (§7); deployed, they ship in the read-only configuration (`/etc/<name>/skills/`). A directory that
+at the next open (§7); deployed, they ship in the read-only configuration (`/etc/fastagent/skills/`). A directory that
 resolves to, or inside, text the program loads (its `SYSTEM.md`, `AGENTS.md`, `skills/` or `prompts/`), and an
 `instructions` file that is one of them, is a configuration error reported at open: it would load the program's text
 twice. Other paths are allowed wherever they are. In a development project the program is the source project, so the
 root's `AGENTS.md`, `skills/` and `prompts/` are the program's and the example above is refused there; a development
 instance declares paths of its own, such as `./dev/AGENTS.md` and `./dev/skills`, which the build does not package
-(§3.4). The example is an instance configuration directory of its own (`/etc/<name>/`, a Kage folder, §4.6). `content add` writes this file by default: the
+(§3.4). The example is an instance configuration directory of its own (a deployment's `/etc/fastagent/`, a Kage folder, §4.6). `content add` writes this file by default: the
 development instance's at the project root, or the one `--config <file>` names; `--program` targets the program's `context.json` instead (§3.3). `.mcp.json` stays a file of its own because it is the ecosystem's format: entries copy from any
 server's documentation, and Claude Code working in the same directory reads the same servers, which is intended.
 
@@ -553,7 +553,7 @@ list is part of the assembly that `info` reports.
 | Part | Lifecycle | In the cloud |
 |---|---|---|
 | Program | Per version | The image, read-only |
-| Configuration | Per deployment | Delivered with the deployment, read-only: baked into a derived image or mounted; both are supported |
+| Configuration | Per deployment | Delivered with the deployment in the image, read-only: `/etc/fastagent/` |
 | Secrets | Per deployment, rotatable | The platform's secret storage |
 | State | Durable | `/data/.state/` on a volume, or managed storage; AgentCore: `/mnt/data/.state/`, reset on every deploy |
 | Workspace | Rebuildable | `/data/` on a volume or a disposable disk (AgentCore: `/mnt/data/`); acquired again from content declarations at start |
@@ -561,9 +561,9 @@ list is part of the assembly that `info` reports.
 A container instance:
 
 ```text
-/app/                     the image: the program, read-only
-/etc/<name>/              configuration, read-only (derived-image layer or mount)
-  fastagent.json  .mcp.json  AGENTS.md  skills/  prompts/
+/app/definition/          the image: the program, read-only, with its build in dist/ and the release manifest
+/etc/fastagent/           configuration, read-only, delivered with the release: FASTAGENT_CONFIG names its fastagent.json
+  fastagent.json  (.mcp.json  AGENTS.md  skills/  prompts/, when an instance adds them)
 /data/                    the volume, FASTAGENT_ROOT: the agent's cwd (/mnt/data/ on AgentCore)
   .state/
   content/<entry>/
@@ -577,7 +577,17 @@ and a volume holds only state and work.
 The volume keeps the path generated deployments have always used, `/data` (`/mnt/data` on AgentCore). The filesystem
 hierarchy's `/var/lib/<name>/` would separate several agents on one machine, but every host here runs one agent per
 app (Fly, Railway, AgentCore) or per Compose project, whose volume is the project's own: a name in the path would buy no
-separation and would move every deployed app's mount. `HOME` stays the user's home (§5's base environment), so files
+separation and would move every deployed app's mount.
+
+The configuration rides in the image the deploy builds, in the filesystem hierarchy's place for it: `deploy --config
+<file>` writes it into `fastagent.deploy/` in the build context, a build output like the release manifest, and the
+generated Dockerfile copies that directory to `/etc/fastagent/` after the build (a change of configuration builds nothing
+again) and names it with `FASTAGENT_CONFIG`. Without `--config` the directory holds `{}`: the program's defaults. Every
+host carries it the same way, AgentCore included. It is a directory of its own, never a file in the program's, because
+what an instance configuration names beside it (its `.mcp.json`, its instructions, skills and prompt templates) is read
+from its own directory. It carries no name, as `/data` does not: an image holds one agent. A mounted configuration (a
+ConfigMap) is the same directory placed by the host instead, named with `FASTAGENT_CONFIG`.
+`HOME` stays the user's home (§5's base environment), so files
 such as `~/.gitconfig` do not land in the instance root.
 
 Configuration on a writable volume would make the deployment and the agent compete for it, the problem #605 describes.
@@ -671,7 +681,7 @@ Recorded, not solved here:
 | Deploy copies and replaces the author directory | Deploys the artifact plus delivered configuration; state preserved |
 | `.secrets/<env>/.env` carries instance settings | `fastagent.json` carries settings; env files carry secrets |
 | `config.model`, `http`, `deploy` read as fixed values | Read as program defaults under instance overrides |
-| Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | `/etc/<name>/` for configuration and `/data/` as the instance root, the agent's cwd (`/mnt/data/` on AgentCore); the definition stays in the image |
+| Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | The configuration delivered in the image's `/etc/fastagent/` and `/data/` as the instance root, the agent's cwd (`/mnt/data/` on AgentCore); the definition stays in the image |
 | `needs()` and MCP references read `{ ...process.env, ...values }` at open | Secrets are an input: the CLI's environment and `--env-file`, or `openAgent`'s `secrets` |
 | `modelsOver` resolves a provider's variable as `environment[name] \|\| process.env[name]` | The model's auth reads only the `secrets` input |
 
@@ -690,7 +700,7 @@ boundary experiments, not a supported format.
 2. **Inputs.** The four-input contract with the instance root, `fastagent.json`, one resolver for API objects and
    files, the configuration shape of §3.2, the default locations and the scaffold's npm scripts; `context.local.json`
    removed.
-3. **Deployment.** Derived from the same artifact with delivered configuration under `/etc/<name>/` and the instance
+3. **Deployment.** Derived from the same artifact with delivered configuration in the image's `/etc/fastagent/` and the instance
    root at `/data/` (`/mnt/data/` on AgentCore); secret modes A and B, missing-value guidance, AgentCore through Secrets Manager.
 4. **Instance additions.** Content and `.mcp.json` entries, text additions, the reopen boundary.
 5. Any public [SPEC](../SPEC.md) change is reviewed on its own.
