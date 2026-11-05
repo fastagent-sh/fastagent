@@ -140,12 +140,20 @@ the instance confirms it.**
   credential. A signature or token proves who sent a request, not where it was sent (Slack signs
   `v0:timestamp:body`), so the address comes from the request's host and forwarding headers; one addressed elsewhere
   (an old domain still routed here) proves nothing and is warned of, and one with no known address counts as none.
+  The comparison is the scheme, the host and the channel's own path; a mount prefix is `http.publicUrl`'s, since an
+  embedding app's router may strip it before `service.fetch` sees the request.
   AgentCore's forwarder passes the original host along (2b).
 - At a terminal, `deploy` waits for that outcome, then writes the verified URL into the binding
   (`channels.<name>.app.url`) in the configuration `--config` names. Every later deploy, CI included, delivers it, and
   an instance whose `http.publicUrl` gives the same URL reports `registered` from the start: across AgentCore's
   state reset on every deploy, and across Lark's 404 on every start. A different URL is `manual` again, truthfully.
   The record is of the moment it was verified: a person who later changes the platform's page changes it too.
+- Without a terminal deploy, a CI-only deployment records it with `fastagent channels setup <name> --config <file>
+  --record-url`, run anywhere after the person has saved the page: it reads the deployment's `/health`, and once the
+  channel is `registered` writes the URL into the binding for the person to commit; the `manual` step names that
+  command beside the page. Until it is recorded, a host that keeps its state (Fly, Railway, Docker) reports
+  `registered` from the evidence once a request has come; AgentCore, which resets its state on every deploy, reports
+  `manual` until the first request after each deploy.
 - Where the URL is known before the app is created (Fly, Railway), setup puts it in the Slack manifest link, so the
   page holds it already and the person clicks Retry once the instance serves, instead of pasting. *To verify:*
   whether Slack creates an app whose Request URL has not answered yet.
@@ -169,13 +177,13 @@ trying the webhook path locally.
 |---|---|---|
 | Telegram | Create the bot, paste its token | Nothing: the instance sets the webhook |
 | Feishu | Scan to create; approve and publish where the tenant reviews scopes | Nothing: the instance sets the Request URL |
-| Lark | Create in the console, paste the credentials; on a 404, paste the URL on the app page after the first deploy | Nothing: the API sets it, or the recorded URL says it is set |
-| Slack | Create from the manifest link and install, paste the credentials; paste the URL on the app page after the first deploy | Nothing while the URL is unchanged: the recorded URL says it is set |
+| Lark | Create in the console, paste the credentials; on a 404, paste the URL on the app page after the first deploy, and record it as Slack's | Nothing: the API sets it, or the recorded URL says it is set |
+| Slack | Create from the manifest link and install, paste the credentials; paste the URL on the app page after the first deploy, and record it (a terminal `deploy` does; otherwise `--record-url`) | Nothing while the URL is unchanged: the recorded URL says it is set |
 
 | Host | Way of receiving by default | Public URL |
 |---|---|---|
 | `dev` | `connection` | None needed; `--tunnel` for the webhook path |
-| Docker, `--tunnel` (to try, or to reproduce a deployment) | `webhook` | The Quick Tunnel's, new on every start |
+| Docker, `--tunnel` (to try, or to reproduce a deployment) | `webhook` | The Quick Tunnel's, new on every start: Slack, and Lark on a 404, need the URL pasted on every start; a named tunnel with `http.publicUrl`, or `connection`, avoids it |
 | Docker, own ingress | `webhook`, or `connection` set in the configuration | `http.publicUrl` |
 | Fly, Railway | `webhook` | Written by `deploy` |
 | AgentCore | `webhook` only | The forwarder's |
