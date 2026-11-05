@@ -33,12 +33,6 @@ const AGENT_SCOPE_LIST = FEISHU_AGENT_SCOPES.map((entry) => entry.request).join(
 const FEISHU_PERMISSION_STEP =
   `before publishing: the app needs ${AGENT_SCOPE_LIST} — \`add feishu\` requests them with the app and names any ` +
   "your tenant withheld (approve those, then publish)";
-/** The setting both clouds read, said the same way in `.env.example` and in `add`'s next steps. */
-const ingressEnv = (prefix: "FEISHU" | "LARK"): ChannelEnv => ({
-  name: `${prefix}_INGRESS`,
-  hint: "webhook | websocket — unset, `dev` connects by websocket, and `start` and every deployment receive by webhook",
-  required: false,
-});
 const LARK_PERMISSION_STEP =
   `before publishing: add ${AGENT_SCOPE_LIST} — \`add lark\` checks them and opens the permission page for any that ` +
   "are missing";
@@ -96,7 +90,6 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
         hint: "webhook only; optional but recommended — set one in the console and copy it here",
         required: false,
       },
-      ingressEnv("FEISHU"),
     ],
     steps: [
       FEISHU_PERMISSION_STEP,
@@ -121,7 +114,6 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
         hint: "webhook only; optional but recommended — set one in the console and copy it here",
         required: false,
       },
-      ingressEnv("LARK"),
     ],
     steps: [
       "finish the console setup: enable Bot and add the required permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
@@ -136,19 +128,16 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
 /** The channel kinds `fastagent add <kind>` can scaffold. */
 export const CHANNEL_KINDS = Object.keys(CHANNEL_SCAFFOLDS) as ChannelKind[];
 
-/** Local setup never changes the production app or ingress. */
-const deploymentStep = (kind: "feishu" | "lark", pinned: boolean): string =>
-  pinned
-    ? `run \`{serve}\` (no tunnel needed: it connects by WebSocket); ${kind.toUpperCase()}_INGRESS=websocket is ` +
-      "set for this environment; production has its own app and ingress setting"
-    : "run `{serve}` (no tunnel needed: it connects by WebSocket); " +
-      "`deploy --run` creates a separate production app for webhook";
+/** Local setup never changes the production app or how a deployment receives. */
+const DEPLOYMENT_STEP =
+  "run `{serve}` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and " +
+  "`deploy --run` creates a separate production app for it";
 
-const websocketSetup = (kind: "feishu" | "lark", pinned: boolean): ChannelScaffold => {
+const websocketSetup = (kind: "feishu" | "lark"): ChannelScaffold => {
   const prefix = kind.toUpperCase();
   return {
     env: CHANNEL_SCAFFOLDS[kind].env.filter((entry) =>
-      [`${prefix}_APP_ID`, `${prefix}_APP_SECRET`, `${prefix}_INGRESS`].includes(entry.name),
+      [`${prefix}_APP_ID`, `${prefix}_APP_SECRET`].includes(entry.name),
     ),
     steps: [
       kind === "feishu" ? FEISHU_PERMISSION_STEP : LARK_PERMISSION_STEP,
@@ -156,7 +145,7 @@ const websocketSetup = (kind: "feishu" | "lark", pinned: boolean): ChannelScaffo
         ? "PUBLISH the app version in the developer console after permission approval — long-connection event subscriptions become active with the published version"
         : "in Events & Callbacks choose long connection, subscribe im.message.receive_v1, then create + publish a version",
       "edit {channel} — routing policy",
-      deploymentStep(kind, pinned),
+      DEPLOYMENT_STEP,
       `the agent can push messages from scheduled turns via the scaffolded {tools}/${kind}-send.ts tool`,
       `the agent reads the threads of the group it is asked in via the scaffolded {tools}/${kind}-threads.ts tool`,
     ],
@@ -167,11 +156,9 @@ const websocketSetup = (kind: "feishu" | "lark", pinned: boolean): ChannelScaffo
 export function channelSetup(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
-  /** Whether `<PREFIX>_INGRESS` is explicitly set in this environment. */
-  pinned = false,
 ): { env: ChannelEnv[]; steps: string[] } {
   if (ingress !== "websocket" || (kind !== "feishu" && kind !== "lark")) return CHANNEL_SCAFFOLDS[kind];
-  return websocketSetup(kind, pinned);
+  return websocketSetup(kind);
 }
 
 /**

@@ -282,8 +282,10 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   const modelSpec = model.spec;
 
-  const declaredSecrets = definition ? definitionSecrets(definition) : declaredVariables(loadEnvironment(agentDir));
-  const code = definition ? buildShapes(definition, values, report) : undefined;
+  const declaredSecrets = definition
+    ? definitionSecrets(definition, config)
+    : declaredVariables(loadEnvironment(agentDir));
+  const code = definition ? buildShapes(definition, values, config, report) : undefined;
   const channels = [...(code?.channels ?? [])].map(
     ([name, module]): DeclaredChannel => ({
       name,
@@ -456,10 +458,11 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 function buildShapes(
   definition: AgentDefinition,
   values: ReadonlyMap<string, string>,
+  config: EffectiveConfig,
   report: DeployReport,
 ): BuiltDefinition | undefined {
   try {
-    return buildDefinitionShape(definition, Object.fromEntries(values));
+    return buildDefinitionShape(definition, Object.fromEntries(values), config);
   } catch (error) {
     report.issue(`the definition does not build, so the deployed agent would not start: ${messageOf(error)}`);
     return undefined;

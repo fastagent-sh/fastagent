@@ -7,7 +7,8 @@ import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { declaredVariables } from "../../environment/declare.ts";
 import { mcpSecrets } from "../../mcp/config.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
-import { type AgentConfig, isNeeds } from "./define.ts";
+import { servedByDev } from "../../serving-command.ts";
+import { type AgentConfig, type Ingress, isByIngress, isNeeds } from "./define.ts";
 import { REGISTRY_KINDS, type Registry } from "./registry.ts";
 
 /** What an opener of this FastAgent reads; a definition made for another refuses. */
@@ -108,10 +109,31 @@ function byName(declared: readonly DeclaredSecret[]): DeclaredInput[] {
     .map((input) => Object.freeze({ ...input, declaredIn: Object.freeze(input.declaredIn) }));
 }
 
-/** Every value the definition can hold `Needs` in, with where it is: modules by file, configuration by key. */
-function declarers({ registry, config }: Pick<DefinitionSpec, "registry" | "config">) {
+/** The channels part of a configuration: how each channel that receives either way receives. */
+export interface ChannelsConfig {
+  channels?: Readonly<Record<string, { ingress?: Ingress }>>;
+}
+
+/**
+ * How the channel `name` receives under `config`: what it names, else WebSocket under `dev` (no public URL there) and
+ * webhook everywhere else (a host that wakes on a request reaches it only that way).
+ */
+export function chosenIngress(config: ChannelsConfig, name: string, dev = servedByDev()): Ingress {
+  return config.channels?.[name]?.ingress ?? (dev ? "websocket" : "webhook");
+}
+
+/**
+ * Every value the definition can hold `Needs` in, with where it is: modules by file, configuration by key. A channel
+ * that receives either way is the way `config` chooses; with no configuration, both ways, each said beside its file.
+ */
+function declarers({ registry, config }: Pick<DefinitionSpec, "registry" | "config">, instance?: ChannelsConfig) {
+  const ways = ({ file, name, value }: { file: string; name: string; value: unknown }) => {
+    if (!isByIngress(value)) return [{ declaredIn: file, value }];
+    if (instance !== undefined) return [{ declaredIn: file, value: value[chosenIngress(instance, name)] }];
+    return (["webhook", "websocket"] as const).map((way) => ({ declaredIn: `${file} (${way})`, value: value[way] }));
+  };
   return [
-    ...REGISTRY_KINDS.flatMap((kind) => registry[kind].map(({ file, value }) => ({ declaredIn: file, value }))),
+    ...REGISTRY_KINDS.flatMap((kind) => registry[kind].flatMap(ways)),
     ...(config.extensions ?? []).map((value, i) => ({ declaredIn: `${CONFIG_FILE} extensions[${i}]`, value })),
     ...(config.providers ?? []).map((value, i) => ({ declaredIn: `${CONFIG_FILE} providers[${i}]`, value })),
   ];
@@ -119,10 +141,13 @@ function declarers({ registry, config }: Pick<DefinitionSpec, "registry" | "conf
 
 type Declaring = Pick<DefinitionSpec, "registry" | "config" | "dir">;
 
-/** The secrets the definition's code reads (`needs()`) and its commands do (`context.json`'s variables). */
-export function codeSecrets(definition: Declaring): DeclaredSecret[] {
+/**
+ * The secrets the definition's code reads (`needs()`) and its commands do (`context.json`'s variables): an instance's,
+ * under its `config`, or every way's with none.
+ */
+export function codeSecrets(definition: Declaring, config?: ChannelsConfig): DeclaredSecret[] {
   return [
-    ...declarers(definition).flatMap(({ declaredIn, value }) =>
+    ...declarers(definition, config).flatMap(({ declaredIn, value }) =>
       isNeeds(value) ? value.secrets.map((secret) => ({ ...secret, declaredIn })) : [],
     ),
     ...declaredVariables(loadEnvironment(definition.dir)),
@@ -130,6 +155,6 @@ export function codeSecrets(definition: Declaring): DeclaredSecret[] {
 }
 
 /** Every declaration of a secret, each where it is: the code's, then `mcp.json`'s references. */
-export function definitionSecrets(definition: Declaring): DeclaredSecret[] {
-  return [...codeSecrets(definition), ...mcpSecrets(definition.dir)];
+export function definitionSecrets(definition: Declaring, config?: ChannelsConfig): DeclaredSecret[] {
+  return [...codeSecrets(definition, config), ...mcpSecrets(definition.dir)];
 }

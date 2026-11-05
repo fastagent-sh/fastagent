@@ -1,20 +1,17 @@
-import { needs } from "@fastagent-sh/fastagent";
-import {
-  type LarkChannelOptions,
-  larkChannel,
-  larkIngress,
-  larkWebSocketChannel,
-} from "@fastagent-sh/fastagent/lark";
+import { byIngress, needs } from "@fastagent-sh/fastagent";
+import { type LarkChannelOptions, larkChannel, larkWebSocketChannel } from "@fastagent-sh/fastagent/lark";
 
 // The branded Lark adapter over fastagent's canonical Feishu engine (verify + run + reply), configured
 // with YOUR policy. Lark international (open.larksuite.com) only; a Feishu tenant uses `fastagent add
 // feishu` instead.
 //
-// How it receives is LARK_INGRESS (webhook | websocket). Unset, `fastagent dev` connects OUT by
-// WebSocket (no public URL, no tunnel), and everything else — `fastagent start`, every deployment —
-// receives by webhook at POST /lark. Dev reads .secrets/.env; production reads
-// .secrets/production/.env. Interactive `deploy --run` guides creation of a separate production app;
-// if Lark refuses its config API, set the Request URL in the console once.
+// How it receives is the instance's choice, `channels.lark.ingress` in its fastagent.json (webhook |
+// websocket). Unset, `fastagent dev` connects OUT by WebSocket (no public URL, no tunnel), and everything
+// else — `fastagent start`, every deployment — receives by webhook at POST /lark, the way a host that
+// wakes on a request is reached.
+// Dev reads .secrets/.env; production reads .secrets/production/.env. Interactive `deploy --run`
+// guides creation of a separate production app; if Lark refuses its config API, set the Request URL
+// in the console once.
 //
 // `fastagent add lark` guides the console setup and validates the credentials. In the developer
 // console:
@@ -47,25 +44,26 @@ const policy: Pick<LarkChannelOptions, "onError" | "route"> = {
   //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { text: `${larkEnvelope(e)}\n[extra]` },
 };
 
-// `needs` declares the env vars this channel reads: fastagent carries them to a deployed box and
-// refuses to serve while a required one is unset. LARK_ENCRYPT_KEY is optional.
-export default larkIngress() === "webhook"
-  ? needs(
-      [
-        "LARK_APP_ID",
-        "LARK_APP_SECRET",
-        "LARK_VERIFICATION_TOKEN",
-        { name: "LARK_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
-      ],
-      (secrets) =>
-        larkChannel({
-          appId: secrets.LARK_APP_ID,
-          appSecret: secrets.LARK_APP_SECRET,
-          verificationToken: secrets.LARK_VERIFICATION_TOKEN, // authenticates inbound events
-          encryptKey: secrets.LARK_ENCRYPT_KEY,
-          ...policy,
-        }),
-    )
-  : needs(["LARK_APP_ID", "LARK_APP_SECRET"], (secrets) =>
-      larkWebSocketChannel({ appId: secrets.LARK_APP_ID, appSecret: secrets.LARK_APP_SECRET, ...policy }),
-    );
+// Each way's `needs` declares the env vars it reads: an instance is asked only for its way's, and
+// refused to serve while a required one is unset. LARK_ENCRYPT_KEY is optional.
+export default byIngress({
+  webhook: needs(
+    [
+      "LARK_APP_ID",
+      "LARK_APP_SECRET",
+      "LARK_VERIFICATION_TOKEN",
+      { name: "LARK_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
+    ],
+    (secrets) =>
+      larkChannel({
+        appId: secrets.LARK_APP_ID,
+        appSecret: secrets.LARK_APP_SECRET,
+        verificationToken: secrets.LARK_VERIFICATION_TOKEN, // authenticates inbound events
+        encryptKey: secrets.LARK_ENCRYPT_KEY,
+        ...policy,
+      }),
+  ),
+  websocket: needs(["LARK_APP_ID", "LARK_APP_SECRET"], (secrets) =>
+    larkWebSocketChannel({ appId: secrets.LARK_APP_ID, appSecret: secrets.LARK_APP_SECRET, ...policy }),
+  ),
+});

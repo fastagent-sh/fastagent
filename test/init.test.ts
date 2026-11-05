@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { execFileSync } from "node:child_process";
 import { hermeticGit, withGitIdentity } from "./git-env.ts";
@@ -492,15 +493,17 @@ describe("add: fastagent add <channel>", () => {
     }
   });
 
-  it("--ingress is the FEISHU_INGRESS setting, written for dev and deployments alike; without it nothing is", async () => {
+  it("--ingress is the instance configuration's channels.<kind>.ingress; without it nothing is written", async () => {
     const plain = await readyAgent();
     await cliInit(["add", "feishu", "--no-onboard"], plain);
-    expect(await readFile(join(plain, ".secrets", ".env"), "utf8").catch(() => "")).not.toMatch(/^FEISHU_INGRESS=/m);
+    expect(existsSync(join(plain, "fastagent.json"))).toBe(false);
 
     const chosen = await readyAgent();
     const out = await cliInit(["add", "feishu", "--no-onboard", "--ingress", "webhook"], chosen);
     expect(out).not.toMatch(/Error/);
-    expect(await readFile(join(chosen, ".secrets", ".env"), "utf8")).toMatch(/^FEISHU_INGRESS=webhook$/m);
+    expect(JSON.parse(await readFile(join(chosen, "fastagent.json"), "utf8"))).toMatchObject({
+      channels: { feishu: { ingress: "webhook" } },
+    });
 
     // A later `add` without the flag follows the saved setting: its next steps are webhook's, not WebSocket's.
     const again = await cliInit(["add", "feishu", "--no-onboard"], chosen);
@@ -514,7 +517,7 @@ describe("add: fastagent add <channel>", () => {
     await cliInit(["add", "feishu", "--no-onboard"], dir);
     const file = join(dir, "src", "channels", "feishu.ts");
     const channel = await readFile(file, "utf8");
-    const dev = "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\nFEISHU_INGRESS=websocket\n";
+    const dev = "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\n";
     await writeFile(join(dir, ".secrets", ".env"), dev);
     const result = await cliInit(["add", "feishu", "--env", "production", "--no-onboard"], dir);
     expect(result).not.toMatch(/Error/);

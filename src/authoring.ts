@@ -336,6 +336,33 @@ function textIfExists(path: string): string | undefined {
 }
 
 /**
+ * Set how the channel `channel` receives in an instance configuration (`fastagent.json` in `agentDir`, or the file
+ * `scope.config` names), keeping the rest of the file as it is. Under the lock content edits take, since they write
+ * the same file.
+ */
+export async function setChannelIngress(
+  agentDir: string,
+  channel: string,
+  ingress: "webhook" | "websocket",
+  scope?: Pick<ContentScope, "config">,
+): Promise<void> {
+  const places = placesOf(resolveAgentDir(agentDir), scope);
+  const programPath = join(places.dir, CONTEXT_FILE);
+  await withLockedFile(
+    programPath,
+    async (): Promise<LockResult<undefined>> => {
+      const text = textIfExists(places.config);
+      const file = text === undefined ? {} : parseInstanceFile(text, places.config);
+      const channels = (file.channels ?? {}) as Record<string, Record<string, unknown>>;
+      const next = { ...file, channels: { ...channels, [channel]: { ...channels[channel], ingress } } };
+      writeFileAtomic(places.config, `${JSON.stringify(next, null, 2)}\n`, fileMode(places.config));
+      return { result: undefined };
+    },
+    { mode: fileMode(programPath), create: false },
+  );
+}
+
+/**
  * Replace the environment `context.json` declares with what `change` makes of it as it is now, under the lock content
  * edits take, keeping the rest of the file as it is; and return what was written.
  */

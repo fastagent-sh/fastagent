@@ -1,18 +1,15 @@
-import { needs } from "@fastagent-sh/fastagent";
-import {
-  type FeishuChannelOptions,
-  feishuChannel,
-  feishuIngress,
-  feishuWebSocketChannel,
-} from "@fastagent-sh/fastagent/feishu";
+import { byIngress, needs } from "@fastagent-sh/fastagent";
+import { type FeishuChannelOptions, feishuChannel, feishuWebSocketChannel } from "@fastagent-sh/fastagent/feishu";
 
 // fastagent's canonical Feishu adapter (verify + run + reply), configured with YOUR policy. Feishu
 // (open.feishu.cn) only; a Lark-international tenant uses `fastagent add lark` instead.
 //
-// How it receives is FEISHU_INGRESS (webhook | websocket). Unset, `fastagent dev` connects OUT by
-// WebSocket (no public URL, no tunnel), and everything else — `fastagent start`, every deployment —
-// receives by webhook at POST /feishu. Dev reads .secrets/.env; production reads
-// .secrets/production/.env. Interactive `deploy --run` creates a separate production app.
+// How it receives is the instance's choice, `channels.feishu.ingress` in its fastagent.json (webhook |
+// websocket). Unset, `fastagent dev` connects OUT by WebSocket (no public URL, no tunnel), and everything
+// else — `fastagent start`, every deployment — receives by webhook at POST /feishu, the way a host that
+// wakes on a request is reached.
+// Dev reads .secrets/.env; production reads .secrets/production/.env. Interactive `deploy --run`
+// creates a separate production app.
 //
 // `fastagent add feishu` creates and configures the app (scan-to-create). For a hand-made app, in the
 // developer console:
@@ -45,25 +42,26 @@ const policy: Pick<FeishuChannelOptions, "onError" | "route"> = {
   //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { text: `${feishuEnvelope(e)}\n[extra]` },
 };
 
-// `needs` declares the env vars this channel reads: fastagent carries them to a deployed box and
-// refuses to serve while a required one is unset. FEISHU_ENCRYPT_KEY is optional.
-export default feishuIngress() === "webhook"
-  ? needs(
-      [
-        "FEISHU_APP_ID",
-        "FEISHU_APP_SECRET",
-        "FEISHU_VERIFICATION_TOKEN",
-        { name: "FEISHU_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
-      ],
-      (secrets) =>
-        feishuChannel({
-          appId: secrets.FEISHU_APP_ID,
-          appSecret: secrets.FEISHU_APP_SECRET,
-          verificationToken: secrets.FEISHU_VERIFICATION_TOKEN, // authenticates inbound events
-          encryptKey: secrets.FEISHU_ENCRYPT_KEY,
-          ...policy,
-        }),
-    )
-  : needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
-      feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
-    );
+// Each way's `needs` declares the env vars it reads: an instance is asked only for its way's, and
+// refused to serve while a required one is unset. FEISHU_ENCRYPT_KEY is optional.
+export default byIngress({
+  webhook: needs(
+    [
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "FEISHU_VERIFICATION_TOKEN",
+      { name: "FEISHU_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
+    ],
+    (secrets) =>
+      feishuChannel({
+        appId: secrets.FEISHU_APP_ID,
+        appSecret: secrets.FEISHU_APP_SECRET,
+        verificationToken: secrets.FEISHU_VERIFICATION_TOKEN, // authenticates inbound events
+        encryptKey: secrets.FEISHU_ENCRYPT_KEY,
+        ...policy,
+      }),
+  ),
+  websocket: needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
+    feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
+  ),
+});

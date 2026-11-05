@@ -60,8 +60,6 @@ beforeEach(async () => {
   });
   vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
   vi.stubEnv("FASTAGENT_ENVIRONMENT", "dev");
-  vi.stubEnv("FEISHU_INGRESS", "");
-  vi.stubEnv("LARK_INGRESS", "");
   vi.spyOn(process, "cwd").mockReturnValue(dir);
   vi.spyOn(process, "exit").mockImplementation(() => {
     throw exited;

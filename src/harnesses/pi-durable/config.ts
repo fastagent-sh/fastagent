@@ -12,7 +12,7 @@ import { type Schema, bool, compile, int, map, obj, oneOf, opt, str, union } fro
 import { instanceContent } from "../../content/file.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { INSTANCE_CONFIG_ENV, INSTANCE_CONFIG_FILE, resolveOverridePath } from "../../paths.ts";
-import type { AgentConfig, AgentDefaults } from "./define.ts";
+import type { AgentConfig, AgentDefaults, Ingress } from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
 
 /** What an instance may set over the program's defaults: `fastagent.json`, or the same shape as an object. */
@@ -80,6 +80,17 @@ function shape(settings: Schema | undefined) {
         // into `deploy agentcore --run`, after the image build.
         agentcore: opt(obj({ idleTimeoutSeconds: opt(int({ minimum: 60, maximum: 1209600 })) })),
       }),
+    ),
+    channels: opt(
+      map(
+        obj({
+          ingress: opt(
+            oneOf(["webhook", "websocket"] as const, {
+              description: "How the channel receives: webhook (inbound HTTP) or websocket (a connection it keeps)",
+            }),
+          ),
+        }),
+      ),
     ),
     settings: opt(settings === undefined ? obj({}) : partial(settings)),
   };
@@ -197,6 +208,7 @@ export interface EffectiveConfig {
   thinkingLevel?: ModelThinkingLevel;
   http?: { port?: number; api?: boolean };
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
+  channels?: Readonly<Record<string, { ingress?: Ingress }>>;
   settings: Readonly<Record<string, unknown>>;
   /** Where each value is from, by its path (`http.port`, `settings.repo`): "program default", or the instance's label. */
   sources: Readonly<Record<string, string>>;
@@ -246,6 +258,15 @@ export function resolveConfig(definition: AgentDefinition, instance?: InstanceCo
   }
   const values = (merged.settings ?? {}) as Record<string, unknown>;
   check(settings ?? obj({}), values, `the settings of ${definition.name}`);
+  const channels = new Set(definition.registry.channels.map(({ name }) => name));
+  for (const name of Object.keys((merged.channels ?? {}) as Record<string, unknown>)) {
+    if (!channels.has(name)) {
+      throw new Error(
+        `${sources[`channels.${name}.ingress`] ?? "the configuration"}: channels.${name} names no channel of ` +
+          `${definition.name} (${channels.size === 0 ? "it has none" : `its channels: ${[...channels].join(", ")}`})`,
+      );
+    }
+  }
   return { ...merged, settings: values, sources };
 }
 

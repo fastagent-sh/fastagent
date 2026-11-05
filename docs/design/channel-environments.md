@@ -34,21 +34,25 @@ must keep the environments separate. Generated hosts pin their own persistent-st
 Both environments' secrets remain ignored by git and excluded from the image. Preflight checks the whole
 `.secrets` tree, including dev credentials, when an operator keeps an ignore file.
 
-## 2. The ingress is selected within each environment
+## 2. The ingress is the instance's configuration
 
-One channel file chooses its factory at import through `feishuIngress()` / `larkIngress()`:
+One channel file offers both ways, `byIngress({ webhook, websocket })`, and each instance's configuration chooses:
 
-- `FEISHU_INGRESS` / `LARK_INGRESS` accepts `webhook` or `websocket` in the selected environment.
-- Unset means webhook; `dev` supplies WebSocket through `FASTAGENT_DEV=1`.
-- `add --ingress` writes only the selected environment's setting. A dev setting cannot change production.
-- Webhook declares App ID, Secret and Verification Token. WebSocket declares only App ID and Secret.
+- `channels.<name>.ingress` in the instance's `fastagent.json` is `"webhook"` or `"websocket"`; a name the agent has
+  no channel by is refused.
+- Unset means webhook; `dev` (which marks its process `FASTAGENT_DEV=1`) means WebSocket. A deployment receives by
+  webhook because a host that scales to zero (AgentCore today; Fly Sprites, Railway Serverless, Cloudflare's Durable
+  Objects) wakes on an inbound request, and a long connection either keeps it awake or dies when it sleeps.
+  WebSocket is for a process that stays up without a public URL: `dev`, or a machine of one's own.
+- `add --ingress` writes the development instance's `fastagent.json`, or the file `--config` names; a deployment's
+  is the configuration `deploy --config` delivers, so the development instance's choice never changes production.
+- Webhook declares App ID, Secret and Verification Token. WebSocket declares only App ID and Secret. An instance is
+  asked only for its way's.
 - AgentCore refuses WebSocket; the other hosts keep a resident process for it.
-- `deploy` refuses a shell-exported ingress that differs from the production file, so preflight and the box
-  cannot import different channel shapes.
+- `deploy` reads the way from the configuration it delivers, as the box will, never from the environment.
 
-Existing authored channel files are never migrated. If a file names a fixed factory, its ingress remains fixed;
-`add --ingress` and production onboarding refuse a shape that disagrees with the requested mode. Re-scaffold it
-or edit it to use the environment-aware factory selector.
+A file that names one factory receives that way only: a configuration naming the other way is refused at open, and
+`add --ingress` and production onboarding refuse it before touching the app. Re-scaffold it to offer both.
 
 ## 3. Deploy provisions the production app
 

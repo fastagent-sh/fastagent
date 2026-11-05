@@ -56,14 +56,19 @@ credentials.
 
 ### How the channel receives
 
-One channel file serves both ways of receiving, and `FEISHU_INGRESS` (`LARK_INGRESS`) chooses between them when it
-is imported. Unset, the command decides ([design note](design/channel-environments.md)):
+One channel file serves both ways of receiving (`byIngress`), and each instance's configuration chooses between
+them: `channels.feishu.ingress` (`channels.lark.ingress`) in its `fastagent.json`, `"webhook"` or `"websocket"`.
+Unset, the command decides ([design note](design/channel-environments.md)):
 
-| Setting in the selected environment | `fastagent dev` (dev app) | `fastagent start`, every deployment (production app) |
+| `channels.feishu.ingress` | `fastagent dev` (dev app) | `fastagent start`, every deployment (production app) |
 |---|---|---|
 | Unset | WebSocket long connection | webhook at `POST /feishu` |
-| `FEISHU_INGRESS=websocket` | WebSocket | WebSocket |
-| `FEISHU_INGRESS=webhook` | webhook (`dev --tunnel` gives it a public URL) | webhook |
+| `"websocket"` | WebSocket | WebSocket |
+| `"webhook"` | webhook (`dev --tunnel` gives it a public URL) | webhook |
+
+A deployment receives by webhook because the hosts that scale to zero wake on an inbound request: a long connection
+keeps them awake or dies when they sleep. WebSocket is for a process that stays up and has no public URL: `dev`, or
+a machine of your own, given a configuration that says so (`deploy --config`, `start --config`).
 
 | | WebSocket | Webhook |
 |---|---|---|
@@ -79,9 +84,9 @@ with `--json`, through a coding agent's user (without either it stops, naming th
 webhook scopes including `patch`, then captures the Verification Token into
 `.secrets/production/.env`. It registers the deployment's Request URL once readiness and model login pass.
 Lark uses guided production-app setup and sets the Request URL by hand when its config API answers 404.
-`add feishu --ingress webhook|websocket` writes the setting only in the selected environment; add
-`--env production` to prepare production instead. It refuses an existing channel file that names its factory
-instead of reading the setting. `deploy` refuses a shell ingress that differs from the production file.
+`add feishu --ingress webhook|websocket` writes `channels.feishu.ingress` to the development instance's
+`fastagent.json`, or to the file `--config` names; with `--env production` it needs `--config`, the configuration
+`deploy --config` delivers. It refuses an existing channel file that names its factory instead of offering both ways.
 A Docker deployment without `--tunnel` has no URL for automated webhook setup.
 
 **Dev and production use independent apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
@@ -172,57 +177,54 @@ FEISHU_VERIFICATION_TOKEN=...
 FEISHU_ENCRYPT_KEY=...   # optional but recommended; must match the console exactly
 ```
 
-5. For webhook, `deploy … --run` (and `FEISHU_INGRESS=webhook fastagent dev --tunnel`) register the Request URL.
+5. For webhook, `deploy … --run` (and `fastagent dev --tunnel` with `channels.feishu.ingress` set to `"webhook"`)
+   register the Request URL.
    Feishu's API path needs `application:application:patch`; Lark may require manual mode/URL setup when its config
    API returns 404. WebSocket runs with ordinary `fastagent dev` and makes no registration call.
 6. **Create a version and publish** the app, then add the bot to a chat.
 
 ## Scaffolded channel
 
-The scaffold (`src/channels/feishu.ts`; the lark kind mirrors it with `larkChannel`, `larkIngress` and
-`larkWebSocketChannel` from `@fastagent-sh/fastagent/lark`, and `LARK_*` vars) picks its factory with
-`feishuIngress()`, so one file serves `dev`'s WebSocket and a deployment's webhook:
+The scaffold (`src/channels/feishu.ts`; the lark kind mirrors it with `larkChannel` and `larkWebSocketChannel` from
+`@fastagent-sh/fastagent/lark`, and `LARK_*` vars) default-exports both ways with `byIngress`, so one file serves
+`dev`'s WebSocket and a deployment's webhook:
 
 ```ts
-import { needs } from "@fastagent-sh/fastagent";
-import {
-  type FeishuChannelOptions,
-  feishuChannel,
-  feishuIngress,
-  feishuWebSocketChannel,
-} from "@fastagent-sh/fastagent/feishu";
+import { byIngress, needs } from "@fastagent-sh/fastagent";
+import { type FeishuChannelOptions, feishuChannel, feishuWebSocketChannel } from "@fastagent-sh/fastagent/feishu";
 
 const policy: Pick<FeishuChannelOptions, "onError" | "route"> = {
   onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
 };
 
-export default feishuIngress() === "webhook"
-  ? needs(
-      [
-        "FEISHU_APP_ID",
-        "FEISHU_APP_SECRET",
-        "FEISHU_VERIFICATION_TOKEN",
-        { name: "FEISHU_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
-      ],
-      (secrets) =>
-        feishuChannel({
-          appId: secrets.FEISHU_APP_ID,
-          appSecret: secrets.FEISHU_APP_SECRET,
-          verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
-          encryptKey: secrets.FEISHU_ENCRYPT_KEY,
-          ...policy,
-        }),
-    )
-  : needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
-      feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
-    );
+export default byIngress({
+  webhook: needs(
+    [
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "FEISHU_VERIFICATION_TOKEN",
+      { name: "FEISHU_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
+    ],
+    (secrets) =>
+      feishuChannel({
+        appId: secrets.FEISHU_APP_ID,
+        appSecret: secrets.FEISHU_APP_SECRET,
+        verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
+        encryptKey: secrets.FEISHU_ENCRYPT_KEY,
+        ...policy,
+      }),
+  ),
+  websocket: needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
+    feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
+  ),
+});
 ```
 
-The webhook form declares the Verification Token, the WebSocket form does not, so `dev` never asks for a token
-it does not use. `deploy` imports the file the way `start` will on the box (not `dev`, with production values),
-so it plans for the ingress the deployment serves. An agent scaffolded by an earlier release names one factory
-in its channel file and keeps it; re-scaffold the file (move it aside, then `add feishu --no-onboard`) to get this
-one.
+Each way declares its own secrets, and an instance is asked only for its way's, so `dev` never asks for a token it
+does not use. `deploy` chooses the way as the box will (not `dev`, with the configuration it delivers), so it plans
+for the ingress the deployment serves. A channel file that names one factory receives that way only; a
+configuration naming the other way is refused at open. Re-scaffold the file (move it aside, then
+`add feishu --no-onboard`) to get this one.
 
 Credentials are checked when serving starts, before the host reports ready. Deployment planning can
 therefore import the module and inspect its function/object shape before secrets have been provisioned.
