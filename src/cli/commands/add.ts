@@ -22,7 +22,7 @@ import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
-import { setChannelIngress } from "../../authoring.ts";
+import { setChannelConfig } from "../../authoring.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import {
@@ -204,7 +204,7 @@ async function addChannel(
     created = await onboardFeishuCloudApp(target, channelKind, ingress, rerun, person);
   }
   if (write !== undefined) {
-    await setChannelIngress(target, channelKind, ingress, { config: write });
+    await setChannelConfig(target, channelKind, { ingress }, { config: write });
     console.error(
       `[fastagent] wrote channels.${channelKind}.ingress "${ingress}" to ` +
         `${isUnderDir(write, target) ? inAgent(relative(target, write)) : write}`,

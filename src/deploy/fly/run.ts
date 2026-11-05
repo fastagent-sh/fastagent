@@ -2,6 +2,7 @@
 import type { BoxLoginStep } from "../box-shell.ts";
 import {
   type BoxWebhooksProbe,
+  type UrlRecorder,
   type PublicHealthProbe,
   type Registrars,
   confirmWebhooks,
@@ -13,6 +14,8 @@ import { type CliRunner, readOutput } from "../runner.ts";
 import { hostSignedOutGate, missingValuesGate } from "../secrets.ts";
 
 export interface FlyRunPlan {
+  /** At a terminal with a `--config` file: record each URL a person set once the box confirms it. */
+  recordUrl?: UrlRecorder;
   /** The `http.publicUrl` the image delivers, where the platforms reach the box; default the app's own URL. */
   publicUrl?: string;
   appName: string;
@@ -199,6 +202,7 @@ export async function deployFlyRun(
     channels: plan.channels,
     registrars,
     log,
+    ...(plan.recordUrl === undefined ? {} : { record: plan.recordUrl }),
     retryHint: "re-run to retry registration (steps already done are skipped)",
     ...(boxWebhooks === undefined
       ? {}

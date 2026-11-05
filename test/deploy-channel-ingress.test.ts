@@ -294,6 +294,59 @@ describe("deploy/channel-ingress: what a box that points its own channels made o
     expect(logs.join("\n")).toContain("feishu: the box did not report its registration within the wait");
   });
 
+  it("at a terminal, records each URL a person set once the box confirms it, and not before", async () => {
+    // Lark without its config API: manual until the person saves the page, then the box reports it registered.
+    const reads = [
+      [{ channel: "lark", outcome: "manual" as const }],
+      [{ channel: "lark", outcome: "manual" as const }],
+      [{ channel: "lark", outcome: "registered" as const }],
+    ];
+    const written: [string, string][] = [];
+    const logs: string[] = [];
+    const gate = await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("lark"),
+      registrars: {},
+      log: (m) => logs.push(m),
+      retryHint: "re-run",
+      probe: async () => reads.shift() ?? [{ channel: "lark", outcome: "registered" }],
+      intervalMs: 0,
+      record: {
+        waitMs: 60_000,
+        write: async (kind, url) => {
+          written.push([kind, url]);
+          return "/work/prod.json";
+        },
+      },
+    });
+    expect(gate).toBeUndefined();
+    expect(written).toEqual([["lark", "https://agent.acme.com/lark"]]);
+    expect(logs.join("\n")).toContain(
+      "lark: the platform reached the box at https://agent.acme.com/lark; recorded it in /work/prod.json",
+    );
+    // The person never saves it: nothing is recorded, and the step stays theirs.
+    const never: [string, string][] = [];
+    await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("lark"),
+      registrars: {},
+      log: () => {},
+      retryHint: "re-run",
+      probe: async () => [{ channel: "lark", outcome: "manual" }],
+      intervalMs: 0,
+      record: {
+        waitMs: 0,
+        write: async (kind, url) => {
+          never.push([kind, url]);
+          return "f";
+        },
+      },
+    });
+    expect(never).toEqual([]);
+  });
+
   it("sets Slack's Request URL from this machine, since no credential on the box can", async () => {
     const slack = vi.fn(registered);
     const probe = vi.fn(async () => []);

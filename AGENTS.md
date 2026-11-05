@@ -77,6 +77,7 @@ src/
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
 │   ├── login-relay.ts      # `login` split across a process boundary: LoginIO as JSON lines, box half + terminal half
+│   ├── channel-app.ts      # a channel's binding recorded in an instance configuration (channels.<name>.app)
 │   ├── ticket.ts           # a step a coding agent starts and a person finishes (a sign-in, an app's setup), outliving
 │   │                       # the command: its own process, a ticket under ~/.fastagent/.state/tickets, `--check`
 │   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell;
@@ -153,6 +154,8 @@ src/
 │   ├── registration.ts     # the shared registrar outcome (registered|manual|failed) + the ONE retry loop
 │   ├── webhooks.ts         # a serve pointing its platforms at itself: which channels take a webhook, the step a
 │   │                       # person takes for each, and the registration the instance's own credentials can make
+│   ├── webhook-evidence.ts # what proves a platform reaches the instance at a URL only a person sets: an
+│   │                       # authenticated request and the address it was sent to, recorded in the channel's state
 │   ├── kit/                # WRITING a channel. Its defining property is an import fact, asserted in
 │   │   │                   # package-boundary.test.ts: everything here has consumers only under
 │   │   │                   # channels/<platform>/, and serve/router/discover have none there

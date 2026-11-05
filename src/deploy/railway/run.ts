@@ -2,6 +2,7 @@
 import type { BoxLoginStep } from "../box-shell.ts";
 import {
   type BoxWebhooksProbe,
+  type UrlRecorder,
   type PublicHealthProbe,
   type Registrars,
   confirmWebhooks,
@@ -13,6 +14,8 @@ import { type CliRunner, readOutput } from "../runner.ts";
 import { hostSignedOutGate, missingValuesGate } from "../secrets.ts";
 
 export interface RailwayRunPlan {
+  /** At a terminal with a `--config` file: record each URL a person set once the box confirms it. */
+  recordUrl?: UrlRecorder;
   /** Names both the project (`railway init --name`) and the service (`railway add --service`). */
   name: string;
   /**
@@ -292,6 +295,7 @@ export async function deployRailwayRun(
     channels: plan.channels,
     registrars,
     log,
+    ...(plan.recordUrl === undefined ? {} : { record: plan.recordUrl }),
     retryHint: "re-run with --into-linked to retry registration",
     ...(boxWebhooks === undefined
       ? {}
