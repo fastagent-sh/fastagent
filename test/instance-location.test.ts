@@ -18,16 +18,18 @@ const scratch = () => mkdtemp(join(tmpdir(), "fa-instance-"));
 describe("the resolvers", () => {
   const dir = "/project";
 
-  it("state: the state directory, else .state in the root, else the project's own", () => {
-    expect(resolveStateRoot(dir, {})).toBe("/project/.state");
-    expect(resolveStateRoot(dir, { FASTAGENT_ENVIRONMENT: "production" })).toBe("/project/.state/production");
+  it("state: the state directory, else .state in the root, else in the project's default root for the environment", () => {
+    expect(resolveStateRoot(dir, {})).toBe("/project/.fastagent/dev/.state");
+    expect(resolveStateRoot(dir, { FASTAGENT_ENVIRONMENT: "dev" })).toBe("/project/.fastagent/dev/.state");
+    expect(resolveStateRoot(dir, { FASTAGENT_ENVIRONMENT: "production" })).toBe("/project/.fastagent/start/.state");
     expect(resolveStateRoot(dir, { FASTAGENT_ROOT: "/r" })).toBe("/r/.state");
     expect(resolveStateRoot(dir, { FASTAGENT_ROOT: "/r", FASTAGENT_STATE_DIR: "/s" })).toBe("/s");
     expect(resolveStateRoot(dir, { FASTAGENT_STATE_DIR: "/s" })).toBe("/s");
   });
 
-  it("working directory: the workspace directory, else the root, else the project", () => {
-    expect(resolveWorkdir(dir, {})).toBe("/project");
+  it("working directory: the workspace directory, else the root, else the project's default root for the environment", () => {
+    expect(resolveWorkdir(dir, {})).toBe("/project/.fastagent/dev");
+    expect(resolveWorkdir(dir, { FASTAGENT_ENVIRONMENT: "production" })).toBe("/project/.fastagent/start");
     expect(resolveWorkdir(dir, { FASTAGENT_ROOT: "/r" })).toBe("/r");
     expect(resolveWorkdir(dir, { FASTAGENT_ROOT: "/r", FASTAGENT_WORKDIR: "/w" })).toBe("/w");
     expect(resolveWorkdir(dir, { FASTAGENT_WORKDIR: "/w" })).toBe("/w");
@@ -58,9 +60,12 @@ describe("info reports where the instance is", () => {
     expect([found.workdir, found.stateRoot]).toEqual([workdir, state]);
   });
 
-  it("with no flag: the project is the working directory and holds the state, as before", async () => {
+  it("with no flag: the project's .fastagent/dev/ is the working directory and holds the state", async () => {
     const found = await where([]);
-    expect([found.workdir, found.stateRoot]).toEqual([found.dir, join(found.dir, ".state")]);
+    const root = join(found.dir, ".fastagent", "dev");
+    expect([found.workdir, found.stateRoot]).toEqual([root, join(root, ".state")]);
+    // Said, not made: `info` reads, and the open makes it.
+    expect(existsSync(root)).toBe(false);
   });
 
   it("a flag beats its environment variable, which beats the default", async () => {
@@ -117,6 +122,33 @@ describe("commands that open an instance", () => {
     expect(result.stdout).toContain("READ-FROM-THE-WORKDIR");
   });
 
+  it("with no flags, invoke keeps its state and works in the project's .fastagent/dev/, leaving the project alone", async () => {
+    const dir = await fauxAgent("fa-instance-default-invoke-");
+    const result = await runInProcess(["invoke", "hello", dir]);
+    expect([result.code, result.stdout.trim()], result.stderr).toEqual([0, "seen 1"]);
+    expect(existsSync(join(dir, ".fastagent", "dev", ".state", "invoke.sqlite"))).toBe(true);
+    expect(existsSync(join(dir, ".state"))).toBe(false);
+    expect(existsSync(join(dir, ".fastagent", "start"))).toBe(false);
+  });
+
+  it("makes the default working directory even when the state is elsewhere", async () => {
+    const dir = await fauxAgent("fa-instance-default-apart-");
+    const state = join(await scratch(), "state");
+    const result = await runInProcess(["invoke", "hello", dir, "--state", state]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(existsSync(join(dir, ".fastagent", "dev"))).toBe(true);
+    expect(existsSync(join(state, "invoke.sqlite"))).toBe(true);
+  });
+
+  it("with no flags, the agent's own commands start in that working directory, not the project", async () => {
+    const dir = await fauxAgent("fa-instance-default-cwd-");
+    const result = await runInProcess(["invoke", "use a tool", dir, "--json"]);
+    expect(result.code, result.stderr).toBe(0);
+    // The faux model's tool reads SYSTEM.md relative to the working directory: the project's is not there.
+    expect(result.stdout).toContain("tool_started");
+    expect(result.stdout).not.toContain("You are terse.");
+  });
+
   it("start serves the built project from the root, with the state and the configuration it names", async () => {
     const dir = await agentWorkspace("fa-instance-start-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
@@ -171,6 +203,24 @@ describe("commands that open an instance", () => {
       },
       env,
     );
+  });
+
+  it("with no flags, start runs from .fastagent/start/, apart from dev's .fastagent/dev/", async () => {
+    const dir = await agentWorkspace("fa-instance-default-start-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      ".secrets/production/.env": "OPENAI_API_KEY=sk-test\n",
+    });
+    await built(dir);
+    await whileRunning(
+      ["start", dir, "--port", "0", "--bind", "127.0.0.1", "--no-input"],
+      /Agent API: .*\n/,
+      async (stderr) => {
+        expect(stderr).toContain(` — ${join(dir, ".fastagent", "start")}\n`);
+        expect(stderr).toContain(`state:       ${join(dir, ".fastagent", "start", ".state")}`);
+      },
+    );
+    expect(existsSync(join(dir, ".fastagent", "start", ".state", "agent.sqlite"))).toBe(true);
+    expect(existsSync(join(dir, ".fastagent", "dev"))).toBe(false);
   });
 
   it("start does not read the project's fastagent.json: only the configuration it is given", async () => {

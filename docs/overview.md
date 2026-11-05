@@ -13,7 +13,7 @@ It does not ask you to rewrite an agent into a framework-specific project. An ag
 Coding agents made it cheap to vibe useful agent directories. The next gap is serving: local agents live in terminals, but real services receive webhooks, join chats, run on a clock and keep their conversations across restarts. FastAgent connects those directories to real triggers and runtimes.
 
 ```txt
-reviewer/                   # the agent, its working directory, and a git repository
+reviewer/                   # the agent: its definition, in a git repository
 ├── fastagent.config.ts     # the marker: defineAgent({ defaults, providers, … })
 ├── context.json            # its content and environment: the repositories it works on, the commands it runs
 ├── fastagent.json          # optional: this instance's configuration, and the content it adds (a deploy does not carry it yet)
@@ -25,7 +25,8 @@ reviewer/                   # the agent, its working directory, and a git reposi
 ├── src/schedules/          # optional prompts run on a cron
 ├── reference.md            # optional reference material the agent reads (any file layout)
 ├── content/handbook/       # a clone fastagent makes of each repository the agent works on
-└── .state/ .secrets/       # this machine's instance: its storage, credentials (kept out of git, except .secrets/.env.example)
+├── .secrets/               # this machine's credentials (kept out of git, except .secrets/.env.example)
+└── .fastagent/dev/         # this machine's dev instance: the agent's cwd, its .state/ storage and content/ clones (kept out of git)
 
 ~/code/app/                 # a checkout of acme/app, added in fastagent.json as a directory
 └── AGENTS.md               # the project's own: a file the agent reads there, never part of its prompt

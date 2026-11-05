@@ -127,14 +127,14 @@ Use `--no-watch` to serve once without the supervisor.
 ## Sessions disappear after redeploy
 
 By default, machine state (the agent's storage, `agent.sqlite`, with its sessions; channel state; schedule state)
-lives under the agent's
-`.state/`, the credentials (`auth.json`, rotated by each OAuth refresh) under its `.secrets/`, and the clones of its
+lives under the instance's
+`.state/` (by default in the project's `.fastagent/dev/`, and `.fastagent/start/` for `start`), the credentials (`auth.json`, rotated by each OAuth refresh) under its `.secrets/`, and the clones of its
 github content under its `content/`:
 
 ```txt
-<state root>    # default <agent dir>/.state
+<state root>    # default <agent dir>/.fastagent/dev/.state (start: .fastagent/start/.state)
 <secrets dir>   # default <agent dir>/.secrets
-content/        # <agent dir>/content
+content/        # <working directory>/content (default <agent dir>/.fastagent/dev/content)
 ```
 
 A redeploy that replaces the agent wipes all three. Point each at durable storage (generated deployments do):

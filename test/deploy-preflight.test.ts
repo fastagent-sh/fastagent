@@ -242,8 +242,9 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   it("a kept .dockerignore: warns for missing secret/machinery/node_modules excludes; notes a .git exclude", async () => {
     const agentDir = await agent({ "package.json": `{"type":"module"}` });
     await mkdir(join(agentDir, "node_modules")); // installed deps exist → they could actually be uploaded
-    await mkdir(join(agentDir, ".state")); // …as does machine state: only what is THERE gets warned about
-    await mkdir(join(agentDir, "content")); // …and this machine's clones of the agent's content
+    const instance = join(agentDir, ".fastagent", "dev");
+    await mkdir(join(instance, ".state"), { recursive: true }); // …as does machine state: only what is THERE gets warned about
+    await mkdir(join(agentDir, "content")); // …and clones in the root, which a host refuses
     await writeFile(join(agentDir, ".dockerignore"), ".git\n"); // the author's own — kept, not ours
 
     const pre = await call(agentDir, { model: "openai/gpt-4o-mini" });
@@ -251,7 +252,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (pre.ok) {
       const text = JSON.stringify(pre.messages);
       expect(text).toMatch(/BAKE SECRETS INTO THE IMAGE/); // missing .secrets/.env excludes — the critical one
-      expect(text).toMatch(/does not exclude .{0,12}\.state/); // machine state would ship
+      expect(text).toMatch(/does not exclude .{0,12}\.fastagent.{0,12} — the build machine's sessions/); // state and clones would ship
       expect(text).toMatch(/does not exclude .{0,12}content.{0,12} — this machine's clones/); // an issue: --run gates on it
       expect(text).toMatch(/does not exclude .{0,30}node_modules/); // the native-binary clobber hazard — named
       expect(text).toMatch(/excludes \.git/); // pull\/push loop dead — named as a note
@@ -261,6 +262,23 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await writeFile(join(agentDir, ".dockerignore"), "**/.secrets\n**/.env\n");
     const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(gated).toMatchObject({ ok: false, gate: expect.stringMatching(/does not exclude .content/) });
+  });
+
+  it("a kept .dockerignore that excludes only the state by name still warns that the instance's clones would ship", async () => {
+    const agentDir = await agent({ "package.json": `{"type":"module"}` });
+    await mkdir(join(agentDir, ".fastagent", "dev", "content", "app"), { recursive: true });
+    await mkdir(join(agentDir, ".fastagent", "dev", ".state"), { recursive: true });
+    const ignore = join(agentDir, ".dockerignore");
+    // What an earlier generated file, and many written by hand, hold: the name-based rules, which cover .state alone.
+    await writeFile(ignore, "**/node_modules\n**/.secrets/**\n**/.state\n**/.env\n/content\n");
+    const warned = async () => {
+      const pre = await call(agentDir, { model: "openai/gpt-4o-mini" });
+      if (!pre.ok) throw new Error(pre.gate);
+      return JSON.stringify(pre.messages);
+    };
+    expect(await warned()).toMatch(/does not exclude .{0,12}\.fastagent.{0,12} — the build machine's sessions/);
+    await writeFile(ignore, "**/node_modules\n**/.secrets/**\n**/.state\n**/.env\n/content\n/.fastagent\n");
+    expect(await warned()).not.toMatch(/does not exclude .{0,12}\.fastagent/);
   });
 
   it("the GENERATED dockerignore passes its own leak gate — contents-only .secrets excludes are not a leak", async () => {
@@ -400,7 +418,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       if (clean.ok)
         // The DIR, not the two filenames we happen to know — an atomic-write temp or a second key file
         // beside auth.json must not ship either.
-        expect(clean.container.machineryPaths).toEqual([".secrets", "creds", ".state"]);
+        expect(clean.container.machineryPaths).toEqual([".secrets", "creds"]);
 
       // A kept .dockerignore carrying only the default name-based excludes misses it → gate.
       await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");

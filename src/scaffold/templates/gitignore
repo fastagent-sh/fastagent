@@ -5,13 +5,13 @@
 # DIRECTORY, so a symlinked one (pnpm, a shared store) would show up as untracked.
 node_modules
 
-# generated: `fastagent build`'s package, and FastAgent's own files
+# generated: `fastagent build`'s package, and FastAgent's own files, a local instance's state, working directory and
+# clones of the agent's content included (`.fastagent/dev/`, `.fastagent/start/`)
 /dist
 .fastagent
-# machine state: the agent's storage, channel state, schedule state
+# the same, where an instance is placed in the agent's directory (`--state`, `--root`), and on a deployed host, where
+# `content/` is a link to the volume (no trailing slash, since a link is not a directory)
 .state
-# where fastagent clones the agent's content (each clone is its repository's, not this one's). No trailing
-# slash: on a deployed host it is a link itself.
 /content
 .cache
 

@@ -163,8 +163,8 @@ export default defineAgent({
 
 ## Content
 
-An agent's directory is its own: its definition, its working directory, and its local instance's `.state/` and
-`.secrets/`. What it works on, its content, is declared by name in two places, never inferred from where the directory
+An agent's directory is its own: its definition and its `.secrets/`; its local instances' working directories and state
+are under its `.fastagent/`. What it works on, its content, is declared by name in two places, never inferred from where the directory
 sits:
 
 - **`context.json`** is part of the definition: committed and shared with everyone who has the agent, so it declares
@@ -447,9 +447,15 @@ A program calls it with `connectAgent(url, { apiKey })` from `@fastagent-sh/fast
 `.secrets/production/.env` when there is none, unless `fastagent.config.ts` says `http: { api: false }`, which also
 keeps a serve from answering the API with a key its environment still holds.
 
-## Machinery: `.state/`, `.secrets/` and `content/`
+## Machinery: `.fastagent/`, `.secrets/` and `content/`
 
-- `<agent dir>/.state/` — the instance's state: its storage (`agent.sqlite`: sessions, messages, entries), channel
+- `<agent dir>/.fastagent/<dev|start>/` — a local instance's root, which is its working directory (`dev` uses
+  `.fastagent/dev/`, and `start`, `invoke` of a deployment's build and the other commands that run what `start` runs use
+  `.fastagent/start/`, kept apart so a trial of the production build never reads or writes the development sessions and
+  clones). `.fastagent/dev/` can be deleted at any time to start the development agent over; `.fastagent/start/` holds
+  the sessions of a local `start`, so give a `start` you want to keep a place of its own with `--root`. `.fastagent/` is
+  ignored by git and left out of every image.
+- `<instance root>/.state/` — the instance's state: its storage (`agent.sqlite`: sessions, messages, entries), channel
   state (`channels/<name>/`, one per channel file) and schedule state (`schedule/`). One process holds it at a time; point it at a volume in
   a container.
 - `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `device.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
@@ -463,7 +469,7 @@ keeps a serve from answering the API with a key its environment still holds.
 ### Where an instance lives
 
 An instance has a working directory, where the agent runs and `content/` clones land, and a state root. By default both
-are the agent directory, as above. `--root <dir>` (`FASTAGENT_ROOT`) makes `<dir>` the working directory with the state
+are in the project's `.fastagent/dev/` for `dev` and `.fastagent/start/` for `start`, as above. `--root <dir>` (`FASTAGENT_ROOT`) makes `<dir>` the working directory with the state
 in `<dir>/.state`; `--state <dir>` (`FASTAGENT_STATE_DIR`) and `--workdir <dir>` (`FASTAGENT_WORKDIR`) place either apart
 from it, a flag over its variable, and a variable over the default. The commands that open an instance or read its state
 take them: `dev`, `start`, `invoke`, `info` and `schedules`. A relative path resolves once, against the directory the
@@ -488,9 +494,10 @@ FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent 
 ```
 
 ```txt
-state root: FASTAGENT_STATE_DIR    > <root>/.state > <agent dir>/.state (production: .state/production)
+state root: FASTAGENT_STATE_DIR    > <root>/.state > <agent dir>/.fastagent/dev/.state (start: .fastagent/start/.state)
 secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets (production: .secrets/production)
 content:    <working directory>/content/<name> (a clone), or the directory fastagent.json names
+workdir:    FASTAGENT_WORKDIR      > <root> > <agent dir>/.fastagent/dev (start: .fastagent/start)
 storage:    <state root>/agent.sqlite
 models:     <state root>/models/
 auth:       FASTAGENT_AUTH_PATH    > <secrets>/auth.json

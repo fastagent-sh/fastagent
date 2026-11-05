@@ -58,7 +58,7 @@ through its channels, and each channel verifies the platform calling it.
 ## 2. Create the agent beside what it works on
 
 An agent is a directory of its own. It holds `fastagent.config.ts`, the definition, and the local instance's
-`.state/`, `.secrets/` and `content/` (where it reaches its content: links and clones), and it is the agent's working directory. What the agent works on (a project, a folder) is
+`.secrets/`, and its local instances' `.fastagent/` (their state, and the clones of its content), but it is not the agent's working directory: that is `.fastagent/dev/` for `dev`. What the agent works on (a project, a folder) is
 declared as its **content**; the agent never sits inside it, and a project never sits inside the agent.
 
 | Situation | Do |
@@ -469,7 +469,7 @@ accepted turns at least once, so side effects must tolerate repetition.
 
 `fastagent info` shows resolved paths. Verify retention on the selected host; deleting its volume also
 deletes the data it holds. See [what deploy bakes](deploy.md#what-deploy-bakes), [host guarantees](deploy.md),
-and [state configuration](configuration.md#machinery-state-secrets-and-content).
+and [state configuration](configuration.md#machinery-fastagent-secrets-and-content).
 
 ## 10. Report what was actually verified
 

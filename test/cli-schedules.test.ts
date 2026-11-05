@@ -29,7 +29,7 @@ describe("cli: schedules", () => {
   build: () => ({ kind: "fastagent.schedule", cron: "0 9 * * 1", tz: "Asia/Shanghai", prompt: "review" }),
 };\n`,
     });
-    const claims = join(dir, ".state", "schedule", "claims", "daily");
+    const claims = join(dir, ".fastagent", "dev", ".state", "schedule", "claims", "daily");
     await mkdir(claims, { recursive: true });
     await writeFile(
       join(claims, "2026-01-01T09-00-00-000Z"),
@@ -77,7 +77,7 @@ describe("cli: schedules", () => {
 
     // An OLD claim that cannot be read does not fail the text listing, which reads the newest only; the whole history
     // (`--json`) does say so.
-    const claims = join(dir, ".state", "schedule", "claims", "daily");
+    const claims = join(dir, ".fastagent", "dev", ".state", "schedule", "claims", "daily");
     await mkdir(join(claims, "2026-01-01T09-00-00-000Z"), { recursive: true }); // a directory where a claim file goes
     await writeFile(
       join(claims, "2026-01-02T09-00-00-000Z"),
@@ -93,8 +93,8 @@ describe("cli: schedules", () => {
 
     // Unreadable state is the operator's to fix: a read-only command says so in one line rather than printing the
     // Node stack `readFires` throws for the serving boot's benefit.
-    await mkdir(join(dir, ".state", "schedule", "claims"), { recursive: true });
-    await writeFile(join(dir, ".state", "schedule", "claims", "daily"), ""); // a FILE where the dir goes
+    await mkdir(join(dir, ".fastagent", "dev", ".state", "schedule", "claims"), { recursive: true });
+    await writeFile(join(dir, ".fastagent", "dev", ".state", "schedule", "claims", "daily"), ""); // a FILE where the dir goes
     const unreadable = await runInProcess(["schedules", "list", dir, "--json"]);
     expect(unreadable.code).toBe(1);
     expect(unreadable.stdout).toBe("");

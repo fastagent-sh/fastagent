@@ -122,7 +122,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
     },
     { timeout: 15000 },
   );
-  const bindings = JSON.parse(await readFile(join(dir, ".state", "mcp-bindings.json"), "utf8"));
+  const bindings = JSON.parse(await readFile(join(dir, ".fastagent", "dev", ".state", "mcp-bindings.json"), "utf8"));
   expect(bindings.test).toBe(status.grant_id);
   const grants = await readFile(join(dir, ".secrets", "mcp-auth.json"), "utf8");
   expect(grants).toContain("refreshToken");
@@ -144,11 +144,17 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
     ),
   ).toBe("");
   expect(JSON.stringify(status)).not.toContain("accessToken");
-  const held = await openLockedStorage(join(dir, ".state", "agent.sqlite"), "posix", "test serving instance");
+  const held = await openLockedStorage(
+    join(dir, ".fastagent", "dev", ".state", "agent.sqlite"),
+    "posix",
+    "test serving instance",
+  );
   try {
     const refused = await run(["mcp", "disconnect", "test", dir, "--json"], undefined, env);
     expect(refused.code).toBe(1);
-    expect(JSON.parse(await readFile(join(dir, ".state", "mcp-bindings.json"), "utf8")).test).toBe(status.grant_id);
+    expect(JSON.parse(await readFile(join(dir, ".fastagent", "dev", ".state", "mcp-bindings.json"), "utf8")).test).toBe(
+      status.grant_id,
+    );
   } finally {
     await held.close(BACKGROUND_CONTEXT);
   }
@@ -156,5 +162,5 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   expect(disconnected.code).toBe(0);
   expect(JSON.parse(disconnected.stdout).grant_revoked).toBe(false);
   expect(await readFile(join(dir, ".secrets", "mcp-auth.json"), "utf8")).toBe(grants);
-  expect(JSON.parse(await readFile(join(dir, ".state", "mcp-bindings.json"), "utf8"))).toEqual({});
+  expect(JSON.parse(await readFile(join(dir, ".fastagent", "dev", ".state", "mcp-bindings.json"), "utf8"))).toEqual({});
 }, 45000);

@@ -78,7 +78,7 @@ it("selects complete independent value files and onboarding state; explicit path
   const env: NodeJS.ProcessEnv = {};
   selectAgentEnvironment("production", env);
   expect(dotEnvPath(dir, env)).toBe(join(dir, ".secrets", "production", ".env"));
-  expect(resolveStateRoot(dir, env)).toBe(join(dir, ".state", "production"));
+  expect(resolveStateRoot(dir, env)).toBe(join(dir, ".fastagent", "start", ".state"));
   env.FASTAGENT_SECRETS_DIR = "/external/secrets";
   env.FASTAGENT_STATE_DIR = "/external/state";
   expect(resolveSecretsDir(dir, env)).toBe("/external/secrets");
@@ -87,7 +87,7 @@ it("selects complete independent value files and onboarding state; explicit path
   delete env.FASTAGENT_SECRETS_DIR;
   delete env.FASTAGENT_STATE_DIR;
   expect(dotEnvPath(dir, env)).toBe(join(dir, ".secrets", ".env"));
-  expect(resolveStateRoot(dir, env)).toBe(join(dir, ".state"));
+  expect(resolveStateRoot(dir, env)).toBe(join(dir, ".fastagent", "dev", ".state"));
 });
 
 it("production never falls back to dev credentials when its file is absent", async () => {
