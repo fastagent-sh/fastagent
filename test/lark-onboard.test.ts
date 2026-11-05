@@ -50,12 +50,12 @@ const manual404 = async () => ({ manualReason: "config API returned HTTP 404" })
 
 describe("the launcher link", () => {
   it("creates the app with the scopes and the event the channel needs, so nothing is ticked afterwards", () => {
-    const link = new URL(larkConsoleUrl("websocket"));
+    const link = new URL(larkConsoleUrl("connection"));
     expect(`${link.origin}${link.pathname}`).toBe("https://open.larksuite.com/page/launcher");
     expect(link.searchParams.get("from")).toBe("backend_oneclick");
     // The same request Feishu's scan-to-create carries: one place says what a Feishu or Lark app needs.
-    expect(addonsOf(larkConsoleUrl("websocket"))).toEqual(feishuAppAddons("websocket"));
-    expect(addonsOf(larkConsoleUrl("websocket"))).toMatchObject({
+    expect(addonsOf(larkConsoleUrl("connection"))).toEqual(feishuAppAddons("connection"));
+    expect(addonsOf(larkConsoleUrl("connection"))).toMatchObject({
       scopes: {
         tenant: expect.arrayContaining(["im:message.group_msg", "im:message:readonly", "im:chat.members:read"]),
       },
@@ -65,7 +65,7 @@ describe("the launcher link", () => {
 
   it("asks for what the ingress needs: a webhook app also asks to register its own Request URL", () => {
     expect(addonsOf(larkConsoleUrl("webhook"))).toEqual(feishuAppAddons("webhook"));
-    expect(larkConsoleUrl("webhook")).not.toBe(larkConsoleUrl("websocket"));
+    expect(larkConsoleUrl("webhook")).not.toBe(larkConsoleUrl("connection"));
   });
 });
 
@@ -99,7 +99,7 @@ describe("guided Lark app onboarding", () => {
     const bootstrapWebhook = vi.fn(async () => ({ token: "must-not-run" }));
     await expect(
       onboardLarkApp(fx.io, {
-        ingress: "websocket",
+        ingress: "connection",
         verifyCredentials: async () => {},
         bootstrapWebhook,
       }),

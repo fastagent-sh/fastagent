@@ -208,14 +208,14 @@ describe("cli: deploy", () => {
       // byIngress as it returns, so the fixture needs no package of its own.
       "src/channels/hook.ts":
         'export default { kind: "fastagent.by-ingress", webhook: () => ({ "POST /hook": () => new Response("ok") }), ' +
-        'websocket: { name: "hook", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) } };\n',
+        'connection: { name: "hook", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) } };\n',
       ".secrets/production/.env": "OPENAI_API_KEY=sk\n",
     });
     const plain = await runInProcess(["deploy", "docker", dir]);
     expect(plain.code, plain.stderr).toBe(0);
     expect(plain.stderr).toContain('route channel "hook" is custom');
     const config = join(dirname(dir), "websocket.json");
-    await writeFile(config, JSON.stringify({ channels: { hook: { ingress: "websocket" } } }));
+    await writeFile(config, JSON.stringify({ channels: { hook: { ingress: "connection" } } }));
     const chosen = await runInProcess(["deploy", "docker", dir, "--config", config, "--force"]);
     expect(chosen.code, chosen.stderr).toBe(0);
     expect(chosen.stderr).toContain('long-connection channel "hook" is custom');

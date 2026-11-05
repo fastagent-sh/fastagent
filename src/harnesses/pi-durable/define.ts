@@ -115,23 +115,23 @@ export function isNeeds(value: unknown): value is Needs<unknown> {
 }
 
 /** How a channel receives: inbound HTTP requests, or a connection it opens itself and keeps. */
-export type Ingress = "webhook" | "websocket";
+export type Ingress = "webhook" | "connection";
 
 /** A channel that can receive either way, each way's module (or `needs` around it) under its name. */
 export interface ByIngress<T = unknown> {
   readonly kind: "fastagent.by-ingress";
   readonly webhook: T | Needs<T>;
-  readonly websocket: T | Needs<T>;
+  readonly connection: T | Needs<T>;
 }
 
 /**
  * Default-export from `src/channels/<name>.ts` a channel that receives either way: each instance takes the one its
- * configuration names (`channels.<name>.ingress`), and without one `dev` takes `websocket` and everything else
+ * configuration names (`channels.<name>.ingress`), and without one `dev` takes `connection` and everything else
  * `webhook`. Each way declares its own secrets, so an instance is asked only for its way's.
  * @public
  */
-export function byIngress<T>(ways: { webhook: T | Needs<T>; websocket: T | Needs<T> }): ByIngress<T> {
-  return { kind: "fastagent.by-ingress", webhook: ways.webhook, websocket: ways.websocket };
+export function byIngress<T>(ways: { webhook: T | Needs<T>; connection: T | Needs<T> }): ByIngress<T> {
+  return { kind: "fastagent.by-ingress", webhook: ways.webhook, connection: ways.connection };
 }
 
 export function isByIngress(value: unknown): value is ByIngress {

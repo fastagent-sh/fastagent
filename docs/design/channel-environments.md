@@ -36,9 +36,9 @@ Both environments' secrets remain ignored by git and excluded from the image. Pr
 
 ## 2. The ingress is the instance's configuration
 
-One channel file offers both ways, `byIngress({ webhook, websocket })`, and each instance's configuration chooses:
+One channel file offers both ways, `byIngress({ webhook, connection })`, and each instance's configuration chooses:
 
-- `channels.<name>.ingress` in the instance's `fastagent.json` is `"webhook"` or `"websocket"`; a name the agent has
+- `channels.<name>.ingress` in the instance's `fastagent.json` is `"webhook"` or `"connection"` (a connection the channel opens: Feishu's and Lark's long connection); a name the agent has
   no channel by is refused.
 - Unset means webhook; `dev` (which marks its process `FASTAGENT_DEV=1`) means WebSocket. A deployment receives by
   webhook because a host that scales to zero (AgentCore today; Fly Sprites, Railway Serverless, Cloudflare's Durable

@@ -100,7 +100,7 @@ the steps it could not do.
   `.secrets/production/.env`. Production never falls back to dev values. Put production provider keys and other
   required values there explicitly; use `.secrets/.env.example` as a template, not the filled dev file.
 - **Feishu/Lark receive by webhook on every host** unless the configuration `--config` delivers sets
-  `channels.feishu.ingress` (`channels.lark.ingress`) to `"websocket"`, while `dev` keeps WebSocket
+  `channels.feishu.ingress` (`channels.lark.ingress`) to `"connection"`, while `dev` keeps WebSocket
   ([design note](design/channel-environments.md)): a host that scales to zero wakes on an inbound request. Interactive
   `--run` creates a separate production app when its credentials are missing: Feishu uses scan-to-create with the
   agent scopes plus `application:application:patch`; Lark uses guided console setup. App ID and Secret are saved
@@ -366,7 +366,7 @@ What to know:
   fails the deploy with the runtime's error.
 - **Redeploys stop the runtime session** so the next call uses the new image; in-flight work is lost.
 - **No long-connection channels.** Feishu/Lark receive by webhook here by default; a delivered configuration setting
-  `channels.<name>.ingress` to `"websocket"` makes `--run` refuse.
+  `channels.<name>.ingress` to `"connection"` makes `--run` refuse.
 - **The IAM-gated door takes only a probe.** `InvokeAgentRuntime` with the deployment's fixed `runtimeSessionId`
   (printed in the runbook) answers whether the definition opened; the agent is reached through its channels and
   schedules.

@@ -6,7 +6,7 @@ import { type LarkChannelOptions, larkChannel, larkWebSocketChannel } from "@fas
 // feishu` instead.
 //
 // How it receives is the instance's choice, `channels.lark.ingress` in its fastagent.json (webhook |
-// websocket). Unset, `fastagent dev` connects OUT by WebSocket (no public URL, no tunnel), and everything
+// connection). Unset, `fastagent dev` opens a long connection OUT (no public URL, no tunnel), and everything
 // else — `fastagent start`, every deployment — receives by webhook at POST /lark, the way a host that
 // wakes on a request is reached.
 // Dev reads .secrets/.env; production reads .secrets/production/.env. Interactive `deploy --run`
@@ -63,7 +63,7 @@ export default byIngress({
         ...policy,
       }),
   ),
-  websocket: needs(["LARK_APP_ID", "LARK_APP_SECRET"], (secrets) =>
+  connection: needs(["LARK_APP_ID", "LARK_APP_SECRET"], (secrets) =>
     larkWebSocketChannel({ appId: secrets.LARK_APP_ID, appSecret: secrets.LARK_APP_SECRET, ...policy }),
   ),
 });

@@ -344,7 +344,7 @@ async function createFeishuAppFlow(
     person,
   });
 
-  if (ingress === "websocket") {
+  if (ingress === "connection") {
     const versionUrl = `${apiBase}/app/${appId}/version`;
     const choose =
       "WebSocket ingress needs no Verification Token, Encrypt Key, Request URL, or tunnel: choose long connection in " +
@@ -458,7 +458,7 @@ export function unpreparedFeishuApps(
   return (["feishu", "lark"] as const).flatMap((kind) => {
     const channel = channels.find((entry) => entry.name === kind);
     if (!channel) return [];
-    const ingress = channel.ingress === "webhook" ? "webhook" : "websocket";
+    const ingress = channel.ingress === "webhook" ? "webhook" : "connection";
     return feishuAppSecretNames(kind, ingress).some((name) => !values.get(name)?.trim()) ? [{ kind, ingress }] : [];
   });
 }

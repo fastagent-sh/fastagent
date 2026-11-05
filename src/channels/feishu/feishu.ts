@@ -721,7 +721,7 @@ export function buildFeishuChannel(
       throw new Error(
         `${factoryName} receives by webhook and needs a non-empty verificationToken: \`fastagent deploy <host> --run\` ` +
           `or \`fastagent add ${profile.kind} --ingress webhook\` captures ${profile.envPrefix}_VERIFICATION_TOKEN ` +
-          `(console → Events & Callbacks has it too), or set channels.<name>.ingress to "websocket" in the instance's ` +
+          `(console → Events & Callbacks has it too), or set channels.<name>.ingress to "connection" in the instance's ` +
           `fastagent.json to receive by WebSocket instead`,
       );
     }

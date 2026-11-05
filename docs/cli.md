@@ -443,7 +443,7 @@ fastagent add slack [agent]    # create/install an internal app; --no-onboard sc
 fastagent add feishu [agent]   # 飞书: scan-to-create the app
 fastagent add lark [agent]     # Lark international: console + credential validation
                              # all channels take --env dev|production (default: dev)
-                             # feishu/lark take --ingress websocket|webhook: writes channels.<kind>.ingress to dev's
+                             # feishu/lark take --ingress connection|webhook: writes channels.<kind>.ingress to dev's
                              # fastagent.json, or to --config <file> (required with --env production)
                              # (unset: dev connects by websocket, start and deployments receive by webhook)
                              # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding

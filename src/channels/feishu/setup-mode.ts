@@ -1,5 +1,5 @@
 /** Feishu/Lark app-level event subscription choice: how a channel receives, and what an app is set up for. */
-export type FeishuSubscriptionMode = "webhook" | "websocket";
+export type FeishuSubscriptionMode = "webhook" | "connection";
 
 /**
  * Configuring THIS app through the v7 config API: registering a webhook Request URL and switching the subscription

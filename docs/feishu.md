@@ -57,13 +57,13 @@ credentials.
 ### How the channel receives
 
 One channel file serves both ways of receiving (`byIngress`), and each instance's configuration chooses between
-them: `channels.feishu.ingress` (`channels.lark.ingress`) in its `fastagent.json`, `"webhook"` or `"websocket"`.
+them: `channels.feishu.ingress` (`channels.lark.ingress`) in its `fastagent.json`, `"webhook"` or `"connection"` (the long connection).
 Unset, the command decides ([design note](design/channel-environments.md)):
 
 | `channels.feishu.ingress` | `fastagent dev` (dev app) | `fastagent start`, every deployment (production app) |
 |---|---|---|
 | Unset | WebSocket long connection | webhook at `POST /feishu` |
-| `"websocket"` | WebSocket | WebSocket |
+| `"connection"` | WebSocket | WebSocket |
 | `"webhook"` | webhook (`dev --tunnel` gives it a public URL) | webhook |
 
 A deployment receives by webhook because the hosts that scale to zero wake on an inbound request: a long connection
@@ -84,7 +84,7 @@ with `--json`, through a coding agent's user (without either it stops, naming th
 webhook scopes including `patch`, then captures the Verification Token into
 `.secrets/production/.env`. It registers the deployment's Request URL once readiness and model login pass.
 Lark uses guided production-app setup and sets the Request URL by hand when its config API answers 404.
-`add feishu --ingress webhook|websocket` writes `channels.feishu.ingress` to the development instance's
+`add feishu --ingress webhook|connection` writes `channels.feishu.ingress` to the development instance's
 `fastagent.json`, or to the file `--config` names; with `--env production` it needs `--config`, the configuration
 `deploy --config` delivers. It refuses an existing channel file that names its factory instead of offering both ways.
 A Docker deployment without `--tunnel` has no URL for automated webhook setup.
@@ -214,7 +214,7 @@ export default byIngress({
         ...policy,
       }),
   ),
-  websocket: needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
+  connection: needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
     feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
   ),
 });

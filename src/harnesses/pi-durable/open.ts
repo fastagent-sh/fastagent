@@ -172,12 +172,13 @@ function chosenChannel(
   build: (value: unknown, source: string) => ChannelModule | LongConnectionChannelModule,
 ): ChannelModule | LongConnectionChannelModule {
   const shapeOf = (module: ChannelModule | LongConnectionChannelModule) =>
-    channelIngress(module) === "webhook" ? "webhook" : "websocket";
+    channelIngress(module) === "webhook" ? "webhook" : "connection";
+  const by = (way: "webhook" | "connection") => (way === "webhook" ? "webhook" : "a connection it opens");
   if (isByIngress(value)) {
     const way = chosenIngress(config, name);
     const module = build(value[way], `${file} (byIngress ${way})`);
     if (shapeOf(module) !== way) {
-      throw new Error(`${file}: its ${way} way builds a channel that receives by ${shapeOf(module)}`);
+      throw new Error(`${file}: its ${way} way builds a channel that receives by ${by(shapeOf(module))}`);
     }
     return module;
   }
@@ -185,8 +186,8 @@ function chosenChannel(
   const named = config.channels?.[name]?.ingress;
   if (named !== undefined && shapeOf(module) !== named) {
     throw new Error(
-      `channels.${name}.ingress is "${named}", and ${file} receives only by ${shapeOf(module)}: default-export ` +
-        `byIngress({ webhook, websocket }) from it to let an instance choose`,
+      `channels.${name}.ingress is "${named}", and ${file} receives only by ${by(shapeOf(module))}: default-export ` +
+        `byIngress({ webhook, connection }) from it to let an instance choose`,
     );
   }
   return module;

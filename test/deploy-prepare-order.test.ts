@@ -174,7 +174,7 @@ it("does not prepare an app a deployment cannot point anywhere, and says what it
   await expect(runDeploy("docker", dir, { run: true })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
   expect(said.join("\n")).toMatch(
-    /feishu receive by webhook here, and this Docker deployment has no public URL .*--tunnel.*channels\.feishu\.ingress to "websocket" in the configuration --config delivers/,
+    /feishu receive by webhook here, and this Docker deployment has no public URL .*--tunnel.*channels\.feishu\.ingress to "connection" in the configuration --config delivers/,
   );
 
   calls.length = 0;

@@ -5,7 +5,7 @@ import { type FeishuChannelOptions, feishuChannel, feishuWebSocketChannel } from
 // (open.feishu.cn) only; a Lark-international tenant uses `fastagent add lark` instead.
 //
 // How it receives is the instance's choice, `channels.feishu.ingress` in its fastagent.json (webhook |
-// websocket). Unset, `fastagent dev` connects OUT by WebSocket (no public URL, no tunnel), and everything
+// connection). Unset, `fastagent dev` opens a long connection OUT (no public URL, no tunnel), and everything
 // else — `fastagent start`, every deployment — receives by webhook at POST /feishu, the way a host that
 // wakes on a request is reached.
 // Dev reads .secrets/.env; production reads .secrets/production/.env. Interactive `deploy --run`
@@ -61,7 +61,7 @@ export default byIngress({
         ...policy,
       }),
   ),
-  websocket: needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
+  connection: needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
     feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
   ),
 });

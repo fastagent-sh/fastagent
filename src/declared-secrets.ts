@@ -26,7 +26,7 @@ export interface DeclaredSecret {
   /** The code runs without it: no start is refused for its absence. */
   optional: boolean;
   /** Declared by one way of a channel that receives either way (`byIngress`): read only when it receives that way. */
-  when?: { channel: string; ingress: "webhook" | "websocket" };
+  when?: { channel: string; ingress: "webhook" | "connection" };
 }
 
 /**

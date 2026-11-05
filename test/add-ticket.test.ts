@@ -85,7 +85,7 @@ it("a ticket's run is the whole add: the person waited on, the app written, its 
   const statuses: string[] = [];
   stubFeishu(statuses, ticket);
   try {
-    await expect(runAddChannel("feishu", dir, { ingress: "websocket", ticket })).rejects.toBe(exited);
+    await expect(runAddChannel("feishu", dir, { ingress: "connection", ticket })).rejects.toBe(exited);
     expect(statuses).toEqual(["need_user_action", "need_user_action"]);
     const done = await checkTicket(ticket);
     expect(done).toMatchObject({
@@ -125,7 +125,7 @@ it("a failure inside the run fails the ticket with its reason, not a bare exit",
     timeoutSeconds: 60,
   });
   try {
-    await expect(runAddChannel("feishu", dir, { ingress: "websocket", ticket })).rejects.toBe(exited);
+    await expect(runAddChannel("feishu", dir, { ingress: "connection", ticket })).rejects.toBe(exited);
     expect(await checkTicket(ticket)).toMatchObject({
       status: "failed",
       message: expect.stringContaining("no package.json"),

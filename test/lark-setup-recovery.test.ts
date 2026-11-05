@@ -46,7 +46,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function setup(ingress: "websocket" | "webhook" = "webhook") {
+function setup(ingress: "connection" | "webhook" = "webhook") {
   return onboardFeishuCloudApp(dir, "lark", ingress, "fastagent deploy fly --run --json", person);
 }
 
@@ -142,7 +142,7 @@ it("fails before webhook setup when saving the verified pair fails", async () =>
 });
 
 it("gives remote users port forwarding instructions without requesting a file edit", async () => {
-  const result = setup("websocket");
+  const result = setup("connection");
   const first = await page();
   const port = new URL(first.url).port;
   expect(first.instructions).toContain(`ssh -N -L ${port}:127.0.0.1:${port} user@host`);

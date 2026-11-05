@@ -248,7 +248,7 @@ async function deploy(
             `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
               `public URL to point the app at — re-run with --tunnel (the app is prepared then), or set up your own ` +
               `ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
-              `set ${kinds.map((kind) => `channels.${kind}.ingress`).join(", ")} to "websocket" in the configuration ` +
+              `set ${kinds.map((kind) => `channels.${kind}.ingress`).join(", ")} to "connection" in the configuration ` +
               `--config delivers`,
           ),
         );
