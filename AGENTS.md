@@ -151,6 +151,8 @@ src/
 │   ├── secret.ts           # the ONE constant-time comparison every shared-secret gate reads through
 │   ├── wait-health.ts      # readiness probe for a server THIS process reaches directly (not a public URL)
 │   ├── registration.ts     # the shared registrar outcome (registered|manual|failed) + the ONE retry loop
+│   ├── webhooks.ts         # a serve pointing its platforms at itself: which channels take a webhook, the step a
+│   │                       # person takes for each, and the registration the instance's own credentials can make
 │   ├── kit/                # WRITING a channel. Its defining property is an import fact, asserted in
 │   │   │                   # package-boundary.test.ts: everything here has consumers only under
 │   │   │                   # channels/<platform>/, and serve/router/discover have none there

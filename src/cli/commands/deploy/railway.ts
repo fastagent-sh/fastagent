@@ -9,6 +9,7 @@ import { deployRailwayRun } from "../../../deploy/railway/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
+import { deliveredConfigArtifact, withPublicUrl } from "../../../deploy/container.ts";
 import { failStartup } from "../../fail.ts";
 import { RAILWAY_LOGIN, hostLogin } from "./host-login.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
@@ -34,6 +35,9 @@ export const railwayHost: HostDeploy = {
     if (opts.run) {
       return runDeployRailway({
         agentDir,
+        // The URL Railway mints is read before the upload, and the image delivers it as `http.publicUrl`.
+        deliverPublicUrl: (url) =>
+          write([deliveredConfigArtifact(withPublicUrl(container.config, url))], { force: true }),
         name: serviceName,
         modelAuth,
         boxLogin,
@@ -68,6 +72,7 @@ async function runDeployRailway(params: {
   values: ReadonlyMap<string, string>;
   valueFile: string;
   intoLinked: boolean;
+  deliverPublicUrl: (url: string) => Promise<void>;
 }): Promise<string> {
   const { agentDir, name, channels, intoLinked } = params;
   const railway = spawnRunner("railway", agentDir);
@@ -91,6 +96,7 @@ async function runDeployRailway(params: {
       valueFile: params.valueFile,
       channels,
       intoLinked,
+      deliverPublicUrl: params.deliverPublicUrl,
       ...boxLoginStep("railway", params, () => railwayShell(name, agentDir)),
       ...hostLogin(RAILWAY_LOGIN, params.answerer, agentDir),
       forAgent: `${params.rerun} --json`,

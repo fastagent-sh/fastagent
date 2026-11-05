@@ -97,9 +97,18 @@ interface LocalAgent extends Agent {
 
 interface Service {
   fetch(request: Request): Promise<Response>; // for an app's own server to route to
-  listen(port: number, host?: string): Promise<number>; // or a server of its own; answers the port it bound
+  listen(port: number, host?: string): Promise<number>; // or a server of its own; answers the port it bound, and once ready registers the webhooks at http.publicUrl in the background
+  registerWebhooks(baseUrl?: string): Promise<WebhookRegistration[]>; // points each webhook channel at <baseUrl ?? http.publicUrl>/<its path>, set on every call
+  readonly webhooks: readonly WebhookRegistration[]; // every webhook channel's outcome, pending until its registration ends
   ready: Promise<void>; // every long connection is up
   close(): Promise<void>;
+}
+
+interface WebhookRegistration {
+  channel: string; // the channel file's name
+  outcome: "pending" | "registered" | "manual" | "failed";
+  url?: string;
+  step?: string; // for manual and failed: what to do
 }
 ```
 
@@ -127,7 +136,8 @@ none; without one anywhere, a message is refused `missing_model` until its sessi
 Nothing reaches the agent until `serve`, and its `wake` tool refuses a wake-up until then: only a serve's clock fires
 one.
 
-`serve()` is what `start` serves: the channels' routes and `GET /health` (503 until every long connection is ready), the
+`serve()` is what `start` serves: the channels' routes and `GET /health` (JSON, `{ status, webhooks }`: 200 `"ok"`, or 503
+`"starting"` until every long connection is ready; `webhooks` lists each webhook channel's name and outcome), the
 long connections, the schedules and the wake-up poll, and, when `apiKeys` holds a key, the Agent API over HTTP under
 `/v1` ([Agent API](SPEC.md) §9; `dev` and `start` take the keys from `FASTAGENT_API_KEY`). Use `fetch`
 from the app's own server, or `listen` for a server of the agent's own on Node's `http` server or `Bun.serve`; `host`

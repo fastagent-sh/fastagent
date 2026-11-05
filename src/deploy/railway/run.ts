@@ -1,11 +1,12 @@
 /** `fastagent deploy railway --run` — drive the Railway CLI to completion. */
 import type { BoxLoginStep } from "../box-shell.ts";
 import {
+  type BoxWebhooksProbe,
   type PublicHealthProbe,
   type Registrars,
+  confirmWebhooks,
   loginGate,
   publicHealthGate,
-  registerWebhooks,
 } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
@@ -41,6 +42,11 @@ export interface RailwayRunPlan {
   hostLogin?: () => Promise<string | undefined>;
   /** The command a coding agent runs to deploy this, its person's steps handed to its user (`--run --json`). */
   forAgent: string;
+  /**
+   * Put the service's domain into the configuration the image delivers (`http.publicUrl`), before `railway up` uploads
+   * it, so the box points its own channels there.
+   */
+  deliverPublicUrl: (url: string) => Promise<void>;
 }
 
 /**
@@ -123,9 +129,11 @@ export async function deployRailwayRun(
   plan: RailwayRunPlan,
   railway: CliRunner,
   log: (msg: string) => void,
-  registrars: Registrars,
+  /** Slack's, which this machine still sets (its Request URL no credential on the box can change). */
+  registrars: Pick<Registrars, "slack" | "leave">,
   healthProbe?: PublicHealthProbe,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  boxWebhooks?: { probe: BoxWebhooksProbe; intervalMs?: number },
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service (`init
@@ -238,17 +246,19 @@ export async function deployRailwayRun(
     }
   }
 
-  // 5. Deploy — CI mode streams build logs then exits (no interactive attach). Build runs on Railway.
-  log("deploying (railway up)…");
-  if ((await railway(["up", "--ci", ...svc])).code !== 0) {
-    return gate("`railway up` failed — see the railway output above; fix and re-run");
-  }
-
-  // 6.
+  // 5. The domain before the upload: `railway domain` creates the service's on a service never deployed, and answers
+  // the existing one when run again, so the image the upload builds names it as its `http.publicUrl`.
   log("getting the public domain…");
   const url = parseDomainUrl((await railway(["domain", "--json", ...svc], { capture: true })).stdout);
   if (!url) {
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
+  }
+  await plan.deliverPublicUrl(url);
+
+  // 6. Deploy — CI mode streams build logs then exits (no interactive attach). Build runs on Railway.
+  log("deploying (railway up)…");
+  if ((await railway(["up", "--ci", ...svc])).code !== 0) {
+    return gate("`railway up` failed — see the railway output above; fix and re-run");
   }
   // 6b. `railway up --ci` exits 0 once the build is accepted, so readiness is asked here and not inferred.
   const healthGate = await publicHealthGate({
@@ -274,12 +284,19 @@ export async function deployRailwayRun(
   }
 
   // 7.
-  const registrationGateMsg = await registerWebhooks({
+  // The box points its own channels at the `http.publicUrl` delivered above; this reads what it made of them.
+  const registrationGateMsg = await confirmWebhooks({
     baseUrl: url,
     channels: plan.channels,
     registrars,
     log,
     retryHint: "re-run with --into-linked to retry registration",
+    ...(boxWebhooks === undefined
+      ? {}
+      : {
+          probe: boxWebhooks.probe,
+          ...(boxWebhooks.intervalMs === undefined ? {} : { intervalMs: boxWebhooks.intervalMs }),
+        }),
   });
   if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true, url };

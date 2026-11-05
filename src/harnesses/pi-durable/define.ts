@@ -22,6 +22,11 @@ export interface AgentDefaults<Settings = unknown> {
      * which `deploy` gives a key. `false` keeps it to its channels and schedules, whatever key its environment holds.
      */
     api?: boolean;
+    /**
+     * The public base URL the platforms reach this instance at, any mount prefix included (`https://x.fly.dev/agent`):
+     * a serve points each webhook channel there. Unset, none is pointed. Never inferred from the environment.
+     */
+    publicUrl?: string;
   };
   /** How the agent is deployed, where a host needs to be told. */
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };

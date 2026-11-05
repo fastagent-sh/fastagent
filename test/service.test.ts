@@ -447,6 +447,126 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
   });
 });
 
+describe("a serve points its webhook channels at itself", () => {
+  /** A `telegram` route channel, as the first-party one is reached, and the secrets that point it. */
+  async function telegramService(config: Record<string, unknown> = {}, secrets: Record<string, string> = {}) {
+    const dir = await agentDir({
+      "src/channels/telegram.mjs": `export default () => ({ "POST /telegram": () => new Response("ok") });`,
+    });
+    const served = await openServing(await loadSourceDefinition(dir), {
+      secrets,
+      env: {},
+      storage: "memory",
+      config: { values: config, label: "test" },
+    });
+    opened.push(served.agent);
+    return serveAgent(served);
+  }
+  const health = async (service: { fetch(r: Request): Promise<Response> }) =>
+    (await service.fetch(new Request("http://h/health"))).json();
+
+  it("reports every webhook channel pending in /health until a registration ends, as JSON", async () => {
+    const service = await telegramService();
+    try {
+      expect(await health(service)).toEqual({ status: "ok", webhooks: [{ channel: "telegram", outcome: "pending" }] });
+      expect(service.webhooks).toEqual([{ channel: "telegram", outcome: "pending" }]);
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("sets Telegram's webhook at http.publicUrl once it listens and is ready, with the instance's own secrets", async () => {
+    const calls: { url: string; body: string }[] = [];
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.startsWith("https://api.telegram.org/")) return real(input, init);
+      calls.push({ url, body: String(init?.body) });
+      return Response.json({ ok: true, result: true });
+    });
+    const service = await telegramService(
+      { http: { publicUrl: "https://agent.example.com/bot" } },
+      { TELEGRAM_BOT_TOKEN: "123:abc", TELEGRAM_SECRET_TOKEN: "s3cret" },
+    );
+    try {
+      const port = await service.listen(0, "127.0.0.1");
+      expect(port).toBeGreaterThan(0);
+      await vi.waitFor(() =>
+        expect(service.webhooks).toEqual([
+          { channel: "telegram", outcome: "registered", url: "https://agent.example.com/bot/telegram" },
+        ]),
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://api.telegram.org/bot123:abc/setWebhook");
+      expect(calls[0]?.body).toContain("https://agent.example.com/bot/telegram");
+      expect(calls[0]?.body).toContain("s3cret");
+      expect(await health(service)).toEqual({
+        status: "ok",
+        webhooks: [{ channel: "telegram", outcome: "registered" }],
+      });
+      // Set again on every call, never read first: a rotated secret behind the same URL is set too.
+      await service.registerWebhooks();
+      expect(calls).toHaveLength(2);
+    } finally {
+      await service.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("without http.publicUrl points nothing, and says what is left to a person", async () => {
+    const service = await telegramService();
+    try {
+      expect(await service.registerWebhooks()).toEqual([
+        {
+          channel: "telegram",
+          outcome: "manual",
+          step: "telegram: no http.publicUrl in the instance configuration, so nothing points the app at this instance",
+        },
+      ]);
+      await expect(service.registerWebhooks("not a url")).rejects.toThrow(
+        'registerWebhooks: "not a url" is not an absolute http(s) URL',
+      );
+      // A base given to the call is the one used, its trailing slash dropped.
+      const [named] = await service.registerWebhooks("https://other.example.com/");
+      expect(named).toMatchObject({ channel: "telegram", url: "https://other.example.com/telegram" });
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("never sets Slack's Request URL, the app's own setting: it says the URL to set and where", async () => {
+    const dir = await agentDir({
+      "src/channels/slack.mjs": `export default () => ({ "POST /slack": () => new Response("ok") });`,
+    });
+    const served = await openServing(await loadSourceDefinition(dir), {
+      secrets: { SLACK_BOT_TOKEN: "xoxb-1" },
+      env: {},
+      storage: "memory",
+      config: { values: { http: { publicUrl: "https://agent.example.com" } }, label: "test" },
+    });
+    opened.push(served.agent);
+    const service = await serveAgent(served);
+    try {
+      expect(await service.registerWebhooks()).toEqual([
+        {
+          channel: "slack",
+          outcome: "manual",
+          url: "https://agent.example.com/slack",
+          step: "slack: set Event Subscriptions → Request URL → https://agent.example.com/slack",
+        },
+      ]);
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("refuses an http.publicUrl that is not an absolute https URL without a trailing slash", async () => {
+    for (const publicUrl of ["http://agent.example.com", "https://agent.example.com/", "agent.example.com"]) {
+      await expect(telegramService({ http: { publicUrl } })).rejects.toThrow(/\/http\/publicUrl/);
+    }
+  });
+});
+
 describe("openAgent: an agent directory opened in an app", () => {
   it("serves the Agent API under /v1 beside its routes only with a key, and keeps /v1 from a channel", async () => {
     const dir = await agentDir();

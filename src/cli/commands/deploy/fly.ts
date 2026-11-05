@@ -14,6 +14,7 @@ import { readTextIfExists } from "../../../paths.ts";
 import { residencyFor } from "../../../deploy/residency.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
+import { withPublicUrl } from "../../../deploy/container.ts";
 import { failStartup } from "../../fail.ts";
 import { FLY_LOGIN, hostLogin } from "./host-login.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
@@ -57,6 +58,7 @@ export const flyHost: HostDeploy = {
         console.error(`[fastagent] warn: ${msg}`);
       }
     }
+    const reachedAt = `https://${appName}.fly.dev`;
     const plan = planFlyDeploy({
       appName,
       port,
@@ -65,9 +67,10 @@ export const flyHost: HostDeploy = {
       secrets: pre.secrets,
       hasCron,
       ...container,
+      // The app's URL is known before the build, so the image names it: the box points its own channels there.
+      config: withPublicUrl(container.config, reachedAt),
     });
     await write(plan.artifacts, { force: !!opts.force });
-    const reachedAt = `https://${appName}.fly.dev`;
     if (opts.run) {
       await runDeployFly({
         agentDir,

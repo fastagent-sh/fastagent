@@ -1,7 +1,13 @@
 /** HOW A RUNNING CHANNEL IS REACHED — the URL-neutral half of "point this channel at the agent". */
 import type { DeclaredChannel } from "../channels/discover.ts";
 import type { RegistrationOutcome } from "../channels/registration.ts";
-import type { ChannelKind } from "../scaffold/add-channel.ts";
+import {
+  type WebhookKind,
+  type WebhookRegistration,
+  manualWebhookStep,
+  webhookKinds,
+  webhookPath,
+} from "../channels/webhooks.ts";
 import { registrationGate } from "./registration-gate.ts";
 import { waitForHealth } from "../channels/wait-health.ts";
 
@@ -17,12 +23,8 @@ export interface Registrars {
 }
 
 interface ChannelIngress {
-  /** The channel's DEFAULT route key. */
-  path: string;
   /** Runs this channel's registration end-to-end, or undefined when the caller wired no registrar for it. */
   register: (registrars: Registrars, baseUrl: string) => Promise<RegistrationOutcome> | undefined;
-  /** The one line a driver prints when no registrar runs it. */
-  manual: (baseUrl: string) => string;
   /** The runbook block for a plan, which cannot register anything (comment lines + commands). */
   runbook: (baseUrl: string) => string[];
   /** When the selected app starts delivering to this deployment. */
@@ -30,14 +32,11 @@ interface ChannelIngress {
 }
 
 const feishuCloud = (kind: "feishu" | "lark", label: string): ChannelIngress => ({
-  path: `/${kind}`,
   // The subscription mode is the published version's: a switch from long connection waits for the publish.
   delivers:
     "delivers to this deployment once its published version is in webhook mode (after a first deploy, publish the " +
     "version it opened)",
   register: (r, baseUrl) => r.feishu?.(baseUrl, kind),
-  manual: (baseUrl) =>
-    `${kind}: set the event Request URL in the developer console (Events & Callbacks) → ${baseUrl}/${kind} (the app must be running when you save)`,
   runbook: (baseUrl) => [
     `# Set the ${label} event Request URL (developer console → Events & Callbacks). Default route`,
     `# POST /${kind}; the app must be RUNNING when you save (the console verifies with a challenge):`,
@@ -46,12 +45,10 @@ const feishuCloud = (kind: "feishu" | "lark", label: string): ChannelIngress => 
 });
 
 /** Declaration order — the order every runbook and every driver reports in. */
-const INGRESS: Record<ChannelKind, ChannelIngress> = {
+const INGRESS: Record<WebhookKind, ChannelIngress> = {
   telegram: {
-    path: "/telegram",
     delivers: "now delivers to this deployment",
     register: (r, baseUrl) => r.telegram(baseUrl),
-    manual: (baseUrl) => `telegram: set the webhook → ${baseUrl}/telegram (secret_token = TELEGRAM_SECRET_TOKEN)`,
     runbook: (baseUrl) => [
       `# Register the Telegram webhook. The path assumes the default route (POST /telegram); if you`,
       `# remapped it in channels/telegram.ts, use your path. secret_token MUST equal TELEGRAM_SECRET_TOKEN:`,
@@ -60,10 +57,8 @@ const INGRESS: Record<ChannelKind, ChannelIngress> = {
     ],
   },
   slack: {
-    path: "/slack",
     delivers: "now delivers to this deployment",
     register: (r, baseUrl) => r.slack?.(baseUrl),
-    manual: (baseUrl) => `slack: set Event Subscriptions → Request URL → ${baseUrl}/slack`,
     runbook: (baseUrl) => [
       `# Set Slack Event Subscriptions → Request URL (default route POST /slack; the running service`,
       `# answers Slack's challenge), and match scopes/subscriptions to the app \`add slack\` created:`,
@@ -74,18 +69,9 @@ const INGRESS: Record<ChannelKind, ChannelIngress> = {
   lark: feishuCloud("lark", "Lark"),
 };
 
-/**
- * The first-party channels this deployment must point at a URL: webhook ingress, and a kind this tool knows how to
- * instruct.
- */
-export function webhookKinds(channels: readonly DeclaredChannel[]): ChannelKind[] {
-  const declared = new Set(channels.filter((c) => c.ingress === "webhook").map((c) => c.name));
-  return (Object.keys(INGRESS) as ChannelKind[]).filter((kind) => declared.has(kind));
-}
-
 /** Default route keys for {@link webhookKinds}, in the same order (the docker plan's ingress note). */
 export function webhookPaths(channels: readonly DeclaredChannel[]): string[] {
-  return webhookKinds(channels).map((kind) => INGRESS[kind].path);
+  return webhookKinds(channels).map(webhookPath);
 }
 
 /**
@@ -102,14 +88,14 @@ export async function pointChannelsAt(input: {
   channels: readonly DeclaredChannel[];
   registrars: Registrars;
   log: (msg: string) => void;
-}): Promise<{ kind: ChannelKind; outcome: RegistrationOutcome }[]> {
-  const outcomes: { kind: ChannelKind; outcome: RegistrationOutcome }[] = [];
+}): Promise<{ kind: WebhookKind; outcome: RegistrationOutcome }[]> {
+  const outcomes: { kind: WebhookKind; outcome: RegistrationOutcome }[] = [];
   for (const kind of webhookKinds(input.channels)) {
     const ingress = INGRESS[kind];
     // Calling IS the question: a channel whose registrar the caller did not wire returns undefined.
     const running = ingress.register(input.registrars, input.baseUrl);
     if (!running) {
-      input.log(ingress.manual(input.baseUrl));
+      input.log(manualWebhookStep(kind, input.baseUrl));
       outcomes.push({ kind, outcome: "manual" }); // a human's step — re-surfaced after registrar output
       continue;
     }
@@ -118,7 +104,7 @@ export async function pointChannelsAt(input: {
   }
   // What the registrar said is in the log; the person who reads none gets the one route to set.
   for (const { kind } of outcomes.filter(({ outcome }) => outcome === "manual")) {
-    input.registrars.leave?.(INGRESS[kind].manual(input.baseUrl));
+    input.registrars.leave?.(manualWebhookStep(kind, input.baseUrl));
   }
   return outcomes;
 }
@@ -240,6 +226,88 @@ export async function registerWebhooks(input: {
   for (const { kind, outcome } of outcomes) reg.track(kind, outcome);
   for (const { kind } of outcomes.filter(({ outcome }) => outcome === "registered")) {
     input.log(`the selected production ${kind} app ${INGRESS[kind].delivers}`);
+  }
+  return reg.gate();
+}
+
+/** How long a deploy waits for a box to end its own registration: the box's registrars retry for about 190 s. */
+const BOX_REGISTRATION_TIMEOUT_MS = 240_000;
+
+/** A box's `/health` webhooks, or undefined while it cannot be read. Injected by tests. */
+export type BoxWebhooksProbe = (
+  healthUrl: string,
+) => Promise<readonly { channel: string; outcome: WebhookRegistration["outcome"] }[] | undefined>;
+
+const readBoxWebhooks: BoxWebhooksProbe = async (healthUrl) => {
+  try {
+    const res = await fetch(healthUrl, { signal: AbortSignal.timeout(5000) });
+    const body = (await res.json()) as { webhooks?: unknown };
+    return Array.isArray(body.webhooks)
+      ? (body.webhooks as { channel: string; outcome: RegistrationOutcome }[])
+      : undefined;
+  } catch {
+    return undefined; // not routable, or not answering JSON yet: polled again until the deadline
+  }
+};
+
+/**
+ * What a box that points its own channels made of them (channel-setup.md §5): read from its `/health` until no channel
+ * is `pending`, then gated as {@link registerWebhooks} gates. Slack's Request URL no credential on the box can set, so
+ * `registrars.slack` sets it from this machine, as before.
+ */
+export async function confirmWebhooks(input: {
+  baseUrl: string;
+  channels: readonly DeclaredChannel[];
+  registrars: Pick<Registrars, "slack" | "leave">;
+  log: (msg: string) => void;
+  retryHint: string;
+  probe?: BoxWebhooksProbe;
+  timeoutMs?: number;
+  intervalMs?: number;
+}): Promise<string | undefined> {
+  const kinds = webhookKinds(input.channels);
+  const reg = registrationGate(input.log, input.retryHint);
+  const outcomes = new Map<WebhookKind, RegistrationOutcome>();
+  if (kinds.includes("slack")) {
+    const slack = input.registrars.slack?.(input.baseUrl);
+    if (slack === undefined) input.log(manualWebhookStep("slack", input.baseUrl));
+    outcomes.set("slack", slack === undefined ? "manual" : await slack);
+  }
+  const own = kinds.filter((kind) => kind !== "slack");
+  if (own.length > 0) {
+    input.log(`waiting for the box to point ${own.join(", ")} at ${input.baseUrl}…`);
+    const probe = input.probe ?? readBoxWebhooks;
+    const deadline = Date.now() + (input.timeoutMs ?? BOX_REGISTRATION_TIMEOUT_MS);
+    for (;;) {
+      const read = await probe(`${input.baseUrl}/health`);
+      const ended = own.map((kind) => read?.find((entry) => entry.channel === kind));
+      if (ended.every((entry) => entry !== undefined && entry.outcome !== "pending")) {
+        for (const [i, kind] of own.entries()) outcomes.set(kind, ended[i]?.outcome as RegistrationOutcome);
+        break;
+      }
+      if (Date.now() >= deadline) {
+        for (const [i, kind] of own.entries()) {
+          if (ended[i] === undefined || ended[i]?.outcome === "pending") {
+            input.log(`${kind}: the box did not report its registration within the wait — see its log`);
+            outcomes.set(kind, "failed");
+          } else {
+            outcomes.set(kind, ended[i]?.outcome as RegistrationOutcome);
+          }
+        }
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, input.intervalMs ?? 2_000));
+    }
+  }
+  for (const kind of kinds) {
+    const outcome = outcomes.get(kind) as RegistrationOutcome;
+    reg.track(kind, outcome);
+    if (outcome === "registered") input.log(`the selected production ${kind} app ${INGRESS[kind].delivers}`);
+    else if (kind !== "slack") {
+      // What the box said and why is in its log; the line a person acts on is said here.
+      input.log(manualWebhookStep(kind, input.baseUrl));
+      input.registrars.leave?.(manualWebhookStep(kind, input.baseUrl));
+    }
   }
   return reg.gate();
 }

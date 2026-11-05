@@ -22,6 +22,21 @@ const DELIVERED_CONFIG_FILE = `${DELIVERED_CONFIG_DIR}/${INSTANCE_CONFIG_FILE}`;
 /** Where a generated image has the instance configuration, read-only: the filesystem hierarchy's for configuration. */
 const IMAGE_CONFIG_DIR = "/etc/fastagent";
 
+/**
+ * The configuration a deploy delivers, with the public URL the host gives the box as its `http.publicUrl`, where the
+ * operator's configuration names none (a custom domain is theirs to name): the URL the box points its channels at.
+ */
+export function withPublicUrl(config: string | undefined, publicUrl: string): string {
+  const values = (config === undefined ? {} : JSON.parse(config)) as { http?: { publicUrl?: string } };
+  if (values.http?.publicUrl !== undefined) return config as string;
+  return `${JSON.stringify({ ...values, http: { ...values.http, publicUrl } }, null, 2)}\n`;
+}
+
+/** The delivered configuration as the artifact a deploy writes, to rewrite it once the host has given the URL. */
+export function deliveredConfigArtifact(config: string): Artifact {
+  return { path: DELIVERED_CONFIG_FILE, content: config };
+}
+
 /** What every deploy writes whoever wrote it before: build output, by its path, never kept or reported stale. */
 export const BUILD_OUTPUTS: readonly string[] = [RELEASE_FILE, PACKAGES_FILE, DELIVERED_CONFIG_FILE];
 

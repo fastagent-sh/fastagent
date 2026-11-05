@@ -96,6 +96,8 @@ export interface OpenedServing {
   code: BuiltDefinition;
   /** The configuration this instance opened with: the program's defaults and the instance's over them. */
   config: EffectiveConfig;
+  /** The secrets it was given that hold a value: what its code was built with, and its webhooks are pointed with. */
+  secrets: Readonly<Record<string, string>>;
   models: ModelEnvironment;
   /** What the agent works on, resolved for this instance. */
   content: readonly ResolvedContent[];
@@ -246,6 +248,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     definition,
     code,
     config,
+    secrets,
     models,
     content,
     agentDir: projectDir,

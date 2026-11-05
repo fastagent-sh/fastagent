@@ -1,11 +1,12 @@
 /** `fastagent deploy fly --run` — drive flyctl to completion. */
 import type { BoxLoginStep } from "../box-shell.ts";
 import {
+  type BoxWebhooksProbe,
   type PublicHealthProbe,
   type Registrars,
+  confirmWebhooks,
   loginGate,
   publicHealthGate,
-  registerWebhooks,
 } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
@@ -76,8 +77,10 @@ export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
-  registrars: Registrars,
+  /** Slack's, which this machine still sets (its Request URL no credential on the box can change). */
+  registrars: Pick<Registrars, "slack" | "leave">,
   healthProbe?: PublicHealthProbe,
+  boxWebhooks?: { probe: BoxWebhooksProbe; intervalMs?: number },
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -187,13 +190,19 @@ export async function deployFlyRun(
     );
   }
 
-  // 9.
-  const registrationGateMsg = await registerWebhooks({
+  // 9. The box points its own channels at the `http.publicUrl` this deploy delivered; this reads what it made of them.
+  const registrationGateMsg = await confirmWebhooks({
     baseUrl,
     channels: plan.channels,
     registrars,
     log,
     retryHint: "re-run to retry registration (steps already done are skipped)",
+    ...(boxWebhooks === undefined
+      ? {}
+      : {
+          probe: boxWebhooks.probe,
+          ...(boxWebhooks.intervalMs === undefined ? {} : { intervalMs: boxWebhooks.intervalMs }),
+        }),
   });
   if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true };
