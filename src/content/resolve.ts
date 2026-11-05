@@ -90,19 +90,18 @@ function resolveLocal(places: ContentPlaces, entry: Extract<DeclaredContent, { k
 
 /**
  * Whether the content `name` can be the directory `target` of this machine: one that exists, and is apart from the
- * definition's directory and the working directory, since a definition is released, content is kept, and one directory
- * cannot be both. Refuses, naming the entry, what cannot be.
+ * definition's directory, since a definition is released, content is kept, and one directory cannot be both. The
+ * working directory is the instance's own writable place, so a directory inside it is only a directory the agent
+ * already reaches. Refuses, naming the entry, what cannot be.
  */
-export function checkDirectory({ dir, workdir }: ContentPlaces, name: string, target: string): void {
+export function checkDirectory({ dir }: Pick<ContentPlaces, "dir">, name: string, target: string): void {
   const stat = statOrMissing(target);
   if (!stat) throw new Error(`content "${name}": ${target} does not exist`);
   if (!stat.isDirectory()) throw new Error(`content "${name}": ${target} is not a directory`);
   // A symlink can still put one inside the other, so ask of the real paths — including for an agent directory `init`
   // is about to create, which a symlinked ancestor still places.
-  for (const place of new Set([dir, workdir])) {
-    const nested = nestingError(realPathOf(place), realpathSync(target), name);
-    if (nested) throw new Error(nested);
-  }
+  const nested = nestingError(realPathOf(dir), realpathSync(target), name);
+  if (nested) throw new Error(nested);
 }
 
 /**

@@ -260,17 +260,18 @@ describe("content: resolved for this instance", () => {
     );
   });
 
-  it("asks it of the working directory too, apart from the definition", async () => {
+  it("asks it of the definition's directory only: the instance's working directory may hold content", async () => {
     const { root, dir } = await layout();
     const workdir = join(root, "instance");
     await mkdir(join(workdir, "data"), { recursive: true });
-    expect(() => checkDirectory({ dir, workdir }, "data", join(workdir, "data"))).toThrow(
-      /content "data" .* is inside the agent directory/,
-    );
-    expect(() => checkDirectory({ dir, workdir }, "root", root)).toThrow(
-      /content "root" .* contains the agent directory/,
-    );
-    expect(() => checkDirectory({ dir, workdir }, "notes", join(root, "notes"))).not.toThrow();
+    const places = { dir, workdir };
+    // The working directory is the instance's own writable place, which a definition's directory is not.
+    expect(resolveContent(local(workdir, { data: { path: "data" } }), places)).toEqual([
+      expect.objectContaining({ name: "data", location: join(workdir, "data") }),
+    ]);
+    expect(() => checkDirectory(places, "data", join(workdir, "data"))).not.toThrow();
+    expect(() => checkDirectory(places, "root", root)).toThrow(/content "root" .* contains the agent directory/);
+    expect(() => checkDirectory(places, "notes", join(root, "notes"))).not.toThrow();
   });
 
   it("asks it of an agent directory that does not exist yet, through a symlinked ancestor", async () => {
@@ -280,7 +281,7 @@ describe("content: resolved for this instance", () => {
     await mkdir(join(root, "real"));
     await symlink(join(root, "real"), join(root, "link"));
     const dir = join(root, "link", "agent", "deeper");
-    expect(() => checkDirectory({ dir, workdir: dir }, "real", join(root, "real"))).toThrow(
+    expect(() => checkDirectory({ dir }, "real", join(root, "real"))).toThrow(
       /content "real" .* contains the agent directory/,
     );
   });

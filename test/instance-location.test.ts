@@ -386,6 +386,30 @@ describe("content commands", () => {
     expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("context.json is shared")]);
   });
 
+  it("a directory inside the instance root is content like any other, not nested in the agent", async () => {
+    const dir = await agentWorkspace("fa-content-inroot-");
+    const root = await scratch();
+    await mkdir(join(root, "data"));
+    const config = join(await scratch(), "fastagent.json");
+    await writeFile(config, JSON.stringify({ content: { data: { path: join(root, "data") } } }));
+    const listed = await runInProcess(["content", "list", dir, "--json", "--root", root, "--config", config]);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout).content).toEqual([expect.objectContaining({ name: "data" })]);
+    const added = await runInProcess([
+      "content",
+      "add",
+      root,
+      dir,
+      "--name",
+      "all",
+      "--root",
+      root,
+      "--config",
+      config,
+    ]);
+    expect(added.code, added.stderr).toBe(0);
+  });
+
   it("list resolves a clone in the working directory it is given", async () => {
     const dir = await agentWorkspace("fa-content-workdir-", {
       "context.json": JSON.stringify({ content: { docs: { github: "acme/docs" } } }),
