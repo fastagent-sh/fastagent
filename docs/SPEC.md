@@ -523,6 +523,12 @@ interface InstanceConfig<Settings = unknown> {
   thinkingLevel?: Session["thinkingLevel"];
   http?: { port?: number; api?: boolean };
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
+  /**
+   * How each channel that offers both ways (`byIngress`) receives, by its file's name. Unset, `dev` receives by
+   * WebSocket and everything else by webhook. A name the agent has no channel by, or a way its channel cannot
+   * receive, refuses the open.
+   */
+  channels?: Record<string, { ingress?: "webhook" | "websocket" }>;
   settings?: Partial<Settings>;
   /** Content the instance adds to the program's: a name may not be one the program declares. */
   content?: Record<string, { github: string; ref?: string } | { path: string }>;
