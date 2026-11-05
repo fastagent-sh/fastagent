@@ -549,10 +549,12 @@ interface InstanceConfig<Settings = unknown> {
     {
       ingress?: "webhook" | "connection";
       /**
-       * Slack's only, refused on another channel: the app this instance is bound to (`id`, its workspace's `team`)
-       * and the digest of the manifest last synced to it, which `fastagent channels setup` writes.
+       * For a channel whose platform lets only a person set its URL (Slack; Lark where its configuration API is
+       * missing), refused on another: the app this instance is bound to (`id`; Slack's workspace as `team`), and the
+       * `url` a person set there and the platform verified, which `deploy` records once it sees it verified. A record
+       * of that moment: a person who later changes the platform's page changes it too.
        */
-      app?: { id: string; team: string; manifest?: string };
+      app?: { id: string; team?: string; url?: string };
     }
   >;
   settings?: Partial<Settings>;
@@ -624,10 +626,14 @@ interface WebhookRegistration {
 }
 ```
 
-Telegram, Feishu and Lark are pointed by the instance with its own credentials. Slack's Request URL is app
-configuration only a person's developer credential can change, so `registerWebhooks` never sets it: a Slack channel
-is `registered` when its `channels.<name>.app.manifest` is the manifest this instance needs (the URL and the
-channel's scopes and events), and otherwise `manual`, its `step` the `fastagent channels setup` to run.
+Telegram, Feishu and Lark are pointed by the instance with its own credentials. Slack's Request URL, and Lark's where
+its configuration API is missing, only a person sets, on the platform's app page, which verifies it then; the
+instance never sets it. Such a channel is `registered` when its `channels.<name>.app.url` is the URL this instance
+needs, or once the instance has received an authenticated request from the platform addressed to that URL (its
+verification on saving, or any event; the address the request was sent to, as its host and any forwarding headers
+say). A platform's signature or token proves who sent a request, not where it was sent, so an authenticated request
+addressed elsewhere proves nothing and is warned of in the log, and one whose address is unknown counts as none.
+Otherwise `manual`, its `step` naming the URL to paste and the page to paste it on.
 
 `openAgent` opens one instance of a built definition, the default export of an agent's package
 (`import support from "@acme/support"`), from its inputs and nothing else. It reads no environment variable, no
