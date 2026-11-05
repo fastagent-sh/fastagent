@@ -222,19 +222,25 @@ describe("init: scaffoldAgent", () => {
     }
   });
 
-  it("--content binds a directory of this machine in context.local.json; a nested one is refused before any write", async () => {
+  it("--content adds a directory of this machine to fastagent.json, a repository to context.json; a nested directory is refused before any write", async () => {
     const base = await realpath(await freshDir());
     const app = join(base, "app");
     await mkdir(app);
     const out = await cliInit(["init", "reviewer", "--content", "app", "--no-install"], base);
     expect(out).toMatch(/created .*reviewer/);
-    expect(out).toContain(`works on app  ${app} (this machine only, bound in context.local.json)`);
-    expect(JSON.parse(await readFile(join(base, "reviewer", "context.local.json"), "utf8"))).toEqual({
+    expect(out).toContain(`works on app  ${app} (a directory of this machine)`);
+    expect(JSON.parse(await readFile(join(base, "reviewer", "fastagent.json"), "utf8"))).toEqual({
       content: { app: { path: app } },
     });
-    // The shared declaration names no directory of this machine, and init's .gitignore keeps this machine's file out.
+    // The program's declaration names no directory of this machine.
     expect(await exists(join(base, "reviewer", "context.json"))).toBe(false);
-    expect(await readFile(join(base, "reviewer", ".gitignore"), "utf8")).toContain("/context.local.json\n");
+    // A repository is the program's: every instance of the agent reaches it, and a deploy carries it.
+    const withRepository = await cliInit(["init", "triage", "--content", "github:acme/docs", "--no-install"], base);
+    expect(withRepository).toContain("github acme/docs, a clone brought up to date at each start");
+    expect(JSON.parse(await readFile(join(base, "triage", "context.json"), "utf8"))).toEqual({
+      content: { docs: { github: "acme/docs" } },
+    });
+    expect(await exists(join(base, "triage", "fastagent.json"))).toBe(false);
     // There is no copy for a host: a directory stays on this machine.
     expect(await cliInit(["init", "nothing", "--content", "app", "--copy", "--no-install"], base)).toMatch(
       /unknown option '--copy'/,

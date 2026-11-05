@@ -5,7 +5,7 @@
  */
 import { existsSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -351,5 +351,74 @@ describe("what a command opens an instance with", () => {
     } finally {
       delete process.env.FA_STRAY;
     }
+  });
+});
+
+describe("content commands", () => {
+  const added = async (dir: string, args: string[], env?: NodeJS.ProcessEnv) => {
+    const result = await runInProcess(["content", "add", ...args, dir], undefined, env);
+    expect(result.code, result.stderr).toBe(0);
+    return result;
+  };
+
+  it("edit the project's fastagent.json by default, the one --config or FASTAGENT_CONFIG names instead, context.json with --program", async () => {
+    const dir = await agentWorkspace("fa-content-config-");
+    const notes = join(await scratch(), "notes");
+    await mkdir(notes);
+    await added(dir, [notes]);
+    expect(JSON.parse(await readFile(join(dir, "fastagent.json"), "utf8"))).toEqual({
+      content: { notes: { path: notes } },
+    });
+
+    const other = join(await scratch(), "other.json");
+    await added(dir, [notes, "--name", "more", "--config", other]);
+    expect(JSON.parse(await readFile(other, "utf8"))).toEqual({ content: { more: { path: notes } } });
+    const viaVariable = join(await scratch(), "variable.json");
+    await added(dir, [notes, "--name", "again"], { ...process.env, FASTAGENT_CONFIG: viaVariable });
+    expect(Object.keys(JSON.parse(await readFile(viaVariable, "utf8")).content)).toEqual(["again"]);
+    expect(Object.keys(JSON.parse(await readFile(join(dir, "fastagent.json"), "utf8")).content)).toEqual(["notes"]);
+
+    await added(dir, ["github:acme/docs", "--program"]);
+    expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8")).content).toEqual({
+      docs: { github: "acme/docs" },
+    });
+    const refused = await runInProcess(["content", "add", notes, dir, "--name", "dir", "--program"]);
+    expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("context.json is shared")]);
+  });
+
+  it("a directory inside the instance root is content like any other, not nested in the agent", async () => {
+    const dir = await agentWorkspace("fa-content-inroot-");
+    const root = await scratch();
+    await mkdir(join(root, "data"));
+    const config = join(await scratch(), "fastagent.json");
+    await writeFile(config, JSON.stringify({ content: { data: { path: join(root, "data") } } }));
+    const listed = await runInProcess(["content", "list", dir, "--json", "--root", root, "--config", config]);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout).content).toEqual([expect.objectContaining({ name: "data" })]);
+    const added = await runInProcess([
+      "content",
+      "add",
+      root,
+      dir,
+      "--name",
+      "all",
+      "--root",
+      root,
+      "--config",
+      config,
+    ]);
+    expect(added.code, added.stderr).toBe(0);
+  });
+
+  it("list resolves a clone in the working directory it is given", async () => {
+    const dir = await agentWorkspace("fa-content-workdir-", {
+      "context.json": JSON.stringify({ content: { docs: { github: "acme/docs" } } }),
+    });
+    const workdir = join(await scratch(), "work");
+    const listed = await runInProcess(["content", "list", dir, "--json", "--workdir", workdir]);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout).content).toEqual([
+      expect.objectContaining({ name: "docs", location: join(workdir, "content", "docs") }),
+    ]);
   });
 });

@@ -73,17 +73,16 @@ fastagent init <dir> [--content <source>]...
 `--content`. Without `--content` the agent has none and only talks. More is added afterwards with
 `fastagent content add`.
 
-| `<source>` | Declared in `context.json` | Bound in `context.local.json` | Here |
-|---|---|---|---|
-| The root of a checkout whose remote is on GitHub | `{ "github": "owner/repo" }` | `{ "path": "<checkout>" }` | The checkout |
-| Any other directory, a subdirectory of such a checkout included | Nothing; for a subdirectory, a note names the `github:` form, which is the whole repository | `{ "path": "<dir>" }` | The directory |
-| `github:owner/repo` | `{ "github": "owner/repo" }` | Nothing | A clone at `content/<name>`, made when the agent starts |
+| `<source>` | Written to | Here |
+|---|---|---|
+| `github:owner/repo` | `context.json`, as `{ "github": "owner/repo" }`, for `init`; `fastagent.json` for `content add`, `context.json` with `--program` | A clone at `content/<name>`, made when the agent starts |
+| Any directory, a checkout of a GitHub repository included | `fastagent.json`, as `{ "path": "<dir>" }`; a note names the `github:` form where the directory is a checkout | The directory |
 
-- **No path is declared; a binding is written absolute.** The declaration is shared with the definition and a path
-  describes one machine, so the path lives only in `context.local.json`, which `init` ignores in git, and an
-  absolute path keeps meaning the same directory when the agent directory moves.
-- **A directory is never widened to its repository.** A subdirectory of a checkout is declared as itself, so an
-  agent kept in that checkout can still work on one directory of it; the note says how to declare the repository.
+- **No path is declared in the definition; a path is written absolute.** The definition's file is shared and a path
+  describes one machine, so the path lives only in the instance's `fastagent.json`, and an absolute path keeps
+  meaning the same directory when the agent directory moves.
+- **A directory is never widened to its repository.** A checkout is used as the directory it is, so an agent kept in
+  that checkout can still work on one directory of it; the note says how to declare the repository for a clone.
 - **Content may not contain the agent, or sit inside it.** `init ~/code/app/agent --content ~/code/app` is
   refused, with the way out: put the agent beside the project, `init ~/agents/reviewer --content ~/code/app`.
 - **Run in a project, `init` says where to go.** `fastagent init .` in a directory that is not empty is refused
@@ -99,37 +98,36 @@ Example output:
 
 ```text
 created  ~/agents/reviewer
-works on app  ~/code/app (github acme/app); a host clones it
+works on app  ~/code/app (a directory of this machine)
 ```
 
 ## 4. Editing content: `fastagent content`
 
-People edit `context.json` and `context.local.json` by hand, and so can a client such as duang: they are JSON. Content
-belongs in the agent directory, not in the client, or a deployment from that directory would lose what it declares. The
-bindings are this machine's, and `content add` writes the one an entry needs here. Both use one implementation: the
+People edit `context.json` and `fastagent.json` by hand, and so can a client such as duang: they are JSON. A
+repository every instance reaches belongs in the agent directory's `context.json`, not in the client, or a deployment
+from that directory would lose what it declares; what one instance adds is its own, and `content add` writes it to
+that instance's `fastagent.json`, or `context.json` with `--program`. Both use one implementation: the
 command, or the functions under it (`initAgent`, `addContent`, `removeContent`, `listContent` in
 `src/authoring.ts`), which the CLI's commands wrap.
 The command:
 
 ```bash
-fastagent content list [agent] [--json]
-fastagent content add <source> [agent] [--name <n>] [--ref <r>] [--description <text>]
-fastagent content remove <name> [agent]
+fastagent content list [agent] [--json] [--config <file>]
+fastagent content add <source> [agent] [--name <n>] [--ref <r>] [--description <text>] [--program] [--config <file>]
+fastagent content remove <name> [agent] [--config <file>]
 ```
 
 - `<source>` is read as in `init`: a directory, or `github:owner/repo`.
 - `add` refuses a directory that contains the agent directory or sits inside it, and asks for `--name` when the
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
-- `remove` drops the entry from both files. A clone at `content/<name>` is left, and said to be: it may hold the
+- `remove` drops the entry from whichever file holds it. A clone at `content/<name>` is left, and said to be: it may hold the
   agent's work.
 - An edit is checked against the content it would leave before anything is written: while another entry does not
-  resolve (a file where its directory was), `add` and `remove` are refused with that entry's error. Removing the
-  broken entry itself always works. A bound directory that is gone does not refuse an edit: it is left out, and said.
+  resolve (a file where its directory was, a directory that is gone), `add` and `remove` are refused with that entry's
+  error. Removing the broken entry itself always works.
 - `list` shows what the agent works on, and where each is.
-- On another machine, a declared repository is cloned; a checkout of it there is bound by adding the checkout
-  (`content add <checkout>` on an agent that already declares the repository asks for another name, so the binding
-  is written by hand: `{ "content": { "<name>": { "path": "<checkout>" } } }` in `context.local.json`;
-  [configuration](../configuration.md#content)).
+- On another machine, a declared repository is cloned; the checkout one has there is added as a directory under a name
+  of its own ([configuration](../configuration.md#content)).
 
 ## 5. Running: `dev`, `start`, `invoke`
 
@@ -179,8 +177,8 @@ works on  papers    a directory of this machine   stays here; the deployed agent
   this machine ([agent model](agent-model.md) §3). Where a deployment resets the host's storage (AgentCore), the
   clone goes with it, and preflight says what of the agent's work is lost.
 - **A local directory does not reach a host, and the deploy goes ahead without it** ([agent model](agent-model.md)
-  §3): preflight names it, a warning for one the agent works on. `context.local.json` stays out of the image, so the
-  host is never told of it. The agent directory does reach a host, as the definition each release replaces.
+  §3): preflight names it, a warning for one the agent works on. The instance's `fastagent.json` stays out of the
+  image, so the host is never told of it. The agent directory does reach a host, as the definition each release replaces.
 - **A `github` entry's credential is `GITHUB_TOKEN` in `.secrets/production/.env`**, which travels with the other values;
   only a private repository, or an agent that pushes, needs it.
 

@@ -3,7 +3,7 @@
  * `ref`, and a clone, made or brought up to date in place. git's own configuration applies throughout (credential helpers, `url.<base>.insteadOf`), so
  * a private repository is reached the way the user's own `git clone` reaches it.
  */
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { gitFor } from "../git.ts";
 
@@ -34,39 +34,6 @@ export function checkoutOf(dir: string): { root: string; origin?: string } | und
   if (root === undefined) return undefined;
   const origin = gitAnswer(["config", "--get", "remote.origin.url"], root);
   return { root, ...(origin ? { origin } : {}) };
-}
-
-/**
- * Why the directory `local` cannot stand for github `repo` on this machine, or undefined when it can: it is the root
- * of a checkout whose `origin` is that repository.
- */
-export function checkoutProblem(local: string, repo: string): string | undefined {
-  if (!existsSync(local)) return "does not exist";
-  const checkout = checkoutOf(local);
-  if (checkout === undefined) return "is not a git checkout";
-  if (realpathSync(checkout.root) !== realpathSync(local))
-    return `is inside the checkout ${checkout.root}, not its root`;
-  const of = checkout.origin === undefined ? undefined : githubRepoOf(checkout.origin);
-  if (of?.toLowerCase() !== repo.toLowerCase()) {
-    return `is a checkout of ${checkout.origin ?? "no origin"}, not of github ${repo}`;
-  }
-  return undefined;
-}
-
-/**
- * What to say when the checkout `dir` is not at `ref`, or undefined when it is: on that branch, or at the commit `ref`
- * names. FastAgent never moves a checkout the user owns, so this is said, not acted on.
- */
-export function refNotice(dir: string, ref: string): string | undefined {
-  const branch = gitAnswer(["symbolic-ref", "--quiet", "--short", "HEAD"], dir);
-  if (branch === ref) return undefined;
-  const head = gitAnswer(["rev-parse", "HEAD"], dir);
-  const target = gitAnswer(["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`], dir);
-  if (head !== undefined && head === target) {
-    return undefined;
-  }
-  const at = branch ?? `a detached ${head?.slice(0, 7) ?? "HEAD"}`;
-  return `the checkout is on ${at}, declared ${ref}; it is left as it is`;
 }
 
 /** A commit named in full: fetched by its hash, since `clone --branch` takes only a branch or a tag. */

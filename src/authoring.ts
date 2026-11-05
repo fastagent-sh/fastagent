@@ -7,37 +7,25 @@
  */
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { writeFileAtomic } from "./atomic-write.ts";
-import { GitNotInstalled, gitFor } from "./git.ts";
-import { CONTEXT_FILE, LOCAL_CONTEXT_FILE, contentEntryPath, resolveAgentDir } from "./paths.ts";
+import { CONTEXT_FILE, INSTANCE_CONFIG_FILE, contentEntryPath, resolveAgentDir } from "./paths.ts";
 import { initRepository, scaffoldAgent } from "./scaffold/init.ts";
 import {
-  type BoundContent,
-  type ContentBinding,
-  type ContentDeclaration,
   type ContentEntry,
-  canonicalBinding,
+  type DeclaredContent,
   canonicalEntry,
-  declareBindings,
   declareContent,
   isContentName,
+  joinContent,
 } from "./content/declare.ts";
-import {
-  type ContextFile,
-  type LocalContextFile,
-  contextFileText,
-  loadContent,
-  localContextFileText,
-  parseContextFile,
-  parseLocalContextFile,
-} from "./content/file.ts";
+import { contextFileText, loadContent, parseContextFile } from "./content/file.ts";
 import type { DeclaredEnvironment } from "./environment/declare.ts";
-import { type ResolvedContent, checkBinding, contentAbsentHere, resolveContent } from "./content/resolve.ts";
+import { type ResolvedContent, checkDirectory, resolveContent } from "./content/resolve.ts";
 import type { ContentAddition } from "./content/source.ts";
 import { type LockResult, withLockedFile } from "./locked-file.ts";
 
-/** `context.json` is part of the definition, read by whoever reads the agent. */
+/** `context.json` and `fastagent.json` are part of an agent's text: read by whoever reads the agent. */
 const CONTEXT_FILE_MODE = 0o644;
 
 /**
@@ -49,8 +37,7 @@ export class ContentNameError extends Error {
 }
 
 export interface InitAgentOptions {
-  /** What the agent works on: repositories into `context.json`, this machine's directories into
-   *  `context.local.json`. */
+  /** What the agent works on: repositories for its program into `context.json`, the rest into `fastagent.json`. */
   content?: ContentAddition[];
   /**
    * Install the agent's dependencies, after the scaffold and before its first commit, so the lockfile is in that
@@ -73,11 +60,37 @@ export interface CreatedAgent {
   repository: string;
 }
 
-/** The two content maps an edit rewrites, as written: `context.json`'s entries and `context.local.json`'s bindings. */
-interface ContentMaps {
-  content: Record<string, ContentEntry>;
-  bindings: Record<string, ContentBinding>;
+/** Where an agent's content is declared and kept: which instance configuration is edited, and where clones go. */
+export interface ContentScope {
+  /** The instance configuration to edit, absolute. Default: `fastagent.json` in the agent directory. */
+  config?: string;
+  /** The instance's working directory, where a clone is made. Default: the agent directory. */
+  workdir?: string;
 }
+
+/** The two content maps an edit rewrites, as written: the program's `context.json` and the instance's configuration. */
+interface ContentMaps {
+  program: Record<string, ContentEntry>;
+  instance: Record<string, ContentEntry>;
+}
+
+/** Where an agent's content is, settled: every path absolute. */
+interface Places {
+  dir: string;
+  workdir: string;
+  config: string;
+}
+
+const placesOf = (dir: string, scope: ContentScope = {}): Places => {
+  const config = scope.config ?? join(dir, INSTANCE_CONFIG_FILE);
+  for (const [name, path] of [
+    ["config", scope.config],
+    ["workdir", scope.workdir],
+  ] as const) {
+    if (path !== undefined && !isAbsolute(path)) throw new Error(`${name} must be an absolute path, and is "${path}"`);
+  }
+  return { dir, workdir: scope.workdir ?? dir, config };
+};
 
 /**
  * Create an agent in `dir` as `fastagent init` does, which must be new or empty: the whole scaffold, and a git
@@ -85,7 +98,7 @@ interface ContentMaps {
  * author goes back to a version that worked. It installs no dependencies; the agent opens without them.
  *
  * `content` gives it any number of entries, each a directory of this machine or a GitHub repository. They are all
- * checked before anything is written, and one that is refused leaves no directory. Two entries may bind the same
+ * checked before anything is written, and one that is refused leaves no directory. Two entries may be the same
  * directory, or one inside the other; the agent then reaches it by both names.
  */
 export async function createAgent(
@@ -104,41 +117,40 @@ export async function initAgent(
   options: InitAgentOptions = {},
 ): Promise<CreatedAgent & { content: ResolvedContent[] }> {
   const agentDir = resolve(dir);
-  const additions = options.content ?? [];
-  let maps: ContentMaps = { content: {}, bindings: {} };
-  for (const addition of additions) maps = withAddition(agentDir, maps, addition).maps;
+  const places = placesOf(agentDir);
+  let maps: ContentMaps = { program: {}, instance: {} };
+  for (const addition of options.content ?? []) maps = withAddition(places, maps, addition).maps;
   const { created, undo } = await scaffoldAgent(agentDir);
   const removeAll = async (error: unknown): Promise<never> => {
     await rm(join(agentDir, CONTEXT_FILE), { force: true });
-    await rm(join(agentDir, LOCAL_CONTEXT_FILE), { force: true });
+    await rm(join(agentDir, INSTANCE_CONFIG_FILE), { force: true });
     await undo();
     throw error;
   };
   // The content was checked above, so a refusal here is one that check could not foresee (the disk changed in
   // between); the scaffold goes with it, or a retry would find "already an agent" declaring no content.
   try {
-    if (Object.keys(maps.content).length > 0) {
-      writeFileAtomic(join(agentDir, CONTEXT_FILE), contextFileText({ content: maps.content }), CONTEXT_FILE_MODE);
+    if (Object.keys(maps.program).length > 0) {
+      writeFileAtomic(join(agentDir, CONTEXT_FILE), contextFileText({ content: maps.program }), CONTEXT_FILE_MODE);
     }
-    if (Object.keys(maps.bindings).length > 0) {
-      writeFileAtomic(join(agentDir, LOCAL_CONTEXT_FILE), localContextFileText(maps.bindings), CONTEXT_FILE_MODE);
+    if (Object.keys(maps.instance).length > 0) {
+      writeFileAtomic(places.config, instanceFileText({}, maps.instance), CONTEXT_FILE_MODE);
     }
   } catch (error) {
     await removeAll(error);
   }
   if (options.install) await options.install(agentDir).catch(removeAll);
-  const content = resolveContent(agentDir, declarationOf(agentDir, maps));
+  const content = resolveContent(declarationOf(places, maps), places);
   return { dir: agentDir, created, content, repository: await initRepository(agentDir) };
 }
 
 /**
- * The on-disk declaration resolved for this machine, not an open agent's startup snapshot. Missing local directories
- * are listed separately; an agent opened here is not told of them.
+ * The on-disk declaration resolved for this machine, not an open agent's startup snapshot. An entry that cannot be
+ * resolved (a directory that is gone) refuses, naming it.
  */
-export async function listContent(agentDir: string): Promise<{ content: ResolvedContent[]; absent: BoundContent[] }> {
-  const dir = resolveAgentDir(agentDir);
-  const declaration = loadContent(dir);
-  return { content: resolveContent(dir, declaration), absent: contentAbsentHere(declaration) };
+export async function listContent(agentDir: string, scope?: ContentScope): Promise<{ content: ResolvedContent[] }> {
+  const places = placesOf(resolveAgentDir(agentDir), scope);
+  return { content: resolveContent(loadContent(places.dir, instanceSourceOf(places)), places) };
 }
 
 /**
@@ -151,166 +163,176 @@ export interface ContentEdit {
 }
 
 /**
- * Add a content entry to the agent in `agentDir`: its repository to `context.json`, its directory on this machine to
- * `context.local.json`, or both. A name that cannot be one, or that the agent already has (ignoring case), is a
- * {@link ContentNameError}.
+ * Add a content entry to the agent in `agentDir`: to the instance configuration (`fastagent.json`, or the file
+ * `scope.config` names), or with `program` to the program's `context.json`. A name that cannot be one, or that the
+ * agent already has in either (ignoring case), is a {@link ContentNameError}.
  */
-export async function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit> {
-  const dir = resolveAgentDir(agentDir);
-  const declaration = await editContext(dir, (shared, local) => {
-    const { maps } = withAddition(dir, mapsOf(shared, local), addition);
-    return {
-      result: declarationOf(dir, maps),
-      ...(addition.entry !== undefined ? { shared: contextFileText({ ...shared, content: maps.content }) } : {}),
-      ...(addition.binding !== undefined ? { local: localContextFileText(maps.bindings) } : {}),
-    };
+export async function addContent(
+  agentDir: string,
+  addition: ContentAddition,
+  scope?: ContentScope,
+): Promise<ContentEdit> {
+  const places = placesOf(resolveAgentDir(agentDir), scope);
+  const declaration = await editContent(places, (maps) => {
+    const next = withAddition(places, maps, addition).maps;
+    return { result: declarationOf(places, next), next };
   });
-  const notes = addition.binding !== undefined ? unignoredLocalFile(dir) : [];
-  return { name: addition.name, content: resolveContent(dir, declaration), notes };
+  return { name: addition.name, content: resolveContent(declaration, places), notes: [] };
 }
 
 /**
- * Remove the agent's content entry named `name` (ignoring case), from `context.json` and from this machine's
- * `context.local.json`. A clone at `content/<name>` is left as it is, and said: it may hold the agent's work, and
+ * Remove the agent's content entry named `name` (ignoring case), from whichever of `context.json` and the instance
+ * configuration holds it. A clone at `content/<name>` is left as it is, and said: it may hold the agent's work, and
  * fastagent never deletes a directory in `content/`. A name the agent does not have is a {@link ContentNameError}.
  */
-export async function removeContent(agentDir: string, name: string): Promise<ContentEdit> {
-  const dir = resolveAgentDir(agentDir);
-  const { removed, wasDeclared, declaration } = await editContext(dir, (shared, local) => {
-    const found = entryNamed(mapsOf(shared, local), name);
-    const maps = {
-      content: without(shared.content, found.name),
-      bindings: without(local.content, found.name),
+export async function removeContent(agentDir: string, name: string, scope?: ContentScope): Promise<ContentEdit> {
+  const places = placesOf(resolveAgentDir(agentDir), scope);
+  const { removed, wasClone, declaration } = await editContent(places, (maps) => {
+    const found = entryNamed(maps, name);
+    const next = {
+      program: without(maps.program, found),
+      instance: without(maps.instance, found),
     };
-    const declaration = declarationOf(dir, maps);
-    // What is left is resolved before it is written, so an entry that cannot be refuses the edit rather than failing
-    // it once it is made. The removed one is not asked: removing a broken entry is how it is mended.
-    resolveContent(dir, declaration);
-    return {
-      result: { removed: found.name, wasDeclared: found.shared, declaration },
-      ...(found.shared ? { shared: contextFileText({ ...shared, content: maps.content }) } : {}),
-      ...(found.local ? { local: localContextFileText(maps.bindings) } : {}),
-    };
+    const declaration = declarationOf(places, next);
+    // What is left is resolved before it is written, so an entry that cannot refuses the edit rather than failing it
+    // once it is made. The removed one is not asked: removing a broken entry is how it is mended.
+    resolveContent(declaration, places);
+    const was = declarationOf(places, maps).find((entry) => entry.name === found);
+    return { result: { removed: found, wasClone: was?.kind === "github", declaration }, next };
   });
   const notes: string[] = [];
-  if (wasDeclared && lstatSync(contentEntryPath(dir, removed), { throwIfNoEntry: false })) {
+  if (wasClone && lstatSync(contentEntryPath(places.workdir, removed), { throwIfNoEntry: false })) {
     notes.push(
       `content/${removed} is left as it is: it may hold the agent's work — delete it once nothing in it is needed`,
     );
   }
-  return { name: removed, content: resolveContent(dir, declaration), notes };
+  return { name: removed, content: resolveContent(declaration, places), notes };
 }
 
 /**
  * `maps` with `addition` among them, checked as a whole before anything is written: its name can name an entry and is
  * not taken (ignoring case), the entry is valid, a repository to clone has nothing at `content/<name>` yet, a
- * directory to bind can be bound, and every other entry still resolves (one that does not refuses the edit, not fails
+ * directory can be the content, and every other entry still resolves (one that does not refuses the edit, not fails
  * it once made).
  */
-function withAddition(agentDir: string, maps: ContentMaps, addition: ContentAddition): { maps: ContentMaps } {
-  const { name, entry, binding } = addition;
-  if (entry === undefined && binding === undefined) throw new Error(`content "${name}": nothing to add`);
+function withAddition(places: Places, maps: ContentMaps, addition: ContentAddition): { maps: ContentMaps } {
+  const { name, entry, program } = addition;
   if (!isContentName(name)) {
     throw new ContentNameError(`"${name}" cannot name content (one path segment of letters, digits, "-" and "_")`);
   }
-  const taken = [...Object.keys(maps.content), ...Object.keys(maps.bindings)].find(
+  const taken = [...Object.keys(maps.program), ...Object.keys(maps.instance)].find(
     (key) => key.toLowerCase() === name.toLowerCase(),
   );
   if (taken) throw new ContentNameError(`this agent already has content named "${taken}"`);
-  const next: ContentMaps = {
-    content: entry !== undefined ? { ...maps.content, [name]: canonicalEntry(entry) } : maps.content,
-    bindings: binding !== undefined ? { ...maps.bindings, [name]: canonicalBinding(binding) } : maps.bindings,
-  };
-  const declaration = declarationOf(agentDir, next);
-  if (binding === undefined) {
-    if (lstatSync(contentEntryPath(agentDir, name), { throwIfNoEntry: false })) {
-      throw new Error(`content/${name} already exists in ${agentDir}: move it away first`);
+  if (program === true && !("github" in entry)) {
+    throw new Error(
+      `content "${name}": ${CONTEXT_FILE} is shared, so it declares only repositories every instance reaches`,
+    );
+  }
+  const written = { ...(program === true ? maps.program : maps.instance), [name]: canonicalEntry(entry) };
+  const next: ContentMaps = program === true ? { ...maps, program: written } : { ...maps, instance: written };
+  const declaration = declarationOf(places, next);
+  const declared = declaration.find((d) => d.name === name) as DeclaredContent;
+  if (declared.kind === "github") {
+    if (lstatSync(contentEntryPath(places.workdir, name), { throwIfNoEntry: false })) {
+      throw new Error(`content/${name} already exists in ${places.workdir}: move it away first`);
     }
   } else {
-    const bound = declaration.bound.find((b) => b.name === name) as BoundContent;
-    const repository = declaration.declared.find((d) => d.name === name);
-    checkBinding(agentDir, name, bound.path, repository);
+    checkDirectory(places, name, declared.path);
   }
-  resolveContent(agentDir, declaration);
+  resolveContent(declaration, places);
   return { maps: next };
 }
 
 /** `maps` declared: what every reader of the files would read from them. */
-function declarationOf(agentDir: string, maps: ContentMaps): ContentDeclaration {
-  const declared = declareContent(maps.content);
-  return { declared, bound: declareBindings(maps.bindings, declared, agentDir) };
-}
-
-function mapsOf(shared: ContextFile, local: LocalContextFile): ContentMaps {
-  return { content: shared.content, bindings: local.content };
+function declarationOf(places: Places, maps: ContentMaps): DeclaredContent[] {
+  return joinContent(
+    declareContent(maps.program, { origin: "program", file: CONTEXT_FILE }),
+    declareContent(maps.instance, { origin: "instance", file: places.config, base: dirname(places.config) }),
+  );
 }
 
 function without<T>(map: Record<string, T>, name: string): Record<string, T> {
   return Object.fromEntries(Object.entries(map).filter(([key]) => key !== name));
 }
 
-/**
- * Where the entry `name` matches ignoring case is written: its name, and which of the two files hold it. One the agent
- * does not have is a {@link ContentNameError}.
- */
-function entryNamed(maps: ContentMaps, name: string): { name: string; shared: boolean; local: boolean } {
-  const matches = (key: string) => key.toLowerCase() === name.toLowerCase();
-  const shared = Object.keys(maps.content).find(matches);
-  const local = Object.keys(maps.bindings).find(matches);
-  const found = shared ?? local;
-  if (found !== undefined) return { name: found, shared: shared !== undefined, local: local !== undefined };
-  const names = [...new Set([...Object.keys(maps.content), ...Object.keys(maps.bindings)])];
-  throw new ContentNameError(`no content named "${name}" (this agent has: ${names.join(", ") || "none"})`);
-}
-
-/**
- * Run `edit` over both context files under ONE lock, `context.json`'s, which env edits take too: whether a name is
- * taken is asked of both files, so two edits that write different files must still queue behind each other. The lock
- * creates neither file; what `edit` returns for a file is written under it, `context.local.json` first.
- */
-async function editContext<T>(
-  dir: string,
-  edit: (shared: ContextFile, local: LocalContextFile) => { result: T; shared?: string; local?: string },
-): Promise<T> {
-  const sharedPath = join(dir, CONTEXT_FILE);
-  const localPath = join(dir, LOCAL_CONTEXT_FILE);
-  return withLockedFile(
-    sharedPath,
-    async (sharedText): Promise<LockResult<T>> => {
-      const shared =
-        sharedText === undefined ? { content: {}, declared: [] } : parseContextFile(sharedText, sharedPath);
-      const localText = textIfExists(localPath);
-      const local =
-        localText === undefined
-          ? { content: {}, bound: [] }
-          : parseLocalContextFile(localText, localPath, shared.declared, dir);
-      const out = edit(shared, local);
-      if (out.local !== undefined) writeFileAtomic(localPath, out.local, fileMode(localPath));
-      return { result: out.result, next: out.shared };
-    },
-    { mode: fileMode(sharedPath), create: false },
+/** Where the entry `name` matches ignoring case is written: its name. One the agent does not have is a {@link ContentNameError}. */
+function entryNamed(maps: ContentMaps, name: string): string {
+  const names = [...Object.keys(maps.program), ...Object.keys(maps.instance)];
+  const found = names.find((key) => key.toLowerCase() === name.toLowerCase());
+  if (found !== undefined) return found;
+  throw new ContentNameError(
+    `no content named "${name}" (this agent has: ${[...new Set(names)].join(", ") || "none"})`,
   );
 }
 
-function textIfExists(path: string): string | undefined {
-  return existsSync(path) ? readFileSync(path, "utf8") : undefined;
+/** The instance configuration's content, as `loadContent` reads it: from the file, or none when there is none. */
+function instanceSourceOf(places: Places) {
+  const text = textIfExists(places.config);
+  if (text === undefined) return undefined;
+  return { values: parseInstanceFile(text, places.config), label: places.config, directory: dirname(places.config) };
+}
+
+/** `text`, the contents of the instance configuration at `path`, as the object it is. */
+function parseInstanceFile(text: string, path: string): Record<string, unknown> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${path} is not valid JSON: ${(error as Error).message}`);
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${path} must hold a JSON object`);
+  return raw as Record<string, unknown>;
+}
+
+/** The instance configuration as written: `file` as it is, with `content` replaced (left out when empty). */
+function instanceFileText(file: Record<string, unknown>, content: Record<string, ContentEntry>): string {
+  const { content: _replaced, ...rest } = file;
+  return `${JSON.stringify(Object.keys(content).length > 0 ? { ...rest, content } : rest, null, 2)}\n`;
 }
 
 /**
- * What to say when git would commit `context.local.json`: it names directories of this machine, so committed it would
- * point every other checkout of the agent at paths it does not have. `init` ignores it; an agent made before that may
- * not. Asked only of an agent in a git repository, and never failing an edit that has already been made.
+ * Run `edit` over both files that hold content under ONE lock, `context.json`'s, which env edits take too: whether a
+ * name is taken is asked of both, so two edits that write different files must still queue behind each other. The lock
+ * creates neither file; what `edit` returns is written under it, the instance configuration first. A file that holds
+ * the same content as before is not rewritten.
  */
-function unignoredLocalFile(dir: string): string[] {
-  const git = gitFor("to check that context.local.json stays out of git");
-  try {
-    if (git.answer(["rev-parse", "--is-inside-work-tree"], dir) !== "true") return [];
-    if (git.answer(["check-ignore", "-q", LOCAL_CONTEXT_FILE], dir) !== undefined) return [];
-  } catch (error) {
-    if (error instanceof GitNotInstalled) return [];
-    throw error;
-  }
-  return [`${LOCAL_CONTEXT_FILE} holds directories of this machine and git does not ignore it: add it to .gitignore`];
+async function editContent<T>(
+  places: Places,
+  edit: (maps: ContentMaps) => { result: T; next: ContentMaps },
+): Promise<T> {
+  const programPath = join(places.dir, CONTEXT_FILE);
+  return withLockedFile(
+    programPath,
+    async (programText): Promise<LockResult<T>> => {
+      const program =
+        programText === undefined ? { content: {}, declared: [] } : parseContextFile(programText, programPath);
+      const instanceText = textIfExists(places.config);
+      const instance = instanceText === undefined ? {} : parseInstanceFile(instanceText, places.config);
+      const maps: ContentMaps = {
+        program: program.content,
+        instance: (instance.content ?? {}) as Record<string, ContentEntry>,
+      };
+      const out = edit(maps);
+      if (!sameEntries(out.next.instance, maps.instance)) {
+        writeFileAtomic(places.config, instanceFileText(instance, out.next.instance), fileMode(places.config));
+      }
+      return {
+        result: out.result,
+        ...(sameEntries(out.next.program, maps.program)
+          ? {}
+          : { next: contextFileText({ ...program, content: out.next.program }) }),
+      };
+    },
+    { mode: fileMode(programPath), create: false },
+  );
+}
+
+const sameEntries = (a: Record<string, ContentEntry>, b: Record<string, ContentEntry>) =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+function textIfExists(path: string): string | undefined {
+  return existsSync(path) ? readFileSync(path, "utf8") : undefined;
 }
 
 /**

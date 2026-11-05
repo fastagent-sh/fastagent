@@ -202,7 +202,7 @@ directory with a `context.json` of the same format an agent's own uses:
 plus `skills/` for working with that context. It is distributed as an npm package or a git repository, and the agent's
 `context.json` lists it under `uses`. Building resolves `uses` into `context.lock.json` and puts the manifests and
 skills in the artifact; starting an instance clones or binds the content and installs the environment. An instance can bind an entry to another repository or directory without a rebuild, as
-`context.local.json` does today.
+an instance's `fastagent.json` does.
 
 **Each package is a namespace, named by the alias its user gives it**, so two packages never collide on a name:
 

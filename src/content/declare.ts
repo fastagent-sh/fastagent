@@ -1,67 +1,65 @@
 /**
- * WHAT AN AUTHOR DECLARES an agent works on, read and refused in ONE place (file.ts reads the files through
- * it): the `content` map of `context.json`, which is shared and so holds only repositories every instance reaches, and
- * the `content` map of `context.local.json`, the directories of this machine it is bound to. Pure: what is on the disk
- * is resolve.ts's question. docs/design/agent-model.md §3 is the rule.
+ * WHAT AN AGENT WORKS ON, declared and refused in ONE place (file.ts reads the files through it): the `content` map of
+ * the program's `context.json`, which holds only repositories every instance reaches, and the `content` map of an
+ * instance's `fastagent.json`, which adds repositories and directories of its own. An instance only adds: a name the
+ * program declares is not one it may take. Pure: what is on the disk is resolve.ts's question.
+ * docs/design/agent-artifact.md §3.3 and §4.2 are the rule.
  */
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { CONTEXT_FILE, LOCAL_CONTEXT_FILE, isUnderDir } from "../paths.ts";
+import { CONTEXT_FILE, isUnderDir } from "../paths.ts";
 
-/** One content entry as `context.json` holds it, under its name: a repository. */
-export interface ContentEntry {
-  /** The repository, `owner/repo`. */
-  github: string;
-  /** The branch, tag or commit to clone. */
-  ref?: string;
-  /** One sentence for the agent: what this is, and how to treat it. */
-  description?: string;
-}
-
-/** A declared entry, read. */
-export interface DeclaredContent {
-  name: string;
-  /** `owner/repo`. */
-  repo: string;
-  ref?: string;
-  description?: string;
-}
-
-/**
- * One binding as `context.local.json` holds it, under its name: a directory of this machine. Under the name of an
- * entry `context.json` declares it is this machine's checkout of that repository, and carries only `path`.
- */
-export interface ContentBinding {
-  /** Absolute, `~/`, or relative to the agent directory. */
-  path: string;
-  description?: string;
-}
-
-/** A binding, read: `path` absolute. */
-export type BoundContent = { name: string; path: string } & (
+/** One content entry as a file holds it, under its name: a repository, or a directory of this machine. */
+export type ContentEntry =
   | {
-      /** This machine's checkout of the declared entry of the same name. */
-      kind: "checkout";
+      /** The repository, `owner/repo`. */
+      github: string;
+      /** The branch, tag or commit to clone. */
+      ref?: string;
+      /** One sentence for the agent: what this is, and how to treat it. */
+      description?: string;
     }
   | {
-      /** A directory only this machine has. */
-      kind: "local";
+      /** Absolute, `~/`, or relative to the instance configuration. */
+      path: string;
       description?: string;
+    };
+
+/** A declared entry, read. */
+export type DeclaredContent = {
+  name: string;
+  description?: string;
+  /** The input that declared it. */
+  origin: "program" | "instance";
+} & (
+  | {
+      kind: "github";
+      /** `owner/repo`. */
+      repo: string;
+      ref?: string;
+    }
+  | {
+      /** A directory of this machine, `path` absolute. */
+      kind: "local";
+      path: string;
     }
 );
 
-/** What an agent's content is declared as: the shared declaration, and this machine's bindings. */
-export interface ContentDeclaration {
-  declared: DeclaredContent[];
-  bound: BoundContent[];
+/** Where a `content` map was read from, for what a refusal says and how a path is read. */
+export interface ContentSource {
+  origin: DeclaredContent["origin"];
+  /** The file's name, or what an instance configuration is called. */
+  file: string;
+  /** What a relative path is relative to: the instance configuration's directory. None for one that is no file. */
+  base?: string;
 }
 
 /**
- * The keys an entry and a binding carry, in the order they are written: where it is, then how it is treated. One list
- * each, so a key the reader accepts is one the writer keeps.
+ * The keys an entry carries, in the order they are written: where it is, then how it is treated. One list each, so a
+ * key the reader accepts is one the writer keeps.
  */
-const ENTRY_KEYS = ["github", "ref", "description"] as const;
-const BINDING_KEYS = ["path", "description"] as const;
+const GITHUB_KEYS = ["github", "ref", "description"] as const;
+const PATH_KEYS = ["path", "description"] as const;
 
 /** A name becomes a directory name, so it is one path segment (the spelling a release's agent name has). */
 const NAME = /^[A-Za-z0-9_-]+$/;
@@ -78,14 +76,9 @@ export function isGithubRepo(repo: string): boolean {
   return GITHUB_REPO.test(repo);
 }
 
-/** `entry` with its keys in {@link ENTRY_KEYS} order: the form written. */
+/** `entry` with its keys in the order they are written. */
 export function canonicalEntry(entry: ContentEntry): ContentEntry {
-  return pick(entry, ENTRY_KEYS) as unknown as ContentEntry;
-}
-
-/** `binding` with its keys in {@link BINDING_KEYS} order: the form written. */
-export function canonicalBinding(binding: ContentBinding): ContentBinding {
-  return pick(binding, BINDING_KEYS) as unknown as ContentBinding;
+  return pick(entry, "github" in entry ? GITHUB_KEYS : PATH_KEYS) as unknown as ContentEntry;
 }
 
 function pick(value: object, keys: readonly string[]): Record<string, unknown> {
@@ -97,44 +90,32 @@ function pick(value: object, keys: readonly string[]): Record<string, unknown> {
   return out;
 }
 
-/** Read `context.json`'s `content` map (undefined is none). Every refusal names the entry; nothing is defaulted. */
-export function declareContent(raw: unknown): DeclaredContent[] {
-  return entriesByName(raw).map(([name, entry]) => declareOne(name, entry));
+/**
+ * Read a `content` map (undefined is none) from `from`. Every refusal names the entry; nothing is defaulted. The
+ * program's declares repositories only, since it is shared; an instance's may name a directory too.
+ */
+export function declareContent(raw: unknown, from: ContentSource): DeclaredContent[] {
+  return entriesByName(raw).map(([name, entry]) => declareOne(name, entry, from));
 }
 
 /**
- * Read `context.local.json`'s `content` map (undefined is none) beside `declared`, with relative paths resolved against
- * `agentDir`. A binding under a declared entry's name is that entry's checkout here; any other is a directory of this
- * machine alone.
+ * The program's entries and the instance's, as one list. An instance only adds: a name both declare (ignoring case,
+ * as names are a directory) is refused, naming both, so nothing is shadowed.
  */
-export function declareBindings(raw: unknown, declared: readonly DeclaredContent[], agentDir: string): BoundContent[] {
-  return entriesByName(raw).map(([name, binding]) => {
-    const at = `content "${name}"`;
-    const e = objectWithKeys(at, binding, BINDING_KEYS);
-    if (typeof e.path !== "string" || e.path === "") throw new Error(`${at}: "path" must be a non-empty string`);
-    const path = absolutePath(e.path, agentDir);
-    const shared = declared.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
-    if (shared !== undefined) {
-      if (shared.name !== name) {
-        throw new Error(`${at} binds the entry ${CONTEXT_FILE} names "${shared.name}": spell it the same`);
-      }
-      if (e.description !== undefined) {
-        throw new Error(
-          `${at} binds this machine's checkout of the entry ${CONTEXT_FILE} declares, which says "description" for ` +
-            `every instance: give it only "path"`,
-        );
-      }
-      return { name, path, kind: "checkout" };
+export function joinContent(
+  program: readonly DeclaredContent[],
+  instance: readonly DeclaredContent[],
+): DeclaredContent[] {
+  for (const added of instance) {
+    const taken = program.find((entry) => entry.name.toLowerCase() === added.name.toLowerCase());
+    if (taken !== undefined) {
+      throw new Error(
+        `content "${added.name}" is declared by the program (${CONTEXT_FILE} names "${taken.name}") and by the ` +
+          `instance: an instance adds to the program's content and does not replace it — name it otherwise`,
+      );
     }
-    const description = descriptionOf(at, e);
-    return { name, path, kind: "local", ...(description !== undefined ? { description } : {}) };
-  });
-}
-
-/** `path` as written in `context.local.json`, absolute: `~/` is the home directory, a relative one the agent's. */
-function absolutePath(path: string, agentDir: string): string {
-  if (path === "~" || path.startsWith("~/")) return join(homedir(), path.slice(1));
-  return isAbsolute(path) ? resolve(path) : resolve(agentDir, path);
+  }
+  return [...program, ...instance];
 }
 
 /** The entries of a `content` map, each name checked, unique ignoring case. */
@@ -168,34 +149,52 @@ function objectWithKeys(at: string, value: unknown, keys: readonly string[]): Re
   return e;
 }
 
-function descriptionOf(at: string, e: Record<string, unknown>): string | undefined {
-  if (e.description !== undefined && (typeof e.description !== "string" || e.description === "")) {
-    throw new Error(`${at}: "description" must be a non-empty string`);
+/** `path` as written in an instance configuration, absolute: `~/` is the home directory, a relative one `base`'s. */
+function absolutePath(path: string, from: ContentSource, at: string): string {
+  if (path === "~" || path.startsWith("~/")) return join(homedir(), path.slice(1));
+  if (isAbsolute(path)) return resolve(path);
+  if (from.base === undefined) {
+    throw new Error(`${at}: "path" must be absolute here, since ${from.file} is not a file its directory could anchor`);
   }
-  return e.description as string | undefined;
+  return resolve(from.base, path);
 }
 
-function declareOne(name: string, entry: unknown): DeclaredContent {
+function declareOne(name: string, entry: unknown, from: ContentSource): DeclaredContent {
   const at = `content "${name}"`;
-  const e = objectWithKeys(at, entry, ENTRY_KEYS);
-  for (const key of ["github", "ref"] as const) {
+  const e = objectWithKeys(at, entry, [...GITHUB_KEYS, "path"]);
+  if (from.origin === "program" && e.path !== undefined) {
+    throw new Error(
+      `${at}: ${from.file} is shared, so it declares only the repositories every instance reaches — add a directory ` +
+        `to the instance's configuration instead (fastagent content add <dir>)`,
+    );
+  }
+  for (const key of ["github", "ref", "path"] as const) {
     if (e[key] !== undefined && (typeof e[key] !== "string" || e[key] === "")) {
       throw new Error(`${at}: "${key}" must be a non-empty string`);
     }
   }
-  const description = descriptionOf(at, e);
+  if (e.description !== undefined && (typeof e.description !== "string" || e.description === "")) {
+    throw new Error(`${at}: "description" must be a non-empty string`);
+  }
+  const base = {
+    name,
+    origin: from.origin,
+    ...(e.description !== undefined ? { description: e.description as string } : {}),
+  };
+  if (e.github !== undefined && e.path !== undefined) throw new Error(`${at} names both "github" and "path": give one`);
+  if (e.path !== undefined) {
+    if (e.ref !== undefined) throw new Error(`${at}: "ref" applies to a repository, and ${at} is a directory`);
+    return { ...base, kind: "local", path: absolutePath(e.path as string, from, at) };
+  }
   if (e.github === undefined) {
-    throw new Error(
-      `${at} needs "github": ${CONTEXT_FILE} is shared, so it declares only what every instance reaches — bind a ` +
-        `directory of this machine in ${LOCAL_CONTEXT_FILE} instead (fastagent content add <dir>)`,
-    );
+    throw new Error(`${at} needs "github"${from.origin === "instance" ? ' or "path"' : ""}`);
   }
   const repo = e.github as string;
   if (!isGithubRepo(repo)) throw new Error(`${at}: "github" must be "owner/repo", got "${repo}"`);
   const ref = e.ref as string | undefined;
   // git reads a leading "-" as an option, and no branch, tag or commit name has one.
   if (ref?.startsWith("-")) throw new Error(`${at}: "ref" must name a branch, tag or commit, got "${ref}"`);
-  return { name, repo, ...(ref !== undefined ? { ref } : {}), ...(description !== undefined ? { description } : {}) };
+  return { ...base, kind: "github", repo, ...(ref !== undefined ? { ref } : {}) };
 }
 
 /**

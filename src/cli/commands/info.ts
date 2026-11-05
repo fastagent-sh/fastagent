@@ -2,9 +2,8 @@
 import { definedValues } from "../../declared-secrets.ts";
 import { resolve } from "node:path";
 import { channelIngress } from "../../channels/discover.ts";
-import type { BoundContent } from "../../content/declare.ts";
 import { loadContent, loadEnvironment } from "../../content/file.ts";
-import { type ResolvedContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
+import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
@@ -50,12 +49,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       : undefined;
   // Reported, not fatal: `info` is how an author finds out a content entry is missing, or the environment refused.
   let content: ResolvedContent[] = [];
-  let contentAbsent: BoundContent[] = [];
   let contentError: string | undefined;
   try {
-    const declaration = loadContent(agentDir);
-    content = resolveContent(workdir, declaration);
-    contentAbsent = contentAbsentHere(declaration);
+    content = resolveContent(loadContent(agentDir, instance), { dir: agentDir, workdir });
   } catch (error) {
     contentError = (error as Error).message;
   }
@@ -91,7 +87,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           agentDir,
           name: definition.name,
           content,
-          contentAbsent,
           contentError: contentError ?? null,
           environment: environment ?? null,
           model: modelSpec ?? null,
@@ -121,7 +116,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", `${definition.name} — ${agentDir}`);
-  for (const [label, value] of contentLines(content, contentAbsent)) line(label, value);
+  for (const [label, value] of contentLines(content)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or defaults.model in fastagent.config.ts)");

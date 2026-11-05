@@ -1,23 +1,16 @@
 /**
- * The agent's `context.json` and this machine's `context.local.json`, read in ONE place, so the opener, `info`,
- * `content list`, `env`, `tool` and deploy read one declaration; and the one shape each is written in. A reader
- * declares the part it uses (its content, or its environment), so a part that is refused stops what uses it and is
- * reported where it is, not as the other's; an edit declares the whole, since it writes the whole. JSON, like
- * `mcp.json` and `package.json`, so a command, a client or the agent itself can edit it without touching TypeScript.
+ * The program's `context.json` and the content an instance's configuration adds, read in ONE place, so the opener,
+ * `info`, `content list`, `env`, `tool` and deploy read one declaration; and the one shape `context.json` is written
+ * in. A reader declares the part it uses (its content, or its environment), so a part that is refused stops what uses
+ * it and is reported where it is, not as the other's; an edit declares the whole, since it writes the whole. JSON,
+ * like `mcp.json` and `package.json`, so a command, a client or the agent itself can edit it without touching
+ * TypeScript.
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { CONTEXT_FILE, LOCAL_CONTEXT_FILE } from "../paths.ts";
+import { CONTEXT_FILE } from "../paths.ts";
 import { type DeclaredEnvironment, declareEnvironment } from "../environment/declare.ts";
-import {
-  type BoundContent,
-  type ContentBinding,
-  type ContentDeclaration,
-  type ContentEntry,
-  type DeclaredContent,
-  declareBindings,
-  declareContent,
-} from "./declare.ts";
+import { type ContentEntry, type DeclaredContent, declareContent, joinContent } from "./declare.ts";
 
 /** `context.json` as read: the content entries as written and as declared, and the environment. */
 export interface ContextFile {
@@ -27,17 +20,10 @@ export interface ContextFile {
   environment?: DeclaredEnvironment;
 }
 
-/** `context.local.json` as read: the bindings as written and as declared. */
-export interface LocalContextFile {
-  content: Record<string, ContentBinding>;
-  bound: BoundContent[];
-}
-
 const FILE_KEYS = ["$schema", "content", "environment"] as const;
-const LOCAL_FILE_KEYS = ["content"] as const;
 
 /** `text`, the contents of `path`, as the object a context file is: refused when the file itself is wrong. */
-function parseFile(text: string, path: string, keys: readonly string[] = FILE_KEYS): Record<string, unknown> {
+function parseFile(text: string, path: string): Record<string, unknown> {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -47,7 +33,9 @@ function parseFile(text: string, path: string, keys: readonly string[] = FILE_KE
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${path} must hold a JSON object`);
   const file = raw as Record<string, unknown>;
   for (const key of Object.keys(file)) {
-    if (!keys.includes(key)) throw new Error(`${path}: unknown key "${key}" (valid keys: ${keys.join(", ")})`);
+    if (!FILE_KEYS.includes(key as never)) {
+      throw new Error(`${path}: unknown key "${key}" (valid keys: ${FILE_KEYS.join(", ")})`);
+    }
   }
   if (file.$schema !== undefined && typeof file.$schema !== "string") {
     throw new Error(`${path}: "$schema" must be a string`);
@@ -67,7 +55,7 @@ function declarePart<T>(path: string, declare: () => T): T {
 /** Read `text`, the contents of `path`, whole: what an edit, which writes the whole, reads. */
 export function parseContextFile(text: string, path: string): ContextFile {
   const file = parseFile(text, path);
-  const declared = declarePart(path, () => declareContent(file.content));
+  const declared = declarePart(path, () => declareContent(file.content, { origin: "program", file: CONTEXT_FILE }));
   const environment = declarePart(path, () => declareEnvironment(file.environment));
   return {
     ...(file.$schema !== undefined ? { $schema: file.$schema as string } : {}),
@@ -77,21 +65,9 @@ export function parseContextFile(text: string, path: string): ContextFile {
   };
 }
 
-/** Read `text`, the contents of `path`, whole, beside the entries `context.json` declares. */
-export function parseLocalContextFile(
-  text: string,
-  path: string,
-  declared: readonly DeclaredContent[],
-  agentDir: string,
-): LocalContextFile {
-  const file = parseFile(text, path, LOCAL_FILE_KEYS);
-  const bound = declarePart(path, () => declareBindings(file.content, declared, resolve(agentDir)));
-  return { content: (file.content ?? {}) as Record<string, ContentBinding>, bound };
-}
-
-/** The agent's context file `name` and its path, or undefined text when it has none (it declares nothing). */
-function contextFileAt(agentDir: string, name = CONTEXT_FILE): { path: string; text?: string } {
-  const path = join(resolve(agentDir), name);
+/** The agent's `context.json` and its path, or undefined text when it has none (it declares nothing). */
+function contextFileAt(agentDir: string): { path: string; text?: string } {
+  const path = join(resolve(agentDir), CONTEXT_FILE);
   try {
     return { path, text: readFileSync(path, "utf8") };
   } catch (error) {
@@ -106,20 +82,39 @@ export function readContextFile(agentDir: string): ContextFile {
   return text === undefined ? { content: {}, declared: [] } : parseContextFile(text, path);
 }
 
-/** This machine's `context.local.json` for the agent in `agentDir`, read whole, beside what it `declared`. */
-function readLocalContextFile(agentDir: string, declared: readonly DeclaredContent[]): LocalContextFile {
-  const { path, text } = contextFileAt(agentDir, LOCAL_CONTEXT_FILE);
-  return text === undefined ? { content: {}, bound: [] } : parseLocalContextFile(text, path, declared, agentDir);
+/** The instance configuration's content, as far as this reads it: its `content` map and where it is from. */
+export interface InstanceContent {
+  values: unknown;
+  label: string;
+  /** The configuration file's directory, which a relative `path` is relative to. */
+  directory?: string;
 }
 
 /**
- * The content of the agent whose program is in `agentDir`: what its `context.json` declares, and what this machine
- * binds in the `context.local.json` of `instanceDir` (the program's own directory unless an instance is elsewhere).
+ * The content of the agent whose program is in `agentDir`: what its `context.json` declares, and what `instance` adds
+ * to it (an instance only adds: a name both declare is refused).
  */
-export function loadContent(agentDir: string, instanceDir: string = agentDir): ContentDeclaration {
+export function loadContent(agentDir: string, instance?: InstanceContent): DeclaredContent[] {
   const { path, text } = contextFileAt(agentDir);
-  const declared = text === undefined ? [] : declarePart(path, () => declareContent(parseFile(text, path).content));
-  return { declared, bound: readLocalContextFile(instanceDir, declared).bound };
+  const program =
+    text === undefined
+      ? []
+      : declarePart(path, () =>
+          declareContent(parseFile(text, path).content, { origin: "program", file: CONTEXT_FILE }),
+        );
+  return joinContent(program, instance === undefined ? [] : instanceContent(instance));
+}
+
+/** What an instance configuration's `content` declares. */
+export function instanceContent({ values, label, directory }: InstanceContent): DeclaredContent[] {
+  const content = typeof values === "object" && values !== null ? (values as { content?: unknown }).content : undefined;
+  return declarePart(label, () =>
+    declareContent(content, {
+      origin: "instance",
+      file: label,
+      ...(directory === undefined ? {} : { base: directory }),
+    }),
+  );
 }
 
 /** The environment the agent in `agentDir` declares, or undefined when it declares none. */
@@ -150,9 +145,4 @@ export function contextFileText(file: {
     ...(Object.keys(environment).length > 0 ? { environment } : {}),
   };
   return `${JSON.stringify(out, null, 2)}\n`;
-}
-
-/** The text `context.local.json` is written as. */
-export function localContextFileText(content: Record<string, ContentBinding>): string {
-  return `${JSON.stringify({ content }, null, 2)}\n`;
 }

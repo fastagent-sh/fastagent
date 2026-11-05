@@ -7,7 +7,7 @@ import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } fr
 import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
 import { unsupportedRuntime } from "../runtime.ts";
 import { failStartup } from "./fail.ts";
-import { CONFIG_FLAG, ENV_FILE_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
+import { CONFIG_FLAG, CONTENT_FLAGS, ENV_FILE_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 const AGENT_ARG = {
@@ -50,7 +50,7 @@ const init: CommandSpec = {
       flags: "--content <source>",
       description:
         "a directory or github:owner/repo the agent works on (repeatable): a repository in context.json, a " +
-        "directory of this machine in context.local.json",
+        "directory of this machine in fastagent.json",
       repeatable: true,
     },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
@@ -562,53 +562,66 @@ const content: CommandSpec = {
   name: "content",
   summary: "list, add or remove what the agent works on",
   description:
-    "Content is a directory the agent works on: a GitHub repository declared " +
-    "by name in context.json, shared with the agent and cloned at content/<name>, or a directory of this " +
-    "machine bound in context.local.json, which never leaves it.",
+    "Content is a directory the agent works on: a GitHub repository, cloned at content/<name> in the instance's " +
+    "working directory, or a directory of this machine. The program's context.json declares repositories every " +
+    "instance reaches; an instance's fastagent.json adds its own, repositories and directories, and only adds: a " +
+    "name the program declares is not one it may take.",
   subcommands: [
     {
       name: "list",
       summary: "each content entry and where it is",
       args: [AGENT_ARG],
-      flags: [JSON_FLAG],
+      flags: [JSON_FLAG, ...CONTENT_FLAGS],
       examples: [{ cmd: "fastagent content list" }],
       run: async (args, f) =>
-        (await import("./commands/content.ts")).runContentList(args[0] as string, f.json === true),
+        (await import("./commands/content.ts")).runContentList(args[0] as string, f.json === true, instanceFlags(f)),
     },
     {
       name: "add",
-      summary: "add a GitHub repository, or bind a directory of this machine, as content",
+      summary: "add a GitHub repository or a directory of this machine as content",
       args: [{ name: "<source>", description: "a directory, or github:owner/repo" }, AGENT_ARG],
       flags: [
         { flags: "--ref <ref>", description: "a repository: the branch, tag or commit to clone" },
         { flags: "--name <name>", description: "its name (default: the directory's or repository's)" },
         { flags: "--description <text>", description: "one sentence for the agent: what it is, how to treat it" },
+        {
+          flags: "--program",
+          description: "declare a repository in context.json, for every instance of the program, not in fastagent.json",
+        },
+        ...CONTENT_FLAGS,
       ],
       examples: [
-        { cmd: "fastagent content add ~/code/app", note: "a directory of this machine" },
+        { cmd: "fastagent content add ~/code/app", note: "a directory" },
         { cmd: "fastagent content add github:acme/docs", note: "a clone" },
+        { cmd: "fastagent content add --program github:acme/docs", note: "for every instance" },
       ],
       notes:
-        "The root of a GitHub checkout is declared in context.json as that repository, and bound in " +
-        "context.local.json to the checkout, used as it is on this machine. github:owner/repo is cloned into " +
+        "Without --program the entry is written to the instance's fastagent.json (the project's, or the file " +
+        "--config or FASTAGENT_CONFIG names); a deploy does not carry it yet. github:owner/repo is cloned into " +
         "content/<name> when the agent starts, and brought up to date in place at each start where git can do so " +
-        "without touching the agent's work; so is a declared repository on any machine with no checkout bound. " +
-        "Any other directory is bound in context.local.json only: a deployed instance works without it. A bound " +
-        "directory may not contain the agent directory, nor sit inside it.",
+        "without touching the agent's work. A directory is used as it is, and may not contain the agent directory " +
+        "nor sit inside it.",
       run: async (args, f) =>
         (await import("./commands/content.ts")).runContentAdd(args[0] as string, args[1] as string, {
           ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
           ...(typeof f.name === "string" ? { name: f.name } : {}),
           ...(typeof f.description === "string" ? { description: f.description } : {}),
+          ...(f.program === true ? { program: true } : {}),
+          instance: instanceFlags(f),
         }),
     },
     {
       name: "remove",
-      summary: "remove a content entry from both files (a bound directory, and a clone, are left as they are)",
+      summary: "remove a content entry (a directory, and a clone, are left as they are)",
       args: [{ name: "<name>", description: "the entry's name" }, AGENT_ARG],
+      flags: [...CONTENT_FLAGS],
       examples: [{ cmd: "fastagent content remove app" }],
-      run: async (args) =>
-        (await import("./commands/content.ts")).runContentRemove(args[0] as string, args[1] as string),
+      run: async (args, f) =>
+        (await import("./commands/content.ts")).runContentRemove(
+          args[0] as string,
+          args[1] as string,
+          instanceFlags(f),
+        ),
     },
   ],
 };

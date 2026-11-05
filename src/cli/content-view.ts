@@ -1,29 +1,21 @@
 /** How the CLI writes an agent's content. */
-import type { BoundContent } from "../content/declare.ts";
-import { LOCAL_CONTEXT_FILE } from "../paths.ts";
-import { type ResolvedContent, absentNotice } from "../content/resolve.ts";
+import type { ResolvedContent } from "../content/resolve.ts";
 
 /** What a content entry is, in the words the reports use. */
 function contentKind(c: ResolvedContent): string {
-  if (c.kind !== "github") return `this machine only, bound in ${LOCAL_CONTEXT_FILE}`;
-  const github = `github ${c.repo}${c.ref ? `@${c.ref}` : ""}`;
-  return c.clone ? `${github}, a clone brought up to date at each start` : `${github}, your checkout bound here`;
+  if (c.kind !== "github") return "a directory of this machine";
+  return `github ${c.repo}${c.ref ? `@${c.ref}` : ""}, a clone brought up to date at each start`;
 }
 
 /**
- * The report lines for an agent's content — `works on`, one per entry, then a `notice` line for each
- * thing its resolution has to say, then one for each directory this machine binds that is not here — shared by the
- * startup report, `info` and `content list`, so the three say the same thing.
+ * The report lines for an agent's content — `works on`, one per entry, then a `notice` line for each thing its
+ * resolution has to say — shared by the startup report, `info` and `content list`, so the three say the same thing.
  */
-export function contentLines(
-  content: readonly ResolvedContent[],
-  absent: readonly BoundContent[] = [],
-): [label: string, value: string][] {
+export function contentLines(content: readonly ResolvedContent[]): [label: string, value: string][] {
   const lines = content.flatMap((c): [string, string][] => [
     ["works on", `${c.name.padEnd(width(content))}  ${c.location} (${contentKind(c)})`],
     ...c.notices.map((notice): [string, string] => ["notice", `${c.name}: ${notice}`]),
   ]);
-  for (const binding of absent) lines.push(["notice", absentNotice(binding)]);
   return lines.length === 0 ? [["content", "(none)"]] : lines;
 }
 

@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, statSync } from "node:fs";
 import { baseEnv } from "../child-env.ts";
 import { definedValues } from "../declared-secrets.ts";
 import { enterAgentEnv } from "../env.ts";
+import type { ContentScope } from "../authoring.ts";
 import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
 import {
   INSTANCE_CONFIG_ENV,
@@ -38,16 +39,29 @@ const INSTANCE_LOCATION: readonly (readonly [keyof InstanceFlags, string, string
   ["config", "--config", INSTANCE_CONFIG_ENV],
 ];
 
+const ROOT_FLAG: FlagSpec = {
+  flags: "--root <dir>",
+  description: `the instance root: its working directory, with its state in <dir>/.state (${INSTANCE_ROOT_ENV})`,
+};
+const STATE_FLAG: FlagSpec = {
+  flags: "--state <dir>",
+  description: `the instance's state, apart from the root (${INSTANCE_STATE_ENV})`,
+};
+const WORKDIR_FLAG: FlagSpec = {
+  flags: "--workdir <dir>",
+  description: `the agent's working directory, apart from the root (${INSTANCE_WORKDIR_ENV})`,
+};
+
 /** The flags of a command that opens, or reads the state of, an instance. */
-export const INSTANCE_FLAGS: readonly FlagSpec[] = [
+export const INSTANCE_FLAGS: readonly FlagSpec[] = [ROOT_FLAG, STATE_FLAG, WORKDIR_FLAG];
+
+/** The flags of a command that reads or edits what an instance works on: where it keeps its clones, and its file. */
+export const CONTENT_FLAGS: readonly FlagSpec[] = [
+  ROOT_FLAG,
+  WORKDIR_FLAG,
   {
-    flags: "--root <dir>",
-    description: `the instance root: its working directory, with its state in <dir>/.state (${INSTANCE_ROOT_ENV})`,
-  },
-  { flags: "--state <dir>", description: `the instance's state, apart from the root (${INSTANCE_STATE_ENV})` },
-  {
-    flags: "--workdir <dir>",
-    description: `the agent's working directory, apart from the root (${INSTANCE_WORKDIR_ENV})`,
+    flags: "--config <file>",
+    description: `the instance configuration to read and edit, a fastagent.json (${INSTANCE_CONFIG_ENV}; default: the project's)`,
   },
 ];
 
@@ -102,6 +116,13 @@ export function enterInstance(agentDir: string, flags: InstanceFlags = {}): void
   enterEnvFile(flags.envFile);
   enterAgentEnv(agentDir);
   enterInstanceLocation(flags);
+}
+
+/** Where a content command reads and edits an agent's content, as its flags and variables say. */
+export function enterContentScope(agentDir: string, flags: InstanceFlags = {}): ContentScope {
+  enterInstanceLocation(flags);
+  const config = process.env[INSTANCE_CONFIG_ENV];
+  return { workdir: resolveWorkdir(agentDir), ...(config === undefined ? {} : { config }) };
 }
 
 /**

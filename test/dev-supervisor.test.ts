@@ -20,7 +20,6 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
     // Content is resolved, and the environment entered, once per process.
     expect(ignored(join(root, "context.json"))).toBe(false);
-    expect(ignored(join(root, "context.local.json"))).toBe(false);
     expect(ignored(join(root, ".mcp.json"))).toBe(false);
     // The instance configuration `dev` reads at the root: resolved once per process, so an edit restarts the worker.
     expect(ignored(join(root, "fastagent.json"))).toBe(false);

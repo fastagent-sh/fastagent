@@ -218,7 +218,7 @@ describe("environment: what context.json may declare", () => {
     // The two edits keep each other's part of the file.
     const dir = await agentDir();
     await writeEnvironment(dir, () => ({ packages: { gh: "2" }, aptPackages: ["chromium"], variables: {} }));
-    await addContent(dir, { name: "app", entry: { github: "acme/app" } });
+    await addContent(dir, { name: "app", entry: { github: "acme/app" }, program: true });
     await writeEnvironment(dir, () => ({ packages: { jq: "latest" }, aptPackages: [], variables: {} }));
     expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8"))).toEqual({
       content: { app: { github: "acme/app" } },

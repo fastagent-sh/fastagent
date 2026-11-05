@@ -76,16 +76,15 @@ it and installs `git` in the image ([what deploy bakes](deploy.md#what-deploy-ba
 Each `--content <source>` adds something the agent works on (see [content](configuration.md#content)), read the
 way `content add` reads it:
 
-| `<source>` | In `context.json` (shared) | In `context.local.json` (this machine) | Here, the agent works in |
-|---|---|---|---|
-| `github:owner/repo` | `{ "github": "owner/repo" }` | Nothing | A clone at `content/<name>`, made when the agent starts and brought up to date in place at each start |
-| The root of a checkout whose `origin` is on GitHub | `{ "github": "owner/repo" }` | `{ "path": "<checkout>" }` | The checkout |
-| Any other directory, a subdirectory of such a checkout included | Nothing | `{ "path": "<dir>" }` | The directory; for a subdirectory, a note names the `github:` form, which is the whole repository |
+| `<source>` | Written to | Here, the agent works in |
+|---|---|---|
+| `github:owner/repo` | `context.json`: `{ "github": "owner/repo" }`, since a new agent's repositories are its program's | A clone at `content/<name>`, made when the agent starts and brought up to date in place at each start |
+| Any directory | `fastagent.json`: `{ "path": "<dir>" }`, this instance's | The directory; for a checkout of a GitHub repository, a note names the `github:` form, which is cloned instead |
 
-The entry is named after the repository or the directory. A directory only this machine binds stays here: a deployed
-instance works without it, and `deploy` says so. A repository is cloned on a host. Every entry is checked before
-anything is written: a directory must exist, and none may contain the agent directory or sit inside it. Without
-`--content` the agent has none and works only in its own directory.
+The entry is named after the repository or the directory. A directory stays on this machine: a deployed instance works
+without it, and `deploy` says so. A repository is cloned on a host. Every entry is checked before anything is written:
+a directory must exist, and none may contain the agent directory or sit inside it. Without `--content` the agent has
+none and works only in its own directory.
 
 `init` refuses a directory that is not empty, inside a project as anywhere else, and names the command that creates
 the agent elsewhere and attaches the project: `fastagent init <new directory> --content <project>`. It also refuses a
@@ -143,25 +142,27 @@ about: the package publishes the file. Prints where `dist/` is; `--json` adds th
 ## `fastagent content`
 
 ```bash
-fastagent content list [agent] [--json]
-fastagent content add <source> [agent] [--ref <ref>] [--name <name>] [--description <text>]
-fastagent content remove <name> [agent]
+fastagent content list [agent] [--json] [--root dir] [--workdir dir] [--config file]
+fastagent content add <source> [agent] [--ref <ref>] [--name <name>] [--description <text>] [--program]
+                                [--root dir] [--workdir dir] [--config file]
+fastagent content remove <name> [agent] [--root dir] [--workdir dir] [--config file]
 ```
 
-Edits `context.json` (what every instance reaches) and `context.local.json` (the directories of this machine the agent
-is bound to). `add` reads `<source>` the way `init --content` does: a directory (bound here), the root of a GitHub
-checkout (declared as that repository, and bound here to the checkout), or `github:owner/repo` (declared, and cloned
-at the next start). A binding is written absolute. `--ref` names a repository's branch, tag or commit; `--description` gives the agent one sentence about it. An
-entry's name defaults to its directory's or repository's; `add` asks for `--name` when that name is taken (ignoring
-case) or is not one segment of letters, digits, `-` and `_`, and refuses a repository to clone when something is
-already at `content/<name>`. `add` says when git would commit `context.local.json` (an agent made before `init`
-ignored it). `remove` drops the entry from both files; the directory it was bound to is untouched, and so is a
-clone, which may hold the agent's work: `remove` says it is left, for you to delete.
+Edits what the agent works on. By default `add` writes the instance's `fastagent.json`: the project's, or the file
+`--config` (`FASTAGENT_CONFIG`) names, created when it is not there and otherwise kept as it is apart from `content`.
+`--program` declares a repository in `context.json` instead, for every instance of the program (a directory is refused
+there). `add` reads `<source>` the way `init --content` does: a directory (used as it is, written absolute) or
+`github:owner/repo` (cloned at the next start). `--ref` names a repository's branch, tag or commit; `--description`
+gives the agent one sentence about it. An entry's name defaults to its directory's or repository's; `add` asks for
+`--name` when that name is taken in either file (ignoring case) or is not one segment of letters, digits, `-` and `_`,
+and refuses a repository to clone when something is already at `content/<name>` in the working directory (`--root`,
+`--workdir`, as for [`dev`](#fastagent-dev)). `remove` drops the entry from whichever file holds it; a directory is
+untouched, and so is a clone, which may hold the agent's work: `remove` says it is left, for you to delete.
 
 Edits take one lock, `context.json`'s (which `fastagent env` edits take too), so two at once apply one after the other
-whichever files they write, and a refusal leaves both files as they were. `list` names a directory bound here that is
-gone; `list --json` prints `{ content, absent }`: each entry as every command resolves it, with its `notices` (a
-checkout off its `ref`, a clone not made yet), and each binding whose directory is gone.
+whichever file they write, and a refusal leaves both files as they were. Every entry that is left must still resolve,
+so a directory that is gone refuses `list` and every edit, naming it, until `remove` drops it. `list --json` prints
+`{ content }`: each entry as every command resolves it, with its `notices` (a clone not made yet).
 
 ## `fastagent env`
 
@@ -557,7 +558,7 @@ workdir:  --workdir > FASTAGENT_WORKDIR > <root> > <agent dir>   (the agent's cw
 root:     --root > FASTAGENT_ROOT
 config:   --config > FASTAGENT_CONFIG > none: start never reads the project's fastagent.json
 secrets:  --env-file > FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production   (still the project's, whatever the root)
-content:  <workdir>/content/<name> (clones; a host has no context.local.json)
+content:  <workdir>/content/<name> (clones)
 ```
 
 The same `--root`, `--state` and `--workdir` place the instance for `dev`, `invoke`, `info` and `schedules`

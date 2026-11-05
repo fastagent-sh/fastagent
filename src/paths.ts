@@ -37,16 +37,13 @@ function environmentPath(dir: string, segment: string, env: NodeJS.ProcessEnv): 
 export const STATE_DIRNAME = ".state";
 
 /**
- * Where fastagent clones the repositories `context.json` declares, `content/<name>` in the agent dir. Never an env
- * override: a machine that has a checkout of its own binds it in {@link LOCAL_CONTEXT_FILE} instead.
+ * Where fastagent clones the repositories an agent's content declares, `content/<name>` in the instance's working
+ * directory. Never an env override: a machine that has a checkout of its own adds it as a directory instead.
  */
 export const CONTENT_DIRNAME = "content";
 
 /** The agent's context declaration (`context.json`), beside its config: shared, so only what every instance reaches. */
 export const CONTEXT_FILE = "context.json";
-
-/** The directories of THIS machine the agent is bound to: never committed, never deployed. */
-export const LOCAL_CONTEXT_FILE = "context.local.json";
 
 /**
  * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
