@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts, imageHasGit } from "../src/deploy/container.ts";
@@ -117,11 +118,13 @@ describe("deploy/container: shared Docker context", () => {
     // so one an earlier deploy delivered does not ship again.
     const artifacts = (i: typeof input & { config?: string }) => containerArtifacts(i);
     const file = (i: typeof input & { config?: string }) =>
-      artifacts(i).find((a) => a.path === "fastagent.instance.json")?.content;
-    expect(manifest({ ...input, config: '{"thinkingLevel":"high"}' }).config).toBe("fastagent.instance.json");
+      artifacts(i).find((a) => a.path === "fastagent.instance/fastagent.json")?.content;
+    expect(manifest({ ...input, config: '{"thinkingLevel":"high"}' }).config).toBe("fastagent.instance/fastagent.json");
     expect(file({ ...input, config: '{"thinkingLevel":"high"}' })).toBe('{"thinkingLevel":"high"}');
     expect(manifest(input).config).toBeUndefined();
     expect(file(input)).toBe("");
+    // In a directory of its own, never the program's: what the configuration names beside it is read from there.
+    expect(posix.dirname(manifest({ ...input, config: "{}" }).config)).not.toBe(".");
     // It is NOT in the image's instructions — a credential could never ride this carrier, and neither does this.
     const dockerfile = containerArtifacts({ ...input, modelSpec: "openai/gpt-4o-mini" }).find(
       (a) => a.path === "Dockerfile",

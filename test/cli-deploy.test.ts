@@ -225,13 +225,25 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     // The configuration decides the deployment's own choices: here, no Agent API key.
     expect(delivered.stderr).toMatch(/Agent API: not served/);
     const manifest = JSON.parse(await readFile(join(dir, "fastagent.release.json"), "utf8"));
-    expect(manifest.config).toBe("fastagent.instance.json");
-    expect(JSON.parse(await readFile(join(dir, "fastagent.instance.json"), "utf8"))).toEqual({
+    // In a directory of its own, apart from the program's: what an instance names beside it is read from there.
+    expect(manifest.config).toBe("fastagent.instance/fastagent.json");
+    expect(JSON.parse(await readFile(join(dir, "fastagent.instance", "fastagent.json"), "utf8"))).toEqual({
       settings: { repo: "acme/api" },
       http: { api: false },
     });
     // The project's own development configuration stays out of the image.
-    expect(await readFile(join(dir, ".dockerignore"), "utf8")).toMatch(/^\/fastagent\.json$/m);
+    const ignore = await readFile(join(dir, ".dockerignore"), "utf8");
+    expect(ignore).toMatch(/^\/fastagent\.json$/m);
+    const { default: ignoreMatcher } = await import("ignore");
+    expect(ignoreMatcher().add(ignore).ignores("fastagent.instance/fastagent.json")).toBe(false);
+
+    // Every deploy writes it again, whoever wrote it before: a build output, never a file kept as the author's.
+    await writeFile(config, JSON.stringify({ settings: { repo: "acme/web" } }));
+    const again = await runInProcess(["deploy", "fly", dir, "--config", config]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(JSON.parse(await readFile(join(dir, "fastagent.instance", "fastagent.json"), "utf8"))).toEqual({
+      settings: { repo: "acme/web" },
+    });
 
     const missing = await runInProcess(["deploy", "fly", dir, "--config", join(dirname(config), "absent.json")]);
     expect([missing.code, missing.stderr]).toEqual([1, expect.stringContaining("absent.json")]);

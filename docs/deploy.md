@@ -34,8 +34,9 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 
 A deployment runs on the program's defaults, and `--config <file>` gives it an instance configuration of its own (a
 `fastagent.json`: model, settings, `http`, `deploy`, repositories it works on). The deploy decides with it (its model,
-whether it serves the Agent API, AgentCore's idle timeout), and carries it in the image as `fastagent.instance.json`
-beside the release manifest, which names it; the box reads it there at every start. The project's own `fastagent.json`
+whether it serves the Agent API, AgentCore's idle timeout), and carries it in the image as `fastagent.instance/fastagent.json`
+beside the release manifest, which names it; the box reads it there at every start. It is a directory of its own,
+apart from the program's, as an instance configuration directory is. The project's own `fastagent.json`
 is the development instance's: a deploy never carries it, and the generated `.dockerignore` keeps it out of the image.
 A configuration holds no secret value.
 

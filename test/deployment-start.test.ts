@@ -110,9 +110,10 @@ export default defineTool({
     // The instance configuration the release delivers, beside its manifest as the image has both.
     await writeFile(
       manifest,
-      JSON.stringify({ version: 1, id: "one", agent: "reviewer", config: "fastagent.instance.json" }),
+      JSON.stringify({ version: 1, id: "one", agent: "reviewer", config: "fastagent.instance/fastagent.json" }),
     );
-    await writeFile(join(dir, "fastagent.instance.json"), JSON.stringify({ thinkingLevel: "high" }));
+    await mkdir(join(dir, "fastagent.instance"));
+    await writeFile(join(dir, "fastagent.instance", "fastagent.json"), JSON.stringify({ thinkingLevel: "high" }));
     await mkdir(join(root, ".secrets"), { recursive: true });
     const rotated = JSON.stringify({ openai: { type: "api_key", key: "rotated" } });
     await writeFile(join(root, ".secrets/auth.json"), rotated);
@@ -171,7 +172,7 @@ try {
       mise: join(root, ".state", "mise"),
       // Read from the configuration the release delivered.
       thinking: "high",
-      thinkingFrom: join(dir, "fastagent.instance.json"),
+      thinkingFrom: join(dir, "fastagent.instance", "fastagent.json"),
     });
     expect(reported.end).toMatchObject({ status: "completed" });
     const result = JSON.stringify(reported.entries.find((entry) => entry.kind === "tool_result")?.data ?? "");
