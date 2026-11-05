@@ -29,6 +29,8 @@ export interface DeployOptions {
   tunnel?: boolean;
   force?: boolean;
   intoLinked?: boolean;
+  /** `--config <file>`: the instance configuration the deployment delivers. */
+  config?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;
   /** `--json`: a coding agent's `--run`, run in a ticket that hands each step only a person can take to its user. */

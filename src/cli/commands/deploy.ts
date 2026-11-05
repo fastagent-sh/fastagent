@@ -2,7 +2,7 @@
  * `fastagent deploy <host> [agent]`: generate host artifacts from the resolved definition and print an ordered deploy
  * runbook.
  */
-import { relative } from "node:path";
+import { relative, resolve } from "node:path";
 import type { DeployHost } from "../../deploy/hosts.ts";
 import { cloudFor } from "../../channels/feishu/cloud.ts";
 import { FEISHU_INGRESS_SETTINGS } from "../../channels/feishu/setup-mode.ts";
@@ -20,7 +20,7 @@ import { buildProject } from "../../harnesses/pi-durable/build.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
 import { unprotectedSecretsNote } from "../../value-file.ts";
-import { resolveConfig } from "../../harnesses/pi-durable/config.ts";
+import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive, shellArg } from "../shared.ts";
@@ -136,10 +136,21 @@ async function deploy(
   }
   if (opts.json && !opts.run) failUsage("--json reports a deploy --run drives: pass --run too");
   selectAgentEnvironment("production");
-  const { agentDir } = await enterAgentDirectory(dirArg, opts);
-  // The program's defaults: what a deployment carries of the configuration until a deploy delivers one of its own.
-  const config = await loadSourceDefinition(agentDir)
-    .then((definition) => resolveConfig(definition))
+  // The configuration the box runs on: the program's defaults, with the instance configuration `--config` delivers,
+  // and never the project's own `fastagent.json`, the development instance's.
+  const delivered =
+    opts.config === undefined
+      ? undefined
+      : await readInstanceConfigFile(resolve(opts.config))
+          .then((source) => ({ source, text: `${JSON.stringify(source.values, null, 2)}\n` }))
+          .catch(failStartup);
+  const deployed = async (dir: string) => ({
+    definition: await loadSourceDefinition(dir),
+    ...(delivered === undefined ? {} : { instance: delivered.source }),
+  });
+  const { agentDir } = await enterAgentDirectory(dirArg, opts, undefined, deployed).catch(failStartup);
+  const config = await deployed(agentDir)
+    .then(({ definition }) => resolveConfig(definition, delivered?.source))
     .catch(failStartup);
   // Never `dev`, whatever spawned this; and what decides a channel's shape is read here as the box will read it.
   unmarkDevServe();
@@ -168,6 +179,7 @@ async function deploy(
     const facts = await preflightDeploy({
       agentDir,
       config,
+      ...(delivered === undefined ? {} : { delivered }),
       run: !!opts.run,
       force: !!opts.force,
       noResidentProcess: host === "agentcore", // alarms and webhooks wake the container there — no machine to keep up
@@ -210,6 +222,7 @@ async function deploy(
           agentDir,
           ...(opts.tunnel ? ["--tunnel"] : []),
           ...(opts.force ? ["--force"] : []),
+          ...(delivered === undefined ? [] : ["--config", delivered.source.label]),
           ...(opts.intoLinked ? ["--into-linked"] : []),
           "--run",
           "--json",

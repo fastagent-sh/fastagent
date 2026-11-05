@@ -1,7 +1,7 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
-import { CONTENT_DIRNAME, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { CONTENT_DIRNAME, INSTANCE_CONFIG_FILE, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { RUNTIME_FLOOR } from "../runtime.ts";
-import { RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
+import { DELIVERED_CONFIG_FILE, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 import { MISE_ENVIRONMENT } from "../environment/mise.ts";
 import { BOX_CLI_PREDATES } from "./box-shell.ts";
 
@@ -12,7 +12,7 @@ import { BOX_CLI_PREDATES } from "./box-shell.ts";
 const PACKAGES_FILE = "fastagent.packages";
 
 /** What every deploy writes whoever wrote it before: build output, by its file name, never kept or reported stale. */
-export const BUILD_OUTPUTS: readonly string[] = [RELEASE_FILE, PACKAGES_FILE];
+export const BUILD_OUTPUTS: readonly string[] = [RELEASE_FILE, PACKAGES_FILE, DELIVERED_CONFIG_FILE];
 
 export interface Artifact {
   path: string;
@@ -112,6 +112,11 @@ export interface ContainerInput {
    * interpolate the operator's shell.
    */
   modelSpec?: string;
+  /**
+   * The instance configuration the deployment delivers (`deploy --config`), as the file's text: written beside the
+   * release manifest and named in it, so the image carries it and `start` reads it there.
+   */
+  config?: string;
   /** The agent's name, recorded in the release manifest: the agent directory's own name. */
   agent: string;
   /** Agent-dir-relative machinery paths the NAME-based excludes below would miss. */
@@ -237,6 +242,8 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 **/${STATE_DIRNAME}
 /${INSTANCES_DIRNAME}
 /${CONTENT_DIRNAME}
+# the project's own instance configuration: the development instance's, which a deploy does not carry
+/${INSTANCE_CONFIG_FILE}
 **/.cache
 **/.env
 **/.env.*
@@ -256,10 +263,13 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
     id: input.releaseId,
     agent: input.agent,
     ...(input.modelSpec !== undefined ? { model: input.modelSpec } : {}),
+    ...(input.config !== undefined ? { config: DELIVERED_CONFIG_FILE } : {}),
   };
   parseDeploymentRelease(JSON.stringify(release));
   return [
     { path: RELEASE_FILE, content: `${JSON.stringify(release, null, 2)}\n` },
+    // Written without a configuration too, empty: one an earlier deploy delivered would otherwise ship again, unread.
+    { path: DELIVERED_CONFIG_FILE, content: input.config ?? "" },
     // Written without packages too, empty: a list an earlier deploy left would otherwise outlive the last package.
     { path: PACKAGES_FILE, content: (input.packages ?? []).map((spec) => `${spec}\n`).join("") },
     { path: "Dockerfile", content: dockerfile(input) },

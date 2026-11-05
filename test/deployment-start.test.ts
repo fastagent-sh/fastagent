@@ -107,7 +107,12 @@ export default defineTool({
     // What the image does: it builds the definition, and the box opens that build where the image has it.
     await buildProject(agent);
     const manifest = join(dir, "release.json");
-    await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "reviewer" }));
+    // The instance configuration the release delivers, beside its manifest as the image has both.
+    await writeFile(
+      manifest,
+      JSON.stringify({ version: 1, id: "one", agent: "reviewer", config: "fastagent.instance.json" }),
+    );
+    await writeFile(join(dir, "fastagent.instance.json"), JSON.stringify({ thinkingLevel: "high" }));
     await mkdir(join(root, ".secrets"), { recursive: true });
     const rotated = JSON.stringify({ openai: { type: "api_key", key: "rotated" } });
     await writeFile(join(root, ".secrets/auth.json"), rotated);
@@ -139,7 +144,7 @@ try {
   const created = await service.agent.sessions.create();
   const end = await service.agent.messages.send({ sessionId: created.id, content: "Read my context" }, { wait: 60 });
   const page = await service.agent.sessions.entries(created.id);
-  console.log(JSON.stringify({ sessionId: created.id, end, entries: page.data, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR }));
+  console.log(JSON.stringify({ sessionId: created.id, end, entries: page.data, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR, thinking: service.config.thinkingLevel, thinkingFrom: service.config.sources.thinkingLevel }));
 } finally {
   await service.close();
   await service.agent.close();
@@ -156,12 +161,17 @@ try {
       entries: { kind: string; data: unknown }[];
       state: string;
       mise: string;
+      thinking: string;
+      thinkingFrom: string;
     };
     // Every machinery dir lands on the storage, the instance's root: nothing of the instance is written into the image.
     expect(reported).toMatchObject({
       state: join(root, ".state"),
       // The tools the agent adds on the host: on the storage, so a new container still has them.
       mise: join(root, ".state", "mise"),
+      // Read from the configuration the release delivered.
+      thinking: "high",
+      thinkingFrom: join(dir, "fastagent.instance.json"),
     });
     expect(reported.end).toMatchObject({ status: "completed" });
     const result = JSON.stringify(reported.entries.find((entry) => entry.kind === "tool_result")?.data ?? "");

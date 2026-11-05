@@ -179,6 +179,19 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(gated.ok).toBe(false);
     if (!gated.ok) expect(gated.gate).toMatch(/does not set FASTAGENT_RELEASE_FILE/);
 
+    // So does a configuration the release delivers beside the manifest, whatever the model's source.
+    await writeFile(join(dir, ".secrets", ".env"), "");
+    const delivered = {
+      source: { values: { thinkingLevel: "high" }, label: "/elsewhere/fastagent.json", directory: "/elsewhere" },
+      text: '{"thinkingLevel":"high"}',
+    };
+    const withConfig = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true, delivered });
+    expect(withConfig).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(/--config delivers the instance configuration/),
+    });
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+
     // `--force` does not rescue it: writeArtifacts keeps a file it did not generate whatever the flag says.
     expect((await call(dir, {}, { run: true, force: true })).ok).toBe(false);
 
@@ -474,36 +487,55 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (clean.ok) expect(JSON.stringify(clean.messages)).not.toMatch(/BAKE SECRETS|node_modules|\.state/);
   });
 
-  it("deploys without what the project's instance configuration adds, saying so, as a warning for each", async () => {
+  it("carries only the configuration --config delivers: its repositories are cloned, a directory is an issue", async () => {
     const dir = await agent({
       "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook" } } }),
-      // A deploy carries the program; what an instance adds stays on the machine whose configuration it is.
-      "fastagent.json": JSON.stringify({
-        content: { app: { path: "/code/app" }, docs: { path: "/docs" }, extra: { github: "acme/extra" } },
-      }),
+      // The development instance's, which a deploy does not carry.
+      "fastagent.json": JSON.stringify({ content: { app: { path: "/code/app" } } }),
     });
-    const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
-    expect(pre.ok).toBe(true);
-    if (!pre.ok) return;
-    expect(pre.messages).toContainEqual({
-      level: "warn",
-      text:
-        "works on app: a directory of this machine (/code/app), added in fastagent.json, which a deploy does not " +
-        "carry: it stays here, and the deployed agent works without it; to work on it from a host, declare the " +
-        "repository in context.json (fastagent content add --program github:owner/repo), or copy what it only " +
-        "needs to read into the agent directory, which every release carries",
+    const configDir = await mkdtemp(join(tmpdir(), "fa-preflight-config-"));
+    const deliver = (values: object): NonNullable<Parameters<typeof preflightDeploy>[0]["delivered"]> => ({
+      source: { values, label: join(configDir, "fastagent.json"), directory: configDir },
+      text: `${JSON.stringify(values, null, 2)}\n`,
     });
-    expect(pre.messages).toContainEqual({
-      level: "warn",
-      text: expect.stringMatching(/^works on docs: a directory of this machine \(\/docs\), added in fastagent\.json/),
+
+    const plain = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(plain.ok).toBe(true);
+    if (!plain.ok) return;
+    expect(plain.messages.map((m) => m.text)).toContain(
+      "fastagent.json is the development instance's configuration and a deploy does not carry it: pass --config " +
+        "<file> to deliver one",
+    );
+    expect(JSON.stringify(plain.messages)).not.toMatch(/works on app/);
+    expect(plain.container.config).toBeUndefined();
+
+    const repository = deliver({ settings: {}, content: { extra: { github: "acme/extra" } } });
+    const delivered = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true, delivered: repository });
+    expect(delivered.ok).toBe(true);
+    if (!delivered.ok) return;
+    expect(delivered.messages.map((m) => m.text)).toEqual(
+      expect.arrayContaining([
+        "works on handbook: github acme/handbook, cloned on the host, and brought up to date in place at each start",
+        "works on extra: github acme/extra, cloned on the host, and brought up to date in place at each start",
+      ]),
+    );
+    expect(delivered.container.config).toBe(repository.text);
+    expect(delivered.messages.map((m) => m.text)).toContain(
+      `fastagent.json is the development instance's configuration and a deploy does not carry it; it carries ${join(configDir, "fastagent.json")}`,
+    );
+    // The installs of its git follow the content it delivers too.
+    expect(delivered.container.apt).toContain("git");
+
+    const local = deliver({ content: { data: { path: "/srv/data" } } });
+    const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true, delivered: local });
+    expect(gated).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(
+        new RegExp(
+          `^works on data: a directory of this machine \\(/srv/data\\), in ${join(configDir, "fastagent.json")}, which the host does not have`,
+        ),
+      ),
     });
-    expect(pre.messages).toContainEqual({
-      level: "warn",
-      text: expect.stringMatching(/^works on extra: github acme\/extra, added in fastagent\.json/),
-    });
-    expect(pre.messages.filter((m) => m.text.includes("handbook")).map((m) => m.text)).toEqual([
-      "works on handbook: github acme/handbook, cloned on the host, and brought up to date in place at each start",
-    ]);
   });
 
   it("says what each repository context becomes on the host, bakes git, and names the token it clones with", async () => {

@@ -1,5 +1,5 @@
 /** Production serving. */
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Agent } from "../../agent-api.ts";
 import { readFile } from "node:fs/promises";
 import { applyCarriedEnv } from "../../deploy/secrets.ts";
@@ -10,6 +10,7 @@ import {
   isAgentcoreRuntime,
   isDeployedWorkspace,
   isUnderDir,
+  INSTANCE_CONFIG_ENV,
   INSTANCE_ROOT_ENV,
 } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
@@ -106,6 +107,9 @@ export async function prepareStartWorkspace(dirArg: string): Promise<string> {
   // `enterAgentEnv` reads the agent's `.env`, which is what makes either source outrank a value edited on the
   // box (applyReleaseEnv's own tests pin the precedence).
   applyReleaseEnv(manifest);
+  // The configuration the release delivers, beside its manifest; an operator who named another meant it.
+  if (manifest.config !== undefined)
+    process.env[INSTANCE_CONFIG_ENV] ||= join(dirname(resolve(manifestPath)), manifest.config);
   return dirArg;
 }
 

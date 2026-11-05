@@ -444,6 +444,12 @@ const deploy: CommandSpec = {
     },
     { flags: "--force", description: "overwrite existing target config/Dockerfile/.dockerignore (else kept)" },
     {
+      flags: "--config <file>",
+      description:
+        "the instance configuration (a fastagent.json) the deployment runs with, carried in the image; without it, " +
+        "the program's defaults (the project's fastagent.json is the development instance's)",
+    },
+    {
       flags: "--into-linked",
       description:
         "(railway --run) provision INTO the project this dir is already linked to (skip create); by " +
@@ -483,6 +489,7 @@ const deploy: CommandSpec = {
       tunnel: f.tunnel === true,
       force: f.force === true,
       intoLinked: f.intoLinked === true,
+      ...(typeof f.config === "string" ? { config: f.config } : {}),
       input: f.input !== false,
       json: f.json === true,
       ...(f.check !== undefined ? { check: f.check as string } : {}),

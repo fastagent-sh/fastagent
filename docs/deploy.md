@@ -27,9 +27,17 @@ fastagent deploy railway --run
 fastagent deploy agentcore              # CloudFormation stack for AWS Bedrock AgentCore + runbook
 fastagent deploy agentcore --run
 fastagent deploy fly --run --json       # a coding agent's deploy: a ticket, its person's steps handed back
+fastagent deploy fly --run --config production.json   # with the instance configuration it runs on
 ```
 
 Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are yours.
+
+A deployment runs on the program's defaults, and `--config <file>` gives it an instance configuration of its own (a
+`fastagent.json`: model, settings, `http`, `deploy`, repositories it works on). The deploy decides with it (its model,
+whether it serves the Agent API, AgentCore's idle timeout), and carries it in the image as `fastagent.instance.json`
+beside the release manifest, which names it; the box reads it there at every start. The project's own `fastagent.json`
+is the development instance's: a deploy never carries it, and the generated `.dockerignore` keeps it out of the image.
+A configuration holds no secret value.
 
 A coding agent deploys with `--run --json`. The deploy runs in a process of its own and the command returns its
 ticket; the agent checks it with `fastagent deploy <host> --check <ticket>` and relays each `need_user_action`: the
@@ -47,7 +55,7 @@ own. See [`fastagent deploy`](cli.md#commands).
 | **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable in `.secrets/production/.env` travels, and so does a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Something reaches it** | A channel, a schedule, or the [Agent API](#the-agent-api). A deployment with none of them is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
 | **Durable storage** | Docker, Fly and Railway make a volume at `/data` the agent's working directory, holding `.state/`, `.secrets/`, `content/` and what the agent writes. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
-| **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/production/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` entry stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, outside `content/`, which every release ships; move what it works on and must keep to a repository. |
+| **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/production/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A directory in the configuration `--config` delivers is refused: the host has no such path. Copy what the agent only reads into the agent directory, outside `content/`, which every release ships; move what it works on and must keep to a repository. |
 
 ### Reproduce it here first
 

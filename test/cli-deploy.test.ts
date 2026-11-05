@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/container.ts";
 import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
@@ -200,6 +200,41 @@ describe("cli: deploy", () => {
     const rejected = await runInProcess(["deploy", "fly", legacy]);
     expect(rejected.code).toBe(1);
     expect(rejected.stderr).toMatch(/unknown key "agentDir"/);
+  });
+
+  it("deploy --config delivers the instance configuration beside the release manifest, and decides with it", async () => {
+    const dir = await agentWorkspace("fa-deploy-config-", {
+      "fastagent.config.ts": `import { obj, str } from "@earendil-works/pi-schema";
+export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    await mkdir(join(dir, "node_modules", "@earendil-works"), { recursive: true });
+    const { symlink } = await import("node:fs/promises");
+    await symlink(
+      new URL("../node_modules/@earendil-works/pi-schema", import.meta.url).pathname,
+      join(dir, "node_modules", "@earendil-works", "pi-schema"),
+      "dir",
+    );
+    // A required setting no default gives: the program alone does not deploy, as the box would not start.
+    const bare = await runInProcess(["deploy", "fly", dir]);
+    expect([bare.code, bare.stderr]).toEqual([1, expect.stringContaining("/repo missing")]);
+
+    const config = join(await mkdtemp(join(tmpdir(), "fa-deploy-config-file-")), "production.json");
+    await writeFile(config, JSON.stringify({ settings: { repo: "acme/api" }, http: { api: false } }));
+    const delivered = await runInProcess(["deploy", "fly", dir, "--config", config]);
+    expect(delivered.code, delivered.stderr).toBe(0);
+    // The configuration decides the deployment's own choices: here, no Agent API key.
+    expect(delivered.stderr).toMatch(/Agent API: not served/);
+    const manifest = JSON.parse(await readFile(join(dir, "fastagent.release.json"), "utf8"));
+    expect(manifest.config).toBe("fastagent.instance.json");
+    expect(JSON.parse(await readFile(join(dir, "fastagent.instance.json"), "utf8"))).toEqual({
+      settings: { repo: "acme/api" },
+      http: { api: false },
+    });
+    // The project's own development configuration stays out of the image.
+    expect(await readFile(join(dir, ".dockerignore"), "utf8")).toMatch(/^\/fastagent\.json$/m);
+
+    const missing = await runInProcess(["deploy", "fly", dir, "--config", join(dirname(config), "absent.json")]);
+    expect([missing.code, missing.stderr]).toEqual([1, expect.stringContaining("absent.json")]);
   });
 
   it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {

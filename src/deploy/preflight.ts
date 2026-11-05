@@ -16,13 +16,17 @@ import {
   providerOf,
 } from "../harnesses/models/models.ts";
 import { modelEnvironment } from "../harnesses/models/environment.ts";
-import { type EffectiveConfig, projectInstanceConfig } from "../harnesses/pi-durable/config.ts";
+import {
+  type EffectiveConfig,
+  type InstanceConfigSource,
+  projectInstanceConfig,
+} from "../harnesses/pi-durable/config.ts";
 import { type AgentDefinition, definitionSecrets } from "../harnesses/pi-durable/definition.ts";
 import { type BuiltDefinition, buildDefinitionShape, loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { INSTANCE_CONFIG_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, channelIngress } from "../channels/discover.ts";
 import type { DeclaredContent } from "../content/declare.ts";
-import { instanceContent, loadContent, loadEnvironment } from "../content/file.ts";
+import { loadContent, loadEnvironment } from "../content/file.ts";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
@@ -89,30 +93,28 @@ export interface DeployReport {
 
 /**
  * What each content entry becomes on the host, one line each, so none is missing there unsaid (agent-model.md §3). A
- * repository `context.json` declares is cloned there. What the project's own instance configuration adds stays here: a
- * deploy carries the program, and the deployed agent works without it, which the line says and says how to change. It
- * is a warning, since the deployed agent lacks data it was meant to work on.
+ * repository, the program's or the delivered configuration's, is cloned there. A directory of this machine is not on
+ * the host, and FastAgent maps none onto it, so the delivered configuration naming one is an issue: the deployed agent
+ * would lack data it was configured to work on.
  */
 function checkContent(
-  program: readonly DeclaredContent[],
-  instance: readonly DeclaredContent[],
+  declared: readonly DeclaredContent[],
+  delivered: string | undefined,
   storageResets: boolean,
   report: DeployReport,
 ): void {
-  for (const entry of program) {
-    if (entry.kind !== "github") continue;
-    const fate = storageResets
-      ? "cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost"
-      : "cloned on the host, and brought up to date in place at each start";
-    report.note(`works on ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
-  }
-  for (const entry of instance) {
-    const what = entry.kind === "github" ? `github ${entry.repo}` : `a directory of this machine (${entry.path})`;
-    report.warn(
-      `works on ${entry.name}: ${what}, added in ${INSTANCE_CONFIG_FILE}, which a deploy does not carry: it stays here, ` +
-        `and the deployed agent works without it; to work on it from a host, declare the repository in ` +
-        `context.json (fastagent content add --program github:owner/repo), or copy what it only needs to read into ` +
-        `the agent directory, which every release carries`,
+  const fate = storageResets
+    ? "cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost"
+    : "cloned on the host, and brought up to date in place at each start";
+  for (const entry of declared) {
+    if (entry.kind === "github") {
+      report.note(`works on ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
+      continue;
+    }
+    report.issue(
+      `works on ${entry.name}: a directory of this machine (${entry.path}), in ${delivered}, which the host does not ` +
+        `have: declare a repository instead (github:owner/repo), or copy what the agent only needs to read into the ` +
+        `agent directory, which every release carries`,
     );
   }
 }
@@ -163,6 +165,8 @@ class DeployGate {
 interface PreflightInput {
   agentDir: string;
   config: EffectiveConfig;
+  /** The instance configuration this deployment delivers (`--config`): as read, and its file's text. */
+  delivered?: { source: InstanceConfigSource; text: string };
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
   /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
@@ -201,7 +205,7 @@ export async function preflightDeploy(input: PreflightInput): Promise<DeployPref
 }
 
 async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
-  const { agentDir, config, force, noResidentProcess, storageResets = false, servesApi = false } = input;
+  const { agentDir, config, delivered, force, noResidentProcess, storageResets = false, servesApi = false } = input;
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
   if (!isReleaseAgentName(basename(agentDir))) {
@@ -220,11 +224,16 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
 
-  const content = loadContent(agentDir);
-  const added = await projectInstanceConfig(agentDir).then((config) =>
-    config === undefined ? [] : instanceContent(config),
-  );
-  checkContent(content, added, storageResets, report);
+  const content = loadContent(agentDir, delivered?.source);
+  checkContent(content, delivered?.source.label, storageResets, report);
+  // The project's own, the development instance's: a deploy carries only the configuration it is given.
+  const own = await projectInstanceConfig(agentDir);
+  if (own !== undefined && own.label !== delivered?.source.label) {
+    report.note(
+      `${INSTANCE_CONFIG_FILE} is the development instance's configuration and a deploy does not carry it` +
+        (delivered === undefined ? ": pass --config <file> to deliver one" : `; it carries ${delivered.source.label}`),
+    );
+  }
 
   // The definition the box will load on every start, read here first: a refusal in it (a module that fails to import,
   // two tools under one name) builds a perfectly good image that crash-loops on fly/railway/docker and fails every
@@ -418,10 +427,12 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     apt,
     ...(installsPackages ? { packages: packageSpecs(packages) } : {}),
     ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
+    ...(delivered !== undefined ? { config: delivered.text } : {}),
     shipsGit,
   };
   const port = config.http?.port ?? DEFAULT_HTTP_PORT;
-  if (kept !== undefined) checkKeptDockerfile(kept, agentDir, model.envValue, valueFile, report);
+  if (kept !== undefined)
+    checkKeptDockerfile(kept, agentDir, model.envValue, valueFile, delivered !== undefined, report);
 
   return {
     channels,
@@ -557,6 +568,8 @@ function checkKeptDockerfile(
   /** The model the release manifest carries (set only when the value file named it). */
   modelFromValueFile: string | undefined,
   valueFile: string,
+  /** The release delivers an instance configuration, which travels beside its manifest. */
+  deliversConfig: boolean,
   report: DeployReport,
 ): void {
   // What the image installs: the packages and apt packages. Variables travel with the value file, whatever the image.
@@ -583,12 +596,19 @@ function checkKeptDockerfile(
   // Anywhere in an `ENV` instruction, not just first: `ENV A=1 FASTAGENT_RELEASE_FILE=/app/x` is ordinary
   // Dockerfile style and hard-refusing it would be a false gate. A backslash continuation still reads as absent
   // (covering it means joining lines first) — the remaining over-strict edge.
-  if (modelFromValueFile !== undefined && !/^\s*ENV\s[^\n]*\bFASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText)) {
+  const readsManifest = /^\s*ENV\s[^\n]*\bFASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText);
+  if (modelFromValueFile !== undefined && !readsManifest) {
     const issue =
       `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
       `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
       `Dockerfile), or set \`defaults.model\` in fastagent.config.ts so it ships in the config instead.`;
     report.issue(issue);
+  }
+  if (deliversConfig && !readsManifest) {
+    report.issue(
+      `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and --config delivers the instance configuration beside ` +
+        `the release manifest, which is only read when that ENV points at it. Add it (see a generated Dockerfile).`,
+    );
   }
 }
 

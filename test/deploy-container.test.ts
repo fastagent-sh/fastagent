@@ -104,7 +104,7 @@ describe("deploy/container: shared Docker context", () => {
   it("records a value-file model in the release manifest, and nothing when the config named it", () => {
     // The carrier is the manifest, not the Dockerfile: every host writes it unconditionally (`alwaysWrite`), it is
     // rewritten by every deploy so it cannot go stale, and nothing on the way in can interpolate a shell.
-    const manifest = (i: typeof input & { modelSpec?: string }) =>
+    const manifest = (i: typeof input & { modelSpec?: string; config?: string }) =>
       JSON.parse(containerArtifacts(i).find((a) => a.path.endsWith("fastagent.release.json"))!.content);
     expect(manifest({ ...input, modelSpec: "baseten/zai-org/GLM-5.3" })).toEqual({
       version: 1,
@@ -113,6 +113,15 @@ describe("deploy/container: shared Docker context", () => {
       model: "baseten/zai-org/GLM-5.3",
     });
     expect(manifest(input).model).toBeUndefined();
+    // A delivered configuration is a file of its own beside it, named in it; without one the file is written empty,
+    // so one an earlier deploy delivered does not ship again.
+    const artifacts = (i: typeof input & { config?: string }) => containerArtifacts(i);
+    const file = (i: typeof input & { config?: string }) =>
+      artifacts(i).find((a) => a.path === "fastagent.instance.json")?.content;
+    expect(manifest({ ...input, config: '{"thinkingLevel":"high"}' }).config).toBe("fastagent.instance.json");
+    expect(file({ ...input, config: '{"thinkingLevel":"high"}' })).toBe('{"thinkingLevel":"high"}');
+    expect(manifest(input).config).toBeUndefined();
+    expect(file(input)).toBe("");
     // It is NOT in the image's instructions — a credential could never ride this carrier, and neither does this.
     const dockerfile = containerArtifacts({ ...input, modelSpec: "openai/gpt-4o-mini" }).find(
       (a) => a.path === "Dockerfile",

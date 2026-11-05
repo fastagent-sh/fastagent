@@ -29,7 +29,15 @@ export interface DeploymentRelease {
    * opposite of what a credential needs (see docs/design/configuration.md §8).
    */
   model?: string;
+  /**
+   * The instance configuration this release delivers: a file beside the manifest, by its name. Configuration only,
+   * like `model`: it holds no secret value.
+   */
+  config?: string;
 }
+
+/** The file a deploy writes the instance configuration it delivers to, beside the release manifest. */
+export const DELIVERED_CONFIG_FILE = "fastagent.instance.json";
 
 /** The manifest names the agent the storage belongs to, and that name is also a content entry's name rule (one path
  *  segment). `deploy` asks BEFORE generating artifacts — a name `init` accepts but this rejects is the author's
@@ -46,7 +54,8 @@ export function parseDeploymentRelease(raw: string): DeploymentRelease {
     !r.id ||
     typeof r.agent !== "string" ||
     !isReleaseAgentName(r.agent) ||
-    (r.model !== undefined && !isModelSpec(r.model))
+    (r.model !== undefined && !isModelSpec(r.model)) ||
+    (r.config !== undefined && r.config !== DELIVERED_CONFIG_FILE)
   ) {
     throw new Error("invalid deployment release manifest");
   }
