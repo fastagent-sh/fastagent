@@ -49,6 +49,19 @@ own. See [`fastagent deploy`](cli.md#commands).
 | **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/`, `.secrets/` and `content/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 | **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/production/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` entry stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, outside `content/`, which every release ships; move what it works on and must keep to a repository. |
 
+### Reproduce it here first
+
+A deployment differs from your `dev` in three ways, and each has its own local check:
+
+| What differs | Check it with |
+|---|---|
+| The artifact: the built `dist/`, not the source | `fastagent build && fastagent start` |
+| The inputs: the production values and configuration, and no state | `fastagent start --root $(mktemp -d)`: `start` reads `.secrets/production/.env`, and `--config <file>` gives it the deployment's configuration when there is one |
+| The machine: the image's operating system, commands and packages | `fastagent deploy docker --run`, which runs the deployment's image on this machine |
+
+The image is built for this machine's architecture, so a native dependency that fails only on another (an arm64 laptop,
+an amd64 host) is not caught here.
+
 ## The Agent API
 
 Docker, Fly and Railway deployments serve the [Agent API](SPEC.md#9-http) under `/v1`, behind

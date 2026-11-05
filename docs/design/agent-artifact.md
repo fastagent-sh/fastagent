@@ -35,8 +35,10 @@ Acceptance:
 
 1. One artifact, opened locally and on a host, reports the same assembly in `fastagent info --json`, except for the
    explicit inputs.
-2. `dev` can run with cloud constraints (read-only package, empty state, disposable workspace) and reproduces a cloud
-   failure locally.
+2. A cloud failure is reproduced locally by what differs: the artifact runs under the cloud's inputs on this machine
+   (`fastagent build`, then `fastagent start`, which reads the production value file, with the configuration and an empty root), and on
+   the cloud's machine (`fastagent deploy docker --run` runs the deployment's image here). Differences between this
+   machine's architecture and the host's are not reproduced (§8).
 3. An implicit dependency (a machine file, a shell variable, the author checkout) fails at preflight or open, not first
    in the cloud.
 
@@ -441,9 +443,11 @@ the developer's choice; the framework adds no local layer.
 `.fastagent/dev/` sits inside the author's repository, where git run in the workspace would otherwise find and act on
 the author's repository, while on a host there is no repository above `/var/lib/<name>/`. The child environment (§5)
 therefore sets `GIT_CEILING_DIRECTORIES` to the workspace's parent (the agent's cwd's) for every instance, so git
-discovery stops at the workspace everywhere, wherever `--workdir` or `workdir` puts it and whether or not a root is given, and an agent cannot commit the author's source by walking upward. Cloud-constraint mode checks it.
+discovery stops at the workspace everywhere, wherever `--workdir` or `workdir` puts it and whether or not a root is given, and an agent cannot commit the author's source by walking upward.
 
-`dev` loads the definition through the same assembly as a deployment and can run with cloud constraints (§1).
+`dev` loads the definition through the same assembly as a deployment. It has no mode that imitates the cloud: running
+on this machine, it can reproduce neither the host's machine nor a layout the host does not have yet, and what it could
+imitate, `start` already runs (§1, acceptance 2).
 
 In development the instance configuration sits at the project root and the agent's cwd is `.fastagent/dev/`, so the
 agent's tools reach the configuration only by absolute path; nothing steers them there, and an agent that does edit it
@@ -655,6 +659,8 @@ Recorded, not solved here:
 - Concurrent sessions share one workspace, so two can step on each other's files and git state.
 - Scale-out needs state in shared storage and a workspace per replica.
 - AgentCore keeps nothing on disk across deploys; only delivered configuration and external secrets persist there.
+- A local reproduction runs on this machine's architecture: an image `deploy docker --run` builds on an arm64 laptop
+  does not show a native dependency that fails on an amd64 host.
 - A deployed instance's MCP OAuth sign-in has no automatic relay (no `mcp login --deployment`): it runs against the
   deployment with a forwarded callback port, and on AgentCore a grant is lost with the storage on every deploy.
 
@@ -685,8 +691,8 @@ boundary experiments, not a supported format.
 1. **Artifact.** A compiled `dist/` with its `bin`, installed under `node_modules`, opened read-only with explicit
    inputs, two independent instances, on Node and Bun. Add pi-schema; the move to pi 1.5.0 is separate (#903).
 2. **Inputs.** The four-input contract with the instance root, `fastagent.json`, one resolver for API objects and
-   files, the configuration shape of §3.2, the default locations, `dev` cloud-constraint mode and the scaffold's npm
-   scripts; `context.local.json` removed.
+   files, the configuration shape of §3.2, the default locations and the scaffold's npm scripts; `context.local.json`
+   removed.
 3. **Deployment.** Derived from the same artifact with delivered configuration under `/etc/<name>/` and the instance
    root under `/var/lib/<name>/` (`/mnt/<name>/` on AgentCore); secret modes A and B, missing-value guidance, AgentCore through Secrets Manager.
 4. **Instance additions.** Content and `.mcp.json` entries, text additions, the reopen boundary.
