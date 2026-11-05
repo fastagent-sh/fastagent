@@ -564,8 +564,8 @@ content:  <workdir>/content/<name> (clones)
 
 The same `--root`, `--state` and `--workdir` place the instance for `dev`, `invoke`, `info` and `schedules`
 (`list`, `run`, `unwake`), and `--config` names the configuration for `dev`, `invoke`, `info` and `schedules run`;
-a relative path resolves once, against the directory the command started in (on a deployed box, the deployed
-definition's), and the root and workdir are created when missing, or refused when they cannot be. [Configuration](configuration.md#where-an-instance-lives) says what each holds.
+a relative path resolves once, against the directory the command started in (in a generated image, its `WORKDIR`,
+`/app/definition`), and the root and workdir are created when missing, or refused when they cannot be. [Configuration](configuration.md#where-an-instance-lives) says what each holds.
 
 ## Global options
 
