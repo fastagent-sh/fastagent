@@ -531,9 +531,10 @@ interface InstanceConfig<Settings = unknown> {
     port?: number;
     api?: boolean;
     /**
-     * The public base URL the platforms reach this instance at, any mount prefix included (`https://x.fly.dev/agent`).
-     * Set, a serve points each webhook channel there (`Service.registerWebhooks`); unset, none is pointed, and each
-     * one's outcome is `manual` with the URL to use. Never inferred from the environment.
+     * The public base URL the platforms reach this instance at, any mount prefix included (`https://x.fly.dev/agent`):
+     * an absolute `https://` URL without a trailing slash, any other value refusing the open. Set, a serve points each
+     * webhook channel there (`Service.registerWebhooks`); unset, none is pointed, and each one's outcome is `manual`
+     * with the URL to use. Never inferred from the environment.
      */
     publicUrl?: string;
   };
@@ -580,18 +581,23 @@ interface Service {
   fetch(request: Request): Promise<Response>;
   /**
    * Or a server of its own, Node's `http` server or `Bun.serve`: the one way to start one. Answers the port it bound.
-   * Default port: the instance configuration's `http.port`, else 8787. Once it answers, and when `http.publicUrl` is
-   * set, it registers the webhook channels (`registerWebhooks()`) before it resolves.
+   * Default port: the instance configuration's `http.port`, else 8787. When `http.publicUrl` is set, it registers the
+   * webhook channels (`registerWebhooks()`) once the serve is ready, in the background: `webhooks` and `/health` say
+   * how it went, and the port is answered without waiting for a platform.
    */
   listen(port?: number, host?: string): Promise<number>;
   /**
    * Points each webhook channel's platform at `<baseUrl ?? http.publicUrl>/<its path>`, for an app that serves `fetch`
-   * on a server of its own: called once that server answers, since a platform verifies the URL as it is set. Sets it
+   * on a server of its own: called once that server answers and the serve is ready, since a platform verifies the URL
+   * as it is set and a host may route to the instance only once its health check passes. Sets it
    * on every call, never reading it first. Answers every webhook channel's outcome, and rejects only for a `baseUrl`
    * that is not an absolute http(s) URL: a platform's refusal is a `failed` outcome.
    */
   registerWebhooks(baseUrl?: string): Promise<WebhookRegistration[]>;
-  /** The outcomes of the last registration, `listen`'s or `registerWebhooks`'s; empty before one. */
+  /**
+   * Every webhook channel's outcome, `pending` until its registration ends (`listen`'s or `registerWebhooks`'s, the
+   * last one's); empty only with no webhook channel.
+   */
   readonly webhooks: readonly WebhookRegistration[];
   ready: Promise<void>;
   /**
@@ -606,10 +612,11 @@ interface WebhookRegistration {
   /** The channel file's name. */
   channel: string;
   /**
-   * `registered`: the platform points at `url`. `manual`: a person's step remains (`step`). `failed`: it is not
-   * pointed, and acting on `step` then registering again can fix it.
+   * `pending`: not registered yet (only in `webhooks`, never in what `registerWebhooks` answers). `registered`: the
+   * platform points at `url`. `manual`: a person's step remains (`step`). `failed`: it is not pointed, and acting on
+   * `step` then registering again can fix it.
    */
-  outcome: "registered" | "manual" | "failed";
+  outcome: "pending" | "registered" | "manual" | "failed";
   /** The URL it was, or is to be, pointed at; absent when no base URL is known. */
   url?: string;
   /** For `manual` and `failed`: what to do, said as the step to take. */
@@ -772,8 +779,8 @@ inbound request. Each way declares its own secrets, and an instance is asked onl
   says so. `/health` and the channels' routes are outside the API and unchanged: each channel verifies its platform.
 - **`GET /health`** is public and answers JSON: `200 { "status": "ok", "webhooks": [...] }` once the serve is ready,
   `503 { "status": "starting", "webhooks": [...] }` before. `webhooks` is always present, each entry only
-  `{ channel, outcome }` (§8's `WebhookRegistration`), empty with no webhook channel or before a registration; a
-  step and its reasons go to the log. A channel that serves `/health` itself answers it instead.
+  `{ channel, outcome }` (§8's `WebhookRegistration`), `pending` until a channel's registration ends, and empty only
+  with no webhook channel; a step and its reasons go to the log. A channel that serves `/health` itself answers it instead.
 - **No CORS**: the key is a credential for the whole instance, so a browser never holds it. A browser app calls its own
   backend, which calls the agent.
 - A request body over 32 MiB is `413`, `invalid_request` with `details.reason: "too_large"`. A request the API
