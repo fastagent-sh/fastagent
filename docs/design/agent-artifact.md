@@ -370,7 +370,7 @@ Where a static value lives depends on where the instance runs; it reaches the in
 |---|---|---|
 | `fastagent dev` | the project's `.secrets/.env`, never committed | the default env file |
 | `fastagent start`, the package's `bin` | an operator's owner-only file outside the configuration directory, or the process environment | `--env-file <path>` or the environment |
-| Docker | a host env file, or the environment running Compose | `env_file:` (mode A) or `environment:` names (mode B), §6.2 |
+| Docker | `.secrets/production/.env` on the machine running Compose, owner-only | Compose `env_file:`, §6.2 |
 | Fly, Railway | the platform's secrets | the platform's injected environment |
 | AgentCore | one JSON secret in Secrets Manager | its ARN in the environment, read at start |
 | An embedding app (Kage) | the app's own secure store (the macOS Keychain) | `openAgent({ secrets })` |
@@ -599,19 +599,60 @@ host maps it to a mount, and is otherwise refused at preflight, never silently s
 
 ### 6.2 Secrets
 
-| Host | A (default): `--env-file <path>` given | B: no file; values already on the platform |
+**A deployment's values are the target's state, never a deploy input.** The definition declares the names it needs
+(`needs()`, MCP references, `context.json`'s `variables`, the channels, the model's provider); the values live in the
+target's own store, set there by a command of their own; `deploy` checks names and never reads or carries a value
+(one a person types during a deploy, or a production app returns, goes straight to the target's store). This is how deployment tools that declare secrets in code or configuration work: Wrangler's `secrets.required`
+fails `wrangler deploy` naming each one the Worker lacks and never uploads `.dev.vars`; Encore checks its `secret()`
+declarations before a deploy; SST fails with the `sst secret set` command to run. A local `.env` is development's.
+
+Carrying a file was the alternative, and what 0.29.0 does: `--run` uploads the whole production value file. It made
+the person deploying hold every production secret, in the project directory a coding agent working there can read,
+and it took a run of machinery that exists only to carry: names a deployment sets itself filtered out of the file,
+chunked carriers, Compose rewriting `$` in values, gates for a value that differs between the shell and the file. Keeping both
+(carry a file, or trust the platform) would have doubled every path.
+
+| Target | Its store | Lists names with |
 |---|---|---|
-| Docker | Compose `env_file:` names the given file | Compose `environment:` lists names only; values come from the environment running Compose |
-| Fly, Railway | Set through the platform's CLI | Nothing set; the platform's existing names are compared with the declared ones |
-| AgentCore | Written to one per-deployment JSON secret in Secrets Manager | `--secret-arn` names an existing secret; deploy only grants access |
+| Docker | `.secrets/production/.env` on the machine running Compose (owner-only), which Compose reads by `env_file:` | the file |
+| Fly | Fly secrets | `fly secrets list --json` (names and digests, no values) |
+| Railway | the service's variables | `railway variable list --json`, of which only the names are read |
+| AgentCore | one JSON secret in Secrets Manager per deployment | the secret's keys |
+| `fastagent start`, an embedding app | `--env-file`, the environment, `openAgent({ secrets })` (§4.1) | — |
 
-Both modes carry static values only. OAuth is created on the deployment itself, never carried: a model provider's login
-through `fastagent login --deployment`, an MCP server's grant by signing in against the deployed instance (§4.1; no
-automatic relay yet, §8). Deploy reports a declared OAuth server the target has no grant for as missing, alongside
-missing values.
+`fastagent secrets set <host> <NAME>` writes one value: at a terminal it asks without echoing, otherwise it reads
+standard input, never the command line. `fastagent secrets push <host> --env-file <file>` writes every value a file
+holds, the batch form for CI (`wrangler secret bulk`'s counterpart). `fastagent secrets list <host>` prints the declared
+names and which the target has. `--generate` sets a random value and prints it once, for the values FastAgent itself
+mints, such as `FASTAGENT_API_KEY`.
 
-The names a deployment needs come from `needs()`, MCP references, `context.json`'s environment and the channels. Mode A
-checks the file; mode B checks the platform where it can list names, and startup's check covers the rest.
+`deploy --run` lists the target's names before its first build, once the app or service it sets values on exists (on
+Fly and Railway, creating one is the first step and is repeatable). For each missing name it reports what it is for,
+where it is declared and whether it is optional, and the command that sets it. At a terminal it asks for each value
+then and there and sets it; with `--json` the ticket waits as `need_user_action` with those commands, saying the
+person runs them in a terminal and the agent never asks for a value in the conversation, and carries on once the names
+are present; with nobody to ask, it stops with the same list.
+
+What `deploy` read values for becomes a name or configuration:
+
+- **Required values** are checked by name, on the target.
+- **The model** is configuration (`defaults.model`, a delivered `--config`); the release manifest records no model.
+- **The model's credential route** (a variable on the target, or a login on the box): whether the target has the
+  provider's variable name.
+- **A channel's shape** (Feishu's and Lark's `<PREFIX>_INGRESS`, webhook or WebSocket) is a setting, not a secret:
+  it moves into configuration, which `deploy` reads as the box will.
+- **Webhook registration** runs on the box, which holds the bot's token, through the host's shell (the one
+  `login --deployment` uses), with the URL `deploy` learned.
+- **A production Feishu or Lark app** that deploy creates is written to the target's store. The check that it is not
+  the development app runs then, the one time deploy holds both App IDs; an app set by hand is the operator's to keep
+  apart.
+
+The production value file stays what local `start` reads and Docker's store: `add <channel> --env production` keeps
+writing there, and another host's values are set with `fastagent secrets`.
+
+OAuth is created on the deployment itself and never carried: a model provider's login through
+`fastagent login --deployment`, an MCP server's grant by signing in against the deployed instance (§4.1; no automatic
+relay yet, §8). Deploy reports a declared OAuth server the target has no grant for as missing, alongside missing names.
 
 **AgentCore.** `AWS::BedrockAgentCore::Runtime`'s `EnvironmentVariables` is a plain string map without secure dynamic
 references, so the template carries only the secret's ARN. The runtime role is granted `secretsmanager:GetSecretValue`
@@ -619,19 +660,6 @@ on that secret, and the container reads it at start. This replaces the chunked `
 plaintext out of CloudFormation, and lets a rotation apply at the next cold start. AgentCore Identity's credential
 providers are evaluated later for MCP OAuth, not as the general carrier. *Implementation research:* verify the chain on a
 minimal stack.
-
-**Missing values.** Deploy reports, for a person and for a coding agent alike:
-
-- each missing name, what it is for, where it is declared, whether it is optional;
-- the host's commands to set it, following that host's recommended practice (*implementation research* per host),
-  reading values from standard input rather than the command line where the host allows it;
-- optionally, `--write-env-example <path>` writes a placeholder file with names and descriptions and no values;
-- with `--json`, a `need_user_action` result carrying the above, and the instruction that a coding agent hands the
-  command or file to its person instead of asking for a secret in the conversation.
-
-These change from implicit to explicit inputs: `add <channel> --env production` and Feishu app creation write values to
-a target the operator names; the dev/production App ID isolation check runs when both inputs are given; preflight reads
-what it was given.
 
 ### 6.3 What a deployed instance can add
 
@@ -683,6 +711,7 @@ Recorded, not solved here:
 | `config.model`, `http`, `deploy` read as fixed values | Read as program defaults under instance overrides |
 | Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | The configuration delivered in the image's `/etc/fastagent/` and `/data/` as the instance root, the agent's cwd (`/mnt/data/` on AgentCore); the definition stays in the image |
 | `needs()` and MCP references read `{ ...process.env, ...values }` at open | Secrets are an input: the CLI's environment and `--env-file`, or `openAgent`'s `secrets` |
+| `deploy --run` carries the production value file to the host, and reads values to plan | Values are the target's state, set with `fastagent secrets`; `deploy` checks names only (§6.2) |
 | `modelsOver` resolves a provider's variable as `environment[name] \|\| process.env[name]` | The model's auth reads only the `secrets` input |
 
 Disposable probes on 0.29.0 executed a source tarball after extraction on Node 26.11.1, Bun 1.4.4 and native Linux ARM64
@@ -701,7 +730,8 @@ boundary experiments, not a supported format.
    files, the configuration shape of §3.2, the default locations and the scaffold's npm scripts; `context.local.json`
    removed.
 3. **Deployment.** Derived from the same artifact with delivered configuration in the image's `/etc/fastagent/` and the instance
-   root at `/data/` (`/mnt/data/` on AgentCore); secret modes A and B, missing-value guidance, AgentCore through Secrets Manager.
+   root at `/data/` (`/mnt/data/` on AgentCore); values as the target's state (`fastagent secrets`, names checked by deploy, channel shape as configuration, webhook
+   registration on the box), AgentCore through Secrets Manager.
 4. **Instance additions.** Content and `.mcp.json` entries, text additions, the reopen boundary.
 5. Any public [SPEC](../SPEC.md) change is reviewed on its own.
 
