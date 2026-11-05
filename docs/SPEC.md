@@ -451,7 +451,7 @@ messages or their HTTP binding. The package's entry points are one per kind of u
 
 | Import | For | Holds |
 |---|---|---|
-| `@fastagent-sh/fastagent` | An app or tool on Node or Bun | `openAgent` and `baseEnv`, what a host embedding agents needs beside it (`createAgent`, model credentials/sign-in, MCP inspection and authorization), the authoring functions (`defineAgent`, `defineChannel`, `defineSchedule`, `needs`), `defineDefinition` (which `fastagent build` writes into a package's entry, never written by hand), `AgentError` and the types |
+| `@fastagent-sh/fastagent` | An app or tool on Node or Bun | `openAgent` and `baseEnv`, what a host embedding agents needs beside it (`createAgent`, model credentials/sign-in, MCP inspection and authorization), the authoring functions (`defineAgent`, `defineChannel`, `byIngress`, `defineSchedule`, `needs`), `defineDefinition` (which `fastagent build` writes into a package's entry, never written by hand), `AgentError` and the types |
 | `@fastagent-sh/fastagent/client` | A program anywhere `fetch` runs (Node, Bun, Deno, Workers) | `connectAgent`, `AgentError` and the types |
 | `@fastagent-sh/fastagent/<channel>` | An agent's channel file | The first-party channels |
 
@@ -490,6 +490,12 @@ interface DeclaredSecret {
   optional: boolean;
   /** Every place it is declared: a module of `src/`, `mcp.json`, `context.json`, the default model's provider. */
   declaredIn: string[];
+  /**
+   * Set when only some channels' ways of receiving read it (`byIngress`): an instance needs it only when one of these
+   * channels receives that way (`channels.<name>.ingress`, else `dev`'s websocket and everyone else's webhook).
+   * Absent, every instance does. Decided by the declarations that require it, or by all of them when none does.
+   */
+  whenIngress?: { channel: string; ingress: "webhook" | "websocket" }[];
 }
 
 type InstanceInputs<Settings = unknown> = {
@@ -692,6 +698,17 @@ same context as any other.
   place nothing was said in.
 - **`stateDir`** is the channel's own directory, `<state root>/channels/<its file's name>`, made at the mount, for the
   records it must keep (a turn's intent before it answers the platform, the platform events it has seen).
+
+A channel that can receive either way default-exports both, and each instance takes one:
+
+```ts
+function byIngress<T>(ways: { webhook: T | Needs<T>; websocket: T | Needs<T> }): ByIngress<T>;
+```
+
+The `webhook` way is a channel of routes and the `websocket` way one that keeps a connection; an instance receives the
+way `channels.<name>.ingress` names, else `dev` by WebSocket and everything else by webhook, since a host that scales
+to zero is woken by an inbound request. Each way declares its own secrets, and an instance is asked only for its way's
+(`DeclaredSecret.whenIngress`). A channel that is not `byIngress` receives the one way it is.
 
 ## 9. HTTP
 
