@@ -113,6 +113,19 @@ describe("a channel's ingress: the instance's configuration, else dev's WebSocke
     );
   });
 
+  it("names the way of byIngress that is not a channel", async () => {
+    const dir = await agentDir("fa-broken-way-");
+    await mkdir(join(dir, "src", "channels"), { recursive: true });
+    await writeFile(
+      join(dir, "src", "channels", "hook.ts"),
+      `export default { kind: "fastagent.by-ingress", webhook: () => ({}), websocket: { name: "hook" } };\n`,
+    );
+    const definition = await loadSourceDefinition(dir);
+    expect(() =>
+      buildDefinition(definition, {}, { settings: {}, channels: { hook: { ingress: "websocket" } } }),
+    ).toThrow("src/channels/hook.ts (byIngress websocket): must default-export");
+  });
+
   it("refuses a way of byIngress that builds the other way's channel", async () => {
     const dir = await agentDir("fa-swapped-ingress-");
     await mkdir(join(dir, "src", "channels"), { recursive: true });

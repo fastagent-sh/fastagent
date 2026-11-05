@@ -21,7 +21,7 @@ import {
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
-import { type InstanceConfig, readInstanceConfigFile } from "../../harnesses/pi-durable/config.ts";
+import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
 import { setChannelIngress } from "../../authoring.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
@@ -123,7 +123,7 @@ async function planAdd(channelKind: ChannelKind, dirArg: string, opts: AddChanne
   const file = join(target, "src", "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const config = instanceConfigPath(target, environment, opts);
-  const ingress = await resolveIngress(channelKind, environment, opts.ingress, config);
+  const ingress = await resolveIngress(target, channelKind, environment, opts.ingress, config);
   if (
     existsAlready &&
     (ingress.write || (environment === "production" && opts.onboard !== false)) &&
@@ -385,6 +385,7 @@ function instanceConfigPath(target: string, environment: string, opts: AddChanne
  * everywhere else.
  */
 async function resolveIngress(
+  target: string,
   kind: ChannelKind,
   environment: string,
   raw: string | undefined,
@@ -398,8 +399,8 @@ async function resolveIngress(
   const named =
     config === undefined || !existsSync(config)
       ? undefined
-      : await readInstanceConfigFile(config)
-          .then(({ values }) => (values as InstanceConfig).channels?.[kind]?.ingress)
+      : await Promise.all([loadSourceDefinition(target), readInstanceConfigFile(config)])
+          .then(([definition, source]) => resolveConfig(definition, source).channels?.[kind]?.ingress)
           .catch(failStartup);
   return { ingress: named ?? (environment === "dev" ? "websocket" : "webhook") };
 }

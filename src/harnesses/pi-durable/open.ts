@@ -169,19 +169,19 @@ function chosenChannel(
   name: string,
   value: unknown,
   config: BuildConfig,
-  build: (value: unknown) => ChannelModule | LongConnectionChannelModule,
+  build: (value: unknown, source: string) => ChannelModule | LongConnectionChannelModule,
 ): ChannelModule | LongConnectionChannelModule {
   const shapeOf = (module: ChannelModule | LongConnectionChannelModule) =>
     channelIngress(module) === "webhook" ? "webhook" : "websocket";
   if (isByIngress(value)) {
     const way = chosenIngress(config, name);
-    const module = build(value[way]);
+    const module = build(value[way], `${file} (byIngress ${way})`);
     if (shapeOf(module) !== way) {
       throw new Error(`${file}: its ${way} way builds a channel that receives by ${shapeOf(module)}`);
     }
     return module;
   }
-  const module = build(value);
+  const module = build(value, file);
   const named = config.channels?.[name]?.ingress;
   if (named !== undefined && shapeOf(module) !== named) {
     throw new Error(
@@ -227,8 +227,8 @@ export function buildDefinition(
   const channels = registry.channels.map(({ file, name, value }) => ({
     source: file,
     name,
-    value: chosenChannel(file, name, value, instance, (way) =>
-      built<ChannelModule | LongConnectionChannelModule>(file, way, values(way), settings, channelProblem),
+    value: chosenChannel(file, name, value, instance, (way, source) =>
+      built<ChannelModule | LongConnectionChannelModule>(source, way, values(way), settings, channelProblem),
     ),
   }));
   const schedules = registry.schedules.map(({ file, name, value }) => ({

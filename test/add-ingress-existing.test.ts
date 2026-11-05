@@ -57,6 +57,17 @@ it("writes the way to the development instance's configuration, for a channel fi
   expect(await readFile(join(dir, ".secrets", ".env"), "utf8").catch(() => "")).not.toMatch(/INGRESS/);
 });
 
+it("refuses a way the configuration misspells before touching the app", async () => {
+  await writeFile(join(dir, "src", "channels", "feishu.ts"), channelTemplate("feishu", "channel.ts"));
+  const written = JSON.stringify({ channels: { feishu: { ingress: "socket" } } });
+  await writeFile(join(dir, "fastagent.json"), written);
+  await expect(runAddChannel("feishu", dir, { onboard: false })).rejects.toBe(exited);
+  expect(said).toContain("exit 1");
+  expect(said.join("\n")).toMatch(/fastagent\.json: \/channels\/feishu\/ingress/);
+  expect(await instanceConfig()).toBe(written);
+  expect(await readFile(join(dir, ".secrets", ".env"), "utf8").catch(() => "")).toBe("");
+});
+
 it("writes a deployment's way only to the configuration it names", async () => {
   await writeFile(join(dir, "src", "channels", "feishu.ts"), channelTemplate("feishu", "channel.ts"));
   await expect(
