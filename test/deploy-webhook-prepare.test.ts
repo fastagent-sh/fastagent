@@ -21,7 +21,7 @@ it("creates missing apps for either ingress and prepares an existing webhook app
   ] as const;
   expect(unpreparedFeishuApps(channels, new Map())).toEqual([
     { kind: "feishu", ingress: "webhook" },
-    { kind: "lark", ingress: "websocket" },
+    { kind: "lark", ingress: "connection" },
   ]);
   const values = new Map([
     ["FEISHU_APP_ID", "f"],

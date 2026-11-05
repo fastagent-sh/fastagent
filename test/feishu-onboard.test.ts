@@ -22,7 +22,7 @@ const grantedAll = (): FeishuAppScope[] => AGENT_SCOPES.map((name) => ({ name, g
 async function check(
   kind: "feishu" | "lark",
   listAppScopes: Pick<FeishuApi, "listAppScopes">["listAppScopes"],
-  ingress: "webhook" | "websocket" = "websocket",
+  ingress: "webhook" | "connection" = "connection",
 ) {
   const notes: string[] = [];
   const opened: string[] = [];
@@ -93,7 +93,7 @@ describe("Feishu/Lark agent permission check", () => {
     expect(webhook.notes).toContain(`${FEISHU_APP_CONFIG_SCOPE}: without it the Verification Token`);
     expect(requested(webhook.opened[0])).toEqual([FEISHU_APP_CONFIG_SCOPE]);
 
-    const websocket = await check("feishu", async () => grantedAll(), "websocket");
+    const websocket = await check("feishu", async () => grantedAll(), "connection");
     expect(websocket.result).toEqual({ publishReady: true, missing: [] });
   });
 
@@ -150,7 +150,7 @@ describe("a new Feishu app through a coding agent's person", () => {
       afterwards: (instructions, url) => said.push(`afterwards: ${instructions} at ${url}`),
     };
     try {
-      await onboardFeishuCloudApp(dir, "feishu", "websocket", "fastagent add feishu", person);
+      await onboardFeishuCloudApp(dir, "feishu", "connection", "fastagent add feishu", person);
       expect(said).toEqual([
         expect.stringMatching(
           /^waits on: confirm the new Feishu app .* at https:\/\/open\.feishu\.cn\/.*user_code=AB-CD/,
@@ -215,7 +215,7 @@ describe("a Lark app through a coding agent's person", () => {
   it("leaves the person what they do on each page, not what the setup said it did", async () => {
     const { dir, person, left } = await larkSetup("LARK_APP_ID=cli_lark\nLARK_APP_SECRET=s\n");
     try {
-      await onboardFeishuCloudApp(dir, "lark", "websocket", "fastagent add lark", person);
+      await onboardFeishuCloudApp(dir, "lark", "connection", "fastagent add lark", person);
       expect(left).toEqual([
         {
           instructions: expect.stringMatching(/^in Events & Callbacks, choose long connection/),
@@ -230,7 +230,7 @@ describe("a Lark app through a coding agent's person", () => {
   it("the person pastes the App ID and Secret on a page of this machine's own; they are checked, then written", async () => {
     const { dir, left, waited, carried, lark } = await larkSetup("", { pasted: true });
     try {
-      const run = onboardFeishuCloudApp(dir, "lark", "websocket", "fastagent add lark", lark);
+      const run = onboardFeishuCloudApp(dir, "lark", "connection", "fastagent add lark", lark);
       const page = await vi.waitFor(() => waited[0] ?? Promise.reject(new Error("not yet")));
       expect(page.instructions).toContain("App ID and App Secret");
       expect(page.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/lark\/credentials\//);
@@ -279,7 +279,7 @@ describe("a Lark app through a coding agent's person", () => {
 
 describe("Feishu app creation addons", () => {
   it("asks for every agent scope on the confirm page, so a tenant that grants them needs no console visit", () => {
-    for (const ingress of ["webhook", "websocket"] as const) {
+    for (const ingress of ["webhook", "connection"] as const) {
       expect(feishuAppAddons(ingress).scopes.tenant).toEqual(expect.arrayContaining(AGENT_SCOPES));
     }
   });
@@ -288,10 +288,10 @@ describe("Feishu app creation addons", () => {
     // A tenant that reviews it holds the app's whole first version in review: a WebSocket app would wait on an
     // admin for a scope it never calls.
     expect(feishuAppAddons("webhook").scopes.tenant).toContain(FEISHU_APP_CONFIG_SCOPE);
-    expect(feishuAppAddons("websocket").scopes.tenant).not.toContain(FEISHU_APP_CONFIG_SCOPE);
+    expect(feishuAppAddons("connection").scopes.tenant).not.toContain(FEISHU_APP_CONFIG_SCOPE);
   });
 
   it("subscribes the inbound message event — an app that cannot hear one serves nothing", () => {
-    expect(feishuAppAddons("websocket").events.items.tenant).toContain(FEISHU_MESSAGE_RECEIVE_EVENT);
+    expect(feishuAppAddons("connection").events.items.tenant).toContain(FEISHU_MESSAGE_RECEIVE_EVENT);
   });
 });

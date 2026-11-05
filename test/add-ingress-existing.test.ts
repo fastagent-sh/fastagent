@@ -42,8 +42,8 @@ it("refuses a way the existing channel file cannot receive, before writing it or
   await expect(runAddChannel("feishu", dir, { ingress: "webhook", onboard: false })).rejects.toBe(exited);
   expect(said).toContain("exit 1");
   expect(said.join("\n")).toContain(
-    'channels.feishu.ingress is "webhook", and src/channels/feishu.ts receives only by websocket: default-export ' +
-      "byIngress({ webhook, websocket }) from it to let an instance choose",
+    'channels.feishu.ingress is "webhook", and src/channels/feishu.ts receives only by a connection it opens: default-export ' +
+      "byIngress({ webhook, connection }) from it to let an instance choose",
   );
   expect(await instanceConfig()).toBe("");
 });
@@ -71,14 +71,14 @@ it("refuses a way the configuration misspells before touching the app", async ()
 it("writes a deployment's way only to the configuration it names", async () => {
   await writeFile(join(dir, "src", "channels", "feishu.ts"), channelTemplate("feishu", "channel.ts"));
   await expect(
-    runAddChannel("feishu", dir, { ingress: "websocket", environment: "production", onboard: false }),
+    runAddChannel("feishu", dir, { ingress: "connection", environment: "production", onboard: false }),
   ).rejects.toBe(exited);
   expect(said).toContain("exit 2");
   expect(said.join("\n")).toContain("--ingress with --env production is a deployment's configuration: pass --config");
   const config = join(dir, "..", "production.json");
   await expect(
-    runAddChannel("feishu", dir, { ingress: "websocket", environment: "production", onboard: false, config }),
+    runAddChannel("feishu", dir, { ingress: "connection", environment: "production", onboard: false, config }),
   ).rejects.toBe(exited);
-  expect(JSON.parse(await readFile(config, "utf8"))).toEqual({ channels: { feishu: { ingress: "websocket" } } });
+  expect(JSON.parse(await readFile(config, "utf8"))).toEqual({ channels: { feishu: { ingress: "connection" } } });
   expect(await instanceConfig()).toBe("");
 });

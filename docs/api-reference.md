@@ -271,7 +271,7 @@ it is (a message in one has not ended), or kept as the code it is, at whatever s
 function defineAgent<Settings>(config: AgentConfig<Settings>): AgentConfig<Settings>; // fastagent.config.ts
 function defineSchedule(config: { cron: string; tz?: string; prompt: string | ((fire: { at: Date }) => string | Promise<string>) }): DefinedSchedule;
 function needs<const S extends readonly SecretSpec[], T, Settings>(secrets: S, build: (values: SecretValues<S>, settings: Settings) => T): Needs<T>;
-function byIngress<T>(ways: { webhook: T | Needs<T>; websocket: T | Needs<T> }): ByIngress<T>; // src/channels/
+function byIngress<T>(ways: { webhook: T | Needs<T>; connection: T | Needs<T> }): ByIngress<T>; // src/channels/
 type SecretSpec = string | { name: string; description?: string; optional?: boolean };
 function sessionIdOf(api: ToolExecutionApi, context: Context): Promise<string | undefined>;
 ```
@@ -308,8 +308,8 @@ function secretEquals(given: unknown, expected: string | undefined): boolean; //
 ```
 
 A channel is a module of `src/channels/` that default-exports one of the two forms, or `needs([...])` around one, or
-`byIngress({ webhook, websocket })` with one of each: an instance then receives the way its configuration names
-(`channels.<name>.ingress`), else `dev` by WebSocket and everything else by webhook, and is asked only for that way's
+`byIngress({ webhook, connection })` with one of each: an instance then receives the way its configuration names
+(`channels.<name>.ingress`), else `dev` by its connection and everything else by webhook, and is asked only for that way's
 secrets. A configuration naming a way a channel cannot receive refuses the open. The definition's `inputs.secrets` lists both ways'
 secrets; a name only one way reads carries `whenIngress`, so a host asks for it only of an instance that receives
 that way.

@@ -150,7 +150,7 @@ export interface ChannelsConfig {
  * webhook everywhere else (a host that wakes on a request reaches it only that way).
  */
 export function chosenIngress(config: ChannelsConfig, name: string, dev = servedByDev()): Ingress {
-  return config.channels?.[name]?.ingress ?? (dev ? "websocket" : "webhook");
+  return config.channels?.[name]?.ingress ?? (dev ? "connection" : "webhook");
 }
 
 /** A value that may hold `Needs`, where it is, and the way of receiving it is read under when only one is. */
@@ -171,7 +171,7 @@ function declarers(
   const ways = ({ file, name, value }: { file: string; name: string; value: unknown }): Declarer[] => {
     if (!isByIngress(value)) return [{ declaredIn: file, value }];
     if (instance !== undefined) return [{ declaredIn: file, value: value[chosenIngress(instance, name)] }];
-    return (["webhook", "websocket"] as const).map((ingress) => ({
+    return (["webhook", "connection"] as const).map((ingress) => ({
       declaredIn: file,
       value: value[ingress],
       when: { channel: name, ingress },

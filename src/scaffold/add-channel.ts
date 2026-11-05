@@ -157,7 +157,7 @@ export function channelSetup(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
 ): { env: ChannelEnv[]; steps: string[] } {
-  if (ingress !== "websocket" || (kind !== "feishu" && kind !== "lark")) return CHANNEL_SCAFFOLDS[kind];
+  if (ingress !== "connection" || (kind !== "feishu" && kind !== "lark")) return CHANNEL_SCAFFOLDS[kind];
   return websocketSetup(kind);
 }
 

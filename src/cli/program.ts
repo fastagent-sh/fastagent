@@ -270,8 +270,8 @@ const start: CommandSpec = {
 const INGRESS: FlagSpec = {
   flags: "--ingress <mode>",
   description:
-    "Feishu/Lark: write websocket or webhook to the instance configuration (channels.<kind>.ingress) and set the " +
-    "app up for it (unset: what the configuration says, else dev uses websocket and everything else webhook)",
+    "Feishu/Lark: write connection or webhook to the instance configuration (channels.<kind>.ingress) and set the " +
+    "app up for it (unset: what the configuration says, else dev uses its connection and everything else webhook)",
 };
 const INGRESS_CONFIG: FlagSpec = {
   flags: "--config <file>",

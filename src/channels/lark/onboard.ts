@@ -109,7 +109,7 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
 
   const eventSecurityUrl = larkEventSecurityUrl(appId);
   io.note("App ID / Secret verified.");
-  if (opts.ingress === "websocket") {
+  if (opts.ingress === "connection") {
     io.openUrl(
       eventSecurityUrl,
       "in Events & Callbacks, choose long connection and subscribe im.message.receive_v1, but do not publish yet: " +

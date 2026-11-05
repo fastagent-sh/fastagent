@@ -277,7 +277,7 @@ async function addChannel(
   }
   if (environment === "production") {
     step(`fastagent deploy <host> --run   # deploy with the production app and credentials`);
-  } else if (ingress === "websocket") {
+  } else if (ingress === "connection") {
     step(`fastagent dev            # no public URL or tunnel required`);
   } else if (channelKind === "slack") {
     step(
@@ -391,8 +391,8 @@ async function resolveIngress(
   raw: string | undefined,
   config: string | undefined,
 ): Promise<{ ingress: FeishuSubscriptionMode; write?: string }> {
-  if (raw !== undefined && raw !== "webhook" && raw !== "websocket") {
-    failUsage(`--ingress must be "webhook" or "websocket", got "${raw}"`);
+  if (raw !== undefined && raw !== "webhook" && raw !== "connection") {
+    failUsage(`--ingress must be "webhook" or "connection", got "${raw}"`);
   }
   if (kind !== "feishu" && kind !== "lark") return { ingress: "webhook" };
   if (raw !== undefined) return { ingress: raw, ...(config === undefined ? {} : { write: config }) };
@@ -402,7 +402,7 @@ async function resolveIngress(
       : await Promise.all([loadSourceDefinition(target), readInstanceConfigFile(config)])
           .then(([definition, source]) => resolveConfig(definition, source).channels?.[kind]?.ingress)
           .catch(failStartup);
-  return { ingress: named ?? (environment === "dev" ? "websocket" : "webhook") };
+  return { ingress: named ?? (environment === "dev" ? "connection" : "webhook") };
 }
 
 /**

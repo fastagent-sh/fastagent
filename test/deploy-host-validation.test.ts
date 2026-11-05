@@ -26,7 +26,7 @@ vi.mock("../src/deploy/preflight.ts", () => ({
     config: { channels?: Record<string, { ingress?: string }> };
   }) => {
     const values = loadEnvValues(dotEnvPath(agentDir));
-    const webhook = !changedIngress && config.channels?.feishu?.ingress !== "websocket";
+    const webhook = !changedIngress && config.channels?.feishu?.ingress !== "connection";
     return {
       ok: true,
       messages: [],
@@ -84,7 +84,7 @@ async function agent(name: string, content: string, relocated = false) {
   await mkdir(join(dir, "src", "channels"), { recursive: true });
   await writeFile(
     join(dir, "src", "channels", "feishu.ts"),
-    'export default { kind: "fastagent.by-ingress", webhook: () => ({}), websocket: { name: "f", connect() {} } };\n',
+    'export default { kind: "fastagent.by-ingress", webhook: () => ({}), connection: { name: "f", connect() {} } };\n',
   );
   await buildable(dir);
   await writeFile(join(secrets, ".env"), content);
@@ -93,9 +93,9 @@ async function agent(name: string, content: string, relocated = false) {
 }
 
 /** The configuration a deployment delivers that has the Feishu channel receive by WebSocket. */
-async function websocketConfig(): Promise<string> {
+async function connectionConfig(): Promise<string> {
   const file = join(root, "websocket.json");
-  await writeFile(file, JSON.stringify({ channels: { feishu: { ingress: "websocket" } } }));
+  await writeFile(file, JSON.stringify({ channels: { feishu: { ingress: "connection" } } }));
   return file;
 }
 
@@ -104,7 +104,7 @@ it.each([
     host: "agentcore",
     name: "agent",
     content: "",
-    websocket: true,
+    connection: true,
     relocated: false,
     error: "cannot run on AgentCore",
   },
@@ -127,7 +127,7 @@ it.each([
   "refuses $host ($error) before creating or configuring an app",
   async ({ host, name, content, relocated, error, ...rest }) => {
     const { dir, file } = await agent(name, content, relocated);
-    const config = "websocket" in rest ? { config: await websocketConfig() } : {};
+    const config = "connection" in rest ? { config: await connectionConfig() } : {};
     await expect(runDeploy(host, dir, { run: true, tunnel: host === "docker", ...config })).rejects.toBe(stopped);
     expect(registerFeishuApp).not.toHaveBeenCalled();
     expect(createFeishuApi).not.toHaveBeenCalled();
@@ -165,7 +165,7 @@ it.each(["agentcore", "docker"] as const)("generate-only %s still warns without 
   const deploy = vi.spyOn(HOSTS[host], "deploy").mockResolvedValue(undefined);
   await runDeploy(host, dir, {
     tunnel: host === "docker",
-    ...(host === "agentcore" ? { config: await websocketConfig() } : {}),
+    ...(host === "agentcore" ? { config: await connectionConfig() } : {}),
   });
   expect(registerFeishuApp).not.toHaveBeenCalled();
   expect(createFeishuApi).not.toHaveBeenCalled();

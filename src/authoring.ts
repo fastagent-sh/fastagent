@@ -343,7 +343,7 @@ function textIfExists(path: string): string | undefined {
 export async function setChannelIngress(
   agentDir: string,
   channel: string,
-  ingress: "webhook" | "websocket",
+  ingress: "webhook" | "connection",
   scope?: Pick<ContentScope, "config">,
 ): Promise<void> {
   const places = placesOf(resolveAgentDir(agentDir), scope);

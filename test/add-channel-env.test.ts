@@ -15,7 +15,7 @@ import { FEISHU_AGENT_SCOPES } from "../src/channels/feishu/setup-mode.ts";
 describe("channel setup guidance", () => {
   it("names every agent permission before the publish step, for both clouds and ingresses", () => {
     for (const kind of ["feishu", "lark"] as const) {
-      for (const ingress of ["webhook", "websocket"] as const) {
+      for (const ingress of ["webhook", "connection"] as const) {
         const steps = channelSetup(kind, ingress).steps;
         const scopeIndex = steps.findIndex((step) => step.includes("im:message.group_msg"));
         const publishIndex = steps.findIndex((step, index) => index > scopeIndex && /publish/i.test(step));
@@ -46,7 +46,7 @@ describe("channel setup guidance", () => {
   });
 
   it("a dev WebSocket app needs only App ID/Secret and leaves production on its own app", async () => {
-    const setup = channelSetup("feishu", "websocket");
+    const setup = channelSetup("feishu", "connection");
     expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
     expect(setup.steps.join("\n")).toContain("a deployment receives by webhook");
     expect(setup.steps.join("\n")).toContain("`deploy --run` creates a separate production app");

@@ -85,8 +85,8 @@ function shape(settings: Schema | undefined) {
       map(
         obj({
           ingress: opt(
-            oneOf(["webhook", "websocket"] as const, {
-              description: "How the channel receives: webhook (inbound HTTP) or websocket (a connection it keeps)",
+            oneOf(["webhook", "connection"] as const, {
+              description: "How the channel receives: webhook (inbound HTTP) or connection (one it opens and keeps)",
             }),
           ),
         }),
