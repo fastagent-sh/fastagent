@@ -560,6 +560,32 @@ describe("a serve points its webhook channels at itself", () => {
     }
   });
 
+  it("registers nothing, and says nothing of webhooks, for a serve that never became ready", async () => {
+    const dir = await agentDir({
+      "src/channels/telegram.mjs": `export default () => ({ "POST /telegram": () => new Response("ok") });`,
+      "src/channels/sock.mjs": `export default { name: "sock", connect: () => ({ ready: Promise.reject(new Error("no")), closed: new Promise(() => {}) }) };`,
+    });
+    const served = await openServing(await loadSourceDefinition(dir), {
+      secrets: {},
+      env: {},
+      storage: "memory",
+      config: { values: { http: { publicUrl: "https://agent.example.com" } }, label: "test" },
+    });
+    opened.push(served.agent);
+    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+    const service = await serveAgent(served, { onChannelClosed: () => {} });
+    try {
+      await service.listen(0, "127.0.0.1").catch(() => {});
+      await expect(service.ready).rejects.toThrow();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(service.webhooks).toEqual([{ channel: "telegram", outcome: "pending" }]);
+      expect(errors.mock.calls.flat().join("\n")).not.toContain("webhook registration failed");
+    } finally {
+      errors.mockRestore();
+      await service.close().catch(() => {});
+    }
+  });
+
   it("refuses an http.publicUrl that is not an absolute https URL without a trailing slash", async () => {
     for (const publicUrl of ["http://agent.example.com", "https://agent.example.com/", "agent.example.com"]) {
       await expect(telegramService({ http: { publicUrl } })).rejects.toThrow(/\/http\/publicUrl/);

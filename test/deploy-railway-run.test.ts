@@ -45,7 +45,7 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   channels: [],
   intoLinked: false,
   forAgent: "fastagent deploy railway ../bot --into-linked --run --json",
-  deliverPublicUrl: async () => {},
+  deliverPublicUrl: async (url) => url,
   ...over,
 });
 
@@ -85,7 +85,10 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       plan({
         channels: declaredChannels(["telegram"]),
         secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
-        deliverPublicUrl: async (url) => void delivered.push({ url, before: cmds() }),
+        deliverPublicUrl: async (url) => {
+          delivered.push({ url, before: cmds() });
+          return url;
+        },
       }),
       railway,
       tg,

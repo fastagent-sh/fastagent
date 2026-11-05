@@ -26,10 +26,11 @@ const IMAGE_CONFIG_DIR = "/etc/fastagent";
  * The configuration a deploy delivers, with the public URL the host gives the box as its `http.publicUrl`, where the
  * operator's configuration names none (a custom domain is theirs to name): the URL the box points its channels at.
  */
-export function withPublicUrl(config: string | undefined, publicUrl: string): string {
+export function withPublicUrl(config: string | undefined, publicUrl: string): { config: string; publicUrl: string } {
   const values = (config === undefined ? {} : JSON.parse(config)) as { http?: { publicUrl?: string } };
-  if (values.http?.publicUrl !== undefined) return config as string;
-  return `${JSON.stringify({ ...values, http: { ...values.http, publicUrl } }, null, 2)}\n`;
+  const own = values.http?.publicUrl;
+  if (own !== undefined) return { config: config as string, publicUrl: own };
+  return { config: `${JSON.stringify({ ...values, http: { ...values.http, publicUrl } }, null, 2)}\n`, publicUrl };
 }
 
 /** The delivered configuration as the artifact a deploy writes, to rewrite it once the host has given the URL. */

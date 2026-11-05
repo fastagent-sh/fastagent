@@ -44,9 +44,10 @@ export interface RailwayRunPlan {
   forAgent: string;
   /**
    * Put the service's domain into the configuration the image delivers (`http.publicUrl`), before `railway up` uploads
-   * it, so the box points its own channels there.
+   * it, so the box points its own channels there. Resolves the URL the configuration then names, the operator's own
+   * when it had one.
    */
-  deliverPublicUrl: (url: string) => Promise<void>;
+  deliverPublicUrl: (url: string) => Promise<string>;
 }
 
 /**
@@ -253,7 +254,7 @@ export async function deployRailwayRun(
   if (!url) {
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
   }
-  await plan.deliverPublicUrl(url);
+  const publicUrl = await plan.deliverPublicUrl(url);
 
   // 6. Deploy — CI mode streams build logs then exits (no interactive attach). Build runs on Railway.
   log("deploying (railway up)…");
@@ -287,6 +288,7 @@ export async function deployRailwayRun(
   // The box points its own channels at the `http.publicUrl` delivered above; this reads what it made of them.
   const registrationGateMsg = await confirmWebhooks({
     baseUrl: url,
+    publicUrl,
     channels: plan.channels,
     registrars,
     log,

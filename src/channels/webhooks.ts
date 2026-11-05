@@ -7,6 +7,7 @@ import type { DeclaredChannel } from "./discover.ts";
 import { registerFeishuWebhook } from "./feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS, type RegistrationOutcome } from "./registration.ts";
 import { registerTelegramWebhook } from "./telegram/register-webhook.ts";
+import { log } from "../log.ts";
 
 /** One webhook channel's registration (SPEC.md §8). */
 export interface WebhookRegistration {
@@ -89,10 +90,14 @@ export async function registerOwnWebhooks(
     }
     const attempts = options.attempts ?? DEPLOY_REGISTRATION_ATTEMPTS;
     const retry = { attempts, ...(options.retryMs === undefined ? {} : { retryMs: options.retryMs }) };
-    const outcome =
-      kind === "telegram"
-        ? await registerTelegramWebhook(baseUrl, { env, ...retry })
-        : await registerFeishuWebhook(baseUrl, kind, { env, ...retry });
+    // A registrar that throws ends its channel `failed`, said with why, never left `pending` for a reader to wait on.
+    const outcome: RegistrationOutcome = await (kind === "telegram"
+      ? registerTelegramWebhook(baseUrl, { env, ...retry })
+      : registerFeishuWebhook(baseUrl, kind, { env, ...retry })
+    ).catch((error: unknown) => {
+      log.error(`[fastagent] ${kind}: could not register its webhook: ${String(error)}`);
+      return "failed" as const;
+    });
     registrations.push({ channel: kind, outcome, url, ...(outcome === "registered" ? {} : { step }) });
   }
   return registrations;

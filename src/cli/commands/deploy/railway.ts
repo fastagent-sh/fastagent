@@ -36,8 +36,11 @@ export const railwayHost: HostDeploy = {
       return runDeployRailway({
         agentDir,
         // The URL Railway mints is read before the upload, and the image delivers it as `http.publicUrl`.
-        deliverPublicUrl: (url) =>
-          write([deliveredConfigArtifact(withPublicUrl(container.config, url))], { force: true }),
+        deliverPublicUrl: async (url) => {
+          const delivered = withPublicUrl(container.config, url);
+          await write([deliveredConfigArtifact(delivered.config)], { force: true });
+          return delivered.publicUrl;
+        },
         name: serviceName,
         modelAuth,
         boxLogin,
@@ -72,7 +75,7 @@ async function runDeployRailway(params: {
   values: ReadonlyMap<string, string>;
   valueFile: string;
   intoLinked: boolean;
-  deliverPublicUrl: (url: string) => Promise<void>;
+  deliverPublicUrl: (url: string) => Promise<string>;
 }): Promise<string> {
   const { agentDir, name, channels, intoLinked } = params;
   const railway = spawnRunner("railway", agentDir);

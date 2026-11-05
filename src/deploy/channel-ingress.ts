@@ -256,7 +256,10 @@ const readBoxWebhooks: BoxWebhooksProbe = async (healthUrl) => {
  * `registrars.slack` sets it from this machine, as before.
  */
 export async function confirmWebhooks(input: {
+  /** Where this machine reaches the box's `/health`: the host's own URL. */
   baseUrl: string;
+  /** Where the platforms reach it, the delivered `http.publicUrl` (a custom domain, say): every step names this one. */
+  publicUrl: string;
   channels: readonly DeclaredChannel[];
   registrars: Pick<Registrars, "slack" | "leave">;
   log: (msg: string) => void;
@@ -269,13 +272,13 @@ export async function confirmWebhooks(input: {
   const reg = registrationGate(input.log, input.retryHint);
   const outcomes = new Map<WebhookKind, RegistrationOutcome>();
   if (kinds.includes("slack")) {
-    const slack = input.registrars.slack?.(input.baseUrl);
-    if (slack === undefined) input.log(manualWebhookStep("slack", input.baseUrl));
+    const slack = input.registrars.slack?.(input.publicUrl);
+    if (slack === undefined) input.log(manualWebhookStep("slack", input.publicUrl));
     outcomes.set("slack", slack === undefined ? "manual" : await slack);
   }
   const own = kinds.filter((kind) => kind !== "slack");
   if (own.length > 0) {
-    input.log(`waiting for the box to point ${own.join(", ")} at ${input.baseUrl}…`);
+    input.log(`waiting for the box to point ${own.join(", ")} at ${input.publicUrl}…`);
     const probe = input.probe ?? readBoxWebhooks;
     const deadline = Date.now() + (input.timeoutMs ?? BOX_REGISTRATION_TIMEOUT_MS);
     for (;;) {
@@ -305,8 +308,8 @@ export async function confirmWebhooks(input: {
     if (outcome === "registered") input.log(`the selected production ${kind} app ${INGRESS[kind].delivers}`);
     else if (kind !== "slack") {
       // What the box said and why is in its log; the line a person acts on is said here.
-      input.log(manualWebhookStep(kind, input.baseUrl));
-      input.registrars.leave?.(manualWebhookStep(kind, input.baseUrl));
+      input.log(manualWebhookStep(kind, input.publicUrl));
+      input.registrars.leave?.(manualWebhookStep(kind, input.publicUrl));
     }
   }
   return reg.gate();

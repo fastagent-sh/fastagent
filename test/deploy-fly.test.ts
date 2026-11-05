@@ -88,17 +88,25 @@ describe("deploy/fly: planFlyDeploy", () => {
     );
     expect(out).toContain("#   GH_TOKEN: required by tools/gh.ts");
     expect(out).toContain("fly secrets set --app bot OPENAI_API_KEY=<value> GH_TOKEN=<value>");
-    // the fastagent-only post step: point the webhook at the live URL
-    expect(out).toContain("https://bot.fly.dev/telegram");
+    // the box points the webhook at the live URL itself; the runbook says where to read how it went
+    expect(out).toContain("The box points telegram at https://bot.fly.dev itself");
+    expect(out).toContain("curl -fsS https://bot.fly.dev/health");
   });
 
   // WHICH webhook steps a runbook carries is webhookRunbook's — deploy-channel-ingress owns that. What
   // is fly's is the base URL those steps are spelled with.
-  it("spells every webhook step at the fly URL", () => {
+  it("spells Slack's step at the delivered URL, and says the box points the rest there", () => {
     const out = runbook(planFlyDeploy({ ...base, channels: declaredChannels(["slack", "feishu"]) }));
     expect(out).toContain("https://bot.fly.dev/slack");
-    expect(out).toContain("https://bot.fly.dev/feishu");
-    expect(out).not.toContain("https://bot.fly.dev/lark"); // only what is mounted
+    expect(out).toContain("The box points feishu at https://bot.fly.dev itself");
+    expect(out).not.toContain("lark"); // only what is mounted
+    // An operator's own URL is the one the platforms reach; /health is still read at the app's.
+    const own = runbook(
+      planFlyDeploy({ ...base, channels: declaredChannels(["slack", "feishu"]), publicUrl: "https://agent.acme.com" }),
+    );
+    expect(own).toContain("Request URL = https://agent.acme.com/slack");
+    expect(own).toContain("The box points feishu at https://agent.acme.com itself");
+    expect(own).toContain("curl -fsS https://bot.fly.dev/health");
   });
 
   it("installs the image's apt packages in one layer, and adds no layer when there are none", () => {

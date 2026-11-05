@@ -13,6 +13,8 @@ import { type CliRunner, readOutput } from "../runner.ts";
 import { hostSignedOutGate, missingValuesGate } from "../secrets.ts";
 
 export interface FlyRunPlan {
+  /** The `http.publicUrl` the image delivers, where the platforms reach the box; default the app's own URL. */
+  publicUrl?: string;
   appName: string;
   /** `KEY=value` secrets to set on Fly: the value file's variables. */
   secrets: Record<string, string>;
@@ -193,6 +195,7 @@ export async function deployFlyRun(
   // 9. The box points its own channels at the `http.publicUrl` this deploy delivered; this reads what it made of them.
   const registrationGateMsg = await confirmWebhooks({
     baseUrl,
+    publicUrl: plan.publicUrl ?? baseUrl,
     channels: plan.channels,
     registrars,
     log,

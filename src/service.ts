@@ -263,9 +263,16 @@ export function serviceOver(
         (bound) => {
           // After ready: a host may route to the instance only once its health check passes, and a platform verifies
           // the URL as it is set. In the background, so the port is answered without waiting for a platform.
-          void ready
-            .then(() => (closing === undefined ? webhooks.register() : undefined))
-            .catch((error: unknown) => log.error(`[fastagent] webhook registration failed: ${String(error)}`));
+          // A ready that fails is the failure its awaiter reports: nothing is registered for a serve that never was.
+          void ready.then(
+            () =>
+              closing === undefined
+                ? webhooks
+                    .register()
+                    .catch((error: unknown) => log.error(`[fastagent] webhook registration failed: ${String(error)}`))
+                : undefined,
+            () => {},
+          );
           return bound;
         },
         async (error: unknown) => {

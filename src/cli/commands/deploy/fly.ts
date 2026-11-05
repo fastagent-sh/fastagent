@@ -59,6 +59,7 @@ export const flyHost: HostDeploy = {
       }
     }
     const reachedAt = `https://${appName}.fly.dev`;
+    const delivered = withPublicUrl(container.config, reachedAt);
     const plan = planFlyDeploy({
       appName,
       port,
@@ -68,7 +69,8 @@ export const flyHost: HostDeploy = {
       hasCron,
       ...container,
       // The app's URL is known before the build, so the image names it: the box points its own channels there.
-      config: withPublicUrl(container.config, reachedAt),
+      config: delivered.config,
+      publicUrl: delivered.publicUrl,
     });
     await write(plan.artifacts, { force: !!opts.force });
     if (opts.run) {
@@ -83,6 +85,7 @@ export const flyHost: HostDeploy = {
         declaredSecrets,
         values,
         valueFile,
+        publicUrl: delivered.publicUrl,
       });
       return reachedAt;
     }
@@ -106,6 +109,8 @@ async function runDeployFly(params: {
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
   valueFile: string;
+  /** The `http.publicUrl` the image delivers: the platforms reach the box there. */
+  publicUrl: string;
 }): Promise<void> {
   const { agentDir, appName, channels } = params;
   const fly = spawnRunner("fly", agentDir);
@@ -132,6 +137,7 @@ async function runDeployFly(params: {
       ...boxLoginStep("fly", params, () => flyShell(appName, agentDir)),
       ...hostLogin(FLY_LOGIN, params.answerer, agentDir),
       forAgent: `${params.rerun} --json`,
+      publicUrl: params.publicUrl,
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
