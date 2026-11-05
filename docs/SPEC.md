@@ -492,10 +492,10 @@ interface DeclaredSecret {
   declaredIn: string[];
   /**
    * Set when only some channels' ways of receiving read it (`byIngress`): an instance needs it only when one of these
-   * channels receives that way (`channels.<name>.ingress`, else `dev`'s websocket and everyone else's webhook).
+   * channels receives that way (`channels.<name>.ingress`, else `dev`'s connection and everyone else's webhook).
    * Absent, every instance does. Decided by the declarations that require it, or by all of them when none does.
    */
-  whenIngress?: { channel: string; ingress: "webhook" | "websocket" }[];
+  whenIngress?: { channel: string; ingress: "webhook" | "connection" }[];
 }
 
 type InstanceInputs<Settings = unknown> = {
@@ -530,11 +530,11 @@ interface InstanceConfig<Settings = unknown> {
   http?: { port?: number; api?: boolean };
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
   /**
-   * How each channel that offers both ways (`byIngress`) receives, by its file's name. Unset, `dev` receives by
-   * WebSocket and everything else by webhook. A name the agent has no channel by, or a way its channel cannot
-   * receive, refuses the open.
+   * How each channel that offers both ways (`byIngress`) receives, by its file's name. Unset, `dev` receives by a
+   * connection it opens and everything else by webhook. A name the agent has no channel by, or a way its channel
+   * cannot receive, refuses the open.
    */
-  channels?: Record<string, { ingress?: "webhook" | "websocket" }>;
+  channels?: Record<string, { ingress?: "webhook" | "connection" }>;
   settings?: Partial<Settings>;
   /** Content the instance adds to the program's: a name may not be one the program declares. */
   content?: Record<string, { github: string; ref?: string } | { path: string }>;
@@ -702,12 +702,13 @@ same context as any other.
 A channel that can receive either way default-exports both, and each instance takes one:
 
 ```ts
-function byIngress<T>(ways: { webhook: T | Needs<T>; websocket: T | Needs<T> }): ByIngress<T>;
+function byIngress<T>(ways: { webhook: T | Needs<T>; connection: T | Needs<T> }): ByIngress<T>;
 ```
 
-The `webhook` way is a channel of routes and the `websocket` way one that keeps a connection; an instance receives the
-way `channels.<name>.ingress` names, else `dev` by WebSocket and everything else by webhook, since a host that scales
-to zero is woken by an inbound request. Each way declares its own secrets, and an instance is asked only for its way's
+The `webhook` way is a channel of routes, and the `connection` way one that opens and keeps a connection to its platform
+(the first-party ones: Feishu's and Lark's long connection). An instance receives the way `channels.<name>.ingress`
+names, else `dev` by its connection and everything else by webhook, since a host that scales to zero is woken by an
+inbound request. Each way declares its own secrets, and an instance is asked only for its way's
 (`DeclaredSecret.whenIngress`). A channel that is not `byIngress` receives the one way it is.
 
 ## 9. HTTP
