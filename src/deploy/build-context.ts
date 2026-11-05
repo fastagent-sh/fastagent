@@ -172,7 +172,7 @@ export async function checkKeptIgnoreFiles(
         `your ${rel} (kept) does not exclude \`${stateShips}\` — the build machine's sessions/channel state would ship in the image. ${remedy([`/${stateShips}`])}`,
       );
     }
-    if (instancesShip && !excluded(`${instancesShip}/dev/.state`)) {
+    if (instancesShip && !excluded(`${instancesShip}/dev/content/x`)) {
       report.warn(
         `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions, channel state and clones of the agent's content would ship in the image. ${remedy([`/${instancesShip}`])}`,
       );

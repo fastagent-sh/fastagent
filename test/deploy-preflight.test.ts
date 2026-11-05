@@ -264,6 +264,23 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(gated).toMatchObject({ ok: false, gate: expect.stringMatching(/does not exclude .content/) });
   });
 
+  it("a kept .dockerignore that excludes only the state by name still warns that the instance's clones would ship", async () => {
+    const agentDir = await agent({ "package.json": `{"type":"module"}` });
+    await mkdir(join(agentDir, ".fastagent", "dev", "content", "app"), { recursive: true });
+    await mkdir(join(agentDir, ".fastagent", "dev", ".state"), { recursive: true });
+    const ignore = join(agentDir, ".dockerignore");
+    // What an earlier generated file, and many written by hand, hold: the name-based rules, which cover .state alone.
+    await writeFile(ignore, "**/node_modules\n**/.secrets/**\n**/.state\n**/.env\n/content\n");
+    const warned = async () => {
+      const pre = await call(agentDir, { model: "openai/gpt-4o-mini" });
+      if (!pre.ok) throw new Error(pre.gate);
+      return JSON.stringify(pre.messages);
+    };
+    expect(await warned()).toMatch(/does not exclude .{0,12}\.fastagent.{0,12} — the build machine's sessions/);
+    await writeFile(ignore, "**/node_modules\n**/.secrets/**\n**/.state\n**/.env\n/content\n/.fastagent\n");
+    expect(await warned()).not.toMatch(/does not exclude .{0,12}\.fastagent/);
+  });
+
   it("the GENERATED dockerignore passes its own leak gate — contents-only .secrets excludes are not a leak", async () => {
     // The regression this pins: the leak check used to ask about the secrets DIRECTORY, which the
     // generated `**/.secrets/**` (contents-only, so the tracked scaffolds can be re-included) answers
