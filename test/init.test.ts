@@ -98,6 +98,11 @@ describe("init: scaffoldAgent", () => {
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
     expect(pkg.type).toBe("module");
     expect(pkg.name).toBe("reviewer");
+    expect(pkg.scripts).toEqual({
+      dev: "fastagent dev",
+      build: "fastagent build",
+      start: "fastagent build && fastagent start",
+    });
     // The fastagent dep tracks this build's version (not a stale hard-coded range), so a fresh
     // agent installs a version that has the API/exports it was scaffolded against. Oracle is the
     // package's real version read DIRECTLY (not fastagentVersion's output) so a corrupt read is caught.
