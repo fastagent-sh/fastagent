@@ -73,10 +73,23 @@ describe("a channel's ingress: the instance's configuration, else dev's WebSocke
         buildDefinition(definition, withoutToken, { settings: {}, channels: { [kind]: { ingress: "websocket" } } }),
       ).not.toThrow();
       expect(() => buildDefinition(definition, withoutToken, { settings: {} })).toThrow(`${prefix}_VERIFICATION_TOKEN`);
-      // The definition's own list is every way's, each said beside its file.
-      expect(definition.inputs.secrets.find(({ name }) => name === `${prefix}_VERIFICATION_TOKEN`)).toMatchObject({
+      // The definition's own list is every way's: a name only one way reads says which, so a host asks for it only
+      // of an instance that receives that way; one both ways read is every instance's.
+      const input = (name: string) => definition.inputs.secrets.find((secret) => secret.name === name);
+      expect(input(`${prefix}_VERIFICATION_TOKEN`)).toEqual({
+        name: `${prefix}_VERIFICATION_TOKEN`,
         optional: false,
-        declaredIn: [`src/channels/${kind}.ts (webhook)`],
+        declaredIn: [`src/channels/${kind}.ts`],
+        whenIngress: [{ channel: kind, ingress: "webhook" }],
+      });
+      expect(input(`${prefix}_ENCRYPT_KEY`)).toMatchObject({
+        optional: true,
+        whenIngress: [{ channel: kind, ingress: "webhook" }],
+      });
+      expect(input(`${prefix}_APP_ID`)).toEqual({
+        name: `${prefix}_APP_ID`,
+        optional: false,
+        declaredIn: [`src/channels/${kind}.ts`],
       });
     },
   );
@@ -112,6 +125,55 @@ describe("a channel's ingress: the instance's configuration, else dev's WebSocke
     expect(() =>
       buildDefinition(definition, {}, { settings: {}, channels: { hook: { ingress: "websocket" } } }),
     ).toThrow("src/channels/hook.ts: its websocket way builds a channel that receives by webhook");
+  });
+
+  it("says a name's condition by the declarations that require it, and none when every instance needs it", async () => {
+    const dir = await agentDir("fa-when-ingress-");
+    await mkdir(join(dir, "src", "channels"), { recursive: true });
+    await mkdir(join(dir, "src", "tools"), { recursive: true });
+    // `needs` and `byIngress` as they return, so the fixture needs no package of its own.
+    const needs = (secrets: { name: string; optional: boolean }[]) =>
+      `{ kind: "fastagent.needs", secrets: ${JSON.stringify(secrets)}, build: () => ({}) }`;
+    await writeFile(
+      join(dir, "src", "channels", "hook.ts"),
+      `export default { kind: "fastagent.by-ingress", ` +
+        `webhook: ${needs([
+          { name: "MIXED", optional: false },
+          { name: "SHARED", optional: false },
+        ])}, ` +
+        `websocket: ${needs([
+          { name: "MIXED", optional: true },
+          { name: "ALSO_TOOL", optional: false },
+          { name: "ANYWHERE", optional: true },
+          { name: "SOCKET_ONLY", optional: false },
+        ])} };\n`,
+    );
+    await writeFile(
+      join(dir, "src", "tools", "t.ts"),
+      `export default ${needs([
+        { name: "ALSO_TOOL", optional: true },
+        { name: "ANYWHERE", optional: true },
+        { name: "SHARED", optional: true },
+      ])};\n`,
+    );
+    const definition = await loadSourceDefinition(dir);
+    const input = (name: string) => definition.inputs.secrets.find((secret) => secret.name === name);
+    // Required by the webhook way only, read optionally by the other: the requiring way decides.
+    expect(input("MIXED")).toMatchObject({ optional: false, whenIngress: [{ channel: "hook", ingress: "webhook" }] });
+    // Required by one way, read optionally by a tool: still only that way's requirement.
+    expect(input("ALSO_TOOL")).toMatchObject({
+      optional: false,
+      whenIngress: [{ channel: "hook", ingress: "websocket" }],
+    });
+    expect(input("SHARED")).toMatchObject({ optional: false, whenIngress: [{ channel: "hook", ingress: "webhook" }] });
+    // Optional everywhere, and read outside any channel's way too: every instance's.
+    expect(input("ANYWHERE")).toEqual({
+      name: "ANYWHERE",
+      optional: true,
+      declaredIn: ["src/tools/t.ts", "src/channels/hook.ts"],
+    });
+    // Required by one way only, and read by nothing else: that way's.
+    expect(input("SOCKET_ONLY")).toMatchObject({ whenIngress: [{ channel: "hook", ingress: "websocket" }] });
   });
 
   it("refuses a configuration naming a channel the agent does not have", async () => {
