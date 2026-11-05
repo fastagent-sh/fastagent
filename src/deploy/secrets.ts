@@ -5,7 +5,7 @@
  * definition declares (`defineTool`/`defineChannel`, the `variables` of `context.json`, plus the model's env key) only says
  * which of those must have a value, so a missing one stops a deploy before its first side effect instead of a boot.
  */
-import { type DeclaredSecret, dedupeSecrets } from "../declared-secrets.ts";
+import { type DeclaredSecret, dedupeSecrets, missingSecrets as unsetSecrets } from "../declared-secrets.ts";
 import { DEV_SERVE_ENV } from "../serving-command.ts";
 import { AGENT_ENVIRONMENT_ENV } from "../paths.ts";
 
@@ -70,8 +70,11 @@ export function deploymentSecrets(
     if (!secrets.some((s) => s.name === name)) secrets.push({ name, hint });
   };
   if (isEnvKey(modelAuth)) add(modelAuth, "your model provider key");
-  for (const { name, declaredIn, description } of dedupeSecrets(declared)) {
-    add(name, `required by ${declaredIn}${description ? `: ${description}` : ""}`);
+  for (const { name, declaredIn, description, optional } of dedupeSecrets(declared)) {
+    add(
+      name,
+      `${optional ? "optional, read by" : "required by"} ${declaredIn}${description ? `: ${description}` : ""}`,
+    );
   }
   for (const name of Object.keys(carriedValues(values))) add(name, `from ${valueFile}`);
   return secrets;
@@ -97,8 +100,8 @@ export function assembleSecrets(input: {
   const secrets = carriedValues(input.values);
   const missingSecrets: string[] = [];
   if (isEnvKey(input.modelAuth) && !secrets[input.modelAuth]) missingSecrets.push(input.modelAuth);
-  for (const { name } of dedupeSecrets(input.declared ?? [])) {
-    if (!secrets[name] && !missingSecrets.includes(name)) missingSecrets.push(name);
+  for (const { name } of unsetSecrets(input.declared ?? [], secrets)) {
+    if (!missingSecrets.includes(name)) missingSecrets.push(name);
   }
   return { secrets, missingSecrets };
 }

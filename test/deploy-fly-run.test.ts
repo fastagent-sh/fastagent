@@ -370,6 +370,20 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     expect(r.missingSecrets).toEqual([]);
   });
 
+  it("an optional name is never missing, unless another declaration requires it", () => {
+    const optional = { name: "SENTRY_DSN", declaredIn: "tools/report.ts", optional: true };
+    expect(assembleSecrets({ modelAuth: undefined, declared: [optional], values: new Map() }).missingSecrets).toEqual(
+      [],
+    );
+    const required = { ...optional, declaredIn: "channels/digest.ts", optional: false };
+    expect(
+      assembleSecrets({ modelAuth: undefined, declared: [optional, required], values: new Map() }).missingSecrets,
+    ).toEqual(["SENTRY_DSN"]);
+    expect(deploymentSecrets(undefined, [optional], new Map(), ".env")).toEqual([
+      { name: "SENTRY_DSN", hint: "optional, read by tools/report.ts" },
+    ]);
+  });
+
   it("a declared name is REQUIRED: absent from the value file → missingSecrets, listed once", () => {
     const declared = [
       { name: "GH_TOKEN", declaredIn: "tools/gh.ts", optional: false },
