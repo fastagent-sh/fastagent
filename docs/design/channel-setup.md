@@ -134,14 +134,18 @@ the instance confirms it.**
 - The outcome is `manual`, its step the full URL and the page: `paste https://x.fly.dev/slack into Request URL at
   https://api.slack.com/apps/A0123/event-subscriptions, then Save Changes`. At a terminal `deploy` opens the page;
   with `--json` the step is the ticket's `afterwards`.
-- Saving makes the platform verify the URL with a signed request (Slack's `url_verification`; Lark's challenge),
-  which the channel answers. A request the platform signed for that URL, the verification or any event, is the
+- Saving makes the platform verify the URL (Slack's signed `url_verification`; Lark's token-bearing challenge), which
+  the channel answers. An authenticated request **addressed to that URL**, the verification or any event, is the
   evidence: the channel records it in its state, and the outcome becomes `registered`, with no developer
-  credential.
+  credential. A signature or token proves who sent a request, not where it was sent (Slack signs
+  `v0:timestamp:body`), so the address comes from the request's host and forwarding headers; one addressed elsewhere
+  (an old domain still routed here) proves nothing and is warned of, and one with no known address counts as none.
+  AgentCore's forwarder passes the original host along (2b).
 - At a terminal, `deploy` waits for that outcome, then writes the verified URL into the binding
   (`channels.<name>.app.url`) in the configuration `--config` names. Every later deploy, CI included, delivers it, and
   an instance whose `http.publicUrl` gives the same URL reports `registered` from the start: across AgentCore's
   state reset on every deploy, and across Lark's 404 on every start. A different URL is `manual` again, truthfully.
+  The record is of the moment it was verified: a person who later changes the platform's page changes it too.
 - Where the URL is known before the app is created (Fly, Railway), setup puts it in the Slack manifest link, so the
   page holds it already and the person clicks Retry once the instance serves, instead of pasting. *To verify:*
   whether Slack creates an app whose Request URL has not answered yet.
