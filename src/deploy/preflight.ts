@@ -367,8 +367,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // runbook gives it (a Fly volume outlives every deploy; AgentCore's mount does not).
   report.note(
     `the agent directory is baked as the definition (WYSIWYG — what you see is what ships, git or not, clean or ` +
-      `not); its package.json dependencies are installed in the image. Every release replaces the deployed definition and leaves the instance's state and ` +
-      `credentials in place — for how long, see this host's storage note below`,
+      `not); its package.json dependencies are installed in the image. Every release replaces the image and leaves the instance's working directory, state and ` +
+      `credentials in place on the storage — for how long, see this host's storage note below`,
   );
   // A code agent with no lockfile builds via a non-frozen install (ranges resolve at build time) — not reproducible.
   if (!hasLockfile) {

@@ -269,15 +269,13 @@ Default locations:
 | `fastagent dev` in a project | `fastagent.json` and `.mcp.json` at the project root, when present | `.fastagent/dev/` |
 | `fastagent start` and `npm start` in a project (opens the project's `dist/`) | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | `.fastagent/start/` in the project |
 | The package's `bin` (`npx @acme/reviewer`) | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | None: `--root` or `FASTAGENT_ROOT` is required |
-| Docker, Fly, Railway | `/etc/<name>/`, baked into a derived image or mounted | `/var/lib/<name>/`, the volume |
-| AgentCore | `/etc/<name>/`, baked into a derived image | `/mnt/<name>/`, SessionStorage, reset on every deploy |
+| Docker, Fly, Railway | `/etc/<name>/`, baked into a derived image or mounted | `/data/`, the volume |
+| AgentCore | `/etc/<name>/`, baked into a derived image | `/mnt/data/`, SessionStorage, reset on every deploy |
 | Embedding | The `config` object; otherwise the program's defaults | None: `root`, or `stateDir` and `workdir`, are required |
 
-`<name>` is the instance name (§4.5). The paths follow the filesystem-hierarchy convention of naming a directory after
-the application, which here is the agent, not the framework, so several agents on one machine never collide.
-`/var/lib/<name>/` applies where the host lets the mount point be chosen; AgentCore's SessionStorage must mount at
-exactly `/mnt/<one level>` (as `src/deploy/agentcore/plan.ts` notes), so there the root is `/mnt/<name>/`, named to
-the runtime through `FASTAGENT_ROOT`. `start`
+`<name>` is the instance name (§4.5). A host's instance root is `/data` (AgentCore's SessionStorage must mount at
+exactly `/mnt/<one level>`, so there it is `/mnt/data`), named to the runtime through `FASTAGENT_ROOT`; §6.1 says why
+it carries no name. `start`
 never reads the development `fastagent.json`: production inputs are explicit. In a project, `start` opens the
 built `dist/`, never the source (§1): it refuses, naming `fastagent build`, when `dist/` is missing or was built from
 other sources than the project now holds (the build records a fingerprint of what it read). It does not build on its
@@ -441,7 +439,7 @@ explicitly. How a team lays out per-environment files, what it commits and wheth
 the developer's choice; the framework adds no local layer.
 
 `.fastagent/dev/` sits inside the author's repository, where git run in the workspace would otherwise find and act on
-the author's repository, while on a host there is no repository above `/var/lib/<name>/`. The child environment (§5)
+the author's repository, while on a host there is no repository above `/data/`. The child environment (§5)
 therefore sets `GIT_CEILING_DIRECTORIES` to the workspace's parent (the agent's cwd's) for every instance, so git
 discovery stops at the workspace everywhere, wherever `--workdir` or `workdir` puts it and whether or not a root is given, and an agent cannot commit the author's source by walking upward.
 
@@ -557,8 +555,8 @@ list is part of the assembly that `info` reports.
 | Program | Per version | The image, read-only |
 | Configuration | Per deployment | Delivered with the deployment, read-only: baked into a derived image or mounted; both are supported |
 | Secrets | Per deployment, rotatable | The platform's secret storage |
-| State | Durable | `/var/lib/<name>/.state/` on a volume, or managed storage; AgentCore: `/mnt/<name>/.state/`, reset on every deploy |
-| Workspace | Rebuildable | `/var/lib/<name>/` on a volume or a disposable disk (AgentCore: `/mnt/<name>/`); acquired again from content declarations at start |
+| State | Durable | `/data/.state/` on a volume, or managed storage; AgentCore: `/mnt/data/.state/`, reset on every deploy |
+| Workspace | Rebuildable | `/data/` on a volume or a disposable disk (AgentCore: `/mnt/data/`); acquired again from content declarations at start |
 
 A container instance:
 
@@ -566,7 +564,7 @@ A container instance:
 /app/                     the image: the program, read-only
 /etc/<name>/              configuration, read-only (derived-image layer or mount)
   fastagent.json  .mcp.json  AGENTS.md  skills/  prompts/
-/var/lib/<name>/          the volume, FASTAGENT_ROOT: the agent's cwd (/mnt/<name>/ on AgentCore)
+/data/                    the volume, FASTAGENT_ROOT: the agent's cwd (/mnt/data/ on AgentCore)
   .state/
   content/<entry>/
   ...
@@ -576,12 +574,11 @@ environment               secrets injected by the platform, or AgentCore's secre
 The volume no longer holds a copy of the definition (today's `/data/definition`): the program lives only in the image,
 and a volume holds only state and work.
 
-`/etc/<name>/` and `/var/lib/<name>/` are the filesystem hierarchy's configuration and variable-state directories, the
-ones systemd's `ConfigurationDirectory=` and `StateDirectory=` create, and the ones official images such as Postgres
-and Grafana use; many images mount `/data` instead, which works equally but does not separate several agents on one
-machine. The generated image creates both directories and gives them to the user it runs as, since a non-root process
-cannot create directories under `/var/lib`. `HOME` stays the user's home (§5's base environment), so files such as
-`~/.gitconfig` do not land in the instance root.
+The volume keeps the path generated deployments have always used, `/data` (`/mnt/data` on AgentCore). The filesystem
+hierarchy's `/var/lib/<name>/` would separate several agents on one machine, but every host here runs one agent per
+app (Fly, Railway, AgentCore) or per Compose project, whose volume is the project's own: a name in the path would buy no
+separation and would move every deployed app's mount. `HOME` stays the user's home (§5's base environment), so files
+such as `~/.gitconfig` do not land in the instance root.
 
 Configuration on a writable volume would make the deployment and the agent compete for it, the problem #605 describes.
 Delivered read-only, it changes only by deploying again, and an agent cannot add capabilities to a served deployment.
@@ -674,7 +671,7 @@ Recorded, not solved here:
 | Deploy copies and replaces the author directory | Deploys the artifact plus delivered configuration; state preserved |
 | `.secrets/<env>/.env` carries instance settings | `fastagent.json` carries settings; env files carry secrets |
 | `config.model`, `http`, `deploy` read as fixed values | Read as program defaults under instance overrides |
-| Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | `/etc/<name>/` for configuration and `/var/lib/<name>/` as the instance root; on AgentCore `/mnt/<name>/`; the definition stays in the image |
+| Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | `/etc/<name>/` for configuration and `/data/` as the instance root, the agent's cwd (`/mnt/data/` on AgentCore); the definition stays in the image |
 | `needs()` and MCP references read `{ ...process.env, ...values }` at open | Secrets are an input: the CLI's environment and `--env-file`, or `openAgent`'s `secrets` |
 | `modelsOver` resolves a provider's variable as `environment[name] \|\| process.env[name]` | The model's auth reads only the `secrets` input |
 
@@ -694,7 +691,7 @@ boundary experiments, not a supported format.
    files, the configuration shape of §3.2, the default locations and the scaffold's npm scripts; `context.local.json`
    removed.
 3. **Deployment.** Derived from the same artifact with delivered configuration under `/etc/<name>/` and the instance
-   root under `/var/lib/<name>/` (`/mnt/<name>/` on AgentCore); secret modes A and B, missing-value guidance, AgentCore through Secrets Manager.
+   root at `/data/` (`/mnt/data/` on AgentCore); secret modes A and B, missing-value guidance, AgentCore through Secrets Manager.
 4. **Instance additions.** Content and `.mcp.json` entries, text additions, the reopen boundary.
 5. Any public [SPEC](../SPEC.md) change is reviewed on its own.
 

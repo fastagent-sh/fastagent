@@ -46,7 +46,7 @@ own. See [`fastagent deploy`](cli.md#commands).
 | **`.secrets/production/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`needs([...])`), the variables `context.json` declares, and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
 | **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable in `.secrets/production/.env` travels, and so does a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Something reaches it** | A channel, a schedule, or the [Agent API](#the-agent-api). A deployment with none of them is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
-| **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/`, `.secrets/` and `content/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
+| **Durable storage** | Docker, Fly and Railway make a volume at `/data` the agent's working directory, holding `.state/`, `.secrets/`, `content/` and what the agent writes. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 | **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/production/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` entry stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, outside `content/`, which every release ships; move what it works on and must keep to a repository. |
 
 ### Reproduce it here first
@@ -397,25 +397,25 @@ complete stops the command. A stack that does not reach `DELETE_COMPLETE` stops 
 ## What deploy bakes
 
 The agent directory is the build context: the image holds it at `/app/definition`, minus what the ignore file
-excludes. Each start publishes it onto persistent storage:
+excludes, and builds its `dist/` there. The deployed agent runs that build where the image has it, and its working
+directory is the persistent storage:
 
 ```text
-<persistent-root>/
-├── definition/           # the deployed definition: the agent's working directory on the host
+<persistent-root>/        # the agent's working directory: what it writes lands here, and stays across releases
 ├── .state/               # agent.sqlite (sessions and messages), channels, scheduled work, mise's data directory (mise/)
 ├── .secrets/             # credentials, including refreshed auth.json
-├── content/              # the agent's content: clones of its github entries; each release links its own here
-└── .deployment/          # release and recovery metadata
+├── content/              # the agent's content: clones of its github entries
+└── .deployment/          # the lease, and the release last started here
 ```
 
 - Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json`, and the packages the image
-  installs to `fastagent.packages`, empty without any (both rewritten every time; do not edit them). Restarting the same
-  release keeps what the agent wrote in `definition/`; a new release replaces `definition/` whole, so a change the agent
-  made to itself, or a file it left there, lasts until the next release. `.state/`, `.secrets/` and `content/` stay.
-- Updates are staged and an interrupted one completes before the agent opens. A file lock at
-  `.deployment/lock` excludes competing starters; do not delete it. Custom images need `flock`.
-- Storage an earlier FastAgent laid out holds the agent's workspace in `base/`; a start refuses it rather than leave
-  it behind unread. Move out what you need and delete it, or deploy onto fresh storage.
+  installs to `fastagent.packages`, empty without any (both rewritten every time; do not edit them). A new release
+  replaces the image, and so the definition; everything on the storage stays. The agent's definition is read as the
+  image built it: a change it makes to a copy in its working directory is not read.
+- A file lock at `.deployment/lock` excludes competing starters; do not delete it. Custom images need `flock`. A
+  storage another agent's deployments started on is refused.
+- Storage an earlier FastAgent laid out may hold a `definition/` (or `base/`) directory: it is left as it is, and no
+  longer read.
 - The agent's `package.json` dependencies install at build time; keep the deploy CLI and the agent's FastAgent
   dependency on the same version.
 - `SYSTEM.md`, `AGENTS.md`, skills and prompt templates are read for every message; code under `src/` and config

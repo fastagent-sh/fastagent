@@ -44,7 +44,10 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
   ];
   let command: string;
   try {
-    command = boxLoginCommand(args, shell.storage);
+    command = boxLoginCommand(args, {
+      ...(shell.storage === undefined ? {} : { storage: shell.storage }),
+      ...(shell.program === undefined ? {} : { program: shell.program }),
+    });
   } catch (error) {
     return (error as Error).message;
   }

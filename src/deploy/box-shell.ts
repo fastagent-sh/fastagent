@@ -26,6 +26,8 @@ export interface BoxShell {
    * shell sees `FASTAGENT_STORAGE_DIR` as the server does, or the image's default.
    */
   storage?: string;
+  /** Where the box's image has the agent. Unset: where a generated image has it. */
+  program?: string;
 }
 
 /** A host CLI that runs a command on the box itself: `bin ...args(command)`, run from `cwd`. */

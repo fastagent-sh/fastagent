@@ -1,9 +1,9 @@
 /**
- * Deployment-owned initialization of a host's storage: the lease, the release journal, and the definition each
- * release replaces. The instance's state, credentials and content (`.state/`, `.secrets/`, `content/`) sit beside the
- * definition and outlive every release; each release links its `content/` to the storage's.
+ * Deployment-owned initialization of a host's storage: the lease, and the record of which agent the storage is for.
+ * The program is the image's, read where it is built; the storage is the instance's root, its working directory with
+ * its state, credentials and content (`.state/`, `.secrets/`, `content/`), which outlives every release.
  */
-import { cp, lstat, mkdir, readFile, rename, rm, symlink } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
@@ -11,15 +11,11 @@ import { once } from "node:events";
 import type { Readable } from "node:stream";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { log } from "../log.ts";
-import { CONTENT_DIRNAME, exists } from "../paths.ts";
-import { detectRuntime, readPackageJson } from "../runtime.ts";
+import { exists } from "../paths.ts";
 
 export const RELEASE_FILE = "fastagent.release.json";
 
-/** Where the storage holds the deployed definition, the agent's working directory on the host. */
-export const DEPLOYED_DEFINITION_DIR = "definition";
-
-/** The deployment's own bookkeeping on the storage: the lease, the release journal, the install marker. */
+/** The deployment's own bookkeeping on the storage: the lease, and the release last started on it. */
 const deploymentMeta = (root: string): string => join(root, ".deployment");
 
 export interface DeploymentRelease {
@@ -88,82 +84,19 @@ export function isModelSpec(value: string): boolean {
   return /^\S+\/\S+$/.test(value);
 }
 
-/** A completed staging tree is published before its journal; readers start only after recovery. */
-async function finishRelease(root: string, release: DeploymentRelease): Promise<void> {
-  const meta = deploymentMeta(root),
-    staged = join(meta, "staged"),
-    previous = join(meta, "previous");
-  const target = join(root, DEPLOYED_DEFINITION_DIR);
-  if (await exists(staged)) {
-    if (await exists(target)) {
-      if (await exists(previous)) throw new Error(`deployment recovery conflict at ${target}`);
-      await rename(target, previous);
-    }
-    await rename(staged, target);
-  } else if (!(await exists(target))) {
-    throw new Error(`deployment recovery has neither staged nor active content: ${target}`);
-  }
-  writeFileAtomic(join(meta, "applied.json"), JSON.stringify(release));
-  await rm(previous, { recursive: true, force: true });
-  await rm(join(meta, "pending.json"));
-}
-
 /**
- * Call while holding the deployment lease. Replaces the deployed definition with the release's (`source`, the image's
- * copy) and returns where it now is; nothing else on the storage is touched.
+ * Call while holding the deployment lease. Records `release` as the one started on the storage at `root`, refusing a
+ * storage another agent's deployments started on: its state is that agent's.
  */
-export async function applyDeploymentRelease(
-  source: string,
-  root: string,
-  release: DeploymentRelease,
-): Promise<string> {
-  const meta = deploymentMeta(root),
-    staged = join(meta, "staged"),
-    pendingPath = join(meta, "pending.json");
-  await mkdir(meta, { recursive: true });
-  await mkdir(join(root, CONTENT_DIRNAME), { recursive: true });
-  // A storage an earlier FastAgent laid out holds the agent's whole workspace there, which this one would leave
-  // behind unread: said, never silently abandoned.
-  const formerWorkspace = join(root, "base");
-  if (await exists(formerWorkspace)) {
-    throw new Error(
-      `${formerWorkspace} holds a workspace from an earlier FastAgent, which no longer copies one to the host — ` +
-        `move out what you need and delete it, or deploy onto fresh storage`,
-    );
-  }
-  if (await exists(pendingPath)) {
-    const pending = parseDeploymentRelease(await readFile(pendingPath, "utf8"));
-    await finishRelease(root, pending);
-  }
+export async function claimDeploymentStorage(root: string, release: DeploymentRelease): Promise<void> {
+  const meta = deploymentMeta(root);
   const appliedPath = join(meta, "applied.json");
   const applied = (await exists(appliedPath)) ? parseDeploymentRelease(await readFile(appliedPath, "utf8")) : undefined;
-  const definition = join(root, DEPLOYED_DEFINITION_DIR);
-  if (applied?.agent !== undefined && applied.agent !== release.agent) {
+  if (applied !== undefined && applied.agent !== release.agent) {
     throw new Error(`deployment selects ${release.agent}, but this storage belongs to ${applied.agent}`);
   }
-  // Logged on BOTH paths: rebuilding an image without regenerating the manifest keeps the id, and a
-  // deployment that silently kept the old definition looks identical to one that took the new one.
-  if (applied?.id === release.id) {
-    log.info(`[fastagent] release ${release.id} is already applied — keeping the deployed definition`);
-    return definition;
-  }
-  if (applied === undefined && (await exists(definition))) {
-    throw new Error(`refusing to initialize over an existing unowned definition: ${definition}`);
-  }
-  if (!(await exists(source)) || !(await lstat(source)).isDirectory()) {
-    throw new Error(`the release must contain its agent directory: ${source}`);
-  }
-  log.info(`[fastagent] publishing release ${release.id} as ${DEPLOYED_DEFINITION_DIR}/`);
-  await rm(staged, { recursive: true, force: true });
-  await cp(source, staged, { recursive: true, verbatimSymlinks: true });
-  // Where the agent reaches each content entry, on every instance: here, the storage's, which no release replaces.
-  await symlink(join("..", CONTENT_DIRNAME), join(staged, CONTENT_DIRNAME)).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    throw new Error(`the release holds ${CONTENT_DIRNAME}/, which a deploy keeps out of the image — rebuild it`);
-  });
-  writeFileAtomic(pendingPath, JSON.stringify(release));
-  await finishRelease(root, release);
-  return definition;
+  log.info(`[fastagent] release ${release.id} on ${root}`);
+  if (applied?.id !== release.id) writeFileAtomic(appliedPath, JSON.stringify(release));
 }
 
 async function mountedPaths(): Promise<string[]> {
@@ -215,44 +148,21 @@ export async function leaseDeployment(metadata: string, waitSeconds = 35): Promi
 }
 
 /**
- * Prepare the deployed definition and return its path.
+ * Take the deployment's storage at `root`: it must be a mount, one process holds it (the lease), and it is the
+ * storage of the agent `release` names.
  *
  * The lease is NOT returned: it stays held for the process lifetime, because channel activation can
  * start background writers that `close()` does not drain. The kernel drops it when the process exits.
  */
-export async function prepareDeployment(source: string, root: string, release: DeploymentRelease): Promise<string> {
+export async function prepareDeployment(root: string, release: DeploymentRelease): Promise<void> {
   await assertStorageMounted(root);
   const meta = deploymentMeta(root);
   await mkdir(meta, { recursive: true });
   const unlock = await leaseDeployment(meta);
   try {
-    return await applyDeploymentRelease(source, root, release);
+    await claimDeploymentStorage(root, release);
   } catch (error) {
     await unlock();
     throw error;
-  }
-}
-
-/**
- * Install the deployed agent's dependencies into the storage when it has no installed CLI yet (a fresh volume), or
- * when an earlier install died part-way — its `installing` marker is still there, so the next boot redoes it.
- */
-export async function installAgentDependencies(root: string, agentDir: string): Promise<void> {
-  const installing = join(deploymentMeta(root), "installing");
-  // A failed install can leave the CLI link in place before its dependencies are complete.
-  if ((await exists(installing)) || !(await exists(join(agentDir, "node_modules/.bin/fastagent")))) {
-    const { runtime, hasLockfile } = detectRuntime(agentDir, await readPackageJson(agentDir));
-    const args =
-      runtime === "bun" ? ["install", ...(hasLockfile ? ["--frozen-lockfile"] : [])] : [hasLockfile ? "ci" : "install"];
-    writeFileAtomic(installing, "");
-    log.info(`[fastagent] installing the agent's dependencies (${runtime} ${args.join(" ")})…`);
-    // stdio inherited: a five-minute install with no output reads as a hang, and the default 1 MB capture would
-    // kill a noisy one outright.
-    const [code, signal] = (await once(
-      spawn(runtime === "bun" ? "bun" : "npm", args, { cwd: agentDir, stdio: "inherit" }),
-      "exit",
-    )) as [number | null, NodeJS.Signals | null];
-    if (code !== 0) throw new Error(`dependency install failed (${signal ?? `exit ${code}`})`);
-    await rm(installing);
   }
 }

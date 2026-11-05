@@ -32,7 +32,7 @@ Only the last row is real, and it is not about a directory of agents.
 ## 2. Provenance belongs to the definition
 
 A vendored skill lands in `<agent>/skills/<name>/`. It is part of **that agent's definition**, and the definition
-is what a deploy ships: the agent directory is the build context, and every release replaces the deployed copy.
+is what a deploy ships: the agent directory is the build context, and every release is a new image.
 Agents are also run and moved independently of wherever they were created. A provenance record anywhere outside
 the agent directory would therefore stop following the skill after a deploy or a move.
 

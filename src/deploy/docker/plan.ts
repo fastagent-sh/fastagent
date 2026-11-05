@@ -177,7 +177,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   runbook.push(
     ``,
     `# Before building a new definition release, run \`fastagent deploy docker\` to refresh its manifest.`,
-    `# The Compose volume at ${MOUNT} retains the deployed definition, state and credentials.`,
+    `# The Compose volume at ${MOUNT} is the agent's working directory, and retains its state and credentials.`,
     `# --pull: the base image is a floating tag, and a copy cached here may be older than the runtime floor.`,
     `${compose} build --pull`,
     `${compose} up -d`,

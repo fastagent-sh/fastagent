@@ -15,10 +15,10 @@ import type { AddressInfo } from "node:net";
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
-/** A storage root laid out as a deployed box's (`<root>/definition`), and a bin dir for the `fastagent` on PATH. */
+/** A deployed box: its storage root, the image's agent directory apart from it, and a bin dir for `fastagent`. */
 async function box(): Promise<{ root: string; agentDir: string; bin: string }> {
   const root = await mkdtemp(join(tmpdir(), "fa-box-"));
-  const agentDir = join(root, "definition");
+  const agentDir = join(root, "image", "definition");
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};\n");
   const bin = join(root, "bin");
@@ -49,7 +49,7 @@ describe("the box half of `login --deployment`", () => {
     const { root, agentDir, bin } = await box();
     await executable(join(bin, "fastagent"), `echo "global $PWD $FASTAGENT_SECRETS_DIR $*"`);
     const run = async () => {
-      const { child } = onBox(boxLoginCommand(["codex", "--if-missing"]), envFor(root, bin));
+      const { child } = onBox(boxLoginCommand(["codex", "--if-missing"], { program: agentDir }), envFor(root, bin));
       let out = "";
       child.stdout.on("data", (d) => (out += d));
       await new Promise((resolve) => child.on("close", resolve));
@@ -71,9 +71,9 @@ describe("the box half of `login --deployment`", () => {
   });
 
   /** The box's half run for real: `fastagent` on its PATH is this checkout's CLI. */
-  async function relayOn(root: string, bin: string, args: string[]) {
+  async function relayOn(root: string, agentDir: string, bin: string, args: string[]) {
     await executable(join(bin, "fastagent"), `exec "${process.execPath}" "${CLI}" "$@"`);
-    const { child, stderr } = onBox(boxLoginCommand(args), envFor(root, bin));
+    const { child, stderr } = onBox(boxLoginCommand(args, { program: agentDir }), envFor(root, bin));
     const noQuestions = {
       select: async () => {
         throw new Error("asked");
@@ -112,14 +112,17 @@ export default {
 };
 `,
     );
-    const held = await relayOn(root, bin, ["gw", "--if-missing", "--no-input"]);
+    const held = await relayOn(root, agentDir, bin, ["gw", "--if-missing", "--no-input"]);
     expect(held.result, held.stderr).toEqual({ ok: true, provider: "gw", kept: UNNAMED_AUTH_SOURCE });
   });
 
   it("a method given is passed on: the box asks no menu, only what that method needs", async () => {
-    const { root, bin } = await box();
+    const { root, agentDir, bin } = await box();
     await executable(join(bin, "fastagent"), `exec "${process.execPath}" "${CLI}" "$@"`);
-    const { child } = onBox(boxLoginCommand(["openai", "--method", "api-key"]), envFor(root, bin));
+    const { child } = onBox(
+      boxLoginCommand(["openai", "--method", "api-key"], { program: agentDir }),
+      envFor(root, bin),
+    );
     const asked: string[] = [];
     const backsOut: LoginIO = {
       select: async (message) => void asked.push(`select: ${message}`),
@@ -133,8 +136,8 @@ export default {
   });
 
   it("reports a credential the box already holds, and a missing one without asking, as one result line", async () => {
-    const { root, bin } = await box();
-    const relay = (args: string[]) => relayOn(root, bin, args);
+    const { root, agentDir, bin } = await box();
+    const relay = (args: string[]) => relayOn(root, agentDir, bin, args);
 
     const missing = await relay(["openai-codex", "--if-missing", "--no-input"]);
     expect(missing.result, missing.stderr).toMatchObject({ ok: false, reason: "missing" });
@@ -183,7 +186,7 @@ export default {
       const failed = await loginOnBox({
         host: "fly",
         // As `fly ssh console --command` and `railway ssh` receive it: one single-quoted word.
-        shell: processShell("sh", (command) => ["-c", `sh -c '${command}'`], root),
+        shell: { ...processShell("sh", (command) => ["-c", `sh -c '${command}'`], root), program: agentDir },
         provider: "openai-codex",
         method: "oauth",
         input: false,

@@ -156,7 +156,7 @@ deleted when its stages landed:
 | Question | Chosen | Not chosen, and why |
 |---|---|---|
 | When content is resolved | Once per process start; content re-read per turn | Per turn: network and git on every turn, for declarations that only change with a restart anyway |
-| Whether a local directory reaches a host | No: content reaches a host only by a type whose home the host reaches (a repository today); the agent directory reaches it as the definition, replaced by each release | A copy baked into the image (`copy: true`, removed before it was released): each instance's copy became data of its own, which nothing brought back together; it tied the data to the release cadence and image size, put local data in the image registry, and needed a staged build directory and a different build context on every host |
+| Whether a local directory reaches a host | No: content reaches a host only by a type whose home the host reaches (a repository today); the agent directory reaches it as the definition, in each release's image | A copy baked into the image (`copy: true`, removed before it was released): each instance's copy became data of its own, which nothing brought back together; it tied the data to the release cadence and image size, put local data in the image registry, and needed a staged build directory and a different build context on every host |
 | How FastAgent's sections enter the prompt | Named sections of an extension FastAgent installs, beside the author's `SYSTEM.md` | Text appended to the author's file: the author's prompt and ours would share one section, and an edit of either would touch the other |
 | Where content is declared | `context.json`, repositories by name with no machine's path; an instance adds its own, directories included, in `fastagent.json` | The TypeScript config: a client could only edit it by rewriting a literal block and re-importing it, and its `local` paths committed one machine's layout to the definition |
 | Where an agent's work goes, apart from its definition | Content it works on, as the prompt directs; the working directory stays the agent's own directory | A content entry declared `workdir` (#716; built in #719, closed). It differs from writable content in where commands start (measured: 180 runs on three models, no difference with `cd <location> && …`) and where a file created without a path lands (directed by the prompt). It would separate the one working directory from the agent directory in every reader. Reopen with a measurement of results landing in the definition |
@@ -724,12 +724,11 @@ mise packages, the agent's mise is not installed here to check with, a package r
 package's runtime is not declared; it warns a kept hand-written Dockerfile that it installs the environment only if it
 says so.
 
-`deploy/workspace.ts` owns the shared deployed lifecycle. Storage contains `definition/` (the cwd), `.state/`,
-`.secrets/` and `.deployment/`; the release manifest names the agent the storage belongs to. A process-lifetime
-lease precedes initialization; staged trees and a pending journal make definition replacement recoverable. The same
-release keeps what the agent wrote in `definition/`; a new one replaces it whole, while `.state/` and `.secrets/`
-stay. Storage laid out by an earlier FastAgent (`base/`) is refused rather than left behind unread. Nothing is
-mounted or unmounted by fastagent: the host's volume is the only storage.
+`deploy/workspace.ts` owns the shared deployed lifecycle. The program is the image's (`/app/definition`, built there),
+opened where it is; the storage is the instance's root (`FASTAGENT_ROOT`): the agent's cwd, with `.state/`,
+`.secrets/`, `content/` and `.deployment/`. The release manifest names the agent the storage belongs to, and a
+storage another agent started on is refused. A process-lifetime lease is taken first. Nothing on the storage is
+replaced by a release. Nothing is mounted or unmounted by fastagent: the host's volume is the only storage.
 
 No credentials file travels. A model whose key is not in the value file logs in on the box: `fastagent
 login --deployment` runs `login --stdio` inside the running image through the host's own
@@ -784,8 +783,8 @@ minted at runtime by the container. The wait on `stack-delete-complete` decides 
 DELETE_FAILED stack still holds a billing runtime, and the image and forwarder zip below it are what a retry
 needs. Webhook registrations are out of scope — they live on the platforms, not in the account.
 
-**AgentCore uses managed SessionStorage at `/mnt/data`, and a deploy resets it.** The same `definition/`,
-`.state/`, `.secrets/` layout applies on the platform's own mount: it survives compute stop/resume, so
+**AgentCore uses managed SessionStorage at `/mnt/data`, and a deploy resets it.** The same layout (the root as the
+agent's cwd, with `.state/` and `.secrets/`) applies on the platform's own mount: it survives compute stop/resume, so
 an idle-reclaimed agent resumes with its memory, and AWS wipes it on every runtime version update — i.e.
 every deploy — and after 14 idle days. That is this host's stated semantics, not a gap: AWS's only
 cross-deploy filesystems are EFS and S3 Files, both VPC-only, and VPC mode costs a NAT gateway for

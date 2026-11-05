@@ -459,7 +459,7 @@ deploy's `probe`.
 
 | Data | What must survive, and how |
 |---|---|
-| Prompt files, skills, code, config, and package lockfile | The image holds the agent directory and installs its dependencies. Definition edits survive same-release restarts; a new release replaces the definition. Git is optional version control. |
+| Prompt files, skills, code, config, and package lockfile | The image holds the agent directory and installs its dependencies; the deployed agent reads its definition there, as built, and changes it only through a new release. Git is optional version control. |
 | The instance's storage (`agent.sqlite`: sessions and messages), channel state, pending work, fired-slot claims | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
 | Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. A model login is the box's own (`fastagent login --deployment`); a redeploy keeps it. AgentCore clears them on deploy, so a login there is repeated after every deploy; an API key in the value file avoids it. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
 | Business notes, approvals, generated artifacts | Locally, write ongoing work into content the agent works on. On a host, the agent's own directory is replaced by every release and local content is not deployed, so use an external store. |

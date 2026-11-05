@@ -1,23 +1,16 @@
 /** Production serving. */
 import { join, resolve } from "node:path";
 import type { Agent } from "../../agent-api.ts";
-import { pathToFileURL } from "node:url";
-import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import { applyCarriedEnv } from "../../deploy/secrets.ts";
-import {
-  applyReleaseEnv,
-  installAgentDependencies,
-  parseDeploymentRelease,
-  prepareDeployment,
-} from "../../deploy/workspace.ts";
+import { applyReleaseEnv, parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
 import {
   selectAgentEnvironment,
   resolveSecretsDir,
   isAgentcoreRuntime,
   isDeployedWorkspace,
   isUnderDir,
-  exists,
+  INSTANCE_ROOT_ENV,
 } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
@@ -62,8 +55,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     const port = portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? 8080;
     const deferred = deferAgentcoreService({
       prepare: () => prepareStartWorkspace(dirArg),
-      assemble: async (prepared) => {
-        const service = await openPreparedWorkspace(prepared, opts);
+      assemble: async (dir) => {
+        const service = await openPreparedStartService(dir, opts);
         await service.ready;
         return service;
       },
@@ -75,7 +68,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     });
     return;
   }
-  // Deployed storage refusals (no mount, a held lease, a missing `flock`, a failed install) are the operator's only
+  // Deployed storage refusals (no mount, a held lease, a missing `flock`, another agent's storage) are the operator's only
   // clue in a crash-looping container.
   const service = await openStartService(dirArg, opts).catch(failStartup);
   const tunnel = opts.tunnel ?? false;
@@ -88,30 +81,22 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   );
 }
 
-/** What the storage stage hands the opening stage. */
-export interface PreparedWorkspace {
-  /** The agent directory to open — the storage's deployed definition when a release manifest selected one. */
-  dir: string;
-  /** The storage root, set when this process took a deployment's storage. */
-  deployed?: { root: string };
-}
-
 /**
- * Stage one — TAKE the storage: verify it is mounted, apply the release, and point the machinery at the volume.
+ * Stage one — TAKE the storage, on a deployed box (a release manifest names it): it is mounted, held by this process,
+ * and this agent's; it becomes the instance's root, and the machinery points at it. The program stays where the image
+ * built it, `dirArg`. Returns that directory. Elsewhere, nothing is taken.
  */
-export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWorkspace> {
+export async function prepareStartWorkspace(dirArg: string): Promise<string> {
   const manifestPath = process.env.FASTAGENT_RELEASE_FILE;
-  if (!manifestPath) return { dir: dirArg };
+  if (!manifestPath) return dirArg;
   const storage = process.env.FASTAGENT_STORAGE_DIR;
   if (!storage) throw new Error("FASTAGENT_STORAGE_DIR is required for a deployment");
   const root = resolve(storage);
   const manifest = parseDeploymentRelease(await readFile(manifestPath, "utf8"));
-  const dir = await prepareDeployment(resolve(dirArg), root, manifest);
-  // Defaults, not overrides: an operator who pointed either dir somewhere else meant it, and silently relocating
+  await prepareDeployment(root, manifest);
+  // Defaults, not overrides: an operator who pointed a directory somewhere else meant it, and silently relocating
   // their state is the one failure they could not diagnose from the logs.
-  // The agent's working directory stays the definition's own, where a deployed release is and `content/` is a link to
-  // the volume; the default under `.fastagent/` is a local project's.
-  process.env.FASTAGENT_WORKDIR ||= dir;
+  process.env[INSTANCE_ROOT_ENV] ||= root;
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
   // mise's data directory, on the storage rather than the container's disk. The image's packages are in mise's system
@@ -121,43 +106,14 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   // `enterAgentEnv` reads the agent's `.env`, which is what makes either source outrank a value edited on the
   // box (applyReleaseEnv's own tests pin the precedence).
   applyReleaseEnv(manifest);
-  process.chdir(dir);
-  return { dir, deployed: { root } };
-}
-
-/**
- * Stage two — RUN the prepared agent directory: install its dependencies, then open through its own FastAgent install.
- */
-async function openPreparedWorkspace(prepared: PreparedWorkspace, opts: StartOptions): Promise<StartedService> {
-  let open = openPreparedStartService;
-  if (prepared.deployed) {
-    const { root } = prepared.deployed;
-    const agentDir = prepared.dir;
-    if (await exists(join(agentDir, "package.json"))) {
-      await installAgentDependencies(root, agentDir);
-      // Tools and their session context must share the agent's runtime module instance.
-      const entry = createRequire(join(agentDir, "package.json")).resolve("@fastagent-sh/fastagent");
-      const local = (await import(
-        new URL("./cli/commands/start.js", pathToFileURL(entry)).href
-      )) as typeof import("./start.ts");
-      // A version-skewed dependency resolves and imports fine, then fails as "open is not a function" with nothing
-      // naming the two versions.
-      if (typeof local.openPreparedStartService !== "function") {
-        throw new Error(
-          `${entry} does not export openPreparedStartService — align the agent's @fastagent-sh/fastagent version with the deploy CLI`,
-        );
-      }
-      open = local.openPreparedStartService;
-    }
-  }
-  return open(prepared.dir, opts);
+  return dirArg;
 }
 
 export async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
-  return openPreparedWorkspace(await prepareStartWorkspace(dirArg), opts);
+  return openPreparedStartService(await prepareStartWorkspace(dirArg), opts);
 }
 
-/** Internal entry loaded from the agent's installed package after storage initialization. */
+/** Stage two: open the built definition in `dirArg` and serve it. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   // The build, never the source (agent-artifact.md §8): refused when there is none or the project has moved on.
   let built: Promise<Project> | undefined;

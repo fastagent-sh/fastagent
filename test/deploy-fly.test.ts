@@ -163,7 +163,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(ignore).toMatch(/^\*\*\/\.state$/m);
     // The runbook deploys from the agent directory with explicit, version-proof flags.
     expect(runbook(p)).toContain("fly deploy . --config fly.toml --dockerfile Dockerfile --app bot");
-    expect(runbook(p)).toContain("each release replaces /data/definition");
+    expect(runbook(p)).toContain("The volume is the agent's working directory: it keeps its work");
   });
 
   it("a bun agent uses the bun base + bun install + bun run", () => {

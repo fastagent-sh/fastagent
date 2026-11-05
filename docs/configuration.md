@@ -480,17 +480,16 @@ and the others read the `fastagent.json` at the project root without it, and `st
 What stays in the project for now: `.secrets/` (the `.env`, `auth.json`, MCP grants), whatever the root. They move into
 the instance with the deploy layout in a later release.
 
-Generated deployments keep the deployed definition at `<persistent-root>/definition/`, replaced by every release,
-with `.state/`, `.secrets/` and `content/` beside it; each release links its own `content/` to that one.
-The root is `/data` on Docker, Fly and Railway and `/mnt/data` on AgentCore (reset by every deploy — see
+Generated deployments run the definition where the image has it and make the persistent root the instance's root: the
+agent's working directory, with `.state/`, `.secrets/` and `content/` in it, kept across releases. The root is `/data`
+on Docker, Fly and Railway and `/mnt/data` on AgentCore (reset by every deploy — see
 [Deploy](deploy.md#aws-bedrock-agentcore)).
 
 For a manually configured service:
 
 ```bash
-ln -sfn /data/content content   # in the agent directory, before every start: a redeploy replaces the directory
 fastagent build   # `start` opens dist/
-FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
+FASTAGENT_ROOT=/data FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
 ```txt
