@@ -6,9 +6,10 @@
  */
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { type Schema, bool, compile, int, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
+import { type Schema, bool, compile, int, map, obj, oneOf, opt, str, union } from "@earendil-works/pi-schema";
+import { instanceContent } from "../../content/file.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { INSTANCE_CONFIG_ENV, INSTANCE_CONFIG_FILE, resolveOverridePath } from "../../paths.ts";
 import type { AgentConfig, AgentDefaults } from "./define.ts";
@@ -21,6 +22,8 @@ export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings>;
 export interface InstanceConfigSource {
   values: unknown;
   label: string;
+  /** The configuration file's directory, which its relative paths are relative to. None for an object. */
+  directory?: string;
 }
 
 const THINKING_LEVELS = [
@@ -35,11 +38,24 @@ const THINKING_LEVELS = [
 const PROGRAM_DEFAULT = "program default";
 
 /** Keys of SPEC.md §8's `InstanceConfig` that a later release reads: refused by name until then, not as unknown. */
-const NOT_READ_YET = ["content", "instructions", "skills", "prompts"];
+const NOT_READ_YET = ["instructions", "skills", "prompts"];
 
 const CONSTANTS = ["name", "description", "extensions", "providers"];
 /** Keys that were the program's own before they became defaults. */
 const FORMER_CONSTANTS = ["model", "thinkingLevel", "http", "deploy"];
+
+/** An instance's content entry: a repository, or a directory (its detailed refusals are content/declare.ts's). */
+const CONTENT_ENTRY = union([
+  obj({
+    github: str({ description: "The repository, owner/repo" }),
+    ref: opt(str({ description: "The branch, tag or commit to clone" })),
+    description: opt(str({ description: "One sentence for the agent: what this is, and how to treat it" })),
+  }),
+  obj({
+    path: str({ description: "A directory of this machine: absolute, ~/, or relative to this file" }),
+    description: opt(str({ description: "One sentence for the agent: what this is, and how to treat it" })),
+  }),
+]);
 
 /** The program's `settings` with no property required: an instance gives some of them, the program's defaults the rest. */
 function partial(settings: Schema): Schema {
@@ -71,7 +87,7 @@ function shape(settings: Schema | undefined) {
 
 /** The JSON Schema of an instance's `fastagent.json` for a program with `settings`: what `fastagent build` publishes. */
 export function instanceConfigSchema(settings: Schema | undefined): Schema {
-  return obj({ $schema: opt(str()), ...shape(settings) });
+  return obj({ $schema: opt(str()), ...shape(settings), content: opt(map(CONTENT_ENTRY)) });
 }
 
 /** Refuse `value`, naming `where`, when `schema` does not accept it: each failing path, and why. */
@@ -133,10 +149,13 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
 }
 
 /** An instance configuration, checked against the shape of a program with `settings`. */
-function checkInstanceConfig({ values, label }: InstanceConfigSource, settings: Schema | undefined): InstanceConfig {
+function checkInstanceConfig(source: InstanceConfigSource, settings: Schema | undefined): InstanceConfig {
+  const { values, label } = source;
   if (typeof values === "object" && values !== null) {
     const unread = NOT_READ_YET.filter((key) => key in values);
     if (unread.length > 0) throw new Error(`${label}: ${unread.join(", ")} is not read by this FastAgent yet`);
+    // Its own refusals name the entry and say what is wrong with it, which a schema's cannot.
+    instanceContent(source);
   }
   checkValues(values, settings, label, instanceConfigSchema);
   const { $schema: _schema, ...config } = values as Record<string, unknown>;
@@ -152,7 +171,7 @@ export async function readInstanceConfigFile(path: string): Promise<InstanceConf
     throw new Error(`cannot read the instance configuration ${path}: ${(error as Error).message}`, { cause: error });
   }
   try {
-    return { values: JSON.parse(text), label: path };
+    return { values: JSON.parse(text), label: path, directory: dirname(path) };
   } catch (error) {
     throw new Error(`${path} is not JSON: ${(error as Error).message}`, { cause: error });
   }

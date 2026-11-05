@@ -151,8 +151,8 @@ commands, runtimes and variable names it needs. Its name matches the vocabulary 
 [agent-model.md](agent-model.md): context is content, connectors and environment; connectors are `mcp.json`.
 `fastagent env add` rewrites its `environment` (the environment belongs only to the program).
 `fastagent content add --program` rewrites its `content` baseline; without `--program`, `content add` writes the
-instance configuration instead (§4.2). Both edits keep the existing lock. `context.local.json` goes away: a machine's
-own bindings belong to the instance.
+instance configuration instead (§4.2). Both edits keep the existing lock. `context.local.json` is gone: a machine's
+own directories belong to the instance's configuration.
 
 `mcp.json` is the default MCP servers in the standard `mcpServers` shape. It is published with the package, so its
 secrets are `${VAR}` references (§4.1).
@@ -410,7 +410,7 @@ credentials' `auth.json`.)
 ```
 
 `fastagent.json` holds every FastAgent-owned instance input: overrides of the program's defaults, settings values,
-additional content sources (including the machine-local bindings `context.local.json` held before), and the
+additional content sources (repositories, and directories of this machine, which `context.local.json` held before), and the
 instance's own instructions, skills and prompt templates. `instructions` names files added after the program's text;
 `skills` and `prompts` name directories. All are relative to `fastagent.json`, and only what is declared loads: a file
 the agent writes elsewhere in its workspace never becomes a capability. Where the configuration directory is the
@@ -666,7 +666,7 @@ Recorded, not solved here:
 | `agentDir` supplies cwd, values, local bindings and clone paths | Configuration, state and workspace are separate inputs |
 | Runtime prompt describes an editable definition in cwd | Immutable program; workspace and configuration |
 | Deploy copies and replaces the author directory | Deploys the artifact plus delivered configuration; state preserved |
-| `context.local.json` and `.secrets/<env>/.env` carry instance settings | `fastagent.json` carries settings; env files carry secrets |
+| `.secrets/<env>/.env` carries instance settings | `fastagent.json` carries settings; env files carry secrets |
 | `config.model`, `http`, `deploy` read as fixed values | Read as program defaults under instance overrides |
 | Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | `/etc/<name>/` for configuration and `/var/lib/<name>/` as the instance root; on AgentCore `/mnt/<name>/`; the definition stays in the image |
 | `needs()` and MCP references read `{ ...process.env, ...values }` at open | Secrets are an input: the CLI's environment and `--env-file`, or `openAgent`'s `secrets` |

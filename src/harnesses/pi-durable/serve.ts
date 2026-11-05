@@ -18,13 +18,7 @@ import { resolveMcpServers } from "../../mcp/config.ts";
 import { mcpAuthorization } from "../../mcp/host.ts";
 import { mcpTools } from "./mcp.ts";
 import { loadContent } from "../../content/file.ts";
-import {
-  type ResolvedContent,
-  absentNotice,
-  cloneContent,
-  contentAbsentHere,
-  resolveContent,
-} from "../../content/resolve.ts";
+import { type ResolvedContent, cloneContent, resolveContent } from "../../content/resolve.ts";
 import { processEnvironment } from "../../child-env.ts";
 import { definedValues } from "../../declared-secrets.ts";
 import { prepareEnvironment } from "../../environment/mise.ts";
@@ -80,7 +74,7 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    */
   workdir?: string;
   /**
-   * The directory whose `.secrets/` (values, model credentials, MCP grants), `context.local.json` and default state
+   * The directory whose `.secrets/` (values, model credentials, MCP grants) and default state
    * root the instance reads. Default: the working directory. Temporary: secrets and content become inputs of their own.
    */
   projectDir?: string;
@@ -105,7 +99,7 @@ export interface OpenedServing {
   models: ModelEnvironment;
   /** What the agent works on, resolved for this instance. */
   content: readonly ResolvedContent[];
-  /** The project directory: whose `.secrets/` and `context.local.json` the instance reads. */
+  /** The project directory: whose `.secrets/` the instance reads. */
   agentDir: string;
   /** The agent's working directory. */
   workdir: string;
@@ -124,13 +118,14 @@ export interface OpenedServing {
  */
 async function contentForThisRun(
   dir: string,
-  projectDir: string,
+  instance: InstanceConfigSource | undefined,
   workdir: string,
   env: NodeJS.ProcessEnv,
 ): Promise<ResolvedContent[]> {
-  const declaration = loadContent(dir, projectDir);
-  for (const entry of resolveContent(workdir, declaration)) {
-    if (entry.kind !== "github" || !entry.clone) continue;
+  const declared = loadContent(dir, instance);
+  const places = { dir, workdir };
+  for (const entry of resolveContent(declared, places)) {
+    if (entry.kind !== "github") continue;
     const done = await cloneContent(entry, env);
     if (done.outcome === "kept") {
       log.warn(`[fastagent] content "${entry.name}": the clone in ${entry.location} is kept as it is, ${done.reason}`);
@@ -139,8 +134,7 @@ async function contentForThisRun(
       log.info(`[fastagent] github ${entry.repo}${entry.ref ? ` at ${entry.ref}` : ""}: ${said} in ${entry.location}`);
     }
   }
-  for (const absent of contentAbsentHere(declaration)) log.warn(`[fastagent] content ${absentNotice(absent)}`);
-  return resolveContent(workdir, declaration);
+  return resolveContent(declared, places);
 }
 
 /** The instance's database, under its state root. */
@@ -188,7 +182,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     },
     dirname(workdir),
   );
-  const content = await contentForThisRun(dir, projectDir, workdir, env);
+  const content = await contentForThisRun(dir, options.config, workdir, env);
   const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
   const models = await modelEnvironment(
     projectDir,

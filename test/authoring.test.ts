@@ -11,7 +11,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useGitIdentity, withGitIdentity } from "./git-env.ts";
-import { git, githubStandIn } from "./github-standin.ts";
 import { ContentNameError, addContent, createAgent, initAgent, listContent, removeContent } from "../src/authoring.ts";
 import { type SourceOptions, readContentSource } from "../src/content/source.ts";
 
@@ -107,9 +106,9 @@ describe("authoring API", () => {
     // A created agent is a repository of its own, whatever created it: the CLI's tests cover the cases it is not.
     expect(created.repository).toBe("created a git repository, with the scaffold as its first commit");
     await access(join(agentDir, ".git"));
-    // A directory of this machine is bound in this machine's file; the shared one is not written for it.
+    // A directory of this machine is the instance's: it goes in fastagent.json, and the program's file is not written for it.
     expect(created.content.map((c) => [c.name, c.location])).toEqual([["app", app]]);
-    const bindings = () => readFile(join(agentDir, "context.local.json"), "utf8");
+    const bindings = () => readFile(join(agentDir, "fastagent.json"), "utf8");
     expect(await bindings()).toBe(`{\n  "content": {\n    "app": {\n      "path": "${app}"\n    }\n  }\n}\n`);
     await expect(access(join(agentDir, "context.json"))).rejects.toThrow(/ENOENT/);
 
@@ -139,28 +138,62 @@ describe("authoring API", () => {
     await access(app);
   });
 
-  it("a checkout is its repository, declared for every instance and bound here; removing it removes both", async () => {
-    const github = githubStandIn();
-    github.repo("acme/app").commit({ "README.md": "app\n" });
-    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-checkout-")));
-    const checkout = join(base, "app");
-    git(base, "clone", "-q", "https://github.com/acme/app.git", checkout);
+  it("--program declares a repository for every instance in context.json, a directory there is refused, and the instance's file is left alone", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-program-")));
     const agentDir = join(base, "agent");
     await createAgent(agentDir);
-    const added = await addContent(agentDir, readContentSource(checkout, base).addition);
-    expect(added.content).toEqual([
-      expect.objectContaining({ name: "app", kind: "github", clone: false, location: checkout }),
-    ]);
+    await mkdir(join(base, "notes"));
+    const repository = readContentSource("github:acme/app", base).addition;
+    const added = await addContent(agentDir, { ...repository, program: true });
+    expect(added.content).toEqual([expect.objectContaining({ name: "app", kind: "github" })]);
     expect(JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"))).toEqual({
       content: { app: { github: "acme/app" } },
     });
-    expect(JSON.parse(await readFile(join(agentDir, "context.local.json"), "utf8"))).toEqual({
-      content: { app: { path: checkout } },
-    });
+    await expect(access(join(agentDir, "fastagent.json"))).rejects.toThrow(/ENOENT/);
+    await expect(addContent(agentDir, { ...directory(join(base, "notes")), program: true })).rejects.toThrow(
+      /context\.json is shared, so it declares only repositories every instance reaches/,
+    );
+    // An instance only adds: the program's name is taken in both files, whichever is written.
+    await expect(addContent(agentDir, readContentSource("github:other/app", base).addition)).rejects.toThrow(
+      ContentNameError,
+    );
     await removeContent(agentDir, "app");
-    for (const file of ["context.json", "context.local.json"]) {
-      expect(JSON.parse(await readFile(join(agentDir, file), "utf8"))).toEqual({ content: {} });
-    }
+    expect(JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"))).toEqual({ content: {} });
+  });
+
+  it("edits the instance configuration it is given, keeping what else is in it, and one that is not there is made", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-config-")));
+    const agentDir = join(base, "agent");
+    await createAgent(agentDir);
+    await mkdir(join(base, "notes"));
+    const config = join(base, "instance", "fastagent.json");
+    await addContent(agentDir, directory(join(base, "notes")), { config });
+    expect(JSON.parse(await readFile(config, "utf8"))).toEqual({ content: { notes: { path: join(base, "notes") } } });
+    await access(join(agentDir, "fastagent.json")).then(
+      () => {
+        throw new Error("the agent's own file was written");
+      },
+      () => undefined,
+    );
+    await writeFile(config, JSON.stringify({ model: "openai/gpt-5.5", settings: { repo: "a/b" }, content: {} }));
+    await addContent(agentDir, directory(join(base, "notes")), { config });
+    expect(JSON.parse(await readFile(config, "utf8"))).toEqual({
+      model: "openai/gpt-5.5",
+      settings: { repo: "a/b" },
+      content: { notes: { path: join(base, "notes") } },
+    });
+    await removeContent(agentDir, "notes", { config });
+    expect(JSON.parse(await readFile(config, "utf8"))).toEqual({ model: "openai/gpt-5.5", settings: { repo: "a/b" } });
+    // A relative path in the file is read against it, a configuration that is no JSON object is refused.
+    await writeFile(config, JSON.stringify({ content: { near: { path: "../notes" } } }));
+    expect((await listContent(agentDir, { config })).content.map((c) => [c.name, c.location])).toEqual([
+      ["near", join(base, "notes")],
+    ]);
+    await writeFile(config, "[]");
+    await expect(listContent(agentDir, { config })).rejects.toThrow(`${config} must hold a JSON object`);
+    await expect(listContent(agentDir, { config: "relative.json" })).rejects.toThrow(
+      'config must be an absolute path, and is "relative.json"',
+    );
   });
 
   it("two edits of one name that write different files queue: one is added, the other refused", async () => {
@@ -176,20 +209,6 @@ describe("authoring API", () => {
     const refused = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
     expect(refused.reason).toBeInstanceOf(ContentNameError);
     expect((await listContent(agentDir)).content.map((entry) => entry.name)).toEqual(["notes"]);
-  });
-
-  it("says when git would commit this machine's bindings", async () => {
-    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-ignored-")));
-    const agentDir = join(base, "agent");
-    for (const dir of ["a", "b"]) await mkdir(join(base, dir));
-    await createAgent(agentDir);
-    // init's .gitignore keeps it out; an agent made before it was there does not.
-    expect((await addContent(agentDir, directory(join(base, "a")))).notes).toEqual([]);
-    const ignore = join(agentDir, ".gitignore");
-    await writeFile(ignore, (await readFile(ignore, "utf8")).replace("/context.local.json\n", ""));
-    expect((await addContent(agentDir, directory(join(base, "b")))).notes).toEqual([
-      "context.local.json holds directories of this machine and git does not ignore it: add it to .gitignore",
-    ]);
   });
 
   it("a clone in content/ outlives its entry, and is said to; nothing is cloned over it", async () => {
@@ -212,25 +231,25 @@ describe("authoring API", () => {
     );
   });
 
-  it("a directory bound here that is gone is left out; an entry that does not resolve refuses an edit until removed", async () => {
+  it("an entry that does not resolve refuses an edit until removed, a directory that is gone included", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-broken-")));
     const agentDir = join(base, "agent");
     for (const dir of ["moved", "b", "c"]) await mkdir(join(base, dir));
     await initAgent(agentDir, { content: [directory(join(base, "moved")), directory(join(base, "c"))] });
     await rm(join(base, "moved"), { recursive: true });
-    // Gone: this machine's own binding, so nothing is refused, and it is named as absent.
-    await addContent(agentDir, directory(join(base, "b")));
-    expect(await listContent(agentDir)).toEqual({
-      content: [expect.objectContaining({ name: "c" }), expect.objectContaining({ name: "b" })],
-      absent: [expect.objectContaining({ name: "moved", path: join(base, "moved") })],
-    });
-    // Something else in its place does not resolve: an edit is refused with that entry's reason, and nothing written.
+    // Gone: the instance names it, so every edit that has to resolve what is left is refused, with its reason.
+    const before = await readFile(join(agentDir, "fastagent.json"), "utf8");
+    await expect(addContent(agentDir, directory(join(base, "b")))).rejects.toThrow(
+      `content "moved": ${join(base, "moved")} does not exist`,
+    );
+    await expect(listContent(agentDir)).rejects.toThrow(/content "moved": .* does not exist/);
+    // Something else in its place does not resolve either.
     await writeFile(join(base, "moved"), "");
-    const before = await readFile(join(agentDir, "context.local.json"), "utf8");
     await expect(removeContent(agentDir, "c")).rejects.toThrow(/content "moved": .* is not a directory/);
-    expect(await readFile(join(agentDir, "context.local.json"), "utf8")).toBe(before);
+    expect(await readFile(join(agentDir, "fastagent.json"), "utf8")).toBe(before);
     const mended = await removeContent(agentDir, "moved");
-    expect(mended.content.map((c) => c.name)).toEqual(["c", "b"]);
+    expect(mended.content.map((c) => c.name)).toEqual(["c"]);
+    await addContent(agentDir, directory(join(base, "b")));
   });
 
   it("a refused edit on an agent without context files leaves none", async () => {
@@ -239,7 +258,7 @@ describe("authoring API", () => {
     await createAgent(agentDir);
     await expect(removeContent(agentDir, "app")).rejects.toThrow('no content named "app" (this agent has: none)');
     await expect(addContent(agentDir, directory(join(base, "missing")))).rejects.toThrow(/does not exist/);
-    for (const file of ["context.json", "context.local.json"]) {
+    for (const file of ["context.json", "fastagent.json"]) {
       await expect(access(join(agentDir, file))).rejects.toThrow(/ENOENT/);
     }
   });

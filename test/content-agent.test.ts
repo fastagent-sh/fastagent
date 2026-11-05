@@ -12,8 +12,13 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { runInProcess } from "./cli-run.ts";
 import { describe, expect, it } from "vitest";
 import { type ResolvedContent, resolveContent } from "../src/content/resolve.ts";
-import { type ContentBinding, declareBindings } from "../src/content/declare.ts";
-import { buildDefinition, assembleAgent, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { type ContentEntry, declareContent } from "../src/content/declare.ts";
+import {
+  assembleAgent,
+  buildDefinition,
+  loadDevProject,
+  loadSourceDefinition,
+} from "../src/harnesses/pi-durable/open.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
@@ -42,9 +47,9 @@ async function skill(dir: string, name: string, description: string): Promise<vo
   await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\nBody.\n`);
 }
 
-/** This machine's bindings of the agent in `agentDir`, as `content add <dir>` writes them. */
-async function bind(agentDir: string, content: Record<string, ContentBinding>): Promise<void> {
-  await writeFile(join(agentDir, "context.local.json"), JSON.stringify({ content }));
+/** The content the instance of the agent in `agentDir` adds, as `content add <dir>` writes it. */
+async function bind(agentDir: string, content: Record<string, ContentEntry>): Promise<void> {
+  await writeFile(join(agentDir, "fastagent.json"), JSON.stringify({ content }));
 }
 
 /** An agent beside two projects: `app` it works on, `handbook` it knows. */
@@ -67,14 +72,13 @@ async function layout() {
 describe("an agent with content", () => {
   it("is told where it is and what it works on; what a project holds stays in the project", async () => {
     const { agentDir, app, handbook } = await layout();
-    const content = resolveContent(agentDir, {
-      declared: [],
-      bound: declareBindings(
+    const content = resolveContent(
+      declareContent(
         { app: { path: app }, handbook: { path: handbook, description: "The team's style rules." } },
-        [],
-        agentDir,
+        { origin: "instance", file: "fastagent.json", base: agentDir },
       ),
-    });
+      { dir: agentDir, workdir: agentDir },
+    );
     const { faux } = makeFaux();
     let prompt = "";
     faux.setResponses([
@@ -117,9 +121,9 @@ describe("an agent with content", () => {
 const cli = (args: string[], cwd: string) => runInProcess(args, cwd);
 
 describe("one resolution", () => {
-  it("the opener, `info --json` and `content list --json` change together when the bindings do", async () => {
+  it("the opener, `info --json` and `content list --json` change together when the content does", async () => {
     // A second derivation of where the content is would disagree with this one sooner or later; here every
-    // reader is asked after each change of the bindings.
+    // reader is asked after each change of the content.
     const { root, agentDir, app, handbook } = await layout();
     await writeFile(
       join(agentDir, "fastagent.config.ts"),
@@ -127,10 +131,12 @@ describe("one resolution", () => {
     );
     await bind(agentDir, { app: { path: "../app" } });
     const readers = async () => {
-      const opened = await openServing(await loadSourceDefinition(agentDir), {
+      const { definition, instance } = await loadDevProject(agentDir);
+      const opened = await openServing(definition, {
         secrets: {},
         env: {},
         storage: "memory",
+        ...(instance === undefined ? {} : { config: instance }),
       });
       await opened.agent.close();
       const info = JSON.parse((await cli(["info", "--json"], agentDir)).stdout);
@@ -148,11 +154,11 @@ describe("one resolution", () => {
 
     const added = await cli(["content", "add", handbook, agentDir], root);
     expect(added.code, added.stderr).toBe(0);
-    expect(added.stderr).toContain(`works on handbook  ${handbook} (this machine only, bound in context.local.json)`);
+    expect(added.stderr).toContain(`works on handbook  ${handbook} (a directory of this machine)`);
     const second = [...first, entry("handbook", handbook)];
     expect(await readers()).toEqual([second, second, second]);
-    // This machine's file holds the paths, the one written by hand as it was; the shared file is not written.
-    expect(JSON.parse(await readFile(join(agentDir, "context.local.json"), "utf8"))).toEqual({
+    // The instance's file holds the paths, the one written by hand as it was; the program's file is not written.
+    expect(JSON.parse(await readFile(join(agentDir, "fastagent.json"), "utf8"))).toEqual({
       content: { app: { path: "../app" }, handbook: { path: handbook } },
     });
     await expect(lstat(join(agentDir, "context.json"))).rejects.toThrow(/ENOENT/);
@@ -161,23 +167,23 @@ describe("one resolution", () => {
     expect(removed.code, removed.stderr).toBe(0);
     const third = [entry("handbook", handbook)];
     expect(await readers()).toEqual([third, third, third]);
-    // The directory it was bound to stays.
+    // The directory it named stays.
     expect((await lstat(app)).isDirectory()).toBe(true);
 
-    // A bound directory that is gone is no reader's content, and `content list --json` names it.
+    // A directory that is gone is refused by every reader, naming it.
     await bind(agentDir, { gone: { path: join(root, "gone") } });
-    const listed = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);
-    expect(listed).toEqual({
-      content: [],
-      absent: [{ name: "gone", path: join(root, "gone"), kind: "local" }],
-    });
+    const listed = await cli(["content", "list", "--json"], agentDir);
+    expect([listed.code, listed.stderr]).toEqual([
+      1,
+      expect.stringContaining(`content "gone": ${join(root, "gone")} does not exist`),
+    ]);
   });
 
   it("`content add` asks for a name it cannot take, and refuses content around the agent", async () => {
     const { root, agentDir, app } = await layout();
     await writeFile(join(agentDir, "fastagent.config.ts"), `export default {};\n`);
     await bind(agentDir, { app: { path: app } });
-    const before = await readFile(join(agentDir, "context.local.json"), "utf8");
+    const before = await readFile(join(agentDir, "fastagent.json"), "utf8");
     const other = join(root, "elsewhere", "app");
     await mkdir(other, { recursive: true });
     const taken = await cli(["content", "add", other, agentDir], root);
@@ -187,7 +193,7 @@ describe("one resolution", () => {
     ]);
     const around = await cli(["content", "add", root, agentDir], root);
     expect([around.code, around.stderr]).toEqual([1, expect.stringMatching(/contains the agent directory/)]);
-    expect(await readFile(join(agentDir, "context.local.json"), "utf8")).toBe(before);
+    expect(await readFile(join(agentDir, "fastagent.json"), "utf8")).toBe(before);
     const missing = await cli(["content", "remove", "nope", agentDir], root);
     expect([missing.code, missing.stderr]).toEqual([
       2,
@@ -196,8 +202,8 @@ describe("one resolution", () => {
     // With a name of its own it is added.
     const named = await cli(["content", "add", other, agentDir, "--name", "app2"], root);
     expect(named.code, named.stderr).toBe(0);
-    expect(named.stderr).toContain(`works on app2  ${other} (this machine only, bound in context.local.json)`);
-    expect(JSON.parse(await readFile(join(agentDir, "context.local.json"), "utf8")).content).toEqual({
+    expect(named.stderr).toContain(`works on app2  ${other} (a directory of this machine)`);
+    expect(JSON.parse(await readFile(join(agentDir, "fastagent.json"), "utf8")).content).toEqual({
       app: { path: app },
       app2: { path: other },
     });

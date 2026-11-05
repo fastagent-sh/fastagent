@@ -235,7 +235,7 @@ describe("an agent's own content, from the package entry", () => {
     for (const dir of made) await mkdir(dir);
     return { base, notes: made[0] as string, app: made[1] as string, handbook: made[2] as string };
   };
-  const bind = (name: string, path: string) => ({ name, binding: { path } });
+  const bind = (name: string, path: string) => ({ name, entry: { path } });
 
   it("is created with any number of folders, edited and listed", async () => {
     const { base, notes, app, handbook } = await folders();
@@ -265,13 +265,13 @@ describe("an agent's own content, from the package entry", () => {
     expect(existsSync(refused)).toBe(false);
   });
 
-  it("reads a folder as the CLI does: named for it, bound on this machine", async () => {
+  it("reads a folder as the CLI does: named for it, used as it is", async () => {
     const { notes } = await folders();
     const { addition } = readContentSource(notes, process.cwd(), { description: "My notes." });
-    expect(addition).toEqual({ name: "notes", binding: { path: notes, description: "My notes." } });
+    expect(addition).toEqual({ name: "notes", entry: { path: notes, description: "My notes." } });
   });
 
-  it("reads a GitHub repository as an entry cloned for every instance", () => {
+  it("reads a GitHub repository as an entry fastagent clones", () => {
     const { addition, notes } = readContentSource("github:acme/app", process.cwd(), { ref: "v1" });
     expect(addition).toEqual({ name: "app", entry: { github: "acme/app", ref: "v1" } });
     expect(notes).toEqual([]);

@@ -149,15 +149,15 @@ opposite things when a new version arrives:
 
 One store can hold both only when it can merge both sides' changes. A copy cannot: copying again overwrites
 the instance's data, and not copying leaves the release behind. So the two live in separate directories, joined
-only by a binding this machine keeps (§3). An agent's directory is its own, and often its own repository:
+only by content the instance names (§3). An agent's directory is its own, and often its own repository:
 
 ```text
 ~/agents/reviewer/            the Agent: its definition and declarations, its local instance (.state/, .secrets/)
-  context.local.json          where this machine has the content: "app" is ~/code/app; never in the definition
+  fastagent.json              the instance's content: "app" is ~/code/app; never in the definition
 ~/code/app/                   content: the project, which holds no agent
 ```
 
-The check runs when an agent is loaded, and a binding to a nested layout is refused with the way out: move the agent
+The check runs when an agent is loaded, and content in a nested layout is refused with the way out: move the agent
 directory out, or bind other content. The clones an instance makes for itself are its own, kept at
 `content/<name>` (§3), beside its runtime state (§5) and not inside it; they are not part of the definition.
 
@@ -167,12 +167,14 @@ strict leaves that option open; allowing it first and taking it back would break
 
 ## 3. Content
 
-An agent's content is declared in two files beside its config, each a map of entries by name whose order carries no
-meaning. `init` and `fastagent content` write both ([CLI](agent-cli.md) §3, §4):
+An agent's content is declared in two files, each a map of entries by name whose order carries no meaning. `init` and
+`fastagent content` write both ([CLI](agent-cli.md) §3, §4):
 
-- **`context.json`**, part of the definition, declares what every instance reaches: GitHub repositories.
-- **`context.local.json`**, this machine's, binds directories of it: a checkout of a declared repository, or a
-  directory only this machine has. It is never committed and never deployed.
+- **`context.json`**, part of the definition beside its config, declares what every instance reaches: GitHub
+  repositories.
+- **The instance's `fastagent.json`** adds to it: repositories and directories of this instance, a directory of this
+  machine included. It is not part of the definition and is not deployed. An instance only adds: a name the
+  definition declares is not one it may take.
 
 ```json
 {
@@ -186,13 +188,12 @@ meaning. `init` and `fastagent content` write both ([CLI](agent-cli.md) §3, §4
 An agent that declares no content has none: a chat-only assistant works only in its own directory. The shared
 declaration decides what an instance on a host receives, so it is visible in the definition instead of being a
 hidden default. It names no path of any machine: the definition is shared, and a path describes one machine. A path
-is what `context.local.json` holds, which is why it is a file of its own that no other machine reads.
+is what an instance's configuration holds, which is why it is not the definition's file.
 
 ### Where an entry is
 
-- **A repository** is a clone the instance makes at `content/<name>` in the agent directory, or, where
-  `context.local.json` binds this machine's checkout of it under the same name, that checkout.
-- **A directory only this machine has** is where its binding says, and on any other instance does not exist.
+- **A repository** is a clone the instance makes at `content/<name>` in its working directory.
+- **A directory** is where the instance's configuration says, and on any other instance does not exist.
 
 `content/` holds only those clones. It belongs to the machine, never to the definition: it carries its own
 `.gitignore`, and a deployment keeps it out of the image. On a host it is a link into the host's storage, which a
@@ -206,8 +207,8 @@ rarely writes one.
 
 | Type | Written in | Where it lives | Here | Elsewhere (a host) | Where changes go |
 |---|---|---|---|---|---|
-| **github** | `context.json`: `{ "github": "acme/app" }` | A repository | A clone, or this machine's checkout bound in `context.local.json`, used as it is | A clone the instance makes | To the repository, when pushed |
-| **local** | `context.local.json`: `{ "path": "~/notes" }` | A directory of this machine | That directory, edited in place | Absent: never declared there (below) | The directory |
+| **github** | `context.json` or `fastagent.json`: `{ "github": "acme/app" }` | A repository | A clone | A clone the instance makes | To the repository, when pushed |
+| **local** | `fastagent.json`: `{ "path": "~/notes" }` | A directory of this machine | That directory, edited in place | Absent: never declared there (below) | The directory |
 
 **Only data with a home every instance can reach is the same data everywhere.** A local directory lives on one
 machine, so it is content of that machine's instance alone. A copy of it on a host would not be the same data:
@@ -257,13 +258,13 @@ Attributes:
   (`isReleaseAgentName`), and two names that differ only in case are the same name on a case-insensitive
   filesystem. A name that breaks either rule is refused when the agent is loaded; adding an entry whose default
   name is taken or misspelled asks for an explicit one.
-- **A `local` entry is this machine's alone, and said to be when it is not there.** No other instance reads
-  `context.local.json`, so no other instance is told of the directory; the deployment names each one it leaves
+- **A `local` entry is this machine's alone, and said to be when it is not there.** No other instance reads this
+  instance's `fastagent.json`, so no other instance is told of the directory; the deployment names each one it leaves
   behind (a warning when the agent works on it, since the deployed agent lacks data it was meant to work on), with
   the two ways to change that. What the agent only reads there can be copied into the agent directory, which every
-  release carries; what it works on moves to a repository declared as `github`. On this machine, a binding whose
-  directory is gone is left out with a warning rather than refused: the binding is this machine's own record, and
-  the agent still runs without it.
+  release carries; what it works on moves to a repository declared as `github`. A directory that is gone refuses the
+  open, naming the entry: the instance's configuration says the agent works on it, and running without it would be
+  running on less than the author set up.
 - **A `github` entry needs access.** Cloning a private repository and pushing to it take a credential: on this
   machine the user's own git credentials, on a host one held in its secret store, like any other credential of
   the instance.
@@ -274,8 +275,8 @@ would be another content type. It is not part of this note.
 ### Example: an agent with a folder of its own
 
 A client such as duang may give a new agent a folder it creates for its work, and let the user attach folders
-they already have. The agent's folder is content like any other, separate from its definition, bound on this
-machine in `context.local.json`:
+they already have. The agent's folder is content like any other, separate from its definition, named in the instance's
+`fastagent.json`:
 
 ```json
 {
@@ -357,7 +358,7 @@ When a change takes effect:
 | Changed | Takes effect |
 |---|---|
 | `SYSTEM.md`, `AGENTS.md`, skills and prompt templates in the agent directory, scripts, project files | On the next message |
-| The definition's code (`src/`) and configuration (`fastagent.config.ts`, `context.json`, `context.local.json`, `package.json`) | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
+| The definition's code (`src/`) and configuration (`fastagent.config.ts`, `context.json`, `package.json`); the instance's `fastagent.json` is read at each open | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
 
 So an agent improves itself while it runs through what takes effect on the next message: a skill whose script it runs
 through `bash`, its prompt files and `AGENTS.md`, and `wake` for its own follow-up work, one-shot or recurring. A

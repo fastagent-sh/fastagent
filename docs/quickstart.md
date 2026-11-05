@@ -42,9 +42,9 @@ my-agent/
 
 **To have it work on a project**, declare the project as its content: `fastagent init my-agent --content ~/code/app`,
 or later `fastagent content add ~/code/app`. The agent stays in its own directory and is told where the project is,
-and reads the project's files, its `AGENTS.md` included, when it works there. A GitHub checkout is declared as its
-repository in `context.json`, so every instance has it; any other directory is bound in `context.local.json`, on this
-machine only. See [content](configuration.md#content).
+and reads the project's files, its `AGENTS.md` included, when it works there. The directory is added to this machine's
+`fastagent.json`; a repository the agent should always have goes in `context.json` (`content add --program
+github:owner/repo`). See [content](configuration.md#content).
 
 ## 2. Check it
 

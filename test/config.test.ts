@@ -89,7 +89,11 @@ describe("resolveConfig", () => {
     ["a model that is not provider/modelId", { model: "nomodel" }, '/model must be "provider/modelId"'],
     ["a setting the program does not declare", { settings: { team: "x" } }, "/settings/team unknown field"],
     ["a setting of the wrong type", { settings: { repo: 7 } }, "/settings/repo"],
-    ["content, which a later release reads", { content: {} }, "content is not read by this FastAgent yet"],
+    [
+      "instructions, which a later release reads",
+      { instructions: [] },
+      "instructions is not read by this FastAgent yet",
+    ],
   ])("refuses %s, naming the file and the path", (_what, values, message) => {
     expect(() => resolveConfig(reviewer, instance({ settings: { repo: "r" }, ...values }))).toThrow(message);
   });
@@ -116,6 +120,32 @@ describe("instanceConfigSchema", () => {
     expect(check.check({ settings: {} })).toBe(true);
     expect(check.check({ settings: { repo: 1 } })).toBe(false);
     expect(check.check({ http: { port: -1 } })).toBe(false);
+  });
+
+  it("describes the content an instance adds: a repository or a directory, by name", () => {
+    const check = compile(instanceConfigSchema(undefined));
+    expect(
+      check.check({ content: { app: { github: "a/b", ref: "main" }, data: { path: "/srv/data", description: "d" } } }),
+    ).toBe(true);
+    for (const content of [{ x: {} }, { x: { github: "a/b", path: "/x" } }, { x: { path: "/x", ref: "main" } }]) {
+      expect(check.check({ content }), JSON.stringify(content)).toBe(false);
+    }
+    // The program's defaults are not where content goes: it is context.json's, or an instance's.
+    expect(() => resolveConfig(program({ defaults: { content: { x: { path: "/x" } } } }))).toThrow(
+      /\/content unknown field/,
+    );
+  });
+
+  it("refuses a bad content entry in an instance's file by naming it and the file, not as a schema path", () => {
+    const refused = (content: unknown, directory?: string) =>
+      resolveConfig(reviewer, {
+        values: { settings: { repo: "r" }, content },
+        label: "fastagent.json",
+        ...(directory === undefined ? {} : { directory }),
+      });
+    expect(() => refused({ x: { description: "d" } })).toThrow('fastagent.json: content "x" needs "github" or "path"');
+    expect(() => refused({ x: { path: "rel" } })).toThrow(/content "x": "path" must be absolute here/);
+    expect(refused({ x: { path: "rel" } }, "/etc/me").sources["content.x.path"]).toBe("fastagent.json");
   });
 });
 

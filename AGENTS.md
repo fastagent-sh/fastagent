@@ -106,7 +106,7 @@ src/
 ├── git.ts                  # running git, and what ONE result means (an answer, a "no", or no git at all)
 ├── content/                # what an agent works on — harness-neutral
 │   ├── declare.ts          # a shared entry and a machine's binding, read and refused in ONE place (names, keys)
-│   ├── file.ts             # `context.json` + `context.local.json` read (a reader its part, an edit the whole) and written
+│   ├── file.ts             # `context.json` and the content an instance's configuration adds, read (a reader its part, an edit the whole)
 │   ├── mount.ts            # content/, where the clones go: the dir with its own .gitignore
 │   ├── resolve.ts          # where each entry is for THIS instance (a clone, a bound dir): the one answer every reader uses
 │   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone

@@ -282,7 +282,6 @@ function selfChangeSection(wake: boolean): string {
 /** What a content entry of this kind is, said to the agent: where it is, and whether another instance shares it. */
 function contentKind(c: ResolvedContent): string {
   if (c.kind !== "github") return "a directory on this machine";
-  if (!c.clone) return `a checkout of github ${c.repo} on this machine`;
   // Brought up to date in place at each start where git can do so without touching the agent's work; what the agent
   // changes stays, and reaches anyone else only when pushed. The declared ref is what it follows, not a claim about
   // where it is: a clone the agent moved elsewhere is left there.

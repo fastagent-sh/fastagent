@@ -164,13 +164,13 @@ export default defineAgent({
 ## Content
 
 An agent's directory is its own: its definition, its working directory, and its local instance's `.state/` and
-`.secrets/`. What it works on, its content, is declared beside the config, never inferred from where the
-directory sits, in two files:
+`.secrets/`. What it works on, its content, is declared by name in two places, never inferred from where the directory
+sits:
 
 - **`context.json`** is part of the definition: committed and shared with everyone who has the agent, so it declares
   only what every instance reaches, a GitHub repository.
-- **`context.local.json`** is this machine's: the directories of it the agent is bound to. `init` ignores it in git
-  and `deploy` keeps it out of the image, so it never reaches another machine.
+- **The instance's `fastagent.json`** adds to it: repositories and directories of this instance. It is the instance's,
+  not the definition's, and is kept out of a deploy, so a directory of this machine never reaches another one.
 
 ```json
 {
@@ -190,19 +190,21 @@ directory sits, in two files:
 }
 ```
 
-Each entry is named by its key: one segment of letters, digits, `-` and `_`, unique ignoring case across both files.
+Each entry is named by its key: one segment of letters, digits, `-` and `_`, unique ignoring case across both. An
+instance only adds: a name `context.json` declares is not one `fastagent.json` may take, and the open refuses it,
+naming both.
 
 | Key | In | Meaning |
 |---|---|---|
-| `github` | `context.json` | A repository, `owner/repo`. Required: an entry every instance reaches is a repository |
-| `ref` | `context.json` | The branch, tag or full commit to clone. Defaults to the repository's default branch |
-| `path` | `context.local.json` | A directory of this machine: absolute, `~/`, or relative to the agent directory |
+| `github` | both | A repository, `owner/repo`. Required in `context.json`: an entry every instance reaches is a repository |
+| `ref` | both, with `github` | The branch, tag or full commit to clone. Defaults to the repository's default branch |
+| `path` | `fastagent.json` | A directory of this machine: absolute, `~/`, or relative to the `fastagent.json` that names it |
 | `description` | both | One sentence for the agent: what it is, and how to treat it. The prompt gives it beside the entry |
 
 Where the agent reaches each one on this machine:
 
-- **A repository** is a clone fastagent makes at `content/<name>` in the agent directory: shallow, at `ref`, the
-  first time the agent starts (`dev`, `start`, `invoke`). At each later start it is brought up to date in
+- **A repository** is a clone fastagent makes at `content/<name>` in the instance's working directory: shallow, at
+  `ref`, the first time the agent starts (`dev`, `start`, `invoke`). At each later start it is brought up to date in
   place, by git's own rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or
   commit it is pinned to). git refuses whatever would overwrite the agent's work: a changed file the update touches,
   an untracked file it would replace, commits the remote does not have. Then, and when the fetch fails, when the
@@ -214,12 +216,9 @@ Where the agent reaches each one on this machine:
   with git's reason. A clone of another repository under the entry's name (it was renamed or redeclared) stops
   the start and is named, never removed: move it away yourself. `content/` carries its own `.gitignore` (`*`) and
   holds only clones: a link there is refused.
-- **A repository this machine has a checkout of** is that checkout, when `context.local.json` binds it under the
-  entry's name with only `path` (`fastagent content add <checkout>` writes both files). It is used as it is: never
-  fetched, never switched to `ref`, and startup and `info` say when it is not at `ref`. A binding to anything but the
-  root of a checkout of that repository is refused; one to a directory that is gone is said, and the clone is used.
-- **A directory only this machine has** is where its binding says. One that is gone is left out with a warning, and
-  the agent is not told of it.
+- **A directory** is where `fastagent.json` says, used as it is: the agent edits it in place. One that is gone
+  refuses the open, naming the entry, so the agent never runs without data it was meant to work on; `content remove`
+  mends it. To work in your own checkout of a repository, add its directory under a name of its own.
 
 git clones with its own configuration on this machine: a private repository needs the credentials your own
 `git clone` uses (a credential helper, or `url.<base>.insteadOf` to reach GitHub over SSH). When git has none of its
@@ -228,9 +227,8 @@ reads it, never the token itself), and so does the agent's own `git push` in the
 missing credential fails the start instead of waiting.
 
 `fastagent init <dir> --content <source>` and `fastagent content add/remove` edit both files
-([CLI](cli.md#fastagent-content)); they can be edited by hand too. The entries' order means nothing. A bound
-directory may not contain the agent directory, nor sit inside it: an agent lives beside the projects it works on,
-never in one.
+([CLI](cli.md#fastagent-content)); they can be edited by hand too. The entries' order means nothing. A directory may
+not contain the agent directory, nor sit inside it: an agent lives beside the projects it works on, never in one.
 
 What each entry gives the agent:
 
@@ -247,10 +245,10 @@ already-bound directory need no restart: the agent sees them when its tools next
 
 A deployed host links its
 `content/` to its storage, so each repository is a clone there, made and kept up to date the same way, and outlives
-each release ([deploy](deploy.md#before-you-deploy)). A directory only this machine binds stays here: the deployed
-agent works without it, and `deploy` says so by name. To give a host what the agent only reads there, copy it into
-the agent directory, which every release ships; to have the agent work on it from a host, move it to a repository
-and add it as `github:owner/repo`.
+each release ([deploy](deploy.md#before-you-deploy)). What `fastagent.json` adds, a directory or a repository, stays
+here for now: the deployed agent works without it, and `deploy` says so by name. To give a host what the agent only
+reads there, copy it into the agent directory, which every release ships; to have the agent work on it from a host,
+declare the repository in `context.json` (`fastagent content add --program github:owner/repo`).
 
 ## The system prompt
 
@@ -457,7 +455,7 @@ keeps a serve from answering the API with a key its environment still holds.
 - `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `device.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
   secret store; its `auth.json` is its own login (`fastagent login --deployment`) and lives on the volume.
-- `<agent dir>/content/` — where this machine keeps the agent's content: links to its directories, and the clones of
+- `<working directory>/content/` — where this instance keeps the clones of
   `github` entries ([Content](#content)). They are data the agent works on, so they are not inside `.state/`; like
   it, they are never part of the definition, and `content/.gitignore` and `deploy` keep them out. It has no
   override: a place that wants it elsewhere links `content/` there.
@@ -473,8 +471,8 @@ command started in (on a deployed box, the deployed definition's directory, whic
 the [instance configuration](#instance-configuration) for `dev`, `start`, `invoke`, `info` and `schedules run`; `dev`
 and the others read the `fastagent.json` at the project root without it, and `start` reads none.
 
-What stays in the project for now: `.secrets/` (the `.env`, `auth.json`, MCP grants) and `context.local.json`, whatever
-the root. Secrets and content become inputs of the instance in later releases.
+What stays in the project for now: `.secrets/` (the `.env`, `auth.json`, MCP grants), whatever the root. They move into
+the instance with the deploy layout in a later release.
 
 Generated deployments keep the deployed definition at `<persistent-root>/definition/`, replaced by every release,
 with `.state/`, `.secrets/` and `content/` beside it; each release links its own `content/` to that one.
@@ -492,7 +490,7 @@ FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent 
 ```txt
 state root: FASTAGENT_STATE_DIR    > <root>/.state > <agent dir>/.state (production: .state/production)
 secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets (production: .secrets/production)
-content:    <agent dir>/content/<name> (a clone), or the directory context.local.json binds
+content:    <working directory>/content/<name> (a clone), or the directory fastagent.json names
 storage:    <state root>/agent.sqlite
 models:     <state root>/models/
 auth:       FASTAGENT_AUTH_PATH    > <secrets>/auth.json

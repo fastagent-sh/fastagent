@@ -16,7 +16,7 @@ Coding agents made it cheap to vibe useful agent directories. The next gap is se
 reviewer/                   # the agent, its working directory, and a git repository
 ├── fastagent.config.ts     # the marker: defineAgent({ defaults, providers, … })
 ├── context.json            # its content and environment: the repositories it works on, the commands it runs
-├── context.local.json      # this machine's directories it is bound to (kept out of git and of every image)
+├── fastagent.json          # optional: this instance's configuration, and the content it adds (a deploy does not carry it yet)
 ├── SYSTEM.md               # the system prompt
 ├── AGENTS.md               # optional: how this agent is built and changed, a section of every prompt
 ├── skills/  prompts/       # optional skills; prompt templates (run as /<name>)
@@ -24,16 +24,16 @@ reviewer/                   # the agent, its working directory, and a git reposi
 ├── src/channels/           # optional webhook/bot adapters
 ├── src/schedules/          # optional prompts run on a cron
 ├── reference.md            # optional reference material the agent reads (any file layout)
-├── content/handbook/       # a clone fastagent makes of each repository with no checkout bound here
+├── content/handbook/       # a clone fastagent makes of each repository the agent works on
 └── .state/ .secrets/       # this machine's instance: its storage, credentials (kept out of git, except .secrets/.env.example)
 
-~/code/app/                 # a checkout of acme/app, declared in context.json and bound here
+~/code/app/                 # a checkout of acme/app, added in fastagent.json as a directory
 └── AGENTS.md               # the project's own: a file the agent reads there, never part of its prompt
 ```
 
 `context.json` declares GitHub repositories (`{ "github": "acme/app" }`), which reach every place the agent runs: here,
-your checkout when `context.local.json` binds one, otherwise a clone; on a host, always a clone. A directory only this
-machine has is bound in `context.local.json` alone: it stays here, and a deployment says so.
+a clone in the working directory; on a host, always a clone. A directory of this machine is added in `fastagent.json`
+alone: it stays here, and a deployment says so.
 
 ## What FastAgent provides
 
