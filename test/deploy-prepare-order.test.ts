@@ -134,8 +134,6 @@ beforeEach(async () => {
   config = {};
   vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
   vi.stubEnv("FASTAGENT_ENVIRONMENT", "");
-  vi.stubEnv("FEISHU_INGRESS", "");
-  vi.stubEnv("LARK_INGRESS", "");
   said = [];
   vi.spyOn(console, "error").mockImplementation((line) => void said.push(String(line)));
   vi.spyOn(process, "exit").mockImplementation(() => {
@@ -148,13 +146,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-it("refuses before anything when this shell names an ingress the value file does not, and plans as start, not dev", async () => {
-  vi.stubEnv("FEISHU_INGRESS", "websocket");
-  await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
-  expect(calls).toEqual([]);
-  expect(said.join("\n")).toContain('FEISHU_INGRESS is "websocket" here and "" in .secrets/production/.env');
-
-  vi.stubEnv("FEISHU_INGRESS", "");
+it("plans as start, not dev, whatever spawned it", async () => {
   vi.stubEnv(DEV_SERVE_ENV, "1");
   facts.values.set("FEISHU_VERIFICATION_TOKEN", "t");
   await runDeploy("fly", dir, { run: true });
@@ -182,7 +174,7 @@ it("does not prepare an app a deployment cannot point anywhere, and says what it
   await expect(runDeploy("docker", dir, { run: true })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
   expect(said.join("\n")).toMatch(
-    /feishu receive by webhook here, and this Docker deployment has no public URL .*--tunnel.*FEISHU_INGRESS=websocket/,
+    /feishu receive by webhook here, and this Docker deployment has no public URL .*--tunnel.*channels\.feishu\.ingress to "websocket" in the configuration --config delivers/,
   );
 
   calls.length = 0;

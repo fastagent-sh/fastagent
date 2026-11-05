@@ -3,6 +3,7 @@
  * slack/feishu/lark additionally CREATE OR RESUME the platform app.
  */
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { assertIndependentFeishuApps, onboardFeishuCloudApp } from "../add-feishu.ts";
 import { type Person, terminalPerson } from "../person.ts";
@@ -17,14 +18,21 @@ import {
   ticketExitCode,
   ticketReport,
 } from "../ticket.ts";
-import { cloudFor } from "../../channels/feishu/cloud.ts";
-import { type FeishuSubscriptionMode, feishuIngressFor } from "../../channels/feishu/setup-mode.ts";
+import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
-import { channelIngress } from "../../channels/discover.ts";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
+import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
+import { setChannelIngress } from "../../authoring.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
-import { selectAgentEnvironment, resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
+import {
+  INSTANCE_CONFIG_FILE,
+  selectAgentEnvironment,
+  resolveStateRoot,
+  SECRETS_DIRNAME,
+  isUnderDir,
+  displayPath,
+} from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
@@ -42,6 +50,8 @@ import { unprotectedSecretsNote } from "../../value-file.ts";
 
 export interface AddChannelOptions {
   ingress?: string;
+  /** `--config <file>`: the instance configuration `--ingress` writes and the setup reads. */
+  config?: string;
   onboard?: boolean;
   replaceConfig?: boolean;
   environment?: string;
@@ -112,18 +122,14 @@ async function planAdd(channelKind: ChannelKind, dirArg: string, opts: AddChanne
   // An existing channel file is authored glue: kept, never rewritten.
   const file = join(target, "src", "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
-  const ingress = resolveIngress(channelKind, opts.ingress);
+  const config = instanceConfigPath(target, environment, opts);
+  const ingress = await resolveIngress(target, channelKind, environment, opts.ingress, config);
   if (
     existsAlready &&
-    (ingress.setting || (environment === "production" && opts.onboard !== false)) &&
+    (ingress.write || (environment === "production" && opts.onboard !== false)) &&
     (channelKind === "feishu" || channelKind === "lark")
   ) {
-    await assertChannelReadsSetting(
-      target,
-      channelKind,
-      ingress.setting ?? { [`${cloudFor(channelKind).envPrefix}_INGRESS`]: ingress.ingress },
-      inAgent(relative(target, file)),
-    );
+    await assertChannelReceives(target, channelKind, ingress.ingress);
   }
   return {
     target,
@@ -136,6 +142,7 @@ async function planAdd(channelKind: ChannelKind, dirArg: string, opts: AddChanne
     rerun:
       `fastagent add ${channelKind}${agentFromCwd === undefined ? "" : ` ${shellArg(agentFromCwd)}`}` +
       `${environment === "production" ? " --env production" : ""}${opts.ingress ? ` --ingress ${opts.ingress}` : ""}` +
+      `${opts.config === undefined ? "" : ` --config ${shellArg(resolve(opts.config))}`}` +
       `${opts.replaceConfig ? " --replace-config" : ""}`,
   };
 }
@@ -149,8 +156,8 @@ interface AddPlan {
   file: string;
   existsAlready: boolean;
   ingress: FeishuSubscriptionMode;
-  pinned: boolean;
-  setting?: Record<string, string>;
+  /** The instance configuration `--ingress` is written to, when it is. */
+  write?: string;
   /** The command that continues an interrupted setup. */
   rerun: string;
 }
@@ -165,7 +172,7 @@ async function addChannel(
   opts: AddChannelOptions,
   person: Person,
 ): Promise<{ written: string[]; next_steps: string[] }> {
-  const { target, environment, inAgent, agentFromCwd, file, existsAlready, ingress, pinned, setting, rerun } = plan;
+  const { target, environment, inAgent, agentFromCwd, file, existsAlready, ingress, write, rerun } = plan;
   const envPath = dotEnvPath(target);
   const envLabel = isUnderDir(envPath, target) ? inAgent(relative(target, envPath)) : envPath;
   const before = loadEnvValues(envPath);
@@ -196,7 +203,14 @@ async function addChannel(
   } else if ((channelKind === "feishu" || channelKind === "lark") && opts.onboard !== false) {
     created = await onboardFeishuCloudApp(target, channelKind, ingress, rerun, person);
   }
-  const setup = channelSetup(channelKind, ingress, pinned);
+  if (write !== undefined) {
+    await setChannelIngress(target, channelKind, ingress, { config: write });
+    console.error(
+      `[fastagent] wrote channels.${channelKind}.ingress "${ingress}" to ` +
+        `${isUnderDir(write, target) ? inAgent(relative(target, write)) : write}`,
+    );
+  }
+  const setup = channelSetup(channelKind, ingress);
   const env = setup.env;
   const steps =
     channelKind === "slack" && opts.onboard !== false
@@ -215,8 +229,8 @@ async function addChannel(
   const dotEnv = await appendChannelDotEnv(
     target,
     channelKind,
-    { ...generated, ...created, ...setting },
-    [...Object.keys(created ?? {}), ...Object.keys(setting ?? {})],
+    { ...generated, ...created },
+    Object.keys(created ?? {}),
     ingress,
   );
   if (dotEnv.unprotectedSecretsDir) {
@@ -314,6 +328,7 @@ async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChann
         target,
         ...(at.environment === "production" ? ["--env", "production"] : []),
         ...(opts.ingress === undefined ? [] : ["--ingress", opts.ingress]),
+        ...(opts.config === undefined ? [] : ["--config", resolve(opts.config)]),
         ...(opts.replaceConfig ? ["--replace-config"] : []),
       ],
       cwd: process.cwd(),
@@ -348,59 +363,68 @@ function reportSetup(ticket: Ticket, opts: AddChannelOptions, when: "started" | 
 }
 
 /**
- * What `add` sets the app up for, and whether it writes the choice down. `--ingress` is the `<PREFIX>_INGRESS`
- * setting in the selected environment. The channel rule supplies its default: WebSocket in dev, webhook in production.
+ * The instance configuration `add` reads how the channel receives from, and writes `--ingress` to: `--config`, else
+ * the development instance's `fastagent.json`. A deployment's is the one `deploy --config` delivers, so production
+ * has none unless one is named.
  */
-function resolveIngress(
-  kind: ChannelKind,
-  raw: string | undefined,
-): { ingress: FeishuSubscriptionMode; pinned: boolean; setting?: Record<string, string> } {
-  if (raw !== undefined && raw !== "webhook" && raw !== "websocket") {
-    failUsage(`--ingress must be "webhook" or "websocket", got "${raw}"`);
+function instanceConfigPath(target: string, environment: string, opts: AddChannelOptions): string | undefined {
+  if (opts.config !== undefined) return resolve(opts.config);
+  if (environment === "dev") return join(target, INSTANCE_CONFIG_FILE);
+  if (opts.ingress !== undefined) {
+    failUsage(
+      "--ingress with --env production is a deployment's configuration: pass --config <file>, the one " +
+        "`deploy --config` delivers",
+    );
   }
-  if (kind !== "feishu" && kind !== "lark") return { ingress: "webhook", pinned: false };
-  const name = `${cloudFor(kind).envPrefix}_INGRESS`;
-  if (raw !== undefined) return { ingress: raw, pinned: true, setting: { [name]: raw } };
-  try {
-    return {
-      ingress: feishuIngressFor(kind, process.env),
-      pinned: Boolean(process.env[name]?.trim()),
-    };
-  } catch (error) {
-    // A malformed value in the environment: the author's to fix, said as the rule says it.
-    return failUsage((error as Error).message);
-  }
+  return undefined;
 }
 
 /**
- * A setting only takes effect in a channel file that reads it: one that names its factory receives the same way
- * whatever the setting says, so writing the setting (and configuring the app for it) would change nothing but the app.
- * Asked of the channel as the agent builds it, under the value this command is about to write.
+ * What `add` sets the app up for, and where it writes the choice down: `--ingress`, written to the instance
+ * configuration; else what that configuration says; else the rule every serve follows, WebSocket in dev and webhook
+ * everywhere else.
  */
-async function assertChannelReadsSetting(
+async function resolveIngress(
   target: string,
   kind: ChannelKind,
-  setting: Record<string, string>,
-  shown: string,
+  environment: string,
+  raw: string | undefined,
+  config: string | undefined,
+): Promise<{ ingress: FeishuSubscriptionMode; write?: string }> {
+  if (raw !== undefined && raw !== "webhook" && raw !== "websocket") {
+    failUsage(`--ingress must be "webhook" or "websocket", got "${raw}"`);
+  }
+  if (kind !== "feishu" && kind !== "lark") return { ingress: "webhook" };
+  if (raw !== undefined) return { ingress: raw, ...(config === undefined ? {} : { write: config }) };
+  const named =
+    config === undefined || !existsSync(config)
+      ? undefined
+      : await Promise.all([loadSourceDefinition(target), readInstanceConfigFile(config)])
+          .then(([definition, source]) => resolveConfig(definition, source).channels?.[kind]?.ingress)
+          .catch(failStartup);
+  return { ingress: named ?? (environment === "dev" ? "websocket" : "webhook") };
+}
+
+/**
+ * A channel file that names its factory receives one way whatever the configuration says, so setting up the app for
+ * the other way would change nothing but the app. Asked of the channel as the agent builds it, the way `add` is about
+ * to set it up for.
+ */
+async function assertChannelReceives(
+  target: string,
+  kind: ChannelKind,
+  ingress: FeishuSubscriptionMode,
 ): Promise<void> {
-  Object.assign(process.env, setting); // the value this command writes anyway
-  const channel = await loadSourceDefinition(target)
-    .then((definition) => buildDefinitionShape(definition, process.env).channels.get(kind))
+  await loadSourceDefinition(target)
+    .then((definition) =>
+      buildDefinitionShape(definition, process.env, {
+        settings: definition.config.defaults?.settings ?? {},
+        channels: { [kind]: { ingress } },
+      }),
+    )
     .catch((error: unknown) =>
       failStartup(new Error(`the agent does not build (${(error as Error).message}) — fix it and re-run`)),
     );
-  const [[name, value]] = Object.entries(setting) as [[string, string]];
-  const wanted = value === "webhook" ? "webhook" : "long-connection";
-  const shape = channel === undefined ? undefined : channelIngress(channel);
-  if (shape !== wanted) {
-    failStartup(
-      new Error(
-        `${shown} receives by ${shape === "webhook" ? "webhook" : "WebSocket"} whatever ${name} says — it names ` +
-          `its factory instead of reading the setting, so ${name}=${value} would change nothing but the app. Move ` +
-          `the file aside and re-run to scaffold one that reads it, or edit its factory yourself`,
-      ),
-    );
-  }
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

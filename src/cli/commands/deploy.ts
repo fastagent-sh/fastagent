@@ -2,11 +2,9 @@
  * `fastagent deploy <host> [agent]`: generate host artifacts from the resolved definition and print an ordered deploy
  * runbook.
  */
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { DeployHost } from "../../deploy/hosts.ts";
-import { cloudFor } from "../../channels/feishu/cloud.ts";
-import { FEISHU_INGRESS_SETTINGS } from "../../channels/feishu/setup-mode.ts";
-import { assembleSecrets, divergentSettingsGate, missingValuesGate } from "../../deploy/secrets.ts";
+import { assembleSecrets, missingValuesGate } from "../../deploy/secrets.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
 import {
@@ -152,15 +150,8 @@ async function deploy(
   const config = await deployed(agentDir)
     .then(({ definition }) => resolveConfig(definition, delivered?.source))
     .catch(failStartup);
-  // Never `dev`, whatever spawned this; and what decides a channel's shape is read here as the box will read it.
+  // Never `dev`, whatever spawned this: a channel's way of receiving is chosen as the box will choose it.
   unmarkDevServe();
-  const shaped = divergentSettingsGate(
-    FEISHU_INGRESS_SETTINGS,
-    process.env,
-    loadEnvValues(dotEnvPath(agentDir)),
-    relative(agentDir, dotEnvPath(agentDir)),
-  );
-  if (shaped) failStartup(new Error(`deploy stopped: ${shaped}`));
   const independentApps = (values: ReadonlyMap<string, string>) => {
     try {
       assertIndependentFeishuApps(agentDir, ["feishu", "lark"], values);
@@ -257,7 +248,8 @@ async function deploy(
             `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
               `public URL to point the app at — re-run with --tunnel (the app is prepared then), or set up your own ` +
               `ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
-              `set ${kinds.map((kind) => `${cloudFor(kind).envPrefix}_INGRESS=websocket`).join(", ")} there`,
+              `set ${kinds.map((kind) => `channels.${kind}.ingress`).join(", ")} to "websocket" in the configuration ` +
+              `--config delivers`,
           ),
         );
       }

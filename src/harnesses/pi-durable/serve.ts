@@ -167,7 +167,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
   const secrets = definedValues(options.secrets);
-  const code = buildDefinition(definition, secrets, config.settings);
+  const code = buildDefinition(definition, secrets, config);
   // FastAgent's own work for the instance (installing packages, cloning content, finding its files) runs in this
   // process's environment and the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
   const env = { ...process.env, ...secrets };

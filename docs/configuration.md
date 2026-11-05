@@ -45,6 +45,7 @@ what an instance starts with, which its own configuration may override ([instanc
 | `defaults.settings` | none | Values of `settings`, for the keys an instance need not give. |
 | `defaults.http.port` | `8787` | Default port for `dev` / `start`. |
 | `defaults.http.api` | `true` | Whether a serve answers the [Agent API](#the-agent-api-over-http) under `/v1` with a key: `dev`, `start` and every deployment, which `deploy` gives a key. `false` keeps them to their channels and schedules, whatever key their environment holds, a host's from an earlier deploy included. Not served on AgentCore either way. |
+| `defaults.channels.<name>.ingress` | `dev`: `websocket`; otherwise `webhook` | How a channel that offers both ways (`byIngress`) receives: `webhook` (inbound HTTP, what a host that scales to zero is woken by) or `websocket` (a connection the process keeps, for one that stays up without a public URL). `<name>` is the channel file's name. |
 | `defaults.deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM (60–1209600 s). Memory bills for the idle tail; a session past it cold-starts. Changing it changes the template, so a kept `agentcore.template.yaml` needs `--force`. |
 
 A provider or extension that reads a secret is wrapped in [`needs`](#secrets-in-code), like any module.
@@ -57,8 +58,8 @@ A command that only reads the shape of the definition (`models`, `login`) builds
 
 ### Instance configuration
 
-An instance sets its own values over the defaults in a `fastagent.json`: `model`, `thinkingLevel`, `http`, `deploy`
-and `settings` (the program's `settings`, partly: the defaults give the rest). Objects merge key by key and arrays
+An instance sets its own values over the defaults in a `fastagent.json`: `model`, `thinkingLevel`, `http`, `deploy`,
+`channels` and `settings` (the program's `settings`, partly: the defaults give the rest). Objects merge key by key and arrays
 replace. `fastagent dev` reads the `fastagent.json` at the project root when there is one; `fastagent start` and
 `fastagent deploy` read only the one `--config` names, and otherwise run on the defaults; an app gives `openAgent` a `config` object, or the absolute path of such a file. An
 unknown key, a value of the wrong type and a required setting no one gave each refuse the open, naming the file and the

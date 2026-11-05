@@ -20,7 +20,7 @@ describe("cli: deploy", () => {
   it("selects the production value file and Docker env_file without reading dev values", async () => {
     const dir = await agentWorkspace("fa-deploy-env-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
-      ".secrets/.env": "FASTAGENT_MODEL=not-a-model\nFEISHU_INGRESS=websocket\nDEV_ONLY=secret\n",
+      ".secrets/.env": "FASTAGENT_MODEL=not-a-model\nDEV_ONLY=secret\n",
       ".secrets/production/.env": "FASTAGENT_MODEL=openai/gpt-4o-mini\nPRODUCTION_ONLY=value\n",
     });
     const result = await runInProcess(["deploy", "docker", dir]);
@@ -200,6 +200,25 @@ describe("cli: deploy", () => {
     const rejected = await runInProcess(["deploy", "fly", legacy]);
     expect(rejected.code).toBe(1);
     expect(rejected.stderr).toMatch(/unknown key "agentDir"/);
+  });
+
+  it("plans a channel the way the configuration it delivers chooses, webhook without one", async () => {
+    const dir = await agentWorkspace("fa-deploy-ingress-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      // byIngress as it returns, so the fixture needs no package of its own.
+      "src/channels/hook.ts":
+        'export default { kind: "fastagent.by-ingress", webhook: () => ({ "POST /hook": () => new Response("ok") }), ' +
+        'websocket: { name: "hook", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) } };\n',
+      ".secrets/production/.env": "OPENAI_API_KEY=sk\n",
+    });
+    const plain = await runInProcess(["deploy", "docker", dir]);
+    expect(plain.code, plain.stderr).toBe(0);
+    expect(plain.stderr).toContain('route channel "hook" is custom');
+    const config = join(dirname(dir), "websocket.json");
+    await writeFile(config, JSON.stringify({ channels: { hook: { ingress: "websocket" } } }));
+    const chosen = await runInProcess(["deploy", "docker", dir, "--config", config, "--force"]);
+    expect(chosen.code, chosen.stderr).toBe(0);
+    expect(chosen.stderr).toContain('long-connection channel "hook" is custom');
   });
 
   it("deploy --config delivers the instance configuration into the image's /etc/fastagent/, and decides with it", async () => {

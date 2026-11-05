@@ -18,9 +18,15 @@ vi.mock("../src/cli/shared.ts", async (importOriginal) => ({
   isInteractive: () => true,
 }));
 vi.mock("../src/deploy/preflight.ts", () => ({
-  preflightDeploy: async ({ agentDir }: { agentDir: string }) => {
+  preflightDeploy: async ({
+    agentDir,
+    config,
+  }: {
+    agentDir: string;
+    config: { channels?: Record<string, { ingress?: string }> };
+  }) => {
     const values = loadEnvValues(dotEnvPath(agentDir));
-    const webhook = !changedIngress && values.get("FEISHU_INGRESS") !== "websocket";
+    const webhook = !changedIngress && config.channels?.feishu?.ingress !== "websocket";
     return {
       ok: true,
       messages: [],
@@ -54,8 +60,6 @@ beforeEach(async () => {
   changedIngress = false;
   vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
   vi.stubEnv("FASTAGENT_ENVIRONMENT", "");
-  vi.stubEnv("FEISHU_INGRESS", undefined);
-  vi.stubEnv("LARK_INGRESS", undefined);
   vi.spyOn(process, "exit").mockImplementation(() => {
     throw stopped;
   });
@@ -76,17 +80,31 @@ async function agent(name: string, content: string, relocated = false) {
   await mkdir(secrets, { recursive: true });
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "fastagent.config.ts"), 'export default { defaults: { model: "openai/gpt-4o" } };\n');
+  // A channel that receives either way, for a configuration to name; the pre-flight is this file's.
+  await mkdir(join(dir, "src", "channels"), { recursive: true });
+  await writeFile(
+    join(dir, "src", "channels", "feishu.ts"),
+    'export default { kind: "fastagent.by-ingress", webhook: () => ({}), websocket: { name: "f", connect() {} } };\n',
+  );
   await buildable(dir);
   await writeFile(join(secrets, ".env"), content);
   if (relocated) vi.stubEnv("FASTAGENT_SECRETS_DIR", secrets);
   return { dir, file: join(secrets, ".env") };
 }
 
+/** The configuration a deployment delivers that has the Feishu channel receive by WebSocket. */
+async function websocketConfig(): Promise<string> {
+  const file = join(root, "websocket.json");
+  await writeFile(file, JSON.stringify({ channels: { feishu: { ingress: "websocket" } } }));
+  return file;
+}
+
 it.each([
   {
     host: "agentcore",
     name: "agent",
-    content: "FEISHU_INGRESS=websocket\n",
+    content: "",
+    websocket: true,
     relocated: false,
     error: "cannot run on AgentCore",
   },
@@ -107,9 +125,10 @@ it.each([
   },
 ] as const)(
   "refuses $host ($error) before creating or configuring an app",
-  async ({ host, name, content, relocated, error }) => {
+  async ({ host, name, content, relocated, error, ...rest }) => {
     const { dir, file } = await agent(name, content, relocated);
-    await expect(runDeploy(host, dir, { run: true, tunnel: host === "docker" })).rejects.toBe(stopped);
+    const config = "websocket" in rest ? { config: await websocketConfig() } : {};
+    await expect(runDeploy(host, dir, { run: true, tunnel: host === "docker", ...config })).rejects.toBe(stopped);
     expect(registerFeishuApp).not.toHaveBeenCalled();
     expect(createFeishuApi).not.toHaveBeenCalled();
     expect(await readFile(file, "utf8")).toBe(content);
@@ -142,9 +161,12 @@ it("validates the refreshed channel facts after onboarding before handing off to
 });
 
 it.each(["agentcore", "docker"] as const)("generate-only %s still warns without onboarding", async (host) => {
-  const { dir } = await agent("agent", host === "agentcore" ? "FEISHU_INGRESS=websocket\n" : "", host === "docker");
+  const { dir } = await agent("agent", "", host === "docker");
   const deploy = vi.spyOn(HOSTS[host], "deploy").mockResolvedValue(undefined);
-  await runDeploy(host, dir, { tunnel: host === "docker" });
+  await runDeploy(host, dir, {
+    tunnel: host === "docker",
+    ...(host === "agentcore" ? { config: await websocketConfig() } : {}),
+  });
   expect(registerFeishuApp).not.toHaveBeenCalled();
   expect(createFeishuApi).not.toHaveBeenCalled();
   expect(deploy).toHaveBeenCalledOnce();

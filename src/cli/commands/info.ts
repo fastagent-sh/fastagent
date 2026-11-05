@@ -37,14 +37,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     }
   })();
   const modelSpec = modelSpecFor(config, opts.model);
-  const declared = definitionSecrets(definition);
+  const declared = definitionSecrets(definition, config);
   const unsetSecrets = missingSecrets(declared, process.env);
   // Built only when every required secret has a value: building is what reads them. A module that is not what its
   // directory holds is said as the refusal `dev` and `start` would stop on.
   const code =
     unsetSecrets.length === 0
       ? await Promise.resolve()
-          .then(() => buildDefinition(definition, process.env, config.settings))
+          .then(() => buildDefinition(definition, process.env, config))
           .catch(failStartup)
       : undefined;
   // Reported, not fatal: `info` is how an author finds out a content entry is missing, or the environment refused.

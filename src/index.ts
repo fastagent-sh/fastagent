@@ -89,9 +89,12 @@ export { signInMcp } from "./mcp/sign-in.ts";
 export { mcpGrantFile } from "./mcp/grants.ts";
 
 export {
+  byIngress,
   defineAgent,
   defineSchedule,
   needs,
+  type ByIngress,
+  type Ingress,
   type AgentConfig,
   type AgentDefaults,
   type SettingsOf,

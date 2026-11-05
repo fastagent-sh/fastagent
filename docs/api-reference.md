@@ -271,6 +271,7 @@ it is (a message in one has not ended), or kept as the code it is, at whatever s
 function defineAgent<Settings>(config: AgentConfig<Settings>): AgentConfig<Settings>; // fastagent.config.ts
 function defineSchedule(config: { cron: string; tz?: string; prompt: string | ((fire: { at: Date }) => string | Promise<string>) }): DefinedSchedule;
 function needs<const S extends readonly SecretSpec[], T, Settings>(secrets: S, build: (values: SecretValues<S>, settings: Settings) => T): Needs<T>;
+function byIngress<T>(ways: { webhook: T | Needs<T>; websocket: T | Needs<T> }): ByIngress<T>; // src/channels/
 type SecretSpec = string | { name: string; description?: string; optional?: boolean };
 function sessionIdOf(api: ToolExecutionApi, context: Context): Promise<string | undefined>;
 ```
@@ -306,7 +307,12 @@ function text(body: string, status: number): Response; // a text/plain response
 function secretEquals(given: unknown, expected: string | undefined): boolean; // constant-time
 ```
 
-A channel is a module of `src/channels/` that default-exports one of the two forms, or `needs([...])` around one.
+A channel is a module of `src/channels/` that default-exports one of the two forms, or `needs([...])` around one, or
+`byIngress({ webhook, websocket })` with one of each: an instance then receives the way its configuration names
+(`channels.<name>.ingress`), else `dev` by WebSocket and everything else by webhook, and is asked only for that way's
+secrets. A configuration naming a way a channel cannot receive refuses the open. The definition's `inputs.secrets` lists both ways'
+secrets; a name only one way reads carries `whenIngress`, so a host asks for it only of an instance that receives
+that way.
 Route keys are `"/path"` (any method) or `"METHOD /path"`; the path is a literal. A path that exists under another
 method answers 405, an unknown one 404. **A channel MUST verify that a request comes from its platform**, with the
 credential the platform issued: nothing else in front of it does ([security boundary](design/security-boundary.md)).

@@ -639,8 +639,8 @@ What `deploy` read values for becomes a name or configuration:
 - **The model** is configuration (`defaults.model`, a delivered `--config`); the release manifest records no model.
 - **The model's credential route** (a variable on the target, or a login on the box): whether the target has the
   provider's variable name.
-- **A channel's shape** (Feishu's and Lark's `<PREFIX>_INGRESS`, webhook or WebSocket) is a setting, not a secret:
-  it moves into configuration, which `deploy` reads as the box will.
+- **A channel's shape** (webhook or WebSocket) is configuration, `channels.<name>.ingress`, which `deploy` reads as
+  the box will; unset, a deployment receives by webhook, since a host that scales to zero wakes on a request.
 - **Webhook registration** runs on the box, which holds the bot's token, through the host's shell (the one
   `login --deployment` uses), with the URL `deploy` learned.
 - **A production Feishu or Lark app** that deploy creates is written to the target's store. The check that it is not

@@ -270,8 +270,14 @@ const start: CommandSpec = {
 const INGRESS: FlagSpec = {
   flags: "--ingress <mode>",
   description:
-    "Feishu/Lark: set websocket or webhook in the selected environment; webhook also prepares its app now " +
-    "(unset: dev uses websocket, production uses webhook)",
+    "Feishu/Lark: write websocket or webhook to the instance configuration (channels.<kind>.ingress) and set the " +
+    "app up for it (unset: what the configuration says, else dev uses websocket and everything else webhook)",
+};
+const INGRESS_CONFIG: FlagSpec = {
+  flags: "--config <file>",
+  description:
+    "the instance configuration --ingress writes and the setup reads (default: dev's fastagent.json; for " +
+    "--env production, the file deploy --config delivers)",
 };
 const CHANNEL_ENVIRONMENT: FlagSpec = {
   flags: "--env <environment>",
@@ -303,7 +309,7 @@ const channelSub = (
   args: [AGENT_ARG],
   flags:
     kind === "feishu" || kind === "lark"
-      ? [CHANNEL_ENVIRONMENT, INGRESS, NO_ONBOARD, ...UNATTENDED_SETUP]
+      ? [CHANNEL_ENVIRONMENT, INGRESS, INGRESS_CONFIG, NO_ONBOARD, ...UNATTENDED_SETUP]
       : kind === "slack"
         ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG, ...UNATTENDED_SETUP]
         : [CHANNEL_ENVIRONMENT, JSON_FLAG],
@@ -315,6 +321,7 @@ const channelSub = (
   run: async (args, f) =>
     (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, {
       ingress: f.ingress as string | undefined,
+      ...(typeof f.config === "string" ? { config: f.config } : {}),
       environment: f.env as "dev" | "production" | undefined,
       onboard: f.onboard !== false,
       replaceConfig: f.replaceConfig === true,

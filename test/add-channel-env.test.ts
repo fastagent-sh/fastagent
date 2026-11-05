@@ -47,18 +47,15 @@ describe("channel setup guidance", () => {
 
   it("a dev WebSocket app needs only App ID/Secret and leaves production on its own app", async () => {
     const setup = channelSetup("feishu", "websocket");
-    expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_INGRESS"]);
-    expect(setup.env.find((entry) => entry.name === "FEISHU_INGRESS")?.required).toBe(false);
+    expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
+    expect(setup.steps.join("\n")).toContain("a deployment receives by webhook");
     expect(setup.steps.join("\n")).toContain("`deploy --run` creates a separate production app");
-    const pinned = channelSetup("feishu", "websocket", true).steps.join("\n");
-    expect(pinned).toContain("FEISHU_INGRESS=websocket is set for this environment");
-    expect(pinned).toContain("production has its own app and ingress setting");
 
-    // One channel file, whichever way it receives: the setting picks the factory when the file is imported.
+    // One channel file, whichever way it receives: each instance's configuration picks the way.
     const dir = await mkdtemp(join(tmpdir(), "fa-feishu-scaffold-"));
     await scaffoldChannel(dir, "feishu");
     const source = await readFile(join(dir, "src", "channels", "feishu.ts"), "utf8");
-    expect(source).toContain('feishuIngress() === "webhook"');
+    expect(source).toContain("export default byIngress({");
     expect(source).toContain("feishuWebSocketChannel(");
     expect(source).toContain("feishuChannel(");
   });
@@ -71,13 +68,7 @@ describe("appendChannelEnv", () => {
     await writeFile(join(dir, ".secrets", ".env.example"), "# agent\n");
     expect(await appendChannelEnv(dir, "feishu")).toBe(true);
     const example = await readFile(join(dir, ".secrets", ".env.example"), "utf8");
-    for (const name of [
-      "FEISHU_APP_ID",
-      "FEISHU_APP_SECRET",
-      "FEISHU_VERIFICATION_TOKEN",
-      "FEISHU_ENCRYPT_KEY",
-      "FEISHU_INGRESS",
-    ]) {
+    for (const name of ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN", "FEISHU_ENCRYPT_KEY"]) {
       expect(example).toContain(`# ${name}=`);
     }
     expect(example).toMatch(/# webhook only \(`start`, every deployment\).*\n# FEISHU_VERIFICATION_TOKEN=/);
