@@ -107,13 +107,11 @@ export default defineTool({
     // What the image does: it builds the definition, and the box opens that build where the image has it.
     await buildProject(agent);
     const manifest = join(dir, "release.json");
-    // The instance configuration the release delivers, beside its manifest as the image has both.
-    await writeFile(
-      manifest,
-      JSON.stringify({ version: 1, id: "one", agent: "reviewer", config: "fastagent.instance/fastagent.json" }),
-    );
-    await mkdir(join(dir, "fastagent.instance"));
-    await writeFile(join(dir, "fastagent.instance", "fastagent.json"), JSON.stringify({ thinkingLevel: "high" }));
+    await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "reviewer" }));
+    // The instance configuration the release delivers, where the image has it and names it.
+    const delivered = join(dir, "etc", "fastagent", "fastagent.json");
+    await mkdir(dirname(delivered), { recursive: true });
+    await writeFile(delivered, JSON.stringify({ thinkingLevel: "high" }));
     await mkdir(join(root, ".secrets"), { recursive: true });
     const rotated = JSON.stringify({ openai: { type: "api_key", key: "rotated" } });
     await writeFile(join(root, ".secrets/auth.json"), rotated);
@@ -128,6 +126,7 @@ export default defineTool({
     }
     Object.assign(env, {
       FASTAGENT_RELEASE_FILE: manifest,
+      FASTAGENT_CONFIG: delivered,
       FASTAGENT_STORAGE_DIR: root,
     });
     const workspaceUrl = pathToFileURL(join(repo, "src/deploy/workspace.ts")).href;
@@ -172,7 +171,7 @@ try {
       mise: join(root, ".state", "mise"),
       // Read from the configuration the release delivered.
       thinking: "high",
-      thinkingFrom: join(dir, "fastagent.instance", "fastagent.json"),
+      thinkingFrom: delivered,
     });
     expect(reported.end).toMatchObject({ status: "completed" });
     const result = JSON.stringify(reported.entries.find((entry) => entry.kind === "tool_result")?.data ?? "");

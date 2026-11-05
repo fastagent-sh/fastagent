@@ -31,7 +31,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
     const artifacts = planRailwayDeploy({ ...base, channels: [] }).artifacts;
     expect(artifacts.map((a) => a.path)).toEqual([
       "fastagent.release.json",
-      "fastagent.instance/fastagent.json",
+      "fastagent.deploy/fastagent.json",
       "fastagent.packages",
       "Dockerfile",
       ".dockerignore",

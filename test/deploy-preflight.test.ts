@@ -188,7 +188,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const withConfig = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true, delivered });
     expect(withConfig).toMatchObject({
       ok: false,
-      gate: expect.stringMatching(/--config delivers the instance configuration/),
+      gate: expect.stringMatching(/does not set FASTAGENT_CONFIG, and --config delivers/),
     });
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
 

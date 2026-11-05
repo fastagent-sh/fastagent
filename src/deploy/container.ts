@@ -1,7 +1,7 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
 import { CONTENT_DIRNAME, INSTANCE_CONFIG_FILE, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { RUNTIME_FLOOR } from "../runtime.ts";
-import { DELIVERED_CONFIG_FILE, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
+import { RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 import { MISE_ENVIRONMENT } from "../environment/mise.ts";
 import { BOX_CLI_PREDATES } from "./box-shell.ts";
 
@@ -11,7 +11,18 @@ import { BOX_CLI_PREDATES } from "./box-shell.ts";
  */
 const PACKAGES_FILE = "fastagent.packages";
 
-/** What every deploy writes whoever wrote it before: build output, by its file name, never kept or reported stale. */
+/**
+ * The directory a deploy writes the instance configuration it delivers to, in the build context; the image copies it to
+ * {@link IMAGE_CONFIG_DIR}. A directory of its own, never a file in the program's: what an instance configuration names
+ * beside it (its `.mcp.json`, its text) is read from its own directory, and the program's directory holds the program's.
+ */
+const DELIVERED_CONFIG_DIR = "fastagent.deploy";
+const DELIVERED_CONFIG_FILE = `${DELIVERED_CONFIG_DIR}/${INSTANCE_CONFIG_FILE}`;
+
+/** Where a generated image has the instance configuration, read-only: the filesystem hierarchy's for configuration. */
+const IMAGE_CONFIG_DIR = "/etc/fastagent";
+
+/** What every deploy writes whoever wrote it before: build output, by its path, never kept or reported stale. */
 export const BUILD_OUTPUTS: readonly string[] = [RELEASE_FILE, PACKAGES_FILE, DELIVERED_CONFIG_FILE];
 
 export interface Artifact {
@@ -113,8 +124,8 @@ export interface ContainerInput {
    */
   modelSpec?: string;
   /**
-   * The instance configuration the deployment delivers (`deploy --config`), as the file's text: written beside the
-   * release manifest and named in it, so the image carries it and `start` reads it there.
+   * The instance configuration the deployment delivers (`deploy --config`), as the file's text: the image copies it to
+   * {@link IMAGE_CONFIG_DIR}, and `start` reads it through `FASTAGENT_CONFIG`. Without one, `{}`: the program's defaults.
    */
   config?: string;
   /** The agent's name, recorded in the release manifest: the agent directory's own name. */
@@ -176,6 +187,15 @@ export const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
 /** Why the image builds `dist/` itself: an upload that follows `.gitignore` (`railway up`) drops it, and `start` needs it. */
 const BUILD_STEP_NOTE = "# `start` opens dist/, which an upload that follows .gitignore leaves out: build it here.";
 
+/**
+ * The instance configuration's layer, after the build so a change of configuration builds nothing again: the directory
+ * the deploy wrote, read-only where the image's configuration goes, and named to `start`.
+ */
+const CONFIG_LAYER = `# The instance configuration \`deploy --config\` delivers ({} without one: the program's defaults).
+COPY ${DELIVERED_CONFIG_DIR}/ ${IMAGE_CONFIG_DIR}/
+ENV FASTAGENT_CONFIG=${IMAGE_CONFIG_DIR}/${INSTANCE_CONFIG_FILE}
+`;
+
 function dockerfile(input: ContainerInput): string {
   // The build context is the agent directory, baked at IMAGE_DEFINITION_DIR; deps install (and the local bin lives)
   // there.
@@ -210,7 +230,7 @@ RUN ${install}
 ${environment}COPY . .
 ${BUILD_STEP_NOTE}
 RUN bun run fastagent build
-CMD ["bun", "run", "fastagent", "start", "${dir}"]
+${CONFIG_LAYER}CMD ["bun", "run", "fastagent", "start", "${dir}"]
 `;
   }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent); fall back to `npm
@@ -221,7 +241,7 @@ RUN ${install}
 ${environment}COPY . .
 ${BUILD_STEP_NOTE}
 RUN ./node_modules/.bin/fastagent build
-CMD ["./node_modules/.bin/fastagent", "start", "${dir}"]
+${CONFIG_LAYER}CMD ["./node_modules/.bin/fastagent", "start", "${dir}"]
 `;
 }
 
@@ -263,13 +283,12 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
     id: input.releaseId,
     agent: input.agent,
     ...(input.modelSpec !== undefined ? { model: input.modelSpec } : {}),
-    ...(input.config !== undefined ? { config: DELIVERED_CONFIG_FILE } : {}),
   };
   parseDeploymentRelease(JSON.stringify(release));
   return [
     { path: RELEASE_FILE, content: `${JSON.stringify(release, null, 2)}\n` },
-    // Written without a configuration too, empty: one an earlier deploy delivered would otherwise ship again, unread.
-    { path: DELIVERED_CONFIG_FILE, content: input.config ?? "" },
+    // Written without a configuration too, as none: one an earlier deploy delivered would otherwise ship again.
+    { path: DELIVERED_CONFIG_FILE, content: input.config ?? "{}\n" },
     // Written without packages too, empty: a list an earlier deploy left would otherwise outlive the last package.
     { path: PACKAGES_FILE, content: (input.packages ?? []).map((spec) => `${spec}\n`).join("") },
     { path: "Dockerfile", content: dockerfile(input) },

@@ -29,19 +29,7 @@ export interface DeploymentRelease {
    * opposite of what a credential needs (see docs/design/configuration.md §8).
    */
   model?: string;
-  /**
-   * The instance configuration this release delivers: a file beside the manifest, by its name. Configuration only,
-   * like `model`: it holds no secret value.
-   */
-  config?: string;
 }
-
-/**
- * Where a deploy writes the instance configuration it delivers, relative to the release manifest: a directory of its
- * own, apart from the program's, because what an instance configuration names beside it (its `.mcp.json`, its text) is
- * read from its own directory, and the program's directory holds the program's.
- */
-export const DELIVERED_CONFIG_FILE = "fastagent.instance/fastagent.json";
 
 /** The manifest names the agent the storage belongs to, and that name is also a content entry's name rule (one path
  *  segment). `deploy` asks BEFORE generating artifacts — a name `init` accepts but this rejects is the author's
@@ -58,8 +46,7 @@ export function parseDeploymentRelease(raw: string): DeploymentRelease {
     !r.id ||
     typeof r.agent !== "string" ||
     !isReleaseAgentName(r.agent) ||
-    (r.model !== undefined && !isModelSpec(r.model)) ||
-    (r.config !== undefined && r.config !== DELIVERED_CONFIG_FILE)
+    (r.model !== undefined && !isModelSpec(r.model))
   ) {
     throw new Error("invalid deployment release manifest");
   }

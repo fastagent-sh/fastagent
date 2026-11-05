@@ -568,7 +568,7 @@ function checkKeptDockerfile(
   /** The model the release manifest carries (set only when the value file named it). */
   modelFromValueFile: string | undefined,
   valueFile: string,
-  /** The release delivers an instance configuration, which travels beside its manifest. */
+  /** The release delivers an instance configuration, which the image must copy and name. */
   deliversConfig: boolean,
   report: DeployReport,
 ): void {
@@ -604,10 +604,11 @@ function checkKeptDockerfile(
       `Dockerfile), or set \`defaults.model\` in fastagent.config.ts so it ships in the config instead.`;
     report.issue(issue);
   }
-  if (deliversConfig && !readsManifest) {
+  if (deliversConfig && !/^\s*ENV\s[^\n]*\bFASTAGENT_CONFIG[=\s]/m.test(dockerfileText)) {
     report.issue(
-      `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and --config delivers the instance configuration beside ` +
-        `the release manifest, which is only read when that ENV points at it. Add it (see a generated Dockerfile).`,
+      `your Dockerfile does not set FASTAGENT_CONFIG, and --config delivers the instance configuration in the ` +
+        `image, which \`start\` reads only where that ENV points: copy fastagent.deploy/ into the image and set it ` +
+        `(see a generated Dockerfile).`,
     );
   }
 }

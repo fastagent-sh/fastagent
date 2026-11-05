@@ -1,4 +1,3 @@
-import { posix } from "node:path";
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts, imageHasGit } from "../src/deploy/container.ts";
@@ -114,17 +113,18 @@ describe("deploy/container: shared Docker context", () => {
       model: "baseten/zai-org/GLM-5.3",
     });
     expect(manifest(input).model).toBeUndefined();
-    // A delivered configuration is a file of its own beside it, named in it; without one the file is written empty,
-    // so one an earlier deploy delivered does not ship again.
-    const artifacts = (i: typeof input & { config?: string }) => containerArtifacts(i);
+    // A delivered configuration is a directory of its own, which the image copies and names; the manifest says nothing
+    // of it. Without one it is `{}`, so one an earlier deploy delivered never ships again.
     const file = (i: typeof input & { config?: string }) =>
-      artifacts(i).find((a) => a.path === "fastagent.instance/fastagent.json")?.content;
-    expect(manifest({ ...input, config: '{"thinkingLevel":"high"}' }).config).toBe("fastagent.instance/fastagent.json");
+      containerArtifacts(i).find((a) => a.path === "fastagent.deploy/fastagent.json")?.content;
     expect(file({ ...input, config: '{"thinkingLevel":"high"}' })).toBe('{"thinkingLevel":"high"}');
-    expect(manifest(input).config).toBeUndefined();
-    expect(file(input)).toBe("");
-    // In a directory of its own, never the program's: what the configuration names beside it is read from there.
-    expect(posix.dirname(manifest({ ...input, config: "{}" }).config)).not.toBe(".");
+    expect(file(input)).toBe("{}\n");
+    expect(manifest({ ...input, config: "{}" }).config).toBeUndefined();
+    const generated = containerArtifacts(input).find((a) => a.path === "Dockerfile")!.content;
+    // After the build, so a change of configuration builds nothing again.
+    expect(generated.indexOf("COPY fastagent.deploy/ /etc/fastagent/")).toBeGreaterThan(
+      generated.indexOf("fastagent build"),
+    );
     // It is NOT in the image's instructions — a credential could never ride this carrier, and neither does this.
     const dockerfile = containerArtifacts({ ...input, modelSpec: "openai/gpt-4o-mini" }).find(
       (a) => a.path === "Dockerfile",
