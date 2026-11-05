@@ -76,7 +76,7 @@ it("deploy and production tunnel registration pass Slack the selected environmen
   expect(registerSlackWebhook).toHaveBeenLastCalledWith(
     "https://production.test",
     expect.objectContaining({
-      stateRoot: "/agent/.state/production",
+      stateRoot: "/agent/.fastagent/start/.state",
       environment: "production",
     }),
   );

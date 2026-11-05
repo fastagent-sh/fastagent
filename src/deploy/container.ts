@@ -1,5 +1,5 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
-import { CONTENT_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { CONTENT_DIRNAME, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { RUNTIME_FLOOR } from "../runtime.ts";
 import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 import { MISE_ENVIRONMENT } from "../environment/mise.ts";
@@ -231,6 +231,7 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 **/node_modules
 **/${SECRETS_DIRNAME}/**
 **/${STATE_DIRNAME}
+/${INSTANCES_DIRNAME}
 /${CONTENT_DIRNAME}
 **/.cache
 **/.env

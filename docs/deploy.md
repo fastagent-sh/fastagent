@@ -423,7 +423,7 @@ anything.
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /
 `agentcore.template.yaml` (Railway has none of its own). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
-`**/.state`, `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
+`**/.state`, `/.fastagent`, `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
 
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
   never touched.

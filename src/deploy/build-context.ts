@@ -10,6 +10,7 @@ import ignore from "ignore";
 import {
   AGENT_CONFIG_FILE,
   CONTENT_DIRNAME,
+  INSTANCES_DIRNAME,
   SECRETS_DIRNAME,
   exists,
   readTextIfExists,
@@ -59,9 +60,11 @@ export interface BuildContextPaths {
   machineryPaths: string[];
   /** Credential files that exist right now — a kept ignore file that lets one through bakes it. */
   leakCandidates: string[];
-  /** The state root, when it exists inside the context. */
+  /** A state root of the agent's own choosing inside the context, when it exists. */
   stateShips?: string;
-  /** `content/`, when it exists: this machine's clones. */
+  /** `.fastagent/`, when it exists: the local instances' state and clones, and a build's staging. */
+  instancesShip?: string;
+  /** `content/`, when it exists: clones in the root, which a host refuses in a release. */
   contentShips?: string;
   /** The agent's node_modules, when it exists. */
   depDirs: string[];
@@ -91,8 +94,12 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   // State gets the same treatment (a custom in-tree FASTAGENT_STATE_DIR is invisible to the name-based `**/.state`),
   // at warn level.
   const stateRel = inContext(resolveStateRoot(agentDir));
+  const inInstances =
+    stateRel !== undefined && (stateRel === INSTANCES_DIRNAME || stateRel.startsWith(`${INSTANCES_DIRNAME}/`));
   // Existence gates the WARNING, never the generated exclude (same split as secretPaths vs leakCandidates).
-  const stateShips = stateRel !== undefined && (await exists(join(agentDir, stateRel))) ? stateRel : undefined;
+  const stateShips =
+    stateRel !== undefined && !inInstances && (await exists(join(agentDir, stateRel))) ? stateRel : undefined;
+  const instancesShip = (await exists(join(agentDir, INSTANCES_DIRNAME))) ? INSTANCES_DIRNAME : undefined;
   const contentShips = (await exists(join(agentDir, CONTENT_DIRNAME))) ? CONTENT_DIRNAME : undefined;
   // The `.env` family at the level fastagent is RESPONSIBLE for: the agent dir's root.
   const envFiles = (await entriesIfExists(agentDir))
@@ -117,8 +124,8 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   ];
   // Same existence rule: a node_modules that is not there cannot be uploaded.
   const depDirs = await present(["node_modules"]);
-  const machineryPaths = [...secretPaths, ...(stateRel ? [stateRel] : [])];
-  return { machineryPaths, leakCandidates, stateShips, contentShips, depDirs };
+  const machineryPaths = [...secretPaths, ...(stateRel && !inInstances ? [stateRel] : [])];
+  return { machineryPaths, leakCandidates, stateShips, instancesShip, contentShips, depDirs };
 }
 
 /** Interrogate BOTH ignore files deploy emits, when the author kept them. */
@@ -127,7 +134,7 @@ export async function checkKeptIgnoreFiles(
   report: DeployReport,
 ): Promise<void> {
   const { agentDir, force } = ctx;
-  const { leakCandidates, stateShips, contentShips, depDirs } = ctx.paths;
+  const { leakCandidates, stateShips, instancesShip, contentShips, depDirs } = ctx.paths;
   for (const rel of [".dockerignore", "Dockerfile.dockerignore"]) {
     const kept = await readTextIfExists(join(agentDir, rel));
     if (kept === undefined) continue;
@@ -163,6 +170,11 @@ export async function checkKeptIgnoreFiles(
     if (stateShips && !excluded(`${stateShips}/sessions`)) {
       report.warn(
         `your ${rel} (kept) does not exclude \`${stateShips}\` — the build machine's sessions/channel state would ship in the image. ${remedy([`/${stateShips}`])}`,
+      );
+    }
+    if (instancesShip && !excluded(`${instancesShip}/dev/.state`)) {
+      report.warn(
+        `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions, channel state and clones of the agent's content would ship in the image. ${remedy([`/${instancesShip}`])}`,
       );
     }
     // An issue, not a warning: a release holding content/ is refused on the host, which links its own there.

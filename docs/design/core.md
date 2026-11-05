@@ -48,11 +48,10 @@ One agent shape, one marker:
 ├── fastagent.json          # optional: this instance's configuration, and the content it adds; never in an image
 ├── .gitignore              # scaffolded once by init, yours after
 ├── .secrets/               # the local instance's .env + auth.json; only .env.example + .gitignore travel
-├── .state/                 # the local instance's state: agent.sqlite, channel state, schedule state
-└── content/                # the clones of the declared repositories; its own .gitignore
+└── .fastagent/dev/        # the local dev instance, and the agent's cwd: .state/ (agent.sqlite, channel state, schedule state) and content/ (clones, its own .gitignore); `start` uses .fastagent/start/
 ```
 
-`.secrets/` and `.state/` hold the `dev` environment's; `start` and a deployment use `production/` in each.
+`.secrets/` holds the `dev` environment's, and `start` and a deployment use `.secrets/production/`; the instance's root is `.fastagent/dev/` for `dev` and `.fastagent/start/` for `start` (the same `--root`, `--state` and `--workdir` place either elsewhere).
 
 **The agent directory is the agent's working directory**, its coding tools' root, and deploy's build context. What it works on is not derived from where it sits:
 it is declared as its **content** ([agent model](agent-model.md) §3): the repositories every instance reaches in
@@ -660,7 +659,7 @@ is due when a request next wakes it.
 `FASTAGENT_STATE_DIR` selects the one machine-state root:
 
 ```txt
-<stateRoot>/                # <agent dir>/.state, .state/production for start (FASTAGENT_STATE_DIR overrides)
+<stateRoot>/                # <agent dir>/.fastagent/dev/.state, .fastagent/start/.state for start (FASTAGENT_STATE_DIR overrides)
 ├── agent.sqlite            # the instance's storage: sessions, messages, entries (pi-durable)
 ├── invoke.sqlite           # `fastagent invoke`'s sessions, apart from the instance's
 ├── models/                 # the model lists fetched (§3): published.json, providers/<id>.json

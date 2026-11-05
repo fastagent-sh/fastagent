@@ -153,22 +153,36 @@ export const INSTANCE_WORKDIR_ENV = "FASTAGENT_WORKDIR";
 export const INSTANCE_STATE_ENV = "FASTAGENT_STATE_DIR";
 export const INSTANCE_CONFIG_ENV = "FASTAGENT_CONFIG";
 
+/** Where fastagent keeps what it makes for a local instance of the project in `dir`, one directory per environment. */
+export const INSTANCES_DIRNAME = ".fastagent";
+
 /**
- * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/):
- * the state directory, else `.state` in the instance root; with neither, production uses `.state/production` in the
- * agent dir and dev uses `.state`.
+ * The instance root of the project in `dir` when none is given (agent-artifact.md §4.1): `.fastagent/dev/` for `dev`,
+ * and `.fastagent/start/` for the commands that run what `start` runs, kept apart so a trial of the production build
+ * never reads or writes the development sessions and clones.
+ */
+function defaultInstanceRoot(dir: string, env: NodeJS.ProcessEnv): string {
+  return join(resolve(dir), INSTANCES_DIRNAME, env[AGENT_ENVIRONMENT_ENV] === "production" ? "start" : "dev");
+}
+
+/**
+ * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/): the state
+ * directory, else `.state` in the instance root, which is the project's default one when none is given.
  */
 export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  const root = resolveOverridePath(env[INSTANCE_ROOT_ENV]);
   return (
     resolveOverridePath(env[INSTANCE_STATE_ENV]) ??
-    (root === undefined ? environmentPath(dir, STATE_DIRNAME, env) : join(root, STATE_DIRNAME))
+    join(resolveOverridePath(env[INSTANCE_ROOT_ENV]) ?? defaultInstanceRoot(dir, env), STATE_DIRNAME)
   );
 }
 
-/** The agent's working directory: the workspace directory, else the instance root, else the agent dir itself. */
+/** The agent's working directory: the workspace directory, else the instance root, which is the project's default one. */
 export function resolveWorkdir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env[INSTANCE_WORKDIR_ENV]) ?? resolveOverridePath(env[INSTANCE_ROOT_ENV]) ?? resolve(dir);
+  return (
+    resolveOverridePath(env[INSTANCE_WORKDIR_ENV]) ??
+    resolveOverridePath(env[INSTANCE_ROOT_ENV]) ??
+    defaultInstanceRoot(dir, env)
+  );
 }
 
 /** Where fastagent clones the content entry `name` of the agent in `dir`. */

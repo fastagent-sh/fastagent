@@ -24,6 +24,8 @@ describe("deploy/container: shared Docker context", () => {
     expect(rootIgnore).toMatch(/^!\*\*\/\.env\.example$/m);
     expect(rootIgnore).toMatch(/^!\*\*\/\.secrets\/\.gitignore$/m);
     expect(rootIgnore).not.toMatch(/^\*\*\/\.secrets$/m);
+    // The local instances' state and clones, whichever environment's default root they are in.
+    expect(rootIgnore).toMatch(/^\/\.fastagent$/m);
 
     // Excluding descendants rather than the directory keeps these negations meaningful in both
     // Docker's matcher and the stricter gitignore-style matcher used by deploy preflight.
@@ -38,6 +40,8 @@ describe("deploy/container: shared Docker context", () => {
       "content/app/README.md",
       "content/notes",
       ".state/channels/telegram.json",
+      ".fastagent/dev/.state/agent.sqlite",
+      ".fastagent/start/content/app/README.md",
     ];
 
     // With .git shipped, this difference is the set `git ls-files --deleted` would report after COPY.

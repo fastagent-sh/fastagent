@@ -109,6 +109,9 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   const dir = await prepareDeployment(resolve(dirArg), root, manifest);
   // Defaults, not overrides: an operator who pointed either dir somewhere else meant it, and silently relocating
   // their state is the one failure they could not diagnose from the logs.
+  // The agent's working directory stays the definition's own, where a deployed release is and `content/` is a link to
+  // the volume; the default under `.fastagent/` is a local project's.
+  process.env.FASTAGENT_WORKDIR ||= dir;
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
   // mise's data directory, on the storage rather than the container's disk. The image's packages are in mise's system

@@ -452,7 +452,7 @@ Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion t
 `src/tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), appends variables to
 `.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
 `add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
-`--env production` selects `.secrets/production/.env` and `.state/production` without changing dev credentials.
+`--env production` selects `.secrets/production/.env` and `.fastagent/start/.state` without changing dev credentials.
 `deploy --run` creates the separate Feishu/Lark production app automatically, at a terminal or, with `--json`, for a
 coding agent's user (without either it stops, naming the `--json` command); Slack needs `add slack --env production`,
 and Telegram needs a separate BotFather bot.
@@ -552,9 +552,9 @@ the startup report says whether it does, and why not
 ```txt
 port:     --port > PORT > fastagent.config.ts defaults.http.port > 8787
 bind:     --bind > all interfaces
-state:    --state > FASTAGENT_STATE_DIR > <root>/.state > <agent dir>/.state/production
+state:    --state > FASTAGENT_STATE_DIR > <root>/.state > <agent dir>/.fastagent/start/.state
           (agent.sqlite, channel and schedule state)
-workdir:  --workdir > FASTAGENT_WORKDIR > <root> > <agent dir>   (the agent's cwd; content/ clones land here)
+workdir:  --workdir > FASTAGENT_WORKDIR > <root> > <agent dir>/.fastagent/start   (the agent's cwd)
 root:     --root > FASTAGENT_ROOT
 config:   --config > FASTAGENT_CONFIG > none: start never reads the project's fastagent.json
 secrets:  --env-file > FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production   (still the project's, whatever the root)
