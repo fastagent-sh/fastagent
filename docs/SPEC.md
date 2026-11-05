@@ -527,14 +527,33 @@ function baseEnv(source: Record<string, string | undefined>): Record<string, str
 interface InstanceConfig<Settings = unknown> {
   model?: string;
   thinkingLevel?: Session["thinkingLevel"];
-  http?: { port?: number; api?: boolean };
+  http?: {
+    port?: number;
+    api?: boolean;
+    /**
+     * The public base URL the platforms reach this instance at, any mount prefix included (`https://x.fly.dev/agent`).
+     * Set, a serve points each webhook channel there (`Service.registerWebhooks`); unset, none is pointed, and each
+     * one's outcome is `manual` with the URL to use. Never inferred from the environment.
+     */
+    publicUrl?: string;
+  };
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
   /**
    * How each channel that offers both ways (`byIngress`) receives, by its file's name. Unset, `dev` receives by a
    * connection it opens and everything else by webhook. A name the agent has no channel by, or a way its channel
    * cannot receive, refuses the open.
    */
-  channels?: Record<string, { ingress?: "webhook" | "connection" }>;
+  channels?: Record<
+    string,
+    {
+      ingress?: "webhook" | "connection";
+      /**
+       * Slack's only, refused on another channel: the app this instance is bound to (`id`, its workspace's `team`)
+       * and the digest of the manifest last synced to it, which `fastagent channels setup` writes.
+       */
+      app?: { id: string; team: string; manifest?: string };
+    }
+  >;
   settings?: Partial<Settings>;
   /** Content the instance adds to the program's: a name may not be one the program declares. */
   content?: Record<string, { github: string; ref?: string } | { path: string }>;
@@ -561,9 +580,19 @@ interface Service {
   fetch(request: Request): Promise<Response>;
   /**
    * Or a server of its own, Node's `http` server or `Bun.serve`: the one way to start one. Answers the port it bound.
-   * Default port: the instance configuration's `http.port`, else 8787.
+   * Default port: the instance configuration's `http.port`, else 8787. Once it answers, and when `http.publicUrl` is
+   * set, it registers the webhook channels (`registerWebhooks()`) before it resolves.
    */
   listen(port?: number, host?: string): Promise<number>;
+  /**
+   * Points each webhook channel's platform at `<baseUrl ?? http.publicUrl>/<its path>`, for an app that serves `fetch`
+   * on a server of its own: called once that server answers, since a platform verifies the URL as it is set. Sets it
+   * on every call, never reading it first. Answers every webhook channel's outcome, and rejects only for a `baseUrl`
+   * that is not an absolute http(s) URL: a platform's refusal is a `failed` outcome.
+   */
+  registerWebhooks(baseUrl?: string): Promise<WebhookRegistration[]>;
+  /** The outcomes of the last registration, `listen`'s or `registerWebhooks`'s; empty before one. */
+  readonly webhooks: readonly WebhookRegistration[];
   ready: Promise<void>;
   /**
    * Ends the API's event streams, each with a `stream_error`, then stops the server, giving requests in flight 500 ms
@@ -571,7 +600,27 @@ interface Service {
    */
   close(): Promise<void>;
 }
+
+/** One webhook channel's registration. */
+interface WebhookRegistration {
+  /** The channel file's name. */
+  channel: string;
+  /**
+   * `registered`: the platform points at `url`. `manual`: a person's step remains (`step`). `failed`: it is not
+   * pointed, and acting on `step` then registering again can fix it.
+   */
+  outcome: "registered" | "manual" | "failed";
+  /** The URL it was, or is to be, pointed at; absent when no base URL is known. */
+  url?: string;
+  /** For `manual` and `failed`: what to do, said as the step to take. */
+  step?: string;
+}
 ```
+
+Telegram, Feishu and Lark are pointed by the instance with its own credentials. Slack's Request URL is app
+configuration only a person's developer credential can change, so `registerWebhooks` never sets it: a Slack channel
+is `registered` when its `channels.<name>.app.manifest` is the manifest this instance needs (the URL and the
+channel's scopes and events), and otherwise `manual`, its `step` the `fastagent channels setup` to run.
 
 `openAgent` opens one instance of a built definition, the default export of an agent's package
 (`import support from "@acme/support"`), from its inputs and nothing else. It reads no environment variable, no
@@ -721,6 +770,10 @@ inbound request. Each way declares its own secrets, and an instance is asked onl
   `FASTAGENT_API_KEY` of its own environment, several separated by commas so a key can be replaced without a gap. A
   wrong or missing key is `401 unauthorized`. With no key configured the API is not served, and the startup report
   says so. `/health` and the channels' routes are outside the API and unchanged: each channel verifies its platform.
+- **`GET /health`** is public and answers JSON: `200 { "status": "ok", "webhooks": [...] }` once the serve is ready,
+  `503 { "status": "starting", "webhooks": [...] }` before. `webhooks` is always present, each entry only
+  `{ channel, outcome }` (§8's `WebhookRegistration`), empty with no webhook channel or before a registration; a
+  step and its reasons go to the log. A channel that serves `/health` itself answers it instead.
 - **No CORS**: the key is a credential for the whole instance, so a browser never holds it. A browser app calls its own
   backend, which calls the agent.
 - A request body over 32 MiB is `413`, `invalid_request` with `details.reason: "too_large"`. A request the API
