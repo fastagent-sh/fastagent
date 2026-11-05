@@ -30,7 +30,7 @@ my-agent/
 ├── SYSTEM.md                      # the system prompt: who the agent is, what it does, how it improves itself
 ├── skills/writing-great-skills/   # the example skill: how to author skills well
 ├── fastagent.config.ts            # model, providers, http
-├── package.json                   # FastAgent, pi-durable, pi-ai and pi-schema, installed by init
+├── package.json                   # FastAgent, pi-durable, pi-ai and pi-schema; scripts dev, build and start
 ├── .secrets/.env.example          # secrets live here, never committed
 └── .gitignore
 ```
@@ -117,7 +117,7 @@ a secret declares it with `needs` ([secrets in code](configuration.md#secrets-in
 ## 6. Serve without watch
 
 ```bash
-fastagent build && fastagent start
+fastagent build && fastagent start   # or npm start
 ```
 
 `build` compiles the agent into `dist/` with the project's own TypeScript (`init` adds it); `start` serves that

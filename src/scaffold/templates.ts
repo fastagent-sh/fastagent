@@ -22,7 +22,9 @@ export const channelBundleFiles = (kind: string): string[] =>
 /**
  * package.json for the complete agent: fastagent at this build's version, the packages an agent's code is written
  * against (its tools and extensions are pi-durable code, its providers pi-ai's, its tool schemas pi-schema's) at the
- * versions this build runs, and the TypeScript `fastagent build` compiles it with.
+ * versions this build runs, and the TypeScript `fastagent build` compiles it with. Its scripts are the framework's
+ * three entries, so `npm run dev` and `npm start` work as in any web project; `start` builds first, since it opens the
+ * built `dist/` and refuses one the project has moved past.
  */
 export function packageJson(
   name: string,
@@ -33,6 +35,7 @@ export function packageJson(
       name,
       private: true,
       type: "module",
+      scripts: { dev: "fastagent dev", build: "fastagent build", start: "fastagent build && fastagent start" },
       dependencies: { "@fastagent-sh/fastagent": `^${build.version}`, ...build.harness },
       devDependencies: { typescript: build.typescript },
     },

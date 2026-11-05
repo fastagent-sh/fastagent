@@ -65,8 +65,9 @@ fastagent init <dir> [--content <source>]... [--no-install]
 ```
 
 Creates the agent in `<dir>` itself, which must be new or empty: `SYSTEM.md` (its system prompt), a
-`writing-great-skills` example skill, `fastagent.config.ts`, `package.json` (FastAgent, and the exact pi-durable and
-pi-ai versions this release is built with), `.secrets/.env.example`, `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`, then makes the directory a git
+`writing-great-skills` example skill, `fastagent.config.ts`, `package.json` (FastAgent, the exact pi-durable, pi-ai and
+pi-schema versions this release is built with, TypeScript, and the scripts `dev`, `build` and `start`, which builds
+first), `.secrets/.env.example`, `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`, then makes the directory a git
 repository whose first commit is the scaffold, so a change the agent makes to itself can be reviewed and undone. It
 says when it does not: the directory is already inside a git repository that tracks it (one that ignores it, such as
 a home directory kept in git with `*` ignored, does not count), git is not installed, or the commit failed for lack of
