@@ -2,7 +2,7 @@
 import { join, resolve } from "node:path";
 import type { Agent } from "../../agent-api.ts";
 import { readFile } from "node:fs/promises";
-import { applyCarriedEnv } from "../../deploy/secrets.ts";
+import { applyRuntimeSecrets } from "../../deploy/agentcore/runtime-secrets.ts";
 import { applyReleaseEnv, parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
 import {
   selectAgentEnvironment,
@@ -41,12 +41,6 @@ type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: num
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
   const bindFlag = parseBind(opts.bind);
-  // A host that carries the value file as ONE encoded variable (AgentCore): expanded before anything reads the env.
-  try {
-    applyCarriedEnv();
-  } catch (error) {
-    failStartup(error);
-  }
   setLogLevel("info");
   selectAgentEnvironment("production");
   unmarkDevServe();
@@ -54,7 +48,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     // The generated Runtime resource sets PORT; 8080 is the platform's contract when nothing does.
     const port = portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? 8080;
     const deferred = deferAgentcoreService({
-      prepare: () => prepareStartWorkspace(dirArg),
+      prepare: () => prepareAgentcoreWorkspace(dirArg),
       assemble: async (dir) => {
         const service = await openPreparedStartService(dir, opts);
         await service.ready;
@@ -107,6 +101,15 @@ export async function prepareStartWorkspace(dirArg: string): Promise<string> {
   // box (applyReleaseEnv's own tests pin the precedence).
   applyReleaseEnv(manifest);
   return dirArg;
+}
+
+/**
+ * AgentCore's stage one: the deployment's values first, on the first invocation, so a failed read is that invocation's
+ * failure and the next asks again; then the storage.
+ */
+export async function prepareAgentcoreWorkspace(dirArg: string): Promise<string> {
+  await applyRuntimeSecrets();
+  return prepareStartWorkspace(dirArg);
 }
 
 export async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {

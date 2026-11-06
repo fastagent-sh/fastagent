@@ -2,13 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { type FlyRunPlan, deployFlyRun } from "../src/deploy/fly/run.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
-import {
-  assembleSecrets,
-  applyCarriedEnv,
-  deploymentSecrets,
-  encodeCarriedEnv,
-  missingValuesGate,
-} from "../src/deploy/secrets.ts";
+import { deploymentSecrets } from "../src/deploy/secrets.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 import { boxReporting } from "./box-webhooks.ts";
 
@@ -289,7 +283,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       ok: false,
       gate:
         "not logged in to Fly — run `fly auth login` in a terminal (it opens a browser), or set FLY_API_TOKEN in this " +
-        "shell's environment, never in .secrets/production/.env (everything there travels to the box); then re-run. " +
+        "shell's environment, not in .secrets/production/.env (that file holds the deployment's values); then re-run. " +
         "From a coding agent, `fastagent deploy fly ../bot --run --json` hands the sign-in to its user",
     });
     expect(cmds()).toEqual(["auth whoami"]); // nothing after the gate
@@ -338,110 +332,6 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   });
 });
 
-describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
-  it("an env-key model auth travels as its own secret (value from the value file)", () => {
-    const r = assembleSecrets({
-      modelAuth: "OPENAI_API_KEY",
-      values: new Map(Object.entries({ OPENAI_API_KEY: "sk-x" })),
-    });
-    expect(r.secrets).toEqual({ OPENAI_API_KEY: "sk-x" });
-    expect(r.missingSecrets).toEqual([]);
-  });
-
-  it("an env-key model auth the value file lacks is missing, like any declared name", () => {
-    const r = assembleSecrets({ modelAuth: "OPENAI_API_KEY", values: new Map() });
-    expect(r.missingSecrets).toEqual(["OPENAI_API_KEY"]);
-  });
-
-  it("a stored credential (OAuth or a logged-in key) carries nothing: the box logs in itself", () => {
-    const r = assembleSecrets({ modelAuth: "OAuth", values: new Map() });
-    expect(r).toEqual({ secrets: {}, missingSecrets: [] });
-  });
-
-  it("the WHOLE value file travels, declared or not — minus what the deployment sets itself", () => {
-    const r = assembleSecrets({
-      modelAuth: "OPENAI_API_KEY",
-      values: new Map(
-        Object.entries({
-          OPENAI_API_KEY: "k",
-          FEISHU_ENCRYPT_KEY: "enc", // optional, declared nowhere: travels anyway
-          HTTPS_PROXY: "http://proxy:8080",
-          EMPTY: "", // an unset `.env` line is not a value
-          // This machine's paths and the model (which rides the release manifest) never travel.
-          PORT: "3000",
-          FASTAGENT_STATE_DIR: "/Users/me/state",
-          // Where the instance is: the box's own, and its configuration the image's /etc/fastagent/.
-          FASTAGENT_CONFIG: "/Users/me/prod.json",
-          FASTAGENT_ROOT: "/Users/me/instance",
-          FASTAGENT_WORKDIR: "/Users/me/work",
-          FASTAGENT_SECRETS_DIR: "/Users/me/secrets",
-          FASTAGENT_MODEL: "openai/gpt-5",
-          FASTAGENT_ENV_2: "stale",
-          FASTAGENT_ENVIRONMENT: "dev",
-          FASTAGENT_DEV: "1",
-        }),
-      ),
-    });
-    expect(r.secrets).toEqual({ OPENAI_API_KEY: "k", FEISHU_ENCRYPT_KEY: "enc", HTTPS_PROXY: "http://proxy:8080" });
-    expect(r.missingSecrets).toEqual([]);
-  });
-
-  it("an optional name is never missing, unless another declaration requires it", () => {
-    const optional = { name: "SENTRY_DSN", declaredIn: "tools/report.ts", optional: true };
-    expect(assembleSecrets({ modelAuth: undefined, declared: [optional], values: new Map() }).missingSecrets).toEqual(
-      [],
-    );
-    const required = { ...optional, declaredIn: "channels/digest.ts", optional: false };
-    expect(
-      assembleSecrets({ modelAuth: undefined, declared: [optional, required], values: new Map() }).missingSecrets,
-    ).toEqual(["SENTRY_DSN"]);
-    expect(deploymentSecrets(undefined, [optional])).toEqual([
-      { name: "SENTRY_DSN", hint: "optional, read by tools/report.ts" },
-    ]);
-    expect(deploymentSecrets(undefined, [optional, required])).toEqual([
-      { name: "SENTRY_DSN", hint: "required by channels/digest.ts" },
-    ]);
-  });
-
-  it("a declared name is REQUIRED: absent from the value file → missingSecrets, listed once", () => {
-    const declared = [
-      { name: "GH_TOKEN", declaredIn: "tools/gh.ts", optional: false },
-      { name: "GH_TOKEN", declaredIn: "channels/digest.ts", optional: false },
-    ];
-    const present = assembleSecrets({
-      modelAuth: "OPENAI_API_KEY",
-      declared,
-      values: new Map(Object.entries({ OPENAI_API_KEY: "k", GH_TOKEN: "ghp_x" })),
-    });
-    expect(present.secrets.GH_TOKEN).toBe("ghp_x");
-    expect(present.missingSecrets).toEqual([]);
-    const absent = assembleSecrets({
-      modelAuth: "OPENAI_API_KEY",
-      declared,
-      values: new Map(Object.entries({ OPENAI_API_KEY: "k" })),
-    });
-    expect(absent.missingSecrets).toEqual(["GH_TOKEN"]);
-  });
-
-  it("the environment running deploy is NOT a source — only the value file is", () => {
-    // A deployment must be reproducible from what it carries, and an exported variable is written down nowhere.
-    const before = process.env.GH_TOKEN;
-    process.env.GH_TOKEN = "from-the-builders-shell";
-    try {
-      const r = assembleSecrets({
-        modelAuth: "OPENAI_API_KEY",
-        declared: [{ name: "GH_TOKEN", declaredIn: "tools/gh.ts", optional: false }],
-        values: new Map([["OPENAI_API_KEY", "k"]]),
-      });
-      expect(r.secrets.GH_TOKEN).toBeUndefined();
-      expect(r.missingSecrets).toEqual(["GH_TOKEN"]);
-    } finally {
-      if (before === undefined) delete process.env.GH_TOKEN;
-      else process.env.GH_TOKEN = before;
-    }
-  });
-});
-
 describe("deploy/secrets: deploymentSecrets (the runbook's list)", () => {
   it("the model's key first, then each declared name hinted by the file that declared it, and nothing a file merely holds", () => {
     const list = deploymentSecrets("OPENAI_API_KEY", [
@@ -451,36 +341,5 @@ describe("deploy/secrets: deploymentSecrets (the runbook's list)", () => {
       { name: "OPENAI_API_KEY", hint: "your model provider key" },
       { name: "GH_TOKEN", hint: "required by tools/gh.ts" },
     ]);
-  });
-});
-
-describe("deploy/secrets: the FASTAGENT_ENV carrier (a host whose artifact must not name the variables)", () => {
-  it("round-trips any value across chunks; a variable the platform set itself wins", () => {
-    const encoded = encodeCarriedEnv({ A: "x=y", B: '"quoted"', C: "ünïcode $HOME", D: "carried" });
-    const env: NodeJS.ProcessEnv = { FASTAGENT_ENV: encoded.slice(0, 5), FASTAGENT_ENV_2: encoded.slice(5), D: "box" };
-    applyCarriedEnv(env);
-    expect(env).toMatchObject({ A: "x=y", B: '"quoted"', C: "ünïcode $HOME", D: "box" });
-    expect(encodeCarriedEnv({})).toBe("");
-    const untouched: NodeJS.ProcessEnv = { X: "1" };
-    applyCarriedEnv(untouched);
-    expect(untouched).toEqual({ X: "1" });
-  });
-
-  it("a payload that is not an object of strings fails visibly", () => {
-    const enc = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64");
-    expect(() => applyCarriedEnv({ FASTAGENT_ENV: enc(["A"]) })).toThrow(/not an object/);
-    expect(() => applyCarriedEnv({ FASTAGENT_ENV: enc({ A: 1 }) })).toThrow(/A is not a string/);
-  });
-});
-
-describe("deploy/secrets: missingValuesGate (one refusal, every host)", () => {
-  it("names the file this deploy actually read, not a hardcoded path", () => {
-    // `FASTAGENT_SECRETS_DIR` moves the value file, and four hosts each spelling the message would each have to
-    // remember that. The gate takes the resolved name so it cannot point at a file deploy never opened.
-    expect(missingValuesGate([], "fastagent/.secrets/.env")).toBeUndefined();
-    const gate = missingValuesGate(["GH_TOKEN", "X_API_KEY"], "/data/.secrets/.env");
-    expect(gate).toContain("GH_TOKEN, X_API_KEY");
-    expect(gate).toContain("/data/.secrets/.env");
-    expect(gate).not.toMatch(/\n/); // one line: it is printed straight into an Error
   });
 });

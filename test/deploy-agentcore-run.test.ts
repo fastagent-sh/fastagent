@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { declaredChannels } from "../src/channels/discover.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
-import { CARRIER_MAX_CHUNKS, ingressSessionId } from "../src/deploy/agentcore/plan.ts";
-import { applyCarriedEnv, encodeCarriedEnv } from "../src/deploy/secrets.ts";
+import { ingressSessionId } from "../src/deploy/agentcore/plan.ts";
 import {
   type AgentcoreRunPlan,
   deployAgentcoreRun,
@@ -53,11 +52,16 @@ const NO_SUCH_STACK = {
 const happyAws = (args: string[]): { code?: number; stdout?: string; stderr?: string } => {
   if (args[0] === "sts") return { stdout: IDENTITY };
   if (args[0] === "ecr" && args[1] === "get-login-password") return { stdout: "hunter2" };
+  if (args[0] === "secretsmanager" && args[1] === "describe-secret") {
+    return { stdout: args.includes("ARN") ? `${SECRET_ARN}\n` : JSON.stringify({ ARN: SECRET_ARN }) };
+  }
   if (args[0] === "cloudformation" && args[1] === "describe-stacks") {
     return args.includes("Stacks[0].StackStatus") ? NO_SUCH_STACK : { stdout: OUTPUTS };
   }
   return {};
 };
+
+const SECRET_ARN = "arn:aws:secretsmanager:us-west-2:123456789012:secret:fastagent/my-agent-AbCdEf";
 
 const NO_WEBHOOKS = { webhooks: false };
 const FORWARDER = { webhooks: true };
@@ -67,9 +71,9 @@ const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   dockerfilePath: "Dockerfile",
   tag: "20260728",
   region: "us-west-2",
-  secrets: {},
-  missingSecrets: [],
-  valueFile: ".secrets/.env",
+  provideSecrets: async () => undefined,
+  ingressSecret: "ingress-secret",
+  wakeSecret: "wake-secret",
   channels: [],
   topology: NO_WEBHOOKS,
   ...over,
@@ -205,7 +209,6 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       plan({
         channels: declaredChannels(["telegram"]),
         topology: FORWARDER,
-        secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
       }),
       aws,
       docker,
@@ -224,6 +227,9 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       // The stack is read ONCE, here: what it says (a redeploy that replaces state, or a failed first create) is
       // only actionable before the build, and step 7 reuses this answer instead of asking again.
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].StackStatus --output text",
+      // The deployment's values, after the only reads that precede a write: the secret the stack reads exists (nothing
+      // to create), and the step that fills it ran.
+      "secretsmanager describe-secret --secret-id fastagent/my-agent --output json",
       "ecr describe-repositories --repository-names fastagent/my-agent",
       // The deployment bucket: created if absent, its safety/durability properties re-converged every
       // deploy, then the content-hashed forwarder package uploaded.
@@ -234,6 +240,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         /^s3 cp \/tmp\/forwarder\.zip s3:\/\/fa-my-agent-123456789012\/forwarder\/[0-9a-f]{16}\.zip$/,
       ),
       "ecr get-login-password",
+      "secretsmanager describe-secret --secret-id fastagent/my-agent --query ARN --output text",
       "cloudformation deploy --stack-name fastagent-my-agent --template-file agentcore.template.yaml " +
         "--capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides file:///tmp/params.json",
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
@@ -259,12 +266,11 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(writeParams).toHaveBeenCalledWith(
       `${JSON.stringify([
         "ImageUri=123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728",
+        `SecretArn=${SECRET_ARN}`,
         "ForwarderBucket=fa-my-agent-123456789012",
         `ForwarderS3Key=${forwarderKey}`,
-        `FastagentEnv=${encodeCarriedEnv({ TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" })}`,
-        "FastagentEnv2=",
-        "FastagentEnv3=",
-        "FastagentEnv4=",
+        "FastagentIngressSecret=ingress-secret",
+        "FastagentWakeSecret=wake-secret",
       ])}\n`,
     );
   });
@@ -309,11 +315,43 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(cmds()).toContain("configure get region");
   });
 
-  it("gates missing secret values BEFORE any side effect", async () => {
+  it("gates on the secrets step before the build, the bucket and the stack", async () => {
     const { cli: aws, cmds } = fakeCli(happyAws);
-    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"] }), aws, fakeCli().cli);
+    const out = await run(
+      plan({ provideSecrets: async () => "AWS Secrets Manager has no value for: TELEGRAM_BOT_TOKEN" }),
+      aws,
+      fakeCli().cli,
+    );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("TELEGRAM_BOT_TOKEN") });
-    expect(cmds().some((c) => c.startsWith("ecr create") || c.startsWith("cloudformation"))).toBe(false);
+    expect(cmds().some((c) => /^(ecr|s3|cloudformation) /.test(c) && !c.startsWith("cloudformation describe"))).toBe(
+      false,
+    );
+  });
+
+  it("hands the secrets step the deployment's secret, made first when it is not there", async () => {
+    const seen: string[] = [];
+    const absent = fakeCli((a) =>
+      a[0] === "secretsmanager" && a[1] === "describe-secret" && !a.includes("ARN") && seen.length === 0
+        ? {
+            code: 254,
+            stderr: "An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation",
+          }
+        : happyAws(a),
+    );
+    const out = await run(
+      plan({
+        provideSecrets: async (store) => {
+          seen.push(`exists:${await store.exists()}`);
+          return undefined;
+        },
+      }),
+      absent.cli,
+      fakeCli().cli,
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(absent.cmds().find((c) => c.startsWith("secretsmanager create-secret"))).toContain(
+      "--name fastagent/my-agent",
+    );
   });
 
   it("skips ECR create when the repository exists; creates it when AWS says it is not there", async () => {
@@ -460,22 +498,6 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       expect(logs[warned]).toContain("/mnt/data");
       expect(logs.findIndex((l) => l.includes("building + pushing"))).toBeGreaterThan(warned);
     });
-  });
-
-  it("gates a value file beyond the chunk ceiling", async () => {
-    const tooBigValues = await run(
-      plan({ secrets: { SOME_BLOB: "x".repeat(6000) } }),
-      fakeCli(happyAws).cli,
-      fakeCli().cli,
-    );
-    expect(tooBigValues).toMatchObject({ ok: false, gate: expect.stringContaining("too large to carry") });
-    // One long value is fine on its own: it is chunked with the rest, not capped per variable.
-    const longValue = await run(
-      plan({ secrets: { SOME_BLOB: "x".repeat(2049) } }),
-      fakeCli(happyAws).cli,
-      fakeCli().cli,
-    );
-    expect(longValue).not.toMatchObject({ gate: expect.stringContaining("too large") });
   });
 
   it("announces account/principal/region/image and flags an unavailable region BEFORE any side effect", async () => {
@@ -705,53 +727,22 @@ describe("deploy/agentcore/run: helpers", () => {
     expect(pickStackOutputs([{ OutputKey: "A", OutputValue: "1" }, { OutputKey: 2 }])).toEqual({ A: "1" });
   });
 
-  it("paramsFileContent: minted secrets by name, the value file as one carrier, every unused chunk cleared", () => {
-    const FWD = { bucket: "b", key: "k" };
+  it("paramsFileContent: the image, the secret's ARN, the forwarder and the two minted secrets, and no value", () => {
     const params = JSON.parse(
-      paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_INGRESS_SECRET: "in" }, FWD),
+      paramsFileContent("img:1", SECRET_ARN, { ingressSecret: "in", wakeSecret: "wk" }, { bucket: "b", key: "k" }),
     ) as string[];
-    expect(params.slice(0, 4)).toEqual([
+    expect(params).toEqual([
       "ImageUri=img:1",
+      `SecretArn=${SECRET_ARN}`,
       "ForwarderBucket=b",
       "ForwarderS3Key=k",
       "FastagentIngressSecret=in",
+      "FastagentWakeSecret=wk",
     ]);
-    // Everything else rides FastagentEnv, and reads back as exactly what was carried.
-    const env = Object.fromEntries(
-      params
-        .filter((p) => p.startsWith("FastagentEnv"))
-        .map((p, i) => [i === 0 ? "FASTAGENT_ENV" : `FASTAGENT_ENV_${i + 1}`, p.slice(p.indexOf("=") + 1)]),
-    );
-    applyCarriedEnv(env);
-    expect(env).toMatchObject({ OPENAI_API_KEY: "sk" });
-
-    // A value file past one env value's 2048-char cap rides across the chunks; an unused chunk is cleared.
-    const long = JSON.parse(paramsFileContent("img:1", { BLOB: "x".repeat(3000) }, FWD)) as string[];
-    const chunks = long.filter((p) => p.startsWith("FastagentEnv"));
-    expect(chunks).toHaveLength(CARRIER_MAX_CHUNKS);
-    expect(chunks[1]).not.toBe("FastagentEnv2=");
-    expect(chunks.at(-1)).toBe("FastagentEnv4=");
-    for (const param of chunks) expect(param.length).toBeLessThanOrEqual(2048 + "FastagentEnv0=".length);
   });
 });
 
 describe("the post-deploy probe (verify restore + construction before registration)", () => {
-  it("names the secrets it carries — the list is no longer only what the author typed", async () => {
-    // A mounted tool/channel/schedule declares its own names, so what `--run` reads from THIS machine
-    // and puts on the runtime has to be visible on this host too.
-    const logs: string[] = [];
-    await deployAgentcoreRun(
-      plan({ secrets: { OPENAI_API_KEY: "sk", X_API_KEY: "x" } }),
-      fakeCli(happyAws).cli,
-      fakeCli().cli,
-      (m) => logs.push(m),
-      writeParams,
-      writeZip,
-      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
-    );
-    expect(logs.join("\n")).toContain("2 secret(s): OPENAI_API_KEY, X_API_KEY");
-  });
-
   it("POSTs the reserved probe path with the ingress secret, and reads the runtime's webhooks through it", async () => {
     const requests: { url: string; body: string }[] = [];
     vi.stubGlobal(
@@ -767,7 +758,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       plan({
         channels: declaredChannels(["telegram"]),
         topology: FORWARDER,
-        secrets: { FASTAGENT_INGRESS_SECRET: "s3cret" },
+        ingressSecret: "s3cret",
       }),
       fakeCli(happyAws).cli,
       fakeCli().cli,

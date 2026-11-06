@@ -14,20 +14,18 @@ import { awsCli, awsJson } from "./aws-cli.ts";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import {
-  CARRIERS,
-  CARRIER_CHUNK_SIZE,
-  CARRIER_MAX_CHUNKS,
   MOUNT,
   agentcoreRepoName,
+  agentcoreSecretName,
   agentcoreStackName,
-  carrierChunk,
   deploymentBucketName,
   forwarderSource,
   ingressSessionId,
   type AgentcoreTopology,
 } from "./plan.ts";
 import { zipSingleFile } from "./zip.ts";
-import { encodeCarriedEnv, missingValuesGate } from "../secrets.ts";
+import type { SecretStore } from "../secret-store.ts";
+import { agentcoreSecretStore } from "./store.ts";
 
 export interface AgentcoreRunPlan {
   /** The base name — stack `fastagent-<name>`, ECR repo `fastagent/<name>`. */
@@ -43,12 +41,12 @@ export interface AgentcoreRunPlan {
    * region`.
    */
   region?: string;
-  /** Env-var name → value: the value file's carried variables. */
-  secrets: Record<string, string>;
-  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
-  missingSecrets: string[];
-  /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
-  valueFile: string;
+  /** Makes the secret hold every value the deployment needs (secrets-step.ts), or says what is missing. */
+  provideSecrets: (store: SecretStore) => Promise<string | undefined>;
+  /** What proves an envelope came from the forwarder: minted by the deploy, a stack parameter. */
+  ingressSecret: string;
+  /** The wake-alarm shared secret between the container and the forwarder: minted by the deploy, a stack parameter. */
+  wakeSecret: string;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
   /**
@@ -195,39 +193,21 @@ export function pickStackOutputs(parsed: unknown): Record<string, string> | unde
   }
   return out;
 }
-/** The secrets `--run` mints for this host, each with the template parameter of its own. */
-const MINTED_PARAMS: Record<string, string> = {
-  FASTAGENT_INGRESS_SECRET: "FastagentIngressSecret",
-  FASTAGENT_WAKE_SECRET: "FastagentWakeSecret",
-};
-
-/** What each carrier holds for this deploy: every variable but the minted ones, as one encoded object. */
-function carrierValues(secrets: Record<string, string>): Record<(typeof CARRIERS)[number]["env"], string> {
-  const carried = Object.fromEntries(Object.entries(secrets).filter(([name]) => !(name in MINTED_PARAMS)));
-  return { FASTAGENT_ENV: encodeCarriedEnv(carried) };
-}
-
 /** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. */
 export function paramsFileContent(
   imageUri: string,
-  secrets: Record<string, string>,
+  secretArn: string,
+  minted: { ingressSecret: string; wakeSecret: string },
   forwarder: { bucket: string; key: string },
 ): string {
-  const params = [`ImageUri=${imageUri}`, `ForwarderBucket=${forwarder.bucket}`, `ForwarderS3Key=${forwarder.key}`];
-  for (const [name, param] of Object.entries(MINTED_PARAMS)) {
-    if (secrets[name] !== undefined) params.push(`${param}=${secrets[name]}`);
-  }
-  // Every chunk is written, empty ones included: an omitted parameter keeps its PREVIOUS value on a stack update.
-  const values = carrierValues(secrets);
-  for (const carrier of CARRIERS) {
-    const value = values[carrier.env];
-    for (let i = 0; i < CARRIER_MAX_CHUNKS; i++) {
-      params.push(
-        `${carrierChunk(carrier, i).param}=${value.slice(i * CARRIER_CHUNK_SIZE, (i + 1) * CARRIER_CHUNK_SIZE)}`,
-      );
-    }
-  }
-  return `${JSON.stringify(params)}\n`;
+  return `${JSON.stringify([
+    `ImageUri=${imageUri}`,
+    `SecretArn=${secretArn}`,
+    `ForwarderBucket=${forwarder.bucket}`,
+    `ForwarderS3Key=${forwarder.key}`,
+    `FastagentIngressSecret=${minted.ingressSecret}`,
+    `FastagentWakeSecret=${minted.wakeSecret}`,
+  ])}\n`;
 }
 
 /** Run the deploy through `aws` + `docker`. */
@@ -286,22 +266,6 @@ export async function deployAgentcoreRun(
       "docker buildx not available — the image must be linux/arm64 (cross-built); install buildx, then re-run",
     );
   }
-
-  // 3. Gate missing required secret VALUES before any side effect (no half-created infra).
-  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
-  if (missingValues) return gate(missingValues);
-  // 3b.
-  const capacity = CARRIER_CHUNK_SIZE * CARRIER_MAX_CHUNKS;
-  const carried = carrierValues(plan.secrets);
-  if (carried.FASTAGENT_ENV.length > capacity) {
-    return gate(
-      `the variables in ${plan.valueFile} are too large to carry (${carried.FASTAGENT_ENV.length} chars encoded > ` +
-        `${capacity}) — move what the deployment does not need out of that file`,
-    );
-  }
-  // Name what travels from the value file onto the runtime.
-  const secretNames = Object.keys(plan.secrets);
-  if (secretNames.length > 0) log(`carrying ${secretNames.length} secret(s): ${secretNames.join(", ")}`);
 
   // 3c. Say what this deploy is ABOUT TO TOUCH while it can still be stopped for free: until here the account and
   // region only surfaced several hundred log lines in, inside the ECR image URI.
@@ -373,6 +337,17 @@ export async function deployAgentcoreRun(
         `Cross-deploy memory needs a real volume: \`deploy fly\` or \`deploy railway\`.`,
     );
   }
+
+  // 3e. The deployment's values, after the only questions that precede a write and before the build: the secret the stack reads, made to hold every name the definition
+  // requires (a coding agent's run, with nobody to ask, stops here naming the commands).
+  const secretStore = agentcoreSecretStore(aws, agentcoreSecretName(plan.name), log);
+  try {
+    await secretStore.ensure();
+  } catch (error) {
+    return gate(error instanceof Error ? error.message : String(error));
+  }
+  const secretsGate = await plan.provideSecrets(secretStore);
+  if (secretsGate !== undefined) return gate(secretsGate);
 
   // 4.
   const registry = `${account}.dkr.ecr.${region}.amazonaws.com`;
@@ -466,7 +441,13 @@ export async function deployAgentcoreRun(
     }
   }
   log(`deploying stack ${stack}…`);
-  const paramsPath = await writeSecretFile(paramsFileContent(image, plan.secrets, forwarderParams));
+  let secretArn: string;
+  try {
+    secretArn = await secretStore.arn();
+  } catch (error) {
+    return gate(error instanceof Error ? error.message : String(error));
+  }
+  const paramsPath = await writeSecretFile(paramsFileContent(image, secretArn, plan, forwarderParams));
   const deployed = await aws([
     "cloudformation",
     "deploy",
@@ -547,7 +528,7 @@ export async function deployAgentcoreRun(
     log("probing the deployed runtime (storage initialization + channel construction)…");
     const verdict = await probeRuntime(
       `${url}${RESERVED_PATHS.probe}`,
-      plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
+      plan.ingressSecret,
       probe.fetchImpl ?? fetch,
       probe.timeoutMs,
       probe.intervalMs,
@@ -577,11 +558,7 @@ export async function deployAgentcoreRun(
     log,
     ...(plan.recordUrl === undefined ? {} : { record: plan.recordUrl }),
     retryHint: "re-run to retry registration (steps already done are skipped)",
-    probe: forwarderWebhooks(
-      `${url}${RESERVED_PATHS.probe}`,
-      plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
-      probe.fetchImpl ?? fetch,
-    ),
+    probe: forwarderWebhooks(`${url}${RESERVED_PATHS.probe}`, plan.ingressSecret, probe.fetchImpl ?? fetch),
     intervalMs: probe.intervalMs ?? WEBHOOKS_INTERVAL_MS,
     ...(probe.timeoutMs === undefined ? {} : { timeoutMs: probe.timeoutMs }),
   });

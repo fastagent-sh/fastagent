@@ -729,7 +729,7 @@ const channels: CommandSpec = {
 const SECRETS_HOST = {
   name: "<host>",
   description: "the target that keeps the values",
-  choices: ["docker", "fly", "railway"],
+  choices: ["docker", "fly", "railway", "agentcore"],
 };
 
 const secrets: CommandSpec = {
@@ -816,7 +816,7 @@ const destroy: CommandSpec = {
   summary: "delete every AWS resource `deploy agentcore` created for an agent",
   description:
     "AgentCore only, and it exists because `aws cloudformation delete-stack` is not enough: the S3 " +
-    "artifact bucket and the ECR repository have to exist BEFORE the stack that reads from them, BOTH " +
+    "artifact bucket, the ECR repository and the values secret have to exist BEFORE the stack that reads from them, BOTH " +
     "log groups (the forwarder's and the runtime's own stdout) are created by AWS on first write so no " +
     "template mentions them, and the EventBridge schedules (one per schedule, one per pending wake-up) " +
     "are minted at runtime by the container — left behind, they keep firing into a deleted Lambda. " +

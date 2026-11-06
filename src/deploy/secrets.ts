@@ -3,10 +3,9 @@
  *
  * Docker, Fly and Railway keep a deployment's values in a store of their own and are never handed a file (secret-store.ts):
  * what the definition declares (`defineTool`/`defineChannel`, the `variables` of `context.json`, plus the model's env key)
- * says which names must have a value there. AgentCore still carries the production value file whole (the functions below
- * that assemble and encode it), until its values move to Secrets Manager.
+ * says which names must have a value there. AgentCore's store is a Secrets Manager secret (agentcore/store.ts).
  */
-import { type DeclaredSecret, dedupeSecrets, missingSecrets as unsetSecrets } from "../declared-secrets.ts";
+import { type DeclaredSecret, dedupeSecrets } from "../declared-secrets.ts";
 import { DEV_SERVE_ENV } from "../serving-command.ts";
 import { AGENT_ENVIRONMENT_ENV } from "../paths.ts";
 
@@ -15,10 +14,7 @@ export function isEnvKey(source: string | undefined): source is string {
   return source !== undefined && /^[A-Z][A-Z0-9_]*$/.test(source);
 }
 
-/**
- * Names a deployment sets on the box itself. The value file's copy of one describes THIS machine (a local state path,
- * a port) or rides another carrier (the model rides the release manifest), so it never travels.
- */
+/** Names a deployment sets on the box itself: a value for one describes THIS machine (a local state path, a port). */
 const DEPLOY_OWNED = new Set([
   "PORT",
   "FASTAGENT_MODEL",
@@ -31,6 +27,7 @@ const DEPLOY_OWNED = new Set([
   "FASTAGENT_RELEASE_FILE",
   "FASTAGENT_STORAGE_DIR",
   "FASTAGENT_AGENTCORE",
+  "FASTAGENT_SECRET_ARN",
   "FASTAGENT_INGRESS_SECRET",
   "FASTAGENT_WAKE_SECRET",
   "FASTAGENT_DEV_WORKER",
@@ -38,16 +35,9 @@ const DEPLOY_OWNED = new Set([
   AGENT_ENVIRONMENT_ENV,
 ]);
 
-/** Is `name` one the deployment sets itself (see {@link DEPLOY_OWNED}), including the chunked carriers? */
+/** Is `name` one the deployment sets itself (see {@link DEPLOY_OWNED})? */
 export function isDeployOwned(name: string): boolean {
-  return DEPLOY_OWNED.has(name) || /^FASTAGENT_ENV(_\d+)?$/.test(name);
-}
-
-/** The value-file variables that travel: everything with a value that the deployment does not set itself. */
-function carriedValues(values: ReadonlyMap<string, string>): Record<string, string> {
-  const carried: Record<string, string> = {};
-  for (const [name, value] of values) if (value && !isDeployOwned(name)) carried[name] = value;
-  return carried;
+  return DEPLOY_OWNED.has(name);
 }
 
 /** One variable a runbook tells the operator to set, and where to look for its value. */
@@ -140,103 +130,13 @@ export function declaredNames(
 }
 
 /**
- * Assemble the VALUES a `--run` deploy sets on the host: every variable the value file carries. Never minted here.
- *
- * `values` is the selected value file, read as data — **the environment running `deploy` is not a source**. A
- * deployment must be reproducible from what it carries, and a variable that happens to be exported on the builder is
- * written down nowhere. CI supplies values by writing the file before running the command.
- *
- * No credentials file travels: a model that does not authenticate through a variable (or its own definition) logs in
- * on the deployment itself (`fastagent login --deployment`), so the box is the only holder of its grant.
- */
-export function assembleSecrets(input: {
-  modelAuth: string | undefined;
-  /** Every name the definition declared it needs — what must have a value. */
-  declared?: readonly DeclaredSecret[];
-  /** The selected value file's contents (`loadEnvValues`). The ONLY source of operator-supplied values. */
-  values: ReadonlyMap<string, string>;
-}): { secrets: Record<string, string>; missingSecrets: string[] } {
-  const secrets = carriedValues(input.values);
-  const missingSecrets: string[] = [];
-  if (isEnvKey(input.modelAuth) && !secrets[input.modelAuth]) missingSecrets.push(input.modelAuth);
-  for (const { name } of unsetSecrets(input.declared ?? [], secrets)) {
-    if (!missingSecrets.includes(name)) missingSecrets.push(name);
-  }
-  return { secrets, missingSecrets };
-}
-
-/**
  * The stop for a host CLI signed out with nobody to sign it in. A token goes in the shell's (or CI's) environment,
- * never in the production value file: everything there travels to the box, which runs an agent with a shell.
+ * never in the production value file, which holds the deployment's values and not the CLI's.
  */
 export function hostSignedOutGate(host: string, login: string, token: string, forAgent: string): string {
   return (
     `not logged in to ${host} — run \`${login}\` in a terminal (it opens a browser), or set ${token} in this ` +
-    `shell's environment, never in .secrets/production/.env (everything there travels to the box); then re-run. ` +
+    `shell's environment, not in .secrets/production/.env (that file holds the deployment's values); then re-run. ` +
     `From a coding agent, \`${forAgent}\` hands the sign-in to its user`
   );
-}
-
-/**
- * The ONE refusal for declared names the deployed environment does not supply a value for — every host reaches it
- * before its first side effect. Host-neutral because the reason is: the value file IS the deployed environment, so a
- * name missing from it is missing from the deployment, whatever platform receives it.
- */
-export function missingValuesGate(missing: readonly string[], valueFile: string): string | undefined {
-  if (missing.length === 0) return undefined;
-  return (
-    `no value for: ${missing.join(", ")} — the deployed environment is declared by ${valueFile}, and this deploy ` +
-    `reads only that file (exporting the variable here does not reach the deployment). Add them there and re-run`
-  );
-}
-
-/**
- * Collect a (possibly CHUNKED) carrier from the environment: `<name>` plus numbered continuations (`_2`, `_3`, …)
- * concatenated in order. A host whose env values have a length cap splits a long value this way.
- */
-function collectChunked(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const first = env[name];
-  if (!first) return undefined;
-  let value = first;
-  for (let i = 2; ; i++) {
-    const part = env[`${name}_${i}`];
-    if (!part) break;
-    value += part;
-  }
-  return value;
-}
-
-/**
- * `FASTAGENT_ENV` (+ `_2`, …): the carried variables as ONE base64 JSON object, for a host whose deployment artifact
- * must not depend on which names the value file holds (AgentCore's template is committed and gated on drift). The
- * inverse of {@link encodeCarriedEnv}.
- */
-function collectCarriedEnv(env: NodeJS.ProcessEnv): Record<string, string> | undefined {
-  const encoded = collectChunked(env, "FASTAGENT_ENV");
-  if (encoded === undefined) return undefined;
-  const parsed: unknown = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("FASTAGENT_ENV is not an object of variables — redeploy to regenerate it");
-  }
-  const carried: Record<string, string> = {};
-  for (const [name, value] of Object.entries(parsed)) {
-    if (typeof value !== "string")
-      throw new Error(`FASTAGENT_ENV: ${name} is not a string — redeploy to regenerate it`);
-    carried[name] = value;
-  }
-  return carried;
-}
-
-/**
- * Expand `FASTAGENT_ENV` into the process environment — what `start` does first on a host that carries the value file
- * that way. The platform's own variables still win, as they do over a value file anywhere.
- */
-export function applyCarriedEnv(env: NodeJS.ProcessEnv = process.env): void {
-  const carried = collectCarriedEnv(env);
-  if (carried) for (const [name, value] of Object.entries(carried)) if (!(name in env)) env[name] = value;
-}
-
-/** The carried variables as the base64 JSON {@link collectCarriedEnv} reads back; empty when nothing travels. */
-export function encodeCarriedEnv(carried: Readonly<Record<string, string>>): string {
-  return Object.keys(carried).length === 0 ? "" : Buffer.from(JSON.stringify(carried), "utf8").toString("base64");
 }

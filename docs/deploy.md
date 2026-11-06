@@ -51,7 +51,7 @@ own. See [`fastagent deploy`](cli.md#commands).
 | Requirement | How |
 |---|---|
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
-| **The target holds the values** | On Fly and Railway the values live in the target's own store (Fly secrets, the service's variables), on Docker in `.secrets/production/.env`, which Compose reads. `--run` checks names, never carries a file: the names declared by code (`needs([...])`), the variables `context.json` declares and a model key with no login to fall back on must have a value on the target, or `--run` stops before building. At a terminal it asks: the names `.secrets/production/.env` holds are set there from it after one question, the rest are typed without echo. In a coding agent's deploy, or in CI, it stops naming `fastagent secrets push <host>` and `fastagent secrets set <host> <NAME>`; run them, then re-run. A variable the definition does not declare is not pushed. AgentCore still carries the file; it moves to Secrets Manager next. See [Secrets](cli.md#fastagent-secrets). |
+| **The target holds the values** | On Fly and Railway the values live in the target's own store (Fly secrets, the service's variables), on Docker in `.secrets/production/.env`, which Compose reads. `--run` checks names, never carries a file: the names declared by code (`needs([...])`), the variables `context.json` declares and a model key with no login to fall back on must have a value on the target, or `--run` stops before building. At a terminal it asks: the names `.secrets/production/.env` holds are set there from it after one question, the rest are typed without echo. In a coding agent's deploy, or in CI, it stops naming `fastagent secrets push <host>` and `fastagent secrets set <host> <NAME>`; run them, then re-run. A variable the definition does not declare is not pushed. On AgentCore the values are one Secrets Manager secret, `fastagent/<name>`. See [Secrets](cli.md#fastagent-secrets). |
 | **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable is a name the target may hold (set it with `fastagent secrets`), and so is a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Something reaches it** | A channel, a schedule, or the [Agent API](#the-agent-api). A deployment with none of them is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
 | **Durable storage** | Docker, Fly and Railway make a volume at `/data` the agent's working directory, holding `.state/`, `.secrets/`, `content/` and what the agent writes. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
@@ -194,7 +194,7 @@ platform sets in the box's environment). A Docker box cannot tell, and leaves `<
   the login is a step of the same ticket. For frequent or CI deploys, use an API key. The shell needs
   `bedrock-agentcore:InvokeAgentRuntimeCommandShell`, and the login first sends the runtime a probe so its storage
   is prepared (after a reset, nothing may have invoked it yet). The shell does not inherit the runtime's environment, so
-  an egress proxy set in `.secrets/production/.env` (`HTTPS_PROXY`) applies to the agent's turns but not to the login: where the
+  an egress proxy in the deployment's values (`HTTPS_PROXY`) applies to the agent's turns but not to the login: where the
   provider is reachable only through that proxy, use an API key on AgentCore.
 
 ## Local Docker
@@ -250,7 +250,7 @@ Notes:
 
 Requires [flyctl](https://fly.io/docs/flyctl/install), signed in: `--run` runs `fly auth login` when it is not (at a
 terminal, or for a coding agent's person with `--json`). A token goes in your shell's or CI's environment
-(`FLY_API_TOKEN`), never in `.secrets/production/.env`, whose every variable travels to the box.
+(`FLY_API_TOKEN`), not in `.secrets/production/.env`, which holds the deployment's values.
 
 ```bash
 fastagent deploy fly
@@ -334,7 +334,7 @@ fastagent deploy agentcore --run
 ```
 
 Generates `agentcore.template.yaml`, `lambda/index.js`, container files and a release manifest.
-The runbook: create the ECR repository, `docker buildx build --platform linux/arm64 … --push` with a unique tag
+The runbook: create the ECR repository and the values secret, `docker buildx build --platform linux/arm64 … --push` with a unique tag
 per deploy, `aws cloudformation deploy`, read the outputs, register webhooks. `--run` does all of it.
 
 The stack carries:
@@ -350,8 +350,15 @@ The stack carries:
   manual deploy, `POST <ForwarderUrl>/__fastagent/probe` with `{"auth":"<FastagentIngressSecret>"}` once (the runbook
   prints it). An `invoke-agent-runtime` call does not, since that door is IAM's and carries no forwarder address.
 
-Variables from `.secrets/production/.env` ride one NoEcho parameter, `FastagentEnv` (chunked), so adding a name does not
-change the template.
+The deployment's values are one **Secrets Manager secret**, `fastagent/<name>`, a JSON object of NAME → value. It is made
+outside the stack, like the ECR repository and the bucket, so the values exist before the first deploy and a stack
+update never rewrites them. The stack gets its ARN as a parameter, the runtime's role may read that one secret, and the
+container reads it with the role's credentials on its first invocation, so adding a name changes neither the template
+nor the stack. `fastagent secrets list|set|push agentcore` and `deploy agentcore --run` fill it the way they fill the
+other hosts' stores; a failed read fails that invocation, so `--run`'s probe reports it. A session already running keeps
+the values it read until it ends (its idle timeout) or the next deploy. The command that runs `--run` needs
+`secretsmanager:CreateSecret`, `DescribeSecret`, `GetSecretValue` and `PutSecretValue`, and `destroy` also
+`DeleteSecret`. The secret costs about $0.40 a month, even with no value in it.
 
 What to know:
 
@@ -363,7 +370,7 @@ What to know:
 - **A login on the runtime survives neither reset**: not a deploy, and not 14 idle days. `--run` logs the runtime in
   again after every deploy and refuses to start without a terminal to do it in; after an idle reset, nothing does it
   for you and turns fail until `fastagent login <provider> --deployment agentcore`. A provider API key in
-  `.secrets/production/.env` avoids all of it.
+  the deployment's secret (`fastagent secrets set agentcore <its variable>`) avoids all of it.
 - **Nothing opens before the first invocation.** `--run` probes that path, so a bad credential or a broken channel
   fails the deploy with the runtime's error.
 - **Redeploys stop the runtime session** so the next call uses the new image; in-flight work is lost.
@@ -398,7 +405,8 @@ fastagent destroy agentcore        # list what exists; delete nothing
 fastagent destroy agentcore --run  # delete it
 ```
 
-Deletes the stack, the artifact bucket, the ECR repository, both log groups and pending wake alarms, which
+Deletes the stack, the artifact bucket, the ECR repository, the values secret (without a recovery window, since one
+would keep its name from the agent's next deployment), both log groups and pending wake alarms, which
 `aws cloudformation delete-stack` alone leaves behind. It prints the account and region first. A read it cannot
 complete stops the command. A stack that does not reach `DELETE_COMPLETE` stops the rest.
 

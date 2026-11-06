@@ -608,8 +608,8 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   if (!agentDir) throw new Error(`login --stdio: ${process.cwd()} is not an agent directory`);
   // A deployed box has no value file to read: its variables reach this process only as the host's shell hands them
   // down (the container's for `docker compose exec`, the platform's over fly/railway ssh), and this installs the egress
-  // proxy they name. AgentCore's command shell hands down none of the runtime's, so a proxy carried there in
-  // FASTAGENT_ENV does not reach the login (docs/deploy.md).
+  // proxy they name. AgentCore's command shell hands down none of the runtime's, so a proxy the runtime has
+  // in its values does not reach the login (docs/deploy.md).
   enterAgentEnv(agentDir);
   // The model environment the serving Agent reads (openServing), its definition's providers included, so "logged in"
   // means what the server will use, and a provider only the definition declares can be signed in to.

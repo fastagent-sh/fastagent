@@ -9,8 +9,7 @@ status: partly implemented (stages A, B and most of C); secrets as the target's 
 
 **Status: partly implemented.** Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900), whose progress
 comment lists the PRs. The artifact (§3), the instance inputs (§4.1-§4.3) and most of the deployment (§6.1) are built;
-what is not is §6.2 (values as the target's state: `fastagent secrets`, `deploy` checking names only, AgentCore through
-Secrets Manager) and the instance additions of §4.2/§7 beyond content. Where this and the code disagree, the code is
+what is not is the instance additions of §4.2/§7 beyond content. Where this and the code disagree, the code is
 current behavior and this is the target; §10 says which part is which. This revises the first draft merged in
 [#901](https://github.com/fastagent-sh/fastagent/pull/901). Items marked *implementation research* are decided in
 direction and settled while building.
@@ -375,7 +374,7 @@ Where a static value lives depends on where the instance runs; it reaches the in
 | `fastagent start`, the package's `bin` | an operator's owner-only file outside the configuration directory, or the process environment | `--env-file <path>` or the environment |
 | Docker | `.secrets/production/.env` on the machine running Compose, owner-only | Compose `env_file:`, §6.2 |
 | Fly, Railway | the platform's secrets | the platform's injected environment |
-| AgentCore | one JSON secret in Secrets Manager | its ARN in the environment, read at start |
+| AgentCore | one JSON secret in Secrets Manager | its ARN in the environment, read on the first invocation |
 | An embedding app (Kage) | the app's own secure store (the macOS Keychain) | `openAgent({ secrets })` |
 
 A grant and its binding are written by the sign-in flow, not supplied by a person:
@@ -672,10 +671,14 @@ relay yet, §8). Deploy reports a declared OAuth server the target has no grant 
 
 **AgentCore.** `AWS::BedrockAgentCore::Runtime`'s `EnvironmentVariables` is a plain string map without secure dynamic
 references, so the template carries only the secret's ARN. The runtime role is granted `secretsmanager:GetSecretValue`
-on that secret, and the container reads it at start. This replaces the chunked `NoEcho` parameter carrier, keeps
-plaintext out of CloudFormation, and lets a rotation apply at the next cold start. AgentCore Identity's credential
-providers are evaluated later for MCP OAuth, not as the general carrier. *Implementation research:* verify the chain on a
-minimal stack.
+on that secret, and the container reads it on its first invocation, so a failed read is that invocation's failure and
+`deploy`'s probe reports it. The credentials are the execution role's, from the microVM's instance-metadata service
+(IMDSv2; the runtime sets no `AWS_CONTAINER_CREDENTIALS_*`), and the request is signed with the SigV4 signer the CLI
+already depends on, so no AWS SDK is installed in the image. This replaces the chunked `NoEcho` parameter carrier, keeps
+plaintext out of CloudFormation, and lets a rotation apply to the next session. The secret lives outside the stack, like
+the ECR repository, because its values must exist before the first deploy; `destroy` deletes it without a recovery
+window. AgentCore Identity's credential providers are evaluated later for MCP OAuth, not as the general carrier. The
+chain was verified on a minimal AgentCore runtime (ap-southeast-1).
 
 ### 6.3 What a deployed instance can add
 
@@ -744,8 +747,7 @@ boundary experiments, not a supported format.
 ## 10. Delivery
 
 Done (#907, #909, #911; #913-#918, #921, #922; #923-#925; a channel's way of receiving and platform app per instance,
-[channel-setup.md](channel-setup.md) §10): items 1 and 2, item 3 except values as the target's state and AgentCore's
-Secrets Manager, and content of item 4. Not started: the rest of item 4.
+[channel-setup.md](channel-setup.md) §10; #948 and the AgentCore secret): items 1, 2 and 3, and content of item 4. Not started: the rest of item 4.
 
 1. **Artifact.** A compiled `dist/` with its `bin`, installed under `node_modules`, opened read-only with explicit
    inputs, two independent instances, on Node and Bun. Add pi-schema; the move to pi 1.5.0 is separate (#903).

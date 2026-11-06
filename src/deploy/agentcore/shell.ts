@@ -13,7 +13,7 @@
  * terminal, so the command switches it to raw, no echo (answers are not echoed back, and a long line is not cut by
  * the terminal's line editor) before handing it to `exec`.
  */
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ import { WebSocket, ping } from "undici";
 import type { BoxChannel, BoxShell } from "../box-shell.ts";
 import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson } from "./aws-cli.ts";
+import { Sha256 } from "./sigv4.ts";
 import { MOUNT, PROBE_PAYLOAD } from "./plan.ts";
 
 const STDIN = 0x00;
@@ -61,21 +62,6 @@ async function awsCliCredentials(aws: CliRunner): Promise<AwsCredentials> {
   throw new Error(
     `could not read AWS credentials from the AWS CLI (${"absent" in read ? "none configured" : read.unreadable})`,
   );
-}
-
-/** SHA-256 / HMAC-SHA-256 over node:crypto, in the shape SigV4's signer takes. */
-class Sha256 {
-  private readonly hash;
-  constructor(secret?: string | ArrayBuffer | ArrayBufferView) {
-    const key = secret instanceof ArrayBuffer ? Buffer.from(secret) : secret;
-    this.hash = key === undefined ? createHash("sha256") : createHmac("sha256", key as string | NodeJS.ArrayBufferView);
-  }
-  update(data: string | ArrayBuffer | ArrayBufferView): void {
-    this.hash.update(data instanceof ArrayBuffer ? Buffer.from(data) : (data as string | NodeJS.ArrayBufferView));
-  }
-  async digest(): Promise<Uint8Array> {
-    return new Uint8Array(this.hash.digest());
-  }
 }
 
 /** The runtime's region, from its ARN (`arn:<partition>:bedrock-agentcore:<region>:<account>:runtime/<id>`). */
