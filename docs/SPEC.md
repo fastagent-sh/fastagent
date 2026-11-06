@@ -854,13 +854,15 @@ streaming).
 
 ### 9.6 Keys and checks, from the CLI
 
-- **`fastagent deploy` gives a deployment a key.** When `.secrets/production/.env` holds no `FASTAGENT_API_KEY`, it
-  writes one, generated there once the pre-flight passes, so that what it deploys can be called; its report
-  names the API's URL and the command that checks it. The key travels to the host with the other values (`deploy`
-  carries the value file), and replacing it is editing that file and deploying again, with both keys listed while the
-  Callers move. A definition that serves no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then
-  writes no key, and no serve answers `/v1`, whatever key its environment holds, one an earlier deploy left on a host
-  included. Not on AgentCore, which serves no API either way (§9.5).
+- **`fastagent deploy --run` gives a deployment a key.** When neither the target nor `.secrets/production/.env` holds a
+  `FASTAGENT_API_KEY`, it makes one, sets it on the target and keeps it in that file, so that what it deploys can be
+  called; a target that lacks the key the file holds (a deployment made again) gets that one. Its report names the
+  API's URL and the command that checks it; without `--run` it writes nothing. Replacing the key is setting
+  `FASTAGENT_API_KEY` again on the target (`fastagent secrets set <host> FASTAGENT_API_KEY`), with the new and the old
+  key separated by commas while the Callers move, and the same in the file for `invoke --url`. A definition that serves
+  no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then makes no key, and no serve answers `/v1`,
+  whatever key its environment holds, one an earlier deploy left on a host included. Not on AgentCore, which serves no
+  API either way (§9.5).
 - **`fastagent invoke --url <base>` checks a deployed agent** the way `invoke` checks a local one: the same message,
   output, `--json`, `--session` and exit code, over `connectAgent`, with `--key` or the first key of
   `FASTAGENT_API_KEY` in `.secrets/production/.env`. `--model` sets the session's model there; without it, the
