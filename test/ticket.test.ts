@@ -509,9 +509,16 @@ describe("a ticket as its command reports it", () => {
         /^Tell the user what the steps it reached leave them: copy the Verification Token https:\/\/open\.larksuite\.com\/app\/cli\/event The cause is in log_tail/,
       ),
     });
-    expect(ticketReport({ ...base, status: "expired" }, "checked").json).toMatchObject({
+    // Expired is nobody's fault to find in a log: no tail, and the agent goes to the user, not to a fix.
+    writeFileSync(ticketLogPath(base.ticket), "waiting for the user\n");
+    const expired = ticketReport({ ...base, status: "expired" }, "checked");
+    expect(expired.json).toMatchObject({
       message: "it was not finished in time",
+      agent_next_steps: expect.stringMatching(/^The step was not finished in time.*ask the user to complete it/),
     });
+    expect(expired.json).not.toHaveProperty("log_tail");
+    expect(expired.json.agent_next_steps).not.toContain("log_tail");
+    expect(expired.text.join("\n")).not.toContain("waiting for the user");
   });
 });
 

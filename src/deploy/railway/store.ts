@@ -21,6 +21,14 @@ export function linkedName(stdout: string): string | undefined {
   return undefined;
 }
 
+function unrelatedProject(name: string | undefined, agent: string): string {
+  return (
+    `this directory is already linked to Railway project ${name ? `"${name}"` : "(name unreadable)"}, not to ` +
+    `this agent's own (${agent}). \`--run\` won't deploy into an unrelated project. To provision the agent ` +
+    "INTO this project, re-run with --into-linked. To start fresh, `railway unlink` first."
+  );
+}
+
 /** Whether `railway status --json` lists a service called `name`. */
 function hasService(stdout: string, name: string): boolean {
   const walk = (value: unknown): boolean => {
@@ -51,13 +59,7 @@ export async function ensureRailwayService(
   const status = await railway(["status", "--json"], { capture: true });
   if (isLinked(status.stdout)) {
     const name = linkedName(status.stdout);
-    if (!plan.intoLinked && name !== plan.name) {
-      return (
-        `this directory is already linked to Railway project ${name ? `"${name}"` : "(name unreadable)"}, not to ` +
-        `this agent's own (${plan.name}). \`--run\` won't deploy into an unrelated project. To provision the agent ` +
-        "INTO this project, re-run with --into-linked. To start fresh, `railway unlink` first."
-      );
-    }
+    if (!plan.intoLinked && name !== plan.name) return unrelatedProject(name, plan.name);
     if (plan.intoLinked) log(`provisioning into linked project ${name ?? plan.name} (--into-linked)`);
     if (hasService(status.stdout, plan.name)) return undefined;
     return addService(railway, plan, log);
@@ -122,7 +124,11 @@ export function railwayStore(
   const svc = ["--service", service];
   return {
     async exists() {
-      return isLinked((await railway(["status", "--json"], { capture: true })).stdout);
+      const status = (await railway(["status", "--json"], { capture: true })).stdout;
+      if (!isLinked(status)) return false;
+      const name = linkedName(status);
+      if (name !== service) throw new Error(unrelatedProject(name, service));
+      return true;
     },
     async ensure() {
       const gate = await ensureRailwayService(railway, { name: service, mountPath: "/data", intoLinked: false }, log);

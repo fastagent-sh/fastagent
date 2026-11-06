@@ -167,9 +167,22 @@ describe("railwayStore", () => {
     ]);
   });
 
-  it("exists when this directory is linked to a project, and not otherwise", async () => {
+  it("exists when this directory is linked to the agent's project, and not otherwise; another project is refused", async () => {
     const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "bot" }) } : {}));
     expect(await railwayStore(linked.run, "bot", quiet, { redeploy: false }).exists()).toBe(true);
+    // Another project's variables are not read, whatever service it holds: the same refusal as `ensure`.
+    const other = fake((args) =>
+      args[0] === "status"
+        ? {
+            stdout: JSON.stringify({
+              name: "prod-app",
+              environments: { edges: [{ node: { serviceInstances: { edges: [{ node: { serviceName: "bot" } }] } } }] },
+            }),
+          }
+        : {},
+    );
+    await expect(railwayStore(other.run, "bot", quiet, { redeploy: false }).exists()).rejects.toThrow("prod-app");
+    expect(other.cmds()).toEqual(["status --json"]);
     const unlinked = fake((args) => (args[0] === "status" ? { stdout: "" } : {}));
     expect(await railwayStore(unlinked.run, "bot", quiet, { redeploy: false }).exists()).toBe(false);
     expect(unlinked.cmds()).toEqual(["status --json"]);

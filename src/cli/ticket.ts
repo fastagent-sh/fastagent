@@ -527,7 +527,9 @@ export function ticketReport(
     const message = ticket.status === "expired" ? "it was not finished in time" : (ticket.message as string);
     // What the step reached before it ended is still the person's: where to get the value it stopped for, say.
     const reached = left.length === 0 ? "" : `Tell the user what the steps it reached leave them: ${left.join(" ")} `;
-    const tail = logTail(ticket.ticket);
+    // An expired step is not a fault: nobody finished it in time, and its log says nothing more.
+    const expired = ticket.status === "expired";
+    const tail = expired ? [] : logTail(ticket.ticket);
     return {
       json: {
         ...base,
@@ -535,10 +537,12 @@ export function ticketReport(
         log,
         ...(tail.length === 0 ? {} : { log_tail: tail }),
         ...(ticket.afterwards ? { afterwards: ticket.afterwards } : {}),
-        agent_next_steps:
-          `${reached}The cause is in log_tail (the whole log is at log): fix what it names, then run: ` +
-          `${ticket.restart} --json. The same inputs fail the same way unless the log shows a transient network or ` +
-          `builder error.`,
+        agent_next_steps: expired
+          ? `${reached}The step was not finished in time, which is not a fault: ask the user to complete it as soon ` +
+            `as you run: ${ticket.restart} --json`
+          : `${reached}The cause is in log_tail (the whole log is at log): fix what it names, then run: ` +
+            `${ticket.restart} --json. The same inputs fail the same way unless the log shows a transient network or ` +
+            `builder error.`,
       },
       text: [
         `${ticket.status}: ${message}`,

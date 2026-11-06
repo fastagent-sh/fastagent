@@ -368,7 +368,9 @@ the values it read until it ends (its idle timeout) or the next deploy. The comm
 IAM user holding only this policy (replace `<region>` and `<account-id>`; as a customer managed policy, since an inline
 user policy is capped at 2048 bytes). Every resource is scoped to the names a deploy derives (`fastagent-*`, `fa-*`,
 `fastagent/*`); CloudFormation makes the stack's calls with the caller's own permissions, which is why Lambda, IAM and
-AgentCore actions are here. It is a verified set, not a proven minimum. Its `Slr` statement, which lets a first deploy into an account create the two AgentCore service-linked roles, was not exercised: the account already held them. `fastagent login --deployment agentcore` also
+AgentCore actions are here. The `Iam` statement lets its holder create any role named `fastagent-*` with any permissions
+and hand it to a function they create (`CAPABILITY_IAM`), so treat this principal as able to escalate within the account;
+a permissions boundary on those roles would narrow that, and was not tried. It is a verified set, not a proven minimum. Its `Slr` statement, which lets a first deploy into an account create the two AgentCore service-linked roles, was not exercised: the account already held them. `fastagent login --deployment agentcore` also
 needs `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
 
 ```json
