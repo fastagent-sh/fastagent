@@ -70,17 +70,34 @@ describe("add <channel> with no one at a terminal: the person's part, named", ()
     expect(JSON.parse(back.stdout)).toMatchObject({ provider: "openai", status: "failed" });
   });
 
-  it("telegram has no person's part: it is added, the outcome one JSON object", async () => {
+  it("telegram has no person's part: it is added to poll, the outcome one JSON object, no webhook secret", async () => {
     const dir = await agentWorkspace("fa-add-telegram-", {
       "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
     });
     const result = await runInProcess(["add", "telegram", dir, "--json"]);
     expect(result.code).toBe(0);
+    const outcome = JSON.parse(result.stdout) as { status: string; written: string[]; next_steps: string[] };
+    expect(outcome.status).toBe("done");
+    expect(outcome.written).not.toContain("TELEGRAM_SECRET_TOKEN");
+    expect(outcome.next_steps).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("TELEGRAM_BOT_TOKEN"),
+        expect.stringContaining("fastagent dev            # no public URL or tunnel required"),
+      ]),
+    );
+    expect(outcome.next_steps.join("\n")).not.toContain("TELEGRAM_SECRET_TOKEN");
+    expect(existsSync(join(dir, "src", "channels", "telegram.ts"))).toBe(true);
+  });
+
+  it("telegram --ingress webhook asks for the secret that verifies a webhook, and generates it", async () => {
+    const dir = await agentWorkspace("fa-add-telegram-webhook-", {
+      "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
+    });
+    const result = await runInProcess(["add", "telegram", dir, "--ingress", "webhook", "--json"]);
+    expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       status: "done",
       written: expect.arrayContaining(["TELEGRAM_SECRET_TOKEN"]),
-      next_steps: expect.arrayContaining([expect.stringContaining("TELEGRAM_BOT_TOKEN")]),
     });
-    expect(existsSync(join(dir, "src", "channels", "telegram.ts"))).toBe(true);
   });
 });

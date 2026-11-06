@@ -270,7 +270,7 @@ const start: CommandSpec = {
 const INGRESS: FlagSpec = {
   flags: "--ingress <mode>",
   description:
-    "Feishu/Lark: write connection or webhook to the instance configuration (channels.<kind>.ingress) and set the " +
+    "Telegram, Feishu, Lark: write connection or webhook to the instance configuration (channels.<kind>.ingress) and set the " +
     "app up for it (unset: what the configuration says, else dev uses its connection and everything else webhook)",
 };
 const INGRESS_CONFIG: FlagSpec = {
@@ -312,7 +312,7 @@ const channelSub = (
       ? [CHANNEL_ENVIRONMENT, INGRESS, INGRESS_CONFIG, NO_ONBOARD, ...UNATTENDED_SETUP]
       : kind === "slack"
         ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG, ...UNATTENDED_SETUP]
-        : [CHANNEL_ENVIRONMENT, JSON_FLAG],
+        : [CHANNEL_ENVIRONMENT, INGRESS, INGRESS_CONFIG, JSON_FLAG],
   examples: [
     { cmd: `fastagent add ${kind}` },
     ...(kind === "telegram" ? [] : [{ cmd: `fastagent add ${kind} --json`, note: "a coding agent" }]),

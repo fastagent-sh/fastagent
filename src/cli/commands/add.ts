@@ -394,7 +394,7 @@ async function resolveIngress(
   if (raw !== undefined && raw !== "webhook" && raw !== "connection") {
     failUsage(`--ingress must be "webhook" or "connection", got "${raw}"`);
   }
-  if (kind !== "feishu" && kind !== "lark") return { ingress: "webhook" };
+  if (kind === "slack") return { ingress: "webhook" };
   if (raw !== undefined) return { ingress: raw, ...(config === undefined ? {} : { write: config }) };
   const named =
     config === undefined || !existsSync(config)

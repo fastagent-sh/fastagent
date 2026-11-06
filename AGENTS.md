@@ -180,7 +180,8 @@ src/
 │   │   ├── stop-command.ts # the shared /stop parsing every chat channel accepts, and the abort it dispatches
 │   │   └── thread-fork.ts  # where a new thread forks from: its room at the message its reply chain names (by key)
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
-│   │   ├── telegram.ts     # ingress + per-turn lifecycle + composition
+│   │   ├── telegram.ts     # the runtime (accept an update, run the turn) + its two ways in: webhook route, long polling
+│   │   ├── polling.ts      # getUpdates as a LongConnection: webhook taken away first, confirm by offset, what ends it
 │   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy
 │   │   ├── invoke-turn.ts  # resolve this platform's attachments for one turn
 │   │   ├── turn-store.ts   # telegram's record + update_id arrival order over the generic store

@@ -3,7 +3,7 @@
  * agent's reply back to the chat, ACK 200.
  */
 import { join } from "node:path";
-import type { ChannelModule } from "../../channel.ts";
+import type { ChannelContext, ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
@@ -36,11 +36,14 @@ import { type Target, callApi, editMessageText, sendMessage } from "./telegram-a
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { portJoin } from "../../effect-port.ts";
+import { pollTelegramUpdates } from "./polling.ts";
 import { type StoredTurn, createTurnStore } from "./turn-store.ts";
 
 // Re-export the public surface authored elsewhere, so `@fastagent-sh/fastagent/telegram` keeps one entry point.
 export { defaultTelegramRoute, telegramEnvelope, telegramStop };
 export type { TelegramFailure, TelegramMessage, TelegramRoute, TelegramUpdate };
+
+const TELEGRAM_API = "https://api.telegram.org";
 
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
@@ -66,150 +69,233 @@ export interface TelegramChannelOptions {
   apiBaseUrl?: string;
 }
 
-/** Build a Telegram bot channel: policy options in, a {@link ChannelModule} out. */
-export function telegramChannel({
-  secretToken,
-  botToken,
-  route,
-  onError,
-  botUsername,
-  apiBaseUrl = "https://api.telegram.org",
-}: TelegramChannelOptions): ChannelModule {
-  return ({ agent, sessionFor, recordedSession, stateDir: stateHome }) => {
-    // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
+/** What both ways of receiving hand an update to: the part of a channel that is the same whichever way it arrives. */
+interface TelegramRuntime {
+  /**
+   * Decide, persist and start the turn for one update. Synchronous and durable before it returns (the turn's intent is
+   * on disk), so the transport may acknowledge the update the moment it does; a throw means it was not accepted.
+   */
+  accept(update: TelegramUpdate): void;
+  /** Resolves once the turns accepted so far have ended: the test/observability seam. */
+  turnsIdle(): Promise<void>;
+}
+
+/** What a channel that polls is given: the webhook one's options without the secret that verifies a webhook. */
+export type TelegramPollingChannelOptions = Omit<TelegramChannelOptions, "secretToken">;
+
+type TelegramRuntimeOptions = TelegramPollingChannelOptions & { apiBaseUrl: string };
+
+/** The channel's state and policy, over the context it is mounted in: everything but how updates arrive. */
+function createTelegramRuntime(
+  { botToken, route, onError, botUsername, apiBaseUrl }: TelegramRuntimeOptions,
+  { agent, sessionFor, recordedSession, stateDir: stateHome }: ChannelContext,
+): TelegramRuntime {
+  // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
+  if (!botToken) {
+    throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
+  }
+  const formatError = onError ?? defaultErrorMessage;
+  // One getMe at startup: the bot's @username (for the default route's group @mention summon and for recognising an
+  // addressed `/stop`, only when not supplied) and the group-privacy flag — privacy mode off is required to receive
+  // the un-summoned group messages that feed the context buffer, so warn if it is on.
+  let mentionName = botUsername;
+  void callApi(apiBaseUrl, botToken, "getMe", {}).then(
+    (me) => {
+      if (mentionName === undefined) mentionName = me.username;
+      if (me.can_read_all_group_messages === false) {
+        log.warn(
+          "[telegram] privacy mode is on: the bot only sees @mentions / replies / commands, so group " +
+            "context (un-summoned messages) won't be captured. Disable it via @BotFather → /setprivacy.",
+        );
+      }
+    },
+    // Name every capability the missing username costs, so "the bot ignores /stop@name" is diagnosable from this
+    // ONE line.
+    (e) =>
+      log.warn(
+        `[telegram] getMe failed; @mention summon, addressed /stop, and the privacy check are skipped: ${String(e)}`,
+      ),
+  );
+  // A bot token is "<bot_id>:<secret>" — the bot's own id is knowable synchronously, so reply-to-bot targeting is
+  // precise from the first update (no getMe race; getMe only resolves the @username).
+  const tokenId = Number(botToken.split(":")[0]);
+  const botId = Number.isSafeInteger(tokenId) && tokenId > 0 ? tokenId : undefined;
+  if (botId === undefined) {
+    log.warn("[telegram] bot token has no parseable bot id — reply-to-bot summon disabled until getMe resolves");
+  }
+  const decide =
+    route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
+
+  const buffer = createContextBuffer(join(stateHome, "buffers.json"));
+  // The send tool rides this channel's token, and what it sends lands in this buffer (shared-api.ts says why).
+  registerTelegramTransport({
+    apiBaseUrl,
+    botToken,
+    record: (placeKey, entry) => buffer.push(placeKey, entry),
+  });
+  // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
+  // replay on the next start.
+  const store = createTurnStore(join(stateHome, "turns.json"));
+  const sideTasks = createTaskTracker("[telegram]");
+  const targetOf = (r: PendingTurn): Target => ({ chatId: r.chatId, threadId: r.threadId, replyTo: r.replyTo });
+
+  // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
+  // operator log line.
+  const notifyDropped = (r: PendingTurn): void => {
+    const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
+    const sent =
+      r.previewId !== undefined
+        ? editMessageText(apiBaseUrl, botToken, targetOf(r), r.previewId, body, { html: false })
+        : sendMessage(apiBaseUrl, botToken, targetOf(r), body, { html: false }).then(() => {});
+    void sent.catch((e) =>
+      log.warn(`[telegram] could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
+    );
+  };
+
+  const runner = createTurnRunner<PendingTurn, StoredTurn, BufferEntry>({
+    label: "[telegram]",
+    store,
+    discussion: buffer,
+    toStored: ({ previewId: _live, ...intent }) => ({ ...intent, attempts: 0 }),
+    fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, previewId: undefined }),
+    discussionKey: (rec) => rec.placeKey,
+    where: (rec) => `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`,
+    // Queue feedback: when this session already has a turn running/queued, a silent wait reads as "the bot ignored
+    // me" once the current turn runs long.
+    onQueuedBehind: (rec) => ({
+      done: sendMessage(apiBaseUrl, botToken, targetOf(rec), "⏳ Queued — I’ll start once the current task finishes.", {
+        html: false,
+      }).then(
+        (id) => {
+          if (id !== undefined) rec.previewId = id;
+        },
+        (e) => log.warn(`[telegram] queue notice failed (the turn still runs): ${String(e)}`),
+      ),
+    }),
+    // Its ⏳ notice (if any) now falsely reads "Queued": delete it best-effort.
+    onDeferred: (rec) => {
+      if (rec.previewId !== undefined) {
+        void callApi(apiBaseUrl, botToken, "deleteMessage", {
+          chat_id: rec.chatId,
+          message_id: rec.previewId,
+        }).catch(() => {});
+      }
+    },
+    notifyDropped,
+    // `rec.previewId`: the ⏳ notice THIS process put up if the record waited behind another turn.
+    deliverAnswer: (rec, answer) =>
+      portJoin(() => deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer, rec.previewId)),
+    execute: (rec, discussion, onAnswered) =>
+      telegramReply(
+        telegramTurnStream(
+          agent,
+          {
+            session: () => sessionFor(rec.conversation),
+            key: rec.id,
+            text: `${discussionBlock(discussion.text)}${rec.baseText}`,
+          },
+          { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: attachmentsDir(stateHome) },
+          {
+            primary: { imageFileIds: rec.imageFileIds, fileIds: rec.fileIds },
+            buffered: collectAttachments(discussion.consumed, {
+              files: new Set(rec.fileIds),
+              images: new Set(rec.imageFileIds),
+            }),
+          },
+        ),
+        apiBaseUrl,
+        botToken,
+        targetOf(rec),
+        formatError,
+        rec.previewId,
+        onAnswered,
+      ),
+  });
+  runner.recover();
+
+  const accept = (update: TelegramUpdate): void => {
+    // Decide whether/where to answer, then run the turn.
+    const m = pickMessage(update);
+    if (!m) return;
+    const placeKey = telegramPlaceKey(m.chat.id, m.message_thread_id);
+    const r = decide(update);
+    if (!r) {
+      // Not summoned: in a group, record the message so a later summon has the discussion (needs privacy off to be
+      // delivered here at all).
+      const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
+      const content = messageText(m);
+      if (isGroup && content) {
+        // OWN attachments only: each message is its own buffer entry, so a reply's referenced attachment is already
+        // (or will be) the other entry's.
+        const fileIds = ownFiles(m);
+        const imageIds = ownImages(m);
+        // A captioned attachment renders as its caption.
+        const summary = attachmentSummary(m);
+        const bodyLine = summary && content !== summary ? `${content} ${summary}` : content;
+        buffer.push(placeKey, {
+          sender: fromLabel(m.from) ?? "someone",
+          body: bodyLine,
+          messageId: m.message_id,
+          replyTo: m.reply_to_message?.message_id,
+          fileIds: fileIds.length ? fileIds : undefined,
+          imageIds: imageIds.length ? imageIds : undefined,
+        });
+      }
+      return;
+    }
+    const conversation = r.conversation ?? placeKey;
+    const chatId = r.chatId ?? m.chat.id;
+    // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no reply-quote.
+    const threadId = r.threadId ?? m.message_thread_id;
+    const sameTarget = String(chatId) === String(m.chat.id) && threadId === m.message_thread_id;
+    const replyTo = m.chat.type !== "private" && sameTarget ? m.message_id : undefined;
+    // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the run it stops.
+    // `abort` waits until what it stopped has ended, so the update is acknowledged first.
+    if (telegramStop(update, { botUsername: mentionName, botId })) {
+      sideTasks.track(
+        dispatchStop(agent, recordedSession(conversation), "[telegram]")
+          .then((feedback) =>
+            sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }),
+          )
+          .catch((e) => log.warn(`[telegram] stop feedback failed: ${String(e)}`)),
+      );
+      return;
+    }
+    const baseText = r.text ?? telegramEnvelope(m);
+    const imageFileIds = extractImages(m);
+    const fileIds = extractFiles(m);
+    if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
+      // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
+      runner.submit(
+        {
+          id: `${update.update_id}`,
+          conversation,
+          placeKey,
+          baseText,
+          chatId,
+          threadId,
+          replyTo,
+          imageFileIds,
+          fileIds,
+        },
+        true,
+      );
+    }
+    return;
+  };
+  return { accept, turnsIdle: () => runner.idle() };
+}
+
+/** Build a Telegram bot channel that receives by webhook: policy options in, a {@link ChannelModule} out. */
+export function telegramChannel(options: TelegramChannelOptions): ChannelModule {
+  const { secretToken, apiBaseUrl = TELEGRAM_API } = options;
+  return (ctx) => {
     if (!secretToken) {
       throw new Error(
         "telegramChannel requires a non-empty secretToken (the webhook secret_token; an unset one accepts forged updates)",
       );
     }
-    if (!botToken) {
-      throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
-    }
-    const formatError = onError ?? defaultErrorMessage;
-    // One getMe at startup: the bot's @username (for the default route's group @mention summon and for recognising an
-    // addressed `/stop`, only when not supplied) and the group-privacy flag — privacy mode off is required to receive
-    // the un-summoned group messages that feed the context buffer, so warn if it is on.
-    let mentionName = botUsername;
-    void callApi(apiBaseUrl, botToken, "getMe", {}).then(
-      (me) => {
-        if (mentionName === undefined) mentionName = me.username;
-        if (me.can_read_all_group_messages === false) {
-          log.warn(
-            "[telegram] privacy mode is on: the bot only sees @mentions / replies / commands, so group " +
-              "context (un-summoned messages) won't be captured. Disable it via @BotFather → /setprivacy.",
-          );
-        }
-      },
-      // Name every capability the missing username costs, so "the bot ignores /stop@name" is diagnosable from this
-      // ONE line.
-      (e) =>
-        log.warn(
-          `[telegram] getMe failed; @mention summon, addressed /stop, and the privacy check are skipped: ${String(e)}`,
-        ),
-    );
-    // A bot token is "<bot_id>:<secret>" — the bot's own id is knowable synchronously, so reply-to-bot targeting is
-    // precise from the first update (no getMe race; getMe only resolves the @username).
-    const tokenId = Number(botToken.split(":")[0]);
-    const botId = Number.isSafeInteger(tokenId) && tokenId > 0 ? tokenId : undefined;
-    if (botId === undefined) {
-      log.warn("[telegram] bot token has no parseable bot id — reply-to-bot summon disabled until getMe resolves");
-    }
-    const decide =
-      route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
-
-    const buffer = createContextBuffer(join(stateHome, "buffers.json"));
-    // The send tool rides this channel's token, and what it sends lands in this buffer (shared-api.ts says why).
-    registerTelegramTransport({
-      apiBaseUrl,
-      botToken,
-      record: (placeKey, entry) => buffer.push(placeKey, entry),
-    });
-    // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
-    // replay on the next start.
-    const store = createTurnStore(join(stateHome, "turns.json"));
-    const sideTasks = createTaskTracker("[telegram]");
-    const targetOf = (r: PendingTurn): Target => ({ chatId: r.chatId, threadId: r.threadId, replyTo: r.replyTo });
-
-    // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
-    // operator log line.
-    const notifyDropped = (r: PendingTurn): void => {
-      const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-      const sent =
-        r.previewId !== undefined
-          ? editMessageText(apiBaseUrl, botToken, targetOf(r), r.previewId, body, { html: false })
-          : sendMessage(apiBaseUrl, botToken, targetOf(r), body, { html: false }).then(() => {});
-      void sent.catch((e) =>
-        log.warn(`[telegram] could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
-      );
-    };
-
-    const runner = createTurnRunner<PendingTurn, StoredTurn, BufferEntry>({
-      label: "[telegram]",
-      store,
-      discussion: buffer,
-      toStored: ({ previewId: _live, ...intent }) => ({ ...intent, attempts: 0 }),
-      fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, previewId: undefined }),
-      discussionKey: (rec) => rec.placeKey,
-      where: (rec) => `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`,
-      // Queue feedback: when this session already has a turn running/queued, a silent wait reads as "the bot ignored
-      // me" once the current turn runs long.
-      onQueuedBehind: (rec) => ({
-        done: sendMessage(
-          apiBaseUrl,
-          botToken,
-          targetOf(rec),
-          "⏳ Queued — I’ll start once the current task finishes.",
-          {
-            html: false,
-          },
-        ).then(
-          (id) => {
-            if (id !== undefined) rec.previewId = id;
-          },
-          (e) => log.warn(`[telegram] queue notice failed (the turn still runs): ${String(e)}`),
-        ),
-      }),
-      // Its ⏳ notice (if any) now falsely reads "Queued": delete it best-effort.
-      onDeferred: (rec) => {
-        if (rec.previewId !== undefined) {
-          void callApi(apiBaseUrl, botToken, "deleteMessage", {
-            chat_id: rec.chatId,
-            message_id: rec.previewId,
-          }).catch(() => {});
-        }
-      },
-      notifyDropped,
-      // `rec.previewId`: the ⏳ notice THIS process put up if the record waited behind another turn.
-      deliverAnswer: (rec, answer) =>
-        portJoin(() => deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer, rec.previewId)),
-      execute: (rec, discussion, onAnswered) =>
-        telegramReply(
-          telegramTurnStream(
-            agent,
-            {
-              session: () => sessionFor(rec.conversation),
-              key: rec.id,
-              text: `${discussionBlock(discussion.text)}${rec.baseText}`,
-            },
-            { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: attachmentsDir(stateHome) },
-            {
-              primary: { imageFileIds: rec.imageFileIds, fileIds: rec.fileIds },
-              buffered: collectAttachments(discussion.consumed, {
-                files: new Set(rec.fileIds),
-                images: new Set(rec.imageFileIds),
-              }),
-            },
-          ),
-          apiBaseUrl,
-          botToken,
-          targetOf(rec),
-          formatError,
-          rec.previewId,
-          onAnswered,
-        ),
-    });
-    runner.recover();
-
+    const runtime = createTelegramRuntime({ ...options, apiBaseUrl }, ctx);
     const handler = async (req: Request): Promise<Response> => {
       if (req.method !== "POST") return text("POST only\n", 405);
       // Fail closed: a missing/wrong secret token is 401, never routed.
@@ -224,78 +310,27 @@ export function telegramChannel({
       } catch {
         return text("invalid json\n", 400);
       }
-
-      // Decide whether/where to answer, then run the turn.
-      const m = pickMessage(update);
-      if (!m) return new Response(null, { status: 200 });
-      const placeKey = telegramPlaceKey(m.chat.id, m.message_thread_id);
-      const r = decide(update);
-      if (!r) {
-        // Not summoned: in a group, record the message so a later summon has the discussion (needs privacy off to be
-        // delivered here at all).
-        const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
-        const content = messageText(m);
-        if (isGroup && content) {
-          // OWN attachments only: each message is its own buffer entry, so a reply's referenced attachment is already
-          // (or will be) the other entry's.
-          const fileIds = ownFiles(m);
-          const imageIds = ownImages(m);
-          // A captioned attachment renders as its caption.
-          const summary = attachmentSummary(m);
-          const bodyLine = summary && content !== summary ? `${content} ${summary}` : content;
-          buffer.push(placeKey, {
-            sender: fromLabel(m.from) ?? "someone",
-            body: bodyLine,
-            messageId: m.message_id,
-            replyTo: m.reply_to_message?.message_id,
-            fileIds: fileIds.length ? fileIds : undefined,
-            imageIds: imageIds.length ? imageIds : undefined,
-          });
-        }
-        return new Response(null, { status: 200 });
-      }
-      const conversation = r.conversation ?? placeKey;
-      const chatId = r.chatId ?? m.chat.id;
-      // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no reply-quote.
-      const threadId = r.threadId ?? m.message_thread_id;
-      const sameTarget = String(chatId) === String(m.chat.id) && threadId === m.message_thread_id;
-      const replyTo = m.chat.type !== "private" && sameTarget ? m.message_id : undefined;
-      // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the run it stops.
-      // `abort` waits until what it stopped has ended, so the update is acknowledged first.
-      if (telegramStop(update, { botUsername: mentionName, botId })) {
-        sideTasks.track(
-          dispatchStop(agent, recordedSession(conversation), "[telegram]")
-            .then((feedback) =>
-              sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }),
-            )
-            .catch((e) => log.warn(`[telegram] stop feedback failed: ${String(e)}`)),
-        );
-        return new Response(null, { status: 200 });
-      }
-      const baseText = r.text ?? telegramEnvelope(m);
-      const imageFileIds = extractImages(m);
-      const fileIds = extractFiles(m);
-      if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
-        // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
-        runner.submit(
-          {
-            id: `${update.update_id}`,
-            conversation,
-            placeKey,
-            baseText,
-            chatId,
-            threadId,
-            replyTo,
-            imageFileIds,
-            fileIds,
-          },
-          true,
-        );
-      }
+      runtime.accept(update);
       return new Response(null, { status: 200 });
     };
     // Test/observability seam: await the fire-and-forget turns this handler enqueues.
-    (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () => runner.idle();
+    (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = runtime.turnsIdle;
     return { "POST /telegram": handler };
+  };
+}
+
+/**
+ * Build a Telegram bot channel that receives by long polling: the process asks Telegram for updates, so no public URL
+ * and no webhook secret are involved. It takes the webhook away from the bot first (`getUpdates` does not work while
+ * one is set), so a bot is polled by one process or reached by one webhook, never both.
+ */
+export function telegramPollingChannel(options: TelegramPollingChannelOptions): LongConnectionChannelModule {
+  const apiBaseUrl = options.apiBaseUrl ?? TELEGRAM_API;
+  return {
+    name: "telegram long polling",
+    connect(ctx, signal) {
+      const runtime = createTelegramRuntime({ ...options, apiBaseUrl }, ctx);
+      return pollTelegramUpdates({ apiBaseUrl, botToken: options.botToken, accept: runtime.accept }, signal);
+    },
   };
 }

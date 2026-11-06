@@ -362,7 +362,7 @@ describe("add: fastagent add <channel>", () => {
       `${JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "^0.4.0" } }, null, 2)}\n`,
     );
 
-    const out = await cliInit(["add", "telegram", "fastagent"], dir);
+    const out = await cliInit(["add", "telegram", "fastagent", "--ingress", "webhook"], dir);
     expect(out).toContain(join("fastagent", "src", "channels", "telegram.ts")); // reported relative to where it ran
     expect(await exists(join(root, "src", "channels", "telegram.ts"))).toBe(true); // in the agent dir…
     expect(await exists(join(root, "src", "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
@@ -375,12 +375,14 @@ describe("add: fastagent add <channel>", () => {
     const dir = await readyAgent();
     await mkdir(join(dir, ".secrets"), { recursive: true });
     await writeFile(join(dir, ".secrets", ".env.example"), "# env\n"); // add injects channel env vars here
-    const out = await cliInit(["add", "telegram"], dir);
+    const out = await cliInit(["add", "telegram", "--ingress", "webhook"], dir);
     expect(out).toContain("src/channels/telegram.ts");
     const src = await readFile(join(dir, "src", "channels", "telegram.ts"), "utf8");
     expect(src).toContain('from "@fastagent-sh/fastagent/telegram"'); // the adapter
-    expect(src).toContain("POST /telegram");
-    expect(src).toContain("telegramChannel({"); // policy-only glue (agent/stateDir arrive via ctx)
+    // Both ways, one policy: the instance's `channels.telegram.ingress` picks (agent/stateDir arrive via ctx).
+    expect(src).toContain("byIngress({");
+    expect(src).toContain("telegramChannel({");
+    expect(src).toContain("telegramPollingChannel({");
     expect(src).not.toContain("sendDocument"); // the channel file is the channel, NOT the send-tool (no misroute)
     // the companion tool lands in tools/ by the bundle convention (so the agent can send files back)
     const sendTool = await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8");
@@ -418,7 +420,7 @@ describe("add: fastagent add <channel>", () => {
 
   it("writes a generated channel secret to .secrets/.env (kind-neutral), keeping any value already there", async () => {
     const dir = await readyAgent();
-    const out = await cliInit(["add", "telegram"], dir);
+    const out = await cliInit(["add", "telegram", "--ingress", "webhook"], dir);
 
     expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .secrets/.env");
     expect(out).toContain("set TELEGRAM_BOT_TOKEN in .secrets/.env");
@@ -435,7 +437,7 @@ describe("add: fastagent add <channel>", () => {
     const kept = await readyAgent();
     await mkdir(join(kept, ".secrets"), { recursive: true });
     await writeFile(join(kept, ".secrets", ".env"), "TELEGRAM_SECRET_TOKEN=keep-me\n");
-    const keptOut = await cliInit(["add", "telegram"], kept);
+    const keptOut = await cliInit(["add", "telegram", "--ingress", "webhook"], kept);
     expect(keptOut).not.toContain("wrote TELEGRAM_SECRET_TOKEN");
     const keptEnv = await readFile(join(kept, ".secrets", ".env"), "utf8");
     expect(keptEnv.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1);
@@ -450,7 +452,7 @@ describe("add: fastagent add <channel>", () => {
       join(dir, ".secrets", ".env"),
       "# mine\nOPENAI_API_KEY=sk-x\n\n# --- telegram channel ---\n# from @BotFather → /newbot\n# TELEGRAM_BOT_TOKEN=\n",
     );
-    const out = await cliInit(["add", "telegram"], dir);
+    const out = await cliInit(["add", "telegram", "--ingress", "webhook"], dir);
     expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .secrets/.env");
     const envFile = await readFile(join(dir, ".secrets", ".env"), "utf8");
     // Slotted under the existing marker — not orphaned at the end of the file.
@@ -469,7 +471,7 @@ describe("add: fastagent add <channel>", () => {
       join(dir, ".secrets", ".env"),
       "# --- telegram channel ---\nTELEGRAM_SECRET_TOKEN=\nOPENAI_API_KEY=sk-x\n",
     );
-    const out = await cliInit(["add", "telegram"], dir);
+    const out = await cliInit(["add", "telegram", "--ingress", "webhook"], dir);
     expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .secrets/.env");
     const envFile = await readFile(join(dir, ".secrets", ".env"), "utf8");
     expect(envFile.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1); // replaced, not duplicated

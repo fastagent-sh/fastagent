@@ -197,6 +197,13 @@ The `x-telegram-bot-api-secret-token` header must match `TELEGRAM_SECRET_TOKEN`.
 
 If using `fastagent dev --tunnel`, rerun after changing `.env` so the webhook registration uses the new token.
 
+## Telegram polling ends with "another process polls this bot"
+
+Telegram lets one process poll a bot. Another `fastagent dev`, a deployment that polls, or a script calling `getUpdates`
+holds it: stop that one, or give this instance its own bot (a dev bot apart from production's). A bot that receives by
+webhook cannot be polled either, and polling deletes its webhook at start; if a deployment points the bot at its URL
+while a poll runs, the poll ends with "a webhook was set for this bot while it polls".
+
 ## Telegram messages send no final reply
 
 Check:
