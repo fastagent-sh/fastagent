@@ -617,7 +617,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("notes a custom channel (its webhook is the author's to wire; its variables travel like every other)", async () => {
+  it("notes a custom channel (its webhook is the author's to wire; its variables are the target's to hold like every other)", async () => {
     const dir = await agent({ "src/channels/discord.ts": "export default () => ({});\n" });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
@@ -626,7 +626,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       expect(pre.messages).toContainEqual({
         level: "note",
         text: expect.stringContaining(
-          'route channel "discord" is custom — its variables travel from .secrets/.env like every other',
+          'route channel "discord" is custom — the variables it declares are the target\'s to hold (`fastagent secrets`)',
         ),
       });
     }

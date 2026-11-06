@@ -4,6 +4,9 @@ import type { SecretStore } from "./secret-store.ts";
 
 export function fileStore(agentDir: string, file: string): SecretStore {
   return {
+    async exists() {
+      return true;
+    },
     async ensure() {},
     async names() {
       return new Set([...loadEnvValues(file)].filter(([, value]) => value.trim() !== "").map(([name]) => name));

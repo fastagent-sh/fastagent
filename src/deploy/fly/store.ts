@@ -58,6 +58,11 @@ export function flyStore(
   options: { stage: boolean },
 ): SecretStore {
   return {
+    async exists() {
+      const listed = await readOutput(fly, "fly", ["apps", "list", "--json"], (out) => listHasName(out, app));
+      if ("gate" in listed) throw new Error(listed.gate);
+      return listed.value;
+    },
     async ensure() {
       const gate = await ensureFlyApp(fly, app, log);
       if (gate !== undefined) throw new Error(gate);

@@ -84,6 +84,9 @@ function variableNames(stdout: string): Set<string> {
 export function railwayStore(railway: CliRunner, service: string, log: (message: string) => void): SecretStore {
   const svc = ["--service", service];
   return {
+    async exists() {
+      return isLinked((await railway(["status", "--json"], { capture: true })).stdout);
+    },
     async ensure() {
       // A directory linked to a project is the one it means; an unlinked one is made one, as a deploy would.
       if (isLinked((await railway(["status", "--json"], { capture: true })).stdout)) return;

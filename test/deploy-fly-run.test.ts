@@ -242,7 +242,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(tg).not.toHaveBeenCalled();
   });
 
-  it("the secrets step runs once the app and its address exist and before the deploy, on a store that stages", async () => {
+  it("the secrets step runs once the app exists, before anything else is set up for it, on a store that stages", async () => {
     const { fly, calls } = fakeFly((a) => (a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {}));
     const seen: string[] = [];
     const out = await run(
@@ -257,7 +257,9 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     );
     expect(out).toEqual({ ok: true });
     const cmds = calls.map((c) => c.args.join(" "));
-    expect(cmds.indexOf("secrets list -a bot --json")).toBeGreaterThan(cmds.indexOf("ips allocate-v6 -a bot"));
+    // An app that cannot run without its values is given no address first.
+    expect(cmds.indexOf("secrets list -a bot --json")).toBeGreaterThan(cmds.indexOf("apps create bot"));
+    expect(cmds.indexOf("secrets list -a bot --json")).toBeLessThan(cmds.indexOf("ips list -a bot --json"));
     expect(cmds.indexOf("secrets import --stage -a bot")).toBeLessThan(cmds.findIndex((c) => c.startsWith("deploy ")));
     // A value goes over stdin, never argv.
     expect(calls.find((c) => c.args[1] === "import")?.input).toBe("OPENAI_API_KEY=sk-x\n");
@@ -309,6 +311,8 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const out = await run(plan({ provideSecrets: async () => "Fly has no value for: TELEGRAM_BOT_TOKEN" }), fly);
     expect(out).toEqual({ ok: false, gate: "Fly has no value for: TELEGRAM_BOT_TOKEN" });
     expect(cmds().some((c) => c.startsWith("deploy "))).toBe(false);
+    // Stopped before it spent anything on an address the app cannot use yet.
+    expect(cmds().some((c) => c.startsWith("ips "))).toBe(false);
   });
 
   it("gate: a failed `apps list` stops (not misreported as a name clash)", async () => {

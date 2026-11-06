@@ -33,9 +33,13 @@ async function fakeFly(listed: string[] = ["GH_TOKEN"]) {
 echo "$@" >> "${log}"
 case "$1" in
   version) echo "fly v0";;
-  apps) if [ "$2" = "list" ]; then echo '[]'; else echo "New app created"; fi;;
+  apps) if [ "$2" = "list" ]; then echo '[]'; else touch "${log}.created"; echo "New app created"; fi;;
   secrets)
-    if [ "$2" = "list" ]; then echo '[${listed.map((name) => `{"Name":"${name}"}`).join(",")}]'; fi
+    # Like flyctl: an app that was never made has no secrets to list.
+    if [ "$2" = "list" ]; then
+      if [ ! -f "${log}.created" ] && [ -z "$FAKE_FLY_APP_EXISTS" ]; then echo "Error: app not found" >&2; exit 1; fi
+      echo '[${listed.map((name) => `{"Name":"${name}"}`).join(",")}]'
+    fi
     if [ "$2" = "import" ]; then cat > "${log}.stdin"; echo "Secrets are staged"; fi;;
 esac
 `,
@@ -60,17 +64,35 @@ describe("secrets list", () => {
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       host: "Docker",
+      exists: true,
       secrets: [
         // The model's key is known, and optional: OpenAI has a login to run on the box instead.
-        { name: "OPENAI_API_KEY", set: false, required: false },
+        { name: "OPENAI_API_KEY", set: false, required: false, hint: "your model provider key, or a login on the box" },
         { name: "GH_TOKEN", set: true, required: true, hint: expect.stringContaining("required by") },
         { name: "SENTRY_DSN", set: false, required: false },
       ],
     });
     expect(result.stdout).not.toContain("ghp_secret");
     const text = await runInProcess(["secrets", "list", "docker", dir]);
-    expect(text.stdout).toMatch(/^missing {2}OPENAI_API_KEY {2}\(optional\)$/m);
+    expect(text.stdout).toMatch(
+      /^missing {2}OPENAI_API_KEY {2}\(optional: your model provider key, or a login on the box\)$/m,
+    );
     expect(text.stdout).toMatch(/^set {6}GH_TOKEN/m);
+  });
+});
+
+describe("secrets list, for a target with no app yet", () => {
+  it("says every name is missing and that the first set, push or deploy makes the app, instead of failing", async () => {
+    const fly = await fakeFly([]);
+    const dir = await agent();
+    const result = await runInProcess(["secrets", "list", "fly", dir, "--json"], undefined, fly.env);
+    expect(result.code, result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout) as { exists: boolean; secrets: { name: string; set: boolean }[] };
+    expect(report.exists).toBe(false);
+    expect(report.secrets.every((entry) => !entry.set)).toBe(true);
+    expect(result.stderr).toContain("Fly has no app for this agent yet");
+    // Nothing was made to find out.
+    expect((await fly.calls()).some((call) => call.startsWith("apps create"))).toBe(false);
   });
 });
 

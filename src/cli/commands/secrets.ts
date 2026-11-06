@@ -93,6 +93,7 @@ async function declared(agentDir: string, configFile: string | undefined) {
   return {
     needs: secretNeeds(facts.modelAuth, facts.declaredSecrets, facts.modelKey),
     names: declaredNames(facts.modelAuth, facts.declaredSecrets, facts.modelKey),
+    modelKeys: facts.modelKey.variables,
   };
 }
 
@@ -140,21 +141,29 @@ export async function runSecrets(
 }
 
 async function list(store: SecretStore, label: string, agentDir: string, opts: SecretsOptions): Promise<void> {
-  const { needs, names } = await declared(agentDir, opts.config);
-  const have = await store.names();
+  const { needs, names, modelKeys } = await declared(agentDir, opts.config);
+  // A target with no app yet holds nothing: every name is missing, which is an answer and not a failure.
+  const present = await store.exists();
+  if (!present)
+    console.error(
+      `[fastagent] ${label} has no app for this agent yet: the first set, push or \`deploy --run\` makes it`,
+    );
+  const have = present ? await store.names() : new Set<string>();
   const required = new Set(needs.map((need) => need.name));
   const rows = names.map((name) => ({
     name,
     set: have.has(name),
     required: required.has(name),
-    hint: needs.find((need) => need.name === name)?.hint,
+    hint:
+      needs.find((need) => need.name === name)?.hint ??
+      (modelKeys.includes(name) ? "your model provider key, or a login on the box" : undefined),
   }));
   printReport(
     opts.json,
-    { host: label, secrets: rows },
+    { host: label, exists: present, secrets: rows },
     rows.map(
       ({ name, set, required: must, hint }) =>
-        `${set ? "set    " : "missing"}  ${name}  (${must ? (hint ?? "required") : "optional"})`,
+        `${set ? "set    " : "missing"}  ${name}  (${must ? (hint ?? "required") : `optional${hint === undefined ? "" : `: ${hint}`}`})`,
     ),
   );
 }

@@ -60,6 +60,14 @@ describe("flyStore", () => {
     await expect(flyStore(run, "bot", quiet, { stage: true }).write({ A: "a" })).rejects.toThrow("fly secrets import");
   });
 
+  it("says whether the app is listed, without making it", async () => {
+    const absent = fake();
+    expect(await flyStore(absent.run, "bot", quiet, { stage: true }).exists()).toBe(false);
+    expect(absent.cmds()).toEqual(["apps list --json"]);
+    const present = fake(() => ({ stdout: JSON.stringify([{ Name: "bot" }]) }));
+    expect(await flyStore(present.run, "bot", quiet, { stage: true }).exists()).toBe(true);
+  });
+
   it("makes the app when it is not listed, and only then", async () => {
     const absent = fake();
     await flyStore(absent.run, "bot", quiet, { stage: true }).ensure();
@@ -102,6 +110,14 @@ describe("railwayStore", () => {
       "init --name bot",
       "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state",
     ]);
+  });
+
+  it("exists when this directory is linked to a project, and not otherwise", async () => {
+    const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "bot" }) } : {}));
+    expect(await railwayStore(linked.run, "bot", quiet).exists()).toBe(true);
+    const unlinked = fake((args) => (args[0] === "status" ? { stdout: "" } : {}));
+    expect(await railwayStore(unlinked.run, "bot", quiet).exists()).toBe(false);
+    expect(unlinked.cmds()).toEqual(["status --json"]);
   });
 
   it("a variable that fails to set stops there, naming it", async () => {

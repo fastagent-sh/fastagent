@@ -26,7 +26,11 @@ vi.mock("@clack/prompts", () => ({
 
 let dir: string;
 let writes: Record<string, string>[];
+let said: string[];
 const target = (held: string[] = []): SecretStore => ({
+  async exists() {
+    return true;
+  },
   async ensure() {},
   async names() {
     return new Set(held);
@@ -40,13 +44,14 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "fa-secrets-step-"));
   await mkdir(join(dir, ".secrets"), { recursive: true });
   writes = [];
+  said = [];
   prompts.confirmed.length = 0;
   prompts.typed.length = 0;
   prompts.asked.length = 0;
   vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
   // A deploy is the production instance's: its value file is the one the key is kept in.
   selectAgentEnvironment("production");
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation((line) => void said.push(String(line)));
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -83,7 +88,7 @@ describe("a deploy's secrets step", () => {
     const values = new Map([["GH_TOKEN", "ghp_file"]]);
     expect(await step({ kind: "terminal" }, { values })(target())).toBeUndefined();
     expect(prompts.asked).toEqual([
-      "Fly lacks GH_TOKEN, which .secrets/production/.env holds. Set them there from it?",
+      "Fly lacks GH_TOKEN, which .secrets/production/.env holds. Set them on Fly from it?",
     ]);
     expect(writes).toEqual([{ GH_TOKEN: "ghp_file" }]);
   });
@@ -111,6 +116,10 @@ describe("a deploy's secrets step", () => {
     const [key] = Object.entries(writes[0] as Record<string, string>);
     expect(key?.[0]).toBe("FASTAGENT_API_KEY");
     expect(key?.[1]).toMatch(/^[\w-]{43}$/);
+    // Said, since nobody typed it: what it is for, where it went, where it is kept.
+    expect(said.join("\n")).toContain(
+      "made FASTAGENT_API_KEY for the Agent API, set on Fly and kept in .secrets/production/.env",
+    );
     expect(await readFile(join(dir, ".secrets", "production", ".env"), "utf8")).toContain(
       `FASTAGENT_API_KEY=${key?.[1]}`,
     );

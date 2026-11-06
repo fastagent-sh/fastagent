@@ -7,6 +7,9 @@ function store(names: string[] = [], fail?: Error) {
   const writes: Record<string, string>[] = [];
   const held = new Set(names);
   const fake: SecretStore = {
+    async exists() {
+      return true;
+    },
     async ensure() {},
     async names() {
       if (fail) throw fail;
@@ -81,7 +84,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
     });
     expect(out).toBeUndefined();
     expect(asked).toEqual([
-      "Fly lacks A, OPT (optional), which .secrets/production/.env holds. Set them there from it?",
+      "Fly lacks A, OPT (optional), which .secrets/production/.env holds. Set them on Fly from it?",
       "B",
     ]);
     expect(writes).toEqual([{ A: "file-a", OPT: "file-opt", B: "typed-b" }]);
@@ -98,7 +101,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       source: { file: "f.env", values: new Map([["A", "file-a"]]) },
       asker,
     });
-    expect(asked).toEqual(["Fly lacks A, which f.env holds. Set them there from it?", "A"]);
+    expect(asked).toEqual(["Fly lacks A, which f.env holds. Set them on Fly from it?", "A"]);
     expect(writes).toEqual([{ A: "typed-a" }]);
   });
 
@@ -112,9 +115,11 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       source: { file: "f.env", values: new Map([["A", "file-a"]]) },
     });
     expect(out).toContain("Fly has no value for: A (required by src/A.ts); B (your model provider key).");
-    expect(out).toContain("`fastagent secrets push fly` sets the ones a value file holds (A)");
-    expect(out).toContain("`fastagent secrets set fly B`");
-    expect(out).toContain("A value is never asked for in a conversation");
+    expect(out).toContain("`fastagent secrets push fly` sets the one a value file holds (A)");
+    expect(out).toContain("a person types the others in a terminal, one command each: `fastagent secrets set fly B`");
+    // A CI job and a secret manager have their own way in.
+    expect(out).toContain("`fastagent secrets push fly --from-env` takes them from the environment");
+    expect(out).toContain("Then re-run. A value is never asked for in a conversation");
     expect(writes).toEqual([]);
   });
 
@@ -132,6 +137,12 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
     expect(out).toBeUndefined();
     expect(said).toEqual(["Fly lacks OPT, which f.env holds; `fastagent secrets push fly` sets it"]);
     expect(writes).toEqual([]);
+  });
+
+  it("one name nobody holds reads as a sentence about it, not about a plural", async () => {
+    const { fake } = store();
+    const out = await provideSecrets({ ...base, store: fake, needs: [need("A")], known: ["A"] });
+    expect(out).toContain("a person types it in a terminal, one command each: `fastagent secrets set fly A`");
   });
 
   it("a target that cannot be read is a gate saying why, never an empty target to fill", async () => {

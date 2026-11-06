@@ -10,6 +10,8 @@
 import type { SecretNeed } from "./secrets.ts";
 
 export interface SecretStore {
+  /** Whether the app or service the values belong to exists: absent, it holds no value, and `names()` cannot be asked. */
+  exists(): Promise<boolean>;
   /** Make the app or service the values belong to, when it does not exist yet. */
   ensure(): Promise<void>;
   /** The names the target holds a value for. */
@@ -64,20 +66,20 @@ function gapLine(
   const names = missing.map((need) => `${need.name} (${need.hint})`).join("; ");
   const fromFile = missing.filter((need) => held.includes(need.name));
   const rest = missing.filter((need) => !held.includes(need.name));
-  return (
-    `${host} has no value for: ${names}. ` +
-    [
-      ...(fromFile.length > 0
-        ? [`\`${commands.push}\` sets the ones a value file holds (${fromFile.map((n) => n.name).join(", ")})`]
-        : []),
-      ...(rest.length > 0
-        ? [
-            `a person sets ${fromFile.length > 0 ? "the others" : "them"} in a terminal, one command each: ${rest.map((need) => `\`${commands.set(need.name)}\``).join(", ")}`,
-          ]
-        : []),
-    ].join("; ") +
-    ", then re-run. A value is never asked for in a conversation"
-  );
+  const ways = [
+    ...(fromFile.length > 0
+      ? [
+          `\`${commands.push}\` sets ${fromFile.length === 1 ? "the one" : "the ones"} a value file holds (${fromFile.map((n) => n.name).join(", ")})`,
+        ]
+      : []),
+    ...(rest.length > 0
+      ? [
+          `a person types ${fromFile.length > 0 ? "the others" : rest.length === 1 ? "it" : "them"} in a terminal, one command each: ${rest.map((need) => `\`${commands.set(need.name)}\``).join(", ")}`,
+        ]
+      : []),
+    `\`${commands.push} --from-env\` takes them from the environment of a secret manager or a CI job (\`op run\`, \`doppler run\`)`,
+  ];
+  return `${host} has no value for: ${names}. ${ways.join("; ")}. Then re-run. A value is never asked for in a conversation`;
 }
 
 /** Resolves a gate line when the target still lacks a required name afterwards, undefined once it holds them all. */
@@ -113,7 +115,7 @@ export async function provideSecrets(input: ProvideSecrets): Promise<string | un
     if (offered.length > 0 && source !== undefined) {
       const required = new Set(missing.map((need) => need.name));
       const list = offered.map((name) => (required.has(name) ? name : `${name} (optional)`)).join(", ");
-      if (await asker.confirm(`${host} lacks ${list}, which ${source.file} holds. Set them there from it?`)) {
+      if (await asker.confirm(`${host} lacks ${list}, which ${source.file} holds. Set them on ${host} from it?`)) {
         for (const name of offered) write[name] = source.values.get(name) as string;
       }
     }

@@ -300,7 +300,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   );
   for (const { name, ingress } of channels) {
     if ((CHANNEL_KINDS as string[]).includes(name)) continue;
-    const secretsPart = `its variables travel from ${valueFile} like every other`;
+    const secretsPart = `the variables it declares are the target's to hold (\`fastagent secrets\`), like every other`;
     report.note(
       ingress === "long-connection"
         ? `long-connection channel "${name}" is custom — ${secretsPart}; generated deploy plans keep the process running and skip webhook registration`
@@ -356,7 +356,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       report.note(
         `${modelSpec}: no credential ships with this deploy (this machine's logins and shell stay here) — once the ` +
           `box is up, \`--run\` asks it: it keeps what it already authenticates ${boxLogin} with, else logs in ` +
-          `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key in ${valueFile}`,
+          `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key on the target ` +
+          `(\`fastagent secrets set <host> ${modelKey.variables[0] ?? "<KEY_NAME>"}\`)`,
       );
     }
   }

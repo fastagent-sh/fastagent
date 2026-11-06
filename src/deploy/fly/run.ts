@@ -93,6 +93,11 @@ export async function deployFlyRun(
   const appGate = await ensureFlyApp(fly, plan.appName, log);
   if (appGate !== undefined) return gate(appGate);
 
+  // 3b. Secrets, before anything else is set up for an app that cannot run without them: the names the app holds, the
+  // gaps filled (staged: the deploy below applies them).
+  const secretsGate = await plan.provideSecrets(flyStore(fly, plan.appName, log, { stage: true }));
+  if (secretsGate !== undefined) return gate(secretsGate);
+
   // 4. NO volume step: `fly deploy` creates it from [mounts] on a first deploy, and only it can tell the scheduler
   // which machine (guest size + image) must fit on the host the volume is pinned to. Pre-creating one here placed it
   // blind, and a host with disk but no compute failed the deploy with `insufficient resources … with existing volume`.
@@ -115,10 +120,6 @@ export async function deployFlyRun(
       return gate(`\`fly ${allocate.join(" ")}\` failed — see the flyctl output above`);
     }
   }
-
-  // 6. Secrets: the names the app holds, the gaps filled (staged: the deploy below applies them).
-  const secretsGate = await plan.provideSecrets(flyStore(fly, plan.appName, log, { stage: true }));
-  if (secretsGate !== undefined) return gate(secretsGate);
 
   // 7.
   log("deploying (remote build)…");

@@ -76,6 +76,9 @@ export function deploySecrets(input: {
       ...(api.served ? { mint: [mintApiKey()] } : {}),
       onMinted: async (minted) => {
         const names = Object.keys(minted);
+        console.error(
+          `[fastagent] made ${names.join(", ")} for the Agent API, set on ${label} and kept in ${valueFile}`,
+        );
         const { unprotectedSecretsDir } = await writeValues(
           agentDir,
           "Agent API",
