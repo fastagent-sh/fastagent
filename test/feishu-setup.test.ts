@@ -327,7 +327,7 @@ describe("a Feishu app is created by scan-to-create", () => {
     expect(prompts.asked).toEqual([]);
     expect(outcome.after).toEqual([
       expect.stringContaining(
-        "takes effect on publish: CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_1/version",
+        "takes effect on publish: CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_1/version (self-approved)",
       ),
     ]);
   });
@@ -455,6 +455,11 @@ describe("a Lark webhook's Verification Token", () => {
     expect(outcome.written).toEqual(["LARK_APP_ID", "LARK_APP_SECRET", "LARK_VERIFICATION_TOKEN"]);
     expect(loadEnvValues(file).get("LARK_VERIFICATION_TOKEN")).toBe("automatic-token");
     expect(waits).toHaveLength(1);
+    // Self-approval was measured on Feishu's tenant, not Lark's: it is not promised there.
+    expect(outcome.after.join("\n")).toContain(
+      "takes effect on publish: CREATE + PUBLISH a version: https://open.larksuite.com/app/cli_lark/version",
+    );
+    expect(outcome.after.join("\n")).not.toContain("self-approved");
   });
 
   it("is pasted on a page of its own where the config API is not there, then the whole app is reused on a rerun", async () => {
@@ -471,7 +476,10 @@ describe("a Lark webhook's Verification Token", () => {
     expect(await paste(tokenPage.url, { LARK_VERIFICATION_TOKEN: "manual-token" })).toContain("Lark connected");
     const outcome = await run;
     expect(loadEnvValues(file).get("LARK_VERIFICATION_TOKEN")).toBe("manual-token");
-    expect(outcome.after.join("\n")).toContain("set the Request URL to https://<where it is served>/lark");
+    // No config API means the instance cannot set the Request URL: the person does, and records it afterwards.
+    expect(outcome.after.join("\n")).toContain("this lark app has no application-config API");
+    expect(outcome.after.join("\n")).toContain("channels setup lark --record-url --config <file>");
+    expect(outcome.after.join("\n")).not.toContain("self-approved");
     expect(said.join("\n")).toContain("returned HTTP 404 for the application-config API");
 
     await setup("lark", "webhook", { person });

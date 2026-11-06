@@ -113,7 +113,7 @@ export function feishuEngine(
     (scopes ??= agentScopes(kind, way, idOf(held), apiOf(held)));
 
   /** How the Verification Token came, when the setup went looking for it. */
-  let token: "read" | "captured" | "pasted" | undefined;
+  let token: "read" | "captured" | "manual" | "pasted" | undefined;
 
   async function capture(held: HeldValues): Promise<string | undefined> {
     const appId = idOf(held);
@@ -129,7 +129,7 @@ export function feishuEngine(
         say(
           `this ${kind} app returned HTTP 404 for the application-config API, so its Verification Token cannot be captured automatically`,
         );
-        token = "pasted";
+        token = "manual";
         return undefined;
       }
       say(`could not read the app's Verification Token directly: ${(error as Error).message}`);
@@ -207,7 +207,15 @@ export function feishuEngine(
                 `(no Verification Token, Request URL or tunnel is needed): ${eventPage(kind, appId)}; then ${then}${publish}`,
         );
       } else if (token === "captured") {
-        lines.push(`the switch to webhook mode takes effect on publish: ${then}${publish} (self-approved)`);
+        lines.push(
+          `the switch to webhook mode takes effect on publish: ${then}${publish}${kind === "feishu" ? " (self-approved)" : ""}`,
+        );
+      } else if (token === "manual") {
+        lines.push(
+          `this ${kind} app has no application-config API, so the instance cannot set its Request URL: choose webhook in ` +
+            `Events & Callbacks and set the Request URL to ${publicUrl ?? "https://<where it is served>"}/${kind}, ` +
+            `${then}${publish}, then run \`fastagent channels setup ${kind} --record-url --config <file>\``,
+        );
       } else if (token === "pasted") {
         lines.push(
           `the instance sets the Subscription mode and Request URL itself when the app holds ${FEISHU_APP_CONFIG_SCOPE}; ` +
