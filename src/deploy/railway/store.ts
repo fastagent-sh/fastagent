@@ -73,15 +73,29 @@ export async function ensureRailwayService(
 
 /** The names `railway variable list --json` shows: the keys of an object. Its values are never read. */
 function variableNames(stdout: string): Set<string> {
-  const parsed: unknown = JSON.parse(stdout);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    // Not the parser's message: it quotes the text around the error, and this output holds every value.
+    throw new Error("the output was not JSON");
+  }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`expected a JSON object of variables, got ${Array.isArray(parsed) ? "an array" : typeof parsed}`);
   }
   return new Set(Object.keys(parsed));
 }
 
-/** `service`'s variables, in the project and environment this directory is linked to. */
-export function railwayStore(railway: CliRunner, service: string, log: (message: string) => void): SecretStore {
+/**
+ * `service`'s variables, in the project and environment this directory is linked to. `redeploy`: the service restarts on
+ * what is written, once, after the last; off, for a deploy that follows and applies them.
+ */
+export function railwayStore(
+  railway: CliRunner,
+  service: string,
+  log: (message: string) => void,
+  options: { redeploy: boolean },
+): SecretStore {
   const svc = ["--service", service];
   return {
     async exists() {
@@ -101,9 +115,10 @@ export function railwayStore(railway: CliRunner, service: string, log: (message:
     async write(values) {
       const names = Object.keys(values);
       log(`setting ${names.length} variable(s) on ${service}: ${names.join(", ")}`);
-      // One value per call over stdin, never argv. `--skip-deploys`: the caller redeploys once, after the last.
-      for (const name of names) {
-        const result = await railway(["variables", "set", name, "--stdin", "--skip-deploys", ...svc], {
+      // One value per call over stdin, never argv. `--skip-deploys` on all but the last of a write that is to take effect.
+      for (const [index, name] of names.entries()) {
+        const skip = options.redeploy && index === names.length - 1 ? [] : ["--skip-deploys"];
+        const result = await railway(["variables", "set", name, "--stdin", ...skip, ...svc], {
           input: values[name] as string,
         });
         if (result.code !== 0)

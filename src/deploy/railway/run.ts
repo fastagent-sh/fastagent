@@ -143,7 +143,7 @@ export async function deployRailwayRun(
   if (projectGate !== undefined) return gate(projectGate);
 
   // 3a. The names the service holds, the gaps filled.
-  const secretsGate = await plan.provideSecrets(railwayStore(railway, plan.name, log));
+  const secretsGate = await plan.provideSecrets(railwayStore(railway, plan.name, log, { redeploy: false }));
   if (secretsGate !== undefined) return gate(secretsGate);
 
   // 3b.

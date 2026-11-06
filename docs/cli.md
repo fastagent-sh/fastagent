@@ -483,8 +483,9 @@ when it does not exist yet, so a CI job can push before its first deploy.
   target with no app yet shows every name missing and says the first `set`, `push` or `deploy --run` makes it.
 - **`set`** sets one value: typed without echo at a terminal, else read from standard input. It is never an argument.
   `--generate` sets a random value and prints it once, on stdout alone, for what FastAgent makes itself
-  (`FASTAGENT_API_KEY`). Use `push` for several names: on a running Fly app each `set` restarts its machines, and a `push` is
-  one batch.
+  (`FASTAGENT_API_KEY`). Use `push` for several names: on a running Fly app each `set` restarts its machines, and a `push` restarts them
+  once. Railway redeploys the service on the last value a `set` or `push` writes; Docker's values are a file that a running
+  container reads after `docker compose up -d`, which the command says.
 - **`push`** sets, in one batch, every declared name its source holds a value for: `--env-file`, else `--from-env`, else
   `.secrets/production/.env`. `--from-env` takes the declared names from the environment of the command that injected
   them, which is how a secret manager or CI joins in with no adapter: `op run --env-file=.env.tpl -- fastagent secrets push fly

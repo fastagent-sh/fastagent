@@ -1,4 +1,4 @@
-/** Fly's secrets as a deployment's store: `fly secrets list` for the names, `fly secrets import` to set them. */
+/** Fly's secrets as a deployment's store: `fly secrets list` for the names, `fly secrets set NAME=-` to set each. */
 import type { SecretStore } from "../secret-store.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
 
@@ -47,6 +47,9 @@ export async function ensureFlyApp(
   return undefined;
 }
 
+/** What `fly secrets set NAME=-` reads from standard input. */
+const FLY_STDIN_LIMIT = 64 * 1024;
+
 /**
  * `stage`: set the secrets without deploying them, for a deploy that follows (`fly deploy` applies staged ones); off, a
  * running app restarts on them at once.
@@ -74,16 +77,23 @@ export function flyStore(
     },
     async write(values) {
       const names = Object.keys(values);
-      // One value per line: a newline inside one would end it early and make the rest a name of its own.
-      const multiline = names.find((name) => /[\r\n]/.test(values[name] as string));
-      if (multiline !== undefined)
-        throw new Error(`${multiline} holds a line break, which \`fly secrets import\` cannot carry`);
+      const tooLong = names.find((name) => Buffer.byteLength(values[name] as string) > FLY_STDIN_LIMIT);
+      if (tooLong !== undefined) {
+        throw new Error(
+          `${tooLong} is longer than the ${FLY_STDIN_LIMIT} bytes \`fly secrets set\` reads from standard input`,
+        );
+      }
       log(`setting ${names.length} secret(s) on ${app}: ${names.join(", ")}`);
-      // Values over stdin, never argv.
-      const input = `${names.map((name) => `${name}=${values[name]}`).join("\n")}\n`;
-      const args = ["secrets", "import", ...(options.stage ? ["--stage"] : []), "-a", app];
-      if ((await fly(args, { input })).code !== 0)
-        throw new Error("`fly secrets import` failed — see the flyctl output above");
+      // `NAME=-` reads the value from standard input exactly as it is, and never from argv. `import` reads a dotenv-like
+      // line instead and changes a value that holds `#` or quotes, so it is not used. Staged, a running app restarts once,
+      // on the last.
+      for (const [index, name] of names.entries()) {
+        const last = index === names.length - 1;
+        const args = ["secrets", "set", ...(options.stage || !last ? ["--stage"] : []), "-a", app, `${name}=-`];
+        if ((await fly(args, { input: values[name] as string })).code !== 0) {
+          throw new Error(`\`fly secrets set ${name}=-\` failed — see the flyctl output above`);
+        }
+      }
     },
   };
 }

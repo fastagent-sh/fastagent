@@ -260,9 +260,11 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     // An app that cannot run without its values is given no address first.
     expect(cmds.indexOf("secrets list -a bot --json")).toBeGreaterThan(cmds.indexOf("apps create bot"));
     expect(cmds.indexOf("secrets list -a bot --json")).toBeLessThan(cmds.indexOf("ips list -a bot --json"));
-    expect(cmds.indexOf("secrets import --stage -a bot")).toBeLessThan(cmds.findIndex((c) => c.startsWith("deploy ")));
+    expect(cmds.indexOf("secrets set --stage -a bot OPENAI_API_KEY=-")).toBeLessThan(
+      cmds.findIndex((c) => c.startsWith("deploy ")),
+    );
     // A value goes over stdin, never argv.
-    expect(calls.find((c) => c.args[1] === "import")?.input).toBe("OPENAI_API_KEY=sk-x\n");
+    expect(calls.find((c) => c.args[1] === "set")?.input).toBe("sk-x");
   });
 
   it("idempotent re-run: an existing app is skipped, deploy still runs", async () => {

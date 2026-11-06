@@ -40,7 +40,7 @@ case "$1" in
       if [ ! -f "${log}.created" ] && [ -z "$FAKE_FLY_APP_EXISTS" ]; then echo "Error: app not found" >&2; exit 1; fi
       echo '[${listed.map((name) => `{"Name":"${name}"}`).join(",")}]'
     fi
-    if [ "$2" = "import" ]; then cat > "${log}.stdin"; echo "Secrets are staged"; fi;;
+    if [ "$2" = "set" ]; then cat >> "${log}.stdin"; echo >> "${log}.stdin"; echo "Secrets are staged"; fi;;
 esac
 `,
   );
@@ -133,21 +133,39 @@ describe("secrets push", () => {
     expect(result.stderr).toContain("two sources");
   });
 
-  it("on Fly: the production file's declared names go in one import over stdin, creating the app first, live and not staged", async () => {
+  it("on Fly: each declared name goes in with `NAME=-` over stdin, creating the app first, exactly as the file holds it, restarting once", async () => {
     const fly = await fakeFly([]);
-    const dir = await agent({ ".secrets/production/.env": "GH_TOKEN=ghp_x\nUNDECLARED=nope\n" });
+    const dir = await agent({
+      ".secrets/production/.env": "GH_TOKEN=ghp_x\nSENTRY_DSN=https://dsn.example/a#b\nUNDECLARED=nope\n",
+    });
     const result = await runInProcess(["secrets", "push", "fly", dir], undefined, fly.env);
     expect(result.code, result.stderr).toBe(0);
     const calls = await fly.calls();
     expect(calls.some((c) => c.startsWith("apps create "))).toBe(true);
-    expect(calls.filter((c) => c.startsWith("secrets import"))).toHaveLength(1);
-    expect(calls.find((c) => c.startsWith("secrets import"))).not.toContain("--stage");
-    expect(await fly.stdin()).toBe("GH_TOKEN=ghp_x\n");
+    const sets = calls.filter((c) => c.startsWith("secrets set"));
+    // Every value but the last is staged, so a running app restarts once.
+    expect(sets).toEqual([
+      expect.stringMatching(/^secrets set --stage -a \S+ GH_TOKEN=-$/),
+      expect.stringMatching(/^secrets set -a \S+ SENTRY_DSN=-$/),
+    ]);
+    expect(await fly.stdin()).toBe("ghp_x\nhttps://dsn.example/a#b\n");
     expect(calls.join("\n")).not.toContain("ghp_x"); // never argv
   });
 });
 
 describe("secrets set", () => {
+  it("on Docker says a running container reads the value after it is started again", async () => {
+    const dir = await agent();
+    Object.defineProperty(process, "stdin", { value: Readable.from(["v\n"]), configurable: true });
+    const set = await runInProcess(["secrets", "set", "docker", "GH_TOKEN", dir]);
+    expect(set.code, set.stderr).toBe(0);
+    expect(set.stderr).toContain("a running container reads it after `docker compose up -d`");
+    const other = join(dir, "..", "docker-note.env");
+    await writeFile(other, "GH_TOKEN=x\n");
+    const push = await runInProcess(["secrets", "push", "docker", dir, "--env-file", other]);
+    expect(push.stderr).toContain("a running container reads it after `docker compose up -d`");
+  });
+
   it("--generate sets a random value and prints it once, on stdout, for what FastAgent makes itself", async () => {
     const dir = await agent();
     const result = await runInProcess(["secrets", "set", "docker", "FASTAGENT_API_KEY", dir, "--generate"]);
@@ -176,7 +194,7 @@ describe("secrets set", () => {
     Object.defineProperty(process, "stdin", { value: Readable.from(["ghp_from_stdin\n"]), configurable: true });
     const result = await runInProcess(["secrets", "set", "fly", "GH_TOKEN", dir], undefined, fly.env);
     expect(result.code, result.stderr).toBe(0);
-    expect(await fly.stdin()).toBe("GH_TOKEN=ghp_from_stdin\n");
+    expect(await fly.stdin()).toBe("ghp_from_stdin\n");
     expect((await fly.calls()).join("\n")).not.toContain("ghp_from_stdin");
     expect(result.stdout).toBe("");
   });

@@ -69,7 +69,7 @@ async function openStore(host: SecretsHost, agentDir: string): Promise<SecretSto
       new Error(hostSignedOutGate("Railway", "railway login", "RAILWAY_API_TOKEN (an account token)", "railway login")),
     );
   }
-  return railwayStore(railway, toRailwayName(basename(agentDir)), log);
+  return railwayStore(railway, toRailwayName(basename(agentDir)), log, { redeploy: true });
 }
 
 /** What the definition declares for the deployment, and the production value file it reads. */
@@ -140,6 +140,15 @@ export async function runSecrets(
   }
 }
 
+/** Docker's values are a file Compose reads when it starts the container: a running one does not see a change to it. */
+function noteWhenItTakesEffect(label: string): void {
+  if (label === "Docker") {
+    console.error(
+      "[fastagent] note: a running container reads it after `docker compose up -d`, or the next `deploy docker --run`",
+    );
+  }
+}
+
 async function list(store: SecretStore, label: string, agentDir: string, opts: SecretsOptions): Promise<void> {
   const { needs, names, modelKeys } = await declared(agentDir, opts.config);
   // A target with no app yet holds nothing: every name is missing, which is an answer and not a failure.
@@ -184,6 +193,7 @@ async function set(
   await store.ensure();
   await store.write({ [name]: value });
   console.error(`[fastagent] set ${name} on ${label}`);
+  noteWhenItTakesEffect(label);
   // The one time a value is shown: it was made here and nobody holds it yet.
   if (minted) console.log(value);
 }
@@ -217,4 +227,5 @@ async function push(store: SecretStore, label: string, agentDir: string, opts: S
   console.error(
     `[fastagent] pushed ${Object.keys(toWrite).length} value(s) from ${where} to ${label}: ${Object.keys(toWrite).join(", ")}`,
   );
+  noteWhenItTakesEffect(label);
 }
