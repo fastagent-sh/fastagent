@@ -125,18 +125,26 @@ function deferred(): { promise: Promise<void>; resolve(): void; reject(error: un
   return { promise, resolve, reject };
 }
 
+/**
+ * Run `fn` when `signal` aborts; the returned function stops listening. A listener that is never removed stays on a
+ * signal that lives as long as the connection, and Node warns past ten of them.
+ */
+function whenAborted(signal: AbortSignal, fn: () => void): () => void {
+  signal.addEventListener("abort", fn, { once: true });
+  return () => signal.removeEventListener("abort", fn);
+}
+
 /** Wait `ms`, or until `signal` aborts. */
 const pause = (ms: number, signal: AbortSignal): Promise<void> =>
   new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    const stopListening = whenAborted(signal, () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    const timer = setTimeout(() => {
+      stopListening();
+      resolve();
+    }, ms);
   });
 
 /** A failure no retry can fix: the connection ends with it. */
@@ -238,6 +246,7 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
       };
       const fail = (error: unknown): void => {
         stop();
+        stopWatching();
         socket.close();
         if (!helloed) reject(error);
         else if (error instanceof TerminalSocketError) {
@@ -249,6 +258,12 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
         } else finish("lost");
       };
       const helloTimer = setTimeout(() => fail(new Error(`no hello from Slack within ${helloMs / 1000}s`)), helloMs);
+      // Until it says hello, the connection is only a socket being opened: an abort ends it at once, and `run` reads
+      // the rejection as the cancellation it is.
+      const stopWatching = whenAborted(signal, () => {
+        clearTimeout(helloTimer);
+        fail(new Error("cancelled"));
+      });
       const ping = (): void => {
         if (socket.ping === undefined) return;
         pingTimer = setTimeout(() => {
@@ -270,6 +285,7 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
           }
           if (envelope.type === "hello") {
             clearTimeout(helloTimer);
+            stopWatching();
             helloed = true;
             ping();
             resolve({
@@ -301,6 +317,7 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
         },
         close: (reason) => {
           clearTimeout(helloTimer);
+          stopWatching();
           fail(new Error(`Socket Mode connection ${reason}`));
         },
       });
@@ -309,34 +326,47 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
   const run = async (): Promise<void> => {
     let current: Connection | undefined;
     let waitMs = retryFirstMs;
-    while (!signal.aborted) {
-      let next: Connection;
-      try {
-        next = await dial(await openUrl());
-      } catch (error) {
+    try {
+      while (!signal.aborted) {
+        let next: Connection;
+        try {
+          next = await dial(await openUrl());
+        } catch (error) {
+          if (signal.aborted) break;
+          if (error instanceof TerminalSocketError || !isReady) throw error;
+          log.warn(`[slack] Socket Mode connection failed, retrying in ${waitMs / 1000}s: ${String(error)}`);
+          await pause(waitMs, signal);
+          waitMs = Math.min(waitMs * 2, retryCapMs);
+          continue;
+        }
+        // Both receive until the old one is let go, so an event sent in between is taken by one of them.
+        current?.close();
+        current = next;
+        waitMs = retryFirstMs;
+        markReady();
+        const outcome = await new Promise<"refresh" | "lost">((resolve, reject) => {
+          const stopWatching = whenAborted(signal, () => resolve("lost"));
+          next.ended.then(
+            (value) => {
+              stopWatching();
+              resolve(value);
+            },
+            (error: unknown) => {
+              stopWatching();
+              reject(error);
+            },
+          );
+        });
         if (signal.aborted) break;
-        if (error instanceof TerminalSocketError || !isReady) throw error;
-        log.warn(`[slack] Socket Mode connection failed, retrying in ${waitMs / 1000}s: ${String(error)}`);
-        await pause(waitMs, signal);
-        waitMs = Math.min(waitMs * 2, retryCapMs);
-        continue;
+        if (outcome === "lost") {
+          current = undefined;
+          await pause(retryFirstMs, signal);
+        }
       }
-      // Both receive until the old one is let go, so an event sent in between is taken by one of them.
+    } finally {
+      // However it ends, including with a failure no retry can fix: a channel that has ended takes no more events.
       current?.close();
-      current = next;
-      waitMs = retryFirstMs;
-      markReady();
-      const outcome = await Promise.race([
-        next.ended,
-        new Promise<"lost">((resolve) => signal.addEventListener("abort", () => resolve("lost"), { once: true })),
-      ]);
-      if (signal.aborted) break;
-      if (outcome === "lost") {
-        current = undefined;
-        await pause(retryFirstMs, signal);
-      }
     }
-    current?.close();
   };
 
   run().then(

@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type OpenSlackSocket, type SlackSocketHandlers, connectSlackSocket } from "../src/channels/slack/socket.ts";
 import type { SlackEventEnvelope } from "../src/channels/slack/parse.ts";
@@ -126,9 +127,9 @@ describe("slack socket mode: connecting", () => {
     await expect(connection.ready).rejects.toThrow("no hello from Slack within 0.03s");
   });
 
-  it("an abort before the first hello is a cancellation, not a failure", async () => {
+  it("an abort while the socket is still opening is a cancellation at once, not a failure after the hello wait", async () => {
     const fake = slack();
-    const { connection, abort } = connect(fake);
+    const { connection, abort } = connect(fake, undefined, { ...FAST, helloMs: 60_000 });
     await vi.waitFor(() => expect(fake.sockets).toHaveLength(1));
     abort.abort();
     await expect(connection.ready).resolves.toBeUndefined();
@@ -224,6 +225,31 @@ describe("slack socket mode: refresh and loss", () => {
     second.say(eventsApi("E2"));
     await vi.waitFor(() => expect(second.sent).toEqual([{ envelope_id: "E2" }]));
     expect(fake.asked).toHaveLength(2);
+  });
+
+  it("ends with the failure and lets the old connection go when the next one cannot be opened", async () => {
+    const fake = slack([{ ok: true }, { ok: false, error: "token_revoked" }]);
+    const { connection } = connect(fake);
+    const first = await greeted(fake);
+    await connection.ready;
+    first.say({ type: "disconnect", reason: "warning" });
+    await expect(connection.closed).rejects.toThrow("apps.connections.open failed: token_revoked");
+    // A channel that has ended takes no more events.
+    expect(first.closed).toBe(true);
+  });
+
+  it("does not leave a listener on the signal for each connection it has had", async () => {
+    const fake = slack();
+    const { connection, abort } = connect(fake);
+    let socket = await greeted(fake);
+    await connection.ready;
+    for (let cycle = 1; cycle <= 4; cycle++) {
+      socket.say({ type: "disconnect", reason: "refresh_requested" });
+      socket = await greeted(fake, cycle);
+      await vi.waitFor(() => expect(fake.sockets[cycle - 1]?.closed).toBe(true));
+    }
+    // Node warns past ten, and a signal lives as long as the connection: refreshes come every few hours.
+    expect(getEventListeners(abort.signal, "abort").length).toBeLessThanOrEqual(2);
   });
 
   it("reconnects when the socket is lost, and stays ready", async () => {
