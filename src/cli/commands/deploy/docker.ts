@@ -12,13 +12,11 @@ import {
 } from "../../../deploy/docker/plan.ts";
 import { deployDockerRun } from "../../../deploy/docker/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
-import { openExternalUrl } from "../../../open-url.ts";
-import { SECRET_FILE_MODE, exists, readTextIfExists, resolveStateRoot } from "../../../paths.ts";
-import { announceWebhooks } from "../../../tunnel.ts";
+import { SECRET_FILE_MODE, exists, readTextIfExists } from "../../../paths.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { failStartup } from "../../fail.ts";
-import { type Answerer, type HostDeploy, boxLoginStep, leftToPerson } from "./shared.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, leftToPerson, registrarsFor } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
@@ -145,13 +143,7 @@ async function runDeployDocker(params: {
       requireTunnel,
       channels,
       ...boxLoginStep("docker", params, () => composeShell(composeFile, agentDir)),
-      announce: (tunnelUrl) =>
-        announceWebhooks(agentDir, tunnelUrl, channels, {
-          // A ticket's process opens no browser: its person is told, through `leave`.
-          ...(leave === undefined ? { openUrl: openExternalUrl } : { leave }),
-          stateRoot: resolveStateRoot(agentDir),
-          env: Object.fromEntries(params.values),
-        }),
+      registrars: registrarsFor(agentDir, params.values, params.answerer),
     },
     spawnRunner("docker", agentDir),
     (message) => console.error(`[fastagent] ${message}`),

@@ -451,7 +451,11 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
 
 describe("a serve points its webhook channels at itself", () => {
   /** A `telegram` route channel, as the first-party one is reached, and the secrets that point it. */
-  async function telegramService(config: Record<string, unknown> = {}, secrets: Record<string, string> = {}) {
+  async function telegramService(
+    config: Record<string, unknown> = {},
+    secrets: Record<string, string> = {},
+    options: ServeOptions = {},
+  ) {
     const dir = await agentDir({
       "src/channels/telegram.mjs": `export default () => ({ "POST /telegram": () => new Response("ok") });`,
     });
@@ -462,7 +466,7 @@ describe("a serve points its webhook channels at itself", () => {
       config: { values: config, label: "test" },
     });
     opened.push(served.agent);
-    return serveAgent(served);
+    return serveAgent(served, options);
   }
   const health = async (service: { fetch(r: Request): Promise<Response> }) =>
     (await service.fetch(new Request("http://h/health"))).json();
@@ -511,6 +515,68 @@ describe("a serve points its webhook channels at itself", () => {
       expect(calls).toHaveLength(2);
     } finally {
       await service.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("without http.publicUrl points at the URL its host names (a Quick Tunnel's), while it is read the channel is pending", async () => {
+    const calls: string[] = [];
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.startsWith("https://api.telegram.org/")) return real(input, init);
+      calls.push(String(init?.body));
+      return Response.json({ ok: true, result: true });
+    });
+    let release: (url: string) => void = () => {};
+    const publicUrlFrom = vi.fn(() => new Promise<string | undefined>((resolve) => (release = resolve)));
+    const service = await telegramService(
+      {},
+      { TELEGRAM_BOT_TOKEN: "123:abc", TELEGRAM_SECRET_TOKEN: "s3cret" },
+      {
+        publicUrlFrom,
+      },
+    );
+    try {
+      await service.listen(0, "127.0.0.1");
+      await vi.waitFor(() => expect(publicUrlFrom).toHaveBeenCalledTimes(1));
+      expect(service.webhooks).toEqual([{ channel: "telegram", outcome: "pending" }]);
+      release("https://blue-cat.trycloudflare.com/");
+      await vi.waitFor(() =>
+        expect(service.webhooks).toEqual([
+          { channel: "telegram", outcome: "registered", url: "https://blue-cat.trycloudflare.com/telegram" },
+        ]),
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toContain("https://blue-cat.trycloudflare.com/telegram");
+    } finally {
+      await service.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("asks its host for no URL when the configuration names one, or the call does", async () => {
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) =>
+      String(input instanceof Request ? input.url : input).startsWith("https://api.telegram.org/")
+        ? Response.json({ ok: true, result: true })
+        : real(input, init),
+    );
+    const publicUrlFrom = vi.fn(async () => "https://blue-cat.trycloudflare.com");
+    const secrets = { TELEGRAM_BOT_TOKEN: "123:abc", TELEGRAM_SECRET_TOKEN: "s3cret" };
+    const named = await telegramService({ http: { publicUrl: "https://agent.acme.com" } }, secrets, { publicUrlFrom });
+    const explicit = await telegramService({}, secrets, { publicUrlFrom });
+    try {
+      expect(await named.registerWebhooks()).toEqual([
+        { channel: "telegram", outcome: "registered", url: "https://agent.acme.com/telegram" },
+      ]);
+      expect(await explicit.registerWebhooks("https://other.example.com")).toEqual([
+        { channel: "telegram", outcome: "registered", url: "https://other.example.com/telegram" },
+      ]);
+      expect(publicUrlFrom).not.toHaveBeenCalled();
+    } finally {
+      await named.close();
+      await explicit.close();
       vi.unstubAllGlobals();
     }
   });

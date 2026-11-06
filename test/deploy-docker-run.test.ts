@@ -10,13 +10,29 @@ import {
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { TUNNEL_DNS_LAG_MS } from "../src/tunnel.ts";
 
+/** What `config --format json` says of a Compose file whose agent reads its tunnel's URL (a plain one needs none). */
+const WIRED = JSON.stringify({
+  services: {
+    agent: { environment: { FASTAGENT_TUNNEL_METRICS: "http://tunnel:20241" } },
+    tunnel: { command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:20241", "--url", "http://agent:8787"] },
+  },
+});
+
+/** The agent's own `/health`, reporting each webhook channel as the agent ended it. */
+const agentReporting = (
+  ...webhooks: { channel: string; outcome: "registered" | "manual" | "failed" | "pending" }[]
+) => ({
+  probe: async () => webhooks,
+  intervalMs: 0,
+});
+
 function fakeDocker(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
   const calls: { args: string[]; env?: NodeJS.ProcessEnv }[] = [];
   const docker: CliRunner = async (args, options) => {
     calls.push({ args, env: options?.env });
     const result = script(args);
     // `config --format json` is how the run learns the ports to be published; a script that says nothing publishes none.
-    const stdout = result.stdout ?? (args.includes("--format") ? '{"services":{"agent":{}}}' : "");
+    const stdout = result.stdout ?? (args.includes("--format") ? WIRED : "");
     return { code: result.code ?? 0, stdout };
   };
   return { docker, calls, commands: () => calls.map((call) => call.args.join(" ")) };
@@ -30,7 +46,7 @@ const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   valueFile: "fastagent/.secrets/.env",
   requireTunnel: false,
   channels: [],
-  announce: async () => [],
+  registrars: {},
   ...override,
 });
 
@@ -122,6 +138,93 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(gated.ok).toBe(false);
     if (!gated.ok) expect(gated.gate).toMatch(/--tunnel.*no "tunnel" service.*--force/);
     expect(withoutTunnel.commands()).not.toContain("compose -f fastagent.compose.yml up -d");
+  });
+
+  it("recreates the agent with the tunnel, so it reads the new tunnel's URL; a plain run does not", async () => {
+    const withTunnel = fakeDocker((args) => (args.includes("--services") ? { stdout: "agent\ntunnel\n" } : {}));
+    await deployDockerRun(
+      plan({ requireTunnel: true }),
+      withTunnel.docker,
+      () => {},
+      healthy,
+      async () => ({
+        url: "https://blue-cat.trycloudflare.com",
+        connected: true,
+      }),
+    );
+    expect(withTunnel.commands()).toContain("compose -f fastagent.compose.yml up -d --force-recreate");
+    const plain = fakeDocker((args) => (args.includes("--services") ? { stdout: "agent\n" } : {}));
+    await deployDockerRun(plan(), plain.docker, () => {}, healthy);
+    expect(plain.commands()).toContain("compose -f fastagent.compose.yml up -d");
+  });
+
+  it("reads the agent's webhooks where the Compose file publishes it, else through the tunnel, and names the tunnel as where the platforms reach it", async () => {
+    const seen: string[] = [];
+    const slack: string[] = [];
+    const probe = async (healthUrl: string) => {
+      seen.push(healthUrl);
+      return [{ channel: "telegram", outcome: "registered" as const }];
+    };
+    const run = (ports: string) => {
+      const { docker } = fakeDocker((args) => {
+        if (args.includes("--services")) return { stdout: "agent\ntunnel\n" };
+        if (args.includes("port")) return ports === "" ? { code: 1 } : { stdout: ports };
+        return {};
+      });
+      return deployDockerRun(
+        plan({
+          requireTunnel: true,
+          channels: declaredChannels(["telegram", "slack"]),
+          registrars: {
+            slack: async (baseUrl) => {
+              slack.push(baseUrl);
+              return "registered";
+            },
+          },
+        }),
+        docker,
+        () => {},
+        healthy,
+        async () => ({ url: "https://blue-cat.trycloudflare.com", connected: true }),
+        undefined,
+        { probe: async (url) => probe(url), intervalMs: 0 },
+      );
+    };
+    await run("127.0.0.1:8787\n");
+    await run("");
+    // Slack's Request URL is set by the deploy at the tunnel; its outcome is the registrar's, not the agent's `manual`.
+    expect(slack).toEqual(["https://blue-cat.trycloudflare.com", "https://blue-cat.trycloudflare.com"]);
+    expect(seen).toEqual(["http://127.0.0.1:8787/health", "https://blue-cat.trycloudflare.com/health"]);
+  });
+
+  it("gates a kept Compose file whose agent cannot read its tunnel, naming what to add", async () => {
+    const unwired = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\ntunnel\n" };
+      if (args.includes("--format")) {
+        return {
+          stdout: JSON.stringify({ services: { agent: { environment: {} }, tunnel: { command: ["tunnel"] } } }),
+        };
+      }
+      return {};
+    });
+    const out = await deployDockerRun(plan({ requireTunnel: true }), unwired.docker, () => {}, healthy);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.gate).toContain('set FASTAGENT_TUNNEL_METRICS: "http://tunnel:20241" on the "agent" service');
+      expect(out.gate).toContain('add "--metrics" "0.0.0.0:20241" to the "tunnel" service\'s command');
+      expect(out.gate).toContain("fastagent.compose.yml — edit it, delete it and regenerate, or pass --force");
+    }
+    // Before the first side effect: nothing was built, recreated or started.
+    expect(unwired.commands().some((c) => c.includes(" build") || c.includes(" up"))).toBe(false);
+    expect(unwired.commands().some((c) => c.includes("rm -s -f tunnel"))).toBe(false);
+
+    // A plain run has no tunnel to read, so a Compose file without the wiring is not one that lacks it.
+    const plain = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\n" };
+      if (args.includes("--format")) return { stdout: JSON.stringify({ services: { agent: {} } }) };
+      return {};
+    });
+    expect((await deployDockerRun(plan(), plain.docker, () => {}, healthy)).ok).toBe(true);
   });
 
   it("the box logs in once healthy and before the tunnel is announced; a failed login still says where Compose is", async () => {
@@ -227,17 +330,13 @@ describe("deploy/docker/run: local Compose journey", () => {
       return {};
     });
     const gated = await deployDockerRun(
-      plan({
-        requireTunnel: true,
-        announce: async () => [
-          { kind: "telegram", outcome: "failed" },
-          { kind: "github", outcome: "manual" },
-        ],
-      }),
+      plan({ requireTunnel: true, channels: declaredChannels(["telegram"]) }),
       docker,
       () => {},
       healthy,
       async () => ({ url: "https://blue-cat.trycloudflare.com", connected: true }),
+      undefined,
+      agentReporting({ channel: "telegram", outcome: "failed" }),
     );
     expect(gated.ok).toBe(false);
     if (!gated.ok) {
@@ -255,11 +354,13 @@ describe("deploy/docker/run: local Compose journey", () => {
     const out = await deployDockerRun(
       // `manual` must NOT gate: re-running can never clear it, so an unclearable gate would spin a
       // coding agent forever (registration-gate.ts states this).
-      plan({ requireTunnel: true, announce: async () => [{ kind: "github", outcome: "manual" }] }),
+      plan({ requireTunnel: true, channels: declaredChannels(["feishu"]) }),
       docker,
       () => {},
       healthy,
       async () => ({ url: "https://blue-cat.trycloudflare.com", connected: true }),
+      undefined,
+      agentReporting({ channel: "feishu", outcome: "manual" }),
     );
     expect(out.ok).toBe(true);
   });
@@ -276,7 +377,7 @@ describe("deploy/docker/run: local Compose journey", () => {
     });
     const lines: string[] = [];
     const out = await deployDockerRun(
-      plan({ requireTunnel: true, announce: async () => [{ kind: "github", outcome: "manual" }] }),
+      plan({ requireTunnel: true }),
       docker,
       (message) => lines.push(message),
       healthy,
@@ -298,7 +399,7 @@ describe("deploy/docker/run: local Compose journey", () => {
     });
     const lines: string[] = [];
     await deployDockerRun(
-      plan({ requireTunnel: true, announce: async () => [{ kind: "github", outcome: "manual" }] }),
+      plan({ requireTunnel: true }),
       docker,
       (message) => lines.push(message),
       healthy,
@@ -455,7 +556,7 @@ describe("deploy/docker/run: parsers", () => {
 
   // #435, the same requirement startCloudflareTunnel has: a quick tunnel's hostname is published when
   // the tunnel registers an edge connection, so the URL alone is a name that does not resolve yet —
-  // and this driver hands it straight to `announce`.
+  // and the agent registers at it as soon as it has it.
   it("waits for the edge connection, not just the URL, before handing the tunnel over", async () => {
     let calls = 0;
     const { docker } = fakeDocker(() => {

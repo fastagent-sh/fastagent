@@ -13,8 +13,11 @@ import {
   announceWebhooks,
   hasTunnelConnection,
   parseTunnelUrl,
+  readQuickTunnelUrl,
   startCloudflareTunnel,
 } from "../src/tunnel.ts";
+import { createServer, type Server } from "node:http";
+import { log } from "../src/log.ts";
 
 // Mirrors TUNNEL_RETRY_MS in tunnel.ts (the constant is not exported).
 const TUNNEL_RETRY_MS = 2000;
@@ -158,6 +161,72 @@ describe("tunnel: startCloudflareTunnel", () => {
     expect(spawns).toBe(3); // retried, not a single silent attempt
     expect(errs.some((e) => /exited before a public URL/.test(e) && /retrying/.test(e))).toBe(true);
     expect(errs.some((e) => /Serving without a tunnel/.test(e))).toBe(true);
+  });
+});
+
+describe("tunnel: readQuickTunnelUrl", () => {
+  const servers: Server[] = [];
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
+  });
+  /** A cloudflared's metrics endpoint: `answers` names what each path says on its nth ask. */
+  async function metrics(answer: (path: string, ask: number) => { status: number; body: string }): Promise<string> {
+    const asked = new Map<string, number>();
+    const server = createServer((request, response) => {
+      const path = request.url ?? "";
+      const ask = (asked.get(path) ?? 0) + 1;
+      asked.set(path, ask);
+      const { status, body } = answer(path, ask);
+      response.writeHead(status).end(body);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  }
+
+  it("waits for the host to be named and for an edge connection, then hands over its https URL", async () => {
+    const url = await metrics((path, ask) =>
+      path === "/quicktunnel"
+        ? ask < 3
+          ? { status: 200, body: "{}" }
+          : { status: 200, body: '{"hostname":"blue-cat.trycloudflare.com"}' }
+        : ask < 2
+          ? { status: 503, body: '{"readyConnections":0}' }
+          : { status: 200, body: '{"readyConnections":1}' },
+    );
+    await expect(readQuickTunnelUrl(url, { intervalMs: 5, dnsLagMs: 0 })).resolves.toBe(
+      "https://blue-cat.trycloudflare.com",
+    );
+  });
+
+  it("says why, and answers undefined, when the tunnel never has a URL in time", async () => {
+    const error = vi.spyOn(log, "error").mockImplementation(() => {});
+    try {
+      const url = await metrics(() => ({ status: 200, body: "{}" }));
+      await expect(readQuickTunnelUrl(url, { timeoutMs: 30, intervalMs: 5 })).resolves.toBeUndefined();
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(/FASTAGENT_TUNNEL_METRICS: no Quick Tunnel URL from http:\/\/127\.0\.0\.1:\d+ within 0s/),
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("does not take a named host that has no edge connection for a tunnel", async () => {
+    const error = vi.spyOn(log, "error").mockImplementation(() => {});
+    try {
+      const url = await metrics((path) =>
+        path === "/quicktunnel"
+          ? { status: 200, body: '{"hostname":"blue-cat.trycloudflare.com"}' }
+          : { status: 503, body: "{}" },
+      );
+      await expect(readQuickTunnelUrl(url, { timeoutMs: 30, intervalMs: 5, dnsLagMs: 0 })).resolves.toBeUndefined();
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("blue-cat.trycloudflare.com has no edge connection yet"),
+      );
+    } finally {
+      error.mockRestore();
+    }
   });
 });
 

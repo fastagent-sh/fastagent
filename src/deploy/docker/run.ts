@@ -3,11 +3,10 @@ import { connect } from "node:net";
 import type { BoxLoginStep } from "../box-shell.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { waitForHealth } from "../../channels/wait-health.ts";
-import { loginGate } from "../channel-ingress.ts";
-import { TUNNEL_DNS_LAG_MS, hasTunnelConnection, parseTunnelUrl } from "../../tunnel.ts";
-import type { RegistrationOutcome } from "../../channels/registration.ts";
-import { registrationGate } from "../registration-gate.ts";
-import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
+import { type Registrars, confirmWebhooks, loginGate } from "../channel-ingress.ts";
+import type { BoxWebhooksProbe } from "../channel-ingress.ts";
+import { TUNNEL_DNS_LAG_MS, TUNNEL_METRICS_VARIABLE, hasTunnelConnection, parseTunnelUrl } from "../../tunnel.ts";
+import { MIN_DOCKER_COMPOSE_VERSION, TUNNEL_METRICS_URL } from "./plan.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
 
@@ -25,8 +24,11 @@ export interface DockerRunPlan {
   missingSecrets: string[];
   /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
   valueFile: string;
-  /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar answered. */
-  announce: DockerAnnounce;
+  /**
+   * The registrars a deploy still runs itself: Slack's Request URL no credential on the box can set. The agent points
+   * the rest at the tunnel it reads ({@link TUNNEL_METRICS_VARIABLE}).
+   */
+  registrars: Pick<Registrars, "slack" | "leave">;
   /** Every declared channel and its ingress: which of them a failed login leaves unregistered. */
   channels: readonly DeclaredChannel[];
   /** `--tunnel` was requested for this run; a kept Compose file must actually contain that service. */
@@ -45,9 +47,6 @@ export type DockerRunOutcome =
    * to re-run.
    */
   | { ok: false; gate: string; url?: string; tunnelUrl?: string };
-
-/** Register the deployment's webhooks against its public URL, reporting what each registrar answered. */
-type DockerAnnounce = (baseUrl: string) => Promise<{ kind: string; outcome: RegistrationOutcome }[]>;
 
 /**
  * `stillStarting` answers whether the agent container is still up; a probe that ignores it simply waits out its whole
@@ -111,6 +110,30 @@ export function agentPublishedPorts(stdout: string): { host: string; port: numbe
     return [{ host: wildcard ? "127.0.0.1" : (entry.host_ip as string), port }];
   });
 }
+
+/**
+ * Whether the tunnel service of a Compose file is wired for the agent to read its URL: the agent names where
+ * ({@link TUNNEL_METRICS_VARIABLE}) and the tunnel serves it there (`--metrics`). A kept Compose file may predate it.
+ */
+export function tunnelWiringGap(stdout: string): string | undefined {
+  const services = (
+    JSON.parse(stdout) as {
+      services?: { agent?: { environment?: Record<string, unknown> }; tunnel?: { command?: unknown } };
+    } | null
+  )?.services;
+  const command = services?.tunnel?.command;
+  const missing = [
+    ...(services?.agent?.environment?.[TUNNEL_METRICS_VARIABLE] === undefined
+      ? [`set ${TUNNEL_METRICS_VARIABLE}: "${TUNNEL_METRICS_URL}" on the "agent" service`]
+      : []),
+    ...(Array.isArray(command) && command.includes("--metrics")
+      ? []
+      : [`add "--metrics" "0.0.0.0:20241" to the "tunnel" service's command`]),
+  ];
+  if (missing.length === 0) return undefined;
+  return `the agent points its own webhook channels at the tunnel it reads from the tunnel's metrics: ${missing.join(" and ")}`;
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -172,6 +195,7 @@ export async function deployDockerRun(
   healthProbe: DockerHealthProbe = defaultHealthProbe,
   tunnelUrlProbe: DockerTunnelUrlProbe = defaultTunnelUrlProbe,
   hostPortBusy: HostPortProbe = defaultHostPortBusy,
+  boxWebhooks?: { probe: BoxWebhooksProbe; intervalMs?: number },
 ): Promise<DockerRunOutcome> {
   const gate = (message: string): DockerRunOutcome => ({ ok: false, gate: message });
   const compose = ["compose", "-f", plan.composeFile];
@@ -224,13 +248,20 @@ export async function deployDockerRun(
   // A port something else already serves would answer the `/health` this run waits for, and the run would report that
   // process's answer as the agent's. A container this project already runs holds its own port, so only a first start
   // (or a start after `down`) asks. Before the first side effect: a refusal leaves nothing to undo.
-  const hostPorts = await readOutput(docker, "docker", [...compose, "config", "--format", "json"], agentPublishedPorts);
-  if ("gate" in hostPorts) return gate(hostPorts.gate);
-  if (hostPorts.value.length > 0) {
+  const composed = await readOutput(docker, "docker", [...compose, "config", "--format", "json"], (stdout) => ({
+    ports: agentPublishedPorts(stdout),
+    tunnelGap: hasTunnel ? tunnelWiringGap(stdout) : undefined,
+  }));
+  if ("gate" in composed) return gate(composed.gate);
+  const { ports: hostPorts, tunnelGap } = composed.value;
+  if (tunnelGap) {
+    return gate(`${tunnelGap} in ${plan.composeFile} — edit it, delete it and regenerate, or pass --force`);
+  }
+  if (hostPorts.length > 0) {
     const running = await docker([...compose, "ps", "--status", "running", "--services"], { capture: true });
     const ours = running.code === 0 && running.stdout.split(/\s+/).includes("agent");
     if (!ours) {
-      for (const { host, port } of hostPorts.value) {
+      for (const { host, port } of hostPorts) {
         if (await hostPortBusy(host, port)) {
           return gate(
             `${host}:${port} is already in use by another process, so the agent's published port is not free and a ` +
@@ -256,7 +287,9 @@ export async function deployDockerRun(
   if ((await docker([...compose, "build", "--pull"])).code !== 0) {
     return gate(`\`docker compose build\` failed — see the Docker output above; fix it and re-run`);
   }
-  if ((await docker([...compose, "up", "-d"])).code !== 0) {
+  // With a tunnel, the agent is recreated too: it reads the tunnel's URL at its start, and a running one holds the
+  // previous tunnel's.
+  if ((await docker([...compose, "up", "-d", ...(hasTunnel ? ["--force-recreate"] : [])])).code !== 0) {
     return gate(`\`docker compose up\` failed — see the Docker output above; fix ${plan.composeFile} and re-run`);
   }
 
@@ -332,11 +365,22 @@ export async function deployDockerRun(
     );
   }
   const tunnelUrl = tunnel.url;
-  // Registration lives HERE, like every other host's driver, and not at the CLI: this is the layer that owns the
-  // outcome, so it is the layer that can gate on one.
-  const reg = registrationGate(log, `re-run this deploy to retry registration (Compose is already up)`);
-  for (const { kind, outcome } of await plan.announce(tunnelUrl)) reg.track(kind, outcome);
-  const blocked = reg.gate();
+  // The agent points its own channels at that tunnel; this reads what it made of them, through the host port when the
+  // Compose file publishes one and through the tunnel when it does not.
+  const blocked = await confirmWebhooks({
+    baseUrl: url ?? tunnelUrl,
+    publicUrl: tunnelUrl,
+    channels: plan.channels,
+    registrars: plan.registrars,
+    log,
+    retryHint: `re-run this deploy to retry registration (Compose is already up)`,
+    ...(boxWebhooks === undefined
+      ? {}
+      : {
+          probe: boxWebhooks.probe,
+          ...(boxWebhooks.intervalMs === undefined ? {} : { intervalMs: boxWebhooks.intervalMs }),
+        }),
+  });
   if (blocked) return { ok: false, gate: blocked, url, tunnelUrl };
   return { ok: true, url, tunnelUrl };
 }

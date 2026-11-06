@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AnyChannelModule } from "../src/channels/discover.ts";
-import { reportServing } from "../src/cli/serve.ts";
+import { cliMountOptions, reportServing } from "../src/cli/serve.ts";
 import { mountAgentcore } from "../src/channels/agentcore-service.ts";
 import { routesFor } from "../src/service.ts";
 import { text } from "../src/channels/respond.ts";
@@ -144,6 +144,18 @@ describe("cli: the serving report", () => {
       (process as { send?: unknown }).send = original;
     }
     expect(sent).toEqual([{ type: "ready", port: 8787, routeChannels: ["telegram"] }]);
+  });
+});
+
+describe("cli: where the platforms reach the serve", () => {
+  const config = { settings: {}, sources: {} } as never;
+
+  it("reads a Quick Tunnel's URL from its metrics only when the environment names them", () => {
+    vi.stubEnv("FASTAGENT_TUNNEL_METRICS", "");
+    expect(cliMountOptions(config).publicUrlFrom).toBeUndefined();
+    vi.stubEnv("FASTAGENT_TUNNEL_METRICS", "http://tunnel:20241");
+    expect(cliMountOptions(config).publicUrlFrom).toBeTypeOf("function");
+    vi.unstubAllEnvs();
   });
 });
 

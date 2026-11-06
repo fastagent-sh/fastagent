@@ -7,7 +7,7 @@ import { API_KEY_VARIABLE, API_TURNED_OFF, apiKeysFrom, apiTurnedOff } from "../
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { declaredChannels } from "../channels/discover.ts";
-import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
+import { TUNNEL_METRICS_VARIABLE, announceWebhooks, readQuickTunnelUrl, startCloudflareTunnel } from "../tunnel.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
 /** Refuse `--tunnel` with a `--bind` that cloudflared cannot reach. */
@@ -23,7 +23,9 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean):
  * when the definition turns the API off, whatever key the environment holds (a host's from an earlier deploy).
  */
 export function cliMountOptions(config: EffectiveConfig): ServeOptions {
+  const metrics = process.env[TUNNEL_METRICS_VARIABLE];
   return {
+    ...(metrics ? { publicUrlFrom: () => readQuickTunnelUrl(metrics) } : {}),
     apiKeys: apiTurnedOff(config) ? [] : apiKeysFrom(process.env[API_KEY_VARIABLE]),
     closeTimeoutMs: SHUTDOWN_GRACE_MS,
     onChannelClosed: (name, error) =>

@@ -101,8 +101,9 @@ created. A URL only a person can set (Slack's; Lark's when its config API answer
 platform reaches it there with an authenticated request, the verification on saving or any event; at a terminal with
 `--config`, `--run` then records it in that file (`channels.<name>.app.url`), so later deploys of the file, CI
 included, report it registered from the start. A deployment that did not record it:
-`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. On Docker `--run` still points them
-itself once the deployment answers `/health`. Each run prints the steps it could not do.
+`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. On Docker with `--tunnel` the agent
+reads the tunnel's URL and points them there (below); without a tunnel the public ingress is yours, and a configuration
+that names `http.publicUrl` has the agent point them at it. Each run prints the steps it could not do.
 
 On AgentCore the runtime has no `/health` of its own: it points its channels at the forwarder's URL (or `http.publicUrl`
 when the configuration names one, a custom domain in front of the Function URL) on the first envelope the forwarder
@@ -237,16 +238,21 @@ Notes:
 
 ```bash
 fastagent deploy docker --tunnel        # add a cloudflared service to the Compose file
-fastagent deploy docker --tunnel --run  # start both, read the URL, register webhooks
+fastagent deploy docker --tunnel --run  # start both; the agent reads the URL and registers its webhooks
 ```
 
-The `tunnel` service points at `http://agent:<port>`. `--run` reads the `*.trycloudflare.com` URL from its logs and
-registers webhooks as `dev --tunnel` does: Telegram, locally onboarded Slack and Feishu/Lark automatically,
-manual Slack prints its URL, long-connection channels are skipped.
+The `tunnel` service points at `http://agent:<port>` and serves its metrics on `0.0.0.0:20241`, inside the Compose
+network. The agent service sets `FASTAGENT_TUNNEL_METRICS: "http://tunnel:20241"`: at every start, once it is ready
+and the configuration names no `http.publicUrl` (which wins), it reads the `*.trycloudflare.com` URL there (waiting for
+the tunnel, which starts after it, to carry traffic) and points Telegram and Feishu/Lark at it with its own
+credentials. `--run` recreates both services so the agent reads the new tunnel's URL, then reads each channel's outcome
+from the agent's `/health` and sets locally onboarded Slack from this machine; manual Slack prints its URL.
+Long-connection channels are skipped. A kept Compose file whose agent does not set `FASTAGENT_TUNNEL_METRICS`, or
+whose tunnel does not pass `--metrics`, stops `--run` before it touches Docker, naming what to add.
 
 The URL changes whenever the tunnel container or Docker restarts, so the service has no restart policy: re-run
-`fastagent deploy docker --tunnel --run` to register the new URL. For a stable endpoint, use your own named tunnel
-or reverse proxy.
+`fastagent deploy docker --tunnel --run` to point the channels at the new URL. For a stable endpoint, use your own
+named tunnel or reverse proxy and name its URL as `http.publicUrl`.
 
 ### Owning the Docker files
 

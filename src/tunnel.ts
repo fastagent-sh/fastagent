@@ -4,6 +4,7 @@
  * application-config PATCH; manual Slack prints the URL).
  */
 import { type ChildProcess, spawn } from "node:child_process";
+import { get } from "node:http";
 import type { RegistrationOutcome } from "./channels/registration.ts";
 import type { DeclaredChannel } from "./channels/discover.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
@@ -155,6 +156,65 @@ function lastErrorLine(tail: string): string {
     .map((l) => l.trim())
     .filter(Boolean);
   return ([...lines].reverse().find((l) => /err|error|failed/i.test(l)) ?? lines.at(-1) ?? "").slice(0, 200);
+}
+
+/** The variable that names a cloudflared's `--metrics` address, which the generated Compose gives the agent. */
+export const TUNNEL_METRICS_VARIABLE = "FASTAGENT_TUNNEL_METRICS";
+
+/** `GET` over plain HTTP, never through a proxy: the metrics address is Docker-internal. */
+function getText(url: string): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const request = get(url, { timeout: 2_000 }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
+    });
+    request.on("timeout", () => request.destroy(new Error("timed out")));
+    request.on("error", reject);
+  });
+}
+
+/**
+ * The Quick Tunnel's public URL, read from its cloudflared's metrics endpoint (`--metrics`): `/quicktunnel` names the
+ * host once it is assigned and `/ready` answers 200 once an edge connection is up (measured: the host is named about a
+ * second before the tunnel can carry anything). The tunnel service starts after the agent, so this waits for it.
+ * Undefined, and said, when it does not come up in time.
+ */
+export async function readQuickTunnelUrl(
+  metricsUrl: string,
+  options: { timeoutMs?: number; intervalMs?: number; dnsLagMs?: number } = {},
+): Promise<string | undefined> {
+  const base = metricsUrl.replace(/\/+$/, "");
+  const timeoutMs = options.timeoutMs ?? 90_000;
+  const deadline = Date.now() + timeoutMs;
+  let last = "no answer";
+  for (;;) {
+    try {
+      const named = await getText(`${base}/quicktunnel`);
+      const hostname = named.status === 200 ? (JSON.parse(named.body) as { hostname?: unknown }).hostname : undefined;
+      if (typeof hostname === "string" && hostname !== "") {
+        if ((await getText(`${base}/ready`)).status === 200) {
+          await sleep(options.dnsLagMs ?? TUNNEL_DNS_LAG_MS);
+          return `https://${hostname}`;
+        }
+        last = `${hostname} has no edge connection yet`;
+      } else {
+        last = `/quicktunnel answered ${named.status}`;
+      }
+    } catch (error) {
+      last = (error as Error).message;
+    }
+    if (Date.now() >= deadline) break;
+    await sleep(options.intervalMs ?? 1_000);
+  }
+  log.error(
+    `[fastagent] ${TUNNEL_METRICS_VARIABLE}: no Quick Tunnel URL from ${base} within ${Math.round(timeoutMs / 1000)}s ` +
+      `(${last}) — the webhook channels are not pointed at it`,
+  );
+  return undefined;
 }
 
 /** Print the public URL and wire up first-party webhook channels found under `dir` (the agent ROOT). */

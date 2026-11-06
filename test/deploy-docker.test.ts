@@ -56,6 +56,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("cloudflared");
     expect(yaml).not.toContain("trycloudflare");
     expect(yaml).not.toContain("TUNNEL_TOKEN");
+    expect(yaml).not.toContain("FASTAGENT_TUNNEL_METRICS");
   });
 
   it("--tunnel adds a pinned ephemeral cloudflared service, without changing the app image", () => {
@@ -71,12 +72,16 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).toContain(`NO_PROXY: "agent,localhost,127.0.0.1,\${NO_PROXY:-}"`);
     expect(yaml).toContain(`no_proxy: "agent,localhost,127.0.0.1,\${no_proxy:-}"`);
     expect(yaml).toContain('restart: "no"');
+    // The agent reads the tunnel's URL there, and the tunnel serves it there.
+    expect(yaml).toMatch(/- --metrics\n\s+- 0\.0\.0\.0:20241/);
+    expect(yaml).toContain('FASTAGENT_TUNNEL_METRICS: "http://tunnel:20241"');
     // BOTH services: "every log has a layer that bounds it" is the whole argument, and Docker's default bounds
     // neither of them.
     expect(yaml.match(/max-size: "10m"/g)).toHaveLength(2);
     const dockerfile = plan.artifacts.find((artifact) => artifact.path.endsWith("Dockerfile"))!.content;
     expect(dockerfile).not.toContain("cloudflared");
-    expect(runbook(plan)).toContain("locally onboarded Slack auto-register");
+    expect(runbook(plan)).toContain("recreates the agent, which reads the tunnel's");
+    expect(runbook(plan)).toContain("`--run` sets locally onboarded Slack");
   });
 
   it("omits public paths for long-connection Feishu", () => {

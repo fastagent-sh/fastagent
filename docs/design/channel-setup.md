@@ -123,8 +123,10 @@ configuration route accepts only a PATCH. Both calls are idempotent. Frameworks 
     (`wake.url`); `http.publicUrl` wins over it, for a custom domain in front of the Function URL. The container
     registers on the first trusted envelope that constructed its channels, once per process, under its busy signal,
     and the probe reports the outcomes.
-  - Docker with `--tunnel`: read from the generated cloudflared service's `/quicktunnel` metrics endpoint (verified),
-    which the generated Compose names to the agent.
+  - Docker with `--tunnel`: read from the generated cloudflared service's metrics endpoint (verified: `/quicktunnel`
+    names the host about a second before `/ready` answers 200 for an edge connection), which the generated Compose
+    names to the agent in `FASTAGENT_TUNNEL_METRICS`. The agent reads it on every registration that has no
+    `http.publicUrl`, and `--run` recreates the agent with the tunnel so it holds the new tunnel's URL.
   - None: nothing is registered, and the outcome says so with the URL to use.
 - **The library makes it a step of its own** (SPEC §8): `service.listen()` registers in the background once the serve
   is ready when `http.publicUrl` is set; an app that mounts `service.fetch` calls `service.registerWebhooks()` once

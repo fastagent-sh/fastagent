@@ -222,6 +222,7 @@ function webhookRegistry(
   kinds: readonly WebhookKind[],
   env: NodeJS.ProcessEnv,
   publicUrl: string | undefined,
+  publicUrlFrom: (() => Promise<string | undefined>) | undefined,
   confirmation: Confirmation,
   options: { attempts?: number; retryMs?: number } = {},
 ): WebhookRegistry {
@@ -262,10 +263,13 @@ function webhookRegistry(
       if (baseUrl !== undefined && !/^https?:\/\/[^/?#\s]+/.test(baseUrl)) {
         return Promise.reject(new Error(`registerWebhooks: ${JSON.stringify(baseUrl)} is not an absolute http(s) URL`));
       }
-      const at = (baseUrl ?? publicUrl)?.replace(/\/+$/, "");
       const run = previous.then(async () => {
-        base = at;
         replace(pendingWebhooks(kinds));
+        const at = (baseUrl ?? publicUrl ?? (kinds.length > 0 ? await publicUrlFrom?.() : undefined))?.replace(
+          /\/+$/,
+          "",
+        );
+        base = at;
         if (at === undefined && kinds.length > 0 && !servedByDev()) {
           log.info(`[fastagent] webhooks: no http.publicUrl, so nothing points ${kinds.join(", ")} at this instance`);
         }
@@ -282,9 +286,9 @@ function webhookRegistry(
 }
 
 /** The webhook channels of an opened agent, to be pointed at `http.publicUrl` or at a URL the host names. */
-export function webhooksOf(opened: ServableAgent): WebhookRegistry {
+export function webhooksOf(opened: ServableAgent, publicUrlFrom?: () => Promise<string | undefined>): WebhookRegistry {
   const kinds = webhookKinds([...opened.channels].map(([name, module]) => ({ name, ingress: channelIngress(module) })));
-  return webhookRegistry(kinds, opened.secrets, opened.config.http?.publicUrl, {
+  return webhookRegistry(kinds, opened.secrets, opened.config.http?.publicUrl, publicUrlFrom, {
     stateDir: (kind) => channelStateDir(opened.stateRoot, kind),
     appUrl: (kind) => opened.config.channels?.[kind]?.app?.url,
   });
@@ -365,6 +369,12 @@ export interface ServeOptions {
   closeTimeoutMs?: number;
   /** The keys the Agent API takes; without one it is not served (SPEC.md §9.1). */
   apiKeys?: readonly string[];
+  /**
+   * Where the platforms reach this instance when the configuration names no `http.publicUrl`, asked on every
+   * registration that names no base URL: a Quick Tunnel's, read from its metrics. It answers undefined when there is
+   * none, and says why itself.
+   */
+  publicUrlFrom?: () => Promise<string | undefined>;
 }
 
 /** What the assembly serves. */
@@ -386,7 +396,7 @@ export interface ServableAgent {
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
   const { agent, agentDir, stateRoot, schedules } = opened;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
-  const webhooks = webhooksOf(opened);
+  const webhooks = webhooksOf(opened, options.publicUrlFrom);
   const routed = routesFor(agent, stateRoot, opened.channels, webhooks.list);
   // Composed BEFORE anything starts.
   const channels = router(routed.routes);
