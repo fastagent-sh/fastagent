@@ -92,7 +92,7 @@ serves no API either way.
 
 ## Chat channels
 
-A deployment receives its chat channels by webhook. On Fly and Railway the box points Telegram, Feishu and Lark (when
+A deployment receives its chat channels by webhook. On Fly, Railway and AgentCore the box points Telegram, Feishu and Lark (when
 its config API allows) at its own URL on every start, with its own credentials: `deploy` delivers that URL as the
 configuration's `http.publicUrl` (Fly's `https://<app>.fly.dev`; Railway's domain, created before `railway up`) unless
 `--config` names one, a custom domain say, and `--run` reads what the box made of each one from its `/health`. Slack's
@@ -101,8 +101,13 @@ created. A URL only a person can set (Slack's; Lark's when its config API answer
 platform reaches it there with an authenticated request, the verification on saving or any event; at a terminal with
 `--config`, `--run` then records it in that file (`channels.<name>.app.url`), so later deploys of the file, CI
 included, report it registered from the start. A deployment that did not record it:
-`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. On AgentCore and Docker `--run` still points them itself once the deployment answers `/health`. Each run
-prints the steps it could not do.
+`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. On Docker `--run` still points them
+itself once the deployment answers `/health`. Each run prints the steps it could not do.
+
+On AgentCore the runtime has no `/health` of its own: it points its channels at the forwarder's URL (or `http.publicUrl`
+when the configuration names one, a custom domain in front of the Function URL) on the first envelope the forwarder
+relays after it starts, and `--run` reads the outcomes through the probe. A runtime a platform's request wakes does the
+same, so every start points them again.
 
 - **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
   `.secrets/production/.env`. Production never falls back to dev values. Put production provider keys and other
@@ -152,15 +157,16 @@ catches the browser's return to `localhost` on this machine, and takes the addre
 For an API key it names the variable to set in `.secrets/production/.env`; the next `deploy <host> --run` carries it,
 unless the box already holds an account sign-in for that provider, which outranks it (below).
 
-`deploy --run` asks the box once it answers `/health` and before any webhook is pointed at it: the box keeps a
+`deploy --run` asks the box once it answers `/health` and before it reads the webhooks' outcomes: the box keeps a
 credential it already authenticates the model's provider with (a login it holds, unexpired or refreshable; a
 variable its host sets; a role it runs as), and logs in only when it has none. A redeploy therefore keeps the box's
 credential. A credential revoked at the provider before it expires is not detected, and the first turn fails with
 the provider's error: run `fastagent login --deployment <host>` to replace it. With `--json`, the login is a step of
-the deploy's ticket, and the webhooks are registered once it is done. Without a terminal or `--json` (CI), `--run`
+the deploy's ticket, and the deploy reads what the box made of its webhooks once it is done. Without a terminal or `--json` (CI), `--run`
 stops at the login with `not logged in`, exit 1, naming the command for a terminal and the `--json` one for a coding
-agent. It has registered no webhook at that point, so when the agent has any, the message also says what to re-run
-once the box is logged in.
+agent. It has confirmed no webhook at that point (a box that points its own channels may have pointed them already, and
+a message that reaches it fails until the login), so when the agent has any, the message also says what to re-run once
+the box is logged in.
 
 A login stored on the box outranks a key in its environment (pi lets a stored credential own its provider). So a key
 added to `.secrets/production/.env` after the box was logged in is not used; the box's startup log says so and names the
@@ -348,7 +354,8 @@ The stack carries:
 
 - the **Runtime** (your container; `FASTAGENT_AGENTCORE=1` serves `POST /invocations` and `GET /ping`);
 - a **forwarder Lambda** with a public Function URL: it relays webhooks when a webhook channel exists (channels
-  verify signatures as on every host) and manages the EventBridge schedules below;
+  verify signatures as on every host), tells the container where it is (the URL the container points its webhook
+  channels at) and manages the EventBridge schedules below;
 - **EventBridge schedules**, which the container sets itself: one recurring cron schedule per schedule, which
   EventBridge fires on its own clock, and a self-deleting one-shot per pending wake-up. Both wake the container on
   time. The container sets them once an envelope has

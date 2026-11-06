@@ -534,14 +534,18 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     runbook.push(
       ``,
       `# Model auth: after EVERY deploy and after 14 idle days (each storage reset wipes the last login),`,
-      `# log the runtime in to ${input.boxLogin} from the agent directory — before pointing any webhook at it:`,
+      `# log the runtime in to ${input.boxLogin} from the agent directory, once the probe below has opened it (a message`,
+      `# that reaches the runtime before the login fails):`,
       `${deploymentLoginCommand("agentcore", input.boxLogin)}`,
     );
   }
 
-  // Post-deploy webhook registration — the shared channel-ingress steps, pointed at the forwarder's Function URL
-  // (read from the stack outputs).
-  const post = webhookRunbook(`<ForwarderUrl>`, channels);
+  // The runtime points the channels its own credentials can at the forwarder's Function URL as the probe below wakes
+  // it; only Slack's URL, and Lark's where its config API answers 404, is a person's step.
+  const post = webhookRunbook(
+    `<ForwarderUrl>`,
+    channels.filter((channel) => channel.name === "slack"),
+  );
   // AgentCore asides the shared steps cannot carry: nothing else routes through a forwarder, and nothing else has a
   // compute ceiling.
   if (webhookKinds(channels).some((kind) => kind === "feishu" || kind === "lark")) {
@@ -551,6 +555,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     );
   }
   if (post.length > 0) runbook.push(``, ...post);
+  const own = webhookKinds(channels).filter((kind) => kind !== "slack");
 
   runbook.push(
     ``,
@@ -562,6 +567,13 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `#   invoke-agent-runtime call does not (that door is IAM's, and does not carry it). \`--run\` does this with its`,
     `#   probe. After a manual deploy, do it once, or no schedule fires until a webhook arrives:`,
     `curl -fsS -X POST "<ForwarderUrl>/__fastagent/probe" -d '{"auth":"<FastagentIngressSecret>"}'`,
+    ...(own.length > 0
+      ? [
+          `# The same envelope makes the runtime point ${own.join(", ")} at <ForwarderUrl> (or the configuration's`,
+          `# http.publicUrl) itself, on every start; the answer's "webhooks" says how each one went, "pending" until it ends`,
+          `# (a step only a person can take is in the runtime's log). Repeat the call to read it again.`,
+        ]
+      : []),
   );
 
   runbook.push(

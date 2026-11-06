@@ -210,7 +210,7 @@ interface Confirmation {
   appUrl(kind: WebhookKind): string | undefined;
 }
 
-/** Nothing to point: a serve with no webhook channel, or one a host points itself (AgentCore's forwarder). */
+/** Nothing to point: a serve with no webhook channel. */
 const NONE: readonly WebhookRegistration[] = Object.freeze([]);
 const NO_WEBHOOKS: WebhookRegistry = { list: () => NONE, register: async () => [], dispose: () => {} };
 
@@ -279,6 +279,15 @@ function webhookRegistry(
       for (const stop of stops) stop();
     },
   };
+}
+
+/** The webhook channels of an opened agent, to be pointed at `http.publicUrl` or at a URL the host names. */
+export function webhooksOf(opened: ServableAgent): WebhookRegistry {
+  const kinds = webhookKinds([...opened.channels].map(([name, module]) => ({ name, ingress: channelIngress(module) })));
+  return webhookRegistry(kinds, opened.secrets, opened.config.http?.publicUrl, {
+    stateDir: (kind) => channelStateDir(opened.stateRoot, kind),
+    appUrl: (kind) => opened.config.channels?.[kind]?.app?.url,
+  });
 }
 
 /**
@@ -377,11 +386,7 @@ export interface ServableAgent {
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
   const { agent, agentDir, stateRoot, schedules } = opened;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
-  const kinds = webhookKinds([...opened.channels].map(([name, module]) => ({ name, ingress: channelIngress(module) })));
-  const webhooks = webhookRegistry(kinds, opened.secrets, opened.config.http?.publicUrl, {
-    stateDir: (kind) => channelStateDir(stateRoot, kind),
-    appUrl: (kind) => opened.config.channels?.[kind]?.app?.url,
-  });
+  const webhooks = webhooksOf(opened);
   const routed = routesFor(agent, stateRoot, opened.channels, webhooks.list);
   // Composed BEFORE anything starts.
   const channels = router(routed.routes);
