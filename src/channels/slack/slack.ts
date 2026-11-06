@@ -1,4 +1,5 @@
 /** First-party Slack HTTP Events API channel: signed ingress, durable turns/context, files, and edited previews. */
+import { recordReached } from "../webhook-evidence.ts";
 import { createHmac } from "node:crypto";
 import { join } from "node:path";
 import type { ChannelModule } from "../../channel.ts";
@@ -652,6 +653,8 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         log.warn(`${label} rejected an event with an invalid/stale X-Slack-Signature`);
         return text("invalid signature\n", 401);
       }
+      // Slack signed it: the Request URL a person set reaches this instance, at the address it was sent to.
+      recordReached(stateHome, request);
 
       let envelope: SlackEventEnvelope;
       try {

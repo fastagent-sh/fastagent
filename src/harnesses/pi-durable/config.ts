@@ -95,6 +95,18 @@ function shape(settings: Schema | undefined) {
     channels: opt(
       map(
         obj({
+          app: opt(
+            obj({
+              id: str({ description: "The platform's app ID" }),
+              team: opt(str({ description: "Slack's workspace (team) ID" })),
+              url: opt(
+                str({
+                  description: "The channel's URL a person set on the platform's app page and the platform verified",
+                  pattern: "^https://[^?#\\s]+$",
+                }),
+              ),
+            }),
+          ),
           ingress: opt(
             oneOf(["webhook", "connection"] as const, {
               description: "How the channel receives: webhook (inbound HTTP) or connection (one it opens and keeps)",
@@ -213,13 +225,23 @@ export async function projectInstanceConfig(dir: string): Promise<InstanceConfig
   return existsSync(path) ? readInstanceConfigFile(path) : undefined;
 }
 
+/** A channel's platform app, for one whose URL only a person sets (SPEC.md §8, `channels.<name>.app`). */
+interface ChannelApp {
+  id: string;
+  team?: string;
+  url?: string;
+}
+
+/** The channels whose platform lets only a person set the URL: Slack's always, Lark's where its config API is missing. */
+const PERSON_SET_URL = ["slack", "lark"];
+
 /** What an open reads of the configuration: the program's defaults with an instance's over them. */
 export interface EffectiveConfig {
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   http?: { port?: number; api?: boolean; publicUrl?: string };
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
-  channels?: Readonly<Record<string, { ingress?: Ingress }>>;
+  channels?: Readonly<Record<string, { ingress?: Ingress; app?: ChannelApp }>>;
   settings: Readonly<Record<string, unknown>>;
   /** Where each value is from, by its path (`http.port`, `settings.repo`): "program default", or the instance's label. */
   sources: Readonly<Record<string, string>>;
@@ -270,10 +292,19 @@ export function resolveConfig(definition: AgentDefinition, instance?: InstanceCo
   const values = (merged.settings ?? {}) as Record<string, unknown>;
   check(settings ?? obj({}), values, `the settings of ${definition.name}`);
   const channels = new Set(definition.registry.channels.map(({ name }) => name));
-  for (const name of Object.keys((merged.channels ?? {}) as Record<string, unknown>)) {
+  // The file that named a channel: whichever of its leaves one set.
+  const namedIn = (name: string) =>
+    Object.entries(sources).find(([path]) => path.startsWith(`channels.${name}.`))?.[1] ?? "the configuration";
+  for (const [name, entry] of Object.entries((merged.channels ?? {}) as Record<string, { app?: unknown }>)) {
+    if (entry.app !== undefined && !PERSON_SET_URL.includes(name)) {
+      throw new Error(
+        `${namedIn(name)}: channels.${name}.app is for a channel whose ` +
+          `platform lets only a person set its URL (${PERSON_SET_URL.join(", ")})`,
+      );
+    }
     if (!channels.has(name)) {
       throw new Error(
-        `${sources[`channels.${name}.ingress`] ?? "the configuration"}: channels.${name} names no channel of ` +
+        `${namedIn(name)}: channels.${name} names no channel of ` +
           `${definition.name} (${channels.size === 0 ? "it has none" : `its channels: ${[...channels].join(", ")}`})`,
       );
     }

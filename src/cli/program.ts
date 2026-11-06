@@ -708,6 +708,49 @@ const schedules: CommandSpec = {
   ],
 };
 
+const channels: CommandSpec = {
+  name: "channels",
+  summary: "a channel's platform app, for one instance",
+  subcommands: [
+    {
+      name: "setup",
+      summary: "record the URL a person set on a Slack or Lark app's page, once the deployment confirms it",
+      description:
+        "With --record-url: read the deployment's /health, and once <name> (slack, or lark where its config API " +
+        "answers 404) is registered there, the platform having reached it at the URL a person saved on its app's " +
+        "page, write that URL into the binding (channels.<name>.app.url) of the configuration --config names. Every " +
+        "later deploy of that configuration, CI included, then reports it registered from the start. A terminal " +
+        "`deploy --run --config` records it itself; this is for a deployment that did not. Setting up the app " +
+        "itself comes in a later release (`fastagent add <channel>` does it today).",
+      args: [{ name: "<name>", description: "the channel: slack or lark" }, AGENT_ARG],
+      flags: [
+        {
+          flags: "--record-url",
+          description: "record the URL the deployment confirms (the one mode this release has)",
+        },
+        { flags: "--config <file>", description: "the configuration the deploy delivers, where the URL is written" },
+        {
+          flags: "--url <url>",
+          description: "where to read its /health (default: the configuration's http.publicUrl)",
+        },
+        { flags: "--app <id>", description: "the app's ID, where this machine did not create it" },
+        { flags: "--team <id>", description: "with --app: the Slack workspace's team ID" },
+        JSON_FLAG,
+      ],
+      examples: [{ cmd: "fastagent channels setup slack --config prod.json --record-url" }],
+      run: async (args, f) =>
+        (await import("./commands/channels.ts")).runChannelsSetup(args[0] as string, args[1] as string, {
+          recordUrl: f.recordUrl === true,
+          ...(typeof f.config === "string" ? { config: f.config } : {}),
+          ...(typeof f.url === "string" ? { url: f.url } : {}),
+          ...(typeof f.app === "string" ? { app: f.app } : {}),
+          ...(typeof f.team === "string" ? { team: f.team } : {}),
+          json: f.json === true,
+        }),
+    },
+  ],
+};
+
 const destroy: CommandSpec = {
   name: "destroy",
   summary: "delete every AWS resource `deploy agentcore` created for an agent",
@@ -979,6 +1022,7 @@ export const specs: readonly CommandSpec[] = [
   dev,
   start,
   add,
+  channels,
   deploy,
   logs,
   destroy,

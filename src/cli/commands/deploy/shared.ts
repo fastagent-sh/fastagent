@@ -3,13 +3,14 @@
  * ownership rule.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import { registerFeishuWebhook } from "../../../channels/feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../../channels/registration.ts";
 import { registerSlackWebhook } from "../../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../../channels/telegram/register-webhook.ts";
-import type { Registrars } from "../../../deploy/channel-ingress.ts";
+import type { Registrars, UrlRecorder } from "../../../deploy/channel-ingress.ts";
+import { recordChannelUrl } from "../../channel-app.ts";
 import {
   BUILD_OUTPUTS,
   IMAGE_DEFINITION_DIR,
@@ -92,6 +93,29 @@ export interface HostDeploy {
 /** Where a step left to the person goes for `answerer`: a ticket's `afterwards`; nowhere else but the log. */
 export function leftToPerson(answerer: Answerer): ((step: string) => void) | undefined {
   return answerer.kind === "ticket" ? (step) => answerer.step.person.afterwards(step) : undefined;
+}
+
+/**
+ * At a terminal, with a `--config` file to write to: record each URL a person sets on a platform's page once the box
+ * confirms it, so later deploys of that configuration, CI included, report it `registered` from the start.
+ */
+export function urlRecorder(
+  agentDir: string,
+  config: string | undefined,
+  values: ReadonlyMap<string, string>,
+  answerer: Answerer,
+): { recordUrl?: UrlRecorder } {
+  if (answerer.kind !== "terminal" || config === undefined) return {};
+  const file = resolve(config);
+  return {
+    recordUrl: {
+      waitMs: 10 * 60_000,
+      write: async (kind, url) => {
+        await recordChannelUrl(agentDir, file, kind, url, values);
+        return file;
+      },
+    },
+  };
 }
 
 /** The registrars every host driver gets; a channel's manual step also goes to `answerer`'s person. */

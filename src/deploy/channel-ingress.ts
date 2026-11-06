@@ -267,6 +267,8 @@ export async function confirmWebhooks(input: {
   probe?: BoxWebhooksProbe;
   timeoutMs?: number;
   intervalMs?: number;
+  /** At a terminal with a `--config` file: record each URL a person set once the box confirms it. */
+  record?: UrlRecorder;
 }): Promise<string | undefined> {
   const kinds = webhookKinds(input.channels);
   const reg = registrationGate(input.log, input.retryHint);
@@ -303,14 +305,77 @@ export async function confirmWebhooks(input: {
     }
   }
   for (const kind of kinds) {
+    if (outcomes.get(kind) === "registered" || kind === "slack") continue;
+    // What the box said and why is in its log; the line a person acts on is said here.
+    input.log(manualWebhookStep(kind, input.publicUrl));
+    input.registrars.leave?.(manualWebhookStep(kind, input.publicUrl));
+  }
+  if (input.record !== undefined) await recordConfirmed(input, kinds, outcomes, input.record);
+  for (const kind of kinds) {
     const outcome = outcomes.get(kind) as RegistrationOutcome;
     reg.track(kind, outcome);
     if (outcome === "registered") input.log(`the selected production ${kind} app ${INGRESS[kind].delivers}`);
-    else if (kind !== "slack") {
-      // What the box said and why is in its log; the line a person acts on is said here.
-      input.log(manualWebhookStep(kind, input.publicUrl));
-      input.registrars.leave?.(manualWebhookStep(kind, input.publicUrl));
-    }
   }
   return reg.gate();
+}
+
+/** Where a deploy at a terminal records the URL a person set once the box confirms it (`channels.<name>.app.url`). */
+export interface UrlRecorder {
+  /** How long to wait for the person to save the URL on the app's page. */
+  waitMs: number;
+  /** Write `url` into the binding of `kind` in the configuration `--config` names; resolves where it wrote. */
+  write(kind: WebhookKind, url: string): Promise<string>;
+}
+
+/**
+ * For each channel whose URL only a person sets (Slack; Lark without its config API), wait for the box to report it
+ * reached at the delivered URL, then record that URL in the binding, so every later deploy, CI included, reports it
+ * `registered` from the start (channel-setup.md §5).
+ */
+async function recordConfirmed(
+  input: {
+    publicUrl: string;
+    log: (msg: string) => void;
+    probe?: BoxWebhooksProbe;
+    baseUrl: string;
+    intervalMs?: number;
+  },
+  kinds: readonly WebhookKind[],
+  outcomes: Map<WebhookKind, RegistrationOutcome>,
+  record: UrlRecorder,
+): Promise<void> {
+  const probe = input.probe ?? readBoxWebhooks;
+  const waiting = new Set(kinds.filter((k) => (k === "slack" || k === "lark") && outcomes.get(k) !== "failed"));
+  if (waiting.size === 0) return;
+  const later = (kind: WebhookKind) => `\`fastagent channels setup ${kind} --config <file> --record-url\``;
+  const manual = [...waiting].filter((kind) => outcomes.get(kind) === "manual");
+  if (manual.length > 0) {
+    input.log(
+      `waiting up to ${Math.round(record.waitMs / 60_000)} min for ` +
+        `${manual.map((kind) => `${input.publicUrl}${webhookPath(kind)}`).join(" and ")} to be saved on the app's ` +
+        `page (the platform verifies it with this box); stop it any time and record it later with ${later(manual[0] as WebhookKind)}`,
+    );
+  }
+  // One deadline for every channel still waiting: each is recorded as the box reports it reached.
+  const deadline = Date.now() + record.waitMs;
+  for (;;) {
+    const read = await probe(`${input.baseUrl}/health`);
+    for (const kind of [...waiting]) {
+      if (read?.find((entry) => entry.channel === kind)?.outcome !== "registered") continue;
+      waiting.delete(kind);
+      outcomes.set(kind, "registered");
+      const url = `${input.publicUrl}${webhookPath(kind)}`;
+      // The deployment is done and the platform reaches it: a record not written is said, never the deploy's failure.
+      await record.write(kind, url).then(
+        (where) => input.log(`${kind}: the platform reached the box at ${url}; recorded it in ${where}`),
+        (error: unknown) =>
+          input.log(
+            `${kind}: the platform reached the box at ${url}, but it was not recorded (${(error as Error).message}); ` +
+              `record it with ${later(kind)}`,
+          ),
+      );
+    }
+    if (waiting.size === 0 || Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, input.intervalMs ?? 2_000));
+  }
 }

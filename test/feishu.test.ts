@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { channelStateDir } from "../src/channels/context.ts";
+import { readReached } from "../src/channels/webhook-evidence.ts";
 import {
   type Asked,
   type Prompt,
@@ -474,6 +476,16 @@ describe("ingress verification", () => {
     expect(bad.status).toBe(401);
     const missing = await handler(feishuRequest({ type: "url_verification", challenge: "ch-42" }));
     expect(missing.status).toBe(401);
+  });
+
+  it("records where a request with the right token reached it, and nothing for a forged one", async () => {
+    feishuFetch();
+    const { handler, root } = buildChannel();
+    const stateDir = channelStateDir(root, "feishu");
+    await handler(feishuRequest({ type: "url_verification", challenge: "ch-42", token: "forged" }));
+    expect(readReached(stateDir)).toBeUndefined();
+    await handler(feishuRequest({ type: "url_verification", challenge: "ch-42", token: TOKEN }));
+    expect(readReached(stateDir)).toBe("http://app/feishu");
   });
 
   it("plaintext mode: an event with a wrong header token is 401, never routed", async () => {

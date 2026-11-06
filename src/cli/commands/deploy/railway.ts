@@ -12,7 +12,7 @@ import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { deliveredConfigArtifact, withPublicUrl } from "../../../deploy/container.ts";
 import { failStartup } from "../../fail.ts";
 import { RAILWAY_LOGIN, hostLogin } from "./host-login.ts";
-import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorder } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const railwayHost: HostDeploy = {
@@ -51,6 +51,7 @@ export const railwayHost: HostDeploy = {
         values,
         valueFile,
         intoLinked: !!opts.intoLinked,
+        config: opts.config,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -76,6 +77,8 @@ async function runDeployRailway(params: {
   valueFile: string;
   intoLinked: boolean;
   deliverPublicUrl: (url: string) => Promise<string>;
+  /** The `--config` file, where a URL a person set is recorded once the box confirms it. */
+  config: string | undefined;
 }): Promise<string> {
   const { agentDir, name, channels, intoLinked } = params;
   const railway = spawnRunner("railway", agentDir);
@@ -100,6 +103,7 @@ async function runDeployRailway(params: {
       channels,
       intoLinked,
       deliverPublicUrl: params.deliverPublicUrl,
+      ...urlRecorder(agentDir, params.config, params.values, params.answerer),
       ...boxLoginStep("railway", params, () => railwayShell(name, agentDir)),
       ...hostLogin(RAILWAY_LOGIN, params.answerer, agentDir),
       forAgent: `${params.rerun} --json`,

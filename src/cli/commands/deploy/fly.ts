@@ -17,7 +17,7 @@ import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { withPublicUrl } from "../../../deploy/container.ts";
 import { failStartup } from "../../fail.ts";
 import { FLY_LOGIN, hostLogin } from "./host-login.ts";
-import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorder } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const flyHost: HostDeploy = {
@@ -86,6 +86,7 @@ export const flyHost: HostDeploy = {
         values,
         valueFile,
         publicUrl: delivered.publicUrl,
+        config: opts.config,
       });
       return reachedAt;
     }
@@ -111,6 +112,8 @@ async function runDeployFly(params: {
   valueFile: string;
   /** The `http.publicUrl` the image delivers: the platforms reach the box there. */
   publicUrl: string;
+  /** The `--config` file, where a URL a person set is recorded once the box confirms it. */
+  config: string | undefined;
 }): Promise<void> {
   const { agentDir, appName, channels } = params;
   const fly = spawnRunner("fly", agentDir);
@@ -138,6 +141,7 @@ async function runDeployFly(params: {
       ...hostLogin(FLY_LOGIN, params.answerer, agentDir),
       forAgent: `${params.rerun} --json`,
       publicUrl: params.publicUrl,
+      ...urlRecorder(agentDir, params.config, params.values, params.answerer),
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),

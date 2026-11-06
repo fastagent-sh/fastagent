@@ -97,7 +97,11 @@ its config API allows) at its own URL on every start, with its own credentials: 
 configuration's `http.publicUrl` (Fly's `https://<app>.fly.dev`; Railway's domain, created before `railway up`) unless
 `--config` names one, a custom domain say, and `--run` reads what the box made of each one from its `/health`. Slack's
 Request URL, which no credential on the box can change, `--run` sets from this machine for an app `add slack`
-created. On AgentCore and Docker `--run` still points them itself once the deployment answers `/health`. Each run
+created. A URL only a person can set (Slack's; Lark's when its config API answers 404) the box confirms when the
+platform reaches it there with an authenticated request, the verification on saving or any event; at a terminal with
+`--config`, `--run` then records it in that file (`channels.<name>.app.url`), so later deploys of the file, CI
+included, report it registered from the start. A deployment that did not record it:
+`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. On AgentCore and Docker `--run` still points them itself once the deployment answers `/health`. Each run
 prints the steps it could not do.
 
 - **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read

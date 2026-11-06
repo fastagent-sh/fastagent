@@ -1,4 +1,6 @@
 import { createHmac } from "node:crypto";
+import { channelStateDir } from "../src/channels/context.ts";
+import { readReached } from "../src/channels/webhook-evidence.ts";
 import { type Asked, type Prompt, asked, promptOf, scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
 import { ev } from "./scripted-run.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -420,6 +422,24 @@ describe("Slack signed ingress", () => {
     expect(challenge.status).toBe(200);
     expect(await challenge.json()).toEqual({ challenge: "abc" });
     expect((await handler(signedRequest(message("1.0"), { signature: "v0=bad" }))).status).toBe(401);
+  });
+
+  it("records where a signed request reached it, and nothing for one that is not signed", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent } = replyingAgent();
+    const stateRoot = root();
+    const { handler } = mount(agent, {}, stateRoot);
+    const stateDir = channelStateDir(stateRoot, "slack");
+    expect((await handler(signedRequest(message("1.0"), { signature: "v0=bad" }))).status).toBe(401);
+    expect(readReached(stateDir)).toBeUndefined();
+    const proxied = signedRequest({ type: "url_verification", challenge: "abc" });
+    const behindProxy = new Request("http://10.0.0.7:8787/slack", {
+      method: "POST",
+      headers: { ...Object.fromEntries(proxied.headers), "x-forwarded-proto": "https", host: "agent.acme.com" },
+      body: await proxied.text(),
+    });
+    expect((await handler(behindProxy)).status).toBe(200);
+    expect(readReached(stateDir)).toBe("https://agent.acme.com/slack");
   });
 
   it("refuses a VALID signature over a stale timestamp, in either direction", async () => {

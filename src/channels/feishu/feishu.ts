@@ -2,6 +2,7 @@
  * Canonical Feishu bot-channel engine: verified webhook or official-SDK WebSocket → dedup → route → persist → enqueue
  * → stream a live card.
  */
+import { recordReached } from "../webhook-evidence.ts";
 import { join } from "node:path";
 import { Effect } from "effect";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../channel.ts";
@@ -610,6 +611,7 @@ function createFeishuWebhookRoutes(
   profile: FeishuCloudProfile,
   opts: FeishuChannelOptions,
   runtime: FeishuRuntime,
+  stateDir: string,
 ): Routes {
   const { verificationToken, encryptKey } = opts;
   const { kind, envPrefix } = profile;
@@ -692,6 +694,9 @@ function createFeishuWebhookRoutes(
       );
       return text("invalid token\n", 401);
     }
+    // The platform's token: the Request URL reaches this instance, at the address it was sent to (Lark's, set by a
+    // person where its configuration API is missing).
+    recordReached(stateDir, req);
 
     if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
       log.info(`${label} answered the console's url_verification challenge`);
@@ -725,7 +730,7 @@ export function buildFeishuChannel(
           `fastagent.json to receive by WebSocket instead`,
       );
     }
-    return createFeishuWebhookRoutes(profile, opts, createRuntime(ctx));
+    return createFeishuWebhookRoutes(profile, opts, createRuntime(ctx), ctx.stateDir);
   };
 }
 
