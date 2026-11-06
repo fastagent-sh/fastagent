@@ -448,7 +448,7 @@ describe("construction fails closed", () => {
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
     // `start` with nothing set reaches this through the scaffold: the error names both ways out.
     expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
-      /receives by webhook .*`fastagent add feishu --ingress webhook` captures FEISHU_VERIFICATION_TOKEN.*channels\.<name>\.ingress to "connection"/,
+      /receives by webhook .*`fastagent channels setup feishu --ingress webhook` captures FEISHU_VERIFICATION_TOKEN.*channels\.<name>\.ingress to "connection"/,
     );
     expect(() => larkChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
       /LARK_VERIFICATION_TOKEN.*channels\.<name>\.ingress to "connection"/,

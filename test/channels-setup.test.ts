@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -128,8 +129,11 @@ afterEach(() => {
 
 const workspace = (prefix: string, files: Record<string, string> = {}) => agentWorkspace(prefix, files);
 const read = (file: string) => readFile(file, "utf8");
-const setup = (name: string, dir: string, opts: Record<string, unknown> = {}) =>
-  runChannelsSetup(name, dir, { recordUrl: false, json: false, ...opts });
+/** `--env-file` names a file that exists, as it does everywhere: a test that is not about that makes it first. */
+const setup = async (name: string, dir: string, opts: Record<string, unknown> = {}) => {
+  if (typeof opts.envFile === "string" && !existsSync(opts.envFile)) await writeFile(opts.envFile, "");
+  return runChannelsSetup(name, dir, { recordUrl: false, json: false, ...opts });
+};
 
 /** The links a manifest link opens, as Slack reads them. */
 const manifestOf = (link: string | undefined) =>
@@ -242,6 +246,15 @@ describe("channels setup at a terminal", () => {
     expect(said.filter((line) => line.includes("now holds a secret and has no .gitignore"))).toEqual([
       expect.stringContaining(`note: ${elsewhere} (where this instance keeps its values) now holds a secret`),
     ]);
+  });
+
+  it("--env-file names a file that exists, as it does for every command: Node itself refuses one that does not", async () => {
+    const dir = await workspace("fa-setup-envfile-");
+    platforms();
+    const missing = join(dir, "nope.env");
+    await ends(runChannelsSetup("telegram", dir, { recordUrl: false, json: false, envFile: missing }), 2);
+    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toContain(`--env-file ${missing} is not a file`);
+    expect(existsSync(missing)).toBe(false);
   });
 
   it("--ingress is written to the configuration: the development instance's, or the one --config names", async () => {
@@ -362,14 +375,28 @@ describe("setUpChannel: writes where it is told, and makes its own values once",
     platforms();
     const elsewhere = join(dir, "elsewhere.env");
     prompts.answers.push(GOOD_BOT);
-    const first = await setUpChannel({ kind: "telegram", agentDir: dir, file: elsewhere, way: "webhook" });
+    const first = await setUpChannel({
+      kind: "telegram",
+      agentDir: dir,
+      file: elsewhere,
+      way: "webhook",
+      dev: false,
+      rerun: "again",
+    });
     expect(first.written.sort()).toEqual(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
     expect(first.kept).toEqual([]);
     expect(await read(elsewhere)).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_BOT}`);
     await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
 
     const secret = (await read(elsewhere)).match(/^TELEGRAM_SECRET_TOKEN=(.*)$/m)?.[1];
-    const again = await setUpChannel({ kind: "telegram", agentDir: dir, file: elsewhere, way: "webhook" });
+    const again = await setUpChannel({
+      kind: "telegram",
+      agentDir: dir,
+      file: elsewhere,
+      way: "webhook",
+      dev: false,
+      rerun: "again",
+    });
     // Nothing asked, nothing written: both are held, and the one setup made stays what it was.
     expect(again).toMatchObject({ written: [], kept: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"] });
     expect((await read(elsewhere)).match(/^TELEGRAM_SECRET_TOKEN=(.*)$/m)?.[1]).toBe(secret);
@@ -392,7 +419,9 @@ describe("channels setup: what Slack's signing secret can and cannot be checked 
 describe("channels setup for a coding agent", () => {
   it("hands the setup to a ticket's process, forwarding what places the instance", async () => {
     const dir = await workspace("fa-setup-json-");
-    await ends(setup("slack", dir, { json: true, ingress: "webhook", config: "prod.json", envFile: "prod.env" }));
+    await ends(
+      setup("slack", dir, { json: true, ingress: "webhook", config: "prod.json", envFile: join(dir, "prod.env") }),
+    );
     expect(started).toEqual([
       expect.objectContaining({
         subject: expect.stringMatching(/^channels-setup:slack:.*prod\.env$/),
@@ -405,7 +434,7 @@ describe("channels setup for a coding agent", () => {
     ]);
     const args = (started[0] as { command: { args: string[] } }).command.args;
     expect(args).toContain(join(process.cwd(), "prod.json"));
-    expect(args).toContain(join(process.cwd(), "prod.env"));
+    expect(args).toContain(join(dir, "prod.env"));
   });
 
   /** The ticket's own process: the page its person is sent to, and what they paste there. */
@@ -440,7 +469,7 @@ describe("channels setup for a coding agent", () => {
     platforms();
     const { ticket, run, waiting, paste } = await onPage("telegram", dir);
     const asked = await waiting();
-    expect(asked.instructions).toBe("paste Bot token on this page");
+    expect(asked.instructions).toContain("paste Bot token on this page");
     expect(asked.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/setup\//);
     const page = await (await fetch(asked.url as string)).text();
     expect(page).toContain("Bot token");

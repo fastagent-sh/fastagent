@@ -7,12 +7,7 @@ import type { DeployHost } from "../../deploy/hosts.ts";
 import { assembleSecrets, missingValuesGate } from "../../deploy/secrets.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
-import {
-  assertIndependentFeishuApps,
-  feishuAppSecretNames,
-  prepareFeishuApps,
-  unpreparedFeishuApps,
-} from "../add-feishu.ts";
+import { channelAppNames, prepareChannelApps, unpreparedChannelApps } from "./deploy/channel-apps.ts";
 import { displayPath, selectAgentEnvironment } from "../../paths.ts";
 import { buildProject } from "../../harnesses/pi-durable/build.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
@@ -22,7 +17,6 @@ import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durabl
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive, shellArg } from "../shared.ts";
-import { terminalPerson } from "../person.ts";
 import {
   type Ticket,
   type TicketStep,
@@ -148,14 +142,6 @@ async function deploy(
     .catch(failStartup);
   // Never `dev`, whatever spawned this: a channel's way of receiving is chosen as the box will choose it.
   unmarkDevServe();
-  const independentApps = (values: ReadonlyMap<string, string>) => {
-    try {
-      assertIndependentFeishuApps(agentDir, ["feishu", "lark"], values);
-    } catch (error) {
-      failStartup(error);
-    }
-  };
-  independentApps(loadEnvValues(dotEnvPath(agentDir)));
   const api = deploymentApi({
     config,
     hostServes: host !== "agentcore",
@@ -183,7 +169,7 @@ async function deploy(
   const rerun =
     `fastagent deploy ${host}${agentArg === undefined ? "" : ` ${shellArg(agentArg)}`}` +
     `${opts.intoLinked ? " --into-linked" : ""} --run`;
-  const unprepared = opts.run ? unpreparedFeishuApps(pre.channels, pre.values) : [];
+  const unprepared = opts.run ? unpreparedChannelApps(pre.channels, pre.values) : [];
 
   if (opts.json && step === undefined) {
     // A coding agent's deploy: what this machine can refuse is refused above, at once; the rest runs in a ticket.
@@ -223,7 +209,7 @@ async function deploy(
   /** Everything past the pre-flight, its person's steps taken by `answerer`; the URL and what the API report says. */
   const deployWith = async (answerer: Answerer): Promise<{ url?: string; notes: string[] }> => {
     if (unprepared.length > 0) {
-      const supplied = unprepared.flatMap(({ kind, ingress }) => feishuAppSecretNames(kind, ingress));
+      const supplied = unprepared.flatMap(channelAppNames);
       const kinds = unprepared.map(({ kind }) => kind);
       const { values } = pre;
       const absent = supplied.filter((name) => !values.get(name)?.trim());
@@ -237,7 +223,7 @@ async function deploy(
         pre.valueFile,
       );
       if (missing) failStartup(new Error(`deploy stopped: ${missing}`));
-      if (host === "docker" && unprepared.some(({ ingress }) => ingress === "webhook")) {
+      if (host === "docker" && unprepared.some(({ way }) => way === "webhook")) {
         failStartup(
           new Error(
             `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
@@ -254,12 +240,15 @@ async function deploy(
             `hands their part to its user`,
         );
       }
-      const person = answerer.kind === "ticket" ? answerer.step.person : terminalPerson;
       const again = answerer.kind === "ticket" ? `${rerun} --json` : rerun;
-      await prepareFeishuApps(agentDir, unprepared, again, person).catch(failStartup);
+      await prepareChannelApps(
+        agentDir,
+        unprepared,
+        again,
+        answerer.kind === "ticket" ? answerer.step.person : undefined,
+      ).catch(failStartup);
       pre = await preflight();
     }
-    independentApps(pre.values);
     if (api.served && api.generatesKey) {
       // Past every refusal the pre-flight makes, and read again, so this deploy carries it.
       const unprotected = await writeApiKey(agentDir).catch(failStartup);

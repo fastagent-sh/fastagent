@@ -123,11 +123,11 @@ set; without it, it says which paths receive nothing yet. It reads no outcome it
   immediately so an interrupted token capture resumes the same app. Approval and publishing remain console steps.
   `--run --json` hands the confirmation to a coding agent's user; without either a terminal or `--json`, `--run`
   stops (exit 2) naming it. CI must supply the production App ID, Secret and Verification Token beforehand.
-- **Other channels:** run `channels setup slack --config prod.json --env-file .secrets/production/.env` to create the
+- **Other channels:** run `channels setup slack --config prod.json` to create the
   production Slack app and keep its credentials, and the same for `telegram` with its own BotFather bot. A deployment
   receives by webhook, so each setup keeps what a webhook needs.
 - **One app still delivers to one place.** `dev --tunnel` changes only the dev app's URL; `deploy --run` changes
-  only production. Feishu/Lark refuse a production App ID copied from the default dev file.
+  only production. Nothing refuses a production App ID copied from the default dev file: two instances on one app split its events, so give production an app of its own.
 
 ## Logging a deployment in
 

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { runAddChannel } from "../src/cli/commands/add.ts";
+import { runChannelsSetup } from "../src/cli/commands/channels.ts";
 import { FEISHU_AGENT_SCOPES } from "../src/channels/feishu/setup-mode.ts";
 import { checkTicket, createTicket } from "../src/cli/ticket.ts";
 import { agentWorkspace } from "./cli-run.ts";
@@ -14,6 +14,8 @@ vi.mock("../src/cli/shared.ts", async (original) => ({
 }));
 
 const exited = new Error("exited");
+const setup = (name: string, dir: string, opts: Record<string, unknown> = {}) =>
+  runChannelsSetup(name, dir, { recordUrl: false, json: false, ...opts });
 
 /** What the command started, recorded: the process it would start is the ticket's own half, run by hand above. */
 const started: Record<string, unknown>[] = [];
@@ -66,7 +68,7 @@ function stubFeishu(statuses: string[], ticket: string) {
   });
 }
 
-it("a ticket's run is the whole add: the person waited on, the app written, its next steps the ticket's result", async () => {
+it("a ticket's run is the whole setup: the person waited on, the app written, what is left the ticket's result", async () => {
   const dir = await agentWorkspace("fa-add-ticket-", {
     "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
   });
@@ -76,59 +78,57 @@ it("a ticket's run is the whole add: the person waited on, the app written, its 
     throw exited;
   });
   const { ticket } = createTicket({
-    subject: "add:feishu:dev",
+    subject: "channels-setup:feishu:dev",
     action: "confirm the new Feishu app",
-    check: "fastagent add feishu --check",
-    restart: "fastagent add feishu",
+    check: "fastagent channels setup feishu --check",
+    restart: "fastagent channels setup feishu",
     timeoutSeconds: 60,
   });
   const statuses: string[] = [];
   stubFeishu(statuses, ticket);
   try {
-    await expect(runAddChannel("feishu", dir, { ingress: "connection", ticket })).rejects.toBe(exited);
+    await expect(setup("feishu", dir, { ticket })).rejects.toBe(exited);
     expect(statuses).toEqual(["need_user_action", "need_user_action"]);
     const done = await checkTicket(ticket);
     expect(done).toMatchObject({
       status: "done",
       url: expect.stringContaining("user_code=AB-CD"),
       result: {
-        // What the app's creation wrote mid-way counts, not only the scaffold's own last write.
-        written: expect.arrayContaining(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]),
-        next_steps: expect.arrayContaining([expect.stringContaining("fastagent dev")]),
+        written: ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
+        next_steps: expect.arrayContaining([
+          "fastagent dev",
+          expect.stringContaining("CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_new/version"),
+        ]),
       },
-      afterwards: [
-        {
-          instructions: expect.stringContaining("CREATE + PUBLISH a version"),
-          url: "https://open.feishu.cn/app/cli_new/version",
-        },
-      ],
     });
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toMatch(/^FEISHU_APP_ID=cli_new$/m);
-    expect(await readFile(join(dir, "src", "channels", "feishu.ts"), "utf8")).toContain("feishu");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
 it("a failure inside the run fails the ticket with its reason, not a bare exit", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "fa-add-ticket-"));
+  const dir = await mkdtemp(join(tmpdir(), "fa-setup-ticket-"));
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
+  vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(process, "exit").mockImplementation(() => {
     throw exited;
   });
+  // Feishu's accounts service is down: the app cannot be created.
+  vi.stubGlobal("fetch", async () => Response.json({ error: "server_error" }, { status: 500 }));
   const { ticket } = createTicket({
-    subject: "add:feishu:dev",
+    subject: "channels-setup:feishu:dev",
     action: "confirm the new Feishu app",
-    check: "fastagent add feishu --check",
-    restart: "fastagent add feishu",
+    check: "fastagent channels setup feishu --check",
+    restart: "fastagent channels setup feishu",
     timeoutSeconds: 60,
   });
   try {
-    await expect(runAddChannel("feishu", dir, { ingress: "connection", ticket })).rejects.toBe(exited);
+    await expect(setup("feishu", dir, { ticket })).rejects.toBe(exited);
     expect(await checkTicket(ticket)).toMatchObject({
       status: "failed",
-      message: expect.stringContaining("no package.json"),
+      message: expect.stringMatching(/500|server_error/),
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -136,7 +136,7 @@ it("a failure inside the run fails the ticket with its reason, not a bare exit",
 });
 
 it("--json hands the person's part over even at a terminal: a coding agent may run commands in one", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "fa-add-json-"));
+  const dir = await mkdtemp(join(tmpdir(), "fa-setup-json-"));
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
   vi.stubEnv("FASTAGENT_STATE_DIR", "");
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -145,9 +145,9 @@ it("--json hands the person's part over even at a terminal: a coding agent may r
     throw exited;
   });
   started.length = 0;
-  await expect(runAddChannel("lark", dir, { onboard: true, json: true })).rejects.toBe(exited);
-  // Lark's App ID and Secret are no longer asked for first, in a file: the setup's own run takes them on a page.
-  expect(started).toEqual([expect.objectContaining({ subject: expect.stringMatching(/^add:lark:dev:/) })]);
+  await expect(setup("lark", dir, { json: true })).rejects.toBe(exited);
+  // Lark's App ID and Secret are not asked for in a file: the setup's own run takes them on a page.
+  expect(started).toEqual([expect.objectContaining({ subject: expect.stringMatching(/^channels-setup:lark:/) })]);
   expect(JSON.parse(String(printed.mock.calls[0]?.[0]))).toMatchObject({ status: "working" });
   expect(String(printed.mock.calls[0]?.[0])).not.toContain("value_file");
   await rm(dir, { recursive: true, force: true });

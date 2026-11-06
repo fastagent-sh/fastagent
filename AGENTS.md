@@ -71,7 +71,6 @@ src/
 │   │                       # once at the command's entry into absolute paths in the process environment
 │   ├── invoke-stream.ts    # `invoke`: one message's answer, as messages.stream delivers it, as text or JSON lines → exit code
 │   ├── models-view.ts, auth-view.ts, content-view.ts # `models` / auth-report / content output
-│   ├── add-feishu.ts       # `add feishu|lark` app onboarding (moves into channel-setup.ts in 4b)
 │   ├── channel-setup.ts    # `channels setup <name>`: ask a person for a channel's credentials, at a terminal or on a page,
 │   │                       # check each with the platform, keep them in the instance's value file
 │   ├── person.ts           # what an app's setup says to the person for the steps only they can take: printed at a
@@ -219,13 +218,13 @@ src/
 │   │   ├── ws-ingress.ts   # the long-connection ingress (the WebSocket form of the same engine)
 │   │   ├── setup-mode.ts   # the onboarding choice (webhook vs websocket) + the scopes every agent app asks for
 │   │   ├── shared-api.ts   # channel/send-tool transport sharing per cloud and state root
-│   │   ├── register-app.ts # `add feishu`: scan-to-create device flow
+│   │   ├── setup.ts        # `channels setup feishu`: scan-to-create, the Verification Token, the permission check; the engine Lark shares
+│   │   ├── register-app.ts # scan-to-create device flow
 │   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation
 │   │   └── scaffold/       # `add feishu` bundle (channel + feishu-send + feishu-threads)
 │   └── lark/               # Lark compatibility/degraded edges over the Feishu engine
 │       ├── lark.ts         # thin branded adapter bound to LARK_COMPAT_CLOUD
-│       ├── onboard.ts      # unbound launcher (its link carries the agent's scopes) + credentials + manual config fallback
-│       ├── credentials-page.ts # loopback-only setup forms: App ID/Secret and a manually copied Verification Token
+│       ├── setup.ts        # `channels setup lark`: the launcher link, the pasted pair checked together
 │       └── scaffold/       # `add lark` bundle
 ├── deploy/                 # `deploy docker|fly|railway|agentcore` (core.md §9). Neutral kernel at top, one
 │   │                       # directory per host. ADDING A HOST: deploy/hosts.ts says what to write and what

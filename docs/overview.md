@@ -98,7 +98,7 @@ Add Telegram, Slack, Feishu, or Lark when the agent should help chat users:
 ```bash
 fastagent add telegram && fastagent channels setup telegram
 fastagent add slack && fastagent channels setup slack
-fastagent add feishu   # 飞书; Lark international: fastagent add lark
+fastagent add feishu && fastagent channels setup feishu   # 飞书; Lark international: lark
 ```
 
 ## Documentation map

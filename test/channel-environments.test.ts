@@ -5,12 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { loadDotEnv } from "../src/env.ts";
 import { dotEnvPath, loadEnvValues } from "../src/value-file.ts";
 import { resolveSecretsDir, resolveStateRoot, selectAgentEnvironment } from "../src/paths.ts";
-import { assertIndependentFeishuApps, onboardFeishuCloudApp } from "../src/cli/add-feishu.ts";
+import { setUpChannel } from "../src/cli/channel-setup.ts";
 import { feishuAppAddons, feishuAppScopes } from "../src/channels/feishu/setup-mode.ts";
 import { buildContextPaths } from "../src/deploy/build-context.ts";
 import { registerFeishuApp } from "../src/channels/feishu/register-app.ts";
 import { bootstrapFeishuVerificationToken } from "../src/channels/feishu/bootstrap-token.ts";
-import { text, password } from "@clack/prompts";
+import { password } from "@clack/prompts";
 
 vi.mock("../src/channels/feishu/register-app.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/channels/feishu/register-app.ts")>()),
@@ -99,64 +99,33 @@ it("production never falls back to dev credentials when its file is absent", asy
   expect(loadEnvValues(dotEnvPath(dir)).size).toBe(0);
 });
 
-it("refuses copying the dev app into production before any registration", async () => {
-  await mkdir(join(dir, ".secrets", "production"), { recursive: true });
-  await writeFile(join(dir, ".secrets", ".env"), "FEISHU_APP_ID=cli_dev\nLARK_APP_ID=cli_lark_dev\n");
-  selectAgentEnvironment("production");
-  for (const [kind, name, value] of [
-    ["feishu", "FEISHU_APP_ID", "cli_dev"],
-    ["lark", "LARK_APP_ID", "cli_lark_dev"],
-  ] as const) {
-    expect(() => assertIndependentFeishuApps(dir, [kind], new Map([[name, value]]))).toThrow(/same app/);
-    const credentials = `${name}=${value}\n${name.replace("_APP_ID", "_APP_SECRET")}=dev_secret\n`;
-    await writeFile(dotEnvPath(dir), credentials);
-    await expect(onboardFeishuCloudApp(dir, kind, "webhook")).rejects.toThrow(/same app/);
-    expect(await readFile(dotEnvPath(dir), "utf8")).toBe(credentials);
-  }
-  expect(() =>
-    assertIndependentFeishuApps(dir, ["feishu"], new Map([["FEISHU_APP_ID", "cli_production"]])),
-  ).not.toThrow();
-});
-
-it.each(["fastagent add lark --env production", "fastagent deploy fly --run"])(
-  "rejects a newly entered dev Lark app before webhook bootstrap (%s)",
-  async (rerun) => {
-    await mkdir(join(dir, ".secrets"));
-    const dev = "LARK_APP_ID=cli_lark_dev\nLARK_APP_SECRET=dev_secret\n";
-    await writeFile(join(dir, ".secrets", ".env"), dev);
-    selectAgentEnvironment("production");
-    vi.mocked(text).mockResolvedValue(" cli_lark_dev ");
-    vi.mocked(password).mockResolvedValue("dev_secret");
-    await expect(onboardFeishuCloudApp(dir, "lark", "webhook", rerun)).rejects.toThrow(/same app/);
-    expect(bootstrapFeishuVerificationToken).not.toHaveBeenCalled();
-    expect(loadEnvValues(dotEnvPath(dir)).size).toBe(0);
-    expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toBe(dev);
-
-    vi.mocked(text).mockResolvedValue("cli_lark_production");
-    await expect(onboardFeishuCloudApp(dir, "lark", "webhook", rerun)).resolves.toMatchObject({
-      LARK_APP_ID: "cli_lark_production",
-      LARK_VERIFICATION_TOKEN: "production_token",
-    });
-    expect(bootstrapFeishuVerificationToken).toHaveBeenCalledOnce();
-  },
-);
-
 it("scan-to-create requests webhook scopes, persists production credentials and resumes without creating another app", async () => {
   await mkdir(join(dir, ".secrets"));
   const dev = "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\n";
   await writeFile(join(dir, ".secrets", ".env"), dev);
   selectAgentEnvironment("production");
+  const production = () =>
+    setUpChannel({
+      kind: "feishu",
+      agentDir: dir,
+      file: dotEnvPath(dir),
+      way: "webhook",
+      dev: false,
+      rerun: "fastagent deploy fly --run",
+    });
+  // The tenant has not approved the app-config scope: the app is made and kept, and the token cannot be had yet.
   approved = false;
-  await onboardFeishuCloudApp(dir, "feishu", "webhook", "fastagent deploy fly --run");
+  vi.mocked(password).mockRejectedValueOnce(new Error("setup cancelled"));
+  await expect(production()).rejects.toThrow("setup cancelled");
   expect(registerFeishuApp).toHaveBeenCalledWith(expect.objectContaining({ addons: feishuAppAddons("webhook") }));
   const values = loadEnvValues(dotEnvPath(dir));
   expect(values.get("FEISHU_APP_ID")).toBe("cli_production");
   expect(values.get("FEISHU_APP_SECRET")).toBe("production_secret");
-  expect(values.get("FEISHU_VERIFICATION_TOKEN")).toBe("");
+  expect(values.has("FEISHU_VERIFICATION_TOKEN")).toBe(false);
   expect((await stat(dotEnvPath(dir))).mode & 0o777).toBe(0o600);
   expect(await readFile(join(dir, ".secrets", "production", ".gitignore"), "utf8")).toContain("*");
   approved = true;
-  await onboardFeishuCloudApp(dir, "feishu", "webhook", "fastagent deploy fly --run");
+  await production();
   expect(registerFeishuApp).toHaveBeenCalledOnce();
   expect(loadEnvValues(dotEnvPath(dir)).get("FEISHU_VERIFICATION_TOKEN")).toBe("production_token");
   expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toBe(dev);

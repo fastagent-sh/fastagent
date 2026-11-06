@@ -78,7 +78,7 @@ describe("cli kernel: spec conformance", () => {
       [["start"], "--port > PORT env > fastagent.config.ts http.port > 8787"],
       [["start"], "share one credential across projects"],
       [["add", "feishu"], "any your tenant withholds are named"],
-      [["add", "lark"], "config-route 404"],
+      [["add", "lark"], "answers 404"],
       [["add", "skill"], "review with git diff"],
       [["deploy"], "Durable ingress remains operator-owned"],
       [["deploy"], "docker compose up -d"],

@@ -267,28 +267,9 @@ const start: CommandSpec = {
     }),
 };
 
-const INGRESS: FlagSpec = {
-  flags: "--ingress <mode>",
-  description:
-    "Telegram, Feishu, Lark: write connection or webhook to the instance configuration (channels.<kind>.ingress) and set the " +
-    "app up for it (unset: what the configuration says, else dev uses its connection and everything else webhook)",
-};
-const INGRESS_CONFIG: FlagSpec = {
-  flags: "--config <file>",
-  description:
-    "the instance configuration --ingress writes and the setup reads (default: dev's fastagent.json; for " +
-    "--env production, the file deploy --config delivers)",
-};
 const CHANNEL_ENVIRONMENT: FlagSpec = {
   flags: "--env <environment>",
-  description:
-    "select independent app credentials and onboarding state (default: dev; production uses .secrets/production/.env)",
-};
-const NO_ONBOARD: FlagSpec = {
-  flags: "--no-onboard",
-  description:
-    "scaffold only: write the channel file (if missing) and its tools, and skip the app onboarding " +
-    "(Feishu/Lark: app creation and credential capture)",
+  description: "select independent credentials and state (default: dev; production uses .secrets/production/.env)",
 };
 
 const channelSub = (
@@ -301,40 +282,12 @@ const channelSub = (
   summary,
   description,
   args: [AGENT_ARG],
-  flags:
-    kind === "feishu" || kind === "lark"
-      ? [CHANNEL_ENVIRONMENT, INGRESS, INGRESS_CONFIG, NO_ONBOARD, ...UNATTENDED_SETUP]
-      : [JSON_FLAG],
-  examples: [
-    { cmd: `fastagent add ${kind}` },
-    ...(kind === "feishu" || kind === "lark" ? [{ cmd: `fastagent add ${kind} --json`, note: "a coding agent" }] : []),
-  ],
+  flags: [JSON_FLAG],
+  examples: [{ cmd: `fastagent add ${kind}` }],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
-    (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, {
-      ingress: f.ingress as string | undefined,
-      ...(typeof f.config === "string" ? { config: f.config } : {}),
-      environment: f.env as "dev" | "production" | undefined,
-      onboard: f.onboard !== false,
-      input: f.input !== false,
-      json: f.json === true,
-      ...(f.check !== undefined ? { check: f.check as string } : {}),
-      ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
-      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
-    }),
+    (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, { json: f.json === true }),
 });
-
-/**
- * How an app's setup runs with no one at a terminal: what the person provides is named, and their steps come back with
- * a ticket to check (`add` in docs/cli.md).
- */
-const UNATTENDED_SETUP: FlagSpec[] = [
-  { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
-  { flags: "--check <ticket>", description: "where a setup started without a terminal stands" },
-  { flags: "--timeout <seconds>", description: "how long that setup stays open (default 900)" },
-  { flags: "--ticket <id>", description: "the process that runs a ticket's setup", hidden: true },
-  NO_INPUT,
-];
 
 const add: CommandSpec = {
   name: "add",
@@ -359,21 +312,23 @@ const add: CommandSpec = {
     ),
     channelSub(
       "feishu",
-      "scaffold the Feishu channel AND create/configure the platform app",
-      "Scaffold src/channels/feishu.ts and create/configure the Feishu app through scan-to-create, writing its " +
-        "credentials to the selected environment. Dev uses WebSocket; deploy --run creates a separate production app for webhook.",
-      "Feishu (open.feishu.cn) is the canonical implementation. WebSocket needs only App ID/Secret and " +
-        "no public URL; webhook additionally captures the Verification Token through a temporary tunnel. " +
-        "The app asks for the scopes that let the agent hear its group chats; any your tenant withholds are named.",
+      "scaffold the Feishu channel (long connection or webhook, durable turns, streaming card)",
+      "Scaffold src/channels/feishu.ts plus its tools (src/tools/feishu-send.ts, feishu-threads.ts). Changes the " +
+        "program only: `fastagent channels setup feishu` creates the app by scan-to-create and keeps its credentials.",
+      "Feishu (open.feishu.cn) is the canonical implementation. A long connection needs only App ID/Secret and " +
+        "no public URL; a webhook additionally needs the Verification Token, which setup captures through a " +
+        "temporary tunnel. The app asks for the scopes that let the agent hear its group chats; any your tenant " +
+        "withholds are named.",
     ),
     channelSub(
       "lark",
-      "scaffold the Lark (international) channel with guided credential setup",
-      "Scaffold src/channels/lark.ts and guide credential setup against the international developer console. " +
-        "Dev uses WebSocket; deploy --run guides setup of a separate production app for webhook.",
-      "Lark international (open.larksuite.com) is Feishu's compatibility profile. WebSocket stops after " +
-        "App ID/Secret validation and a permission check; webhook setup probes config automation and falls " +
-        "back to explicit manual steps on the international config-route 404.",
+      "scaffold the Lark (international) channel",
+      "Scaffold src/channels/lark.ts plus its tools (src/tools/lark-send.ts, lark-threads.ts). Changes the program " +
+        "only: `fastagent channels setup lark` guides the app's creation on Lark's launcher, checks the App ID " +
+        "and Secret, and keeps them.",
+      "Lark international (open.larksuite.com) is Feishu's compatibility profile. A long connection stops after " +
+        "App ID/Secret validation and a permission check; a webhook tries to capture the Verification Token " +
+        "and asks for it when the international config API answers 404.",
     ),
     {
       name: "skill",
@@ -689,6 +644,18 @@ const schedules: CommandSpec = {
   ],
 };
 
+/**
+ * How an app's setup runs with no one at a terminal: what the person provides is named, and their steps come back with
+ * a ticket to check (`channels setup` in docs/cli.md).
+ */
+const UNATTENDED_SETUP: FlagSpec[] = [
+  { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
+  { flags: "--check <ticket>", description: "where a setup started without a terminal stands" },
+  { flags: "--timeout <seconds>", description: "how long that setup stays open (default 900)" },
+  { flags: "--ticket <id>", description: "the process that runs a ticket's setup", hidden: true },
+  NO_INPUT,
+];
+
 const channels: CommandSpec = {
   name: "channels",
   summary: "a channel's platform app, for one instance",
@@ -698,8 +665,8 @@ const channels: CommandSpec = {
       summary: "set up a channel's platform app for one instance, and keep its credentials",
       description:
         "Guide a person through creating the platform app (a Slack app from a manifest link, a Telegram bot from " +
-        "BotFather), ask for the values only they can read off its pages, check each with the platform, and keep them " +
-        "in the instance's value file. Safe to run again: a value already there that the platform still accepts is " +
+        "BotFather, a Feishu app by scan-to-create, a Lark app on its launcher), ask for the values only they can " +
+        "read off its pages, check each with the platform, and keep them in the instance's value file. Safe to run again: a value already there that the platform still accepts is " +
         "kept. How the channel receives (webhook or connection) decides which values it needs: --ingress, else what " +
         "the configuration says, else connection for the development instance and webhook for any other. With no " +
         "terminal (--json), the values are pasted on a page on this machine for the person a coding agent hands the " +
@@ -707,10 +674,7 @@ const channels: CommandSpec = {
         "or lark where its config API answers 404) is registered there, the platform having reached it at the URL a " +
         "person saved on its app's page, write that URL into the binding (channels.<name>.app.url) of the " +
         "configuration --config names, so every later deploy of it reports it registered from the start.",
-      args: [
-        { name: "<name>", description: "the channel: telegram or slack (feishu and lark: `add` for now)" },
-        AGENT_ARG,
-      ],
+      args: [{ name: "<name>", description: "the channel: telegram, slack, feishu or lark" }, AGENT_ARG],
       flags: [
         {
           flags: "--ingress <mode>",
@@ -725,8 +689,9 @@ const channels: CommandSpec = {
         {
           flags: "--env-file <file>",
           description:
-            "the value file the credentials are kept in, created when missing; naming it or --config makes this " +
-            "another instance than the development one (default: .secrets/.env for dev, else .secrets/production/.env)",
+            "the value file the credentials are kept in, which must exist; naming it or --config makes this " +
+            "another instance than the development one (default: .secrets/.env for dev, else " +
+            ".secrets/production/.env, created when missing)",
         },
         {
           flags: "--record-url",
@@ -741,7 +706,7 @@ const channels: CommandSpec = {
       examples: [
         { cmd: "fastagent channels setup telegram" },
         { cmd: "fastagent channels setup slack --json", note: "an agent" },
-        { cmd: "fastagent channels setup slack --env-file prod.env", note: "a deployment" },
+        { cmd: "fastagent channels setup slack --config prod.json", note: "a deployment" },
         { cmd: "fastagent channels setup slack --record-url --config c.json" },
       ],
       run: async (args, f) =>

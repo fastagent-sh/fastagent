@@ -5,22 +5,22 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
 
-describe("add <channel> with no one at a terminal: the person's part, named", () => {
-  it("lark: the App ID and Secret are pasted on a page of the setup's own, never typed into a file", async () => {
+describe("a channel at the command line: the program by `add`, the app by `channels setup`", () => {
+  it("channels setup lark with no one at a terminal: the App ID and Secret are pasted on a page of the setup's own, never typed into a file", async () => {
     const dir = await agentWorkspace("fa-add-lark-", {
       "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
     });
     const home = await mkdtemp(join(tmpdir(), "fa-add-lark-home-"));
-    const result = await run(["add", "lark", dir, "--json"], undefined, { ...process.env, HOME: home });
+    const result = await run(["channels", "setup", "lark", dir, "--json"], undefined, { ...process.env, HOME: home });
     const report = JSON.parse(result.stdout);
     try {
       expect(result.code).toBe(0);
       expect(report).toMatchObject({
         status: "need_user_action",
         // A page on this machine: the browser sends the pair to this process, not through the agent's conversation.
-        url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/lark\/credentials\/[0-9a-f]{48}$/),
+        url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/setup\/[0-9a-f]{48}$/),
         instructions: expect.stringContaining("App ID and App Secret"),
-        check_command: expect.stringContaining("add lark --check"),
+        check_command: expect.stringContaining("channels setup lark --check"),
       });
       // Nothing asks the person to edit a file, the way every secret reached a chat window before.
       expect(result.stdout).not.toContain("value_file");
@@ -48,7 +48,7 @@ describe("add <channel> with no one at a terminal: the person's part, named", ()
   }, 30_000);
 
   it("a ticket that names no setup, or another command's, is a usage error naming the right command", async () => {
-    const result = await runInProcess(["add", "feishu", "--check", "0123456789abcdef", "--json"]);
+    const result = await runInProcess(["channels", "setup", "feishu", "--check", "0123456789abcdef", "--json"]);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain(`no ticket "0123456789abcdef" on this machine`);
     const { createTicket } = await import("../src/cli/ticket.ts");
@@ -60,7 +60,7 @@ describe("add <channel> with no one at a terminal: the person's part, named", ()
       timeoutSeconds: 60,
       fields: { provider: "openai", method: "account" },
     }).ticket;
-    const other = await runInProcess(["add", "feishu", "--check", signIn, "--json"]);
+    const other = await runInProcess(["channels", "setup", "feishu", "--check", signIn, "--json"]);
     expect(other.code).toBe(2);
     expect(other.stderr).toContain(
       `ticket ${signIn} is not this command's: it is to sign in to OpenAI; check it with \`fastagent login --check ${signIn}\``,
@@ -70,7 +70,7 @@ describe("add <channel> with no one at a terminal: the person's part, named", ()
     expect(JSON.parse(back.stdout)).toMatchObject({ provider: "openai", status: "failed" });
   });
 
-  it.each(["telegram", "slack"] as const)(
+  it.each(["telegram", "slack", "feishu", "lark"] as const)(
     "%s changes the program only: the channel and its tools, the names it reads, no app and no value",
     async (kind) => {
       const dir = await agentWorkspace(`fa-add-${kind}-`, {

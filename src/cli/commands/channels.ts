@@ -15,10 +15,11 @@ import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durabl
 import { chosenIngress } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { setChannelConfig } from "../../authoring.ts";
-import { INSTANCE_CONFIG_FILE, resolveOverridePath, selectAgentEnvironment } from "../../paths.ts";
+import { INSTANCE_CONFIG_FILE, selectAgentEnvironment } from "../../paths.ts";
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
-import { dotEnvPath, loadEnvValues, useValueFile } from "../../value-file.ts";
+import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
+import { enterEnvFile } from "../instance.ts";
 import type { Person } from "../person.ts";
 import { isInteractive, shellArg } from "../shared.ts";
 import {
@@ -58,9 +59,7 @@ export async function runChannelsSetup(name: string, dirArg: string, opts: Chann
   if (opts.check !== undefined) return checkSetup(name, opts.check, opts);
   if (opts.recordUrl) return recordUrl(name, dirArg, opts);
   if (!isSetupKind(name)) {
-    failUsage(
-      `${name}: this release sets up telegram and slack (\`fastagent add ${name}\` sets up that app itself for now)`,
-    );
+    failUsage(`${name}: \`channels setup\` sets up telegram, slack, feishu and lark`);
   }
   if (opts.ticket !== undefined) {
     // The process `startTicket` started: it takes the ticket before anything slow (the definition is loaded to plan),
@@ -104,10 +103,7 @@ async function planSetup(kind: SetupKind, dirArg: string, opts: ChannelsSetupOpt
   selectAgentEnvironment(dev ? "dev" : "production");
   if (dev) markDevServe();
   else unmarkDevServe();
-  if (opts.envFile !== undefined) {
-    if (opts.envFile.trim() === "") failUsage("--env-file needs a path");
-    useValueFile(resolveOverridePath(opts.envFile));
-  }
+  enterEnvFile(opts.envFile);
   enterAgentEnv(agentDir);
   const file = dotEnvPath(agentDir);
   const config =
@@ -159,6 +155,8 @@ async function carryOut(
     agentDir: plan.agentDir,
     file: plan.file,
     way: plan.way,
+    dev: plan.dev,
+    rerun: plan.rerun,
     ...(plan.publicUrl === undefined ? {} : { publicUrl: plan.publicUrl }),
     ...(person === undefined ? {} : { person }),
   });
@@ -186,7 +184,7 @@ async function setUpUnattended(plan: SetupPlan, opts: ChannelsSetupOptions): Pro
   const ticket = await startTicket({
     // One setup per agent, channel and value file: another one's is its own business.
     subject: `channels-setup:${plan.kind}:${plan.file}`,
-    action: `set up the ${plan.kind} app: paste its credentials on a page`,
+    action: `set up the ${plan.kind} app`,
     check: setupCheck(plan.kind),
     restart: plan.rerun,
     timeoutSeconds: timeout,
@@ -245,7 +243,7 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
     failUsage("--record-url writes into the configuration a deploy delivers: pass --config <file>");
   const agentDir = agentDirOrExit(resolve(dirArg));
   selectAgentEnvironment("production");
-  if (opts.envFile !== undefined) useValueFile(resolveOverridePath(opts.envFile));
+  enterEnvFile(opts.envFile);
   // The deployment's /health and the platform are reached as the instance's values and environment say, a proxy included.
   enterAgentEnv(agentDir);
   const config = resolve(opts.config);

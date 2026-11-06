@@ -144,7 +144,7 @@ describe("cli: channels setup --record-url", () => {
     const config = join(dir, "..", "bare.json");
     await writeFile(config, "{}");
     const cases: [string[], string][] = [
-      [["channels", "setup", "feishu", dir], "this release sets up telegram and slack"],
+      [["channels", "setup", "whatsapp", dir], "sets up telegram, slack, feishu and lark"],
       [["channels", "setup", "telegram", dir, "--record-url"], "only slack and lark have a URL a person sets"],
       [["channels", "setup", "slack", dir, "--record-url"], "pass --config <file>"],
       [["channels", "setup", "slack", dir, "--record-url", "--config", config], "names no http.publicUrl: pass --url"],

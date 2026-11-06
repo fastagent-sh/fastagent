@@ -504,8 +504,8 @@ level up because theirs are not.
 
 **Feishu is the design center; Lark is a compatibility profile.** The clouds share event/card/crypto
 wire formats, but Lark international trails Feishu in app creation and application-config APIs.
-`src/channels/lark/lark.ts` is a thin branded adapter over the Feishu engine; `lark/onboard.ts` owns
-Lark's degraded guided/manual onboarding; `feishu/cloud.ts` records the capability differences. A kind
+`src/channels/lark/lark.ts` is a thin branded adapter over the Feishu engine; `lark/setup.ts` owns
+Lark's degraded guided/manual setup; `feishu/cloud.ts` records the capability differences. A kind
 still owns its channel identity, env, state, logs, and onboarding: `feishuChannel` returns
 `POST /feishu`, `feishuWebSocketChannel` returns a long-connection module, and the Lark factories mirror
 those boundaries. One agent can run both clouds. Outbound APIs and webhook handling are fetch-based;

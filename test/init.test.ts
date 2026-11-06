@@ -416,61 +416,24 @@ describe("add: fastagent add <channel>", () => {
     expect(await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8")).toBe(sendTool);
   });
 
-  it("--no-onboard upgrades an existing Feishu or Lark agent's tools without touching its app", async () => {
+  it("a re-add upgrades an existing Feishu or Lark agent's tools without touching its channel file or app", async () => {
     for (const kind of ["feishu", "lark"]) {
       const dir = await readyAgent();
-      expect(await cliInit(["add", kind, "--no-onboard"], dir)).not.toMatch(/Error|creating the Feishu app/);
+      expect(await cliInit(["add", kind], dir)).not.toMatch(/Error|creating the Feishu app/);
       // An agent from an earlier release: its channel edited, and no thread tool yet.
       const channel = join(dir, "src", "channels", `${kind}.ts`);
       const authored = `${await readFile(channel, "utf8")}// edited\n`;
       await writeFile(channel, authored);
       await rm(join(dir, "src", "tools", `${kind}-threads.ts`));
-      const out = await cliInit(["add", kind, "--no-onboard"], dir);
+      const out = await cliInit(["add", kind], dir);
       expect(out).not.toMatch(/Error|creating the Feishu app/);
+      expect(out).toContain(`fastagent channels setup ${kind}`);
       expect(await readFile(channel, "utf8")).toBe(authored);
       expect(await readFile(join(dir, "src", "tools", `${kind}-threads.ts`), "utf8")).toContain("defineTool(");
+      // The program only: no value and no configuration, whatever the app will need.
+      expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
+      expect(existsSync(join(dir, "fastagent.json"))).toBe(false);
     }
-  });
-
-  it("--ingress is the instance configuration's channels.<kind>.ingress; without it nothing is written", async () => {
-    const plain = await readyAgent();
-    await cliInit(["add", "feishu", "--no-onboard"], plain);
-    expect(existsSync(join(plain, "fastagent.json"))).toBe(false);
-
-    const chosen = await readyAgent();
-    const out = await cliInit(["add", "feishu", "--no-onboard", "--ingress", "webhook"], chosen);
-    expect(out).not.toMatch(/Error/);
-    expect(JSON.parse(await readFile(join(chosen, "fastagent.json"), "utf8"))).toMatchObject({
-      channels: { feishu: { ingress: "webhook" } },
-    });
-
-    // A later `add` without the flag follows the saved setting: its next steps are webhook's, not WebSocket's.
-    const again = await cliInit(["add", "feishu", "--no-onboard"], chosen);
-    expect(again).toContain("for webhook ingress");
-    expect(again).toContain("fastagent dev --tunnel");
-    expect(again).not.toContain("no public URL or tunnel required");
-  });
-
-  it("add --env production keeps the dev credentials and channel file while setting up a separate app", async () => {
-    const dir = await readyAgent();
-    await cliInit(["add", "feishu", "--no-onboard"], dir);
-    const file = join(dir, "src", "channels", "feishu.ts");
-    const channel = await readFile(file, "utf8");
-    const dev = "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\n";
-    await writeFile(join(dir, ".secrets", ".env"), dev);
-    const result = await cliInit(["add", "feishu", "--env", "production", "--no-onboard"], dir);
-    expect(result).not.toMatch(/Error/);
-    expect(result).toContain(".secrets/production/.env");
-    expect(result).toContain("fastagent deploy <host> --run");
-    expect(await readFile(file, "utf8")).toBe(channel);
-    expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toBe(dev);
-    expect(await readFile(join(dir, ".secrets", "production", ".env"), "utf8")).not.toContain("cli_dev");
-    const invalid = await cliInit(["add", "feishu", "--env", "../dev", "--no-onboard"], dir);
-    expect(invalid).toContain('--env must be "dev" or "production"');
-    const lark = await cliInit(["add", "lark", "--env", "production", "--no-onboard"], dir);
-    expect(lark).toContain("fastagent start --tunnel");
-    expect(lark).toContain("manually switch Subscription mode to webhook");
-    expect(lark).not.toContain("fastagent dev");
   });
 
   it("rewrites the companion tool on every add — it is the package's, so a re-add upgrades it", async () => {

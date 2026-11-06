@@ -31,18 +31,20 @@ Both ingress modes feed the same request/reply engine: the channel holds the app
 
 ## Add the channel
 
-From an agent directory, credentials land in `.secrets/.env` — excluded by the `.secrets/.gitignore` that `init` scaffolds; both
-commands refuse to write platform credentials into a committable file:
+`add` changes the program; `channels setup` binds an instance to its platform app and keeps the credentials in that
+instance's value file: `.secrets/.env` for `dev`, excluded by the `.secrets/.gitignore` that `init` scaffolds. It refuses
+to write platform credentials into a committable file:
 
 ```bash
-fastagent add feishu   # scan-to-create
-fastagent add lark     # guided console setup
-fastagent add feishu --env production  # prepare the independent production app before deploying
+fastagent add feishu                    # the channel file and its tools (lark: fastagent add lark)
+fastagent channels setup feishu         # scan-to-create the app, keep its credentials
+fastagent channels setup lark           # guided console setup, credentials pasted
+fastagent channels setup feishu --config prod.json   # another instance's app (a deployment's), its values in .secrets/production/.env
 ```
 
 The Agent takes part in its group chats like a colleague: bare human replies in a thread it is part of invoke
 it, and each answered turn reads what was said in its place since the Agent last answered there. That takes the app
-scopes below, and there is no mention-only variant. The created app asks for all of them (Feishu); onboarding
+scopes below, and there is no mention-only variant. The created app asks for all of them (Feishu); setup
 then checks what the app actually holds and names any scope your tenant withheld.
 
 | Scope | Without it |
@@ -78,41 +80,44 @@ a machine of your own, given a configuration that says so (`deploy --config`, `s
 | Scale-to-zero / App Sleeping | Not supported; keep one process running | Supported when no other always-on producer exists |
 | App-config permission (`application:application:patch`) | Not needed | Needed to register the Request URL and capture the Verification Token; a tenant that reviews it holds the app's version in review once |
 
-`add feishu` sets the app up for `dev`'s WebSocket and asks for no `patch`, so a tenant that reviews it does not
-hold the first `add`. `deploy --run` creates a separate production app when credentials are missing, at a terminal or,
-with `--json`, through a coding agent's user (without either it stops, naming the `--json` command), requesting
-webhook scopes including `patch`, then captures the Verification Token into
-`.secrets/production/.env`. It registers the deployment's Request URL once readiness and model login pass.
-Lark uses guided production-app setup and sets the Request URL by hand when its config API answers 404.
-`add feishu --ingress webhook|connection` writes `channels.feishu.ingress` to the development instance's
-`fastagent.json`, or to the file `--config` names; with `--env production` it needs `--config`, the configuration
-`deploy --config` delivers. It refuses an existing channel file that names its factory instead of offering both ways.
+`channels setup feishu` sets the app up for `dev`'s WebSocket and asks for no `patch`, so a tenant that reviews it does not
+hold the first setup. `deploy --run` creates a separate production app when credentials are missing, at a terminal or,
+with `--json`, through a coding agent's user (without either it stops, naming the `--json` command): the same
+`channels setup`, aimed at `.secrets/production/.env`. It requests webhook scopes including `patch`, then captures the
+Verification Token. The instance registers its own Request URL once readiness and model login pass.
+Lark uses guided setup and sets the Request URL by hand when its config API answers 404.
+`channels setup feishu --ingress webhook|connection` writes `channels.feishu.ingress` to the development instance's
+`fastagent.json`, or to the file `--config` names (the one `deploy --config` delivers, for a deployment). It refuses an
+existing channel file that names its factory instead of offering both ways.
 A Docker deployment has no public URL of its own: name your ingress as `http.publicUrl`, or choose `connection`.
 
 **Dev and production use independent apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
 `.secrets/production/.env`, with no dev fallback. Copy required provider keys explicitly, not the dev app
-credentials. A production App ID matching the default dev file is refused. Both apps can receive at the same
-time: `dev --tunnel` changes only dev's Request URL, and `deploy --run` changes only production's.
-One app still has only one subscription mode and Request URL, and two WebSocket clients on that app split its events.
+credentials: an app is one receiver, so two instances on the same app split its events (two WebSocket clients) or
+overwrite each other's Request URL, and nothing refuses it. `channels setup` for another instance creates a new app
+(Feishu) or asks for another app's credentials (Lark). Both apps can receive at the same time: `dev --tunnel` changes only
+dev's Request URL, and the production instance changes only production's. One app has only one subscription mode and
+Request URL.
 
-Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
+Setup differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
 guided credential input, because its bound confirmation flow does not work. The launcher link carries the same
 `addons` as Feishu's, so a Lark app is created with the scopes and the event the channel needs; nothing is ticked in
 the console afterwards, except a scope the tenant withholds.
-In a coding agent's run (`add lark --json`, or a deploy that needs the app) the App ID and App Secret are pasted on a
-page the setup serves on this machine (`127.0.0.1`, no tunnel), not typed into a file: the page checks each pair against
-Lark and saves accepted credentials before attempting webhook setup. Credential refusals stay on the form; other
+In a coding agent's run (`channels setup lark --json`, or a deploy that needs the app) the App ID and App Secret are
+pasted on a page the setup serves on this machine (`127.0.0.1`, no tunnel), not typed into a file: the page checks the pair
+against Lark and saves accepted credentials before attempting webhook setup. A refused pair stays on the form; other
 failures stop setup with their actual cause. A remote CLI needs local port forwarding: the ticket gives the SSH command
-for its page's port. See [remote setup instructions](cli.md#fastagent-add-telegramslackfeishulark).
-Within either cloud, the ingress being prepared determines the remaining work. For WebSocket (what `add` prepares),
-the runtime credential set stops at the validated/persisted App ID/Secret pair; onboarding continues through the
-permission check and opens Events & Callbacks so the user can select long connection and publish.
-For webhook (`deploy --run`, or `add --ingress webhook`), it continues through the temporary-tunnel challenge to
-capture the Verification Token and configure the Request URL. Onboarding then reads the App's scopes and, for any that is missing, opens the
-console page that requests it, pre-filled. Lark's missing config API falls back to explicit manual
-Token/mode/URL steps. For a coding agent, the Verification Token is pasted on a second local page and saved without
-requiring a file edit. Re-running a partial setup reuses the complete App ID/Secret pair rather
-than creating or attaching a different app.
+for its page's port. See [remote setup instructions](cli.md#fastagent-channels-setup).
+Within either cloud, the way the channel receives determines the remaining work. For a long connection (what `dev`
+sets up), the runtime credential set stops at the validated App ID/Secret pair; setup continues through the permission
+check and names what is left: publish the version (a Feishu app made by scan-to-create is on a long connection already; for Lark, choose it in Events & Callbacks first).
+For webhook (`deploy --run`, or `--ingress webhook`), it continues through the temporary-tunnel challenge to
+capture the Verification Token (a webhook registration that is thrown away, which also switches the app's draft to
+webhook mode). A token that cannot be captured (no config API, a withheld `patch` scope, a tunnel that does not come up)
+is asked for, and where to find it is named. Setup then reads the App's scopes and, for any that is missing, names it with
+the console page that requests it, pre-filled. Re-running a partial setup reuses the App ID/Secret already kept rather
+than creating or attaching a different app, and a Verification Token kept from another app is never kept with new
+credentials.
 
 This creates (for the feishu kind; lark mirrors it):
 
@@ -124,18 +129,18 @@ src/tools/feishu-threads.ts   # reads the threads of the group a message was ask
 
 It also appends the required env vars to `.env.example` when possible.
 
-## How `add feishu` creates the app
+## How `channels setup feishu` creates the app
 
-`fastagent add feishu` runs the platform's **scan-to-create** flow (its official name; an OAuth 2.0
-device-authorization grant) as its default behavior. The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
+`fastagent channels setup feishu` runs the platform's **scan-to-create** flow (its official name; an OAuth 2.0
+device-authorization grant). The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
 pre-configured—and adds `im.message.receive_v1` and the scopes in the table above. It does not ask for
 `application:application:patch`: a tenant that reviews that scope holds the app's whole first version in review,
 for a scope `dev`'s WebSocket never uses. Creating a production webhook app requests it at creation;
-when the app is not granted it, the preparation names it and leaves the Verification Token and Request URL to the
-console instead of trying. A tenant may withhold any requested scope; onboarding names what it withheld. The CLI immediately persists App ID/Secret to
-the selected environment's `.env` before starting later network work.
+when the app is not granted it, setup names it, asks for the Verification Token instead of capturing it, and leaves the Request URL to the
+console. A tenant may withhold any requested scope; setup names what it withheld. The CLI immediately persists App ID/Secret to
+the instance's value file before starting later network work.
 
 For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
 generated Verification Token has no read API; its only programmatic delivery is the `url_verification`
@@ -144,7 +149,7 @@ stage is interrupted, re-running resumes Token capture for the same App rather t
 
 What is left for the console depends on the tenant. A tenant that grants the requested scopes at creation
 gets an app that holds them at once; one that withholds some needs them requested (the CLI opens that page)
-and approved, then a version created and published. WebSocket keeps the template's long-connection mode;
+and approved, then a version created and published. A long connection keeps the template's long-connection mode;
 webhook flips it and registers a Request URL. Mode and scope changes take effect only after publish, while
 later webhook URL changes apply immediately. Version publishing and tenant-admin approval have no general
 automatic completion path.
@@ -224,7 +229,7 @@ Each way declares its own secrets, and an instance is asked only for its way's, 
 does not use. `deploy` chooses the way as the box will (not `dev`, with the configuration it delivers), so it plans
 for the ingress the deployment serves. A channel file that names one factory receives that way only; a
 configuration naming the other way is refused at open. Re-scaffold the file (move it aside, then
-`add feishu --no-onboard`) to get this one.
+`add feishu`) to get this one.
 
 Credentials are checked when serving starts, before the host reports ready. Deployment planning can
 therefore import the module and inspect its function/object shape before secrets have been provisioned.
@@ -333,7 +338,7 @@ in that topic.
   have gone on since, and the list says so), and a thread started before those 50 messages does not appear. A topic
   group lists every message, so there a thread shows its last activity.
 - A read is the thread's newest 20 messages, bounded like the place history above, the agent's own answers included.
-- An agent created before this release gets the tool with `fastagent add feishu --no-onboard`: it keeps the channel
+- An agent created before this release gets the tool with `fastagent add feishu`: it keeps the channel
   file and writes the package's tools.
 
 ## Threads and conversations
@@ -456,8 +461,7 @@ Feishu and Lark remain isolated even in one agent. With no channel mounted (`fas
 with no channels mounted), the transport is built from those credentials against that cloud's default gateway.
 
 `src/tools/feishu-send.ts` / `src/tools/lark-send.ts` are the package's, not authored glue: re-running
-`fastagent add feishu|lark` rewrites the tool, keeps `src/channels/<kind>.ts` and the credentials already in
-`.env`, and re-checks the app's permissions. That is how an agent scaffolded by an earlier release
+`fastagent add feishu|lark` rewrites the tool and keeps `src/channels/<kind>.ts`. That is how an agent scaffolded by an earlier release
 picks up the current tool.
 
 ## Limits
@@ -470,13 +474,13 @@ picks up the current tool.
 - The official SDK currently carries event subscriptions over long connection; callback subscriptions
   are not part of this FastAgent ingress. Card streaming remains outbound HTTP and is unaffected.
 - Subscription mode cannot travel as creation-link config, and a tenant may withhold any requested scope.
-  Onboarding names a withheld scope and opens the page that requests it; tenant-admin approval and version
+  Setup names a withheld scope and the page that requests it; tenant-admin approval and version
   publishing remain console actions.
 - Bound CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every
-  ack renders as "Link expired"). `add lark` therefore uses the unbound launcher + guided credential
+  ack renders as "Link expired"). `channels setup lark` therefore uses the unbound launcher + guided credential
   paste (the launcher link carries `addons`, so the app is created holding the agent scopes: checked on a real
-  international tenant, where an app created from it held all of them with none ticked), then actively probes the config API: automatic mode/token bootstrap on success; manual
-  Token + Subscription mode/URL only on an explicit route-level 404.
+  international tenant, where an app created from it held all of them with none ticked), then probes the config API: automatic mode/token capture on success; a pasted Token and a Subscription mode/URL
+  set by hand only on an explicit route-level 404.
 - Without the sensitive `im:message.group_msg` scope the platform never delivers unsummoned messages, so only @mentions summon.
 - A read of a place's history adds about 300–400 ms before a group turn starts.
 - Sessions are one per chat and one per thread, never deleted, so the instance's storage grows with the number of chats and threads the Agent has taken part in. Thread participation is capped and evicts BYSTANDER threads first (ones the Agent only listened to — losing one costs nothing, since the summon rule refuses such a thread anyway); age decides only among threads it takes part in. The rest is unbounded.
