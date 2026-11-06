@@ -39,7 +39,7 @@ const TERMINAL_OPEN_ERRORS = new Set([
 ]);
 
 /** The socket as this module uses it, so a test can stand in a fake and a runtime without pings still serves. */
-export interface SlackSocket {
+interface SlackSocket {
   send(data: string): void;
   close(): void;
   /** Sends a ping frame, when the runtime can; its pong arrives as `handlers.pong`. */

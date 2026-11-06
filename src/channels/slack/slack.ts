@@ -254,7 +254,7 @@ function createSlackAuthentication(api: ReturnType<typeof createSlackApi>, label
 }
 
 /** What a Slack channel is told besides how its events arrive: the policy both ways share. */
-export type SlackPolicyOptions = Omit<SlackChannelOptions, "signingSecret">;
+type SlackPolicyOptions = Omit<SlackChannelOptions, "signingSecret">;
 
 /** The policy as the runtime reads it: defaults applied and what can be refused refused, at construction. */
 function resolveSlackPolicy(options: SlackPolicyOptions) {
