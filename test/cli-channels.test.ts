@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { agentWorkspace, runInProcess } from "./cli-run.ts";
 
-/** A deployment's public face: its /health, answering what the box reports of `lark`. */
-async function deployment(outcome: string): Promise<{ url: string; close(): void }> {
+/** A deployment's public face: its /health, answering what the box reports of `channel`. */
+async function deployment(outcome: string, channel = "lark"): Promise<{ url: string; close(): void }> {
   const server = createServer((_req, res) => {
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ status: "ok", webhooks: [{ channel: "lark", outcome }] }));
+    res.end(JSON.stringify({ status: "ok", webhooks: [{ channel, outcome }] }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() };
@@ -69,6 +69,52 @@ describe("cli: channels setup --record-url", () => {
       });
     } finally {
       confirmed.close();
+    }
+  });
+
+  it("reads /health at --url, records the configuration's own URL, and takes an app this machine did not create", async () => {
+    const dir = await agentWorkspace("fa-record-url-own-", {
+      "fastagent.config.ts": `export default {};\n`,
+    });
+    const config = join(dir, "..", "own.json");
+    await writeFile(config, JSON.stringify({ http: { publicUrl: "https://agent.acme.com" } }));
+    const box = await deployment("registered", "slack");
+    try {
+      const noApp = await runInProcess([
+        "channels",
+        "setup",
+        "slack",
+        dir,
+        "--record-url",
+        "--config",
+        config,
+        "--url",
+        box.url,
+      ]);
+      expect(noApp.code).toBe(1);
+      expect(noApp.stderr).toContain("name it with --app <id> (and --team <id>)");
+      const done = await runInProcess([
+        "channels",
+        "setup",
+        "slack",
+        dir,
+        "--record-url",
+        "--config",
+        config,
+        "--url",
+        box.url,
+        "--app",
+        "A1",
+        "--team",
+        "T1",
+      ]);
+      expect(done.code, done.stderr).toBe(0);
+      expect(JSON.parse(await readFile(config, "utf8"))).toEqual({
+        http: { publicUrl: "https://agent.acme.com" },
+        channels: { slack: { app: { id: "A1", team: "T1", url: "https://agent.acme.com/slack" } } },
+      });
+    } finally {
+      box.close();
     }
   });
 

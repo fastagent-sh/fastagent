@@ -15,6 +15,8 @@ export interface ChannelsSetupOptions {
   recordUrl: boolean;
   config?: string;
   url?: string;
+  app?: string;
+  team?: string;
   json: boolean;
 }
 
@@ -34,23 +36,30 @@ export async function runChannelsSetup(name: string, dirArg: string, opts: Chann
   const config = resolve(opts.config);
   const source = await readInstanceConfigFile(config).catch(failStartup);
   const named = (source.values as { http?: { publicUrl?: unknown } }).http?.publicUrl;
-  const base = (opts.url ?? (typeof named === "string" ? named : undefined))?.replace(/\/+$/, "");
-  if (base === undefined) {
+  const configured = typeof named === "string" ? named.replace(/\/+$/, "") : undefined;
+  // `--url` is where this machine reads the deployment's /health; the URL the box confirms is the configuration's
+  // own http.publicUrl when it names one, the one the platforms reach.
+  const reach = opts.url?.replace(/\/+$/, "") ?? configured;
+  const base = configured ?? reach;
+  if (reach === undefined || base === undefined) {
     failUsage(`${config} names no http.publicUrl: pass --url <the deployment's public URL>`);
   }
+  if (opts.team !== undefined && opts.app === undefined) failUsage("--team names the app's workspace: pass --app too");
   const kind = name as WebhookKind;
   const url = `${base}${webhookPath(kind)}`;
-  const outcome = await healthOutcome(`${base}/health`, kind).catch(failStartup);
+  const outcome = await healthOutcome(`${reach}/health`, kind).catch(failStartup);
   if (outcome !== "registered") {
     failStartup(
       new Error(
-        `${kind}: the deployment at ${base} reports it ${outcome ?? "not listed"}, not reached at ${url} yet — save ` +
+        `${kind}: the deployment at ${reach} reports it ${outcome ?? "not listed"}, not reached at ${url} yet — save ` +
           `${url} on the app's page (the platform verifies it with the deployment), then run this again`,
       ),
     );
   }
   selectAgentEnvironment("production");
-  await recordChannelUrl(agentDir, config, kind, url, loadEnvValues(dotEnvPath(agentDir))).catch(failStartup);
+  const app =
+    opts.app === undefined ? undefined : { id: opts.app, ...(opts.team === undefined ? {} : { team: opts.team }) };
+  await recordChannelUrl(agentDir, config, kind, url, loadEnvValues(dotEnvPath(agentDir)), app).catch(failStartup);
   printReport(opts.json, { status: "done", channel: kind, url, config }, [`recorded ${url} for ${kind} in ${config}`]);
 }
 

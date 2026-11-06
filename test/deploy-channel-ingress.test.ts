@@ -325,6 +325,73 @@ describe("deploy/channel-ingress: what a box that points its own channels made o
     expect(logs.join("\n")).toContain(
       "lark: the platform reached the box at https://agent.acme.com/lark; recorded it in /work/prod.json",
     );
+    // A record that cannot be written is said, and the deploy, which is done, ends as it would.
+    const unrecorded: string[] = [];
+    const notWritten = await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("slack", "lark"),
+      registrars: { slack: async () => "manual" },
+      log: (m) => unrecorded.push(m),
+      retryHint: "re-run",
+      // Lark manual when the box first reports, then both reached once the person saves the pages.
+      probe: (() => {
+        let reads = 0;
+        return async () =>
+          reads++ === 0
+            ? [{ channel: "lark", outcome: "manual" as const }]
+            : [
+                { channel: "slack", outcome: "registered" as const },
+                { channel: "lark", outcome: "registered" as const },
+              ];
+      })(),
+      intervalMs: 0,
+      record: {
+        waitMs: 60_000,
+        write: async (kind) => {
+          if (kind === "slack") throw new Error("slack: no Slack app onboarded on this machine");
+          return "/work/prod.json";
+        },
+      },
+    });
+    expect(notWritten).toBeUndefined();
+    expect(unrecorded.join("\n")).toContain(
+      "slack: the platform reached the box at https://agent.acme.com/slack, but it was not recorded (slack: no Slack app onboarded on this machine); record it with `fastagent channels setup slack --config <file> --record-url`",
+    );
+    // Both under one deadline, the one wait said once for both.
+    expect(unrecorded.filter((m) => m.startsWith("waiting up to"))).toEqual([
+      expect.stringContaining("https://agent.acme.com/slack and https://agent.acme.com/lark"),
+    ]);
+    expect(unrecorded.join("\n")).toContain(
+      "lark: the platform reached the box at https://agent.acme.com/lark; recorded it in /work/prod.json",
+    );
+    // One deadline for both: Lark, reached at once, is recorded at the first read, not after Slack's wait.
+    let probes = 0;
+    const recordedAt: number[] = [];
+    await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("slack", "lark"),
+      registrars: { slack: async () => "manual" },
+      log: () => {},
+      retryHint: "re-run",
+      probe: async () => {
+        probes++;
+        return [
+          { channel: "slack", outcome: "manual" },
+          { channel: "lark", outcome: probes === 1 ? "manual" : "registered" },
+        ];
+      },
+      intervalMs: 1,
+      record: {
+        waitMs: 50,
+        write: async () => {
+          recordedAt.push(probes);
+          return "f";
+        },
+      },
+    });
+    expect(recordedAt).toEqual([2]);
     // The person never saves it: nothing is recorded, and the step stays theirs.
     const never: [string, string][] = [];
     await confirmWebhooks({

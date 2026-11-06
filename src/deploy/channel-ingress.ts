@@ -345,27 +345,37 @@ async function recordConfirmed(
   record: UrlRecorder,
 ): Promise<void> {
   const probe = input.probe ?? readBoxWebhooks;
-  for (const kind of kinds.filter((k) => k === "slack" || k === "lark")) {
-    if (outcomes.get(kind) === "failed") continue;
-    const url = `${input.publicUrl}${webhookPath(kind)}`;
-    if (outcomes.get(kind) === "manual") {
-      input.log(
-        `${kind}: waiting up to ${Math.round(record.waitMs / 60_000)} min for ${url} to be saved on the app's page ` +
-          `(the platform verifies it with this box); stop it any time and record it later with ` +
-          `\`fastagent channels setup ${kind} --config <file> --record-url\``,
+  const waiting = new Set(kinds.filter((k) => (k === "slack" || k === "lark") && outcomes.get(k) !== "failed"));
+  if (waiting.size === 0) return;
+  const later = (kind: WebhookKind) => `\`fastagent channels setup ${kind} --config <file> --record-url\``;
+  const manual = [...waiting].filter((kind) => outcomes.get(kind) === "manual");
+  if (manual.length > 0) {
+    input.log(
+      `waiting up to ${Math.round(record.waitMs / 60_000)} min for ` +
+        `${manual.map((kind) => `${input.publicUrl}${webhookPath(kind)}`).join(" and ")} to be saved on the app's ` +
+        `page (the platform verifies it with this box); stop it any time and record it later with ${later(manual[0] as WebhookKind)}`,
+    );
+  }
+  // One deadline for every channel still waiting: each is recorded as the box reports it reached.
+  const deadline = Date.now() + record.waitMs;
+  for (;;) {
+    const read = await probe(`${input.baseUrl}/health`);
+    for (const kind of [...waiting]) {
+      if (read?.find((entry) => entry.channel === kind)?.outcome !== "registered") continue;
+      waiting.delete(kind);
+      outcomes.set(kind, "registered");
+      const url = `${input.publicUrl}${webhookPath(kind)}`;
+      // The deployment is done and the platform reaches it: a record not written is said, never the deploy's failure.
+      await record.write(kind, url).then(
+        (where) => input.log(`${kind}: the platform reached the box at ${url}; recorded it in ${where}`),
+        (error: unknown) =>
+          input.log(
+            `${kind}: the platform reached the box at ${url}, but it was not recorded (${(error as Error).message}); ` +
+              `record it with ${later(kind)}`,
+          ),
       );
     }
-    const deadline = Date.now() + record.waitMs;
-    for (;;) {
-      const read = await probe(`${input.baseUrl}/health`);
-      if (read?.find((entry) => entry.channel === kind)?.outcome === "registered") {
-        const where = await record.write(kind, url);
-        outcomes.set(kind, "registered");
-        input.log(`${kind}: the platform reached the box at ${url}; recorded it in ${where}`);
-        break;
-      }
-      if (Date.now() >= deadline) break;
-      await new Promise((resolve) => setTimeout(resolve, input.intervalMs ?? 2_000));
-    }
+    if (waiting.size === 0 || Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, input.intervalMs ?? 2_000));
   }
 }
