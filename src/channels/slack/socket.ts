@@ -15,6 +15,7 @@ import { channel } from "node:diagnostics_channel";
 import * as undici from "undici";
 import type { LongConnection } from "../../channel.ts";
 import { log } from "../../log.ts";
+import { pause, whenAborted } from "../kit/abortable.ts";
 import type { SlackEventEnvelope } from "./parse.ts";
 
 const RETRY_FIRST_MS = 1_000;
@@ -101,52 +102,6 @@ const openRuntimeSocket: OpenSlackSocket = (url, handlers) => {
   };
 };
 
-function deferredOutcome(): {
-  promise: Promise<"refresh" | "lost">;
-  resolve(value: "refresh" | "lost"): void;
-  reject(error: unknown): void;
-} {
-  let resolve!: (value: "refresh" | "lost") => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<"refresh" | "lost">((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-function deferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {
-  let resolve!: () => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<void>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-/**
- * Run `fn` when `signal` aborts; the returned function stops listening. A listener that is never removed stays on a
- * signal that lives as long as the connection, and Node warns past ten of them.
- */
-function whenAborted(signal: AbortSignal, fn: () => void): () => void {
-  signal.addEventListener("abort", fn, { once: true });
-  return () => signal.removeEventListener("abort", fn);
-}
-
-/** Wait `ms`, or until `signal` aborts. */
-const pause = (ms: number, signal: AbortSignal): Promise<void> =>
-  new Promise((resolve) => {
-    const stopListening = whenAborted(signal, () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    const timer = setTimeout(() => {
-      stopListening();
-      resolve();
-    }, ms);
-  });
-
 /** A failure no retry can fix: the connection ends with it. */
 class TerminalSocketError extends Error {}
 
@@ -170,8 +125,8 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
   const helloMs = options.timing?.helloMs ?? HELLO_MS;
   const pingEveryMs = options.timing?.pingEveryMs ?? PING_EVERY_MS;
   const pongWithinMs = options.timing?.pongWithinMs ?? PONG_WITHIN_MS;
-  const ready = deferred();
-  const closed = deferred();
+  const ready = Promise.withResolvers<void>();
+  const closed = Promise.withResolvers<void>();
   let isReady = false;
   const markReady = (): void => {
     if (isReady) return;
@@ -229,7 +184,7 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
   /** Dial `url` and resolve at its `hello`; the connection then answers events until it ends. */
   const dial = (url: string): Promise<Connection> =>
     new Promise((resolve, reject) => {
-      const ended = deferredOutcome();
+      const ended = Promise.withResolvers<"refresh" | "lost">();
       let outcome: "refresh" | "lost" | undefined;
       let helloed = false;
       let pingTimer: NodeJS.Timeout | undefined;

@@ -10,6 +10,7 @@
  */
 import type { LongConnection } from "../../channel.ts";
 import { log } from "../../log.ts";
+import { pause } from "../kit/abortable.ts";
 import { TelegramApiError, callApi } from "./telegram-api.ts";
 import type { TelegramUpdate } from "./parse.ts";
 
@@ -31,31 +32,6 @@ export interface TelegramPollingOptions {
   timing?: { longPollS?: number; retryFirstMs?: number; retryCapMs?: number; conflictWaitMs?: number };
 }
 
-/** A promise settled from outside, because ready and closed are settled by a loop that outlives the call. */
-function deferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {
-  let resolve!: () => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<void>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-/** Wait `ms`, or until `signal` aborts. */
-const pause = (ms: number, signal: AbortSignal): Promise<void> =>
-  new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-
 const isApiError = (error: unknown): error is TelegramApiError => error instanceof TelegramApiError;
 
 /** Poll until `signal` aborts; `ready` settles after the first answer, `closed` when the poll ends or cannot go on. */
@@ -65,8 +41,8 @@ export function pollTelegramUpdates(options: TelegramPollingOptions, signal: Abo
   const retryFirstMs = options.timing?.retryFirstMs ?? RETRY_FIRST_MS;
   const retryCapMs = options.timing?.retryCapMs ?? RETRY_CAP_MS;
   const conflictWaitMs = options.timing?.conflictWaitMs ?? CONFLICT_WAIT_MS;
-  const ready = deferred();
-  const closed = deferred();
+  const ready = Promise.withResolvers<void>();
+  const closed = Promise.withResolvers<void>();
   let isReady = false;
   const markReady = (): void => {
     if (isReady) return;
