@@ -226,11 +226,10 @@ matching `message.channels` / `message.groups` / `message.mpim` subscriptions an
 `channels:history` / `groups:history` / `mpim:history` scopes. The Request URL must be the currently
 running `https://…/slack`; Quick Tunnel URLs are ephemeral.
 
-For an app created by `fastagent add slack`, `dev --tunnel` and `deploy --run` update that URL through
-the owner-local App Configuration refresh token in `<state root>/channels/slack/onboarding.json`. If
-rotation/update fails, re-run `fastagent add slack` and choose **Replace App Configuration tokens**; this
-does not replace the installed Bot Token. A scaffold created with `--no-onboard`, or a missing onboarding
-state file, deliberately falls back to printing the manual Slack console URL.
+Slack's Request URL is the app's own page, which no credential FastAgent holds can change: `dev --tunnel` and
+`deploy --run` print the URL to set under Event Subscriptions, and Slack verifies it as you save. Click **Retry** there
+once the instance is serving if the URL was set first. A development instance that receives by Socket Mode has no
+Request URL at all.
 
 ## Slack Socket Mode is connected but nothing answers
 

@@ -103,7 +103,30 @@ const openRuntimeSocket: OpenSlackSocket = (url, handlers) => {
 };
 
 /** A failure no retry can fix: the connection ends with it. */
-class TerminalSocketError extends Error {}
+export class TerminalSocketError extends Error {}
+
+/**
+ * `apps.connections.open`: the address a connection is dialled at. A refusal that names the token (see
+ * {@link TERMINAL_OPEN_ERRORS}) is a {@link TerminalSocketError}; one that can pass (a rate limit, an outage) and an
+ * unreachable Slack are plain errors.
+ */
+export async function openSlackConnection(apiBaseUrl: string, appToken: string, signal?: AbortSignal): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}/apps.connections.open`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${appToken}`, "content-type": "application/x-www-form-urlencoded" },
+      signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]),
+    });
+  } catch (error) {
+    throw new Error(`apps.connections.open could not be reached: ${String(error)}`, { cause: error });
+  }
+  const body = (await response.json().catch(() => ({}))) as { ok?: boolean; url?: string; error?: string };
+  if (body.ok === true && typeof body.url === "string") return body.url;
+  const reason = body.error ?? `HTTP ${response.status}`;
+  const message = `apps.connections.open failed: ${reason}`;
+  throw TERMINAL_OPEN_ERRORS.has(reason) ? new TerminalSocketError(message) : new Error(message);
+}
 
 /** One open connection: what ended it is what its `ended` says. */
 interface Connection {
@@ -136,23 +159,7 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
     ready.resolve();
   };
 
-  const openUrl = async (): Promise<string> => {
-    let response: Response;
-    try {
-      response = await fetch(`${apiBaseUrl}/apps.connections.open`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${appToken}`, "content-type": "application/x-www-form-urlencoded" },
-        signal: AbortSignal.any([AbortSignal.timeout(15_000), signal]),
-      });
-    } catch (error) {
-      throw new Error(`apps.connections.open could not be reached: ${String(error)}`, { cause: error });
-    }
-    const body = (await response.json().catch(() => ({}))) as { ok?: boolean; url?: string; error?: string };
-    if (body.ok === true && typeof body.url === "string") return body.url;
-    const reason = body.error ?? `HTTP ${response.status}`;
-    const message = `apps.connections.open failed: ${reason}`;
-    throw TERMINAL_OPEN_ERRORS.has(reason) ? new TerminalSocketError(message) : new Error(message);
-  };
+  const openUrl = (): Promise<string> => openSlackConnection(apiBaseUrl, appToken, signal);
 
   /** Acknowledge each event once it is taken; an event that cannot be taken is left for Slack to send again. */
   const handleEnvelope = async (socket: SlackSocket, envelope: Record<string, unknown>): Promise<void> => {

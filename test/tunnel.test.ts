@@ -4,8 +4,6 @@ import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSlackOnboardingState } from "../src/channels/slack/onboard.ts";
-import { writeSlackOnboardingState } from "../src/channels/slack/onboarding-state.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 import { REGISTRATION_RETRY_MS } from "../src/channels/registration.ts";
 import {
@@ -257,35 +255,6 @@ describe("tunnel: announceWebhooks", () => {
     await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["slack"]));
 
     expect(errs.some((line) => /slack:/.test(line) && /x\.trycloudflare\.com\/slack/.test(line))).toBe(true);
-  });
-
-  it("auto-updates an onboarded Slack app from owner-local state", async () => {
-    const errs = captureErrors();
-    const dir = await workspace(["slack"]);
-    const stateRoot = join(dir, ".fastagent");
-    writeSlackOnboardingState(stateRoot, {
-      ...newSlackOnboardingState({
-        appName: "Agent",
-        configToken: "xoxe.config",
-        configRefreshToken: "xoxe-refresh",
-      }),
-      appId: "A1",
-      installedAt: new Date().toISOString(),
-    });
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      if (String(input).endsWith("/health")) return new Response("ok");
-      const body = JSON.parse(String(init?.body)) as { app_id?: string; manifest?: string };
-      expect(body.app_id).toBe("A1");
-      expect(JSON.parse(body.manifest ?? "{}")).toMatchObject({
-        settings: { event_subscriptions: { request_url: "https://x.trycloudflare.com/slack" } },
-      });
-      return Response.json({ ok: true });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["slack"]), { stateRoot });
-
-    expect(errs.some((line) => /slack: Event Subscriptions Request URL registered/.test(line))).toBe(true);
   });
 
   it("uses the validated route-channel subset and never registers an excluded WebSocket channel", async () => {

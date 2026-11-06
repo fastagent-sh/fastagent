@@ -83,7 +83,7 @@ export async function deployFlyRun(
   fly: CliRunner,
   log: (msg: string) => void,
   /** Slack's, which this machine still sets (its Request URL no credential on the box can change). */
-  registrars: Pick<Registrars, "slack" | "leave">,
+  registrars: Pick<Registrars, "leave">,
   healthProbe?: PublicHealthProbe,
   boxWebhooks?: { probe: BoxWebhooksProbe; intervalMs?: number },
 ): Promise<FlyRunOutcome> {

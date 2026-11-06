@@ -145,7 +145,7 @@ async function runDeployFly(params: {
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
-    registrarsFor(agentDir, params.values, params.answerer),
+    registrarsFor(params.values, params.answerer),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);

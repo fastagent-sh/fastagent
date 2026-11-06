@@ -361,7 +361,7 @@ describe("Slack place history", () => {
     place.messages.push(msg("back", { user: "U4" }));
     expect(await answeredTurn(place, place.ask())).toMatch(/^Dana \(msg /m);
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
-      "[slack] users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app `fastagent add slack` created gets it with the next `dev --tunnel` or `deploy --run`), then Reinstall to Workspace; names appear within 10 minutes, or after a restart if the reinstall issued a new Bot Token",
+      "[slack] users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app `fastagent channels setup slack` creates has it), then Reinstall to Workspace; names appear within 10 minutes, or after a restart if the reinstall issued a new Bot Token",
     ]);
     warn.mockRestore();
     vi.useRealTimers();

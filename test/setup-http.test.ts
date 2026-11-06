@@ -8,12 +8,18 @@ it("malformed request URLs return 400 without killing either setup server", asyn
     import assert from "node:assert/strict";
     import { request } from "node:http";
     import { startLarkCredentialsPage } from ${JSON.stringify(new URL("../src/channels/lark/credentials-page.ts", import.meta.url).href)};
-    import { startSlackSetupServer } from ${JSON.stringify(new URL("../src/channels/slack/setup-server.ts", import.meta.url).href)};
+    import { startCredentialsPage } from ${JSON.stringify(new URL("../src/credentials-page.ts", import.meta.url).href)};
 
     const lark = await startLarkCredentialsPage({ consoleUrl: "https://open.larksuite.com", check: async () => {} });
-    const slack = await startSlackSetupServer();
+    const kept = [];
+    const pasted = await startCredentialsPage({
+      title: "Connect Slack",
+      doneHeading: "Slack connected",
+      fields: [{ name: "SLACK_BOT_TOKEN", label: "Bot User OAuth Token", guide: { instructions: "Copy it." } }],
+      accept: async (name, value) => { kept.push([name, value]); },
+    });
     try {
-      for (const target of [lark.url, "http://127.0.0.1:" + slack.port + "/health"]) {
+      for (const target of [lark.url, pasted.url]) {
         const port = new URL(target).port;
         // Fetch would normalize or reject this request target before it reaches the server.
         const reply = await new Promise((resolve, reject) => {
@@ -37,10 +43,17 @@ it("malformed request URLs return 400 without killing either setup server", asyn
       assert.equal(accepted.status, 200);
       await accepted.text();
       assert.deepEqual(await lark.credentials, { appId: "cli_test", appSecret: "test-secret" });
+      const saved = await fetch(pasted.url, {
+        method: "POST", body: new URLSearchParams({ SLACK_BOT_TOKEN: "xoxb-test" }),
+      });
+      assert.equal(saved.status, 200);
+      await saved.text();
+      await pasted.done;
+      assert.deepEqual(kept, [["SLACK_BOT_TOKEN", "xoxb-test"]]);
       console.log("setup servers survived");
     } finally {
       await lark.close();
-      await slack.close();
+      await pasted.close();
     }
   `;
   const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script], {

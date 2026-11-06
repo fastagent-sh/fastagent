@@ -288,13 +288,7 @@ const NO_ONBOARD: FlagSpec = {
   flags: "--no-onboard",
   description:
     "scaffold only: write the channel file (if missing) and its tools, and skip the app onboarding " +
-    "(Slack: internal-app creation/OAuth; Feishu/Lark: app creation and credential capture)",
-};
-const REPLACE_CONFIG: FlagSpec = {
-  flags: "--replace-config",
-  description:
-    "Slack: replace the local App Configuration token pair (repairs automatic dev/deploy Request URL " +
-    "updates after the tokens expire or are revoked; runs on the machine that onboarded the app)",
+    "(Feishu/Lark: app creation and credential capture)",
 };
 
 const channelSub = (
@@ -310,12 +304,10 @@ const channelSub = (
   flags:
     kind === "feishu" || kind === "lark"
       ? [CHANNEL_ENVIRONMENT, INGRESS, INGRESS_CONFIG, NO_ONBOARD, ...UNATTENDED_SETUP]
-      : kind === "slack"
-        ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG, ...UNATTENDED_SETUP]
-        : [CHANNEL_ENVIRONMENT, INGRESS, INGRESS_CONFIG, JSON_FLAG],
+      : [JSON_FLAG],
   examples: [
     { cmd: `fastagent add ${kind}` },
-    ...(kind === "telegram" ? [] : [{ cmd: `fastagent add ${kind} --json`, note: "a coding agent" }]),
+    ...(kind === "feishu" || kind === "lark" ? [{ cmd: `fastagent add ${kind} --json`, note: "a coding agent" }] : []),
   ],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
@@ -324,7 +316,6 @@ const channelSub = (
       ...(typeof f.config === "string" ? { config: f.config } : {}),
       environment: f.env as "dev" | "production" | undefined,
       onboard: f.onboard !== false,
-      replaceConfig: f.replaceConfig === true,
       input: f.input !== false,
       json: f.json === true,
       ...(f.check !== undefined ? { check: f.check as string } : {}),
@@ -354,19 +345,17 @@ const add: CommandSpec = {
   subcommands: [
     channelSub(
       "telegram",
-      "scaffold the Telegram bot channel (durable turns, live preview)",
+      "scaffold the Telegram bot channel (long polling or webhook, durable turns, live preview)",
       "Scaffold src/channels/telegram.ts — the Telegram bot channel with durable turns, a live-preview " +
-        "message pump, and an optional route() policy.",
+        "message pump, and an optional route() policy — and its send tool. Changes the program only: " +
+        "`fastagent channels setup telegram` sets up the bot and keeps its token.",
     ),
     channelSub(
       "slack",
-      "scaffold the Slack Events API channel (files, threads, context, live preview)",
-      "Scaffold src/channels/slack.ts plus its tools (src/tools/slack-send.ts, slack-threads.ts), create a single-workspace " +
-        "internal Slack app from a manifest, and install it through OAuth. The channel provides signed " +
-        "Events API ingress, durable turns, files, threads, context, and an edited live preview.",
-      "Automated onboarding requires Slack App Configuration access + refresh tokens and a temporary " +
-        "cloudflared tunnel. They stay in owner-readable local state and are never deployed; --no-onboard " +
-        "keeps the explicit manual/scaffold-only path.",
+      "scaffold the Slack channel (Socket Mode or Events API, files, threads, context, live preview)",
+      "Scaffold src/channels/slack.ts plus its tools (src/tools/slack-send.ts, slack-threads.ts): durable turns, " +
+        "files, threads, context, and an edited live preview, received over Socket Mode or the Events API. Changes " +
+        "the program only: `fastagent channels setup slack` creates the app from a manifest link and keeps its tokens.",
     ),
     channelSub(
       "feishu",
@@ -706,38 +695,67 @@ const channels: CommandSpec = {
   subcommands: [
     {
       name: "setup",
-      summary: "record the URL a person set on a Slack or Lark app's page, once the deployment confirms it",
+      summary: "set up a channel's platform app for one instance, and keep its credentials",
       description:
-        "With --record-url: read the deployment's /health, and once <name> (slack, or lark where its config API " +
-        "answers 404) is registered there, the platform having reached it at the URL a person saved on its app's " +
-        "page, write that URL into the binding (channels.<name>.app.url) of the configuration --config names. Every " +
-        "later deploy of that configuration, CI included, then reports it registered from the start. A terminal " +
-        "`deploy --run --config` records it itself; this is for a deployment that did not. Setting up the app " +
-        "itself comes in a later release (`fastagent add <channel>` does it today).",
-      args: [{ name: "<name>", description: "the channel: slack or lark" }, AGENT_ARG],
+        "Guide a person through creating the platform app (a Slack app from a manifest link, a Telegram bot from " +
+        "BotFather), ask for the values only they can read off its pages, check each with the platform, and keep them " +
+        "in the instance's value file. Safe to run again: a value already there that the platform still accepts is " +
+        "kept. How the channel receives (webhook or connection) decides which values it needs: --ingress, else what " +
+        "the configuration says, else connection for the development instance and webhook for any other. With no " +
+        "terminal (--json), the values are pasted on a page on this machine for the person a coding agent hands the " +
+        "step to, never in its conversation. With --record-url: read the deployment's /health, and once <name> (slack, " +
+        "or lark where its config API answers 404) is registered there, the platform having reached it at the URL a " +
+        "person saved on its app's page, write that URL into the binding (channels.<name>.app.url) of the " +
+        "configuration --config names, so every later deploy of it reports it registered from the start.",
+      args: [
+        { name: "<name>", description: "the channel: telegram or slack (feishu and lark: `add` for now)" },
+        AGENT_ARG,
+      ],
       flags: [
         {
-          flags: "--record-url",
-          description: "record the URL the deployment confirms (the one mode this release has)",
+          flags: "--ingress <mode>",
+          description: "webhook or connection: set the app up for it, and write it to the configuration",
         },
-        { flags: "--config <file>", description: "the configuration the deploy delivers, where the URL is written" },
+        {
+          flags: "--config <file>",
+          description:
+            "the instance configuration: how the channel receives is read from it, and --ingress written to it " +
+            "(default: the project's fastagent.json, the development instance's)",
+        },
+        {
+          flags: "--env-file <file>",
+          description:
+            "the value file the credentials are kept in, created when missing; naming it or --config makes this " +
+            "another instance than the development one (default: .secrets/.env for dev, else .secrets/production/.env)",
+        },
+        {
+          flags: "--record-url",
+          description: "record the URL the deployment confirms, in the configuration --config names",
+        },
         {
           flags: "--url <url>",
-          description: "where to read its /health (default: the configuration's http.publicUrl)",
+          description: "with --record-url: where to read its /health (default: the configuration's http.publicUrl)",
         },
-        { flags: "--app <id>", description: "the app's ID, where this machine did not create it" },
-        { flags: "--team <id>", description: "with --app: the Slack workspace's team ID" },
-        JSON_FLAG,
+        ...UNATTENDED_SETUP,
       ],
-      examples: [{ cmd: "fastagent channels setup slack --config prod.json --record-url" }],
+      examples: [
+        { cmd: "fastagent channels setup telegram" },
+        { cmd: "fastagent channels setup slack --json", note: "an agent" },
+        { cmd: "fastagent channels setup slack --env-file prod.env", note: "a deployment" },
+        { cmd: "fastagent channels setup slack --record-url --config c.json" },
+      ],
       run: async (args, f) =>
         (await import("./commands/channels.ts")).runChannelsSetup(args[0] as string, args[1] as string, {
           recordUrl: f.recordUrl === true,
+          ...(typeof f.ingress === "string" ? { ingress: f.ingress } : {}),
           ...(typeof f.config === "string" ? { config: f.config } : {}),
+          ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
           ...(typeof f.url === "string" ? { url: f.url } : {}),
-          ...(typeof f.app === "string" ? { app: f.app } : {}),
-          ...(typeof f.team === "string" ? { team: f.team } : {}),
           json: f.json === true,
+          input: f.input !== false,
+          ...(f.check !== undefined ? { check: f.check as string } : {}),
+          ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
+          ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
         }),
     },
   ],

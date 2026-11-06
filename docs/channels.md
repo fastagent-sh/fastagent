@@ -114,8 +114,8 @@ FastAgent ships lightweight first-party adapters as subpath exports.
 
 | Channel | Package import | Docs | Add command |
 |---|---|---|---|
-| Telegram bot | `@fastagent-sh/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram` |
-| Slack app | `@fastagent-sh/fastagent/slack` | [Slack channel](slack.md) | `fastagent add slack` |
+| Telegram bot | `@fastagent-sh/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram`, `fastagent channels setup telegram` |
+| Slack app | `@fastagent-sh/fastagent/slack` | [Slack channel](slack.md) | `fastagent add slack`, `fastagent channels setup slack` |
 | Feishu bot (飞书) | `@fastagent-sh/fastagent/feishu` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add feishu` |
 | Lark bot (international) | `@fastagent-sh/fastagent/lark` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add lark` |
 
@@ -204,7 +204,7 @@ fastagent dev --tunnel
 When `cloudflared` is installed, FastAgent opens a Cloudflare quick tunnel, prints the public URL, and auto-registers first-party webhooks where possible:
 
 - Telegram: calls `setWebhook` using `.env` values, for a channel that receives by webhook (name `webhook` for it in the dev instance's configuration; unset, `dev` polls and needs no tunnel).
-- Slack: for an app created by `add slack`, rotates its owner-local Configuration Token and updates the App Manifest Request URL; scaffold-only/manual apps receive the URL to paste.
+- Slack: prints the Request URL to paste under Event Subscriptions (no credential here can set it); name `webhook` for the channel to receive there, since a Slack channel in `dev` uses Socket Mode.
 - Feishu: PATCHes the app's event subscription to the tunnel URL via the reference cloud's config API.
 - Lark compatibility: probes the same Feishu mechanism; its lagging config route currently falls back
   to opening the app console and printing the Request URL.

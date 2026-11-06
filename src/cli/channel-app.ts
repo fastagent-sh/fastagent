@@ -4,31 +4,30 @@
  * terminal and `channels setup --record-url` both write.
  */
 import { setChannelConfig } from "../authoring.ts";
-import { readSlackOnboardingState } from "../channels/slack/onboarding-state.ts";
+import { createSlackApi } from "../channels/slack/slack-api.ts";
 import type { WebhookKind } from "../channels/webhooks.ts";
-import { resolveStateRoot } from "../paths.ts";
 
-/** The app a recorded URL belongs to: Slack's from this machine's onboarding of it, Lark's App ID from its values. */
-function appOf(
-  agentDir: string,
+/**
+ * The app a recorded URL belongs to: Lark's App ID from its values; Slack's from its bot token, which names the app a
+ * bot belongs to (`bots.info`, which needs the `users:read` scope the app is created with).
+ */
+async function appOf(
   kind: "slack" | "lark",
   values: ReadonlyMap<string, string>,
-  given?: { id: string; team?: string },
-): { id: string; team?: string } {
-  if (given !== undefined) return given;
+): Promise<{ id: string; team?: string }> {
   if (kind === "lark") {
     const id = values.get("LARK_APP_ID");
     if (!id) throw new Error("lark: no LARK_APP_ID in the values, so the URL cannot be recorded against its app");
     return { id };
   }
-  const state = readSlackOnboardingState(resolveStateRoot(agentDir));
-  if (!state?.appId) {
-    throw new Error(
-      "slack: no Slack app onboarded on this machine (`fastagent add slack --env production`), so the URL cannot be " +
-        "recorded against its app: name it with --app <id> (and --team <id>), from its Basic Information page",
-    );
-  }
-  return { id: state.appId, ...(state.teamId === undefined ? {} : { team: state.teamId }) };
+  const botToken = values.get("SLACK_BOT_TOKEN");
+  if (!botToken)
+    throw new Error("slack: no SLACK_BOT_TOKEN in the values, so the URL cannot be recorded against its app");
+  const api = createSlackApi({ botToken });
+  const { teamId, botId } = await api.authTest();
+  const id = botId === undefined ? undefined : await api.botAppId(botId);
+  if (id === undefined) throw new Error("slack: Slack named no app for this bot token (does it hold users:read?)");
+  return { id, ...(teamId === undefined ? {} : { team: teamId }) };
 }
 
 /** Record `url` as the confirmed URL of `kind`'s app in the configuration file `config`. */
@@ -38,10 +37,9 @@ export async function recordChannelUrl(
   kind: WebhookKind,
   url: string,
   values: ReadonlyMap<string, string>,
-  app?: { id: string; team?: string },
 ): Promise<void> {
   if (kind !== "slack" && kind !== "lark") {
     throw new Error(`${kind}: its URL the instance sets itself, so there is nothing to record`);
   }
-  await setChannelConfig(agentDir, kind, { app: { ...appOf(agentDir, kind, values, app), url } }, { config });
+  await setChannelConfig(agentDir, kind, { app: { ...(await appOf(kind, values)), url } }, { config });
 }

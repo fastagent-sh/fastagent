@@ -70,34 +70,31 @@ describe("add <channel> with no one at a terminal: the person's part, named", ()
     expect(JSON.parse(back.stdout)).toMatchObject({ provider: "openai", status: "failed" });
   });
 
-  it("telegram has no person's part: it is added to poll, the outcome one JSON object, no webhook secret", async () => {
-    const dir = await agentWorkspace("fa-add-telegram-", {
-      "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
-    });
-    const result = await runInProcess(["add", "telegram", dir, "--json"]);
-    expect(result.code).toBe(0);
-    const outcome = JSON.parse(result.stdout) as { status: string; written: string[]; next_steps: string[] };
-    expect(outcome.status).toBe("done");
-    expect(outcome.written).not.toContain("TELEGRAM_SECRET_TOKEN");
-    expect(outcome.next_steps).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("TELEGRAM_BOT_TOKEN"),
-        expect.stringContaining("fastagent dev            # no public URL or tunnel required"),
-      ]),
-    );
-    expect(outcome.next_steps.join("\n")).not.toContain("TELEGRAM_SECRET_TOKEN");
-    expect(existsSync(join(dir, "src", "channels", "telegram.ts"))).toBe(true);
-  });
+  it.each(["telegram", "slack"] as const)(
+    "%s changes the program only: the channel and its tools, the names it reads, no app and no value",
+    async (kind) => {
+      const dir = await agentWorkspace(`fa-add-${kind}-`, {
+        "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
+      });
+      const result = await runInProcess(["add", kind, dir, "--json"]);
+      expect(result.code, result.stderr).toBe(0);
+      const outcome = JSON.parse(result.stdout) as { status: string; created: string[]; next_steps: string[] };
+      expect(outcome.status).toBe("done");
+      expect(outcome.created).toContain(join(dir, "src", "channels", `${kind}.ts`));
+      expect(outcome.next_steps).toEqual(
+        expect.arrayContaining([expect.stringContaining(`fastagent channels setup ${kind}`), "fastagent dev"]),
+      );
+      expect(existsSync(join(dir, "src", "channels", `${kind}.ts`))).toBe(true);
+      // Asks nothing and writes no value: the instance's values are `channels setup`'s.
+      expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
+      expect(outcome.next_steps.join("\n")).not.toContain("tunnel");
 
-  it("telegram --ingress webhook asks for the secret that verifies a webhook, and generates it", async () => {
-    const dir = await agentWorkspace("fa-add-telegram-webhook-", {
-      "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
-    });
-    const result = await runInProcess(["add", "telegram", dir, "--ingress", "webhook", "--json"]);
-    expect(result.code, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      status: "done",
-      written: expect.arrayContaining(["TELEGRAM_SECRET_TOKEN"]),
-    });
-  });
+      // The flags that were the app's setup are gone.
+      for (const flag of ["--ingress webhook", "--env production", "--no-onboard", "--replace-config"]) {
+        const refused = await runInProcess(["add", kind, dir, ...flag.split(" ")]);
+        expect(refused.code, flag).toBe(2);
+        expect(refused.stderr).toContain("unknown option");
+      }
+    },
+  );
 });

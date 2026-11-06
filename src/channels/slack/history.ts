@@ -255,7 +255,7 @@ export function createSlackPlaceHistory(deps: {
       if (!scopeWarned) {
         scopeWarned = true;
         log.warn(
-          `${deps.label} users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app \`fastagent add slack\` created gets it with the next \`dev --tunnel\` or \`deploy --run\`), then Reinstall to Workspace; names appear within 10 minutes, or after a restart if the reinstall issued a new Bot Token`,
+          `${deps.label} users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app \`fastagent channels setup slack\` creates has it), then Reinstall to Workspace; names appear within 10 minutes, or after a restart if the reinstall issued a new Bot Token`,
         );
       }
     } else if (failures.length > 0) {

@@ -71,7 +71,9 @@ src/
 │   │                       # once at the command's entry into absolute paths in the process environment
 │   ├── invoke-stream.ts    # `invoke`: one message's answer, as messages.stream delivers it, as text or JSON lines → exit code
 │   ├── models-view.ts, auth-view.ts, content-view.ts # `models` / auth-report / content output
-│   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
+│   ├── add-feishu.ts       # `add feishu|lark` app onboarding (moves into channel-setup.ts in 4b)
+│   ├── channel-setup.ts    # `channels setup <name>`: ask a person for a channel's credentials, at a terminal or on a page,
+│   │                       # check each with the platform, keep them in the instance's value file
 │   ├── person.ts           # what an app's setup says to the person for the steps only they can take: printed at a
 │   │                       # terminal, a ticket's `need_user_action` / `afterwards` in a coding agent's run
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
@@ -90,6 +92,9 @@ src/
 ├── model-ref.ts            # provider/modelId parsed for definitions and remote callers without loading a harness
 ├── log.ts                  # leveled logging singleton (dev=debug, start=info)
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
+├── credentials-page.ts     # the page a person pastes a setup's credentials on when there is no terminal: loopback, one use,
+│                           # each value checked as it is pasted and kept before the next
+├── channels/setup.ts       # what a channel's setup asks a person for (values, guides, checks); `cli/channel-setup.ts` asks
 ├── setup-page.ts           # the pages a person pastes a credential on, one design for every channel (Slack, Lark): form
 │                           # and status cards, and the headers of a page that takes a secret
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code edits (src/, config, package.json, .env); the
@@ -182,6 +187,7 @@ src/
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts     # the runtime (accept an update, run the turn) + its two ways in: webhook route, long polling
 │   │   ├── polling.ts      # getUpdates as a LongConnection: webhook taken away first, confirm by offset, what ends it
+│   │   ├── setup.ts        # what `channels setup telegram` asks for: the bot token, checked with getMe; a webhook's secret
 │   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy
 │   │   ├── invoke-turn.ts  # resolve this platform's attachments for one turn
 │   │   ├── turn-store.ts   # telegram's record + update_id arrival order over the generic store
@@ -200,8 +206,8 @@ src/
 │   │   ├── history.ts      # a place's history: conversations.history (top level) / .replies (a thread)
 │   │   ├── slack-api.ts    # the Bot API pipeline (retry, markdown/text splitting, files, history reads)
 │   │   ├── shared-api.ts   # the ONE transport per state root the channel and the send tool share
-│   │   ├── onboard.ts, setup-server.ts, manifest.ts, config-api.ts, onboarding-state.ts, welcomed.ts,
-│   │   │                   # register-webhook.ts # `add slack`: the app-creation flow and what it remembers
+│   │   ├── setup.ts, manifest.ts # what `channels setup slack` asks for (the values, how each is checked) + the app's manifest and its link
+│   │   ├── welcomed.ts     # who was greeted
 │   │   └── scaffold/       # `add slack` bundle (channel + slack-send + slack-threads)
 │   ├── feishu/             # CANONICAL Feishu channel engine — see docs/design/core.md
 │   │   ├── feishu.ts       # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile

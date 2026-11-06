@@ -87,10 +87,10 @@ value file is refused under Docker `--run` because the committed Compose names a
 
 ## 4. Other channels
 
-`add slack --env production` runs the existing Slack creation/OAuth flow with separate credentials and separate
-local onboarding state. Its App Configuration token remains on the onboarding machine and is not deployed.
-`add telegram --env production` writes production placeholders and a separate webhook secret; the bot itself
-must be created with BotFather. Neither channel is automatically provisioned by `deploy`.
+A production Slack app or Telegram bot is another instance's: `channels setup <name> --config prod.json --env-file
+.secrets/production/.env` creates it (a Slack app from the manifest link, a bot through BotFather) and keeps its
+credentials in that file, with a webhook's secret made once. Neither channel is automatically provisioned by `deploy`,
+and no credential of the person's own (Slack's configuration token) is kept anywhere.
 
 `dev --tunnel` registers only the dev app, and `deploy --run` registers only the production app. Re-registering
 one app can still move that app between URLs, but it no longer takes messages from the other environment's app.

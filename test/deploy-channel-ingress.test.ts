@@ -194,16 +194,14 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
 
   it("a failed registrar gates, and one failure does not skip the rest", async () => {
     const feishu = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
-    const slack = vi.fn(registered);
     const gate = await registerWebhooks({
       baseUrl: "https://x",
       channels: webhook("telegram", "slack", "feishu", "lark"),
-      registrars: { telegram: async () => "failed", slack, feishu },
+      registrars: { telegram: async () => "failed", feishu },
       log: () => {},
       retryHint: "re-run with --into-linked",
     });
     // Each kind reaches its own seam, with the kind it belongs to.
-    expect(slack).toHaveBeenCalledWith("https://x");
     expect(feishu.mock.calls).toEqual([
       ["https://x", "feishu"],
       ["https://x", "lark"],
@@ -217,13 +215,12 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     await registerWebhooks({
       baseUrl: "https://x",
       channels: webhook("telegram", "slack", "feishu", "lark"),
-      registrars: { telegram: async () => "failed", slack: registered, feishu: registered },
+      registrars: { telegram: async () => "failed", feishu: registered },
       log: (line) => said.push(line),
       retryHint: "re-run",
     });
     const moved = said.filter((line) => line.includes("delivers to this deployment"));
     expect(moved).toEqual([
-      "the selected production slack app now delivers to this deployment",
       "the selected production feishu app delivers to this deployment once its published version is in webhook mode " +
         "(after a first deploy, publish the version it opened)",
       expect.stringContaining("selected production lark app delivers to this deployment"),
@@ -332,7 +329,7 @@ describe("deploy/channel-ingress: what a box that points its own channels made o
       baseUrl: "https://x",
       publicUrl: "https://agent.acme.com",
       channels: webhook("slack", "lark"),
-      registrars: { slack: async () => "manual" },
+      registrars: {},
       log: (m) => unrecorded.push(m),
       retryHint: "re-run",
       // Lark manual when the box first reports, then both reached once the person saves the pages.
@@ -373,7 +370,7 @@ describe("deploy/channel-ingress: what a box that points its own channels made o
       baseUrl: "https://x",
       publicUrl: "https://agent.acme.com",
       channels: webhook("slack", "lark"),
-      registrars: { slack: async () => "manual" },
+      registrars: {},
       log: () => {},
       retryHint: "re-run",
       probe: async () => {
@@ -415,20 +412,20 @@ describe("deploy/channel-ingress: what a box that points its own channels made o
     expect(never).toEqual([]);
   });
 
-  it("sets Slack's Request URL from this machine, since no credential on the box can", async () => {
-    const slack = vi.fn(registered);
+  it("leaves Slack's Request URL to a person: no registrar of the deploy sets it, and the box is not asked", async () => {
+    const said: string[] = [];
     const probe = vi.fn(async () => []);
     const gate = await confirmWebhooks({
       baseUrl: "https://x",
       publicUrl: "https://agent.acme.com",
       channels: webhook("slack"),
-      registrars: { slack },
-      log: () => {},
+      registrars: {},
+      log: (line) => said.push(line),
       retryHint: "re-run",
       probe,
     });
     expect(gate).toBeUndefined();
-    expect(slack).toHaveBeenCalledWith("https://agent.acme.com");
+    expect(said).toContain("slack: set Event Subscriptions → Request URL → https://agent.acme.com/slack");
     // Nothing of the box's to wait for.
     expect(probe).not.toHaveBeenCalled();
   });

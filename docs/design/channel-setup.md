@@ -40,11 +40,15 @@ instance's state.
   <name>`), as `slack run` creates and installs a local app on first run; usually once per project. With no terminal
   it refuses as it does today for a missing value, naming `fastagent channels setup <name> --json`.
 - **`fastagent channels setup <name>` sets up one instance's app**, and is safe to run again.
-  - It creates the app (Slack's manifest link, Feishu's scan-to-create, Lark's guided console, Telegram's BotFather
-    by hand), or links an existing one (`--app <id>`).
-  - It writes the app's runtime credentials to the instance's store: dev's `.secrets/.env`, a host's store
-    (`--host fly`, through `fastagent secrets`, agent-artifact.md §6.2), or `--env-file <file>`. A credential the
-    person has is pasted: hidden input at a terminal, a page on this machine with `--json`, never the conversation.
+  - It guides the person through creating the app (Slack's manifest link, Feishu's scan-to-create, Lark's guided
+    console, Telegram's BotFather by hand). The values only they can read off its pages are pasted, and an app made by
+    hand is linked the same way: by pasting its credentials.
+  - It writes the app's runtime credentials to the instance's value file: dev's `.secrets/.env`, or `--env-file <file>`
+    (a host's store, through `fastagent secrets` and `--host`, agent-artifact.md §6.2, comes with that work). A
+    credential the person has is pasted: hidden input at a terminal, a page on this machine with `--json`, never the
+    conversation. Each value is checked with the platform before it is kept (`auth.test`, `getMe`, a connection opened
+    with the token), a refusal asks again, and a check that could not be made ends the setup instead of asking again for
+    a value that may be right.
   - It writes the instance configuration the file `--config` names (dev's `fastagent.json` by default): the binding
     (§4) and `channels.<name>.ingress` when given `--ingress`.
   - It runs from a built package as from a project (`npx @acme/reviewer channels setup slack --config prod.json
@@ -170,7 +174,11 @@ independent of how any channel receives.
 - Slack's Socket Mode needs an app-level token (`xapp-`, scope `connections:write`), generated on the app's page and
   pasted at setup. `apps.manifest.create` returns none (its response carries the app's credentials only), so the person
   generates it. A Socket Mode app receives over the socket alone, so a dev app and a production app stay separate.
-  `slackSocketChannel` exists (3b); the scaffold and `add slack` offer it with the onboarding rewrite (step 4).
+  `slackSocketChannel` exists (3b) and `channels setup slack` asks for the token (4a).
+- Slack refuses a webhook manifest that subscribes to events without a Request URL, and accepts one whose URL does not
+  answer yet (it shows "Your URL didn't respond" and a Retry): measured. So a webhook app is created with the
+  configuration's `http.publicUrl` or a placeholder, and the person sets the real one on Event Subscriptions (§5). The
+  app a bot token belongs to is read with `auth.test` and `bots.info` (`users:read`, which the manifest has).
 - Telegram's long polling deletes any webhook first, since `getUpdates` does not work while one is set; the dev bot
   is the dev instance's, apart from production's.
   A second process polling the same bot gets a 409 from Telegram: the connection retries three times, five seconds
@@ -235,4 +243,11 @@ app itself through hooks.
 3. `connection` for Slack (Socket Mode) and Telegram (long polling), so `dev` needs no tunnel or public URL, and a
    Docker deployment may choose it in its configuration; in parallel with 2.
 4. `channels setup`, `add` changing only the program, `dev` setting up on first run; Feishu production-app creation
-   out of `deploy`; the Slack onboarding record removed; `fastagent.json` in the scaffold's `.gitignore`.
+   out of `deploy`; the Slack onboarding record removed; `fastagent.json` in the scaffold's `.gitignore`. In three:
+   - 4a: `channels setup` for Telegram and Slack, with the pasted-values runner (terminal and page) and the instance's
+     value file named by `--env-file`; `add telegram|slack` change the program only; the Slack onboarding, its
+     configuration token and its Request URL registrar are removed, and so are the `--ingress`, `--env`,
+     `--no-onboard`, `--replace-config` flags of those two `add`s.
+   - 4b: Feishu and Lark move into `channels setup`; `deploy`'s production-app creation calls it; the same flags
+     leave `add feishu|lark`.
+   - 4c: `dev` sets up what it lacks on first run; `fastagent.json` in the scaffold's `.gitignore`.

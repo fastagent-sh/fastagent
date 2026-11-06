@@ -152,22 +152,3 @@ it("--json hands the person's part over even at a terminal: a coding agent may r
   expect(String(printed.mock.calls[0]?.[0])).not.toContain("value_file");
   await rm(dir, { recursive: true, force: true });
 });
-
-it("what the setup was asked reaches its process: --replace-config with the rest, one setup per agent", async () => {
-  const dir = await agentWorkspace("fa-add-replace-");
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  vi.spyOn(process, "exit").mockImplementation(() => {
-    throw exited;
-  });
-  started.length = 0;
-  await expect(runAddChannel("slack", dir, { onboard: true, replaceConfig: true, json: true })).rejects.toBe(exited);
-  expect(started).toEqual([
-    expect.objectContaining({
-      subject: `add:slack:dev:${dir}`,
-      restart: expect.stringMatching(/ --replace-config$/),
-      command: expect.objectContaining({ args: expect.arrayContaining(["add", "slack", dir, "--replace-config"]) }),
-    }),
-  ]);
-  await rm(dir, { recursive: true, force: true });
-});

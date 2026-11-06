@@ -7,7 +7,6 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import { registerFeishuWebhook } from "../../../channels/feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../../channels/registration.ts";
-import { registerSlackWebhook } from "../../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../../channels/telegram/register-webhook.ts";
 import type { Registrars, UrlRecorder } from "../../../deploy/channel-ingress.ts";
 import { recordChannelUrl } from "../../channel-app.ts";
@@ -19,7 +18,7 @@ import {
 } from "../../../deploy/container.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
 import type { EffectiveConfig } from "../../../harnesses/pi-durable/config.ts";
-import { exists, resolveStateRoot } from "../../../paths.ts";
+import { exists } from "../../../paths.ts";
 import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
 import { loginOnBox, ticketLoginIO } from "../../box-login.ts";
 import type { TicketStep } from "../../ticket.ts";
@@ -118,15 +117,13 @@ export function urlRecorder(
 }
 
 /** The registrars every host driver gets; a channel's manual step also goes to `answerer`'s person. */
-export function registrarsFor(agentDir: string, values: ReadonlyMap<string, string>, answerer: Answerer): Registrars {
+export function registrarsFor(values: ReadonlyMap<string, string>, answerer: Answerer): Registrars {
   const attempts = DEPLOY_REGISTRATION_ATTEMPTS;
   const env = Object.fromEntries(values);
   const leave = leftToPerson(answerer);
   return {
     ...(leave === undefined ? {} : { leave }),
     telegram: (baseUrl) => registerTelegramWebhook(baseUrl, { attempts, env }),
-    slack: (baseUrl) =>
-      registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir), environment: "production", attempts }),
     feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind, { attempts, env }),
   };
 }

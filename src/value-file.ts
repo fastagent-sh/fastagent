@@ -91,10 +91,13 @@ export interface ValueWriteResult {
   unprotectedSecretsDir?: string;
 }
 
-/** What a command says when it wrote a secret into a secrets directory fastagent does not own and git may track. */
-export function unprotectedSecretsNote(dir: string): string {
+/**
+ * What a command says when it wrote a secret into a secrets directory fastagent does not own and git may track; `chosenBy`
+ * is what put the secrets there (the operator's `FASTAGENT_SECRETS_DIR`, unless the caller knows better).
+ */
+export function unprotectedSecretsNote(dir: string, chosenBy = "FASTAGENT_SECRETS_DIR"): string {
   return (
-    `${dir} (FASTAGENT_SECRETS_DIR) now holds a secret and has no .gitignore — that directory is yours, so ` +
+    `${dir} (${chosenBy}) now holds a secret and has no .gitignore — that directory is yours, so ` +
     "fastagent will not write one into it. Make sure git does not track what is in there."
   );
 }
@@ -124,16 +127,16 @@ function mentionsEnvName(content: string, name: string): boolean {
 }
 
 /**
- * Write `entries` into the selected environment's value file, under a `# --- <section> ---` line. A name with a
- * non-empty active value is kept unless `overwrite` names it.
+ * Write `entries` into `file` (default: the selected environment's value file), under a `# --- <section> ---` line. A
+ * name with a non-empty active value is kept unless `overwrite` names it.
  */
 export async function writeValues(
   dir: string,
   section: string,
   entries: readonly ValueEntry[],
   overwrite: readonly string[] = [],
+  file: string = dotEnvPath(dir),
 ): Promise<ValueWriteResult> {
-  const file = dotEnvPath(dir);
   const unprotectedSecretsDir = await prepareSecretsDirectory(dir, dirname(file));
   let current = "";
   try {

@@ -76,6 +76,6 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   serveService(
     service,
     { port: portFlag ?? config.http?.port ?? DEFAULT_HTTP_PORT, host },
-    { tunnel, agentDir, stateRoot: opened.stateRoot, config },
+    { tunnel, agentDir, config },
   );
 }

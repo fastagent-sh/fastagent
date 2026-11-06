@@ -466,23 +466,30 @@ downloads are host-restricted, timeout/cap guarded, and translated to vision ima
 paths. Primary files fail visibly; files from the discussion degrade individually. Outbound delivery uses Slack's
 external upload three-step protocol and stays at-least-once across an ambiguous completion response.
 
-Newly onboarded apps use Slack's `agent_view`, `assistant:write`, suggested prompts, Agent
+Apps `channels setup slack` creates use Slack's `agent_view`, `assistant:write`, suggested prompts, Agent
 status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Markdown text events
 append to the stream; each harness-neutral tool start appends a compact factual trace, and a failed tool
 end appends one line naming the call. Raw model thinking and tool output stay private — reading output
 would mean guessing the harness's result shape. The compatibility renderer retains one edited message
 with a strict three-second mutation interval; a custom route reaching a top-level target selects it
 (both ways of getting there are listed on the `rendering` option in `slack.ts`) because native streams
-require a parent user message. HTTP Events API is the production transport; Socket Mode is a separate
-future boundary.
+require a parent user message.
 
-`add slack` owns a single-workspace internal-app control plane outside `ChannelModule`: a temporary
-unguessable challenge/OAuth responder, mode-specific App Manifest creation, OAuth-v2 code exchange, and
-irreversible-boundary recovery state. The long-lived bot token + Signing Secret go to `.env` (bot-token
-rotation is left off: it would ship the refresh token and client secret beside the access token); the
-more powerful App Configuration refresh token stays owner-local and never enters deployment secrets.
-`dev --tunnel` and `deploy --run` rotate it locally and update the Request URL through
-`apps.manifest.update`. This is not Marketplace/multi-workspace installation storage.
+`slack.ts` is one runtime (`createSlackRuntime`: routing, durable turns, history, rendering) with two ways in. The
+HTTP Events API (`slackChannel`) is the transport a host woken by a request needs: the signed route. Socket Mode
+(`slackSocketChannel`, `socket.ts`) is a `LongConnection`: `apps.connections.open` with the app-level token, `hello`,
+each `events_api` envelope acknowledged by its `envelope_id` once `ingest` took it, the next connection opened before
+the old one is let go, pings that drop a connection that stopped answering. Both call the runtime's `ingest`.
+
+The app is not the channel's to create. `channels setup slack` (`cli/channel-setup.ts`, with what Slack's setup asks for in
+`channels/slack/setup.ts`) opens a manifest link (`manifest.ts`: scopes, events, Socket Mode on or a Request URL),
+asks the person for the values only they can read off the app's pages, checks each with Slack, and writes it to the
+instance's value file. The long-lived bot token goes there with the app-level token or the Signing Secret (bot-token
+rotation is left off: it would ship the refresh token and client secret beside the access token). No credential of the
+person's own is kept: the App Configuration token, which could create apps and set a Request URL through
+`apps.manifest.*`, expires every 12 hours and rotates on each use, so the Request URL of a webhook app is a page the
+person sets once and the instance confirms (channel-setup.md §5). This is not Marketplace/multi-workspace installation
+storage.
 
 ### Feishu (canonical) / Lark (compatibility)
 

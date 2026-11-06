@@ -10,7 +10,6 @@ import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { type ValueWriteResult, writeValues } from "../value-file.ts";
 import { envExamplePath } from "../value-file.ts";
 import { FEISHU_AGENT_SCOPES, type FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
-import { slackBotScopes } from "../channels/slack/manifest.ts";
 
 export type ChannelKind = "telegram" | "slack" | "feishu" | "lark";
 
@@ -20,7 +19,6 @@ export interface ChannelEnv {
   hint: string;
   /** Required for the channel to run. */
   required: boolean;
-  generate?: boolean;
 }
 
 interface ChannelScaffold {
@@ -38,30 +36,21 @@ const LARK_PERMISSION_STEP =
   "are missing";
 
 const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
+  // Telegram and Slack apps are set up by `channels setup`, which asks for these values; `add` only names them.
   telegram: {
     env: [
       { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot", required: true },
-      {
-        name: "TELEGRAM_SECRET_TOKEN",
-        hint: "webhook only: any random string; verifies inbound updates",
-        required: true,
-        generate: true,
-      },
+      { name: "TELEGRAM_SECRET_TOKEN", hint: "webhook only: verifies inbound updates", required: true },
     ],
-    steps: [
-      "edit {channel} — customise routing with route() (optional; the defaults already work)",
-      "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
-    ],
+    steps: ["the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool"],
   },
   slack: {
     env: [
-      { name: "SLACK_BOT_TOKEN", hint: "Slack app → OAuth & Permissions → Bot User OAuth Token", required: true },
-      { name: "SLACK_SIGNING_SECRET", hint: "Slack app → Basic Information → App Credentials", required: true },
+      { name: "SLACK_BOT_TOKEN", hint: "Install App → Bot User OAuth Token", required: true },
+      { name: "SLACK_APP_TOKEN", hint: "connection only: Basic Information → App-Level Tokens", required: true },
+      { name: "SLACK_SIGNING_SECRET", hint: "webhook only: Basic Information → Signing Secret", required: true },
     ],
     steps: [
-      `Slack Bot Token Scopes: ${slackBotScopes().join(", ")}`,
-      "enable Agents (agent_view) and leave token rotation OFF (it cannot be turned off again); subscribe app_home_opened, app_context_changed, app_mention, message.im, message.channels, message.groups, message.mpim; set Request URL to <public-url>/slack",
-      "reinstall the app after changing scopes, then invite it to each channel it should read",
       "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
       "the agent reads the threads of the channel it is asked in via the scaffolded {tools}/slack-threads.ts tool",
     ],
@@ -133,15 +122,6 @@ const DEPLOYMENT_STEP =
   "run `{serve}` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and " +
   "`deploy --run` creates a separate production app for it";
 
-const pollingSetup = (): ChannelScaffold => ({
-  env: CHANNEL_SCAFFOLDS.telegram.env.filter((entry) => entry.name === "TELEGRAM_BOT_TOKEN"),
-  steps: [
-    "edit {channel} — customise routing with route() (optional; the defaults already work)",
-    "a deployment receives by webhook unless the configuration `deploy --config` delivers names `connection`",
-    "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
-  ],
-});
-
 const websocketSetup = (kind: "feishu" | "lark"): ChannelScaffold => {
   const prefix = kind.toUpperCase();
   return {
@@ -166,10 +146,8 @@ export function channelSetup(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
 ): { env: ChannelEnv[]; steps: string[] } {
-  if (ingress !== "connection") return CHANNEL_SCAFFOLDS[kind];
-  if (kind === "telegram") return pollingSetup();
-  if (kind === "feishu" || kind === "lark") return websocketSetup(kind);
-  return CHANNEL_SCAFFOLDS[kind];
+  if (ingress !== "connection" || (kind !== "feishu" && kind !== "lark")) return CHANNEL_SCAFFOLDS[kind];
+  return websocketSetup(kind);
 }
 
 /**
