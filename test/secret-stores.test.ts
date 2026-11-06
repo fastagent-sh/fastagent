@@ -138,24 +138,51 @@ describe("railwayStore", () => {
     expect(failure?.message).not.toContain("hunter2");
   });
 
-  it("uses the project this directory is linked to, and makes one (with its service) only when it is not linked", async () => {
-    const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "bot" }) } : {}));
+  it("uses the project named for the agent, and makes one (with its service) only when it is not linked", async () => {
+    const service = (project: string) => ({
+      name: project,
+      environments: { edges: [{ node: { serviceInstances: { edges: [{ node: { serviceName: "bot" } }] } } }] },
+    });
+    const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify(service("bot")) } : {}));
     await railwayStore(linked.run, "bot", quiet, { redeploy: false }).ensure();
     expect(linked.cmds()).toEqual(["status --json"]);
+    // Another project is refused even when it holds a service of this name: values are not written into it.
+    const sameName = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify(service("prod-app")) } : {}));
+    await expect(railwayStore(sameName.run, "bot", quiet, { redeploy: false }).ensure()).rejects.toThrow("prod-app");
+    expect(sameName.cmds()).toEqual(["status --json"]);
+    // A project named for the agent that lacks the service gets it; an unrelated one is refused.
+    const bare = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "bot" }) } : {}));
+    await railwayStore(bare.run, "bot", quiet, { redeploy: false }).ensure();
+    expect(bare.cmds()).toEqual(["status --json", "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state"]);
+    const unrelated = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "prod-app" }) } : {}));
+    await expect(railwayStore(unrelated.run, "bot", quiet, { redeploy: false }).ensure()).rejects.toThrow("prod-app");
+    expect(unrelated.cmds()).toEqual(["status --json"]);
 
     const unlinked = fake((args) => (args[0] === "status" ? { stdout: "" } : {}));
     await railwayStore(unlinked.run, "bot", quiet, { redeploy: false }).ensure();
     expect(unlinked.cmds()).toEqual([
-      "status --json",
       "status --json",
       "init --name bot",
       "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state",
     ]);
   });
 
-  it("exists when this directory is linked to a project, and not otherwise", async () => {
+  it("exists when this directory is linked to the agent's project, and not otherwise; another project is refused", async () => {
     const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "bot" }) } : {}));
     expect(await railwayStore(linked.run, "bot", quiet, { redeploy: false }).exists()).toBe(true);
+    // Another project's variables are not read, whatever service it holds: the same refusal as `ensure`.
+    const other = fake((args) =>
+      args[0] === "status"
+        ? {
+            stdout: JSON.stringify({
+              name: "prod-app",
+              environments: { edges: [{ node: { serviceInstances: { edges: [{ node: { serviceName: "bot" } }] } } }] },
+            }),
+          }
+        : {},
+    );
+    await expect(railwayStore(other.run, "bot", quiet, { redeploy: false }).exists()).rejects.toThrow("prod-app");
+    expect(other.cmds()).toEqual(["status --json"]);
     const unlinked = fake((args) => (args[0] === "status" ? { stdout: "" } : {}));
     expect(await railwayStore(unlinked.run, "bot", quiet, { redeploy: false }).exists()).toBe(false);
     expect(unlinked.cmds()).toEqual(["status --json"]);

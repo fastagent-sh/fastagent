@@ -12,7 +12,9 @@ import {
   environmentAuth,
   interactiveLoginKind,
   keyVariables,
+  listModels,
   loginProviders,
+  modelHint,
   modelsOver,
   providerOf,
 } from "../harnesses/models/models.ts";
@@ -523,8 +525,8 @@ async function checkModelExists(
     return;
   }
   report.issue(
-    `no provider of the deployed agent offers "${spec}" — pi-ai's built-ins, pi's published catalog and the ` +
-      `providers fastagent.config.ts declares are all it has`,
+    `no provider of the deployed agent offers "${spec}": ${modelHint(listModels(models), spec)}. Its providers are ` +
+      `pi-ai's built-ins, pi's published catalog and the ones fastagent.config.ts declares`,
   );
 }
 

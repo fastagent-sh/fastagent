@@ -32,6 +32,34 @@ export function listModels(models: Models): string[] {
   return specs.sort();
 }
 
+const tokensOf = (text: string): string[] =>
+  text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+/**
+ * What to say when `spec` names no model: the models of its provider that read most like it, or the providers there are
+ * when the provider is the unknown part, and the command that lists them.
+ */
+export function modelHint(specs: readonly string[], spec: string): string {
+  const provider = providerOf(spec);
+  const own = specs.filter((candidate) => candidate.startsWith(`${provider}/`));
+  if (own.length === 0) {
+    const providers = [...new Set(specs.map(providerOf))];
+    return `there is no provider "${provider}"; the providers are ${providers.join(", ")} (\`fastagent models\` lists their models)`;
+  }
+  const wanted = new Set(tokensOf(spec.slice(provider.length + 1)));
+  const overlap = (candidate: string) =>
+    tokensOf(candidate.slice(provider.length + 1)).filter((t) => wanted.has(t)).length;
+  const closest = own
+    .map((candidate) => ({ candidate, score: overlap(candidate) }))
+    .sort((a, b) => b.score - a.score || a.candidate.localeCompare(b.candidate))
+    .slice(0, 5)
+    .map(({ candidate }) => candidate);
+  return `${provider}'s models include ${closest.join(", ")} (\`fastagent models ${provider}\` lists all ${own.length})`;
+}
+
 /**
  * pi's own reading of an environment (a blank variable is unset) through `read` instead of this process's: an agent's
  * environment is its own when the process runs several. Files a source points at are this machine's unless

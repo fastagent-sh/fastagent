@@ -18,9 +18,20 @@
  * stopped with it, by `stop` and when it exits.
  */
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { STATE_DIRNAME, globalHome } from "../paths.ts";
 import { recordFailures } from "./fail.ts";
@@ -454,6 +465,33 @@ async function awaitAddress(id: string, signal: AbortSignal): Promise<string> {
   throw new Error("the step no longer waits for an address");
 }
 
+const LOG_TAIL_LINES = 12;
+const LOG_TAIL_BYTES = 8192;
+const LOG_LINE_CHARS = 300;
+
+/**
+ * The last lines of a ticket's log, without terminal colors: where a failed step says why. A coding agent reads a
+ * report once, and "see the output above" points at a log it has not opened.
+ */
+function logTail(id: string): string[] {
+  const path = ticketLogPath(id);
+  if (!existsSync(path)) return [];
+  const size = statSync(path).size;
+  const start = Math.max(0, size - LOG_TAIL_BYTES);
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.alloc(size - start);
+    readSync(fd, buffer, 0, buffer.length, start);
+    return stripVTControlCharacters(buffer.toString("utf8"))
+      .split("\n")
+      .map((line) => line.trim().slice(0, LOG_LINE_CHARS))
+      .filter((line) => line !== "")
+      .slice(-LOG_TAIL_LINES);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * A ticket as its command reports it, with what to do next (`agent_next_steps`): one JSON object, or its lines for a
  * person. `done` is what the step's `result` adds to the report, beside a sentence for the agent.
@@ -489,17 +527,27 @@ export function ticketReport(
     const message = ticket.status === "expired" ? "it was not finished in time" : (ticket.message as string);
     // What the step reached before it ended is still the person's: where to get the value it stopped for, say.
     const reached = left.length === 0 ? "" : `Tell the user what the steps it reached leave them: ${left.join(" ")} `;
+    // An expired step is not a fault: nobody finished it in time, and its log says nothing more.
+    const expired = ticket.status === "expired";
+    const tail = expired ? [] : logTail(ticket.ticket);
     return {
       json: {
         ...base,
         message,
         log,
+        ...(tail.length === 0 ? {} : { log_tail: tail }),
         ...(ticket.afterwards ? { afterwards: ticket.afterwards } : {}),
-        agent_next_steps: `${reached}To try again, run: ${ticket.restart} --json`,
+        agent_next_steps: expired
+          ? `${reached}The step was not finished in time, which is not a fault: ask the user to complete it as soon ` +
+            `as you run: ${ticket.restart} --json`
+          : `${reached}The cause is in log_tail (the whole log is at log): fix what it names, then run: ` +
+            `${ticket.restart} --json. The same inputs fail the same way unless the log shows a transient network or ` +
+            `builder error.`,
       },
       text: [
         `${ticket.status}: ${message}`,
         `log: ${log}`,
+        ...tail.map((line) => `  | ${line}`),
         ...left.map((line) => `left for the person: ${line}`),
         `to try again: ${ticket.restart}`,
       ],

@@ -72,6 +72,20 @@ describe("runInvokeStream", () => {
     expect(s.out.join("")).toBe("hmm"); // text still went to out, never err
   });
 
+  it("a model with no credential says what to do about it, where the caller says it runs; other failures say nothing more", async () => {
+    const auth = { code: "auth_required", message: "Provider is not configured: openai", retryable: false };
+    const s = sinks();
+    await runInvokeStream(stream(ended({ status: "failed", error: auth })), s.outFn, s.errFn, "log in the box");
+    expect(s.err).toEqual([
+      "[fastagent] failed: auth_required: Provider is not configured: openai",
+      "[fastagent] next: log in the box",
+    ]);
+    const other = sinks();
+    const boom = { code: "model_error", message: "boom", retryable: false };
+    await runInvokeStream(stream(ended({ status: "failed", error: boom })), other.outFn, other.errFn, "log in the box");
+    expect(other.err).toEqual(["[fastagent] failed: model_error: boom"]);
+  });
+
   it("a refusal, an unconfirmed send and a stream that ends before its message each exit 1, saying which", async () => {
     const s = sinks();
     expect(await runInvokeStream(refusedWith("busy", "busy"), s.outFn, s.errFn)).toBe(1);

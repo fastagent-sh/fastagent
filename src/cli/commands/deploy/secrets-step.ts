@@ -73,6 +73,7 @@ export function deploySecrets(input: {
         console.error(`[fastagent] note: ${line}`);
         if (answerer.kind === "ticket") answerer.step.person.afterwards(line);
       },
+      inform: (line) => console.error(`[fastagent] note: ${line}`),
       ...(api.served ? { mint: [mintApiKey()] } : {}),
       onMinted: async (minted) => {
         const names = Object.keys(minted);

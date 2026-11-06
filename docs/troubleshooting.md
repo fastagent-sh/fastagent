@@ -342,6 +342,26 @@ requests.
 Loopback (`localhost`, `127.0.0.1`, `::1`) is always added to `NO_PROXY`. A LAN address is not: after
 `fastagent dev --bind 192.168.1.5`, add that address to `NO_PROXY` yourself.
 
+## A deploy stopped and the message does not say why
+
+A `deploy --run` that fails prints the host CLI's own output above its last line, and the ticket of `deploy <host> --run
+--json` carries the last lines of that output as `log_tail` (the whole log is at `log`). Read it for the cause before
+running the deploy again: the same inputs fail the same way.
+
+- **Fly: `failed to list workers … authentication handshake failed`, or `connecting to Depot builder: timed out`.** flyctl
+  cannot reach its remote builder. Measured on one machine: with a proxy tool's TUN mode (all traffic through a tunnel
+  interface) on, three deploys failed this way and `fly doctor` found no fault, and with TUN off the same build took
+  15 to 25 seconds, with or without `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` set. Unsetting the variables does not leave a
+  tunnel, so turn the TUN or VPN off for the deploy. Where that is not possible, follow the runbook `fastagent deploy fly`
+  prints (without `--run`) and add `--depot=false` to its `fly deploy` line, which builds on Fly's own builder, then set
+  the Agent API key with `fastagent secrets set fly FASTAGENT_API_KEY --generate` and log the box in as the runbook says.
+- **Fly: `WARN FASTAGENT_SECRETS_DIR may be a potentially sensitive environment variable`.** It is a path, not a
+  secret. Ignore it.
+- **`no provider of the deployed agent offers "…"`.** The model name is not one a provider lists. The message names the
+  closest models; `fastagent models <provider>` lists them all.
+- **`auth_required: Provider is not configured` from `invoke --url`.** The deployment has no credential for its model:
+  `fastagent secrets set <host> <the provider's API key variable>`, or `fastagent login <provider> --deployment <host>`.
+
 ## Need a machine-readable report
 
 Use:

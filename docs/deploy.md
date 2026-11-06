@@ -293,10 +293,12 @@ Generates `Dockerfile` and `.dockerignore`, and prints the runbook:
 6. `railway domain`, then register webhooks.
 
 ```bash
-fastagent deploy railway --run   # provisions an unlinked dir end to end
+fastagent deploy railway --run   # provisions an unlinked dir end to end, and redeploys a provisioned one
 ```
 
-`--run` refuses a dir already linked to a project unless `--into-linked`. No Railway config file is generated:
+`--run` continues the linked project named for the agent (`fastagent secrets set railway` and an earlier `--run` make
+one) and gives it the service when it lacks one. It refuses a dir linked to any other project, whatever that project
+holds, unless `--into-linked`; `fastagent secrets … railway` refuses it too. No Railway config file is generated:
 Railway retires `railway.json` on 2026-12-01, and its replacement (`.railway/railway.ts`) would make every agent
 install Railway's SDK. Railway builds the `Dockerfile` at the root of the upload and restarts a crashed service by
 default. It does not wait for `/health`, so it marks a deploy live once the container starts; `--run` probes the
@@ -359,6 +361,35 @@ other hosts' stores; a failed read fails that invocation, so `--run`'s probe rep
 the values it read until it ends (its idle timeout) or the next deploy. The command that runs `--run` needs
 `secretsmanager:CreateSecret`, `DescribeSecret`, `GetSecretValue` and `PutSecretValue`, and `destroy` also
 `DeleteSecret`. The secret costs about $0.40 a month, even with no value in it.
+
+### The permissions a deployer needs
+
+`deploy agentcore --run`, a redeploy, `logs agentcore`, `secrets … agentcore` and `destroy agentcore` ran end to end as an
+IAM user holding only this policy (replace `<region>` and `<account-id>`; as a customer managed policy, since an inline
+user policy is capped at 2048 bytes). Every resource is scoped to the names a deploy derives (`fastagent-*`, `fa-*`,
+`fastagent/*`); CloudFormation makes the stack's calls with the caller's own permissions, which is why Lambda, IAM and
+AgentCore actions are here. The `Iam` statement lets its holder create any role named `fastagent-*` with any permissions
+and hand it to a function they create (`CAPABILITY_IAM`), so treat this principal as able to escalate within the account;
+a permissions boundary on those roles would narrow that, and was not tried. It is a verified set, not a proven minimum. Its `Slr` statement, which lets a first deploy into an account create the two AgentCore service-linked roles, was not exercised: the account already held them. `fastagent login --deployment agentcore` also
+needs `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
+
+```json
+{"Version":"2012-10-17","Statement":[
+  {"Sid": "Cfn", "Effect": "Allow", "Action": ["cloudformation:CreateChangeSet", "cloudformation:DescribeChangeSet", "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet", "cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents", "cloudformation:DeleteStack", "cloudformation:GetTemplateSummary"], "Resource": "arn:aws:cloudformation:<region>:<account-id>:stack/fastagent-*/*"},
+  {"Sid": "CfnGlobal", "Effect": "Allow", "Action": ["cloudformation:GetTemplateSummary", "cloudformation:ListStacks"], "Resource": "*"},
+  {"Sid": "Iam", "Effect": "Allow", "Action": ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:PassRole", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:TagRole", "iam:UpdateAssumeRolePolicy"], "Resource": "arn:aws:iam::<account-id>:role/fastagent-*"},
+  {"Sid": "Lambda", "Effect": "Allow", "Action": ["lambda:CreateFunction", "lambda:DeleteFunction", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetPolicy", "lambda:CreateFunctionUrlConfig", "lambda:DeleteFunctionUrlConfig", "lambda:GetFunctionUrlConfig", "lambda:UpdateFunctionUrlConfig", "lambda:ListTags", "lambda:TagResource"], "Resource": "arn:aws:lambda:<region>:<account-id>:function:fastagent-*"},
+  {"Sid": "LambdaGlobal", "Effect": "Allow", "Action": ["lambda:GetAccountSettings"], "Resource": "*"},
+  {"Sid": "AgentCore", "Effect": "Allow", "Action": ["bedrock-agentcore:CreateAgentRuntime", "bedrock-agentcore:UpdateAgentRuntime", "bedrock-agentcore:DeleteAgentRuntime", "bedrock-agentcore:GetAgentRuntime", "bedrock-agentcore:ListAgentRuntimes", "bedrock-agentcore:ListTagsForResource", "bedrock-agentcore:TagResource", "bedrock-agentcore:CreateWorkloadIdentity", "bedrock-agentcore:DeleteWorkloadIdentity", "bedrock-agentcore:GetWorkloadIdentity", "bedrock-agentcore:StopRuntimeSession", "bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:CreateAgentRuntimeEndpoint", "bedrock-agentcore:GetAgentRuntimeEndpoint", "bedrock-agentcore:UpdateAgentRuntimeEndpoint", "bedrock-agentcore:DeleteAgentRuntimeEndpoint", "bedrock-agentcore:ListAgentRuntimeEndpoints", "bedrock-agentcore:UntagResource", "bedrock-agentcore:PassCapacityProvider"], "Resource": "*"},
+  {"Sid": "EcrAuth", "Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
+  {"Sid": "Ecr", "Effect": "Allow", "Action": ["ecr:CreateRepository", "ecr:DescribeRepositories", "ecr:DeleteRepository", "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], "Resource": "arn:aws:ecr:<region>:<account-id>:repository/fastagent/*"},
+  {"Sid": "S3", "Effect": "Allow", "Action": ["s3:CreateBucket", "s3:PutBucketPublicAccessBlock", "s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketLocation", "s3:PutObject", "s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:DeleteBucket"], "Resource": ["arn:aws:s3:::fa-*", "arn:aws:s3:::fa-*/*"]},
+  {"Sid": "Secrets", "Effect": "Allow", "Action": ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue", "secretsmanager:DeleteSecret", "secretsmanager:TagResource"], "Resource": "arn:aws:secretsmanager:<region>:<account-id>:secret:fastagent/*"},
+  {"Sid": "Logs", "Effect": "Allow", "Action": ["logs:DescribeLogGroups", "logs:DescribeLogStreams", "logs:FilterLogEvents", "logs:GetLogEvents", "logs:DeleteLogGroup", "logs:PutRetentionPolicy"], "Resource": "*"},
+  {"Sid": "Scheduler", "Effect": "Allow", "Action": ["scheduler:ListSchedules", "scheduler:GetSchedule", "scheduler:DeleteSchedule"], "Resource": "*"},
+  {"Sid": "Slr", "Effect": "Allow", "Action": "iam:CreateServiceLinkedRole", "Resource": "*", "Condition": {"StringEquals": {"iam:AWSServiceName": ["runtime-identity.bedrock-agentcore.amazonaws.com", "network.bedrock-agentcore.amazonaws.com"]}}}
+]}
+```
 
 What to know:
 
