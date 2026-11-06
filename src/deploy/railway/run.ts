@@ -11,7 +11,9 @@ import {
 } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
-import { hostSignedOutGate, missingValuesGate } from "../secrets.ts";
+import type { SecretStore } from "../secret-store.ts";
+import { hostSignedOutGate } from "../secrets.ts";
+import { ensureRailwayService, railwayStore } from "./store.ts";
 
 export interface RailwayRunPlan {
   /** At a terminal with a `--config` file: record each URL a person set once the box confirms it. */
@@ -23,12 +25,11 @@ export interface RailwayRunPlan {
    * in lockstep).
    */
   mountPath: string;
-  /** `KEY=value` secrets set one-per-`variable set --stdin`: the value file's variables. */
-  secrets: Record<string, string>;
-  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
-  missingSecrets: string[];
-  /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
-  valueFile: string;
+  /**
+   * Make sure the service holds a value for every name the deployment needs, through whoever can supply one
+   * (secret-store.ts): resolves a gate line, or undefined. It runs once the service exists.
+   */
+  provideSecrets: (store: SecretStore) => Promise<string | undefined>;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
   /** Opt-in (CLI `--into-linked`) to provision INTO the project this directory is already linked to. */
@@ -57,25 +58,6 @@ export interface RailwayRunPlan {
  * Done (with the live URL), or a gate the operator must clear before re-running (printed + non-zero exit by the CLI).
  */
 export type RailwayRunOutcome = { ok: true; url: string } | { ok: false; gate: string };
-
-/** Whether `railway status --json` shows a linked project: non-empty stdout. */
-export function isLinked(stdout: string): boolean {
-  return stdout.trim() !== "";
-}
-
-/**
- * The linked project's name for the gate message, or undefined if it can't be read (still linked — `railway status
- * --json` puts `name` at the top level on 5.15.0).
- */
-export function linkedName(stdout: string): string | undefined {
-  try {
-    const v = JSON.parse(stdout) as { name?: unknown };
-    if (typeof v.name === "string") return v.name;
-  } catch {
-    // non-JSON but non-empty → still linked, just no name to show
-  }
-  return undefined;
-}
 
 /** Every string leaf of a parsed JSON value. */
 function jsonStrings(stdout: string): string[] {
@@ -144,11 +126,6 @@ export async function deployRailwayRun(
   // --name` + `add --service`).
   const svc = ["--service", plan.name];
 
-  // 1. Gate missing required secret VALUES before any side effect (no half-created infra), and before asking a
-  // person to sign in for a deploy that would stop here anyway.
-  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
-  if (missingValues) return gate(missingValues);
-
   // 2.
   if ((await railway(["whoami"], { capture: true })).code !== 0) {
     const failed = plan.hostLogin
@@ -158,65 +135,25 @@ export async function deployRailwayRun(
   }
 
   // 3.
-  const status = await railway(["status", "--json"], { capture: true });
-  if (isLinked(status.stdout)) {
-    if (!plan.intoLinked) {
-      const name = linkedName(status.stdout);
-      return gate(
-        `this directory is already linked to Railway project ${name ? `"${name}"` : "(name unreadable)"}. ` +
-          "`--run` provisions a NEW project and only runs on an unlinked directory — it won't deploy into an " +
-          "unrelated one. To redeploy an already-provisioned agent, run `railway up`. To provision the agent " +
-          "INTO this project, re-run with --into-linked. To start fresh, `railway unlink` first.",
-      );
-    }
-    log(`provisioning into linked project ${linkedName(status.stdout) ?? plan.name} (--into-linked)`);
-  } else {
-    // --into-linked means "provision into the project this dir is linked to" — but it isn't linked.
-    if (plan.intoLinked) {
-      log("warn: --into-linked was passed but this directory isn't linked to any project — creating a fresh one");
-    }
-    log(`creating project ${plan.name}…`);
-    if ((await railway(["init", "--name", plan.name])).code !== 0) {
-      return gate(
-        "`railway init` failed — if you have multiple workspaces, run it once interactively (or pass --workspace) to pick one, then re-run",
-      );
-    }
-    // Create + link the service (init makes only a project); it precedes the volume, which has no --service flag and
-    // rides the linked service.
-    log(`creating service ${plan.name}…`);
-    // `--variables` with one of the machinery variables set just below: in a terminal, a bare `railway add` stops at
-    // "Enter a variable <esc to skip>" (5.62.1) and waits for a key nobody was told to press.
-    const addArgs = ["add", "--service", plan.name, "--variables", `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`];
-    if ((await railway(addArgs)).code !== 0) {
-      // Precise recovery, not "fix and re-run": init already created + linked the project, so a plain re-run hits the
-      // linked-gate, and --into-linked SKIPS `add` and then fails at the volume (no service to ride).
-      return gate(
-        `\`railway add --service\` failed — \`railway init\` already created the project (this directory is now ` +
-          `linked) but not the service. Finish with \`railway add --service ${plan.name}\` here, then re-run with ` +
-          `--into-linked; or \`railway unlink\` to detach and start fresh.`,
-      );
-    }
-  }
+  const projectGate = await ensureRailwayService(
+    railway,
+    { name: plan.name, mountPath: plan.mountPath, intoLinked: plan.intoLinked },
+    log,
+  );
+  if (projectGate !== undefined) return gate(projectGate);
+
+  // 3a. The names the service holds, the gaps filled.
+  const secretsGate = await plan.provideSecrets(railwayStore(railway, plan.name, log, { redeploy: false }));
+  if (secretsGate !== undefined) return gate(secretsGate);
 
   // 3b.
   const machineryVars = [
     `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`,
     `FASTAGENT_SECRETS_DIR=${plan.mountPath}/.secrets`,
   ];
-  // The secret NAMES, not a count: `--run` uploads the whole value file, so the operator has to be able to see the
-  // list on every host.
-  const secretNames = Object.keys(plan.secrets);
-  log(
-    `setting ${machineryVars.map((v) => v.split("=")[0]).join("/")} + ${secretNames.length} secret(s)` +
-      `${secretNames.length > 0 ? `: ${secretNames.join(", ")}` : ""}…`,
-  );
+  log(`setting ${machineryVars.map((v) => v.split("=")[0]).join("/")}…`);
   if ((await railway(["variables", "set", ...machineryVars, ...svc])).code !== 0) {
     return gate("`railway variables set` failed — see the railway output above");
-  }
-  for (const [k, v] of Object.entries(plan.secrets)) {
-    if ((await railway(["variables", "set", k, "--stdin", ...svc], { input: v })).code !== 0) {
-      return gate(`\`railway variables set ${k}\` failed — see the railway output above`);
-    }
   }
 
   // 3c.

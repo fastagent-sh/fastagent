@@ -11,6 +11,7 @@ import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import {
   environmentAuth,
   interactiveLoginKind,
+  keyVariables,
   loginProviders,
   modelsOver,
   providerOf,
@@ -63,6 +64,11 @@ interface DeployFacts {
    * ({@link credentialRoute}).
    */
   modelAuth: string | undefined;
+  /**
+   * The variables the model's provider reads its key from, and whether the deployment needs one of them set on its
+   * target: when no key is in the value file and the provider has no login to run on the box, the key is the only way in.
+   */
+  modelKey: { variables: string[]; required: boolean };
   /**
    * The provider the deployment must log in to itself (`fastagent login --deployment`): the model's credential does
    * not travel, because it is neither a variable in the value file nor resolved by the definition's own provider code.
@@ -294,7 +300,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   );
   for (const { name, ingress } of channels) {
     if ((CHANNEL_KINDS as string[]).includes(name)) continue;
-    const secretsPart = `its variables travel from ${valueFile} like every other`;
+    const secretsPart = `the variables it declares are the target's to hold (\`fastagent secrets\`), like every other`;
     report.note(
       ingress === "long-connection"
         ? `long-connection channel "${name}" is custom — ${secretsPart}; generated deploy plans keep the process running and skip webhook registration`
@@ -335,17 +341,23 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       valueFile,
     });
   }
+  const modelProvider = modelSpec ? loginProviders(providers).find((p) => p.id === providerOf(modelSpec)) : undefined;
+  const modelKey = {
+    variables: modelProvider ? await keyVariables(modelProvider) : [],
+    required: boxLogin !== undefined && !hasLogin(boxLogin, providers),
+  };
   if (boxLogin !== undefined) {
-    if (!hasLogin(boxLogin, providers)) {
-      report.issue(
-        `no credential for ${modelSpec} reaches the deployment, and "${boxLogin}" has no login to run there — set ` +
-          `its API key in ${valueFile}`,
+    if (modelKey.required) {
+      report.note(
+        `${modelSpec}: "${boxLogin}" has no login to run on the box, so its API key (${modelKey.variables.join(" or ")}) ` +
+          `must be set on the target`,
       );
     } else {
       report.note(
         `${modelSpec}: no credential ships with this deploy (this machine's logins and shell stay here) — once the ` +
           `box is up, \`--run\` asks it: it keeps what it already authenticates ${boxLogin} with, else logs in ` +
-          `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key in ${valueFile}`,
+          `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key on the target ` +
+          `(\`fastagent secrets set <host> ${modelKey.variables[0] ?? "<KEY_NAME>"}\`)`,
       );
     }
   }
@@ -442,11 +454,12 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     values,
     valueFile,
     modelAuth,
+    modelKey,
     boxLogin,
     container,
     port,
     declaredSecrets,
-    secrets: deploymentSecrets(modelAuth, declaredSecrets, values, valueFile),
+    secrets: deploymentSecrets(modelAuth, declaredSecrets),
   };
 }
 

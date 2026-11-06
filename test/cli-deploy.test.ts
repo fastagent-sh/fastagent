@@ -28,7 +28,6 @@ describe("cli: deploy", () => {
     expect(result.stderr).toContain("source: .secrets/production/.env");
     // `deploy` builds first, generate-only included: the image's `start` opens dist/.
     expect(await stat(join(dir, "dist", "index.js"))).toBeDefined();
-    expect(result.stdout).toContain("PRODUCTION_ONLY");
     expect(result.stdout).not.toContain("DEV_ONLY");
     expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toContain(".secrets/production/.env");
   });
@@ -178,12 +177,18 @@ describe("cli: deploy", () => {
     const result = await runInProcess(["deploy", "fly", dir]);
     expect(result.code).toBe(0);
     expect(result.stderr).toMatch(/baked as the definition/); // the WYSIWYG bake note is stated
-    // Where the Agent API is reached, as Fly names the app, and the command that checks it.
+    // Where the Agent API is reached, as Fly names the app, and how its key comes about: a generate-only deploy has
+    // set nothing.
     expect(result.stderr).toMatch(
-      /Agent API: (https:\/\/[\w-]+\.fly\.dev)\/v1,[^\n]*\n.*check it: fastagent invoke --url \1 "hello" /,
+      /Agent API: https:\/\/[\w-]+\.fly\.dev\/v1, behind FASTAGENT_API_KEY, which --run makes and sets on the target/,
     );
-    // Run from elsewhere, the check names the agent: that is where `invoke --url` finds the key.
-    expect(/check it: .* "hello" (\S+)\n/.exec(result.stderr)?.[1]).toBe(dir);
+    // With a key in the production value file, run from elsewhere the check names the agent: that is where
+    // `invoke --url` finds the key.
+    await mkdir(join(dir, ".secrets", "production"), { recursive: true });
+    await writeFile(join(dir, ".secrets", "production", ".env"), "FASTAGENT_API_KEY=k\n");
+    const keyed = await runInProcess(["deploy", "fly", dir]);
+    expect(keyed.code, keyed.stderr).toBe(0);
+    expect(/check it: .* "hello" (\S+)\n/.exec(keyed.stderr)?.[1]).toBe(dir);
     expect(result.stderr).not.toMatch(/not yet supported/); // no placement gate anywhere
 
     // The retired config key fails visibly — placement is structural now, never configured.

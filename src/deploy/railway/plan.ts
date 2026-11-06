@@ -85,7 +85,8 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
 
   if (secrets.length > 0) {
     runbook.push(
-      `# Secrets:`,
+      `# Secrets the service needs a value for. \`fastagent secrets push railway\` sets the ones a value file holds and`,
+      `# \`fastagent secrets set railway <NAME>\` one typed without echo; or with the railway CLI:`,
       `#   ${secrets.map((s) => `${s.name}: ${s.hint}`).join("\n#   ")}`,
       `railway variables set ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );

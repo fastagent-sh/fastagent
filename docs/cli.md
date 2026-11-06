@@ -36,6 +36,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
 | `channels setup <name> [agent]` | Set up one instance's platform app (`telegram`, `slack`): guide the person through creating it, check each pasted credential with the platform, and keep it in the instance's value file. `--ingress`, `--config` and `--env-file` say which instance it is and how it receives. |
 | `channels setup <name> --record-url --config <file> [--url <url>]` | Record, in the configuration a deploy delivers, the URL a person saved on a Slack or Lark app's page once the deployment's `/health` reports the channel reached there (`channels.<name>.app.url`; `--url` is where `/health` is read), so later deploys report it registered. |
+| `secrets list\|set\|push <host> [agent]` | A deployment's values on the target that keeps them (`docker`, `fly`, `railway`): the declared names and which the target holds, one value typed without echo or generated, or every declared value a value file or the environment holds. |
 | `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). |
 | `deploy fly [agent]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
 | `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
@@ -463,6 +464,37 @@ The app, and the values of the instance that runs it, are [`channels setup`](#fa
 `deploy --run` creates the separate Feishu/Lark production app automatically (the same `channels setup`), at a
 terminal or, with `--json`, for a coding agent's user (without either it stops, naming the `--json` command); a Slack
 or Telegram deployment needs its own app, from `channels setup <name> --config <file> --env-file <file>`.
+
+## `fastagent secrets`
+
+```bash
+fastagent secrets list <host> [agent] [--config file] [--json]
+fastagent secrets set <host> <NAME> [agent] [--config file] [--generate]
+fastagent secrets push <host> [agent] [--config file] [--env-file file | --from-env]
+```
+
+`<host>` is `docker`, `fly` or `railway`. A deployment's values are the target's state: Fly secrets, the Railway service's
+variables, `.secrets/production/.env` for Docker (agent-artifact.md §6.2). `deploy` checks which names the target holds
+and never carries a file; these commands are how the values get there, and they create the Fly app or Railway service
+when it does not exist yet, so a CI job can push before its first deploy.
+
+- **`list`** prints every name the deployment declares (the model's key, `needs()`, `context.json`'s variables, MCP
+  references, for the channels `--config` chooses) and whether the target holds it. A value is never read back. A
+  target with no app yet shows every name missing and says the first `set`, `push` or `deploy --run` makes it.
+- **`set`** sets one value: typed without echo at a terminal, else read from standard input. It is never an argument.
+  `--generate` sets a random value and prints it once, on stdout alone, for what FastAgent makes itself
+  (`FASTAGENT_API_KEY`). Use `push` for several names: on a running Fly app each `set` restarts its machines, and a `push` restarts them
+  once. Railway redeploys the service on the last value a `set` or `push` writes; Docker's values are a file that a running
+  container reads after `docker compose up -d`, which the command says.
+- **`push`** sets, in one batch, every declared name its source holds a value for: `--env-file`, else `--from-env`, else
+  `.secrets/production/.env` (Docker's own store, so for Docker one of the first two is required). `--from-env` takes the declared names from the environment of the command that injected
+  them, which is how a secret manager or CI joins in with no adapter: `op run --env-file=.env.tpl -- fastagent secrets push fly
+  --from-env`, `doppler run -- …`, `infisical run -- …`, `dotenvx run -- …`, or a CI job's secrets. Names the definition does
+  not declare are not pushed, and are said.
+
+Each value reaches the target over standard input (never a command line), and a run says names only. `deploy --run`
+does the same at a terminal for what the target lacks: one question to set the names the production file holds, then each
+missing value typed without echo. In a coding agent's deploy or in CI it stops naming these commands.
 
 ## `fastagent channels setup <name>`
 

@@ -12,10 +12,12 @@ import { deployFlyRun } from "../../../deploy/fly/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { readTextIfExists } from "../../../paths.ts";
 import { residencyFor } from "../../../deploy/residency.ts";
-import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { withPublicUrl } from "../../../deploy/container.ts";
+import type { DeploymentApi } from "../../../deploy/api.ts";
+import type { ModelKey } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
+import { deploySecrets } from "./secrets-step.ts";
 import { FLY_LOGIN, hostLogin } from "./host-login.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorder } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
@@ -78,8 +80,10 @@ export const flyHost: HostDeploy = {
         agentDir,
         appName,
         modelAuth,
+        modelKey: pre.modelKey,
         boxLogin,
         answerer: ctx.answerer,
+        api: ctx.api,
         rerun: ctx.rerun,
         channels,
         declaredSecrets,
@@ -100,10 +104,12 @@ async function runDeployFly(params: {
   agentDir: string;
   appName: string;
   modelAuth: string | undefined;
+  modelKey: ModelKey;
   /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
   boxLogin: string | undefined;
   /** Who answers the box's login: `--run` continues into it rather than stopping at "not logged in". */
   answerer: Answerer;
+  api: DeploymentApi;
   /** The command that runs this deploy again (`DeployContext.rerun`). */
   rerun: string;
   channels: readonly DeclaredChannel[];
@@ -122,18 +128,22 @@ async function runDeployFly(params: {
     failStartup(new Error(`flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`));
   }
 
-  const { secrets, missingSecrets } = assembleSecrets({
-    modelAuth: params.modelAuth,
-    declared: params.declaredSecrets,
-    values: params.values,
-  });
-
   const outcome = await deployFlyRun(
     {
       appName,
-      secrets,
-      missingSecrets,
-      valueFile: params.valueFile,
+      provideSecrets: deploySecrets({
+        host: "fly",
+        label: "Fly",
+        agentDir,
+        opts: { config: params.config },
+        answerer: params.answerer,
+        api: params.api,
+        modelAuth: params.modelAuth,
+        modelKey: params.modelKey,
+        declaredSecrets: params.declaredSecrets,
+        valueFile: params.valueFile,
+        values: params.values,
+      }),
       channels,
       flyConfig: "fly.toml",
       dockerfile: "Dockerfile",

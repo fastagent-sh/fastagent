@@ -17,6 +17,7 @@ import {
   isGeneratedDockerignore,
 } from "../../../deploy/container.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
+import type { DeploymentApi } from "../../../deploy/api.ts";
 import type { EffectiveConfig } from "../../../harnesses/pi-durable/config.ts";
 import { exists } from "../../../paths.ts";
 import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
@@ -65,6 +66,8 @@ interface DeployContext {
   agentDir: string;
   config: EffectiveConfig;
   pre: Extract<DeployPreflight, { ok: true }>;
+  /** Whether the deployment serves the Agent API, so whether the deploy mints its key. */
+  api: DeploymentApi;
   channels: readonly DeclaredChannel[];
   webhookChannels: readonly DeclaredChannel[];
   /** Write this host's planned artifacts into the agent directory under the ownership rule. */

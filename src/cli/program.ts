@@ -726,6 +726,91 @@ const channels: CommandSpec = {
   ],
 };
 
+const SECRETS_HOST = {
+  name: "<host>",
+  description: "the target that keeps the values",
+  choices: ["docker", "fly", "railway"],
+};
+
+const secrets: CommandSpec = {
+  name: "secrets",
+  summary: "a deployment's values, on the target that keeps them",
+  subcommands: [
+    {
+      name: "list",
+      summary: "the names the definition declares, and which the target holds",
+      description:
+        "Print every name the deployment declares (the model's key, `needs()`, `context.json`'s variables, MCP " +
+        "references, for the channels its configuration chooses) with whether the target holds a value for it. A value " +
+        "is never read back.",
+      args: [SECRETS_HOST, AGENT_ARG],
+      flags: [
+        { flags: "--config <file>", description: "the configuration the deployment delivers (`deploy --config`)" },
+        JSON_FLAG,
+      ],
+      examples: [{ cmd: "fastagent secrets list fly" }],
+      run: async (args, f) =>
+        (await import("./commands/secrets.ts")).runSecrets("list", args[0] as "fly", undefined, args[1] as string, {
+          ...(typeof f.config === "string" ? { config: f.config } : {}),
+          json: f.json === true,
+        }),
+    },
+    {
+      name: "set",
+      summary: "set one value: typed without echo, from standard input, or generated",
+      description:
+        "Set one value on the target, creating the app or service when it does not exist. The value is typed without " +
+        "echo at a terminal, else read from standard input; it is never an argument. --generate sets a random value " +
+        "and prints it once, for what FastAgent makes itself (FASTAGENT_API_KEY).",
+      args: [SECRETS_HOST, { name: "<name>", description: "the environment variable" }, AGENT_ARG],
+      flags: [
+        { flags: "--config <file>", description: "the configuration the deployment delivers (`deploy --config`)" },
+        { flags: "--generate", description: "a random value, printed once" },
+      ],
+      examples: [
+        { cmd: "fastagent secrets set fly OPENAI_API_KEY" },
+        { cmd: "fastagent secrets set fly FASTAGENT_API_KEY --generate" },
+      ],
+      run: async (args, f) =>
+        (await import("./commands/secrets.ts")).runSecrets(
+          "set",
+          args[0] as "fly",
+          args[1] as string,
+          args[2] as string,
+          {
+            ...(typeof f.config === "string" ? { config: f.config } : {}),
+            generate: f.generate === true,
+          },
+        ),
+    },
+    {
+      name: "push",
+      summary: "set every declared value a value file or the environment holds",
+      description:
+        "Set, in one batch, every declared name the source holds a value for, creating the app or service when it does " +
+        "not exist. The source is --env-file, else --from-env (the environment of a command that injected the values: " +
+        "`op run`, `doppler run`, `infisical run`, `dotenvx run`, a CI job), else the production value file " +
+        "(.secrets/production/.env). Names the definition does not declare are not pushed.",
+      args: [SECRETS_HOST, AGENT_ARG],
+      flags: [
+        { flags: "--config <file>", description: "the configuration the deployment delivers (`deploy --config`)" },
+        { flags: "--env-file <file>", description: "the value file to push from, which must exist" },
+        { flags: "--from-env", description: "push from this command's environment" },
+      ],
+      examples: [
+        { cmd: "fastagent secrets push fly" },
+        { cmd: "doppler run -- fastagent secrets push fly --from-env", note: "a secret manager" },
+      ],
+      run: async (args, f) =>
+        (await import("./commands/secrets.ts")).runSecrets("push", args[0] as "fly", undefined, args[1] as string, {
+          ...(typeof f.config === "string" ? { config: f.config } : {}),
+          ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
+          fromEnv: f.fromEnv === true,
+        }),
+    },
+  ],
+};
+
 const destroy: CommandSpec = {
   name: "destroy",
   summary: "delete every AWS resource `deploy agentcore` created for an agent",
@@ -998,6 +1083,7 @@ export const specs: readonly CommandSpec[] = [
   start,
   add,
   channels,
+  secrets,
   deploy,
   logs,
   destroy,

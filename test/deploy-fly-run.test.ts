@@ -27,9 +27,7 @@ function fakeFly(script: (args: string[]) => { code?: number; stdout?: string } 
 
 const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   appName: "bot",
-  secrets: {},
-  missingSecrets: [],
-  valueFile: "fastagent/.secrets/.env",
+  provideSecrets: async () => undefined,
   channels: [],
   flyConfig: "fastagent/fly.toml",
   dockerfile: "fastagent/Dockerfile",
@@ -53,7 +51,6 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     const out = await run(
       plan({
         channels: declaredChannels(["telegram"]),
-        secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
       }),
       fly,
       tg,
@@ -67,7 +64,6 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       "ips list -a bot --json",
       "ips allocate-v4 --shared -a bot",
       "ips allocate-v6 -a bot",
-      "secrets import --stage -a bot",
       "deploy . -a bot -c fastagent/fly.toml --dockerfile fastagent/Dockerfile --remote-only --yes --ha=false",
     ]);
     expect(tg).toHaveBeenCalledWith("https://bot.fly.dev"); // telegram end-to-end
@@ -246,12 +242,29 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(tg).not.toHaveBeenCalled();
   });
 
-  it("secret values go over stdin (import), never argv", async () => {
-    const { fly, calls } = fakeFly((a) => (a[0] === "apps" ? { stdout: "[]" } : {}));
-    await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", GH_TOKEN: "ghp_x" } }), fly);
-    const importCall = calls.find((c) => c.args[0] === "secrets")!;
-    expect(importCall.args.join(" ")).not.toContain("sk-x"); // not in argv
-    expect(importCall.input).toBe("OPENAI_API_KEY=sk-x\nGH_TOKEN=ghp_x\n"); // on stdin
+  it("the secrets step runs once the app exists, before anything else is set up for it, on a store that stages", async () => {
+    const { fly, calls } = fakeFly((a) => (a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {}));
+    const seen: string[] = [];
+    const out = await run(
+      plan({
+        provideSecrets: async (store) => {
+          seen.push(...(await store.names()));
+          await store.write({ OPENAI_API_KEY: "sk-x" });
+          return undefined;
+        },
+      }),
+      fly,
+    );
+    expect(out).toEqual({ ok: true });
+    const cmds = calls.map((c) => c.args.join(" "));
+    // An app that cannot run without its values is given no address first.
+    expect(cmds.indexOf("secrets list -a bot --json")).toBeGreaterThan(cmds.indexOf("apps create bot"));
+    expect(cmds.indexOf("secrets list -a bot --json")).toBeLessThan(cmds.indexOf("ips list -a bot --json"));
+    expect(cmds.indexOf("secrets set --stage -a bot OPENAI_API_KEY=-")).toBeLessThan(
+      cmds.findIndex((c) => c.startsWith("deploy ")),
+    );
+    // A value goes over stdin, never argv.
+    expect(calls.find((c) => c.args[1] === "set")?.input).toBe("sk-x");
   });
 
   it("idempotent re-run: an existing app is skipped, deploy still runs", async () => {
@@ -295,14 +308,13 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(refused.cmds()).toEqual(["auth whoami"]);
   });
 
-  it("gate: a missing secret value stops before creating infra", async () => {
-    // Signed out as well: no person is asked to sign in for a deploy that stops here anyway.
-    const { fly, cmds } = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
-    const hostLogin = vi.fn(async () => undefined);
-    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"], hostLogin }), fly);
-    expect(out).toEqual({ ok: false, gate: expect.stringContaining("TELEGRAM_BOT_TOKEN") });
-    expect(cmds()).toEqual([]); // not even whoami
-    expect(hostLogin).not.toHaveBeenCalled();
+  it("gate: a name the app lacks stops the run before the deploy, with the app already made", async () => {
+    const { fly, cmds } = fakeFly((a) => (a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {}));
+    const out = await run(plan({ provideSecrets: async () => "Fly has no value for: TELEGRAM_BOT_TOKEN" }), fly);
+    expect(out).toEqual({ ok: false, gate: "Fly has no value for: TELEGRAM_BOT_TOKEN" });
+    expect(cmds().some((c) => c.startsWith("deploy "))).toBe(false);
+    // Stopped before it spent anything on an address the app cannot use yet.
+    expect(cmds().some((c) => c.startsWith("ips "))).toBe(false);
   });
 
   it("gate: a failed `apps list` stops (not misreported as a name clash)", async () => {
@@ -319,7 +331,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       return {};
     });
     const out = await run(plan(), fly);
-    expect(out).toEqual({ ok: false, gate: expect.stringMatching(/globally unique|taken/) });
+    expect(out).toEqual({
+      ok: false,
+      gate: expect.stringMatching(/globally unique.*unique `app` in fly\.toml|payment information/s),
+    });
   });
 });
 
@@ -380,10 +395,10 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     expect(
       assembleSecrets({ modelAuth: undefined, declared: [optional, required], values: new Map() }).missingSecrets,
     ).toEqual(["SENTRY_DSN"]);
-    expect(deploymentSecrets(undefined, [optional], new Map(), ".env")).toEqual([
+    expect(deploymentSecrets(undefined, [optional])).toEqual([
       { name: "SENTRY_DSN", hint: "optional, read by tools/report.ts" },
     ]);
-    expect(deploymentSecrets(undefined, [optional, required], new Map(), ".env")).toEqual([
+    expect(deploymentSecrets(undefined, [optional, required])).toEqual([
       { name: "SENTRY_DSN", hint: "required by channels/digest.ts" },
     ]);
   });
@@ -428,17 +443,13 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
 });
 
 describe("deploy/secrets: deploymentSecrets (the runbook's list)", () => {
-  it("required names first, hinted by their source, then everything else the value file carries", () => {
-    const list = deploymentSecrets(
-      "OPENAI_API_KEY",
-      [{ name: "GH_TOKEN", declaredIn: "tools/gh.ts", optional: false }],
-      new Map(Object.entries({ OPENAI_API_KEY: "k", GH_TOKEN: "x", EXTRA: "y", FASTAGENT_STATE_DIR: "/s" })),
-      "fastagent/.secrets/.env",
-    );
+  it("the model's key first, then each declared name hinted by the file that declared it, and nothing a file merely holds", () => {
+    const list = deploymentSecrets("OPENAI_API_KEY", [
+      { name: "GH_TOKEN", declaredIn: "tools/gh.ts", optional: false },
+    ]);
     expect(list).toEqual([
       { name: "OPENAI_API_KEY", hint: "your model provider key" },
       { name: "GH_TOKEN", hint: "required by tools/gh.ts" },
-      { name: "EXTRA", hint: "from fastagent/.secrets/.env" },
     ]);
   });
 });
