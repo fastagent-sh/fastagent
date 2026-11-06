@@ -246,22 +246,25 @@ src/
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
 │   │                       # process lease, recoverable definition replacement (definition/ is cwd; .state/
 │   │                       # and .secrets/ stay beside it)
-│   ├── secrets.ts          # both directions of the value carry: the NAMES a runbook lists, the VALUES
-│   │                       # `--run` sends, and the FASTAGENT_ENV the container expands back
+│   ├── secrets.ts          # the NAMES a deployment needs and declares (secretNeeds, declaredNames, ModelKey)
+│   ├── secret-store.ts, file-store.ts # where a deployment's values live and how a deploy fills the gaps; Docker's store
 │   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
 │   ├── box-shell.ts        # a running box's owner-authenticated shell as a byte channel (`login --deployment`)
 │   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + state volume, ingress is the operator's) + the compose driver
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
 │   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
-│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js } # ONE stack:
+│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js,
+│                    store.ts, runtime-secrets.ts, sigv4.ts } # ONE stack:
 │                             # runtime + forwarder Lambda (webhooks, and the alarms the container sets). No public
 │                             # URL, no resident process, no volume — the facts every difference follows from.
-│                             # destroy.ts is the other direction, and it exists because three of the four
+│                             # destroy.ts is the other direction, and it exists because most of the
 │                             # resources cannot be stack resources. aws-cli.ts owns what ONE AWS CLI result
 │                             # MEANS — there / gone / could not find out — because eleven call sites each
 │                             # deciding that produced the same defect five review rounds running. Every AWS
 │                             # read that asks "is it there, and could I tell" goes through it. shell.ts is the
 │                             # command-shell WebSocket `login --deployment` speaks (SigV4 presigned, AWS CLI creds)
+│                             # store.ts is the deployment's values as one Secrets Manager secret outside the stack;
+│                             # runtime-secrets.ts is the container reading it on its first invocation (IMDSv2 + SigV4)
 ├── schedule/               # the N axis: prompts on a cron and the clock that fires them
 │   ├── schedule.ts         # a schedule as built ({ name, cron, tz?, prompt }) from `defineSchedule` in src/schedules/
 │   ├── cron.ts             # the one place touching `croner`: nextRun + cronError

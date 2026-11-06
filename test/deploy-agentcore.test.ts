@@ -116,8 +116,9 @@ describe("deploy agentcore: the plan", () => {
     expect(forwarderSource()).toContain("exports.handler");
     expect(forwarderSource()).not.toMatch(/^import /m);
     expect(template).toContain(`INGRESS_SESSION_ID: ${ingressSessionId("my-agent")}`);
-    // Variables ride the fixed FastagentEnv carrier, never a parameter per name.
-    expect(template).toContain("FASTAGENT_ENV: !Ref FastagentEnv");
+    // Values are read from one Secrets Manager secret, never a parameter per name.
+    expect(template).toContain("FASTAGENT_SECRET_ARN: !Ref SecretArn");
+    expect(template).not.toContain("FastagentEnv");
     expect(template).not.toContain("TelegramBotToken");
     expect(plan.runbook.join("\n")).toContain("makes the runtime point telegram at <ForwarderUrl>");
     // The redeploy-immediacy step is in the manual runbook too (— --run automates it).

@@ -1,11 +1,14 @@
 /**
  * `destroy agentcore`: removing what a deploy created, INCLUDING the parts the stack does not own.
  *
- * `aws cloudformation delete-stack` is the obvious move and it leaves three of the four behind, each for its own
+ * `aws cloudformation delete-stack` is the obvious move and it leaves most of them behind, each for its own
  * reason:
  *
  * - the S3 artifact bucket and the ECR repository must exist BEFORE the stack (it reads the forwarder's zip and
  *   the runtime's image from them), so they cannot be stack resources;
+ * - the Secrets Manager secret holds the deployment's values, which must exist before the first deploy and survive a
+ *   stack update, so it is no stack resource either; it is deleted without a recovery window, since a window would
+ *   keep its name from the next deployment of the agent (its values are pushed again from their source);
  * - the forwarder's log group is created by AWS on the Lambda's first WRITE, so no template ever mentions it —
  *   and the deploy put a 14-day retention on it, i.e. it holds data;
  * - the EventBridge schedules are minted at RUNTIME by the container: a recurring one per `schedules/` file, which
@@ -25,6 +28,7 @@ import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson, parseLogGroupNames } from "./aws-cli.ts";
 import {
   agentcoreRepoName,
+  agentcoreSecretName,
   agentcoreStackName,
   deploymentBucketName,
   forwarderLogGroup,
@@ -194,6 +198,20 @@ export async function destroyAgentcoreDeployment(
   }
   const repoExists = "ok" in repoRead;
 
+  const secretName = agentcoreSecretName(plan.name);
+  const secretRead = await aws.present([
+    "secretsmanager",
+    "describe-secret",
+    "--secret-id",
+    secretName,
+    "--output",
+    "json",
+  ]);
+  if ("unreadable" in secretRead) {
+    return gate(`could not tell whether secret ${secretName} exists in ${region}: ${secretRead.unreadable}`);
+  }
+  const secretExists = "ok" in secretRead;
+
   // BOTH LOG GROUPS. AWS creates each on the first WRITE, so neither is a stack resource — same reason, twice —
   // and the runtime's holds the agent's own stdout/stderr, i.e. what it said in every conversation. `deploy`'s
   // runbook already knows there are two: it sets a retention on each.
@@ -263,6 +281,7 @@ export async function destroyAgentcoreDeployment(
   if (stackExists) found.push(`stack ${stack}`);
   if (bucketExists) found.push(`bucket ${bucket} (${keys.length} object version(s))`);
   if (repoExists) found.push(`repository ${repo}`);
+  if (secretExists) found.push(`secret ${secretName}`);
   for (const name of listedGroups) found.push(`log group ${name}`);
 
   // The one thing this command refuses to delete.
@@ -342,6 +361,15 @@ export async function destroyAgentcoreDeployment(
   if (bucketExists && foreign.length === 0) await purgeBucket(bucket, aws, attempt, failures);
   if (repoExists) {
     await attempt(`repository ${repo}`, ["ecr", "delete-repository", "--repository-name", repo, "--force"]);
+  }
+  if (secretExists) {
+    await attempt(`secret ${secretName}`, [
+      "secretsmanager",
+      "delete-secret",
+      "--secret-id",
+      secretName,
+      "--force-delete-without-recovery",
+    ]);
   }
   for (const name of logGroups) {
     await attempt(`log group ${name}`, ["logs", "delete-log-group", "--log-group-name", name]);

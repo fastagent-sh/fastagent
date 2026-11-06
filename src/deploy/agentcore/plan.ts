@@ -93,24 +93,14 @@ export function recurringSchedulePrefix(name: string): string {
 export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
 }
-/**
- * AgentCore env values max 2048 chars — a value file's variables easily exceed it, so the carrier is CHUNKED across
- * `<NAME>` + `_2`… (collectChunked reassembles at boot).
- */
-export const CARRIER_CHUNK_SIZE = 2000;
-export const CARRIER_MAX_CHUNKS = 4;
-
-/** The template's chunked carrier: CloudFormation parameter prefix → container env-var name. */
-export const CARRIERS = [
-  { param: "FastagentEnv", env: "FASTAGENT_ENV", what: "base64 JSON of the value file's variables" },
-] as const;
-
-/** Chunk `i` (0-based) of a carrier: its parameter and env-var names. */
-export function carrierChunk(carrier: (typeof CARRIERS)[number], i: number): { param: string; env: string } {
-  return i === 0
-    ? { param: carrier.param, env: carrier.env }
-    : { param: `${carrier.param}${i + 1}`, env: `${carrier.env}_${i + 1}` };
+/** The Secrets Manager secret holding a deployment's values: one JSON object of NAME → value (agent-artifact.md §6.2). */
+export function agentcoreSecretName(name: string): string {
+  return `fastagent/${name}`;
 }
+
+/** The environment variable that tells the container which secret to read at its first invocation. */
+export const SECRET_ARN_ENV = "FASTAGENT_SECRET_ARN";
+
 /** The generated template's filename (namespaced under the kit in the agentDir layout). */
 export const TEMPLATE_FILE = "agentcore.template.yaml";
 
@@ -202,13 +192,15 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
   const idleTimeout = input.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
 
-  // Secret env vars ride CFN NoEcho parameters.
   const params: string[] = [
     `  ImageUri:`,
     `    Type: String`,
     `    Description: ECR image URI (linux/arm64) — <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>`,
   ];
   params.push(
+    `  SecretArn:`,
+    `    Type: String`,
+    `    Description: ARN of the Secrets Manager secret holding the deployment's values (created outside this stack by \`fastagent secrets\`; the runtime reads it on its first invocation)`,
     `  ForwarderBucket:`,
     `    Type: String`,
     `    Description: S3 bucket holding the forwarder deployment package (created outside this stack)`,
@@ -222,23 +214,8 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `        FASTAGENT_STORAGE_DIR: ${MOUNT}`,
     `        FASTAGENT_STATE_DIR: ${MOUNT}/.state`,
     `        FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`,
+    `        ${SECRET_ARN_ENV}: !Ref SecretArn`,
   ];
-  // The carrier is chunked (env values max 2048 chars — see CARRIER_CHUNK_SIZE): N parameters, each riding its
-  // own env var; `start` reassembles them. ONE parameter set for every variable, so the template does not change
-  // when the value file gains a name.
-  for (const carrier of CARRIERS) {
-    for (let i = 0; i < CARRIER_MAX_CHUNKS; i++) {
-      const { param, env } = carrierChunk(carrier, i);
-      params.push(
-        `  ${param}:`,
-        `    Type: String`,
-        `    Default: ""`,
-        `    NoEcho: true`,
-        `    Description: ${carrier.what} carried by --run, chunk ${i + 1}/${CARRIER_MAX_CHUNKS} (env values cap at 2048 chars); empty = unused`,
-      );
-      envLines.push(`        ${env}: !Ref ${param}`);
-    }
-  }
   // IAM invocation permission does not prove forwarder origin. Internal envelopes need a secret.
   params.push(
     `  FastagentIngressSecret:`,
@@ -296,6 +273,9 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `              - Effect: Allow # AgentCore workload identity (the platform mints one per runtime)`,
     `                Action: [bedrock-agentcore:GetWorkloadAccessToken]`,
     `                Resource: "*"`,
+    `              - Effect: Allow # the deployment's values: this one secret, read on the first invocation`,
+    `                Action: [secretsmanager:GetSecretValue]`,
+    `                Resource: !Ref SecretArn`,
     ``,
     `  Runtime:`,
     `    Type: AWS::BedrockAgentCore::Runtime`,
@@ -473,13 +453,19 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# Prereqs: AWS CLI v2 with credentials + a region where AgentCore is available, and Docker with buildx`,
     `# (the image MUST be linux/arm64 — the one host whose build runs on YOUR machine, not remotely).`,
     ``,
-    `# 1. ECR repository + the forwarder artifact bucket (one-time; skip what exists).`,
+    `# 1. ECR repository, the forwarder artifact bucket and the deployment's values secret (one-time; skip what exists).`,
     `aws ecr create-repository --repository-name ${repo}`,
     `aws s3api create-bucket --bucket ${bucketHint} --region us-east-1   # us-east-1 ONLY`,
     `aws s3api create-bucket --bucket ${bucketHint} --region <region> \\   # every OTHER region`,
     `  --create-bucket-configuration LocationConstraint=<region>`,
     `aws s3api put-public-access-block --bucket ${bucketHint} \\`,
     `  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true`,
+    ``,
+    `aws secretsmanager create-secret --name ${agentcoreSecretName(name)} --secret-string '{}'`,
+    ...(secrets.length > 0
+      ? [`#    Its values, one command each (or \`fastagent secrets push agentcore\` for a file or the environment):`]
+      : []),
+    ...secrets.map((s) => `#      fastagent secrets set agentcore ${s.name}   # ${s.hint}`),
     ``,
     `# 1b. Package the forwarder and upload it. Name the object by its CONTENT (a hash/date):`,
     `#     CloudFormation rolls the function only when the ForwarderS3Key VALUE changes.`,
@@ -493,13 +479,9 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     ``,
     `# 3. Deploy the stack (runtime + ingress in one template).`,
   ];
-  if (secrets.length > 0) {
-    runbook.push(
-      `#    Variables ride ONE NoEcho parameter, FastagentEnv: base64 of a JSON object {"NAME": "value", …},`,
-      `#    split every ${CARRIER_CHUNK_SIZE} chars across FastagentEnv, FastagentEnv2 … (\`--run\` builds it):`,
-      ...secrets.map((s) => `#      ${s.name}: ${s.hint}`),
-    );
-  }
+  runbook.push(
+    `#    SecretArn: the ARN of the secret made in step 1 (aws secretsmanager describe-secret --secret-id ${agentcoreSecretName(name)} --query ARN)`,
+  );
   const wakeSecretHint = " FastagentWakeSecret=<any random string> FastagentIngressSecret=<another random string>";
   runbook.push(`#      FastagentWakeSecret: the wake-alarm shared secret — any random string (\`--run\` mints one)`);
   runbook.push(
@@ -508,9 +490,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   runbook.push(
     `aws cloudformation deploy --stack-name ${stack} --template-file ${TEMPLATE_FILE} \\`,
     `  --capabilities CAPABILITY_IAM \\`,
-    `  --parameter-overrides ImageUri=${image} ForwarderBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip${
-      secrets.length > 0 ? " FastagentEnv=<base64 JSON>" : ""
-    }${wakeSecretHint}`,
+    `  --parameter-overrides ImageUri=${image} SecretArn=<arn> ForwarderBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip${wakeSecretHint}`,
     ``,
     `# 4. Read the outputs (the runtime ARN + callback URL; it serves webhooks only when configured):`,
     `aws cloudformation describe-stacks --stack-name ${stack} --query "Stacks[0].Outputs"`,

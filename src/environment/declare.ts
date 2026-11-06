@@ -81,9 +81,7 @@ function declareVariables(raw: unknown): Record<string, DeclaredVariable> {
     const at = `environment: variable ${JSON.stringify(name)}`;
     if (!isEnvName(name)) throw new Error(`${at} is not an environment variable name`);
     if (isDeployOwned(name)) {
-      throw new Error(
-        `${at} is set by the deployment itself, so it cannot be declared: a value file's copy never travels`,
-      );
+      throw new Error(`${at} is set by the deployment itself, so it cannot be declared`);
     }
     if (!variable || typeof variable !== "object" || Array.isArray(variable)) {
       throw new Error(

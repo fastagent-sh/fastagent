@@ -52,6 +52,35 @@ esac
   };
 }
 
+/** An `aws` on PATH with one Secrets Manager secret in a file: absent until `create-secret`, as the CLI answers. */
+async function fakeAws(initial?: string) {
+  const bin = await mkdtemp(join(tmpdir(), "fa-fake-aws-"));
+  const log = join(bin, "log");
+  const secret = join(bin, "secret");
+  if (initial !== undefined) await writeFile(secret, initial);
+  await writeFile(
+    join(bin, "aws"),
+    `#!/bin/sh
+echo "$@" >> "${log}"
+[ "$1" = secretsmanager ] || exit 1
+case "$2" in
+  describe-secret)
+    [ -f "${secret}" ] || { echo "An error occurred (ResourceNotFoundException) when calling DescribeSecret" >&2; exit 254; }
+    case "$*" in *ARN*) echo "arn:aws:secretsmanager:us-west-2:1:secret:fastagent/x-AbCdEf";; *) echo '{"Name":"x"}';; esac;;
+  create-secret) echo '{}' > "${secret}"; echo '{"Name":"x"}';;
+  get-secret-value) cat "${secret}"; echo;;
+  put-secret-value) for last; do :; done; cp "\${last#file://}" "${secret}"; echo '{"VersionId":"v"}';;
+esac
+`,
+  );
+  await chmod(join(bin, "aws"), 0o755);
+  return {
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    calls: async () => (await readFile(log, "utf8").catch(() => "")).trim().split("\n"),
+    held: async () => readFile(secret, "utf8").catch(() => undefined),
+  };
+}
+
 const realStdin = Object.getOwnPropertyDescriptor(process, "stdin");
 afterEach(() => {
   if (realStdin) Object.defineProperty(process, "stdin", realStdin);
@@ -223,5 +252,42 @@ describe("secrets set", () => {
     const bad = await runInProcess(["secrets", "set", "docker", "not a name", dir]);
     expect(bad.code).toBe(2);
     expect(bad.stderr).toContain("is not an environment variable name");
+  });
+});
+
+describe("secrets on AgentCore (one Secrets Manager secret)", () => {
+  it("list: a deployment with no secret yet holds nothing, and nothing is created", async () => {
+    const aws = await fakeAws();
+    const dir = await agent();
+    const result = await runInProcess(["secrets", "list", "agentcore", dir, "--json"], undefined, aws.env);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ host: "AWS Secrets Manager", exists: false });
+    expect(await aws.held()).toBeUndefined();
+    expect(result.stderr).toContain("has no app for this agent yet");
+  });
+
+  it("set: creates the secret, merges the value without argv, and says when a running session sees it", async () => {
+    const aws = await fakeAws();
+    const dir = await agent();
+    Object.defineProperty(process, "stdin", { value: Readable.from(["ghp_value\n"]), configurable: true });
+    const result = await runInProcess(["secrets", "set", "agentcore", "GH_TOKEN", dir], undefined, aws.env);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse((await aws.held()) as string)).toEqual({ GH_TOKEN: "ghp_value" });
+    expect((await aws.calls()).join("\n")).not.toContain("ghp_value");
+    expect(result.stderr).toContain("the runtime reads the secret when a session starts");
+  });
+
+  it("push: only declared names go in, the Agent API's key is not one of them (AgentCore does not serve it), and others stay", async () => {
+    const aws = await fakeAws('{"KEEP":"1"}');
+    const dir = await agent();
+    await writeFile(join(dir, "values.env"), "GH_TOKEN=ghp_x\nFASTAGENT_API_KEY=nope\nUNDECLARED=nope\n");
+    const result = await runInProcess(
+      ["secrets", "push", "agentcore", dir, "--env-file", join(dir, "values.env")],
+      undefined,
+      aws.env,
+    );
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse((await aws.held()) as string)).toEqual({ KEEP: "1", GH_TOKEN: "ghp_x" });
+    expect(result.stderr).toContain("FASTAGENT_API_KEY");
   });
 });

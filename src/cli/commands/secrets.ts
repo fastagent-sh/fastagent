@@ -8,13 +8,16 @@ import { randomBytes } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { isCancel, password } from "@clack/prompts";
 import { isEnvName } from "../../declared-secrets.ts";
+import { agentcoreName, agentcoreSecretName } from "../../deploy/agentcore/plan.ts";
+import { agentcoreSecretStore } from "../../deploy/agentcore/store.ts";
+import { deploymentApi } from "../../deploy/api.ts";
 import { fileStore } from "../../deploy/file-store.ts";
 import { toFlyAppName, parseFlyAppName } from "../../deploy/fly/plan.ts";
 import { flyStore } from "../../deploy/fly/store.ts";
 import { toRailwayName } from "../../deploy/railway/plan.ts";
 import { railwayStore } from "../../deploy/railway/store.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { spawnRunner } from "../../deploy/runner.ts";
+import { awsRunner, spawnRunner } from "../../deploy/runner.ts";
 import type { SecretStore } from "../../deploy/secret-store.ts";
 import { declaredNames, hostSignedOutGate, secretNeeds } from "../../deploy/secrets.ts";
 import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
@@ -28,7 +31,7 @@ import { printReport } from "../ticket.ts";
 import { join } from "node:path";
 
 /** The targets that keep a deployment's values in a store of their own. */
-export type SecretsHost = "docker" | "fly" | "railway";
+export type SecretsHost = "docker" | "fly" | "railway" | "agentcore";
 
 export interface SecretsOptions {
   /** `--config <file>`: the instance configuration the deployment delivers; its channels decide which names it reads. */
@@ -42,12 +45,19 @@ export interface SecretsOptions {
   json?: boolean;
 }
 
-const LABELS: Record<SecretsHost, string> = { docker: "Docker", fly: "Fly", railway: "Railway" };
+const LABELS: Record<SecretsHost, string> = {
+  docker: "Docker",
+  fly: "Fly",
+  railway: "Railway",
+  agentcore: "AWS Secrets Manager",
+};
 
 /** The store of `host` for the agent in `agentDir`, its CLI signed in. */
 async function openStore(host: SecretsHost, agentDir: string): Promise<SecretStore> {
   const log = (message: string) => console.error(`[fastagent] ${message}`);
   if (host === "docker") return fileStore(agentDir, dotEnvPath(agentDir));
+  if (host === "agentcore")
+    return agentcoreSecretStore(awsRunner(agentDir), agentcoreSecretName(agentcoreName(basename(agentDir))), log);
   if (host === "fly") {
     const fly = spawnRunner("fly", agentDir, { stdoutToStderr: true });
     if ((await fly(["version"], { capture: true })).code === 127) {
@@ -73,10 +83,11 @@ async function openStore(host: SecretsHost, agentDir: string): Promise<SecretSto
 }
 
 /** What the definition declares for the deployment, and the production value file it reads. */
-async function declared(agentDir: string, configFile: string | undefined) {
+async function declared(agentDir: string, configFile: string | undefined, host: SecretsHost) {
   const instance = configFile === undefined ? undefined : await readInstanceConfigFile(resolve(configFile));
   const definition = await loadSourceDefinition(agentDir);
   const config = resolveConfig(definition, instance);
+  const api = deploymentApi({ config, hostServes: host !== "agentcore" });
   const facts = await preflightDeploy({
     agentDir,
     config,
@@ -87,13 +98,15 @@ async function declared(agentDir: string, configFile: string | undefined) {
     force: false,
     noResidentProcess: false,
     storageResets: false,
-    servesApi: true,
+    servesApi: api.served,
   });
   if (!facts.ok) throw new Error(facts.gate);
   return {
     needs: secretNeeds(facts.modelAuth, facts.declaredSecrets, facts.modelKey),
     names: declaredNames(facts.modelAuth, facts.declaredSecrets, facts.modelKey),
     modelKeys: facts.modelKey.variables,
+    // The key of the Agent API: on the hosts that serve it.
+    apiNames: api.served ? [API_KEY_VARIABLE] : [],
   };
 }
 
@@ -129,28 +142,34 @@ export async function runSecrets(
   // The deployment's own, never the development instance's: its channels receive the way the box will choose.
   selectAgentEnvironment("production");
   unmarkDevServe();
-  const label = LABELS[host];
   try {
     const store = await openStore(host, agentDir);
-    if (action === "list") return await list(store, label, agentDir, opts);
-    if (action === "set") return await set(store, label, name as string, opts, agentDir);
-    return await push(store, label, agentDir, opts);
+    if (action === "list") return await list(store, host, agentDir, opts);
+    if (action === "set") return await set(store, host, name as string, opts, agentDir);
+    return await push(store, host, agentDir, opts);
   } catch (error) {
     failStartup(error);
   }
 }
 
-/** Docker's values are a file Compose reads when it starts the container: a running one does not see a change to it. */
-function noteWhenItTakesEffect(label: string): void {
-  if (label === "Docker") {
+/** When a written value reaches what is running: a Docker container reads its file at start, an AgentCore session its secret. */
+function noteWhenItTakesEffect(host: SecretsHost): void {
+  if (host === "docker") {
     console.error(
       "[fastagent] note: a running container reads it after `docker compose up -d`, or the next `deploy docker --run`",
     );
   }
+  if (host === "agentcore") {
+    console.error(
+      "[fastagent] note: the runtime reads the secret when a session starts: a session already running keeps its values " +
+        "until it ends (its idle timeout) or the next deploy",
+    );
+  }
 }
 
-async function list(store: SecretStore, label: string, agentDir: string, opts: SecretsOptions): Promise<void> {
-  const { needs, names, modelKeys } = await declared(agentDir, opts.config);
+async function list(store: SecretStore, host: SecretsHost, agentDir: string, opts: SecretsOptions): Promise<void> {
+  const label = LABELS[host];
+  const { needs, names, modelKeys } = await declared(agentDir, opts.config, host);
   // A target with no app yet holds nothing: every name is missing, which is an answer and not a failure.
   const present = await store.exists();
   if (!present)
@@ -179,13 +198,14 @@ async function list(store: SecretStore, label: string, agentDir: string, opts: S
 
 async function set(
   store: SecretStore,
-  label: string,
+  host: SecretsHost,
   name: string,
   opts: SecretsOptions,
   agentDir: string,
 ): Promise<void> {
-  const { names } = await declared(agentDir, opts.config);
-  if (!names.includes(name) && name !== API_KEY_VARIABLE) {
+  const label = LABELS[host];
+  const { names, apiNames } = await declared(agentDir, opts.config, host);
+  if (!names.includes(name) && !apiNames.includes(name)) {
     console.error(`[fastagent] warn: ${name} is not declared by the definition, so nothing reads it on ${label}`);
   }
   const { value, minted } = await valueFor(name, opts.generate);
@@ -193,21 +213,22 @@ async function set(
   await store.ensure();
   await store.write({ [name]: value });
   console.error(`[fastagent] set ${name} on ${label}`);
-  noteWhenItTakesEffect(label);
+  noteWhenItTakesEffect(host);
   // The one time a value is shown: it was made here and nobody holds it yet.
   if (minted) console.log(value);
 }
 
-async function push(store: SecretStore, label: string, agentDir: string, opts: SecretsOptions): Promise<void> {
-  const { names } = await declared(agentDir, opts.config);
-  const known = new Set([...names, API_KEY_VARIABLE]);
+async function push(store: SecretStore, host: SecretsHost, agentDir: string, opts: SecretsOptions): Promise<void> {
+  const label = LABELS[host];
+  const { names, apiNames } = await declared(agentDir, opts.config, host);
+  const known = new Set([...names, ...apiNames]);
   let source: ReadonlyMap<string, string>;
   let where: string;
   if (opts.fromEnv) {
     source = new Map(Object.entries(process.env).flatMap(([n, v]) => (v === undefined ? [] : [[n, v] as const])));
     where = "the environment";
   } else {
-    if (label === "Docker" && opts.envFile === undefined) {
+    if (host === "docker" && opts.envFile === undefined) {
       throw new Error(
         `${dotEnvPath(agentDir)} is Docker's own store, so there is nothing to push from it: pass --env-file <file> or --from-env`,
       );
@@ -232,5 +253,5 @@ async function push(store: SecretStore, label: string, agentDir: string, opts: S
   console.error(
     `[fastagent] pushed ${Object.keys(toWrite).length} value(s) from ${where} to ${label}: ${Object.keys(toWrite).join(", ")}`,
   );
-  noteWhenItTakesEffect(label);
+  noteWhenItTakesEffect(host);
 }
