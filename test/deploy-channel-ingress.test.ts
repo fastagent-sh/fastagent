@@ -88,12 +88,13 @@ describe("deploy/channel-ingress: a login that did not happen", () => {
     expect(logs).toEqual([]);
   });
 
-  it("with one, says logging in registers none, and how this host gets them registered", () => {
+  it("with one, says this deploy and the login confirm none, and what this host does once logged in", () => {
     const logs: string[] = [];
     const gate = loginGate({ notLoggedIn, channels: webhook("telegram"), log: (m) => logs.push(m), afterLogin });
     expect(gate).toBe(
-      `${notLoggedIn}. This deploy registered no webhook, and logging in registers none; any an earlier deploy ` +
-        `registered still points here, and every message it brings fails until the box is logged in. Once it is, ` +
+      `${notLoggedIn}. This deploy confirmed no webhook, and logging in confirms none; any already pointed here, ` +
+        `by the box itself or by an earlier deploy, still delivers, and every message it brings fails until the box ` +
+        `is logged in. Once it is, ` +
         afterLogin,
     );
     expect(logs).toEqual([]); // no URL yet: nothing to point by hand
@@ -481,13 +482,15 @@ describe("every host's runbook reads the same answer", () => {
     expect(railway(longConnection("telegram"))).not.toContain("railway domain");
   });
 
-  it("agentcore: the same steps at the forwarder URL, and generate-only skips a long-connection one", () => {
+  it("agentcore: the runtime points its own channels at the forwarder URL, so only Slack's is a person's step", () => {
     const out = agentcore(webhook("telegram", "slack"));
-    expect(out).toContain("-d url=<ForwarderUrl>/telegram");
+    expect(out).toContain("makes the runtime point telegram at <ForwarderUrl>");
     expect(out).toContain("Request URL = <ForwarderUrl>/slack");
+    expect(out).not.toContain("-d url=<ForwarderUrl>/telegram");
     // `--run` refuses a long-connection channel, but generate-only only warns and still prints this
     // runbook — so the steps filter on ingress rather than on the CLI having gated.
-    expect(agentcore(longConnection("telegram"))).not.toContain("setWebhook");
+    expect(agentcore(longConnection("telegram"))).not.toContain("makes the runtime point");
+    expect(agentcore(webhook("slack"))).not.toContain("makes the runtime point");
   });
 
   it("agentcore: a feishu step carries the forwarder challenge note the shared wording cannot", () => {

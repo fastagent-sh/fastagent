@@ -99,7 +99,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(await run(p("not logged in: …"), fly, tg, healthy)).toMatchObject({
       ok: false,
       gate: expect.stringMatching(
-        /^not logged in: …\. This deploy registered no webhook.*re-run `fastagent deploy fly --run`/,
+        /^not logged in: …\. This deploy confirmed no webhook.*re-run `fastagent deploy fly --run`/,
       ),
     });
     expect(order).toEqual(["health", "login"]);

@@ -157,15 +157,16 @@ catches the browser's return to `localhost` on this machine, and takes the addre
 For an API key it names the variable to set in `.secrets/production/.env`; the next `deploy <host> --run` carries it,
 unless the box already holds an account sign-in for that provider, which outranks it (below).
 
-`deploy --run` asks the box once it answers `/health` and before any webhook is pointed at it: the box keeps a
+`deploy --run` asks the box once it answers `/health` and before it reads the webhooks' outcomes: the box keeps a
 credential it already authenticates the model's provider with (a login it holds, unexpired or refreshable; a
 variable its host sets; a role it runs as), and logs in only when it has none. A redeploy therefore keeps the box's
 credential. A credential revoked at the provider before it expires is not detected, and the first turn fails with
 the provider's error: run `fastagent login --deployment <host>` to replace it. With `--json`, the login is a step of
-the deploy's ticket, and the webhooks are registered once it is done. Without a terminal or `--json` (CI), `--run`
+the deploy's ticket, and the deploy reads what the box made of its webhooks once it is done. Without a terminal or `--json` (CI), `--run`
 stops at the login with `not logged in`, exit 1, naming the command for a terminal and the `--json` one for a coding
-agent. It has registered no webhook at that point, so when the agent has any, the message also says what to re-run
-once the box is logged in.
+agent. It has confirmed no webhook at that point (a box that points its own channels may have pointed them already, and
+a message that reaches it fails until the login), so when the agent has any, the message also says what to re-run once
+the box is logged in.
 
 A login stored on the box outranks a key in its environment (pi lets a stored credential own its provider). So a key
 added to `.secrets/production/.env` after the box was logged in is not used; the box's startup log says so and names the

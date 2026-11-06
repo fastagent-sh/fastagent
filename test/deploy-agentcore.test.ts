@@ -119,7 +119,7 @@ describe("deploy agentcore: the plan", () => {
     // Variables ride the fixed FastagentEnv carrier, never a parameter per name.
     expect(template).toContain("FASTAGENT_ENV: !Ref FastagentEnv");
     expect(template).not.toContain("TelegramBotToken");
-    expect(plan.runbook.join("\n")).toContain("setWebhook");
+    expect(plan.runbook.join("\n")).toContain("makes the runtime point telegram at <ForwarderUrl>");
     // The redeploy-immediacy step is in the manual runbook too (— --run automates it).
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
     expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --source forwarder --follow");

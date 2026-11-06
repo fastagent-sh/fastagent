@@ -187,7 +187,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(out).toMatchObject({
       ok: false,
       gate: expect.stringMatching(
-        /^not logged in: …\. This deploy registered no webhook.*they work again: the runtime has pointed its own channels/,
+        /^not logged in: …\. This deploy confirmed no webhook.*they work again: the runtime has pointed its own channels/,
       ),
     });
     // The shell opens on the runtime this deploy just produced; the one fetch is the probe that verified it.
@@ -644,6 +644,37 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       { intervalMs: 1, timeoutMs: 20 },
     );
     expect(never).toMatchObject({ ok: false, gate: expect.stringContaining("telegram") });
+  });
+
+  it("asks the runtime for its webhooks every 5 s by default: each ask is a billed Lambda and runtime call", async () => {
+    const pending = [{ channel: "telegram", outcome: "pending" }];
+    const answers = [pending, pending, [{ channel: "telegram", outcome: "registered" }]];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ ok: true, webhooks: answers.shift() })),
+    );
+    const delays: number[] = [];
+    const wait = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
+      delays.push(ms ?? 0);
+      fn();
+      return 0;
+    }) as unknown as typeof setTimeout);
+    try {
+      const out = await deployAgentcoreRun(
+        plan({ channels: declaredChannels(["telegram"]) }),
+        fakeCli(happyAws).cli,
+        fakeCli().cli,
+        () => {},
+        writeParams,
+        writeZip,
+        { telegram: vi.fn() },
+      );
+      expect(out).toMatchObject({ ok: true });
+    } finally {
+      wait.mockRestore();
+    }
+    expect(delays).toContain(5_000);
+    expect(delays).not.toContain(2_000);
   });
 
   it("names the configuration's own http.publicUrl as where the platforms reach it, and sets Slack there", async () => {

@@ -57,8 +57,8 @@ export interface AgentcoreRunPlan {
    */
   topology: AgentcoreTopology;
   /**
-   * Log the runtime in (`fastagent login --deployment`) once the probe verified it and before any webhook points at
-   * it. Resolves a gate line, or undefined.
+   * Log the runtime in (`fastagent login --deployment`) once the probe verified it and before the deploy reads its
+   * webhooks. Resolves a gate line, or undefined.
    */
   boxLogin?: BoxLoginStep<[runtimeArn: string]>;
   /** The `http.publicUrl` the configuration names (a custom domain); default the forwarder's URL. */
@@ -88,6 +88,12 @@ const EMPTY_STACK_STATUSES = new Set([
   "REVIEW_IN_PROGRESS",
   "DELETE_COMPLETE",
 ]);
+
+/**
+ * How often the deploy asks the runtime how its webhooks went. Each ask is a Lambda and an `InvokeAgentRuntime` that
+ * keeps the microVM up and is billed, where another host's `/health` costs nothing.
+ */
+const WEBHOOKS_INTERVAL_MS = 5_000;
 
 /** Budget for image pull, storage initialization and channel construction. */
 const PROBE_TIMEOUT_MS = 240_000;
@@ -576,7 +582,7 @@ export async function deployAgentcoreRun(
       plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
       probe.fetchImpl ?? fetch,
     ),
-    ...(probe.intervalMs === undefined ? {} : { intervalMs: probe.intervalMs }),
+    intervalMs: probe.intervalMs ?? WEBHOOKS_INTERVAL_MS,
     ...(probe.timeoutMs === undefined ? {} : { timeoutMs: probe.timeoutMs }),
   });
   if (registrationGateMsg) return gate(registrationGateMsg);
