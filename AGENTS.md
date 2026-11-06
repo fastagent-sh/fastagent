@@ -242,7 +242,7 @@ src/
 │   │                       # `--run` sends, and the FASTAGENT_ENV the container expands back
 │   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
 │   ├── box-shell.ts        # a running box's owner-authenticated shell as a byte channel (`login --deployment`)
-│   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + optional Quick Tunnel) + the compose driver
+│   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + state volume, ingress is the operator's) + the compose driver
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
 │   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
 │   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js } # ONE stack:

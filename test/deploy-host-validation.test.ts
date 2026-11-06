@@ -128,7 +128,7 @@ it.each([
   async ({ host, name, content, relocated, error, ...rest }) => {
     const { dir, file } = await agent(name, content, relocated);
     const config = "connection" in rest ? { config: await connectionConfig() } : {};
-    await expect(runDeploy(host, dir, { run: true, tunnel: host === "docker", ...config })).rejects.toBe(stopped);
+    await expect(runDeploy(host, dir, { run: true, ...config })).rejects.toBe(stopped);
     expect(registerFeishuApp).not.toHaveBeenCalled();
     expect(createFeishuApi).not.toHaveBeenCalled();
     expect(await readFile(file, "utf8")).toBe(content);
@@ -136,14 +136,25 @@ it.each([
   },
 );
 
-it.each(["agentcore", "docker"] as const)("valid %s setup still onboards before deployment", async (host) => {
+it("a valid AgentCore setup still onboards before deployment", async () => {
+  const host = "agentcore";
   const { dir } = await agent("agent", "");
   const deploy = vi.spyOn(HOSTS[host], "deploy").mockImplementation(async (ctx) => {
     expect(registerFeishuApp).toHaveBeenCalledOnce();
     expect(ctx.pre.values.get("FEISHU_APP_ID")).toBe("cli_production");
     expect(ctx.pre.values.get("FEISHU_VERIFICATION_TOKEN")).toBe("production_token");
   });
-  await runDeploy(host, dir, { run: true, tunnel: host === "docker" });
+  await runDeploy(host, dir, { run: true });
+  expect(deploy).toHaveBeenCalledOnce();
+});
+
+it("a valid Docker setup (a channel that connects out) onboards before deployment", async () => {
+  const { dir } = await agent("agent", "");
+  const deploy = vi.spyOn(HOSTS.docker, "deploy").mockImplementation(async (ctx) => {
+    expect(registerFeishuApp).toHaveBeenCalledOnce();
+    expect(ctx.pre.values.get("FEISHU_APP_ID")).toBe("cli_production");
+  });
+  await runDeploy("docker", dir, { run: true, config: await connectionConfig() });
   expect(deploy).toHaveBeenCalledOnce();
 });
 
@@ -163,10 +174,7 @@ it("validates the refreshed channel facts after onboarding before handing off to
 it.each(["agentcore", "docker"] as const)("generate-only %s still warns without onboarding", async (host) => {
   const { dir } = await agent("agent", "", host === "docker");
   const deploy = vi.spyOn(HOSTS[host], "deploy").mockResolvedValue(undefined);
-  await runDeploy(host, dir, {
-    tunnel: host === "docker",
-    ...(host === "agentcore" ? { config: await connectionConfig() } : {}),
-  });
+  await runDeploy(host, dir, host === "agentcore" ? { config: await connectionConfig() } : {});
   expect(registerFeishuApp).not.toHaveBeenCalled();
   expect(createFeishuApi).not.toHaveBeenCalled();
   expect(deploy).toHaveBeenCalledOnce();

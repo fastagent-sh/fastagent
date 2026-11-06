@@ -1,12 +1,7 @@
 /** `fastagent deploy docker --run` — reconcile the generated/user-owned Compose application locally. */
 import { connect } from "node:net";
 import type { BoxLoginStep } from "../box-shell.ts";
-import type { DeclaredChannel } from "../../channels/discover.ts";
 import { waitForHealth } from "../../channels/wait-health.ts";
-import { loginGate } from "../channel-ingress.ts";
-import { TUNNEL_DNS_LAG_MS, hasTunnelConnection, parseTunnelUrl } from "../../tunnel.ts";
-import type { RegistrationOutcome } from "../../channels/registration.ts";
-import { registrationGate } from "../registration-gate.ts";
 import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
@@ -25,12 +20,6 @@ export interface DockerRunPlan {
   missingSecrets: string[];
   /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
   valueFile: string;
-  /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar answered. */
-  announce: DockerAnnounce;
-  /** Every declared channel and its ingress: which of them a failed login leaves unregistered. */
-  channels: readonly DeclaredChannel[];
-  /** `--tunnel` was requested for this run; a kept Compose file must actually contain that service. */
-  requireTunnel: boolean;
   /**
    * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
@@ -39,15 +28,9 @@ export interface DockerRunPlan {
 }
 
 export type DockerRunOutcome =
-  | { ok: true; url?: string; tunnelUrl?: string }
-  /**
-   * `url`/`tunnelUrl` travel with a gate too: Compose is up, so the operator still needs to know where it is and what
-   * to re-run.
-   */
-  | { ok: false; gate: string; url?: string; tunnelUrl?: string };
-
-/** Register the deployment's webhooks against its public URL, reporting what each registrar answered. */
-type DockerAnnounce = (baseUrl: string) => Promise<{ kind: string; outcome: RegistrationOutcome }[]>;
+  | { ok: true; url?: string }
+  /** `url` travels with a gate too: Compose is up, so the operator still needs to know where. */
+  | { ok: false; gate: string; url?: string };
 
 /**
  * `stillStarting` answers whether the agent container is still up; a probe that ignores it simply waits out its whole
@@ -59,13 +42,6 @@ export type DockerHealthProbe = (healthUrl: string, stillStarting: () => Promise
  * publish free", asked before `up`, because afterwards a `/health` that answers cannot say whose it is.
  */
 export type HostPortProbe = (host: string, port: number) => Promise<boolean>;
-/** A published Quick Tunnel URL, and whether its tunnel ever reported an edge connection. */
-export interface ComposeTunnel {
-  url: string;
-  connected: boolean;
-}
-export type DockerTunnelUrlProbe = (docker: CliRunner, composeFile: string) => Promise<ComposeTunnel | undefined>;
-
 /** Resolve Docker Compose's `host:port` output to a loopback URL (safe for 0.0.0.0/[::] bindings too). */
 export function localUrlFromComposePort(stdout: string): string | undefined {
   const line = stdout
@@ -114,35 +90,6 @@ export function agentPublishedPorts(stdout: string): { host: string; port: numbe
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Poll the detached cloudflared service's logs until its Quick Tunnel URL is assigned AND the tunnel reports an edge
- * connection.
- */
-export async function waitForComposeTunnelUrl(
-  docker: CliRunner,
-  composeFile: string,
-  options: { attempts?: number; intervalMs?: number; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<ComposeTunnel | undefined> {
-  const compose = ["compose", "-f", composeFile];
-  const attempts = options.attempts ?? 60;
-  let assigned: string | undefined;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const logs = await docker([...compose, "logs", "--no-color", "tunnel"], { capture: true });
-    if (logs.code === 0) {
-      assigned ??= parseTunnelUrl(logs.stdout);
-      if (assigned && hasTunnelConnection(logs.stdout)) {
-        await (options.sleep ?? sleep)(TUNNEL_DNS_LAG_MS);
-        return { url: assigned, connected: true };
-      }
-    }
-    if (attempt + 1 < attempts) await (options.sleep ?? sleep)(options.intervalMs ?? 500);
-  }
-  return assigned ? { url: assigned, connected: false } : undefined;
-}
-
-const defaultTunnelUrlProbe: DockerTunnelUrlProbe = (docker, composeFile) =>
-  waitForComposeTunnelUrl(docker, composeFile);
-
-/**
  * `/health` asked from inside the agent container, for a topology that publishes no host port. The image always has
  * node or bun (the generated Dockerfile's base), and both have `fetch`; nothing else is assumed installed.
  */
@@ -170,7 +117,6 @@ export async function deployDockerRun(
   docker: CliRunner,
   log: (message: string) => void,
   healthProbe: DockerHealthProbe = defaultHealthProbe,
-  tunnelUrlProbe: DockerTunnelUrlProbe = defaultTunnelUrlProbe,
   hostPortBusy: HostPortProbe = defaultHostPortBusy,
 ): Promise<DockerRunOutcome> {
   const gate = (message: string): DockerRunOutcome => ({ ok: false, gate: message });
@@ -213,13 +159,6 @@ export async function deployDockerRun(
   if (!services.includes("agent")) {
     return gate(`Compose file must keep the "agent" service for \`fastagent deploy docker --run\``);
   }
-  const hasTunnel = services.includes("tunnel");
-  if (plan.requireTunnel && !hasTunnel) {
-    return gate(
-      `--tunnel was requested but the kept ${plan.composeFile} has no "tunnel" service — ` +
-        `edit it, delete it and regenerate, or pass --force`,
-    );
-  }
 
   // A port something else already serves would answer the `/health` this run waits for, and the run would report that
   // process's answer as the agent's. A container this project already runs holds its own port, so only a first start
@@ -243,14 +182,6 @@ export async function deployDockerRun(
     }
   }
 
-  // Quick Tunnel logs are the control-plane output (the assigned URL).
-  if (hasTunnel) {
-    log("recreating the ephemeral tunnel service…");
-    if ((await docker([...compose, "rm", "-s", "-f", "tunnel"])).code !== 0) {
-      return gate(`could not recreate the tunnel service — inspect \`docker compose -f ${plan.composeFile} ps\``);
-    }
-  }
-
   log(`building and reconciling ${plan.composeFile}…`);
   // `--pull`: the base image is a floating tag, and a copy cached here may be older than the runtime floor.
   if ((await docker([...compose, "build", "--pull"])).code !== 0) {
@@ -266,11 +197,6 @@ export async function deployDockerRun(
   if (running.code !== 0 || !runningServices.includes("agent")) {
     return gate(
       `the Compose service "agent" is not running — inspect with \`docker compose -f ${plan.composeFile} logs agent\``,
-    );
-  }
-  if (hasTunnel && !runningServices.includes("tunnel")) {
-    return gate(
-      `the Compose service "tunnel" is not running — inspect with \`docker compose -f ${plan.composeFile} logs tunnel\``,
     );
   }
 
@@ -308,35 +234,6 @@ export async function deployDockerRun(
 
   // `url` travels with this gate: Compose is up, and the operator needs to know where.
   const notLoggedIn = await plan.boxLogin?.run();
-  if (notLoggedIn) {
-    // Only a tunnel is ours to announce; without one, the webhooks were never this run's to register.
-    const afterLogin = "re-run `fastagent deploy docker --run` (it keeps the login and announces the tunnel)";
-    const channels = hasTunnel ? plan.channels : [];
-    return { ok: false, gate: loginGate({ notLoggedIn, channels, log, afterLogin }), url };
-  }
-
-  if (!hasTunnel) return { ok: true, url };
-  log("waiting for the Compose tunnel service to publish its Quick Tunnel URL…");
-  const tunnel = await tunnelUrlProbe(docker, plan.composeFile);
-  if (!tunnel) {
-    return gate(
-      `tunnel did not publish a Quick Tunnel URL — inspect \`docker compose -f ${plan.composeFile} logs tunnel\``,
-    );
-  }
-  // The same sentence `startCloudflareTunnel` prints for the same state, and needed MORE here.
-  if (!tunnel.connected) {
-    log(
-      `warn: the tunnel service never reported an edge connection for ${tunnel.url} — announcing it anyway. ` +
-        `Nothing reaches a tunnel that has not connected, so a webhook registration that cannot resolve the ` +
-        `host is this, not the platform. Inspect \`docker compose -f ${plan.composeFile} logs tunnel\`.`,
-    );
-  }
-  const tunnelUrl = tunnel.url;
-  // Registration lives HERE, like every other host's driver, and not at the CLI: this is the layer that owns the
-  // outcome, so it is the layer that can gate on one.
-  const reg = registrationGate(log, `re-run this deploy to retry registration (Compose is already up)`);
-  for (const { kind, outcome } of await plan.announce(tunnelUrl)) reg.track(kind, outcome);
-  const blocked = reg.gate();
-  if (blocked) return { ok: false, gate: blocked, url, tunnelUrl };
-  return { ok: true, url, tunnelUrl };
+  if (notLoggedIn) return { ok: false, gate: notLoggedIn, url };
+  return { ok: true, url };
 }

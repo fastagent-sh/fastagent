@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentWorkspace, runInProcess } from "./cli-run.ts";
@@ -33,26 +33,6 @@ describe("cli: deploy docker", () => {
     expect(second.stderr).toContain("kept fastagent.compose.yml");
     expect(await readFile(join(dir, "Dockerfile"), "utf8")).toBe(customDockerfile);
     expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toBe(customCompose);
-  });
-
-  it("deploy docker --tunnel keeps an existing app-only topology and prints an actionable runbook", async () => {
-    const dir = await agentWorkspace("fa-deploy-kept-no-tunnel-", {
-      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
-    });
-    expect((await runInProcess(["deploy", "docker", dir])).code).toBe(0);
-    const composePath = join(dir, "fastagent.compose.yml");
-    const compose = await readFile(composePath, "utf8");
-
-    const result = await runInProcess(["deploy", "docker", dir, "--tunnel"]);
-    expect(result.code).toBe(0);
-    expect(result.stderr).toMatch(/--tunnel.*kept fastagent\.compose\.yml.*no "tunnel" service/);
-    expect(result.stderr).toMatch(/edit it, delete it and regenerate, or pass --force/);
-    expect(result.stdout).not.toContain("logs -f tunnel");
-    expect(result.stdout).toContain(
-      // One spelling: the generated Compose names the value file itself.
-      "docker compose -f fastagent.compose.yml build --pull\ndocker compose -f fastagent.compose.yml up -d\n",
-    );
-    expect(await readFile(composePath, "utf8")).toBe(compose);
   });
 
   it("deploy docker gates --run when FASTAGENT_SECRETS_DIR sends the values away from the committed env_file", async () => {
@@ -97,23 +77,13 @@ describe("cli: deploy docker", () => {
     expect(gated.stderr).not.toMatch(/wrote /);
   });
 
-  it("deploy docker --tunnel shapes Compose but does not run Docker without --run", async () => {
-    const dir = await agentWorkspace("fa-deploy-tunnel-", {
+  it("deploy has no --tunnel: public ingress is the operator's, named as http.publicUrl", async () => {
+    const dir = await agentWorkspace("fa-deploy-no-tunnel-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
     const result = await runInProcess(["deploy", "docker", dir, "--tunnel"]);
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("Quick Tunnel");
-    const compose = await readFile(join(dir, "fastagent.compose.yml"), "utf8");
-    expect(compose).toContain("cloudflare/cloudflared:");
-    expect(compose).toContain("http://agent:8787");
-    expect(result.stderr).not.toMatch(/Docker CLI not found|Docker daemon/);
-
-    // The file is now authoritative: a later plain generation/run must not treat omitted --tunnel as
-    // "remove tunnel" (only --force resets generated topology).
-    const second = await runInProcess(["deploy", "docker", dir]);
-    expect(second.code).toBe(0);
-    expect(second.stderr).not.toContain("fastagent.compose.yml — it no longer matches");
-    expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toBe(compose);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("unknown option '--tunnel'");
+    await expect(access(join(dir, "fastagent.compose.yml"))).rejects.toThrow();
   });
 });

@@ -11,8 +11,7 @@
  * below. Locally known refusals belong in `HostDeploy.validate`: the dispatcher runs it before app onboarding
  * and again on the facts onboarding produces. `deploy/` itself is a neutral kernel plus one directory per host; nothing host-specific
  * belongs in the kernel, and no host may hold a fact about another one (a host-only flag is a row in
- * `HOST_ONLY_FLAGS` in `cli/commands/deploy.ts`, warning elsewhere; `--tunnel` stays a usage GATE in `runDeploy`
- * because a refusal is not a row).
+ * `HOST_ONLY_FLAGS` in `cli/commands/deploy.ts`, warning elsewhere).
  *
  * BEFORE writing one, read that host's docs for what it does NOT do implicitly — above all, whether
  * a created resource is REACHABLE without a further step. On Fly, `[http_service]` declares a service and allocates

@@ -435,19 +435,12 @@ const deploy: CommandSpec = {
     {
       flags: "--run",
       description:
-        "drive the target CLI to completion. Docker builds (pulling the base image) and runs `docker compose up -d`; with a tunnel " +
-        "service, reads its URL and registers webhooks. Fly/Railway provision app/service + volume + " +
+        "drive the target CLI to completion. Docker builds (pulling the base image) and runs `docker compose up -d`. Fly/Railway provision app/service + volume + " +
         "secrets + deploy + webhook setup. AgentCore builds/pushes the arm64 image and deploys the " +
         "stack (aws + docker CLIs). A model key in the value file travels; any other credential is a login on " +
         "the deployment itself, which --run starts once the box is up (fastagent login --deployment). " +
         "Stops at a gate (missing CLI/daemon/login/secret) with one actionable line. Without it: prints " +
         "the runbook",
-    },
-    {
-      flags: "--tunnel",
-      description:
-        "(docker only) add a Quick Tunnel service to generated Compose; generation-only unless combined " +
-        "with --run. Existing Compose stays authoritative",
     },
     { flags: "--force", description: "overwrite existing target config/Dockerfile/.dockerignore (else kept)" },
     {
@@ -482,7 +475,7 @@ const deploy: CommandSpec = {
   examples: [
     { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
     { cmd: "fastagent deploy fly --run --json", note: "a coding agent" },
-    { cmd: "fastagent deploy docker --tunnel --run", note: "Compose + a public URL" },
+    { cmd: "fastagent deploy docker --run", note: "Compose on this machine" },
     { cmd: "fastagent deploy railway", note: "print the runbook only" },
     { cmd: "fastagent deploy agentcore --run", note: "arm64 image + stack + webhooks" },
   ],
@@ -493,7 +486,6 @@ const deploy: CommandSpec = {
   run: async (args, f) =>
     (await import("./commands/deploy.ts")).runDeploy(args[0] as DeployHost, args[1] as string, {
       run: f.run === true,
-      tunnel: f.tunnel === true,
       force: f.force === true,
       intoLinked: f.intoLinked === true,
       ...(typeof f.config === "string" ? { config: f.config } : {}),

@@ -42,7 +42,7 @@ FastAgent is the missing bridge from local agent directory to live service.
 - **Durable by default.** Every conversation lives in the instance's storage, and an accepted message is answered after a restart. Built on the open-source [pi](https://github.com/earendil-works/pi) durable harness.
 - **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key, plus your own providers in code; typed tools in `src/tools/` (TypeBox-validated); Agent Skills loaded on demand.
 - **App embedding — your stack, we plug in.** Open the agent in your own process and call it like any function, behind your auth, with your database and infra; mount its channels in your Next / Astro / Hono / Bun / Node app with one handler. FastAgent composes with your app, never owns it.
-- **Deploy anywhere.** No application build step — the directory is the deployable unit. `fastagent deploy docker|fly|railway|agentcore` generates the container + target config and a runbook (`--run` drives it to completion). Local Docker gets user-owned Compose + durable state; optional `--tunnel` adds an ephemeral Quick Tunnel service for webhook channels; AWS Bedrock AgentCore gets a one-stack CloudFormation topology (webhooks via a forwarder Lambda, schedules via EventBridge). Durable ingress remains yours.
+- **Deploy anywhere.** No application build step — the directory is the deployable unit. `fastagent deploy docker|fly|railway|agentcore` generates the container + target config and a runbook (`--run` drives it to completion). Local Docker gets user-owned Compose + durable state; AWS Bedrock AgentCore gets a one-stack CloudFormation topology (webhooks via a forwarder Lambda, schedules via EventBridge). Durable ingress remains yours.
 
 ## Design philosophy
 

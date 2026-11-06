@@ -89,8 +89,8 @@ fastagent dev --tunnel
 ```
 
 The temporary onboarding URL is replaced automatically with the live `<quick-tunnel>/slack` Request URL.
-Each later Quick Tunnel receives the same update. `deploy fly --run`, `deploy railway --run`, and Docker
-`--run --tunnel` likewise update the deployed URL from the local machine without sending the configuration
+Each later Quick Tunnel receives the same update. `deploy fly --run` and `deploy railway --run`
+likewise update the deployed URL from the local machine without sending the configuration
 token to the host. Invite the App to each channel it should read.
 
 This is an internal, single-workspace installation—not Marketplace/multi-workspace OAuth token storage.

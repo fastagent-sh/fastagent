@@ -1,20 +1,18 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { webhookPaths } from "../../../deploy/channel-ingress.ts";
+import { ownPublicUrl } from "../../../deploy/container.ts";
 import {
   DOCKER_COMPOSE_FILE,
   DOCKER_VALUE_FILE,
-  composeHasTunnelService,
+  ingressNotes,
   isGeneratedCompose,
   planDockerDeploy,
   toDockerProjectName,
 } from "../../../deploy/docker/plan.ts";
 import { deployDockerRun } from "../../../deploy/docker/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
-import { openExternalUrl } from "../../../open-url.ts";
-import { SECRET_FILE_MODE, exists, readTextIfExists, resolveStateRoot } from "../../../paths.ts";
-import { announceWebhooks } from "../../../tunnel.ts";
+import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { failStartup } from "../../fail.ts";
@@ -36,7 +34,7 @@ export const dockerHost: HostDeploy = {
     }
   },
   async deploy(ctx) {
-    const { opts, agentDir, channels, webhookChannels, pre, write } = ctx;
+    const { opts, agentDir, channels, pre, write } = ctx;
     const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
     // Compose requires its committed env_file to exist, even when no values are declared.
     const composeValueFile = join(agentDir, DOCKER_VALUE_FILE);
@@ -55,43 +53,21 @@ export const dockerHost: HostDeploy = {
           `"$". Prefer a value without "$".`,
       );
     }
-    const hasDeclaredChannels = channels.length > 0;
-    const projectName = toDockerProjectName(basename(agentDir));
-    const dockerPlan = (tunnel: boolean) =>
-      planDockerDeploy({
-        projectName,
-        port,
-        boxLogin,
-        channels,
-        tunnel,
-        secrets: pre.secrets,
-        valueFile,
-        ...container,
-      });
-    const requestedTunnel = !!opts.tunnel && (!hasDeclaredChannels || webhookChannels.length > 0);
-    if (opts.tunnel && hasDeclaredChannels && webhookChannels.length === 0) {
-      console.error(`[fastagent] note: --tunnel skipped — every channel uses a long connection`);
-    }
-    let plan = dockerPlan(requestedTunnel);
-    // An existing Compose file is authoritative: shape its comparison/runbook from the topology on disk, regardless
-    // of the current flag.
-    const composeFile = join(agentDir, plan.composePath);
-    let keptWithoutRequestedTunnel = false;
-    // Same ownership question as fly.toml: a hand-owned compose file survives --force, so the plan must describe the
-    // topology that will actually be there.
-    const composeText = await readTextIfExists(composeFile).catch(failStartup);
-    if (composeText !== undefined && (!opts.force || !isGeneratedCompose(composeText))) {
-      const existingHasTunnel = composeHasTunnelService(composeText);
-      plan = dockerPlan(existingHasTunnel);
-      keptWithoutRequestedTunnel = requestedTunnel && !existingHasTunnel;
-    }
+    const plan = planDockerDeploy({
+      projectName: toDockerProjectName(basename(agentDir)),
+      port,
+      boxLogin,
+      channels,
+      secrets: pre.secrets,
+      valueFile,
+      ...container,
+    });
     await write(plan.artifacts, { force: !!opts.force });
     if (opts.run) {
       return runDeployDocker({
         agentDir,
         composeFile: plan.composePath,
         port,
-        requireTunnel: requestedTunnel,
         modelAuth,
         boxLogin,
         answerer: ctx.answerer,
@@ -99,13 +75,8 @@ export const dockerHost: HostDeploy = {
         declaredSecrets,
         values,
         valueFile,
+        publicUrl: ownPublicUrl(container.config),
       });
-    }
-    if (keptWithoutRequestedTunnel) {
-      console.error(
-        `[fastagent] warn: --tunnel was requested but kept ${plan.composePath} has no "tunnel" service — ` +
-          `edit it, delete it and regenerate, or pass --force`,
-      );
     }
     console.log(plan.runbook.join("\n"));
     return `http://127.0.0.1:${port}`;
@@ -117,7 +88,6 @@ async function runDeployDocker(params: {
   agentDir: string;
   composeFile: string;
   port: number;
-  requireTunnel: boolean;
   modelAuth: string | undefined;
   /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
   boxLogin: string | undefined;
@@ -127,8 +97,10 @@ async function runDeployDocker(params: {
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
   valueFile: string;
+  /** The `http.publicUrl` the configuration names: where the agent points its own webhook channels. */
+  publicUrl: string | undefined;
 }): Promise<string | undefined> {
-  const { agentDir, composeFile, port, requireTunnel, channels } = params;
+  const { agentDir, composeFile, port, channels } = params;
   const leave = leftToPerson(params.answerer);
   const { secrets, missingSecrets } = assembleSecrets({
     modelAuth: params.modelAuth,
@@ -142,45 +114,23 @@ async function runDeployDocker(params: {
       secrets,
       missingSecrets,
       valueFile: params.valueFile,
-      requireTunnel,
-      channels,
       ...boxLoginStep("docker", params, () => composeShell(composeFile, agentDir)),
-      announce: (tunnelUrl) =>
-        announceWebhooks(agentDir, tunnelUrl, channels, {
-          // A ticket's process opens no browser: its person is told, through `leave`.
-          ...(leave === undefined ? { openUrl: openExternalUrl } : { leave }),
-          stateRoot: resolveStateRoot(agentDir),
-          env: Object.fromEntries(params.values),
-        }),
     },
     spawnRunner("docker", agentDir),
     (message) => console.error(`[fastagent] ${message}`),
   );
   const compose = `docker compose -f ${composeFile}`;
   // Compose reached "up" iff the driver could report where it is.
-  const isUp = outcome.ok || outcome.url !== undefined || outcome.tunnelUrl !== undefined;
+  const isUp = outcome.ok || outcome.url !== undefined;
   if (outcome.url) console.error(`[fastagent] running → ${outcome.url}`);
   if (isUp) {
     console.error(`[fastagent] logs: ${compose} logs -f agent`);
     console.error(`[fastagent] stop: ${compose} down (state volume is kept)`);
   }
-  // BEFORE failStartup: a registration gate says "re-run this deploy", and a re-run rebuilds the tunnel service.
-  if (outcome.tunnelUrl) {
-    console.error(
-      `[fastagent] note: Quick Tunnel URLs are ephemeral — after the tunnel container/Docker daemon ` +
-        `restarts, re-run this deploy so webhooks receive the new URL`,
-    );
-  }
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
-  if (outcome.tunnelUrl) return outcome.tunnelUrl;
-  const paths = webhookPaths(channels);
-  if (paths.length > 0) {
-    const unreached =
-      `${paths.join(", ")} receive nothing until a public URL reaches this container — re-run with --tunnel for a ` +
-      `Quick Tunnel, or configure your own tunnel/proxy and point those webhook path(s) (or your remapped channel ` +
-      `routes) at it`;
-    console.error(`[fastagent] note: ${unreached}`);
-    leave?.(unreached);
+  for (const note of ingressNotes(channels, params.publicUrl, outcome.url && `${outcome.url}/health`)) {
+    console.error(`[fastagent] note: ${note}`);
+    leave?.(note);
   }
   return outcome.url;
 }
