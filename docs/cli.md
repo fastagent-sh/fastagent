@@ -487,7 +487,7 @@ when it does not exist yet, so a CI job can push before its first deploy.
   once. Railway redeploys the service on the last value a `set` or `push` writes; Docker's values are a file that a running
   container reads after `docker compose up -d`, which the command says.
 - **`push`** sets, in one batch, every declared name its source holds a value for: `--env-file`, else `--from-env`, else
-  `.secrets/production/.env`. `--from-env` takes the declared names from the environment of the command that injected
+  `.secrets/production/.env` (Docker's own store, so for Docker one of the first two is required). `--from-env` takes the declared names from the environment of the command that injected
   them, which is how a secret manager or CI joins in with no adapter: `op run --env-file=.env.tpl -- fastagent secrets push fly
   --from-env`, `doppler run -- …`, `infisical run -- …`, `dotenvx run -- …`, or a CI job's secrets. Names the definition does
   not declare are not pushed, and are said.

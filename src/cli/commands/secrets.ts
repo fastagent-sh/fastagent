@@ -207,6 +207,11 @@ async function push(store: SecretStore, label: string, agentDir: string, opts: S
     source = new Map(Object.entries(process.env).flatMap(([n, v]) => (v === undefined ? [] : [[n, v] as const])));
     where = "the environment";
   } else {
+    if (label === "Docker" && opts.envFile === undefined) {
+      throw new Error(
+        `${dotEnvPath(agentDir)} is Docker's own store, so there is nothing to push from it: pass --env-file <file> or --from-env`,
+      );
+    }
     const file = opts.envFile === undefined ? dotEnvPath(agentDir) : resolve(opts.envFile);
     source = loadEnvValues(file);
     where = file;

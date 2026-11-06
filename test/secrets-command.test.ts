@@ -120,10 +120,25 @@ describe("secrets push", () => {
     expect(written).toContain("GH_TOKEN=ghp_env");
     expect(written).not.toContain("HOME_SECRET");
     // The environment is a source only when asked for: without the flag it is not read.
+    const fly = await fakeFly([]);
     const dir2 = await agent();
-    const none = await runInProcess(["secrets", "push", "docker", dir2], undefined, env);
+    const none = await runInProcess(["secrets", "push", "fly", dir2], undefined, { ...fly.env, GH_TOKEN: "ghp_env" });
     expect(none.code).toBe(1);
     expect(none.stderr).toContain("holds no values: pass --env-file <file>, or --from-env");
+    expect((await fly.calls()).some((call) => call.startsWith("secrets set"))).toBe(false);
+  });
+
+  it("Docker's own value file is not a source for Docker: pushing it to itself does nothing and says so", async () => {
+    const dir = await agent({ ".secrets/production/.env": "GH_TOKEN=ghp_x\n" });
+    const before = await read(production(dir));
+    const result = await runInProcess(["secrets", "push", "docker", dir]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("is Docker's own store, so there is nothing to push from it");
+    expect(await read(production(dir))).toBe(before);
+    // Another file, or the environment, is a source.
+    const other = join(dir, "..", "other-docker.env");
+    await writeFile(other, "SENTRY_DSN=https://dsn\n");
+    expect((await runInProcess(["secrets", "push", "docker", dir, "--env-file", other])).code).toBe(0);
   });
 
   it("two sources are a usage error", async () => {
