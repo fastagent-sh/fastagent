@@ -179,7 +179,7 @@ export function loginGate(input: {
   log: (msg: string) => void;
   /** What THIS host does about its webhooks once the box is logged in — the only per-host words in the gate. */
   afterLogin: string;
-  /** Where the channels point; unset when the host has not minted it yet (Docker's tunnel is read after). */
+  /** Where the channels point, for the lines that point them by hand; unset when the host has none to print. */
   baseUrl?: string;
 }): string {
   if (webhookKinds(input.channels).length === 0) return input.notLoggedIn;

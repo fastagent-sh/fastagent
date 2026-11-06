@@ -93,7 +93,7 @@ it("deploy and production tunnel registration pass Slack the selected environmen
   );
 });
 
-it("Docker tunnel registration uses its selected production values, not dev's exported bot token", async () => {
+it("a tunnel announcement uses its selected production values, not dev's exported bot token", async () => {
   vi.stubEnv("TELEGRAM_BOT_TOKEN", "DEV_BOT");
   vi.stubEnv("TELEGRAM_SECRET_TOKEN", "dev_secret");
   const requests = platformFetch();

@@ -304,10 +304,9 @@ redeploy; `deploy` prints the effective model and its source. To switch models, 
 
 ## Webhooks stop working after a tunnel restart
 
-Quick Tunnel URLs are ephemeral. Restarting the tunnel container, the Docker daemon, or
-`fastagent dev --tunnel` mints a new URL, and the old webhook registration points at a dead one.
-Re-run `fastagent dev --tunnel` (or `fastagent deploy docker --tunnel --run`) to register the new
-URL. For a stable endpoint, bring your own named tunnel or reverse proxy.
+Quick Tunnel URLs are ephemeral. Restarting `fastagent dev --tunnel` (or `start --tunnel`) mints a new URL, and the old webhook registration points at a dead one.
+Re-run `fastagent dev --tunnel` to register the new URL. For a stable endpoint, bring your own named tunnel
+or reverse proxy and name its URL as `http.publicUrl`.
 
 ## Proxy / network issues
 

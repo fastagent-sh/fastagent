@@ -123,8 +123,6 @@ configuration route accepts only a PATCH. Both calls are idempotent. Frameworks 
     (`wake.url`); `http.publicUrl` wins over it, for a custom domain in front of the Function URL. The container
     registers on the first trusted envelope that constructed its channels, once per process, under its busy signal,
     and the probe reports the outcomes.
-  - Docker with `--tunnel`: read from the generated cloudflared service's `/quicktunnel` metrics endpoint (verified),
-    which the generated Compose names to the agent.
   - None: nothing is registered, and the outcome says so with the URL to use.
 - **The library makes it a step of its own** (SPEC §8): `service.listen()` registers in the background once the serve
   is ready when `http.publicUrl` is set; an app that mounts `service.fetch` calls `service.registerWebhooks()` once
@@ -186,8 +184,7 @@ trying the webhook path locally.
 | Host | Way of receiving by default | Public URL |
 |---|---|---|
 | `dev` | `connection` | None needed; `--tunnel` for the webhook path |
-| Docker, `--tunnel` (to try, or to reproduce a deployment) | `webhook` | The Quick Tunnel's, new on every start: Slack, and Lark on a 404, need the URL pasted on every start; a named tunnel with `http.publicUrl`, or `connection`, avoids it |
-| Docker, own ingress | `webhook`, or `connection` set in the configuration | `http.publicUrl` |
+| Docker | `connection` once step 3 ships (a resident process needs no public URL); `webhook` for an operator's own ingress | `http.publicUrl`. There is no tunnel service: a local Quick Tunnel's URL is new on every start, and `dev --tunnel` already serves trying a webhook locally |
 | Fly, Railway | `webhook` | Written by `deploy` |
 | AgentCore | `webhook` only | The forwarder's |
 | A package on someone's server (`npx @acme/x start`) | `webhook`, or `connection` | `http.publicUrl`, the operator's |
@@ -229,8 +226,9 @@ app itself through hooks.
 1. The SPEC: `http.publicUrl`, `Service.registerWebhooks()`, `Service.webhooks` and `/health` (#932);
    `channels.<name>.app` as the binding with its verified `url`.
 2. The instance registering itself: `http.publicUrl`, `registerWebhooks()`, `/health`, `start`, and `deploy` reading
-   the outcome, with Fly and Railway writing the URL (2a); AgentCore's forwarder carrying it, and the probe reporting the outcome (2b); Docker's tunnel
-   (2c). The signed-request evidence and the recorded URL for Slack and Lark.
-3. `connection` for Slack (Socket Mode) and Telegram (long polling), so `dev` needs no tunnel; in parallel with 2.
+   the outcome, with Fly and Railway writing the URL (2a); AgentCore's forwarder carrying it, and the probe reporting the outcome (2b). Docker's
+   `--tunnel` is removed rather than taught to register (2c). The signed-request evidence and the recorded URL for Slack and Lark.
+3. `connection` for Slack (Socket Mode) and Telegram (long polling), so `dev` and Docker need no tunnel or public
+   URL, and Docker's default ingress becomes `connection`; in parallel with 2.
 4. `channels setup`, `add` changing only the program, `dev` setting up on first run; Feishu production-app creation
    out of `deploy`; the Slack onboarding record removed; `fastagent.json` in the scaffold's `.gitignore`.

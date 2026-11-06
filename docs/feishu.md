@@ -87,7 +87,7 @@ Lark uses guided production-app setup and sets the Request URL by hand when its 
 `add feishu --ingress webhook|connection` writes `channels.feishu.ingress` to the development instance's
 `fastagent.json`, or to the file `--config` names; with `--env production` it needs `--config`, the configuration
 `deploy --config` delivers. It refuses an existing channel file that names its factory instead of offering both ways.
-A Docker deployment without `--tunnel` has no URL for automated webhook setup.
+A Docker deployment has no public URL of its own: name your ingress as `http.publicUrl`, or choose `connection`.
 
 **Dev and production use independent apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
 `.secrets/production/.env`, with no dev fallback. Copy required provider keys explicitly, not the dev app

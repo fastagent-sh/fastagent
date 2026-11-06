@@ -128,10 +128,6 @@ async function deploy(
   step?: TicketStep,
 ): Promise<{ url?: string; notes: string[] }> {
   if (opts.code !== undefined) failUsage("--code hands a code to a deploy's ticket: pass --check <ticket> too");
-  if (opts.tunnel && host !== "docker") {
-    // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
-    failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
-  }
   if (opts.json && !opts.run) failUsage("--json reports a deploy --run drives: pass --run too");
   selectAgentEnvironment("production");
   // The configuration the box runs on: the program's defaults, with the instance configuration `--config` delivers,
@@ -186,7 +182,7 @@ async function deploy(
   const agentArg = displayPath(process.cwd(), agentDir);
   const rerun =
     `fastagent deploy ${host}${agentArg === undefined ? "" : ` ${shellArg(agentArg)}`}` +
-    `${opts.tunnel ? " --tunnel" : ""}${opts.intoLinked ? " --into-linked" : ""} --run`;
+    `${opts.intoLinked ? " --into-linked" : ""} --run`;
   const unprepared = opts.run ? unpreparedFeishuApps(pre.channels, pre.values) : [];
 
   if (opts.json && step === undefined) {
@@ -211,7 +207,6 @@ async function deploy(
           "deploy",
           host,
           agentDir,
-          ...(opts.tunnel ? ["--tunnel"] : []),
           ...(opts.force ? ["--force"] : []),
           ...(delivered === undefined ? [] : ["--config", delivered.source.label]),
           ...(opts.intoLinked ? ["--into-linked"] : []),
@@ -242,12 +237,11 @@ async function deploy(
         pre.valueFile,
       );
       if (missing) failStartup(new Error(`deploy stopped: ${missing}`));
-      if (host === "docker" && !opts.tunnel && unprepared.some(({ ingress }) => ingress === "webhook")) {
+      if (host === "docker" && unprepared.some(({ ingress }) => ingress === "webhook")) {
         failStartup(
           new Error(
             `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
-              `public URL to point the app at — re-run with --tunnel (the app is prepared then), or set up your own ` +
-              `ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
+              `public URL to point the app at — set up your own ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
               `set ${kinds.map((kind) => `channels.${kind}.ingress`).join(", ")} to "connection" in the configuration ` +
               `--config delivers`,
           ),

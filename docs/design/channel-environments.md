@@ -80,8 +80,9 @@ Feishu/Lark production App IDs that match the default dev value file are refused
 This catches copying a complete dev file into production, which would defeat isolation. Explicit relocated dev
 files are the operator's responsibility.
 
-Docker's generated Compose reads `.secrets/production/.env`. It needs `--tunnel` for automated webhook setup;
-an operator with their own ingress supplies app values and sets the Request URL themselves. A relocated production
+Docker's generated Compose reads `.secrets/production/.env`. It has no public URL of its own, so a deployment with a
+webhook channel is an operator with their own ingress: they supply app values and name the URL as `http.publicUrl`
+(or set the channel to `connection`). A relocated production
 value file is refused under Docker `--run` because the committed Compose names a fixed path.
 
 ## 4. Other channels

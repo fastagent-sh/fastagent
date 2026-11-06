@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  CLOUDFLARED_IMAGE,
-  MIN_DOCKER_COMPOSE_VERSION,
-  composeHasTunnelService,
-  planDockerDeploy,
-  toDockerProjectName,
-} from "../src/deploy/docker/plan.ts";
+import { MIN_DOCKER_COMPOSE_VERSION, planDockerDeploy, toDockerProjectName } from "../src/deploy/docker/plan.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 import { webhookPaths } from "../src/deploy/channel-ingress.ts";
 
@@ -21,7 +15,6 @@ const base = {
   port: 8787,
   runtime: "node",
   hasLockfile: true,
-  tunnel: false,
 } as const;
 
 describe("deploy/docker: planDockerDeploy", () => {
@@ -30,7 +23,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("SYS_ADMIN");
     expect(yaml).not.toContain("apparmor");
   });
-  it("generates only the app topology: loopback port + persistent state, no tunnel/ingress coupling", () => {
+  it("generates only the app topology: loopback port + persistent state, no ingress coupling", () => {
     const plan = planDockerDeploy({ ...base, channels: declaredChannels(["telegram"]) });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
       "fastagent.compose.yml",
@@ -58,25 +51,11 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("TUNNEL_TOKEN");
   });
 
-  it("--tunnel adds a pinned ephemeral cloudflared service, without changing the app image", () => {
-    const plan = planDockerDeploy({
-      ...base,
-      channels: declaredChannels(["telegram"]),
-      tunnel: true,
-    });
-    const yaml = compose(plan);
-    expect(yaml).toContain("tunnel:");
-    expect(yaml).toContain(`image: ${CLOUDFLARED_IMAGE}`);
-    expect(yaml).toContain("http://agent:8787");
-    expect(yaml).toContain(`NO_PROXY: "agent,localhost,127.0.0.1,\${NO_PROXY:-}"`);
-    expect(yaml).toContain(`no_proxy: "agent,localhost,127.0.0.1,\${no_proxy:-}"`);
-    expect(yaml).toContain('restart: "no"');
-    // BOTH services: "every log has a layer that bounds it" is the whole argument, and Docker's default bounds
-    // neither of them.
-    expect(yaml.match(/max-size: "10m"/g)).toHaveLength(2);
-    const dockerfile = plan.artifacts.find((artifact) => artifact.path.endsWith("Dockerfile"))!.content;
-    expect(dockerfile).not.toContain("cloudflared");
-    expect(runbook(plan)).toContain("locally onboarded Slack auto-register");
+  it("tells whoever owns the ingress to name its URL as http.publicUrl, and leaves a plain Compose alone", () => {
+    const plan = planDockerDeploy({ ...base, channels: declaredChannels(["telegram"]) });
+    expect(runbook(plan)).toContain("Name that URL as http.publicUrl");
+    expect(runbook(plan)).not.toContain("logs -f tunnel");
+    expect(compose(plan)).not.toContain("tunnel:");
   });
 
   it("omits public paths for long-connection Feishu", () => {
@@ -142,10 +121,6 @@ describe("deploy/docker: planDockerDeploy", () => {
   it("sanitizes a stable Compose project name and exposes default webhook paths", () => {
     expect(toDockerProjectName("My Agent!")).toBe("fastagent-my-agent");
     expect(toDockerProjectName("___")).toBe("fastagent-agent");
-    expect(composeHasTunnelService("services:\n  tunnel:\n    image: cloudflare/cloudflared\n")).toBe(true);
-    expect(composeHasTunnelService("services:\n    tunnel:\n        image: cloudflare/cloudflared\n")).toBe(true);
-    expect(composeHasTunnelService("services:\n\ttunnel:\n\t\timage: cloudflare/cloudflared\n")).toBe(true);
-    expect(composeHasTunnelService("services:\n  agent:\n")).toBe(false);
     expect(webhookPaths(declaredChannels(["telegram", "slack", "feishu", "lark"]))).toEqual([
       "/telegram",
       "/slack",

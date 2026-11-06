@@ -702,9 +702,8 @@ Scaling an instance out needs a router that sends each session's calls to the pr
 
 `fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config,
 persistent-volume wiring, required secret names, and a runbook. Docker adds a user-owned
-`fastagent.compose.yml`; `--tunnel` can add a separate ephemeral cloudflared service, while durable
-ingress stays operator-owned. `--run` alone causes host side effects; for a tunnel topology it also
-reads the Quick Tunnel URL and registers webhooks.
+`fastagent.compose.yml`; ingress stays operator-owned (there is no tunnel service). `--run` alone causes host
+side effects.
 
 The build context is the agent directory, baked at `/app/definition`; the artifacts and the ignore file sit at its root,
 and preflight checks that a kept ignore file ships `fastagent.config.ts` and excludes credentials. Preflight says what

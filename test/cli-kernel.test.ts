@@ -84,7 +84,6 @@ describe("cli kernel: spec conformance", () => {
       [["deploy"], "docker compose up -d"],
       [["deploy"], "provision app/service + volume + secrets + deploy + webhook setup"],
       [["deploy"], "missing CLI/daemon/login/secret"],
-      [["deploy"], "Existing Compose stays authoritative"],
       [["deploy"], "plain redeploy of an already-provisioned agent"],
       [["login"], "outside an agent it writes the global ~/.fastagent/.secrets/auth.json"],
     ];

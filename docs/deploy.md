@@ -17,9 +17,7 @@ CLI.
 
 ```bash
 fastagent deploy docker                 # Dockerfile + local Compose + runbook
-fastagent deploy docker --tunnel        # Compose with a Quick Tunnel service
 fastagent deploy docker --run           # start the app service
-fastagent deploy docker --tunnel --run  # start app + tunnel and register webhooks
 fastagent deploy fly                    # Dockerfile + fly.toml + runbook
 fastagent deploy fly --run
 fastagent deploy railway
@@ -101,13 +99,18 @@ created. A URL only a person can set (Slack's; Lark's when its config API answer
 platform reaches it there with an authenticated request, the verification on saving or any event; at a terminal with
 `--config`, `--run` then records it in that file (`channels.<name>.app.url`), so later deploys of the file, CI
 included, report it registered from the start. A deployment that did not record it:
-`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. On Docker `--run` still points them
-itself once the deployment answers `/health`. Each run prints the steps it could not do.
+`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. Each run prints the steps it could not do.
 
 On AgentCore the runtime has no `/health` of its own: it points its channels at the forwarder's URL (or `http.publicUrl`
 when the configuration names one, a custom domain in front of the Function URL) on the first envelope the forwarder
 relays after it starts, and `--run` reads the outcomes through the probe. A runtime a platform's request wakes does the
 same, so every start points them again.
+
+Docker has no public URL of its own: the Compose file publishes the agent on `127.0.0.1` only. Route your own
+ingress (a reverse proxy, a named tunnel) to it and name that URL as `http.publicUrl` in the configuration `--config`
+delivers, and the agent points Telegram and Feishu/Lark at it on every start (Slack's Request URL is yours to set);
+or have the channel receive by `connection` where it has one, which needs no public URL. `--run` reads no outcome
+there.
 
 - **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
   `.secrets/production/.env`. Production never falls back to dev values. Put production provider keys and other
@@ -233,31 +236,14 @@ Notes:
 - If `FASTAGENT_SECRETS_DIR` points this machine at a different value file than the committed Compose reads,
   generating warns and `--run` gates.
 
-### Quick Tunnel
-
-```bash
-fastagent deploy docker --tunnel        # add a cloudflared service to the Compose file
-fastagent deploy docker --tunnel --run  # start both, read the URL, register webhooks
-```
-
-The `tunnel` service points at `http://agent:<port>`. `--run` reads the `*.trycloudflare.com` URL from its logs and
-registers webhooks as `dev --tunnel` does: Telegram, locally onboarded Slack and Feishu/Lark automatically,
-manual Slack prints its URL, long-connection channels are skipped.
-
-The URL changes whenever the tunnel container or Docker restarts, so the service has no restart policy: re-run
-`fastagent deploy docker --tunnel --run` to register the new URL. For a stable endpoint, use your own named tunnel
-or reverse proxy.
-
 ### Owning the Docker files
 
 - An existing `Dockerfile`, `.dockerignore` or `fastagent.compose.yml` is kept byte for byte and used by `--run`.
 - `--force` regenerates only files fastagent generated (they start with a marker line). Remove the marker to own a
   file; delete a file to hand it back.
-- `--tunnel` shapes only a newly generated Compose file. `--tunnel --run` against a kept file without a `tunnel`
-  service stops before touching Docker.
 - The environment (`context.json`'s `environment`) is installed by the generated Dockerfile; a hand-written one
   installs it only if it says so, and `deploy` warns.
-- `--run` relies on the service named `agent` (and `tunnel`). Add other services, networks, volumes or ports freely.
+- `--run` relies on the service named `agent`. Add other services, networks, volumes or ports freely.
 
 ## Fly.io
 

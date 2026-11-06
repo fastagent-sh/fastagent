@@ -27,7 +27,6 @@ import type { DeployHost } from "../../../deploy/hosts.ts";
 
 export interface DeployOptions {
   run?: boolean;
-  tunnel?: boolean;
   force?: boolean;
   intoLinked?: boolean;
   /** `--config <file>`: the instance configuration the deployment delivers. */

@@ -174,12 +174,8 @@ it("does not prepare an app a deployment cannot point anywhere, and says what it
   await expect(runDeploy("docker", dir, { run: true })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
   expect(said.join("\n")).toMatch(
-    /feishu receive by webhook here, and this Docker deployment has no public URL .*--tunnel.*channels\.feishu\.ingress to "connection" in the configuration --config delivers/,
+    /feishu receive by webhook here, and this Docker deployment has no public URL .*set up your own ingress.*channels\.feishu\.ingress to "connection" in the configuration --config delivers/,
   );
-
-  calls.length = 0;
-  await runDeploy("docker", dir, { run: true, tunnel: true });
-  expect(calls).toContain("prepare feishu rerun=fastagent deploy docker --tunnel --run");
 });
 
 it("prepares only with a person: with nobody, it names the deploy that hands their part to a coding agent's user", async () => {
