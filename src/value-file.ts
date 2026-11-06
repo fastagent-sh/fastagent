@@ -91,10 +91,13 @@ export interface ValueWriteResult {
   unprotectedSecretsDir?: string;
 }
 
-/** What a command says when it wrote a secret into a secrets directory fastagent does not own and git may track. */
-export function unprotectedSecretsNote(dir: string): string {
+/**
+ * What a command says when it wrote a secret into a secrets directory fastagent does not own and git may track; `chosenBy`
+ * is what put the secrets there (the operator's `FASTAGENT_SECRETS_DIR`, unless the caller knows better).
+ */
+export function unprotectedSecretsNote(dir: string, chosenBy = "FASTAGENT_SECRETS_DIR"): string {
   return (
-    `${dir} (FASTAGENT_SECRETS_DIR) now holds a secret and has no .gitignore — that directory is yours, so ` +
+    `${dir} (${chosenBy}) now holds a secret and has no .gitignore — that directory is yours, so ` +
     "fastagent will not write one into it. Make sure git does not track what is in there."
   );
 }

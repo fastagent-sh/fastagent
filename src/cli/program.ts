@@ -726,7 +726,7 @@ const channels: CommandSpec = {
           flags: "--env-file <file>",
           description:
             "the value file the credentials are kept in, created when missing; naming it or --config makes this " +
-            "another instance than the development one (default: .secrets/.env)",
+            "another instance than the development one (default: .secrets/.env for dev, else .secrets/production/.env)",
         },
         {
           flags: "--record-url",

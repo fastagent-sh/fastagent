@@ -61,7 +61,7 @@ const INGRESS: Record<WebhookKind, ChannelIngress> = {
     register: () => undefined,
     runbook: (baseUrl) => [
       `# Set Slack Event Subscriptions → Request URL (default route POST /slack; the running service`,
-      `# answers Slack's challenge), and match scopes/subscriptions to the app \`add slack\` created:`,
+      `# answers Slack's challenge), and match scopes/subscriptions to the app \`channels setup slack\` created:`,
       `#   Request URL = ${baseUrl}/slack`,
     ],
   },

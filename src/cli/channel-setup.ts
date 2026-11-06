@@ -56,10 +56,12 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
   });
   const written: string[] = [];
   const kept: string[] = [];
+  /** A directory fastagent does not own that now holds a secret: said once, however many values went there. */
+  let unprotected: string | undefined;
 
   const keep = async (name: string, value: string, replace: boolean): Promise<void> => {
     const result = await writeValues(agentDir, `${kind} channel`, [{ name, value }], replace ? [name] : [], file);
-    if (result.unprotectedSecretsDir) say(`note: ${unprotectedSecretsNote(result.unprotectedSecretsDir)}`);
+    unprotected ??= result.unprotectedSecretsDir;
     written.push(name);
   };
 
@@ -95,6 +97,8 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
     if (person === undefined) await askAtTerminal(toAsk, accept);
     else await askOnPage(kind, toAsk, accept, person);
   }
+  if (unprotected !== undefined)
+    say(`note: ${unprotectedSecretsNote(unprotected, "where this instance keeps its values")}`);
   return { written, kept, after: plan.after };
 }
 

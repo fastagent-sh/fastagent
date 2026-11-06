@@ -244,6 +244,10 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
   if (opts.config === undefined)
     failUsage("--record-url writes into the configuration a deploy delivers: pass --config <file>");
   const agentDir = agentDirOrExit(resolve(dirArg));
+  selectAgentEnvironment("production");
+  if (opts.envFile !== undefined) useValueFile(resolveOverridePath(opts.envFile));
+  // The deployment's /health and the platform are reached as the instance's values and environment say, a proxy included.
+  enterAgentEnv(agentDir);
   const config = resolve(opts.config);
   const source = await readInstanceConfigFile(config).catch(failStartup);
   const named = (source.values as { http?: { publicUrl?: unknown } }).http?.publicUrl;
@@ -266,8 +270,6 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
       ),
     );
   }
-  selectAgentEnvironment("production");
-  if (opts.envFile !== undefined) useValueFile(resolveOverridePath(opts.envFile));
   await recordChannelUrl(agentDir, config, kind, url, loadEnvValues(dotEnvPath(agentDir))).catch(failStartup);
   printReport(opts.json, { status: "done", channel: kind, url, config }, [`recorded ${url} for ${kind} in ${config}`]);
 }

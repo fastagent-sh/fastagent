@@ -3,7 +3,11 @@ import type { AddressInfo } from "node:net";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { installProxyFetch } from "../src/proxy.ts";
 import { agentWorkspace, runInProcess } from "./cli-run.ts";
+
+// What reaches the platform goes through the proxy the environment declares: whether it does is asked of this seam.
+vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 
 /** A deployment's public face: its /health, answering what the box reports of `channel`. */
 async function deployment(outcome: string, channel = "lark"): Promise<{ url: string; close(): void }> {
@@ -82,11 +86,13 @@ describe("cli: channels setup --record-url", () => {
     const box = await deployment("registered", "slack");
     const real = globalThis.fetch;
     const slack: string[] = [];
+    const events: string[] = [];
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       if (!url.startsWith("https://slack.com/api/")) return real(input, init);
       const method = (url.split("/").pop() as string).split("?")[0] as string;
       slack.push(`${url.split("/").pop()} ${new Headers(init?.headers).get("authorization")}`);
+      events.push("slack");
       return Response.json(
         method === "auth.test"
           ? { ok: true, team_id: "T1", user_id: "U1", bot_id: "B1" }
@@ -113,7 +119,12 @@ describe("cli: channels setup --record-url", () => {
       expect(noToken.stderr).toContain("no SLACK_BOT_TOKEN in the values");
 
       await writeFile(values, "SLACK_BOT_TOKEN=xoxb-held\n");
+      vi.mocked(installProxyFetch).mockImplementation(() => {
+        events.push("proxy");
+      });
       const done = await runInProcess(args);
+      // The Slack calls that name the app are made after the proxy is installed, not before.
+      expect(events).toEqual(["proxy", "slack", "slack"]);
       expect(done.code, done.stderr).toBe(0);
       expect(slack).toEqual(["auth.test Bearer xoxb-held", "bots.info?bot=B1 Bearer xoxb-held"]);
       expect(JSON.parse(await readFile(config, "utf8"))).toEqual({

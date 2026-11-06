@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setUpChannel } from "../src/cli/channel-setup.ts";
@@ -214,6 +215,33 @@ describe("channels setup at a terminal", () => {
 
     await ends(setup("telegram", dir, { envFile: file }));
     expect((await read(file)).match(/^TELEGRAM_SECRET_TOKEN=(.*)$/m)?.[1]).toBe(secret);
+  });
+
+  it("naming only a configuration is another instance: its values go where deploy reads them, apart from dev's", async () => {
+    const dir = await workspace("fa-setup-config-only-");
+    platforms();
+    const config = join(dir, "prod.json");
+    await writeFile(config, "{}");
+    prompts.answers.push(GOOD_BOT);
+    await ends(setup("telegram", dir, { config }));
+    const production = await read(join(dir, ".secrets", "production", ".env"));
+    expect(production).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_BOT}`);
+    // Not dev's: a webhook's secret came with it, and the development file was not made.
+    expect(production).toMatch(/^TELEGRAM_SECRET_TOKEN=/m);
+    await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
+  });
+
+  it("says once that a directory it does not own now holds secrets, however many values went there", async () => {
+    const dir = await workspace("fa-setup-unprotected-");
+    platforms();
+    const elsewhere = await mkdtemp(join(tmpdir(), "fa-setup-elsewhere-"));
+    prompts.answers.push(GOOD_BOT);
+    await ends(setup("telegram", dir, { envFile: join(elsewhere, "prod.env") }));
+    const said = vi.mocked(console.error).mock.calls.flat().map(String);
+    // Two values were written (the token and a webhook's secret), and the note is said once, naming the directory.
+    expect(said.filter((line) => line.includes("now holds a secret and has no .gitignore"))).toEqual([
+      expect.stringContaining(`note: ${elsewhere} (where this instance keeps its values) now holds a secret`),
+    ]);
   });
 
   it("--ingress is written to the configuration: the development instance's, or the one --config names", async () => {
