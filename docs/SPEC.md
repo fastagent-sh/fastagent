@@ -768,8 +768,9 @@ function byIngress<T>(ways: { webhook: T | Needs<T>; connection: T | Needs<T> })
 ```
 
 The `webhook` way is a channel of routes, and the `connection` way one that opens and keeps a connection to its platform
-(the first-party ones: Feishu's and Lark's long connection). An instance receives the way `channels.<name>.ingress`
-names, else `dev` by its connection and everything else by webhook, since a host that scales to zero is woken by an
+(the first-party ones: Feishu's and Lark's long connection, Slack's Socket Mode and Telegram's long polling). A
+connection that cannot be kept (a credential the platform refuses, the platform's switch for it turned off) ends the
+serve with its reason, never silently. An instance receives the way `channels.<name>.ingress` names, else `dev` by its connection and everything else by webhook, since a host that scales to zero is woken by an
 inbound request. Each way declares its own secrets, and an instance is asked only for its way's
 (`DeclaredSecret.whenIngress`). A channel that is not `byIngress` receives the one way it is.
 
