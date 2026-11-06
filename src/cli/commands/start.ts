@@ -77,7 +77,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   serveService(
     service,
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? service.port, host: bindFlag },
-    { tunnel, agentDir: service.agentDir, stateRoot: service.stateRoot, config: service.config },
+    { tunnel, agentDir: service.agentDir, config: service.config },
   );
 }
 

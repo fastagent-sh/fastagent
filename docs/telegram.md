@@ -10,30 +10,30 @@ The Telegram channel turns a Telegram Bot API update, polled or sent to a webhoo
 
 Telegram is request/reply: the channel holds the bot token, streams a live preview message while the turn runs, and edits it into the final answer.
 
-## Add the channel
+## Add the channel, then set up its bot
 
 From an agent directory:
 
 ```bash
-fastagent add telegram
+fastagent add telegram            # the program: the channel file and its send tool
+fastagent channels setup telegram # the bot, and this instance's token for it
+fastagent dev                     # polls Telegram: no tunnel, no public URL
 ```
 
-This creates:
+`add telegram` changes the program only. It creates:
 
 ```txt
 src/channels/telegram.ts      # inbound adapter (long polling or webhook) + routing policy
 src/tools/telegram-send.ts    # optional outbound send tool for the agent (message or file)
 ```
 
-It also appends the required env vars to `.env.example` when possible.
+and lists the variables they read in `.secrets/.env.example`. It asks nothing and creates no bot.
 
-## Configure Telegram
-
-Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token in the agent's `.secrets/.env`:
-
-```bash
-TELEGRAM_BOT_TOKEN=...
-```
+`channels setup telegram` sets up the bot for **one instance**: it opens [@BotFather](https://t.me/BotFather), where you send
+`/newbot` and copy the token, asks for it (hidden input), checks it with Telegram (`getMe`), and keeps it in the
+instance's value file, `.secrets/.env` for the development instance. A coding agent runs `channels setup telegram --json`:
+the person pastes the token on a page on this machine, never in the agent's conversation. It is safe to run again: a token
+Telegram still accepts is kept, one it refuses is asked for again.
 
 That is all `fastagent dev` needs: it polls Telegram (`getUpdates`), so there is no public URL, no tunnel and no webhook
 secret. Message the bot.
@@ -41,8 +41,8 @@ secret. Message the bot.
 ## Long polling or webhook
 
 How the channel receives is the instance's choice, `channels.telegram.ingress` in its configuration (`webhook` or
-`connection`, which for Telegram is long polling; `add telegram --ingress` writes it). Unset, `dev` polls and everything
-else receives by webhook, since a host that scales to zero is woken by a request.
+`connection`, which for Telegram is long polling; `channels setup telegram --ingress` writes it). Unset, `dev` polls and
+everything else receives by webhook, since a host that scales to zero is woken by a request.
 
 - **Long polling** needs only `TELEGRAM_BOT_TOKEN`. It takes the bot's webhook away first (`getUpdates` does not work
   while one is set) and says so. A bot is polled by one process or reached by one webhook, never both: a second process
@@ -50,8 +50,8 @@ else receives by webhook, since a host that scales to zero is woken by a request
   retries, five seconds apart. A network failure after it is running is retried with a growing wait; a refused token or a
   webhook set under the poll ends it with the reason.
 - **Webhook** also needs `TELEGRAM_SECRET_TOKEN`, any random string that verifies inbound updates
-  (`add telegram --ingress webhook` generates one into `.secrets/.env`, gitignored by the scaffolded
-  `.secrets/.gitignore`). At a public URL, `https://<host>/telegram`, the instance points Telegram at itself on every
+  (`channels setup` makes one for an instance that receives by webhook and keeps it in its value file, such as
+  `.secrets/.env`, gitignored by the scaffolded `.secrets/.gitignore`). At a public URL, `https://<host>/telegram`, the instance points Telegram at itself on every
   start (`http.publicUrl`); see [Deploy](deploy.md).
 
 To try the webhook path locally, name `webhook` for the channel in the dev instance's `fastagent.json` and add

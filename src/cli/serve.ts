@@ -38,13 +38,13 @@ export function cliMountOptions(config: EffectiveConfig): ServeOptions {
 export function serveService(
   service: ServedAgent,
   bind: { port: number; host?: string },
-  posture: { tunnel: boolean; agentDir: string; stateRoot: string; config: EffectiveConfig },
+  posture: { tunnel: boolean; agentDir: string; config: EffectiveConfig },
 ): void {
   const { host } = bind;
-  const { tunnel, agentDir, stateRoot, config } = posture;
+  const { tunnel, agentDir, config } = posture;
   serve(service, bind, (p) => {
     reportServing(service, host, p, config);
-    maybeTunnel(agentDir, service.channels.routes, p, tunnel, stateRoot);
+    maybeTunnel(agentDir, service.channels.routes, p, tunnel);
   });
 }
 
@@ -144,20 +144,11 @@ export function serve(
 }
 
 /** Start a Cloudflare tunnel for route channels only. */
-function maybeTunnel(
-  agentDir: string,
-  routeChannels: string[],
-  boundPort: number,
-  tunnel: boolean,
-  stateRoot?: string,
-): void {
+function maybeTunnel(agentDir: string, routeChannels: string[], boundPort: number, tunnel: boolean): void {
   if (!tunnel || process.env.FASTAGENT_DEV_WORKER === "1") return;
   void startCloudflareTunnel(boundPort).then((instance) => {
     if (!instance) return;
-    void announceWebhooks(agentDir, instance.url, declaredChannels(routeChannels), {
-      openUrl: openExternalUrl,
-      stateRoot,
-    });
+    void announceWebhooks(agentDir, instance.url, declaredChannels(routeChannels), { openUrl: openExternalUrl });
     const cleanup = (): void => instance.close();
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);

@@ -13,7 +13,6 @@ import { waitForHealth } from "../channels/wait-health.ts";
 
 export interface Registrars {
   telegram: (baseUrl: string) => Promise<RegistrationOutcome>;
-  slack?: (baseUrl: string) => Promise<RegistrationOutcome>;
   feishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>;
   /**
    * Where a channel's manual step goes beside the log, for a person who reads no log: a coding agent's user, through
@@ -58,7 +57,8 @@ const INGRESS: Record<WebhookKind, ChannelIngress> = {
   },
   slack: {
     delivers: "now delivers to this deployment",
-    register: (r, baseUrl) => r.slack?.(baseUrl),
+    // The Request URL is the app's page, which a person sets (channel-setup.md §3): no credential here changes it.
+    register: () => undefined,
     runbook: (baseUrl) => [
       `# Set Slack Event Subscriptions → Request URL (default route POST /slack; the running service`,
       `# answers Slack's challenge), and match scopes/subscriptions to the app \`add slack\` created:`,
@@ -262,7 +262,7 @@ export async function confirmWebhooks(input: {
   /** Where the platforms reach it, the delivered `http.publicUrl` (a custom domain, say): every step names this one. */
   publicUrl: string;
   channels: readonly DeclaredChannel[];
-  registrars: Pick<Registrars, "slack" | "leave">;
+  registrars: Pick<Registrars, "leave">;
   log: (msg: string) => void;
   retryHint: string;
   probe?: BoxWebhooksProbe;
@@ -275,9 +275,8 @@ export async function confirmWebhooks(input: {
   const reg = registrationGate(input.log, input.retryHint);
   const outcomes = new Map<WebhookKind, RegistrationOutcome>();
   if (kinds.includes("slack")) {
-    const slack = input.registrars.slack?.(input.publicUrl);
-    if (slack === undefined) input.log(manualWebhookStep("slack", input.publicUrl));
-    outcomes.set("slack", slack === undefined ? "manual" : await slack);
+    input.log(manualWebhookStep("slack", input.publicUrl));
+    outcomes.set("slack", "manual");
   }
   const own = kinds.filter((kind) => kind !== "slack");
   if (own.length > 0) {

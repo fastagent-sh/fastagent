@@ -677,21 +677,21 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(delays).not.toContain(2_000);
   });
 
-  it("names the configuration's own http.publicUrl as where the platforms reach it, and sets Slack there", async () => {
+  it("names the configuration's own http.publicUrl as where the platforms reach it, in Slack's step", async () => {
     runtimeReporting([{ channel: "slack", outcome: "manual" }]);
-    const slack = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
+    const logs: string[] = [];
     const out = await deployAgentcoreRun(
       plan({ channels: declaredChannels(["slack"]), publicUrl: "https://agent.acme.com" }),
       fakeCli(happyAws).cli,
       fakeCli().cli,
-      () => {},
+      (m) => logs.push(m),
       writeParams,
       writeZip,
-      { telegram: vi.fn(), slack },
+      { telegram: vi.fn() },
       { intervalMs: 1 },
     );
     expect(out).toMatchObject({ ok: true });
-    expect(slack).toHaveBeenCalledWith("https://agent.acme.com");
+    expect(logs).toContain("slack: set Event Subscriptions → Request URL → https://agent.acme.com/slack");
   });
 });
 
@@ -804,7 +804,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       () => {},
       writeParams,
       writeZip,
-      { telegram: async () => "registered", feishu: undefined, slack: undefined },
+      { telegram: async () => "registered", feishu: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 5_000, intervalMs: 1_000 },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("FEISHU_APP_SECRET is not set") });
@@ -820,7 +820,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       () => {},
       writeParams,
       writeZip,
-      { telegram: async () => "registered", feishu: undefined, slack: undefined },
+      { telegram: async () => "registered", feishu: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("403 forbidden") });
@@ -838,7 +838,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       () => {},
       writeParams,
       writeZip,
-      { telegram: async () => "registered", feishu: undefined, slack: undefined },
+      { telegram: async () => "registered", feishu: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("never answered") });

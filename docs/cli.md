@@ -32,9 +32,10 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
 | `schedules run <name> [agent]` | Fire one schedule now, as its clock would. |
 | `schedules unwake <id> [agent]` | Cancel a pending wake-up, whatever session set it. |
-| `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. With `--no-onboard`, each writes only the channel (if missing) and its tools, which is how an existing agent picks up a new tool. |
+| `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel. `add telegram` and `add slack` change the program only (the channel file and its tools; their app is `channels setup`'s). `add feishu` scan-creates the app. `add lark` guides and validates credentials. With `--no-onboard`, feishu and lark write only the channel (if missing) and its tools, which is how an existing agent picks up a new tool. |
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
-| `channels setup <name> --record-url --config <file> [--url <url>] [--app <id> [--team <id>]]` | Record, in the configuration a deploy delivers, the URL a person saved on a Slack or Lark app's page once the deployment's `/health` reports the channel reached there (`channels.<name>.app.url`, the configuration's own `http.publicUrl` when it names one; `--url` is where `/health` is read), so later deploys report it registered. `--app` names an app this machine did not create. |
+| `channels setup <name> [agent]` | Set up one instance's platform app (`telegram`, `slack`): guide the person through creating it, check each pasted credential with the platform, and keep it in the instance's value file. `--ingress`, `--config` and `--env-file` say which instance it is and how it receives. |
+| `channels setup <name> --record-url --config <file> [--url <url>]` | Record, in the configuration a deploy delivers, the URL a person saved on a Slack or Lark app's page once the deployment's `/health` reports the channel reached there (`channels.<name>.app.url`; `--url` is where `/health` is read), so later deploys report it registered. |
 | `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). |
 | `deploy fly [agent]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
 | `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
@@ -440,49 +441,43 @@ it is refused while `dev` or `start` serves the agent.
 
 ```bash
 fastagent add telegram [agent]
-fastagent add slack [agent]    # create/install an internal app; --no-onboard scaffolds only
+fastagent add slack [agent]    # the program only; `channels setup slack` creates the app
 fastagent add feishu [agent]   # 飞书: scan-to-create the app
 fastagent add lark [agent]     # Lark international: console + credential validation
-                             # all channels take --env dev|production (default: dev)
+                             # feishu/lark take --env dev|production (default: dev)
                              # feishu/lark take --ingress connection|webhook: writes channels.<kind>.ingress to dev's
                              # fastagent.json, or to --config <file> (required with --env production)
                              # (unset: dev connects by websocket, start and deployments receive by webhook)
-                             # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding
-                             # --json: the outcome as one JSON object; without a terminal, the person's part
-                             # comes back as need_user_action and a ticket (below)
+                             # feishu/lark take --no-onboard: write the files, skip the app onboarding
+                             # --json: the outcome as one JSON object; for feishu/lark without a terminal, the
+                             # person's part comes back as need_user_action and a ticket (below)
 ```
 
 Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion tools (`src/tools/<kind>-send.ts`, and
-`src/tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), appends variables to
-`.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` (for a channel that receives by webhook) to `.secrets/.env`. Re-run
-`add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
+`src/tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), and lists the variables they read in
+`.secrets/.env.example`. Re-run `add <kind>` after upgrading the package to refresh the tools.
+
+`add telegram` and `add slack` change the program only: they ask nothing, create no app and write no value, and have
+none of the setup flags. Their app, and the values of the instance that runs it, are
+[`channels setup`](#fastagent-channels-setup)'s. `add feishu` and `add lark` still create the app themselves, and
 `--env production` selects `.secrets/production/.env` and `.fastagent/start/.state` without changing dev credentials.
 `deploy --run` creates the separate Feishu/Lark production app automatically, at a terminal or, with `--json`, for a
-coding agent's user (without either it stops, naming the `--json` command); Slack needs `add slack --env production`,
-and Telegram needs a separate BotFather bot.
+coding agent's user (without either it stops, naming the `--json` command); a Slack or Telegram deployment needs
+its own app, from `channels setup <name> --config <file> --env-file <file>`.
 
-Slack:
-
-- Onboarding creates the app through `apps.manifest.create`, installs it through OAuth, and writes the bot token
-  and signing secret to `.secrets/.env`. The App Configuration token stays in `<state root>/channels/slack/` on
-  this machine; `dev --tunnel` and `deploy --run` use it to update the Request URL.
-- `--replace-config` replaces that token pair when it has expired or been revoked. Other machines set the Request
-  URL in the Slack console.
-
-Without a terminal, or with `--json` or `--no-input`, the app's setup is driven by a coding agent and finished by its
-user ([Scripts and coding agents](#scripts-and-coding-agents)):
+Without a terminal, or with `--json` or `--no-input`, feishu and lark's setup is driven by a coding agent and finished by
+its user ([Scripts and coding agents](#scripts-and-coding-agents)):
 
 | Channel | What the person provides first | What the ticket waits on |
 |---|---|---|
 | `feishu` | nothing | confirming the new app (`url`, in a browser or in Feishu) |
 | `lark` | nothing | creating the app and pasting its App ID and App Secret on the page at `url`; if automatic webhook setup is unavailable, pasting its Verification Token on a second page |
-| `slack` | nothing | pasting an App Configuration token pair on the page at `url`, which then takes the browser on to Slack's install page to click Allow |
 
-Both pages are the setup's own, at a one-time random address, and look alike. Slack's is served through the temporary
-tunnel `add slack` opens anyway. Lark's binds only `127.0.0.1`, with no public tunnel. It checks each pair against Lark
-and saves accepted credentials to the selected environment's `.env` (`0600`) before starting webhook setup or checking
-permissions. A later failure therefore leaves the pair available for a rerun. A credential refusal stays on the form;
-network, storage and dev/production app-conflict errors stop the ticket with their actual reason.
+The page is the setup's own, at a one-time random address, bound to `127.0.0.1` only, with no public tunnel. It checks
+each pair against Lark and saves accepted credentials to the selected environment's `.env` (`0600`) before starting
+webhook setup or checking permissions. A later failure therefore leaves the pair available for a rerun. A credential
+refusal stays on the form; network, storage and dev/production app-conflict errors stop the ticket with their actual
+reason.
 
 For a remote CLI, forward the page's port to the **same port** on your browser's machine. For SSH, run
 `ssh -N -L PORT:127.0.0.1:PORT user@host`, replacing `PORT` with the port in the ticket's `url`, then open that exact URL.
@@ -493,10 +488,6 @@ Without a local browser or port forwarding, interactive page setup cannot comple
 the previous file-entry flow. Existing credentials in the selected environment are still reused. Do not paste secrets
 into a coding-agent conversation or commands it records.
 
-Slack's pair never passes through the agent's conversation or any `.env` file: it manages every Slack app the person
-owns in that workspace, and only this machine's CLI uses it, so it goes into the onboarding state (`0600`) and never
-deploys.
-
 The setup runs in a process of its own and the command returns its ticket: `need_user_action` while the person has a
 step, `working` while there is nothing for them to do, then `done` with the variables it `written`, the
 `next_steps` and the steps left to the person (`afterwards`, such as publishing a version). `add <kind> --check
@@ -505,6 +496,44 @@ for the same agent, channel and environment replaces a setup waiting on the pers
 Lark Verification Token that could not be captured automatically is collected on a second password-input page and
 saved before setup continues. It is copied from Lark's console, not validated against a read API; the operator must use
 the token from the same app.
+
+## `fastagent channels setup <name>`
+
+```bash
+fastagent channels setup telegram [agent]
+fastagent channels setup slack [agent] [--ingress webhook|connection] [--config <file>] [--env-file <file>]
+fastagent channels setup slack --json                       # a coding agent: the person pastes on a page
+fastagent channels setup slack --record-url --config prod.json [--url <url>]
+```
+
+Sets up the platform app of **one instance** of a channel and keeps its credentials with that instance
+([design](design/channel-setup.md)). It guides the person through the steps only they can take, asks for each value
+they alone can read off the platform's pages (hidden input at a terminal), checks it with the platform, and writes it to the
+instance's value file. It is safe to run again: a value already set that the platform still accepts is kept, one it refuses
+is asked for again, and a value the setup makes itself (a webhook's secret token) is made once.
+
+| Channel | By connection (dev's default) | By webhook (every other instance's default) |
+|---|---|---|
+| `telegram` | `TELEGRAM_BOT_TOKEN`, checked with `getMe` | the same, and a generated `TELEGRAM_SECRET_TOKEN` |
+| `slack` | the app's manifest link, `SLACK_BOT_TOKEN` (`auth.test`) and `SLACK_APP_TOKEN` (opens a connection) | the manifest link, `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` (shape only) |
+
+The way the channel receives is `--ingress`, else what the instance's configuration names (`channels.<name>.ingress`), else
+a connection for the development instance and a webhook for any other. The development instance is the default one: its
+configuration is the project's `fastagent.json` and its values `.secrets/.env`. `--config <file>` and `--env-file <file>`
+name another instance's (a deployment's): `--config` is read for the way it receives and its `http.publicUrl` (Slack's
+manifest names it as the Request URL; without one a placeholder stands, which Slack accepts) and is where `--ingress` is
+written; `--env-file` is where the values go, created when missing. Naming either makes it another instance than dev. The
+channel file must offer the way chosen (`byIngress`), else the command refuses before anything is asked.
+
+Without a terminal, or with `--json` or `--no-input`, the values are pasted on a page the setup serves on `127.0.0.1`
+(one use, a random address, [forward its port](#fastagent-add-telegramslackfeishulark) from a remote CLI) for the person a
+coding agent hands it to, never in the agent's conversation: the command returns a ticket (`need_user_action` with the
+page's `url`, then `done` with the variables it `written` and the `next_steps`). `--check <ticket>` reads where it
+stands, `--timeout <seconds>` sets how long it stays open (default 900).
+
+`--record-url` records the URL a person set on a Slack or Lark app's page (§5 of the design), in the configuration a deploy
+delivers, once the deployment confirms the platform reaches it there; the app is named by its bot token (Slack) or
+`LARK_APP_ID` (Lark), in `--env-file` or the instance's values.
 
 See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 
@@ -578,7 +607,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `add slack\|feishu\|lark`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
+| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `channels setup`, `add feishu\|lark`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
 | `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list`, `login`, `auth check`, `add` | Machine-readable output. |
 
@@ -601,7 +630,7 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
 - **A step only a person can take returns at once**, with what the person does and how to follow it:
   `"status": "need_user_action"`, the address to open, and a `check_command` to run once they have, in a sentence for
   the agent (`agent_next_steps`). An account sign-in (`login`, and `login --deployment` on the box) and an app's setup
-  (`add slack|feishu|lark`) work this way: a process of the CLI's own finishes the step and keeps a ticket that
+  (`channels setup`, `add feishu|lark`) work this way: a process of the CLI's own finishes the step and keeps a ticket that
   `--check <ticket>` reads. So does a whole deploy, opted into with `deploy <host> --run --json`: a deploy's exit 0
   says it is deployed, so one paused for a person (exit 0, `need_user_action`) is never what a CI job gets without
   asking for it.

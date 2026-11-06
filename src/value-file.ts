@@ -124,16 +124,16 @@ function mentionsEnvName(content: string, name: string): boolean {
 }
 
 /**
- * Write `entries` into the selected environment's value file, under a `# --- <section> ---` line. A name with a
- * non-empty active value is kept unless `overwrite` names it.
+ * Write `entries` into `file` (default: the selected environment's value file), under a `# --- <section> ---` line. A
+ * name with a non-empty active value is kept unless `overwrite` names it.
  */
 export async function writeValues(
   dir: string,
   section: string,
   entries: readonly ValueEntry[],
   overwrite: readonly string[] = [],
+  file: string = dotEnvPath(dir),
 ): Promise<ValueWriteResult> {
-  const file = dotEnvPath(dir);
   const unprotectedSecretsDir = await prepareSecretsDirectory(dir, dirname(file));
   let current = "";
   try {

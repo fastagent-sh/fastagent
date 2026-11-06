@@ -94,8 +94,7 @@ A deployment receives its chat channels by webhook. On Fly, Railway and AgentCor
 its config API allows) at its own URL on every start, with its own credentials: `deploy` delivers that URL as the
 configuration's `http.publicUrl` (Fly's `https://<app>.fly.dev`; Railway's domain, created before `railway up`) unless
 `--config` names one, a custom domain say, and `--run` reads what the box made of each one from its `/health`. Slack's
-Request URL, which no credential on the box can change, `--run` sets from this machine for an app `add slack`
-created. A URL only a person can set (Slack's; Lark's when its config API answers 404) the box confirms when the
+Request URL, which no credential on the box can change, is the person's to set (`--run` prints it). A URL only a person can set (Slack's; Lark's when its config API answers 404) the box confirms when the
 platform reaches it there with an authenticated request, the verification on saving or any event; at a terminal with
 `--config`, `--run` then records it in that file (`channels.<name>.app.url`), so later deploys of the file, CI
 included, report it registered from the start. A deployment that did not record it:
@@ -124,8 +123,9 @@ set; without it, it says which paths receive nothing yet. It reads no outcome it
   immediately so an interrupted token capture resumes the same app. Approval and publishing remain console steps.
   `--run --json` hands the confirmation to a coding agent's user; without either a terminal or `--json`, `--run`
   stops (exit 2) naming it. CI must supply the production App ID, Secret and Verification Token beforehand.
-- **Other channels:** run `add slack --env production` to create the production Slack app, or
-  `add telegram --env production` and create its bot through BotFather. Their local onboarding state is separate.
+- **Other channels:** run `channels setup slack --config prod.json --env-file .secrets/production/.env` to create the
+  production Slack app and keep its credentials, and the same for `telegram` with its own BotFather bot. A deployment
+  receives by webhook, so each setup keeps what a webhook needs.
 - **One app still delivers to one place.** `dev --tunnel` changes only the dev app's URL; `deploy --run` changes
   only production. Feishu/Lark refuse a production App ID copied from the default dev file.
 

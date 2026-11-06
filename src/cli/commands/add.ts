@@ -1,8 +1,8 @@
 /**
  * `fastagent add <channel>|skill` — scaffold channel glue (`src/channels/<kind>.ts`) or vendor an Agent Skills skill.
- * slack/feishu/lark additionally CREATE OR RESUME the platform app.
+ * telegram and slack change the program only (their app is `channels setup`'s); feishu and lark additionally CREATE OR
+ * RESUME the platform app, until they move there too.
  */
-import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { assertIndependentFeishuApps, onboardFeishuCloudApp } from "../add-feishu.ts";
@@ -25,14 +25,7 @@ import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durabl
 import { setChannelConfig } from "../../authoring.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
-import {
-  INSTANCE_CONFIG_FILE,
-  selectAgentEnvironment,
-  resolveStateRoot,
-  SECRETS_DIRNAME,
-  isUnderDir,
-  displayPath,
-} from "../../paths.ts";
+import { INSTANCE_CONFIG_FILE, selectAgentEnvironment, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
@@ -53,7 +46,6 @@ export interface AddChannelOptions {
   /** `--config <file>`: the instance configuration `--ingress` writes and the setup reads. */
   config?: string;
   onboard?: boolean;
-  replaceConfig?: boolean;
   environment?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;
@@ -70,8 +62,12 @@ export interface AddChannelOptions {
 /** Without a terminal, how long an app's setup stays open for the person to finish their part. */
 const UNATTENDED_TIMEOUT_SECONDS = 900;
 
+/** The channels whose platform app `add` still creates itself. */
+type OnboardedKind = "feishu" | "lark";
+
 /** `fastagent add <kind> [dir]`: scaffold `src/channels/<kind>.ts`, the adapter configured with a starter policy. */
 export async function runAddChannel(channelKind: ChannelKind, dirArg: string, opts: AddChannelOptions): Promise<void> {
+  if (channelKind === "telegram" || channelKind === "slack") return addProgram(channelKind, dirArg, opts);
   if (opts.check !== undefined) return checkSetup(channelKind, opts.check, opts);
   if (opts.ticket !== undefined) {
     // The process `startTicket` started: it takes the ticket before anything slow (the definition is built to plan),
@@ -83,7 +79,7 @@ export async function runAddChannel(channelKind: ChannelKind, dirArg: string, op
   }
   const plan = await planAdd(channelKind, dirArg, opts);
   const unattended = opts.input === false || opts.json === true || !isInteractive();
-  if (unattended && opts.onboard !== false && channelKind !== "telegram") {
+  if (unattended && opts.onboard !== false) {
     return setUpUnattended(channelKind, opts, plan);
   }
   const added = await addChannel(channelKind, plan, opts, terminalPerson).catch(failStartup);
@@ -93,12 +89,53 @@ export async function runAddChannel(channelKind: ChannelKind, dirArg: string, op
   process.exit(0);
 }
 
+/**
+ * `add telegram|slack`: the program only (channel-setup.md §2). It writes the channel file and its tools and names the
+ * values they read in `.secrets/.env.example`; it asks nothing and creates no app. The app, and the values of the
+ * instance that runs it, are `channels setup`'s.
+ */
+async function addProgram(kind: "telegram" | "slack", dirArg: string, opts: AddChannelOptions): Promise<void> {
+  const target = agentDirOrExit(resolve(dirArg));
+  const agentFromCwd = displayPath(process.cwd(), target);
+  const inAgent = (p: string): string => (agentFromCwd === undefined ? p : join(agentFromCwd, p));
+  const file = join(target, "src", "channels", `${kind}.ts`);
+  const created: string[] = [];
+  await (async () => {
+    if (await channelExists(target, kind)) {
+      console.error(`[fastagent] ${inAgent(relative(target, file))} already exists — keeping it`);
+    } else {
+      await assertChannelReady(target);
+      await scaffoldChannel(target, kind);
+      created.push(inAgent(relative(target, file)));
+      console.error(`[fastagent] created ${inAgent(relative(target, file))}`);
+    }
+    // Companion tools are the package's, not authored glue.
+    for (const tool of await scaffoldCompanionTools(target, kind)) {
+      created.push(inAgent(relative(target, tool)));
+      console.error(`[fastagent] wrote ${inAgent(relative(target, tool))}`);
+    }
+    if (await appendChannelEnv(target, kind)) {
+      console.error(`[fastagent] added ${kind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
+    }
+  })().catch(failStartup);
+  const install =
+    detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
+  const next = [
+    `${agentFromCwd === undefined ? install : `(cd ${agentFromCwd} && ${install})`}   # if @fastagent-sh/fastagent is not installed yet`,
+    `fastagent channels setup ${kind}${agentFromCwd === undefined ? "" : ` ${shellArg(agentFromCwd)}`}   # creates the app and asks for its credentials`,
+    `edit ${inAgent(relative(target, file))} — customise routing with route() (optional; the defaults already work)`,
+    ...channelSetup(kind).steps.map((line) => line.replace("{tools}", inAgent(join("src", "tools")))),
+    "fastagent dev",
+  ];
+  console.error("  next steps:");
+  for (const line of next) console.error(`    ${line}`);
+  if (opts.json) console.log(JSON.stringify({ status: "done", created, next_steps: next }, null, 2));
+  process.exit(0);
+}
+
 /** What `add` settles before it changes anything, refusing what it can while nothing has changed. */
-async function planAdd(channelKind: ChannelKind, dirArg: string, opts: AddChannelOptions): Promise<AddPlan> {
+async function planAdd(channelKind: OnboardedKind, dirArg: string, opts: AddChannelOptions): Promise<AddPlan> {
   // The channel (glue + companion tools + secrets) is agent surface: everything lands in the AGENT DIR.
-  if (opts.replaceConfig && opts.onboard === false) {
-    failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
-  }
   const target = agentDirOrExit(resolve(dirArg));
   const environment = opts.environment ?? "dev";
   if (environment !== "dev" && environment !== "production") {
@@ -108,7 +145,7 @@ async function planAdd(channelKind: ChannelKind, dirArg: string, opts: AddChanne
   if (environment === "production") unmarkDevServe();
   else markDevServe();
   enterAgentEnv(target);
-  if (environment === "production" && (channelKind === "feishu" || channelKind === "lark")) {
+  if (environment === "production") {
     try {
       assertIndependentFeishuApps(target, [channelKind], loadEnvValues(dotEnvPath(target)));
     } catch (error) {
@@ -124,11 +161,7 @@ async function planAdd(channelKind: ChannelKind, dirArg: string, opts: AddChanne
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const config = instanceConfigPath(target, environment, opts);
   const ingress = await resolveIngress(target, channelKind, environment, opts.ingress, config);
-  if (
-    existsAlready &&
-    (ingress.write || (environment === "production" && opts.onboard !== false)) &&
-    (channelKind === "feishu" || channelKind === "lark")
-  ) {
+  if (existsAlready && (ingress.write || (environment === "production" && opts.onboard !== false))) {
     await assertChannelReceives(target, channelKind, ingress.ingress);
   }
   return {
@@ -142,8 +175,7 @@ async function planAdd(channelKind: ChannelKind, dirArg: string, opts: AddChanne
     rerun:
       `fastagent add ${channelKind}${agentFromCwd === undefined ? "" : ` ${shellArg(agentFromCwd)}`}` +
       `${environment === "production" ? " --env production" : ""}${opts.ingress ? ` --ingress ${opts.ingress}` : ""}` +
-      `${opts.config === undefined ? "" : ` --config ${shellArg(resolve(opts.config))}`}` +
-      `${opts.replaceConfig ? " --replace-config" : ""}`,
+      `${opts.config === undefined ? "" : ` --config ${shellArg(resolve(opts.config))}`}`,
   };
 }
 
@@ -167,7 +199,7 @@ interface AddPlan {
  * onboarding through `person`, and the next steps, printed and returned with the variables it wrote.
  */
 async function addChannel(
-  channelKind: ChannelKind,
+  channelKind: OnboardedKind,
   plan: AddPlan,
   opts: AddChannelOptions,
   person: Person,
@@ -192,17 +224,7 @@ async function addChannel(
   }
   // Stateful app onboarding is re-runnable after the scaffold boundary.
   let created: Record<string, string> | undefined;
-  if (channelKind === "slack" && opts.onboard !== false) {
-    const { onboardSlackInternalApp } = await import("../add-slack.ts");
-    created = await onboardSlackInternalApp({
-      target,
-      stateRoot: resolveStateRoot(target),
-      replaceConfig: opts.replaceConfig,
-      ...(person === terminalPerson ? {} : { person }),
-    }).then(() => undefined);
-  } else if ((channelKind === "feishu" || channelKind === "lark") && opts.onboard !== false) {
-    created = await onboardFeishuCloudApp(target, channelKind, ingress, rerun, person);
-  }
+  if (opts.onboard !== false) created = await onboardFeishuCloudApp(target, channelKind, ingress, rerun, person);
   if (write !== undefined) {
     await setChannelConfig(target, channelKind, { ingress }, { config: write });
     console.error(
@@ -210,29 +232,8 @@ async function addChannel(
         `${isUnderDir(write, target) ? inAgent(relative(target, write)) : write}`,
     );
   }
-  const setup = channelSetup(channelKind, ingress);
-  const env = setup.env;
-  const steps =
-    channelKind === "slack" && opts.onboard !== false
-      ? [
-          // No line about the Request URL: the `dev --tunnel` line below is the whole instruction, and FastAgent sets
-          // that URL itself when the agent first runs.
-          "invite the app to each channel it should read",
-          // The tool lines are the scaffold's (one list), whichever path set the app up.
-          ...setup.steps.filter((step) => step.includes("{tools}/")),
-        ]
-      : setup.steps;
-  const generated = Object.fromEntries(
-    env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
-  );
-  // Kind-neutral: every channel's generated secrets get the same treatment.
-  const dotEnv = await appendChannelDotEnv(
-    target,
-    channelKind,
-    { ...generated, ...created },
-    Object.keys(created ?? {}),
-    ingress,
-  );
+  const { env, steps } = channelSetup(channelKind, ingress);
+  const dotEnv = await appendChannelDotEnv(target, channelKind, { ...created }, Object.keys(created ?? {}), ingress);
   if (dotEnv.unprotectedSecretsDir) {
     console.error(`[fastagent] note: ${unprotectedSecretsNote(dotEnv.unprotectedSecretsDir)}`);
   }
@@ -259,12 +260,11 @@ async function addChannel(
     if (!written.includes(e.name) && dotEnv.alreadySet.includes(e.name)) continue; // the user's already: nothing to do
     if (written.includes(e.name)) {
       // Written, but its hint may still carry an action — keep the variable visible instead of silently absorbing it.
-      step(`${e.name} — ${e.generate ? "generated and " : ""}written to ${envLabel}   # ${e.hint}`);
+      step(`${e.name} — written to ${envLabel}   # ${e.hint}`);
       continue;
     }
-    const value = e.generate ? `=${generated[e.name]}` : "";
     const action = e.required ? "set" : "optionally set";
-    step(`${action} ${e.name}${value} in ${envLabel}   # ${e.hint}`);
+    step(`${action} ${e.name} in ${envLabel}   # ${e.hint}`);
   }
   const serveCommand = environment === "production" ? "fastagent build && fastagent start" : "fastagent dev";
   for (const s of steps) {
@@ -279,33 +279,28 @@ async function addChannel(
     step(`fastagent deploy <host> --run   # deploy with the production app and credentials`);
   } else if (ingress === "connection") {
     step(`fastagent dev            # no public URL or tunnel required`);
-  } else if (channelKind === "slack") {
-    step(
-      `fastagent dev --tunnel   # ${opts.onboard === false ? "serve locally + print the URL to paste into the Slack app's Event Subscriptions" : "start the agent — then message it in Slack"}`,
-    );
-  } else if (channelKind !== "lark") {
+  } else if (channelKind === "feishu") {
     step(`fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
   }
   return { written, next_steps: next };
 }
 
 /** The command that reads an app's setup ticket, as every such ticket records it. */
-const setupCheck = (kind: ChannelKind) => `fastagent add ${kind} --check`;
+const setupCheck = (kind: OnboardedKind) => `fastagent add ${kind} --check`;
 
 /** What the person does for each kind's app, to follow "so they can". */
-const SETUP_ACTIONS: Record<"slack" | "feishu" | "lark", string> = {
-  slack: "set up the Slack app: paste a configuration token on the page, then click Allow in Slack",
+const SETUP_ACTIONS: Record<OnboardedKind, string> = {
   feishu: "confirm the new Feishu app",
   lark: "finish setting up the Lark app",
 };
 
 /**
- * `add slack|feishu|lark` with no one at a terminal to ask, for a coding agent: the app's setup runs in a process of its
+ * `add feishu|lark` with no one at a terminal to ask, for a coding agent: the app's setup runs in a process of its
  * own (ticket.ts), and the command returns once the person has a step to take, it is done, or it is still working at it.
  * What only the person has (Slack's tokens, Lark's App ID and Secret) is pasted on a page of the setup's own, never asked
  * for in the agent's conversation and never typed into a file.
  */
-async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChannelOptions, at: AddPlan): Promise<void> {
+async function setUpUnattended(kind: OnboardedKind, opts: AddChannelOptions, at: AddPlan): Promise<void> {
   const { target } = at;
   const timeout = opts.timeout === undefined ? UNATTENDED_TIMEOUT_SECONDS : Number(opts.timeout);
   if (!Number.isInteger(timeout) || timeout <= 0) failUsage(`--timeout must be a whole number of seconds`);
@@ -329,7 +324,6 @@ async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChann
         ...(at.environment === "production" ? ["--env", "production"] : []),
         ...(opts.ingress === undefined ? [] : ["--ingress", opts.ingress]),
         ...(opts.config === undefined ? [] : ["--config", resolve(opts.config)]),
-        ...(opts.replaceConfig ? ["--replace-config"] : []),
       ],
       cwd: process.cwd(),
     },
@@ -339,7 +333,7 @@ async function setUpUnattended(kind: "slack" | "feishu" | "lark", opts: AddChann
 }
 
 /** `add <kind> --check <ticket>`. */
-async function checkSetup(kind: ChannelKind, id: string, opts: AddChannelOptions): Promise<void> {
+async function checkSetup(kind: OnboardedKind, id: string, opts: AddChannelOptions): Promise<void> {
   const refused = refusedCheck(id, setupCheck(kind));
   if (refused !== undefined) failUsage(refused);
   // There: refusedCheck read it, and a ticket is pruned only a day after it ends.
@@ -386,7 +380,7 @@ function instanceConfigPath(target: string, environment: string, opts: AddChanne
  */
 async function resolveIngress(
   target: string,
-  kind: ChannelKind,
+  kind: OnboardedKind,
   environment: string,
   raw: string | undefined,
   config: string | undefined,
@@ -394,7 +388,6 @@ async function resolveIngress(
   if (raw !== undefined && raw !== "webhook" && raw !== "connection") {
     failUsage(`--ingress must be "webhook" or "connection", got "${raw}"`);
   }
-  if (kind === "slack") return { ingress: "webhook" };
   if (raw !== undefined) return { ingress: raw, ...(config === undefined ? {} : { write: config }) };
   const named =
     config === undefined || !existsSync(config)
@@ -412,7 +405,7 @@ async function resolveIngress(
  */
 async function assertChannelReceives(
   target: string,
-  kind: ChannelKind,
+  kind: OnboardedKind,
   ingress: FeishuSubscriptionMode,
 ): Promise<void> {
   await loadSourceDefinition(target)

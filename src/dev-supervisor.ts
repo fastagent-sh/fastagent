@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { AGENT_CONFIG_FILE, CONTEXT_FILE, INSTANCE_CONFIG_FILE, resolveStateRoot, isUnderDir } from "./paths.ts";
+import { AGENT_CONFIG_FILE, CONTEXT_FILE, INSTANCE_CONFIG_FILE, isUnderDir } from "./paths.ts";
 import { dotEnvPath } from "./value-file.ts";
 import { MCP_FILE } from "./mcp/config.ts";
 import { log } from "./log.ts";
@@ -97,7 +97,6 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
             tunnel = t;
             void announceWebhooks(agentDir, t.url, declaredChannels(m.routeChannels ?? []), {
               openUrl: openExternalUrl,
-              stateRoot: resolveStateRoot(agentDir),
             });
           }
         });

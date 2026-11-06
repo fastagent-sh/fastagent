@@ -216,7 +216,7 @@ async function runDeployAgentcore(params: {
         await writeFile(path, bytes);
         return path;
       },
-      registrarsFor(agentDir, params.values, params.answerer),
+      registrarsFor(params.values, params.answerer),
     );
     if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
     console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);

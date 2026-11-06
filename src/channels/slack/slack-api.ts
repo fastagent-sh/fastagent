@@ -149,6 +149,8 @@ export interface SlackApi {
   /** A person's name as the workspace shows it (`users.info`, needs `users:read`); undefined when it has none. */
   userName(userId: string, opts?: CallOptions): Promise<string | undefined>;
   authTest(): Promise<{ teamId?: string; userId?: string; botId?: string }>;
+  /** The id of the Slack app a bot belongs to (`bots.info`, which a bot token holding `users:read` may call). */
+  botAppId(botId: string): Promise<string | undefined>;
   postMessage(target: SlackTarget, text: string): Promise<string>;
   postMarkdown(target: SlackTarget, markdown: string): Promise<string>;
   updateMessage(channelId: string, ts: string, text: string): Promise<void>;
@@ -413,6 +415,10 @@ function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOp
     async authTest() {
       const data = await call<SlackBody & { team_id?: string; user_id?: string; bot_id?: string }>("auth.test", {});
       return { teamId: data.team_id, userId: data.user_id, botId: data.bot_id };
+    },
+    async botAppId(botId) {
+      const data = await call<SlackBody & { bot?: { app_id?: string } }>("bots.info", { bot: botId }, "GET");
+      return data.bot?.app_id;
     },
     async postMessage(target, text) {
       const data = await call<SlackBody & { ts?: string; channel?: string }>("chat.postMessage", {

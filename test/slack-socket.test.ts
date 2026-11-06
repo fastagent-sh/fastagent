@@ -1,6 +1,12 @@
 import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type OpenSlackSocket, type SlackSocketHandlers, connectSlackSocket } from "../src/channels/slack/socket.ts";
+import {
+  type OpenSlackSocket,
+  type SlackSocketHandlers,
+  TerminalSocketError,
+  connectSlackSocket,
+  openSlackConnection,
+} from "../src/channels/slack/socket.ts";
 import type { SlackEventEnvelope } from "../src/channels/slack/parse.ts";
 import { log } from "../src/log.ts";
 
@@ -97,6 +103,37 @@ afterEach(() => {
   for (const abort of aborts.splice(0)) abort.abort();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("apps.connections.open", () => {
+  const asks = (answer: unknown) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => (answer instanceof Error ? Promise.reject(answer) : Response.json(answer))),
+    );
+
+  it("answers the address, and sends the app-level token as a header, never in the query", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ ok: true, url: "wss://wss.test/link" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(openSlackConnection(API, APP_TOKEN)).resolves.toBe("wss://wss.test/link");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${API}/apps.connections.open`);
+    expect(new Headers(init.headers).get("authorization")).toBe(`Bearer ${APP_TOKEN}`);
+  });
+
+  it("tells a refusal that names the token (no retry fixes it) from one that can pass", async () => {
+    asks({ ok: false, error: "invalid_auth" });
+    await expect(openSlackConnection(API, APP_TOKEN)).rejects.toBeInstanceOf(TerminalSocketError);
+    asks({ ok: false, error: "ratelimited" });
+    const rate = await openSlackConnection(API, APP_TOKEN).catch((error: unknown) => error);
+    expect(rate).toBeInstanceOf(Error);
+    expect(rate).not.toBeInstanceOf(TerminalSocketError);
+    expect((rate as Error).message).toContain("ratelimited");
+    asks(new Error("connect ECONNREFUSED"));
+    const down = await openSlackConnection(API, APP_TOKEN).catch((error: unknown) => error);
+    expect(down).not.toBeInstanceOf(TerminalSocketError);
+    expect((down as Error).message).toContain("could not be reached");
+  });
 });
 
 describe("slack socket mode: connecting", () => {
