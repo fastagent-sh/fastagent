@@ -162,19 +162,25 @@ async function runDeployAgentcore(params: {
   config: string | undefined;
 }): Promise<void> {
   const { agentDir, name, channels, topology } = params;
-  // Decided before the first side effect: the deploy resets the runtime's storage and the login with it, so with nobody
-  // to log it in again it would end at "not logged in" AFTER replacing a runtime that was serving, with the webhooks
-  // a previous deploy registered still pointing at it. A coding agent's ticket has someone: its user.
-  if (params.boxLogin && params.answerer.kind === "nobody") {
-    failStartup(
-      new Error(
-        `deploy stopped: every AgentCore deploy wipes the runtime's ${params.boxLogin} login, and without a terminal ` +
-          `nobody can log it in again — run this deploy in a terminal; from a coding agent, run ` +
-          `\`${params.rerun} --json\`, which hands the login to its user; or set ` +
-          `${params.boxLogin}'s API key with \`fastagent secrets set agentcore <its variable>\``,
-      ),
-    );
-  }
+  const secretsStep = deploySecrets({
+    host: "agentcore",
+    label: "AWS Secrets Manager",
+    agentDir,
+    opts: { config: params.config },
+    answerer: params.answerer,
+    api: params.api,
+    modelAuth: params.modelAuth,
+    modelKey: params.modelKey,
+    declaredSecrets: params.declaredSecrets,
+    valueFile: params.valueFile,
+    values: params.values,
+  });
+  // The model's key on the target is a credential like a key in the value file: the runtime has it from its first
+  // invocation, so there is no login to run on the box. Only the target can say, hence after the secrets step.
+  let keyOnTarget = false;
+  const login = boxLoginStep("agentcore", params, (runtimeArn: string) =>
+    agentcoreShell(runtimeArn, ingressSessionId(name), awsRunner(agentDir)),
+  ).boxLogin;
   // The params temp dir holds the ONE file carrying secret values (file:// parameter-overrides — never argv);
   // 0700/0600 and removed after the run, success or gate.
   const paramsDir = await mkdtemp(join(tmpdir(), "fastagent-agentcore-"));
@@ -189,19 +195,25 @@ async function runDeployAgentcore(params: {
           .replace(/[-:.TZ]/g, "")
           .slice(0, 14),
         region: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION,
-        provideSecrets: deploySecrets({
-          host: "agentcore",
-          label: "AWS Secrets Manager",
-          agentDir,
-          opts: { config: params.config },
-          answerer: params.answerer,
-          api: params.api,
-          modelAuth: params.modelAuth,
-          modelKey: params.modelKey,
-          declaredSecrets: params.declaredSecrets,
-          valueFile: params.valueFile,
-          values: params.values,
-        }),
+        provideSecrets: async (store) => {
+          const gate = await secretsStep(store);
+          if (gate !== undefined) return gate;
+          const held = await store.names();
+          keyOnTarget = params.modelKey.variables.some((variable) => held.has(variable));
+          // Decided before the build and the stack: the deploy resets the runtime's storage and the login with it, so
+          // with nobody to log it in again it would end at "not logged in" AFTER replacing a runtime that was serving,
+          // with the webhooks a previous deploy registered still pointing at it. A coding agent's ticket has someone:
+          // its user.
+          if (params.boxLogin && !keyOnTarget && params.answerer.kind === "nobody") {
+            return (
+              `every AgentCore deploy wipes the runtime's ${params.boxLogin} login, and without a terminal ` +
+              `nobody can log it in again — run this deploy in a terminal; from a coding agent, run ` +
+              `\`${params.rerun} --json\`, which hands the login to its user; or set ` +
+              `${params.boxLogin}'s API key with \`fastagent secrets set agentcore ${params.modelKey.variables[0] ?? "<its variable>"}\``
+            );
+          }
+          return undefined;
+        },
         // The wake-alarm shared secret (container ↔ forwarder).
         wakeSecret: crypto.randomUUID(),
         // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM principal's.
@@ -210,9 +222,14 @@ async function runDeployAgentcore(params: {
         topology,
         ...(params.publicUrl === undefined ? {} : { publicUrl: params.publicUrl }),
         ...urlRecorder(agentDir, params.config, params.values, params.answerer),
-        ...boxLoginStep("agentcore", params, (runtimeArn: string) =>
-          agentcoreShell(runtimeArn, ingressSessionId(name), awsRunner(agentDir)),
-        ),
+        ...(login === undefined
+          ? {}
+          : {
+              boxLogin: {
+                ...login,
+                run: async (runtimeArn: string) => (keyOnTarget ? undefined : login.run(runtimeArn)),
+              },
+            }),
       },
       awsRunner(agentDir),
       spawnRunner("docker", agentDir),

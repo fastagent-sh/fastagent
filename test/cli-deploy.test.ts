@@ -79,26 +79,62 @@ describe("cli: deploy", () => {
     expect(forced.stderr).toMatch(/excludes \.git/); // …and the history note
   });
 
-  it("deploy agentcore --run with a login to redo and no terminal stops before touching AWS", async () => {
-    // Every AgentCore deploy wipes the runtime's login; with nobody to redo it, the deploy would replace a serving
-    // runtime with one that cannot answer. Decided up front, so no AWS command runs at all.
-    const dir = await agentWorkspace("fa-deploy-ac-login-", {
-      "fastagent.config.ts": `export default { defaults: { model: "${CODEX_MODEL}" } };\n`,
-    });
+  /** An `aws` and a `docker` on PATH that answer the reads before the build; `held` is what the secret holds. */
+  async function fakeAwsAndDocker(held: string) {
     const bin = await mkdtemp(join(tmpdir(), "fa-aws-"));
     const called = join(bin, "called");
-    await writeFile(join(bin, "aws"), `#!/bin/sh\necho "$@" >> ${called}\nexit 1\n`, { mode: 0o755 });
-    const result = await runInProcess(["deploy", "agentcore", dir, "--run"], undefined, {
-      ...process.env,
-      PATH: `${bin}:${process.env.PATH}`,
+    await writeFile(
+      join(bin, "aws"),
+      `#!/bin/sh
+echo "$@" >> ${called}
+case "$1 $2" in
+  "sts get-caller-identity") echo '{"Account":"123456789012"}';;
+  "configure get") echo us-west-2;;
+  "cloudformation describe-stacks") echo "Stack with id x does not exist" >&2; exit 254;;
+  "secretsmanager describe-secret") echo '{"Name":"x"}';;
+  "secretsmanager get-secret-value") echo '${held}';;
+  "bedrock-agentcore-control list-agent-runtimes") echo '{}';;
+  *) exit 1;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    await writeFile(
+      join(bin, "docker"),
+      `#!/bin/sh\necho "docker $@" >> ${called}\ncase "$1" in version|buildx) exit 0;; esac\nexit 1\n`,
+      { mode: 0o755 },
+    );
+    return { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, calls: () => readFile(called, "utf8") };
+  }
+
+  it("deploy agentcore --run with a login to redo and no terminal stops before the build and the stack", async () => {
+    // Every AgentCore deploy wipes the runtime's login; with nobody to redo it, the deploy would replace a serving
+    // runtime with one that cannot answer. Decided once the target's values are known, and before anything is built.
+    const dir = await agentWorkspace("fa-deploy-ac-login-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
+    const aws = await fakeAwsAndDocker("{}");
+    const result = await runInProcess(["deploy", "agentcore", dir, "--run"], undefined, aws.env);
     expect(result.code).toBe(1);
-    expect(result.stderr).toMatch(/wipes the runtime's openai-codex login.*run this deploy in a terminal/);
-    // The coding agent's way names this agent, run from wherever this deploy was.
+    expect(result.stderr).toMatch(/wipes the runtime's openai login.*run this deploy in a terminal/);
+    // The coding agent's way names this agent, run from wherever this deploy was; the key's variable is named.
     expect(result.stderr).toContain(
       `\`fastagent deploy agentcore ${dir} --run --json\`, which hands the login to its user`,
     );
-    await expect(stat(called)).rejects.toThrow(); // no aws invocation
+    expect(result.stderr).toContain("fastagent secrets set agentcore OPENAI_API_KEY");
+    const calls = await aws.calls();
+    expect(calls).not.toMatch(/cloudformation deploy|ecr |s3 |s3api |docker buildx build|docker login/);
+  });
+
+  it("deploy agentcore --run goes on when the target already holds the model's key: there is no login to redo", async () => {
+    const dir = await agentWorkspace("fa-deploy-ac-key-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    const aws = await fakeAwsAndDocker('{"OPENAI_API_KEY":"sk"}');
+    const result = await runInProcess(["deploy", "agentcore", dir, "--run"], undefined, aws.env);
+    expect(result.stderr).not.toContain("wipes the runtime");
+    // Past the stop: the docker CLI of the fake refuses, which is the next thing the deploy needs.
+    expect(await aws.calls()).toContain("ecr describe-repositories");
   });
 
   it("deploy agentcore --run --json goes on past that stop: its ticket has someone to redo the login", async () => {
