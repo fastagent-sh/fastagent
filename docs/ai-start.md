@@ -313,7 +313,9 @@ webhook servers, token refresh loops, or reply pipelines:
 | Feishu | `fastagent add feishu`, then `fastagent channels setup feishu --json` | Confirm the new app at the address it returns, then publish its version in the console. [Feishu](feishu.md) |
 | Lark | `fastagent add lark`, then `fastagent channels setup lark --json` | Open the page it returns, create the app from the launcher link, and paste its App ID and App Secret on that page. [Lark compatibility](feishu.md) |
 
-`add` changes the program only; the app and its credentials are `channels setup`'s. With `--json`,
+`add` changes the program only; the app and its credentials are `channels setup`'s. At a terminal, `fastagent dev` sets up a
+channel that has no credentials by asking for them; run it as `fastagent dev --no-input` (the owner's own terminal can
+answer, your run cannot) and it exits 2 instead, naming `channels setup <name> --json`. With `--json`,
 `channels setup` answers `need_user_action` for each part only the owner can do,
 with the address, what to write where, and a `check_command`; relay it, wait for the owner to say it is done, and run
 the command it names. The setup's ticket ends `done` with the variables it wrote, the next steps, and what is left for
@@ -321,7 +323,7 @@ the owner (such as publishing a version, in `next_steps`). Never ask for a token
 the file or page the owner enters it in ([`fastagent channels setup`](cli.md#fastagent-channels-setup),
 [`fastagent add`](cli.md#fastagent-add-telegramslackfeishulark)).
 
-After owner-approved setup, run `fastagent dev`: Telegram, Slack and Feishu/Lark receive over a connection the process
+After owner-approved setup, run `fastagent dev --no-input`: Telegram, Slack and Feishu/Lark receive over a connection the process
 opens, so no tunnel is needed (`dev --tunnel` is for trying a webhook path, with a channel set to `webhook`). Confirm
 each channel loads and send a real message from the authorized account. A URL verification challenge proves reachability, not a completed conversation. Keep manual
 console steps visible. Rename a channel to, for example, `src/channels/slack.ts.disabled` to disable it; a broken

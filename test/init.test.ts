@@ -71,6 +71,9 @@ describe("init: scaffoldAgent", () => {
     const ig = ignore({ ignorecase: false }).add(rootIgnore);
     expect(ig.ignores(".env")).toBe(true);
     expect(ig.ignores(".env.local")).toBe(true);
+    // The development instance's configuration is personal (its app is one person's); a team shares `defaults`.
+    expect(ig.ignores("fastagent.json")).toBe(true);
+    expect(ig.ignores("prod.json")).toBe(false);
     const secretsIgnore = ignore({ ignorecase: false }).add(
       await readFile(join(dir, ".secrets", ".gitignore"), "utf8"),
     );
