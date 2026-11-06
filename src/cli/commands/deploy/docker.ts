@@ -1,10 +1,11 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { webhookPaths } from "../../../deploy/channel-ingress.ts";
+import { ownPublicUrl } from "../../../deploy/container.ts";
 import {
   DOCKER_COMPOSE_FILE,
   DOCKER_VALUE_FILE,
+  ingressNotes,
   isGeneratedCompose,
   planDockerDeploy,
   toDockerProjectName,
@@ -74,6 +75,7 @@ export const dockerHost: HostDeploy = {
         declaredSecrets,
         values,
         valueFile,
+        publicUrl: ownPublicUrl(container.config),
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -95,6 +97,8 @@ async function runDeployDocker(params: {
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
   valueFile: string;
+  /** The `http.publicUrl` the configuration names: where the agent points its own webhook channels. */
+  publicUrl: string | undefined;
 }): Promise<string | undefined> {
   const { agentDir, composeFile, port, channels } = params;
   const leave = leftToPerson(params.answerer);
@@ -124,15 +128,9 @@ async function runDeployDocker(params: {
     console.error(`[fastagent] stop: ${compose} down (state volume is kept)`);
   }
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
-  const paths = webhookPaths(channels);
-  if (paths.length > 0) {
-    const unreached =
-      `${paths.join(", ")} receive nothing until a public URL reaches this container — configure your own ` +
-      `tunnel/proxy, point those webhook path(s) (or your remapped channel routes) at it and name its URL as ` +
-      `http.publicUrl in the configuration --config delivers, or set the channel's ingress to "connection" ` +
-      `where it has one`;
-    console.error(`[fastagent] note: ${unreached}`);
-    leave?.(unreached);
+  for (const note of ingressNotes(channels, params.publicUrl, outcome.url && `${outcome.url}/health`)) {
+    console.error(`[fastagent] note: ${note}`);
+    leave?.(note);
   }
   return outcome.url;
 }

@@ -109,8 +109,9 @@ same, so every start points them again.
 Docker has no public URL of its own: the Compose file publishes the agent on `127.0.0.1` only. Route your own
 ingress (a reverse proxy, a named tunnel) to it and name that URL as `http.publicUrl` in the configuration `--config`
 delivers, and the agent points Telegram and Feishu/Lark at it on every start (Slack's Request URL is yours to set);
-or have the channel receive by `connection` where it has one, which needs no public URL. `--run` reads no outcome
-there.
+or have the channel receive by `connection` where it has one, which needs no public URL. With `http.publicUrl`
+named, `--run` ends by pointing at the agent's `/health` (each channel's outcome) and, for Slack, the Request URL to
+set; without it, it says which paths receive nothing yet. It reads no outcome itself.
 
 - **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
   `.secrets/production/.env`. Production never falls back to dev values. Put production provider keys and other

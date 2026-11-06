@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MIN_DOCKER_COMPOSE_VERSION, planDockerDeploy, toDockerProjectName } from "../src/deploy/docker/plan.ts";
+import {
+  MIN_DOCKER_COMPOSE_VERSION,
+  ingressNotes,
+  planDockerDeploy,
+  toDockerProjectName,
+} from "../src/deploy/docker/plan.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 import { webhookPaths } from "../src/deploy/channel-ingress.ts";
 
@@ -56,6 +61,24 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(runbook(plan)).toContain("Name that URL as http.publicUrl");
     expect(runbook(plan)).not.toContain("logs -f tunnel");
     expect(compose(plan)).not.toContain("tunnel:");
+  });
+
+  it("says what is left of the webhook channels: nothing reaches them without a URL, or the agent points them at the named one", () => {
+    const channels = declaredChannels(["telegram", "slack"]);
+    expect(ingressNotes(channels, undefined, "http://127.0.0.1:8787/health")).toEqual([
+      expect.stringContaining("/telegram, /slack receive nothing until a public URL reaches this container"),
+    ]);
+    const named = ingressNotes(channels, "https://agent.acme.com", "http://127.0.0.1:8787/health");
+    expect(named).toEqual([
+      "the agent points its webhook channels at https://agent.acme.com on every start; http://127.0.0.1:8787/health says how each went",
+      expect.stringContaining("slack: set Event Subscriptions → Request URL → https://agent.acme.com/slack"),
+    ]);
+    // Without Slack there is no step of the operator's; without a webhook channel there is nothing to say.
+    expect(ingressNotes(declaredChannels(["telegram"]), "https://agent.acme.com", undefined)).toEqual([
+      "the agent points its webhook channels at https://agent.acme.com on every start; its /health says how each went",
+    ]);
+    expect(ingressNotes(declaredChannels(["feishu"], "long-connection"), undefined, undefined)).toEqual([]);
+    expect(ingressNotes([], "https://agent.acme.com", undefined)).toEqual([]);
   });
 
   it("omits public paths for long-connection Feishu", () => {

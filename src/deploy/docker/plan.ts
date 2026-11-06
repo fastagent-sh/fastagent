@@ -1,6 +1,7 @@
 /** `fastagent deploy docker` — the local-Docker plan. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
+import { manualWebhookStep, webhookKinds } from "../../channels/webhooks.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
@@ -100,6 +101,32 @@ services:
 volumes:
   state:
 `;
+}
+
+/**
+ * What `--run` says of the webhook channels once Compose is up. Docker has no URL of its own: with `http.publicUrl`
+ * named in the delivered configuration the agent points its own channels there (its `/health` says how each went) and
+ * only Slack's Request URL is the operator's; without one, nothing can reach those paths yet.
+ */
+export function ingressNotes(
+  channels: readonly DeclaredChannel[],
+  publicUrl: string | undefined,
+  healthUrl: string | undefined,
+): string[] {
+  const paths = webhookPaths(channels);
+  if (paths.length === 0) return [];
+  if (publicUrl === undefined) {
+    return [
+      `${paths.join(", ")} receive nothing until a public URL reaches this container — configure your own ` +
+        `tunnel/proxy, point those webhook path(s) (or your remapped channel routes) at it and name its URL as ` +
+        `http.publicUrl in the configuration --config delivers, or set the channel's ingress to "connection" ` +
+        `where it has one`,
+    ];
+  }
+  return [
+    `the agent points its webhook channels at ${publicUrl} on every start; ${healthUrl ?? "its /health"} says how each went`,
+    ...(webhookKinds(channels).includes("slack") ? [manualWebhookStep("slack", publicUrl)] : []),
+  ];
 }
 
 /** Compute local-Docker artifacts + the runbook; no Docker process is touched here. */

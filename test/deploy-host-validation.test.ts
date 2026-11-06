@@ -148,6 +148,16 @@ it("a valid AgentCore setup still onboards before deployment", async () => {
   expect(deploy).toHaveBeenCalledOnce();
 });
 
+it("a valid Docker setup (a channel that connects out) onboards before deployment", async () => {
+  const { dir } = await agent("agent", "");
+  const deploy = vi.spyOn(HOSTS.docker, "deploy").mockImplementation(async (ctx) => {
+    expect(registerFeishuApp).toHaveBeenCalledOnce();
+    expect(ctx.pre.values.get("FEISHU_APP_ID")).toBe("cli_production");
+  });
+  await runDeploy("docker", dir, { run: true, config: await connectionConfig() });
+  expect(deploy).toHaveBeenCalledOnce();
+});
+
 it("validates the refreshed channel facts after onboarding before handing off to the host", async () => {
   const { dir } = await agent("agent", "");
   vi.mocked(registerFeishuApp).mockImplementationOnce(async () => {
