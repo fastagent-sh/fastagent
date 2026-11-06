@@ -138,15 +138,27 @@ describe("railwayStore", () => {
     expect(failure?.message).not.toContain("hunter2");
   });
 
-  it("uses the project this directory is linked to, and makes one (with its service) only when it is not linked", async () => {
-    const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "bot" }) } : {}));
-    await railwayStore(linked.run, "bot", quiet, { redeploy: false }).ensure();
-    expect(linked.cmds()).toEqual(["status --json"]);
+  it("uses the project that has the service, and makes one (with its service) only when it is not linked", async () => {
+    const service = (project: string) => ({
+      name: project,
+      environments: { edges: [{ node: { serviceInstances: { edges: [{ node: { serviceName: "bot" } }] } } }] },
+    });
+    for (const project of ["bot", "elsewhere"]) {
+      const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify(service(project)) } : {}));
+      await railwayStore(linked.run, "bot", quiet, { redeploy: false }).ensure();
+      expect(linked.cmds()).toEqual(["status --json"]);
+    }
+    // A project named for the agent that lacks the service gets it; an unrelated one is refused.
+    const bare = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "bot" }) } : {}));
+    await railwayStore(bare.run, "bot", quiet, { redeploy: false }).ensure();
+    expect(bare.cmds()).toEqual(["status --json", "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state"]);
+    const unrelated = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "prod-app" }) } : {}));
+    await expect(railwayStore(unrelated.run, "bot", quiet, { redeploy: false }).ensure()).rejects.toThrow("prod-app");
+    expect(unrelated.cmds()).toEqual(["status --json"]);
 
     const unlinked = fake((args) => (args[0] === "status" ? { stdout: "" } : {}));
     await railwayStore(unlinked.run, "bot", quiet, { redeploy: false }).ensure();
     expect(unlinked.cmds()).toEqual([
-      "status --json",
       "status --json",
       "init --name bot",
       "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state",

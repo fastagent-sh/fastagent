@@ -181,10 +181,12 @@ describe("provideSecrets: values FastAgent makes itself", () => {
     expect(kept).toEqual([{ KEY: "made" }]);
   });
 
-  it("with nobody to ask, makes none over a key the file holds, and says it is not set rather than replace it", async () => {
+  it("a target that lacks a key the file holds gets that one, with nobody to ask: a new key would strand its callers", async () => {
+    // A deployment made again (the app was destroyed, the file kept): leaving the key unset serves no Agent API at all.
     const { fake, writes } = store();
     const kept: Record<string, string>[] = [];
-    const said: string[] = [];
+    const told: string[] = [];
+    const left: string[] = [];
     await provideSecrets({
       ...base,
       store: fake,
@@ -193,20 +195,22 @@ describe("provideSecrets: values FastAgent makes itself", () => {
       source: { file: "f.env", values: new Map([["KEY", "from-file"]]) },
       mint,
       onMinted: async (values) => void kept.push(values),
-      say: (line) => said.push(line),
+      inform: (line) => told.push(line),
+      say: (line) => left.push(line),
     });
-    expect(writes).toEqual([]);
-    expect(kept).toEqual([]);
-    expect(said).toHaveLength(1);
+    expect(writes).toEqual([{ KEY: "from-file" }]);
+    expect(kept).toEqual([]); // nothing new to record: the file already has it
+    expect(told).toEqual(["set KEY on Fly from f.env, where an earlier deploy kept it"]);
+    expect(left).toEqual([]); // nothing for the person to do
   });
 
-  it("makes none when the target holds one, or the file does (that one is offered instead)", async () => {
+  it("makes none when the target holds one; one the file holds is set without a question", async () => {
     const held = store(["KEY"]);
     await provideSecrets({ ...base, store: held.fake, needs: [], known: ["KEY"], asker: person().asker, mint });
     expect(held.writes).toEqual([]);
 
     const filed = store();
-    const { asker } = person();
+    const { asker, asked } = person();
     await provideSecrets({
       ...base,
       store: filed.fake,
@@ -217,6 +221,7 @@ describe("provideSecrets: values FastAgent makes itself", () => {
       mint,
     });
     expect(filed.writes).toEqual([{ KEY: "from-file" }]);
+    expect(asked).toEqual([]);
   });
 
   it("needs no one to ask: a coding agent's deploy mints it too, and still names a name it cannot", async () => {

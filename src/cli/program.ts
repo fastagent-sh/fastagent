@@ -396,8 +396,9 @@ const deploy: CommandSpec = {
     {
       flags: "--into-linked",
       description:
-        "(railway --run) provision INTO the project this dir is already linked to (skip create); by " +
-        "default --run refuses a pre-existing link (could be unrelated/production)",
+        "(railway --run) provision INTO the project this dir is linked to even when it is not the agent's " +
+        "(it holds no service of this name and is not named for it); by default --run refuses that link " +
+        "(could be unrelated/production)",
     },
     {
       flags: "--json",
@@ -424,9 +425,8 @@ const deploy: CommandSpec = {
     { cmd: "fastagent deploy agentcore --run", note: "arm64 image + stack + webhooks" },
   ],
   notes:
-    "Definition-read-only: the only writes are generated artifacts (never clobbered without " +
-    "--force). A plain redeploy of an already-provisioned agent is just the host's own command " +
-    "(e.g. `railway up`).",
+    "Definition-read-only: the only writes are generated artifacts (never clobbered without --force). A plain " +
+    "redeploy of an already-provisioned agent is just the host's own command (e.g. `railway up`).",
   run: async (args, f) =>
     (await import("./commands/deploy.ts")).runDeploy(args[0] as DeployHost, args[1] as string, {
       run: f.run === true,

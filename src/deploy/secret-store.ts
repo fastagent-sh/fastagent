@@ -52,6 +52,8 @@ export interface ProvideSecrets {
   mint?: readonly { name: string; make(): string }[];
   /** Say a line to the person who runs the deploy, for what a deploy with nobody to ask leaves undone. */
   say?: (line: string) => void;
+  /** Say what the deploy did by itself, which leaves the person nothing to do. */
+  inform?: (line: string) => void;
   /** What was minted, once the target holds it: kept on this machine too, where the person who calls the API looks. */
   onMinted?: (values: Readonly<Record<string, string>>) => Promise<void>;
 }
@@ -88,13 +90,35 @@ export async function provideSecrets(input: ProvideSecrets): Promise<string | un
   try {
     const have = await store.names();
     const missing = needs.filter((need) => !have.has(need.name));
-    const offered = [...(source?.values ?? [])]
-      .filter(([name, value]) => value.trim() !== "" && known.includes(name) && !have.has(name))
-      .map(([name]) => name);
+    const ours = new Set(mint.map((made) => made.name));
+    const filed = (name: string) => {
+      const value = source?.values.get(name);
+      return value !== undefined && value.trim() !== "" ? value : undefined;
+    };
+    // What FastAgent made is not the person's to be asked about: the file records it, so a target that lacks it (a
+    // deployment made again) gets that value, and one the file lacks too gets a new one.
     const minted: Record<string, string> = {};
-    // Made only where nobody holds one: not on the target, and not in the file that would be offered.
-    for (const { name, make } of mint) if (!have.has(name) && !offered.includes(name)) minted[name] = make();
+    const restored: string[] = [];
+    for (const { name, make } of mint) {
+      if (have.has(name)) continue;
+      const kept = filed(name);
+      if (kept === undefined) minted[name] = make();
+      else {
+        minted[name] = kept;
+        restored.push(name);
+      }
+    }
+    const offered = [...(source?.values ?? [])]
+      .filter(([name, value]) => value.trim() !== "" && known.includes(name) && !have.has(name) && !ours.has(name))
+      .map(([name]) => name);
     if (missing.length === 0 && offered.length === 0 && Object.keys(minted).length === 0) return undefined;
+    const finishMinted = async () => {
+      if (restored.length > 0) {
+        input.inform?.(`set ${restored.join(", ")} on ${host} from ${source?.file}, where an earlier deploy kept it`);
+      }
+      const made = Object.fromEntries(Object.entries(minted).filter(([name]) => !restored.includes(name)));
+      if (Object.keys(made).length > 0) await input.onMinted?.(made);
+    };
     const held = offered.filter((name) => missing.some((need) => need.name === name));
     if (asker === undefined) {
       const lacking = missing.filter((need) => !(need.name in minted));
@@ -107,7 +131,7 @@ export async function provideSecrets(input: ProvideSecrets): Promise<string | un
       }
       if (Object.keys(minted).length > 0) {
         await store.write(minted);
-        await input.onMinted?.(minted);
+        await finishMinted();
       }
       return undefined;
     }
@@ -124,7 +148,7 @@ export async function provideSecrets(input: ProvideSecrets): Promise<string | un
       write[need.name] = await asker.secret(need);
     }
     if (Object.keys(write).length > 0) await store.write(write);
-    if (Object.keys(minted).length > 0) await input.onMinted?.(minted);
+    if (Object.keys(minted).length > 0) await finishMinted();
     return undefined;
   } catch (error) {
     return `${host}'s values could not be read or set: ${error instanceof Error ? error.message : String(error)}`;

@@ -83,10 +83,14 @@ const unsent = (error: unknown) => ["EncodeError", "InvalidUrlError"].includes(r
 const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** What stopped a request that left, said for a Caller. */
-const whatFailed = (baseUrl: string, error: unknown) =>
-  reasonOf(error)?._tag === "TransportError"
-    ? `could not reach the agent at ${baseUrl}: ${said(error)}`
-    : `the agent at ${baseUrl} answered what this client cannot read: ${said(error)}`;
+const whatFailed = (baseUrl: string, error: unknown) => {
+  if (reasonOf(error)?._tag === "TransportError") return `could not reach the agent at ${baseUrl}: ${said(error)}`;
+  const answered = `the agent at ${baseUrl} answered what this client cannot read: ${said(error)}`;
+  // A serve mounts the API only while it holds a key (SPEC §9.6): a host that is up and has none answers 404 here.
+  return reasonOf(error)?.response?.status === 404
+    ? `${answered} (a deployment serves no Agent API without a FASTAGENT_API_KEY, and AgentCore serves none)`
+    : answered;
+};
 
 /**
  * A read's failure, and a write's other than a send's: a refusal as the agent answered it; one that could not get

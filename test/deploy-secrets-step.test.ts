@@ -125,6 +125,28 @@ describe("a deploy's secrets step", () => {
     );
   });
 
+  it("a deployment made again gets the key its earlier deploy kept in the file, with no question and no new key", async () => {
+    const values = new Map([["FASTAGENT_API_KEY", "kept-key"]]);
+    const left: string[] = [];
+    const ticket = { kind: "ticket", step: { person: { afterwards: (line: string) => left.push(line) } } };
+    for (const answerer of [{ kind: "nobody" }, { kind: "terminal" }, ticket] as unknown as Answerer[]) {
+      writes.length = 0;
+      said.length = 0;
+      const out = await step(answerer, { api: { served: true }, declaredSecrets: [], values })(target());
+      expect(out).toBeUndefined();
+      expect(writes).toEqual([{ FASTAGENT_API_KEY: "kept-key" }]);
+      expect(prompts.asked).toEqual([]);
+      expect(said.join("\n")).toContain(
+        "set FASTAGENT_API_KEY on Fly from .secrets/production/.env, where an earlier deploy kept it",
+      );
+      expect(said.join("\n")).not.toContain("made FASTAGENT_API_KEY");
+    }
+    // It is done, not left for the person: a ticket's afterwards lists only what they still have to do.
+    expect(left).toEqual([]);
+    // The file already records it: nothing is written to it again.
+    await expect(readFile(join(dir, ".secrets", "production", ".env"), "utf8")).rejects.toThrow();
+  });
+
   it("makes no key when the target has one", async () => {
     await step({ kind: "nobody" }, { api: { served: true }, declaredSecrets: [] })(target(["FASTAGENT_API_KEY"]));
     expect(writes).toEqual([]);

@@ -349,12 +349,12 @@ A `deploy --run` that fails prints the host CLI's own output above its last line
 running the deploy again: the same inputs fail the same way.
 
 - **Fly: `failed to list workers … authentication handshake failed`, or `connecting to Depot builder: timed out`.** flyctl
-  cannot reach its remote builder: a proxy or VPN in the way (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` in the shell), or
-  the builder itself. Unset the proxy variables for the command (`env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY fastagent
-  deploy fly --run`) and run it again. If it still times out, the builder is what cannot be reached from here: follow
-  the runbook `fastagent deploy fly` prints (without `--run`) and add `--depot=false` to its `fly deploy` line, which
-  builds on Fly's own builder, then set the Agent API key with `fastagent secrets set fly FASTAGENT_API_KEY --generate`
-  and log the box in as the runbook says.
+  cannot reach its remote builder. Measured on one machine: with a proxy tool's TUN mode (all traffic through a tunnel
+  interface) on, three deploys failed this way and `fly doctor` found no fault, and with TUN off the same build took
+  15 to 25 seconds, with or without `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` set. Unsetting the variables does not leave a
+  tunnel, so turn the TUN or VPN off for the deploy. Where that is not possible, follow the runbook `fastagent deploy fly`
+  prints (without `--run`) and add `--depot=false` to its `fly deploy` line, which builds on Fly's own builder, then set
+  the Agent API key with `fastagent secrets set fly FASTAGENT_API_KEY --generate` and log the box in as the runbook says.
 - **Fly: `WARN FASTAGENT_SECRETS_DIR may be a potentially sensitive environment variable`.** It is a path, not a
   secret. Ignore it.
 - **`no provider of the deployed agent offers "…"`.** The model name is not one a provider lists. The message names the

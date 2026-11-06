@@ -404,7 +404,17 @@ describe("connectAgent", () => {
       // A read may be asked again after a server's error, and is the server's fault otherwise.
       await expect(agent.sessions.get("s")).rejects.toMatchObject({ code: "unavailable", retryable: true });
       answer = () => new Response("<html>not here</html>", { status: 404 });
-      await expect(agent.sessions.get("s")).rejects.toMatchObject({ code: "internal", retryable: false });
+      await expect(agent.sessions.get("s")).rejects.toMatchObject({
+        code: "internal",
+        retryable: false,
+        // A host that is up and mounts no API (no key set there) answers 404: say what makes that so.
+        message: expect.stringContaining("serves no Agent API without a FASTAGENT_API_KEY"),
+      });
+      answer = () =>
+        new Response("<html>bad gateway</html>", { status: 502, headers: { "content-type": "text/html" } });
+      await expect(agent.sessions.get("s")).rejects.toMatchObject({
+        message: expect.not.stringContaining("FASTAGENT_API_KEY"),
+      });
       answer = () => new Response("{ not json", { status: 200, headers: { "content-type": "application/json" } });
       await expect(agent.messages.send({ sessionId: "s", content: "hi" })).rejects.toMatchObject(lost);
     } finally {

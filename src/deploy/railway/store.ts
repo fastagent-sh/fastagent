@@ -21,10 +21,26 @@ export function linkedName(stdout: string): string | undefined {
   return undefined;
 }
 
+/** Whether `railway status --json` lists a service called `name`. */
+function hasService(stdout: string, name: string): boolean {
+  const walk = (value: unknown): boolean => {
+    if (value === null || typeof value !== "object") return false;
+    const object = value as Record<string, unknown>;
+    if (object.serviceName === name) return true;
+    return Object.values(object).some(walk);
+  };
+  try {
+    return walk(JSON.parse(stdout));
+  } catch {
+    return false;
+  }
+}
+
 /**
- * The project and service a deployment's values and image belong to, made when this directory is not linked to one:
- * `--run` provisions a NEW project and only runs on an unlinked directory unless `intoLinked` says to provision into
- * the linked one. Resolves the gate line when it cannot be done.
+ * The project and service a deployment's values and image belong to. A linked project that already has the agent's
+ * service is the agent's (`secrets set` or an earlier `--run` made it, or `--into-linked` did), and one named for the
+ * agent that lacks it is given the service. A directory linked to another project is refused unless `intoLinked` says to
+ * provision into it, and an unlinked one is given a new project. Resolves the gate line when it cannot be done.
  */
 export async function ensureRailwayService(
   railway: CliRunner,
@@ -33,16 +49,17 @@ export async function ensureRailwayService(
 ): Promise<string | undefined> {
   const status = await railway(["status", "--json"], { capture: true });
   if (isLinked(status.stdout)) {
-    if (!plan.intoLinked) {
-      const name = linkedName(status.stdout);
+    const name = linkedName(status.stdout);
+    if (hasService(status.stdout, plan.name)) return undefined;
+    if (!plan.intoLinked && name !== plan.name) {
       return (
-        `this directory is already linked to Railway project ${name ? `"${name}"` : "(name unreadable)"}. ` +
-        "`--run` provisions a NEW project and only runs on an unlinked directory — it won't deploy into an " +
-        "unrelated one. To redeploy an already-provisioned agent, run `railway up`. To provision the agent " +
+        `this directory is already linked to Railway project ${name ? `"${name}"` : "(name unreadable)"}, not to ` +
+        `this agent's own (${plan.name}). \`--run\` won't deploy into an unrelated project. To provision the agent ` +
         "INTO this project, re-run with --into-linked. To start fresh, `railway unlink` first."
       );
     }
-    log(`provisioning into linked project ${linkedName(status.stdout) ?? plan.name} (--into-linked)`);
+    if (plan.intoLinked) log(`provisioning into linked project ${name ?? plan.name} (--into-linked)`);
+    return addService(railway, plan, log);
   } else {
     // --into-linked means "provision into the project this dir is linked to" — but it isn't linked.
     if (plan.intoLinked) {
@@ -52,21 +69,26 @@ export async function ensureRailwayService(
     if ((await railway(["init", "--name", plan.name])).code !== 0) {
       return "`railway init` failed — if you have multiple workspaces, run it once interactively (or pass --workspace) to pick one, then re-run";
     }
-    // Create + link the service (init makes only a project); it precedes the volume, which has no --service flag and
-    // rides the linked service.
-    log(`creating service ${plan.name}…`);
-    // `--variables` with one of the machinery variables set just below: in a terminal, a bare `railway add` stops at
-    // "Enter a variable <esc to skip>" (5.62.1) and waits for a key nobody was told to press.
-    const addArgs = ["add", "--service", plan.name, "--variables", `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`];
-    if ((await railway(addArgs)).code !== 0) {
-      // Precise recovery, not "fix and re-run": init already created + linked the project, so a plain re-run hits the
-      // linked-gate, and --into-linked SKIPS `add` and then fails at the volume (no service to ride).
-      return (
-        `\`railway add --service\` failed — \`railway init\` already created the project (this directory is now ` +
-        `linked) but not the service. Finish with \`railway add --service ${plan.name}\` here, then re-run with ` +
-        `--into-linked; or \`railway unlink\` to detach and start fresh.`
-      );
-    }
+    return addService(railway, plan, log);
+  }
+}
+
+async function addService(
+  railway: CliRunner,
+  plan: { name: string; mountPath: string },
+  log: (message: string) => void,
+): Promise<string | undefined> {
+  // `init` makes only a project; the service precedes the volume, which has no --service flag and rides the linked one.
+  log(`creating service ${plan.name}…`);
+  // `--variables` with one of the machinery variables set just below: in a terminal, a bare `railway add` stops at
+  // "Enter a variable <esc to skip>" (5.62.1) and waits for a key nobody was told to press.
+  const addArgs = ["add", "--service", plan.name, "--variables", `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`];
+  if ((await railway(addArgs)).code !== 0) {
+    return (
+      `\`railway add --service\` failed — the project ${plan.name} exists and this directory is linked to it, but ` +
+      `it has no service. Run \`railway add --service ${plan.name}\` here, then re-run; or \`railway unlink\` to ` +
+      `detach and start fresh.`
+    );
   }
   return undefined;
 }
@@ -102,8 +124,6 @@ export function railwayStore(
       return isLinked((await railway(["status", "--json"], { capture: true })).stdout);
     },
     async ensure() {
-      // A directory linked to a project is the one it means; an unlinked one is made one, as a deploy would.
-      if (isLinked((await railway(["status", "--json"], { capture: true })).stdout)) return;
       const gate = await ensureRailwayService(railway, { name: service, mountPath: "/data", intoLinked: false }, log);
       if (gate !== undefined) throw new Error(gate);
     },
