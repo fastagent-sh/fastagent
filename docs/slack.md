@@ -125,6 +125,43 @@ print this manual Request URL instead of claiming registration succeeded. On the
 app, `fastagent add slack --replace-config` replaces an expired or revoked App Configuration token pair
 without touching the installed app or its runtime credentials.
 
+## Socket Mode: no public URL
+
+`slackSocketChannel` receives by Slack's [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/): the
+process opens a WebSocket to Slack, so there is no Request URL, no tunnel and no signing secret. It is the way a
+development instance can receive without a public address; it is not offered by the scaffold or by `add slack` yet
+(that app is created for HTTP), so a channel file names it by hand:
+
+```ts
+import { byIngress, needs } from "@fastagent-sh/fastagent";
+import { slackChannel, slackSocketChannel } from "@fastagent-sh/fastagent/slack";
+
+export default byIngress({
+  webhook: needs(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"], (secrets) =>
+    slackChannel({ botToken: secrets.SLACK_BOT_TOKEN, signingSecret: secrets.SLACK_SIGNING_SECRET }),
+  ),
+  connection: needs(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], (secrets) =>
+    slackSocketChannel({ botToken: secrets.SLACK_BOT_TOKEN, appToken: secrets.SLACK_APP_TOKEN }),
+  ),
+});
+```
+
+The instance's `channels.slack.ingress` picks the way (unset: `dev` uses the connection, everything else the webhook).
+Both take the same policy options (`rendering`, `route`, `onError`, …) and answer the same way.
+
+Set the app up by hand: turn on **Socket Mode** in its settings, generate an **app-level token** with the
+`connections:write` scope under Basic Information → App-Level Tokens (`apps.manifest.create` returns none, so it cannot
+be created for you), and put it in `SLACK_APP_TOKEN` beside the bot token. The scopes and event subscriptions are the
+ones listed under Manual setup above, with no Request URL. An app in Socket Mode receives over the socket **alone**
+(turning it on stops HTTP delivery), so keep a separate app for each instance that receives by webhook, a deployment
+included. Apps that use Socket Mode cannot be listed in the Slack Marketplace.
+
+The connection is refreshed by Slack every few hours; FastAgent opens the next one before the old one goes, so no event
+falls between them, and it pings the socket and reconnects when one stops answering. A lost network is retried with a
+growing wait. What retrying cannot fix ends the serve with its reason: a refused token (`invalid_auth`,
+`token_revoked`, …), Socket Mode turned off for the app (`link_disabled`), or a start that cannot connect. An event
+that cannot be taken (Slack authentication unavailable) is left unacknowledged, and Slack sends it again.
+
 ## Scaffolded channel
 
 ```ts

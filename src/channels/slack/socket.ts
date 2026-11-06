@@ -1,0 +1,357 @@
+/**
+ * Slack Socket Mode: how an app receives with no public URL. `apps.connections.open` (the app-level token) gives a
+ * short-lived `wss://` address; Slack sends `hello`, then every event as an envelope that must be acknowledged by its
+ * `envelope_id` within three seconds or Slack sends it again. Connections are refreshed every few hours: Slack says so
+ * with a `disconnect` (a `warning` about ten seconds ahead, then `refresh_requested`), and the app opens the next
+ * connection BEFORE the old one goes, so no event falls between them.
+ *
+ * What ends the connection and what does not follows what can be done about it. Before the first `hello`, any failure
+ * ends it: a start that cannot reach Slack, or is refused, is the operator's to see. After it, a lost socket, a
+ * refused `apps.connections.open` that can pass (rate limit, an outage) or a connection that stops answering pings is
+ * retried with a growing wait; a refused token and Socket Mode turned off for the app (`link_disabled`) end it with their
+ * reason, because retrying cannot fix them.
+ */
+import { channel } from "node:diagnostics_channel";
+import * as undici from "undici";
+import type { LongConnection } from "../../channel.ts";
+import { log } from "../../log.ts";
+import type { SlackEventEnvelope } from "./parse.ts";
+
+const RETRY_FIRST_MS = 1_000;
+const RETRY_CAP_MS = 30_000;
+/** How long a new connection may take to say `hello`. */
+const HELLO_MS = 15_000;
+/** A socket that stays silent is asked, with a ping, whether it is there: how often, and how long to wait for the pong. */
+const PING_EVERY_MS = 30_000;
+const PONG_WITHIN_MS = 10_000;
+
+/** What `apps.connections.open` says when the token is the problem: no retry will fix these. */
+const TERMINAL_OPEN_ERRORS = new Set([
+  "invalid_auth",
+  "not_authed",
+  "token_revoked",
+  "token_expired",
+  "account_inactive",
+  "not_allowed_token_type",
+  "missing_scope",
+  "no_permission",
+]);
+
+/** The socket as this module uses it, so a test can stand in a fake and a runtime without pings still serves. */
+export interface SlackSocket {
+  send(data: string): void;
+  close(): void;
+  /** Sends a ping frame, when the runtime can; its pong arrives as `handlers.pong`. */
+  ping?(): void;
+}
+
+export interface SlackSocketHandlers {
+  message(data: string): void;
+  pong(): void;
+  /** The socket ended, or could not be opened; `reason` says how. */
+  close(reason: string): void;
+}
+
+export type OpenSlackSocket = (url: string, handlers: SlackSocketHandlers) => SlackSocket;
+
+export interface SlackSocketOptions {
+  apiBaseUrl: string;
+  /** The app-level token (`xapp-…`). */
+  appToken: string;
+  /** Take an `event_callback` durably; a rejection leaves its envelope unacknowledged, so Slack sends it again. */
+  ingest(envelope: SlackEventEnvelope): Promise<void>;
+  /** Replaces the WebSocket and the waits, for tests. */
+  openSocket?: OpenSlackSocket;
+  timing?: {
+    retryFirstMs?: number;
+    retryCapMs?: number;
+    helloMs?: number;
+    pingEveryMs?: number;
+    pongWithinMs?: number;
+  };
+}
+
+/** The runtime's own WebSocket, with the pings undici can send; a runtime that offers neither serves without them. */
+const openRuntimeSocket: OpenSlackSocket = (url, handlers) => {
+  const Socket = undici.WebSocket ?? globalThis.WebSocket;
+  const socket = new Socket(url);
+  const pongs = channel("undici:websocket:pong");
+  const onPong = (message: unknown): void => {
+    if ((message as { websocket?: unknown }).websocket === socket) handlers.pong();
+  };
+  pongs.subscribe(onPong);
+  let closed = false;
+  const end = (reason: string): void => {
+    if (closed) return;
+    closed = true;
+    pongs.unsubscribe(onPong);
+    handlers.close(reason);
+  };
+  socket.addEventListener("message", (event) => handlers.message(String(event.data)));
+  socket.addEventListener("error", (event) =>
+    end(`socket error${(event as ErrorEvent).message ? `: ${(event as ErrorEvent).message}` : ""}`),
+  );
+  socket.addEventListener("close", (event) => end(`closed (${event.code}${event.reason ? ` ${event.reason}` : ""})`));
+  return {
+    send: (data) => socket.send(data),
+    close: () => socket.close(),
+    ...(undici.WebSocket !== undefined && typeof undici.ping === "function"
+      ? { ping: () => undici.ping(socket as never) }
+      : {}),
+  };
+};
+
+function deferredOutcome(): {
+  promise: Promise<"refresh" | "lost">;
+  resolve(value: "refresh" | "lost"): void;
+  reject(error: unknown): void;
+} {
+  let resolve!: (value: "refresh" | "lost") => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<"refresh" | "lost">((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Wait `ms`, or until `signal` aborts. */
+const pause = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+
+/** A failure no retry can fix: the connection ends with it. */
+class TerminalSocketError extends Error {}
+
+/** One open connection: what ended it is what its `ended` says. */
+interface Connection {
+  socket: SlackSocket;
+  /**
+   * `refresh`: Slack said it is about to replace this one. `lost`: it is gone, or stopped answering. Rejects with the
+   * reason when no retry can fix it.
+   */
+  ended: Promise<"refresh" | "lost">;
+  close(): void;
+}
+
+/** Hold a Socket Mode connection until `signal` aborts; `ready` settles at the first `hello`. */
+export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSignal): LongConnection {
+  const { apiBaseUrl, appToken, ingest } = options;
+  const openSocket = options.openSocket ?? openRuntimeSocket;
+  const retryFirstMs = options.timing?.retryFirstMs ?? RETRY_FIRST_MS;
+  const retryCapMs = options.timing?.retryCapMs ?? RETRY_CAP_MS;
+  const helloMs = options.timing?.helloMs ?? HELLO_MS;
+  const pingEveryMs = options.timing?.pingEveryMs ?? PING_EVERY_MS;
+  const pongWithinMs = options.timing?.pongWithinMs ?? PONG_WITHIN_MS;
+  const ready = deferred();
+  const closed = deferred();
+  let isReady = false;
+  const markReady = (): void => {
+    if (isReady) return;
+    isReady = true;
+    ready.resolve();
+  };
+
+  const openUrl = async (): Promise<string> => {
+    let response: Response;
+    try {
+      response = await fetch(`${apiBaseUrl}/apps.connections.open`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${appToken}`, "content-type": "application/x-www-form-urlencoded" },
+        signal: AbortSignal.any([AbortSignal.timeout(15_000), signal]),
+      });
+    } catch (error) {
+      throw new Error(`apps.connections.open could not be reached: ${String(error)}`, { cause: error });
+    }
+    const body = (await response.json().catch(() => ({}))) as { ok?: boolean; url?: string; error?: string };
+    if (body.ok === true && typeof body.url === "string") return body.url;
+    const reason = body.error ?? `HTTP ${response.status}`;
+    const message = `apps.connections.open failed: ${reason}`;
+    throw TERMINAL_OPEN_ERRORS.has(reason) ? new TerminalSocketError(message) : new Error(message);
+  };
+
+  /** Acknowledge each event once it is taken; an event that cannot be taken is left for Slack to send again. */
+  const handleEnvelope = async (socket: SlackSocket, envelope: Record<string, unknown>): Promise<void> => {
+    const id = envelope.envelope_id;
+    if (typeof id !== "string") return;
+    if (envelope.type === "events_api") {
+      const payload = envelope.payload as SlackEventEnvelope | undefined;
+      if (payload?.type === "event_callback") {
+        try {
+          await ingest(payload);
+        } catch (error) {
+          log.error(
+            `[slack] an event was not taken, so it is not acknowledged and Slack will send it again: ${String(error)}`,
+          );
+          return;
+        }
+      }
+    } else {
+      // Interactivity and slash commands are not what this channel serves: acknowledged, so Slack does not resend them.
+      log.debug(`[slack] ignoring a Socket Mode "${String(envelope.type)}" envelope`);
+    }
+    try {
+      socket.send(JSON.stringify({ envelope_id: id }));
+    } catch (error) {
+      // The connection went while the event was taken (a refresh closes the old one): Slack sends it again, and the
+      // delivery ring in the channel recognises it.
+      log.debug(`[slack] could not acknowledge an event on a closed connection: ${String(error)}`);
+    }
+  };
+
+  /** Dial `url` and resolve at its `hello`; the connection then answers events until it ends. */
+  const dial = (url: string): Promise<Connection> =>
+    new Promise((resolve, reject) => {
+      const ended = deferredOutcome();
+      let outcome: "refresh" | "lost" | undefined;
+      let helloed = false;
+      let pingTimer: NodeJS.Timeout | undefined;
+      let pongTimer: NodeJS.Timeout | undefined;
+      const stop = (): void => {
+        clearTimeout(pingTimer);
+        clearTimeout(pongTimer);
+      };
+      const finish = (value: "refresh" | "lost"): void => {
+        if (outcome !== undefined) return;
+        outcome = value;
+        stop();
+        ended.resolve(value);
+      };
+      const fail = (error: unknown): void => {
+        stop();
+        socket.close();
+        if (!helloed) reject(error);
+        else if (error instanceof TerminalSocketError) {
+          // Only the connection still in service ends the channel with it: one already let go has nothing to tell.
+          if (outcome === undefined) {
+            outcome = "lost";
+            ended.reject(error);
+          }
+        } else finish("lost");
+      };
+      const helloTimer = setTimeout(() => fail(new Error(`no hello from Slack within ${helloMs / 1000}s`)), helloMs);
+      const ping = (): void => {
+        if (socket.ping === undefined) return;
+        pingTimer = setTimeout(() => {
+          socket.ping?.();
+          pongTimer = setTimeout(() => {
+            log.warn(`[slack] Socket Mode connection stopped answering pings; reconnecting`);
+            fail(new Error("no pong"));
+          }, pongWithinMs);
+        }, pingEveryMs);
+      };
+      const socket = openSocket(url, {
+        message: (data) => {
+          let envelope: Record<string, unknown>;
+          try {
+            envelope = JSON.parse(data) as Record<string, unknown>;
+          } catch {
+            log.warn("[slack] ignoring a Socket Mode message that is not JSON");
+            return;
+          }
+          if (envelope.type === "hello") {
+            clearTimeout(helloTimer);
+            helloed = true;
+            ping();
+            resolve({
+              socket,
+              ended: ended.promise,
+              close: () => {
+                finish("lost");
+                socket.close();
+              },
+            });
+          } else if (envelope.type === "disconnect") {
+            const reason = String(envelope.reason);
+            if (reason === "link_disabled") {
+              fail(new TerminalSocketError("Slack Socket Mode is turned off for this app (link_disabled)"));
+            } else if (reason === "warning" || reason === "refresh_requested") {
+              finish("refresh");
+            } else {
+              log.warn(`[slack] Slack asked this Socket Mode connection to go (${reason})`);
+              finish("lost");
+            }
+          } else {
+            void handleEnvelope(socket, envelope);
+          }
+        },
+        pong: () => {
+          clearTimeout(pongTimer);
+          clearTimeout(pingTimer);
+          ping();
+        },
+        close: (reason) => {
+          clearTimeout(helloTimer);
+          fail(new Error(`Socket Mode connection ${reason}`));
+        },
+      });
+    });
+
+  const run = async (): Promise<void> => {
+    let current: Connection | undefined;
+    let waitMs = retryFirstMs;
+    while (!signal.aborted) {
+      let next: Connection;
+      try {
+        next = await dial(await openUrl());
+      } catch (error) {
+        if (signal.aborted) break;
+        if (error instanceof TerminalSocketError || !isReady) throw error;
+        log.warn(`[slack] Socket Mode connection failed, retrying in ${waitMs / 1000}s: ${String(error)}`);
+        await pause(waitMs, signal);
+        waitMs = Math.min(waitMs * 2, retryCapMs);
+        continue;
+      }
+      // Both receive until the old one is let go, so an event sent in between is taken by one of them.
+      current?.close();
+      current = next;
+      waitMs = retryFirstMs;
+      markReady();
+      const outcome = await Promise.race([
+        next.ended,
+        new Promise<"lost">((resolve) => signal.addEventListener("abort", () => resolve("lost"), { once: true })),
+      ]);
+      if (signal.aborted) break;
+      if (outcome === "lost") {
+        current = undefined;
+        await pause(retryFirstMs, signal);
+      }
+    }
+    current?.close();
+  };
+
+  run().then(
+    () => {
+      markReady();
+      closed.resolve();
+    },
+    (error: unknown) => {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (!isReady) {
+        isReady = true;
+        ready.reject(failure);
+      }
+      closed.reject(failure);
+    },
+  );
+  return { ready: ready.promise, closed: closed.promise };
+}

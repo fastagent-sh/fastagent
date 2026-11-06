@@ -170,6 +170,7 @@ independent of how any channel receives.
 - Slack's Socket Mode needs an app-level token (`xapp-`, scope `connections:write`), generated on the app's page and
   pasted at setup. `apps.manifest.create` returns none (its response carries the app's credentials only), so the person
   generates it. A Socket Mode app receives over the socket alone, so a dev app and a production app stay separate.
+  `slackSocketChannel` exists (3b); the scaffold and `add slack` offer it with the onboarding rewrite (step 4).
 - Telegram's long polling deletes any webhook first, since `getUpdates` does not work while one is set; the dev bot
   is the dev instance's, apart from production's.
   A second process polling the same bot gets a 409 from Telegram: the connection retries three times, five seconds

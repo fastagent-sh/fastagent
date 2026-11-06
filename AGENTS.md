@@ -193,7 +193,8 @@ src/
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
 │   │   └── scaffold/       # `add telegram` bundle (channel + send tool)
 │   ├── slack/              # Slack Agent: native streams + inline tool traces, signed Events API ingress
-│   │   ├── slack.ts        # ingress + per-turn lifecycle + composition
+│   │   ├── slack.ts        # the runtime (ingest an event, run the turn) + its two ways in: signed webhook, Socket Mode
+│   │   ├── socket.ts       # Socket Mode as a LongConnection: hello, ack by envelope id, refresh before the old one goes, pings
 │   │   ├── parse.ts, model.ts, reaction.ts # pure protocol parsing/shapes + the reaction vocabulary
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + BOTH renderers (native Agent stream, classic edits)
 │   │   ├── history.ts      # a place's history: conversations.history (top level) / .replies (a thread)
