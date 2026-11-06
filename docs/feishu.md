@@ -39,7 +39,7 @@ to write platform credentials into a committable file:
 fastagent add feishu                    # the channel file and its tools (lark: fastagent add lark)
 fastagent channels setup feishu         # scan-to-create the app, keep its credentials
 fastagent channels setup lark           # guided console setup, credentials pasted
-fastagent channels setup feishu --env-file prod.env --config prod.json   # another instance's app (a deployment's)
+fastagent channels setup feishu --config prod.json   # another instance's app (a deployment's), its values in .secrets/production/.env
 ```
 
 The Agent takes part in its group chats like a colleague: bare human replies in a thread it is part of invoke
@@ -110,7 +110,7 @@ failures stop setup with their actual cause. A remote CLI needs local port forwa
 for its page's port. See [remote setup instructions](cli.md#fastagent-channels-setup).
 Within either cloud, the way the channel receives determines the remaining work. For a long connection (what `dev`
 sets up), the runtime credential set stops at the validated App ID/Secret pair; setup continues through the permission
-check and names what to do in Events & Callbacks: select long connection, then publish.
+check and names what is left: publish the version (a Feishu app made by scan-to-create is on a long connection already; for Lark, choose it in Events & Callbacks first).
 For webhook (`deploy --run`, or `--ingress webhook`), it continues through the temporary-tunnel challenge to
 capture the Verification Token (a webhook registration that is thrown away, which also switches the app's draft to
 webhook mode). A token that cannot be captured (no config API, a withheld `patch` scope, a tunnel that does not come up)

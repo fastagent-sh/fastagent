@@ -50,7 +50,7 @@ tunnel is opened.
 
 The way the app receives is `--ingress webhook|connection`, else the instance's `channels.slack.ingress`, else
 Socket Mode for the development instance and webhook for any other (a host that scales to zero is woken by a request).
-A deployment is another instance: `channels setup slack --config prod.json --env-file .secrets/production/.env` sets up an
+A deployment is another instance: `channels setup slack --config prod.json` sets up an
 app of its own (a Socket Mode app receives over the socket alone, so two instances never share one) and writes its
 values to that file. Webhook apps are created with a placeholder Request URL (`http.publicUrl` when the configuration
 names one): Slack allows an app whose URL does not answer yet. Once the instance is served, open **Event Subscriptions**,
@@ -409,7 +409,7 @@ thread instead of crash-looping forever — unless its answer was already record
 
 `fastagent deploy docker|fly|railway|agentcore` discovers Slack and checks that the deployment has the values its way of
 receiving reads. A deployment receives by webhook, so it needs `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`, from an app of
-its own (`channels setup slack --config prod.json --env-file .secrets/production/.env`). Slack's Request URL is the app's
+its own (`channels setup slack --config prod.json`). Slack's Request URL is the app's
 page, which no credential on the box can change: `deploy` prints the URL to set under Event Subscriptions, and the box
 confirms it once Slack reaches it there ([Deploy](deploy.md#chat-channels)). Resident hosts need durable storage and one
 replica. [AgentCore resets its storage on every deploy](deploy.md#aws-bedrock-agentcore), so thread state and delivery

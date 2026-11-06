@@ -489,8 +489,8 @@ a connection for the development instance and a webhook for any other. The devel
 configuration is the project's `fastagent.json` and its values `.secrets/.env`. `--config <file>` and `--env-file <file>`
 name another instance's (a deployment's): `--config` is read for the way it receives and its `http.publicUrl` (Slack's
 manifest names it as the Request URL; without one a placeholder stands, which Slack accepts) and is where `--ingress` is
-written; `--env-file` is where the values go, created when missing (without it, `.secrets/production/.env`, the file `deploy`
-reads). Naming either makes it another instance than dev. The
+written; `--env-file` is where the values go, a file that must exist, like every `--env-file` (without it, `.secrets/production/.env`,
+the file `deploy` reads, created when missing). Naming either makes it another instance than dev. The
 channel file must offer the way chosen (`byIngress`), else the command refuses before anything is asked.
 
 Without a terminal, or with `--json` or `--no-input`, the values are pasted on a page the setup serves on `127.0.0.1`

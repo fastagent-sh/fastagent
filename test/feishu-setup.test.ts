@@ -173,13 +173,21 @@ describe("what is left once an app has its credentials: the permission check and
     return (await setup(kind, way)).after;
   }
 
-  it("an app holding every agent scope is told only to publish, on its long connection", async () => {
+  it("a Feishu app holding every agent scope is told only to publish: scan-to-create leaves it on a long connection", async () => {
     platform.granted = AGENT_SCOPES;
-    const lines = await leftAfter("connection");
+    expect(await leftAfter("connection")).toEqual([
+      "CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_a/version",
+    ]);
+    expect(said.join("\n")).toContain("granted");
+  });
+
+  it("a Lark app is told to choose the long connection and subscribe the event, then publish", async () => {
+    platform.granted = AGENT_SCOPES;
+    const lines = await leftAfter("connection", "lark");
     expect(lines).toEqual([expect.stringContaining("choose long connection")]);
     expect(lines[0]).toContain(`make sure ${FEISHU_MESSAGE_RECEIVE_EVENT} is subscribed`);
-    expect(lines[0]).toContain("CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_a/version");
-    expect(said.join("\n")).toContain("granted");
+    expect(lines[0]).toContain("https://open.larksuite.com/app/cli_a/event?tab=safe");
+    expect(lines[0]).toContain("CREATE + PUBLISH a version: https://open.larksuite.com/app/cli_a/version");
   });
 
   it("names each missing scope with what it costs, and links the console pre-filled with exactly those", async () => {
@@ -236,7 +244,7 @@ describe("a Feishu app is created by scan-to-create", () => {
     ]);
     expect(carried).toBe(1);
     expect(outcome.written).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
-    expect(outcome.after).toEqual([expect.stringContaining("https://open.feishu.cn/app/cli_new/version")]);
+    expect(outcome.after).toEqual(["CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_new/version"]);
     expect(await written()).toMatch(/^FEISHU_APP_ID=cli_new$/m);
     // The link's own lapse (Feishu's expires_in), which can come before the ticket's.
     const until = (waits[0] as { until: number }).until;

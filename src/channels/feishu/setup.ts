@@ -199,9 +199,12 @@ export function feishuEngine(
       const publish = `CREATE + PUBLISH a version: ${apiBase}/app/${encodeURIComponent(appId)}/version`;
       const lines = [...findings.lines];
       if (way === "connection") {
+        // A Feishu app made by scan-to-create is on a long connection already, with the event subscribed (measured).
         lines.push(
-          `in Events & Callbacks choose long connection and make sure ${FEISHU_MESSAGE_RECEIVE_EVENT} is subscribed ` +
-            `(no Verification Token, Request URL or tunnel is needed): ${eventPage(kind, appId)}; then ${then}${publish}`,
+          kind === "feishu"
+            ? `${then}${publish}`
+            : `in Events & Callbacks choose long connection and make sure ${FEISHU_MESSAGE_RECEIVE_EVENT} is subscribed ` +
+                `(no Verification Token, Request URL or tunnel is needed): ${eventPage(kind, appId)}; then ${then}${publish}`,
         );
       } else if (token === "captured") {
         lines.push(`the switch to webhook mode takes effect on publish: ${then}${publish} (self-approved)`);

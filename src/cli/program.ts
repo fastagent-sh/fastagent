@@ -689,8 +689,9 @@ const channels: CommandSpec = {
         {
           flags: "--env-file <file>",
           description:
-            "the value file the credentials are kept in, created when missing; naming it or --config makes this " +
-            "another instance than the development one (default: .secrets/.env for dev, else .secrets/production/.env)",
+            "the value file the credentials are kept in, which must exist; naming it or --config makes this " +
+            "another instance than the development one (default: .secrets/.env for dev, else " +
+            ".secrets/production/.env, created when missing)",
         },
         {
           flags: "--record-url",
@@ -705,7 +706,7 @@ const channels: CommandSpec = {
       examples: [
         { cmd: "fastagent channels setup telegram" },
         { cmd: "fastagent channels setup slack --json", note: "an agent" },
-        { cmd: "fastagent channels setup slack --env-file prod.env", note: "a deployment" },
+        { cmd: "fastagent channels setup slack --config prod.json", note: "a deployment" },
         { cmd: "fastagent channels setup slack --record-url --config c.json" },
       ],
       run: async (args, f) =>
