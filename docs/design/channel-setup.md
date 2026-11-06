@@ -163,14 +163,17 @@ the instance confirms it.**
 
 **Development needs no public URL.** Every platform recommends a connection the app opens for development (§6), so
 `dev` receives each first-party channel that way: Feishu's and Lark's long connection (implemented), Slack's Socket
-Mode and Telegram's long polling (§10). Their scaffolds offer both ways with `byIngress`. `dev --tunnel` remains for
-trying the webhook path locally.
+Mode and Telegram's long polling (§10). Their scaffolds offer both ways with `byIngress`. To try the webhook path
+locally, name `webhook` for the channel in the dev instance's configuration and add `--tunnel`; the tunnel itself is
+independent of how any channel receives.
 
 - Slack's Socket Mode needs an app-level token (`xapp-`, scope `connections:write`), generated on the app's page and
-  pasted at setup. *To verify:* whether `apps.manifest.create` returns one for a Socket Mode manifest; it lists a
-  `failed_generating_app_token` error, and its documented response carries none.
+  pasted at setup. `apps.manifest.create` returns none (its response carries the app's credentials only), so the person
+  generates it. A Socket Mode app receives over the socket alone, so a dev app and a production app stay separate.
 - Telegram's long polling deletes any webhook first, since `getUpdates` does not work while one is set; the dev bot
   is the dev instance's, apart from production's.
+  A second process polling the same bot gets a 409 from Telegram: the connection retries three times, five seconds
+  apart, then ends the serve with `another process polls this bot` instead of taking turns with it.
 
 ## 6. Every channel, every host
 
@@ -183,8 +186,8 @@ trying the webhook path locally.
 
 | Host | Way of receiving by default | Public URL |
 |---|---|---|
-| `dev` | `connection` | None needed; `--tunnel` for the webhook path |
-| Docker | `connection` once step 3 ships (a resident process needs no public URL); `webhook` for an operator's own ingress | `http.publicUrl`. There is no tunnel service: a local Quick Tunnel's URL is new on every start, and `dev --tunnel` already serves trying a webhook locally |
+| `dev` | `connection` | None needed. `--tunnel` gives the process a public URL for what uses one (a channel set to `webhook`, the Agent API); it does not change how a channel receives |
+| Docker | `webhook`, or `connection` set in the configuration (a resident process needs no public URL) | `http.publicUrl` for `webhook`. There is no tunnel service: a local Quick Tunnel's URL is new on every start, and `dev --tunnel` serves trying a webhook locally |
 | Fly, Railway | `webhook` | Written by `deploy` |
 | AgentCore | `webhook` only | The forwarder's |
 | A package on someone's server (`npx @acme/x start`) | `webhook`, or `connection` | `http.publicUrl`, the operator's |
@@ -228,7 +231,7 @@ app itself through hooks.
 2. The instance registering itself: `http.publicUrl`, `registerWebhooks()`, `/health`, `start`, and `deploy` reading
    the outcome, with Fly and Railway writing the URL (2a); AgentCore's forwarder carrying it, and the probe reporting the outcome (2b). Docker's
    `--tunnel` is removed rather than taught to register (2c). The signed-request evidence and the recorded URL for Slack and Lark.
-3. `connection` for Slack (Socket Mode) and Telegram (long polling), so `dev` and Docker need no tunnel or public
-   URL, and Docker's default ingress becomes `connection`; in parallel with 2.
+3. `connection` for Slack (Socket Mode) and Telegram (long polling), so `dev` needs no tunnel or public URL, and a
+   Docker deployment may choose it in its configuration; in parallel with 2.
 4. `channels setup`, `add` changing only the program, `dev` setting up on first run; Feishu production-app creation
    out of `deploy`; the Slack onboarding record removed; `fastagent.json` in the scaffold's `.gitignore`.
