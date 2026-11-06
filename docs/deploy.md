@@ -92,7 +92,7 @@ serves no API either way.
 
 ## Chat channels
 
-A deployment receives its chat channels by webhook. On Fly and Railway the box points Telegram, Feishu and Lark (when
+A deployment receives its chat channels by webhook. On Fly, Railway and AgentCore the box points Telegram, Feishu and Lark (when
 its config API allows) at its own URL on every start, with its own credentials: `deploy` delivers that URL as the
 configuration's `http.publicUrl` (Fly's `https://<app>.fly.dev`; Railway's domain, created before `railway up`) unless
 `--config` names one, a custom domain say, and `--run` reads what the box made of each one from its `/health`. Slack's
@@ -101,8 +101,13 @@ created. A URL only a person can set (Slack's; Lark's when its config API answer
 platform reaches it there with an authenticated request, the verification on saving or any event; at a terminal with
 `--config`, `--run` then records it in that file (`channels.<name>.app.url`), so later deploys of the file, CI
 included, report it registered from the start. A deployment that did not record it:
-`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. On AgentCore and Docker `--run` still points them itself once the deployment answers `/health`. Each run
-prints the steps it could not do.
+`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. On Docker `--run` still points them
+itself once the deployment answers `/health`. Each run prints the steps it could not do.
+
+On AgentCore the runtime has no `/health` of its own: it points its channels at the forwarder's URL (or `http.publicUrl`
+when the configuration names one, a custom domain in front of the Function URL) on the first envelope the forwarder
+relays after it starts, and `--run` reads the outcomes through the probe. A runtime a platform's request wakes does the
+same, so every start points them again.
 
 - **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
   `.secrets/production/.env`. Production never falls back to dev values. Put production provider keys and other
@@ -348,7 +353,8 @@ The stack carries:
 
 - the **Runtime** (your container; `FASTAGENT_AGENTCORE=1` serves `POST /invocations` and `GET /ping`);
 - a **forwarder Lambda** with a public Function URL: it relays webhooks when a webhook channel exists (channels
-  verify signatures as on every host) and manages the EventBridge schedules below;
+  verify signatures as on every host), tells the container where it is (the URL the container points its webhook
+  channels at) and manages the EventBridge schedules below;
 - **EventBridge schedules**, which the container sets itself: one recurring cron schedule per schedule, which
   EventBridge fires on its own clock, and a self-deleting one-shot per pending wake-up. Both wake the container on
   time. The container sets them once an envelope has

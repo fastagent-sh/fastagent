@@ -28,9 +28,14 @@ const IMAGE_CONFIG_DIR = "/etc/fastagent";
  */
 export function withPublicUrl(config: string | undefined, publicUrl: string): { config: string; publicUrl: string } {
   const values = (config === undefined ? {} : JSON.parse(config)) as { http?: { publicUrl?: string } };
-  const own = values.http?.publicUrl;
+  const own = ownPublicUrl(config);
   if (own !== undefined) return { config: config as string, publicUrl: own };
   return { config: `${JSON.stringify({ ...values, http: { ...values.http, publicUrl } }, null, 2)}\n`, publicUrl };
+}
+
+/** The `http.publicUrl` an operator's configuration names, if it does. */
+export function ownPublicUrl(config: string | undefined): string | undefined {
+  return config === undefined ? undefined : (JSON.parse(config) as { http?: { publicUrl?: string } }).http?.publicUrl;
 }
 
 /** The delivered configuration as the artifact a deploy writes, to rewrite it once the host has given the URL. */

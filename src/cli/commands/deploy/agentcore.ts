@@ -26,7 +26,8 @@ import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
 import { shellArg } from "../../shared.ts";
-import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
+import { ownPublicUrl } from "../../../deploy/container.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorder } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const agentcoreHost: HostDeploy = {
@@ -123,6 +124,8 @@ export const agentcoreHost: HostDeploy = {
         values,
         valueFile,
         topology: plan.topology,
+        publicUrl: ownPublicUrl(container.config),
+        config: opts.config,
       });
       return undefined;
     }
@@ -147,6 +150,10 @@ async function runDeployAgentcore(params: {
   values: ReadonlyMap<string, string>;
   valueFile: string;
   topology: AgentcoreTopology;
+  /** The `http.publicUrl` the configuration names, where the platforms reach the runtime instead of the forwarder. */
+  publicUrl: string | undefined;
+  /** The `--config` file, where a URL a person set is recorded once the runtime confirms it. */
+  config: string | undefined;
 }): Promise<void> {
   const { agentDir, name, channels, topology } = params;
   // Decided before the first side effect: the deploy resets the runtime's storage and the login with it, so with nobody
@@ -190,6 +197,8 @@ async function runDeployAgentcore(params: {
         valueFile: params.valueFile,
         channels,
         topology,
+        ...(params.publicUrl === undefined ? {} : { publicUrl: params.publicUrl }),
+        ...urlRecorder(agentDir, params.config, params.values, params.answerer),
         ...boxLoginStep("agentcore", params, (runtimeArn: string) =>
           agentcoreShell(runtimeArn, ingressSessionId(name), awsRunner(agentDir)),
         ),

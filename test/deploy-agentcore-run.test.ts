@@ -90,12 +90,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The runtime as the forwarder's probe reaches it: verified, and reporting how it pointed each webhook channel. */
+const runtimeReporting = (webhooks: { channel: string; outcome: string }[]) =>
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ ok: true, webhooks })),
+  );
+
+/** Registration happens on the runtime now: a deploy's own registrar is called for Slack's page alone. */
 const run = (
   p: AgentcoreRunPlan,
   aws: CliRunner,
   docker: CliRunner,
   tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-) => deployAgentcoreRun(p, aws, docker, () => {}, writeParams, writeZip, { telegram: tg });
+) => deployAgentcoreRun(p, aws, docker, () => {}, writeParams, writeZip, { telegram: tg }, { intervalMs: 1 });
 
 describe("the deployment bucket (the agent's memory outlives the stack)", () => {
   const withForwarder = plan({ topology: FORWARDER });
@@ -158,12 +166,10 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
 });
 
 describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
-  it("the runtime logs in after the probe verified it and before any webhook points at it; a failed login registers none", async () => {
+  it("the runtime logs in after the probe verified it; a failed login ends the deploy before it reads the webhooks", async () => {
     const order: string[] = [];
-    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
-      order.push("register");
-      return "registered";
-    });
+    runtimeReporting([{ channel: "telegram", outcome: "registered" }]);
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const boxLogin = async (runtimeArn: string) => {
       order.push(`login ${runtimeArn}`);
       return "not logged in: …";
@@ -181,46 +187,19 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(out).toMatchObject({
       ok: false,
       gate: expect.stringMatching(
-        /^not logged in: …\. This deploy registered no webhook.*point the channels by hand.*lines above/,
+        /^not logged in: …\. This deploy registered no webhook.*they work again: the runtime has pointed its own channels/,
       ),
     });
-    // The shell opens on the runtime this deploy just produced, and nothing is pointed at it.
+    // The shell opens on the runtime this deploy just produced; the one fetch is the probe that verified it.
     expect(order).toEqual(["login arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc"]);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
     expect(tg).not.toHaveBeenCalled();
-  });
-
-  it("a redeploy's failed login says the webhooks an earlier deploy registered are still live, not missing", async () => {
-    // Every deploy wipes the runtime's login, and the forwarder URL outlives it: the channels are already delivering
-    // to a runtime with no model credential, which "point the channels by hand" would misreport.
-    const { cli: aws } = fakeCli((a) =>
-      a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")
-        ? { stdout: "UPDATE_COMPLETE\n" }
-        : happyAws(a),
-    );
-    const logs: string[] = [];
-    const out = await deployAgentcoreRun(
-      plan({
-        channels: declaredChannels(["telegram"]),
-        topology: FORWARDER,
-        boxLogin: { command: "fastagent login p --deployment agentcore", run: async () => "not logged in: …" },
-      }),
-      aws,
-      fakeCli().cli,
-      (m) => logs.push(m),
-      writeParams,
-      writeZip,
-      { telegram: vi.fn() },
-    );
-    expect(out).toMatchObject({
-      ok: false,
-      gate: expect.stringMatching(/still points here, and every message it brings fails.*forwarder URL is unchanged/),
-    });
-    expect(logs.some((l) => l.includes("url=https://"))).toBe(false); // nothing to point by hand
   });
 
   it("happy path: identity → docker checks → ecr → login → buildx push → cfn deploy → outputs → webhook", async () => {
     const { cli: aws, cmds: awsCmds } = fakeCli(happyAws);
     const { cli: docker, cmds: dockerCmds, calls: dockerCalls } = fakeCli();
+    runtimeReporting([{ channel: "telegram", outcome: "registered" }]);
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
       plan({
@@ -271,7 +250,8 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     ]);
     // The ECR password flows stdout→stdin between the runners, never argv.
     expect(dockerCalls.find((c) => c.args[0] === "login")?.input).toBe("hunter2");
-    expect(tg).toHaveBeenCalledWith("https://xyz.lambda-url.us-west-2.on.aws");
+    // The runtime pointed Telegram itself; the deploy read what it made of it.
+    expect(tg).not.toHaveBeenCalled();
     // Secrets ride the params FILE (0600 temp), never argv.
     const forwarderKey = awsCmds()
       .find((c) => c.startsWith("s3 cp"))!
@@ -637,9 +617,50 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
 
   it("a failed telegram registration gates AFTER the deploy (the app itself deployed)", async () => {
     const { cli: aws } = fakeCli(happyAws);
-    const tg = vi.fn(async (): Promise<RegistrationOutcome> => "failed");
-    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), aws, fakeCli().cli, tg);
+    runtimeReporting([{ channel: "telegram", outcome: "failed" }]);
+    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("telegram") });
+  });
+
+  it("waits while the runtime reports a channel pending, and gates when it never ends", async () => {
+    const pending = [{ channel: "telegram", outcome: "pending" }];
+    const answers = [pending, pending, [{ channel: "telegram", outcome: "registered" }]];
+    const fetchImpl = vi.fn(async () => Response.json({ ok: true, webhooks: answers.shift() ?? [] }));
+    vi.stubGlobal("fetch", fetchImpl);
+    const first = await run(plan({ channels: declaredChannels(["telegram"]) }), fakeCli(happyAws).cli, fakeCli().cli);
+    expect(first).toMatchObject({ ok: true });
+    // The probe that verified it (the runtime is only waking), a read that said pending, one that said registered.
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+
+    runtimeReporting([{ channel: "telegram", outcome: "pending" }]);
+    const never = await deployAgentcoreRun(
+      plan({ channels: declaredChannels(["telegram"]) }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      () => {},
+      writeParams,
+      writeZip,
+      { telegram: vi.fn() },
+      { intervalMs: 1, timeoutMs: 20 },
+    );
+    expect(never).toMatchObject({ ok: false, gate: expect.stringContaining("telegram") });
+  });
+
+  it("names the configuration's own http.publicUrl as where the platforms reach it, and sets Slack there", async () => {
+    runtimeReporting([{ channel: "slack", outcome: "manual" }]);
+    const slack = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
+    const out = await deployAgentcoreRun(
+      plan({ channels: declaredChannels(["slack"]), publicUrl: "https://agent.acme.com" }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      () => {},
+      writeParams,
+      writeZip,
+      { telegram: vi.fn(), slack },
+      { intervalMs: 1 },
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(slack).toHaveBeenCalledWith("https://agent.acme.com");
   });
 });
 
@@ -700,21 +721,17 @@ describe("the post-deploy probe (verify restore + construction before registrati
     expect(logs.join("\n")).toContain("2 secret(s): OPENAI_API_KEY, X_API_KEY");
   });
 
-  it("POSTs the reserved probe path with the ingress secret BEFORE registration and proceeds on ok:true", async () => {
+  it("POSTs the reserved probe path with the ingress secret, and reads the runtime's webhooks through it", async () => {
     const requests: { url: string; body: string }[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (u: string | URL, init?: RequestInit) => {
         requests.push({ url: String(u), body: String(init?.body) });
-        return Response.json({ ok: true });
+        return Response.json({ ok: true, webhooks: [{ channel: "telegram", outcome: "registered" }] });
       }),
     );
     const logs: string[] = [];
-    const registered: string[] = [];
-    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
-      registered.push("telegram");
-      return "registered";
-    });
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await deployAgentcoreRun(
       plan({
         channels: declaredChannels(["telegram"]),
@@ -733,12 +750,13 @@ describe("the post-deploy probe (verify restore + construction before registrati
     // the deploy's own credential in the body, never argv.
     expect(requests[0]?.url).toBe("https://xyz.lambda-url.us-west-2.on.aws/__fastagent/probe");
     expect(JSON.parse(requests[0]?.body ?? "{}")).toEqual({ auth: "s3cret" });
-    // The probe ran BEFORE the registrar: registration verifies the URL, so the container must
-    // already be restored + constructed when the platform's challenge arrives.
+    // The runtime registers as the probe wakes it, so what the deploy reads afterwards is the same path and secret.
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
     expect(logs.findIndex((l) => l.includes("probing"))).toBeLessThan(
-      logs.findIndex((l) => l.includes("registering telegram")),
+      logs.findIndex((l) => l.includes("waiting for the box to point telegram")),
     );
-    expect(registered).toEqual(["telegram"]);
+    expect(tg).not.toHaveBeenCalled();
   });
 
   it("gates IMMEDIATELY with the runtime's OWN error text on an ok:false verdict", async () => {

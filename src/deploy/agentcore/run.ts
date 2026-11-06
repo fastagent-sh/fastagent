@@ -2,7 +2,13 @@
 import type { BoxLoginStep } from "../box-shell.ts";
 import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
-import { type Registrars, loginGate, registerWebhooks } from "../channel-ingress.ts";
+import {
+  type BoxWebhooksProbe,
+  type Registrars,
+  type UrlRecorder,
+  confirmWebhooks,
+  loginGate,
+} from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson } from "./aws-cli.ts";
 import { createHash } from "node:crypto";
@@ -55,6 +61,10 @@ export interface AgentcoreRunPlan {
    * it. Resolves a gate line, or undefined.
    */
   boxLogin?: BoxLoginStep<[runtimeArn: string]>;
+  /** The `http.publicUrl` the configuration names (a custom domain); default the forwarder's URL. */
+  publicUrl?: string;
+  /** At a terminal with a `--config` file: record each URL a person set once the box confirms it. */
+  recordUrl?: UrlRecorder;
 }
 
 /** AWS keys are typed, so a coding agent's user signs the CLI in at a terminal of their own. */
@@ -83,6 +93,40 @@ const EMPTY_STACK_STATUSES = new Set([
 const PROBE_TIMEOUT_MS = 240_000;
 const PROBE_INTERVAL_MS = 3_000;
 
+/** One call to the forwarder's reserved probe path. */
+async function askProbe(
+  probeUrl: string,
+  auth: string,
+  fetchImpl: typeof fetch,
+): Promise<{ status: number; body: string }> {
+  const res = await fetchImpl(probeUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ auth }),
+    signal: AbortSignal.timeout(65_000),
+  });
+  return { status: res.status, body: await res.text() };
+}
+
+/**
+ * The runtime's own report of its webhook channels, through the probe: the container has no `/health` of its own to
+ * read, and the forwarder relays only this path. The address it is handed is the other hosts' `/health`, which this
+ * one has no use for.
+ */
+function forwarderWebhooks(probeUrl: string, auth: string, fetchImpl: typeof fetch): BoxWebhooksProbe {
+  return async () => {
+    try {
+      const { status, body } = await askProbe(probeUrl, auth, fetchImpl);
+      const verdict = status === 200 ? (JSON.parse(body) as { ok?: unknown; webhooks?: unknown }) : undefined;
+      return verdict?.ok === true && Array.isArray(verdict.webhooks)
+        ? (verdict.webhooks as { channel: string; outcome: "pending" | "registered" | "manual" | "failed" }[])
+        : undefined;
+    } catch {
+      return undefined; // polled again until the deadline
+    }
+  };
+}
+
 /** Drive the forwarder's reserved probe path until it answers, and read the runtime's STRUCTURED verdict. */
 async function probeRuntime(
   probeUrl: string,
@@ -95,14 +139,8 @@ async function probeRuntime(
   let last: string | undefined;
   for (;;) {
     try {
-      const res = await fetchImpl(probeUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ auth }),
-        signal: AbortSignal.timeout(65_000),
-      });
-      const bodyText = await res.text();
-      if (res.status === 200) {
+      const { status, body: bodyText } = await askProbe(probeUrl, auth, fetchImpl);
+      if (status === 200) {
         let verdict: { ok?: unknown; error?: unknown } | undefined;
         try {
           verdict = JSON.parse(bodyText) as { ok?: unknown; error?: unknown };
@@ -116,7 +154,7 @@ async function probeRuntime(
         }
       }
       const firstLine = bodyText.trim().split("\n")[0] ?? "";
-      last = `${res.status}${firstLine ? ` ${firstLine}` : ""}`;
+      last = `${status}${firstLine ? ` ${firstLine}` : ""}`;
     } catch {
       // not routable yet (Function URL DNS, cold start) — keep polling until the deadline
     }
@@ -518,24 +556,29 @@ export async function deployAgentcoreRun(
         notLoggedIn,
         channels: plan.channels,
         log,
-        // The forwarder URL outlives a redeploy, so the webhooks an earlier deploy registered already point at it.
-        ...(redeploy
-          ? { afterLogin: "they work again: the forwarder URL is unchanged, so nothing needs pointing" }
-          : { baseUrl: url, afterLogin: "point the channels by hand (a redeploy would wipe that login again)" }),
+        // The runtime points its own channels at the forwarder URL as the probe wakes it, login or not.
+        afterLogin: "they work again: the runtime has pointed its own channels, so nothing needs pointing",
       }),
     );
   }
 
-  // 9.
-  const registrationGateMsg = url
-    ? await registerWebhooks({
-        baseUrl: url,
-        channels: plan.channels,
-        registrars,
-        log,
-        retryHint: "re-run to retry registration (steps already done are skipped)",
-      })
-    : undefined;
+  // 9. The runtime points its own channels as the probe wakes it; this reads what it made of them.
+  const registrationGateMsg = await confirmWebhooks({
+    baseUrl: url,
+    publicUrl: plan.publicUrl ?? url,
+    channels: plan.channels,
+    registrars,
+    log,
+    ...(plan.recordUrl === undefined ? {} : { record: plan.recordUrl }),
+    retryHint: "re-run to retry registration (steps already done are skipped)",
+    probe: forwarderWebhooks(
+      `${url}${RESERVED_PATHS.probe}`,
+      plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
+      probe.fetchImpl ?? fetch,
+    ),
+    ...(probe.intervalMs === undefined ? {} : { intervalMs: probe.intervalMs }),
+    ...(probe.timeoutMs === undefined ? {} : { timeoutMs: probe.timeoutMs }),
+  });
   if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true, runtimeArn, url };
 }

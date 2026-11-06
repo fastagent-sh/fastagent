@@ -3,10 +3,12 @@ import { Buffer } from "node:buffer";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentcoreRoutes, type RouteSurface } from "../src/channels/agentcore.ts";
+import { agentcoreRoutes, type AgentcoreAdapterOptions, type RouteSurface } from "../src/channels/agentcore.ts";
 import type { AgentcoreEnvelope, WebhookReply } from "../src/channels/agentcore-protocol.ts";
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import type { Routes } from "../src/channel.ts";
+import { log } from "../src/log.ts";
+import { activeWork } from "../src/channels/busy.ts";
 import { readWakeAlarmUrl, rememberWakeAlarmUrl } from "../src/schedule/wake-alarm.ts";
 import { PROBE_PAYLOAD } from "../src/deploy/agentcore/plan.ts";
 
@@ -21,6 +23,7 @@ interface AdapterOverrides {
   fireSchedule?: (name: string, occurrence: Date) => Promise<Response>;
   ingressSecret?: string;
   onStateReady?: () => void;
+  webhooks?: AgentcoreAdapterOptions["webhooks"];
 }
 
 const stateRoot = await mkdtemp(join(tmpdir(), "fa-agentcore-adapter-"));
@@ -38,6 +41,7 @@ const adapter = (over: AdapterOverrides = {}): Routes =>
     fireSchedule: over.fireSchedule ?? (async () => Response.json({ fired: false, skippedReason: "test" })),
     ingressSecret: "ingressSecret" in over ? over.ingressSecret : SECRET,
     onStateReady: over.onStateReady,
+    ...(over.webhooks ? { webhooks: over.webhooks } : {}),
   });
 
 const post = (routes: Routes, body: string): Promise<Response> | Response =>
@@ -104,7 +108,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     const ok = adapter({ channels: () => ({ routes: health }) });
     const okRes = await postEnvelope(ok, { kind: "probe" });
     expect(okRes.status).toBe(200);
-    expect(await okRes.json()).toEqual({ ok: true });
+    expect(await okRes.json()).toEqual({ ok: true, webhooks: [] });
 
     // The forwarder rewrites any non-200 transport into an opaque 502, so the failure verdict MUST
     // ride a transport-200 body — that is the whole reason the probe kind exists.
@@ -118,6 +122,79 @@ describe("agentcore adapter: lazy channel construction", () => {
     const verdict = (await res.json()) as { ok: boolean; error?: string };
     expect(verdict.ok).toBe(false);
     expect(verdict.error).toContain("FEISHU_APP_SECRET");
+  });
+
+  it("points the webhook channels once, at the URL the forwarder names, and a probe reports their outcomes", async () => {
+    let outcomes: { channel: string; outcome: "pending" | "registered" }[] = [
+      { channel: "telegram", outcome: "pending" },
+    ];
+    const point = vi.fn(async (_url: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      outcomes = [{ channel: "telegram", outcome: "registered" }];
+    });
+    const routes = adapter({ channels: { routes: health }, webhooks: { point, list: () => outcomes } });
+    const forwarder = { wake: { url: "https://fwd.lambda-url.on.aws" } };
+
+    const first = await postEnvelope(routes, { kind: "probe", ...forwarder });
+    expect(await first.json()).toEqual({ ok: true, webhooks: [{ channel: "telegram", outcome: "pending" }] });
+    await vi.waitFor(() => expect(point).toHaveBeenCalledWith("https://fwd.lambda-url.on.aws"));
+
+    await vi.waitFor(() => expect(outcomes[0]?.outcome).toBe("registered"));
+    const again = await postEnvelope(routes, { kind: "probe", ...forwarder });
+    expect(await again.json()).toEqual({ ok: true, webhooks: [{ channel: "telegram", outcome: "registered" }] });
+    await postEnvelope(routes, { kind: "wake-poke", ...forwarder });
+    expect(point).toHaveBeenCalledTimes(1);
+  });
+
+  it("points nothing for an IAM caller, an envelope that names no forwarder, or channels that did not construct", async () => {
+    const point = vi.fn(async () => {});
+    const webhooks = { point, list: () => [] };
+    await postUntrusted(adapter({ channels: { routes: health }, webhooks }), {
+      kind: "probe",
+      wake: { url: "https://iam.example" },
+    });
+    await postEnvelope(adapter({ channels: { routes: health }, webhooks }), { kind: "probe" });
+    await postEnvelope(
+      adapter({
+        channels: () => {
+          throw new Error("TELEGRAM_BOT_TOKEN is not set");
+        },
+        webhooks,
+      }),
+      { kind: "probe", wake: { url: "https://fwd.example" } },
+    );
+    expect(point).not.toHaveBeenCalled();
+  });
+
+  it("holds the process busy while it points", async () => {
+    const release: (() => void)[] = [];
+    const point = vi.fn(() => new Promise<void>((resolve) => release.push(resolve)));
+    const routes = adapter({
+      channels: { routes: health },
+      isBusy: () => activeWork() > 0,
+      webhooks: { point, list: () => [] },
+    });
+    await postEnvelope(routes, { kind: "probe", wake: { url: "https://fwd.example" } });
+    await vi.waitFor(() => expect(point).toHaveBeenCalled());
+    expect(activeWork()).toBe(1);
+    release[0]?.();
+    await vi.waitFor(() => expect(activeWork()).toBe(0));
+  });
+
+  it("a registration that throws is logged, the busy hold released, and the envelope still answered", async () => {
+    const error = vi.spyOn(log, "error").mockImplementation(() => {});
+    try {
+      const point = vi.fn(async () => {
+        throw new Error("invalid forwarder URL");
+      });
+      const routes = adapter({ channels: { routes: health }, webhooks: { point, list: () => [] } });
+      const res = await postEnvelope(routes, { kind: "probe", wake: { url: "https://fwd.example" } });
+      expect(res.status).toBe(200);
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(expect.stringContaining("invalid forwarder URL")));
+      expect(activeWork()).toBe(0);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it("an IAM probe opens the workspace and reports it, without constructing the channels", async () => {
