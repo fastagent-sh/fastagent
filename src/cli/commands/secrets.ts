@@ -49,7 +49,7 @@ async function openStore(host: SecretsHost, agentDir: string): Promise<SecretSto
   const log = (message: string) => console.error(`[fastagent] ${message}`);
   if (host === "docker") return fileStore(agentDir, dotEnvPath(agentDir));
   if (host === "fly") {
-    const fly = spawnRunner("fly", agentDir);
+    const fly = spawnRunner("fly", agentDir, { stdoutToStderr: true });
     if ((await fly(["version"], { capture: true })).code === 127) {
       failStartup(new Error("flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run"));
     }
@@ -60,7 +60,7 @@ async function openStore(host: SecretsHost, agentDir: string): Promise<SecretSto
     const app = (toml && parseFlyAppName(toml)) ?? toFlyAppName(basename(agentDir));
     return flyStore(fly, app, log, { stage: false });
   }
-  const railway = spawnRunner("railway", agentDir);
+  const railway = spawnRunner("railway", agentDir, { stdoutToStderr: true });
   if ((await railway(["--version"], { capture: true })).code === 127) {
     failStartup(new Error("railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run"));
   }

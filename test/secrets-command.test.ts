@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentWorkspace, runInProcess } from "./cli-run.ts";
+import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
 
 /** A channel that declares what a deployment needs: GH_TOKEN required, SENTRY_DSN optional. */
 const HOOK = `export default {
@@ -33,10 +33,10 @@ async function fakeFly(listed: string[] = ["GH_TOKEN"]) {
 echo "$@" >> "${log}"
 case "$1" in
   version) echo "fly v0";;
-  apps) if [ "$2" = "list" ]; then echo '[]'; fi;;
+  apps) if [ "$2" = "list" ]; then echo '[]'; else echo "New app created"; fi;;
   secrets)
     if [ "$2" = "list" ]; then echo '[${listed.map((name) => `{"Name":"${name}"}`).join(",")}]'; fi
-    if [ "$2" = "import" ]; then cat > "${log}.stdin"; fi;;
+    if [ "$2" = "import" ]; then cat > "${log}.stdin"; echo "Secrets are staged"; fi;;
 esac
 `,
   );
@@ -135,6 +135,18 @@ describe("secrets set", () => {
     expect(await read(production(dir))).toContain(`FASTAGENT_API_KEY=${printed}`);
     expect(result.stderr).not.toContain(printed);
   });
+
+  it("--generate's stdout is the key and nothing else, whatever the host CLI prints", async () => {
+    const fly = await fakeFly([]);
+    const dir = await agent();
+    // A real process, since what is under test is where a child's stdout goes.
+    const result = await run(["secrets", "set", "fly", "FASTAGENT_API_KEY", dir, "--generate"], undefined, fly.env);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toMatch(/^[\w-]{43}\n$/);
+    // The host CLI's own lines are still said, on stderr.
+    expect(result.stderr).toContain("New app created");
+    expect(result.stderr).toContain("Secrets are staged");
+  }, 30_000);
 
   it("without a terminal reads the value from standard input, never the command line", async () => {
     const fly = await fakeFly(["GH_TOKEN"]);

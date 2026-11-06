@@ -86,7 +86,8 @@ export function railwayStore(railway: CliRunner, service: string, log: (message:
   return {
     async ensure() {
       // A directory linked to a project is the one it means; an unlinked one is made one, as a deploy would.
-      const gate = await ensureRailwayService(railway, { name: service, mountPath: "/data", intoLinked: true }, log);
+      if (isLinked((await railway(["status", "--json"], { capture: true })).stdout)) return;
+      const gate = await ensureRailwayService(railway, { name: service, mountPath: "/data", intoLinked: false }, log);
       if (gate !== undefined) throw new Error(gate);
     },
     async names() {

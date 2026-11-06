@@ -89,6 +89,21 @@ describe("railwayStore", () => {
     expect(calls.map((call) => call.input)).toEqual(["value-a", "value-b"]);
   });
 
+  it("uses the project this directory is linked to, and makes one (with its service) only when it is not linked", async () => {
+    const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "bot" }) } : {}));
+    await railwayStore(linked.run, "bot", quiet).ensure();
+    expect(linked.cmds()).toEqual(["status --json"]);
+
+    const unlinked = fake((args) => (args[0] === "status" ? { stdout: "" } : {}));
+    await railwayStore(unlinked.run, "bot", quiet).ensure();
+    expect(unlinked.cmds()).toEqual([
+      "status --json",
+      "status --json",
+      "init --name bot",
+      "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state",
+    ]);
+  });
+
   it("a variable that fails to set stops there, naming it", async () => {
     const { run, cmds } = fake((args) => (args.includes("B") ? { code: 1 } : {}));
     await expect(railwayStore(run, "bot", quiet).write({ A: "a", B: "b", C: "c" })).rejects.toThrow(

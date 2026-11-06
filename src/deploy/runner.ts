@@ -51,9 +51,10 @@ export async function readOutput<T>(
 
 /**
  * Production {@link CliRunner}: spawn `bin` in `cwd` (the agent directory, which is the build/upload context). stderr
- * is always inherited to the terminal.
+ * is always inherited to the terminal. `stdoutToStderr`: what the CLI prints is not this command's result (a command
+ * whose stdout is data, `secrets set --generate`), so it goes to this process's stderr, still on the terminal.
  */
-export function spawnRunner(bin: string, cwd: string): CliRunner {
+export function spawnRunner(bin: string, cwd: string, options: { stdoutToStderr?: boolean } = {}): CliRunner {
   return (args, opts) =>
     new Promise((res) => {
       const child = spawn(bin, args, {
@@ -61,7 +62,7 @@ export function spawnRunner(bin: string, cwd: string): CliRunner {
         env: opts?.env ? { ...process.env, ...opts.env } : process.env,
         stdio: [
           opts?.input ? "pipe" : "inherit",
-          opts?.capture ? "pipe" : "inherit",
+          opts?.capture ? "pipe" : options.stdoutToStderr ? 2 : "inherit",
           opts?.captureStderr ? "pipe" : "inherit",
         ],
       });

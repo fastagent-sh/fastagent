@@ -325,7 +325,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       return {};
     });
     const out = await run(plan(), fly);
-    expect(out).toEqual({ ok: false, gate: expect.stringMatching(/globally unique|taken/) });
+    expect(out).toEqual({
+      ok: false,
+      gate: expect.stringMatching(/globally unique.*unique `app` in fly\.toml|payment information/s),
+    });
   });
 });
 
