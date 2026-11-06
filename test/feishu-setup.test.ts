@@ -13,6 +13,7 @@ import {
 import { registerFeishuApp } from "../src/channels/feishu/register-app.ts";
 import { larkLauncherUrl } from "../src/channels/lark/setup.ts";
 import { type SetUpChannelInput, setUpChannel } from "../src/cli/channel-setup.ts";
+import { prepareChannelApps } from "../src/cli/commands/deploy/channel-apps.ts";
 import type { Person } from "../src/cli/person.ts";
 import { loadEnvValues } from "../src/value-file.ts";
 
@@ -229,6 +230,33 @@ describe("what is left once an app has its credentials: the permission check and
     const lines = await leftAfter("connection");
     expect(lines[0]).toMatch(/could not read the feishu app's permissions/);
     expect(requested(urlIn(lines[0] as string))).toEqual(AGENT_SCOPES);
+  });
+});
+
+describe("a deploy that sets up the production app", () => {
+  const app = [{ kind: "feishu", way: "connection" }] as const;
+  const holdPair = async () => {
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(file, "FEISHU_APP_ID=cli_prod\nFEISHU_APP_SECRET=s\n");
+  };
+
+  it("hands what is left, the publish, to the person a ticket gave it", async () => {
+    platform.granted = AGENT_SCOPES;
+    await holdPair();
+    await prepareChannelApps(dir, app, "fastagent deploy fly --run --json", person);
+    expect(afterwards).toEqual([
+      { instructions: "CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_prod/version" },
+    ]);
+  });
+
+  it("says it at a terminal, naming the scope a tenant withheld", async () => {
+    platform.granted = AGENT_SCOPES.filter((scope) => scope !== "im:message.group_msg");
+    await holdPair();
+    await prepareChannelApps(dir, app, "fastagent deploy fly --run");
+    const out = said.join("\n");
+    expect(out).toContain("next: the feishu app is not granted:");
+    expect(out).toContain("im:message.group_msg");
+    expect(out).toContain("next: after the permission work above, CREATE + PUBLISH a version");
   });
 });
 

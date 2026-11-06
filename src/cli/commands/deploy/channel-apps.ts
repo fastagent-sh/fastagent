@@ -40,6 +40,11 @@ export async function prepareChannelApps(
   for (const { kind, way } of apps) {
     console.error(`[fastagent] ${kind}: preparing the production app for ${way} in ${file}`);
     const input = { kind: kind satisfies SetupKind, agentDir, file, way, dev: false, rerun };
-    await setUpChannel(person === undefined ? input : { ...input, person });
+    const { after } = await setUpChannel(person === undefined ? input : { ...input, person });
+    // What is left (the publish, a scope to approve) is not the deploy's to finish: the person is told.
+    for (const line of after) {
+      if (person === undefined) console.error(`[fastagent] next: ${line}`);
+      else person.afterwards(line);
+    }
   }
 }

@@ -25,7 +25,7 @@ function sources(dir: string): string[] {
   });
 }
 
-/** Ways this codebase reaches the operator. `note()` is add-feishu's local helper (console.error
+/** Ways this codebase reaches the operator. `note()` is a local helper (console.error
  *  underneath), `log.*` the leveled logger, `clackLog.*` the prompt library's. Missing one here
  *  fails CORRECT code, so the list is wide rather than tight. */
 const OUTPUT = /console\.(?:error|log|warn|info)\(|clackLog\.\w+\(|\bnote\(|\blog\.\w+\(/;
