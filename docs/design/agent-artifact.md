@@ -2,15 +2,18 @@
 title: The agent framework's artifact and instance inputs
 description: "FastAgent as an agent framework: one immutable built definition, assembled deterministically from explicit instance inputs (configuration, secrets, state, workspace) on a laptop, inside an app or in the cloud."
 type: design-doc
-status: constraints and direction decided; not implemented
+status: partly implemented (stages A, B and most of C); secrets as the target's state and instance additions are not
 ---
 
 # The agent framework's artifact and instance inputs
 
-**Status: constraints and direction decided; not implemented.** Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900).
-This revises the first draft merged in [#901](https://github.com/fastagent-sh/fastagent/pull/901). FastAgent 0.29.0 still
-opens a writable author directory; nothing below describes current runtime behavior. Items marked *implementation
-research* are decided in direction and settled while building.
+**Status: partly implemented.** Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900), whose progress
+comment lists the PRs. The artifact (§3), the instance inputs (§4.1-§4.3) and most of the deployment (§6.1) are built;
+what is not is §6.2 (values as the target's state: `fastagent secrets`, `deploy` checking names only, AgentCore through
+Secrets Manager) and the instance additions of §4.2/§7 beyond content. Where this and the code disagree, the code is
+current behavior and this is the target; §10 says which part is which. This revises the first draft merged in
+[#901](https://github.com/fastagent-sh/fastagent/pull/901). Items marked *implementation research* are decided in
+direction and settled while building.
 
 ## 1. What this is for
 
@@ -704,6 +707,9 @@ Recorded, not solved here:
 
 ## 9. Current implementation seams and evidence
 
+The *Current* column is 0.29.0. Stages A to C have made every change below except the one on secrets at deploy (§6.2);
+the runtime prompt's description of the definition is partly done (#919).
+
 | Current | Change |
 |---|---|
 | A source project is read as a definition value, its modules imported where they are and nothing written; `start` opens the project's `dist/`, and `openAgent` takes a definition | Build prepares; open loads a built definition |
@@ -726,6 +732,10 @@ different `stateDir` values shared cwd, relative output files, local content bin
 boundary experiments, not a supported format.
 
 ## 10. Delivery
+
+Done (#907, #909, #911; #913-#918, #921, #922; #923-#925; a channel's way of receiving and platform app per instance,
+[channel-setup.md](channel-setup.md) §10): items 1 and 2, item 3 except values as the target's state and AgentCore's
+Secrets Manager, and content of item 4. Not started: the rest of item 4.
 
 1. **Artifact.** A compiled `dist/` with its `bin`, installed under `node_modules`, opened read-only with explicit
    inputs, two independent instances, on Node and Bun. Add pi-schema; the move to pi 1.5.0 is separate (#903).
