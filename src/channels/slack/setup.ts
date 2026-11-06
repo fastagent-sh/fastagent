@@ -3,7 +3,7 @@
  * its scopes, events and Socket Mode switch are what FastAgent needs; the values only they can read off its pages are
  * pasted: the bot token, and for the way the app receives, its app-level token (Socket Mode) or its signing secret.
  */
-import { type ChannelSetup, SetupRefused, type SetupValue } from "../setup.ts";
+import { type ChannelSetup, SetupRefused, type SetupValue, pasteOne } from "../setup.ts";
 import { buildSlackManifest, slackManifestLink } from "./manifest.ts";
 import { SlackApiError, createSlackApi } from "./slack-api.ts";
 import { TerminalSocketError, openSlackConnection } from "./socket.ts";
@@ -23,8 +23,7 @@ export const slackSetup: ChannelSetup = ({ way, appName, publicUrl }) => {
           requestUrl: publicUrl === undefined ? PLACEHOLDER_REQUEST_URL : `${publicUrl}/slack`,
         });
   const values: SetupValue[] = [
-    {
-      kind: "paste",
+    pasteOne({
       name: "SLACK_BOT_TOKEN",
       label: "Bot User OAuth Token",
       guide: {
@@ -58,11 +57,10 @@ export const slackSetup: ChannelSetup = ({ way, appName, publicUrl }) => {
           throw error;
         }
       },
-    },
+    }),
     ...(way === "connection"
       ? [
-          {
-            kind: "paste" as const,
+          pasteOne({
             name: "SLACK_APP_TOKEN",
             label: "App-Level Token",
             guide: {
@@ -89,11 +87,10 @@ export const slackSetup: ChannelSetup = ({ way, appName, publicUrl }) => {
                 throw error;
               }
             },
-          },
+          }),
         ]
       : [
-          {
-            kind: "paste" as const,
+          pasteOne({
             name: "SLACK_SIGNING_SECRET",
             label: "Signing Secret",
             guide: {
@@ -108,12 +105,12 @@ export const slackSetup: ChannelSetup = ({ way, appName, publicUrl }) => {
               }
               return undefined;
             },
-          },
+          }),
         ]),
   ];
   return {
     values,
-    after: [
+    finish: () => [
       "invite the app to each channel it should read (/invite @<its name> in the channel)",
       ...(way === "webhook"
         ? [

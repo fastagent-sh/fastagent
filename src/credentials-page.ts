@@ -2,7 +2,7 @@
  * The page where a person pastes the values a channel's setup needs, for a setup that has no terminal (a coding agent's
  * `--json`): loopback only, one use, and each value goes from the browser to this process and nowhere else (see
  * setup-page.ts for why it is never the agent's conversation). Each value is checked as it is pasted and handed to
- * `accept` at once, so a value that passed stays accepted when another is refused: the form then asks only for what is left.
+ * `accept` at once, so a step that passed stays accepted when another is refused: the form then asks only for what is left.
  */
 import { randomBytes } from "node:crypto";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
@@ -22,10 +22,11 @@ import {
   submit,
 } from "./setup-page.ts";
 
-export interface CredentialsField {
-  name: string;
+/** What the person pastes at one step: its fields are checked together. */
+export interface CredentialsStep {
   label: string;
   guide: SetupGuide;
+  fields: readonly { name: string; label: string; secret?: boolean }[];
 }
 
 export interface CredentialsPage {
@@ -60,24 +61,24 @@ export async function startCredentialsPage(input: {
   title: string;
   /** What the done page says: "Slack connected". */
   doneHeading: string;
-  fields: readonly CredentialsField[];
-  /** Check `value` and keep it. Throws {@link SetupRefused} to stay on the form with the reason; anything else ends the page. */
-  accept(name: string, value: string): Promise<void>;
+  steps: readonly CredentialsStep[];
+  /** Check a step's values and keep them. Throws {@link SetupRefused} to stay on the form with the reason; anything else ends the page. */
+  accept(step: number, values: Record<string, string>): Promise<void>;
 }): Promise<CredentialsPage> {
   const path = `/setup/${randomBytes(24).toString("hex")}`;
   const { promise: done, resolve, reject } = Promise.withResolvers<void>();
-  const accepted = new Set<string>();
+  const accepted = new Set<number>();
   let checking = false;
   let used = false;
   let port = 0;
 
-  const form = (problem?: { name: string; refusal: SetupRefused }): string =>
+  const form = (problem?: { step: number; refusal: SetupRefused }): string =>
     formCard(
       input.title,
-      input.fields
-        .map(({ name, label, guide }, index) => {
-          if (accepted.has(name)) return step(index + 1, label, prose(`Saved.`));
-          const here = problem?.name === name ? problem.refusal : undefined;
+      input.steps
+        .map(({ label, guide, fields }, index) => {
+          if (accepted.has(index)) return step(index + 1, label, prose(`Saved.`));
+          const here = problem?.step === index ? problem.refusal : undefined;
           return step(
             index + 1,
             label,
@@ -86,7 +87,17 @@ export async function startCredentialsPage(input: {
               (here === undefined
                 ? ""
                 : refusal(here.message, here.fix === undefined ? undefined : ` ${here.fix}`, here.why)) +
-              field({ id: name, label, secret: true, invalid: here !== undefined, autofocus: here !== undefined }),
+              fields
+                .map((one, position) =>
+                  field({
+                    id: one.name,
+                    label: one.label,
+                    secret: one.secret ?? true,
+                    invalid: here !== undefined,
+                    autofocus: here !== undefined && position === 0,
+                  }),
+                )
+                .join(""),
           );
         })
         .join("") +
@@ -144,18 +155,22 @@ export async function startCredentialsPage(input: {
     checking = true;
     const pasted = new URLSearchParams(body);
     try {
-      for (const { name, label } of input.fields) {
-        if (accepted.has(name)) continue;
-        const value = (pasted.get(name) ?? "").trim();
+      for (const [index, { fields }] of input.steps.entries()) {
+        if (accepted.has(index)) continue;
         try {
-          if (value === "") throw new SetupRefused(`${label} is needed.`);
-          await input.accept(name, value);
-          accepted.add(name);
+          const values: Record<string, string> = {};
+          for (const { name, label } of fields) {
+            const value = (pasted.get(name) ?? "").trim();
+            if (value === "") throw new SetupRefused(`${label} is needed.`);
+            values[name] = value;
+          }
+          await input.accept(index, values);
+          accepted.add(index);
         } catch (error) {
           // Only a refusal stays on the form; infrastructure and persistence errors end the setup.
           if (!(error instanceof SetupRefused)) throw error;
           checking = false;
-          sendPage(response, 200, { title: `${input.title} — FastAgent`, card: form({ name, refusal: error }) });
+          sendPage(response, 200, { title: `${input.title} — FastAgent`, card: form({ step: index, refusal: error }) });
           return;
         }
       }

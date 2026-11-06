@@ -62,9 +62,9 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
     };
   },
 }));
-vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/cli/add-feishu.ts")>()),
-  prepareFeishuApps: async (_dir: string, apps: { kind: string }[], rerun: string, person: unknown) => {
+vi.mock("../src/cli/commands/deploy/channel-apps.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/cli/commands/deploy/channel-apps.ts")>()),
+  prepareChannelApps: async (_dir: string, apps: { kind: string }[], rerun: string, person: unknown) => {
     calls.push(`prepare ${apps.map(({ kind }) => kind).join(",")} rerun=${rerun}`);
     preparedFor = person;
     facts.values.set("FEISHU_APP_ID", "cli_production");

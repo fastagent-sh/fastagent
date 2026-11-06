@@ -1,15 +1,14 @@
 /** What a Telegram bot's setup asks for (channels/setup.ts): its token from BotFather, and for a webhook a secret. */
 import { randomBytes } from "node:crypto";
-import { type ChannelSetup, SetupRefused } from "../setup.ts";
+import { type ChannelSetup, SetupRefused, pasteOne } from "../setup.ts";
 import { TelegramApiError, callApi } from "./telegram-api.ts";
 
 const TOKEN = /^\d+:[A-Za-z0-9_-]{30,}$/;
 
 export const telegramSetup: ChannelSetup = ({ way }) => ({
-  after: [],
+  finish: () => [],
   values: [
-    {
-      kind: "paste",
+    pasteOne({
       name: "TELEGRAM_BOT_TOKEN",
       label: "Bot token",
       guide: {
@@ -35,7 +34,7 @@ export const telegramSetup: ChannelSetup = ({ way }) => ({
           throw error;
         }
       },
-    },
+    }),
     // Only a webhook has an inbound request to verify: a polling bot asks Telegram for its updates.
     ...(way === "webhook"
       ? [{ kind: "make" as const, name: "TELEGRAM_SECRET_TOKEN", make: () => randomBytes(24).toString("hex") }]

@@ -58,9 +58,7 @@ export async function runChannelsSetup(name: string, dirArg: string, opts: Chann
   if (opts.check !== undefined) return checkSetup(name, opts.check, opts);
   if (opts.recordUrl) return recordUrl(name, dirArg, opts);
   if (!isSetupKind(name)) {
-    failUsage(
-      `${name}: this release sets up telegram and slack (\`fastagent add ${name}\` sets up that app itself for now)`,
-    );
+    failUsage(`${name}: \`channels setup\` sets up telegram, slack, feishu and lark`);
   }
   if (opts.ticket !== undefined) {
     // The process `startTicket` started: it takes the ticket before anything slow (the definition is loaded to plan),
@@ -159,6 +157,8 @@ async function carryOut(
     agentDir: plan.agentDir,
     file: plan.file,
     way: plan.way,
+    dev: plan.dev,
+    rerun: plan.rerun,
     ...(plan.publicUrl === undefined ? {} : { publicUrl: plan.publicUrl }),
     ...(person === undefined ? {} : { person }),
   });
@@ -186,7 +186,7 @@ async function setUpUnattended(plan: SetupPlan, opts: ChannelsSetupOptions): Pro
   const ticket = await startTicket({
     // One setup per agent, channel and value file: another one's is its own business.
     subject: `channels-setup:${plan.kind}:${plan.file}`,
-    action: `set up the ${plan.kind} app: paste its credentials on a page`,
+    action: `set up the ${plan.kind} app: the step that is yours is on a page`,
     check: setupCheck(plan.kind),
     restart: plan.rerun,
     timeoutSeconds: timeout,

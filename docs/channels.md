@@ -116,8 +116,8 @@ FastAgent ships lightweight first-party adapters as subpath exports.
 |---|---|---|---|
 | Telegram bot | `@fastagent-sh/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram`, `fastagent channels setup telegram` |
 | Slack app | `@fastagent-sh/fastagent/slack` | [Slack channel](slack.md) | `fastagent add slack`, `fastagent channels setup slack` |
-| Feishu bot (飞书) | `@fastagent-sh/fastagent/feishu` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add feishu` |
-| Lark bot (international) | `@fastagent-sh/fastagent/lark` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add lark` |
+| Feishu bot (飞书) | `@fastagent-sh/fastagent/feishu` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add feishu`, `fastagent channels setup feishu` |
+| Lark bot (international) | `@fastagent-sh/fastagent/lark` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add lark`, `fastagent channels setup lark` |
 
 Example Telegram glue (`fastagent add telegram` writes a fuller one, with its policy options):
 

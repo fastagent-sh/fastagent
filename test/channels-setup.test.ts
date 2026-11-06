@@ -362,14 +362,28 @@ describe("setUpChannel: writes where it is told, and makes its own values once",
     platforms();
     const elsewhere = join(dir, "elsewhere.env");
     prompts.answers.push(GOOD_BOT);
-    const first = await setUpChannel({ kind: "telegram", agentDir: dir, file: elsewhere, way: "webhook" });
+    const first = await setUpChannel({
+      kind: "telegram",
+      agentDir: dir,
+      file: elsewhere,
+      way: "webhook",
+      dev: false,
+      rerun: "again",
+    });
     expect(first.written.sort()).toEqual(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
     expect(first.kept).toEqual([]);
     expect(await read(elsewhere)).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_BOT}`);
     await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
 
     const secret = (await read(elsewhere)).match(/^TELEGRAM_SECRET_TOKEN=(.*)$/m)?.[1];
-    const again = await setUpChannel({ kind: "telegram", agentDir: dir, file: elsewhere, way: "webhook" });
+    const again = await setUpChannel({
+      kind: "telegram",
+      agentDir: dir,
+      file: elsewhere,
+      way: "webhook",
+      dev: false,
+      rerun: "again",
+    });
     // Nothing asked, nothing written: both are held, and the one setup made stays what it was.
     expect(again).toMatchObject({ written: [], kept: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"] });
     expect((await read(elsewhere)).match(/^TELEGRAM_SECRET_TOKEN=(.*)$/m)?.[1]).toBe(secret);
@@ -440,7 +454,7 @@ describe("channels setup for a coding agent", () => {
     platforms();
     const { ticket, run, waiting, paste } = await onPage("telegram", dir);
     const asked = await waiting();
-    expect(asked.instructions).toBe("paste Bot token on this page");
+    expect(asked.instructions).toContain("paste Bot token on this page");
     expect(asked.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/setup\//);
     const page = await (await fetch(asked.url as string)).text();
     expect(page).toContain("Bot token");

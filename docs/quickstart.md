@@ -143,12 +143,13 @@ fastagent add feishu     # 飞书 (open.feishu.cn)
 fastagent add lark       # Lark international
 ```
 
-Telegram and Slack then set up the bot or app for this instance, asking for its credentials and checking them:
+Then set up the bot or app for this instance, asking for its credentials and checking them:
 
 ```bash
 fastagent channels setup telegram   # opens @BotFather and asks for the token
 fastagent channels setup slack      # opens the app's manifest link and asks for its two tokens
-fastagent dev                       # no tunnel, no public URL: Telegram polls, Slack uses Socket Mode
+fastagent channels setup feishu     # scan to create the app (lark: channels setup lark)
+fastagent dev                       # no tunnel, no public URL: Telegram polls, Slack and Feishu hold a connection
 ```
 
 Read [Channels](channels.md) for the channel model, [Telegram channel](telegram.md) for Telegram bots, [Slack channel](slack.md) for Slack apps, and [Feishu channel (Lark compatibility)](feishu.md) for Feishu and Lark bots.

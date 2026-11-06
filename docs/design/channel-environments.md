@@ -53,17 +53,17 @@ One channel file offers both ways, `byIngress({ webhook, connection })`, and eac
 - `deploy` reads the way from the configuration it delivers, as the box will, never from the environment.
 
 A file that names one factory receives that way only: a configuration naming the other way is refused at open, and
-`add --ingress` and production onboarding refuse it before touching the app. Re-scaffold it to offer both.
+`channels setup --ingress` refuses it before touching the app. Re-scaffold it to offer both.
 
 ## 3. Deploy provisions the production app
 
-Interactive `deploy --run` uses the existing onboarding flow when a declared Feishu/Lark channel lacks its
+Interactive `deploy --run` runs `channels setup` for the production instance when a declared Feishu/Lark channel lacks its
 production App ID, Secret, or webhook Verification Token. A complete app is reused without another creation flow.
 This also applies to a production environment explicitly configured for WebSocket.
 
 1. Run preflight and host validation before creating an app. AgentCore rejects long connections and names beyond
    its resource-name limit; Docker refuses a value file that differs from the generated Compose path. Refuse
-   missing values that onboarding cannot supply.
+   missing values that setup cannot supply.
 2. Refuse unattended setup (`--no-input` or no terminal), naming the missing production values and their file.
    CI must write those values beforehand. Generate-only deployment creates no remote app.
 3. **Feishu:** scan-to-create a separate production app. A webhook app requests the agent scopes plus
@@ -76,9 +76,9 @@ This also applies to a production environment explicitly configured for WebSocke
 6. Re-run preflight and host validation, then build and deploy with the values now in that file. Once readiness and model login pass,
    register the deployment's stable Request URL with those same values, never shell-exported dev credentials.
 
-Feishu/Lark production App IDs that match the default dev value file are refused before onboarding or deployment.
-This catches copying a complete dev file into production, which would defeat isolation. Explicit relocated dev
-files are the operator's responsibility.
+Nothing refuses a production App ID that is the dev one: two instances on one app are documented, as for Telegram and
+Slack (an app is one receiver, so copying a complete dev file into production takes dev's events away). `channels setup`
+for another instance creates a new app (Feishu) or asks for another app's credentials (Lark).
 
 Docker's generated Compose reads `.secrets/production/.env`. It has no public URL of its own, so a deployment with a
 webhook channel is an operator with their own ingress: they supply app values and name the URL as `http.publicUrl`

@@ -4,29 +4,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  appendChannelDotEnv,
   appendChannelEnv,
   channelSetup,
   scaffoldChannel,
   scaffoldCompanionTools,
 } from "../src/scaffold/add-channel.ts";
-import { FEISHU_AGENT_SCOPES } from "../src/channels/feishu/setup-mode.ts";
 import { writeValues } from "../src/value-file.ts";
 
 describe("channel setup guidance", () => {
-  it("names every agent permission before the publish step, for both clouds and ingresses", () => {
-    for (const kind of ["feishu", "lark"] as const) {
-      for (const ingress of ["webhook", "connection"] as const) {
-        const steps = channelSetup(kind, ingress).steps;
-        const scopeIndex = steps.findIndex((step) => step.includes("im:message.group_msg"));
-        const publishIndex = steps.findIndex((step, index) => index > scopeIndex && /publish/i.test(step));
-        expect(scopeIndex).toBeGreaterThanOrEqual(0);
-        expect(publishIndex).toBeGreaterThan(scopeIndex);
-        for (const entry of FEISHU_AGENT_SCOPES) expect(steps[scopeIndex]).toContain(entry.request);
-      }
-    }
-  });
-
   it("Slack's channel is scaffolded for both ways, and its names are listed for whoever fills them", async () => {
     expect(channelSetup("slack").env.map((entry) => entry.name)).toEqual([
       "SLACK_BOT_TOKEN",
@@ -50,13 +35,14 @@ describe("channel setup guidance", () => {
     );
   });
 
-  it("a dev WebSocket app needs only App ID/Secret and leaves production on its own app", async () => {
-    const setup = channelSetup("feishu", "connection");
-    expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
-    expect(setup.steps.join("\n")).toContain("a deployment receives by webhook");
-    expect(setup.steps.join("\n")).toContain("`deploy --run` creates a separate production app");
-
-    // One channel file, whichever way it receives: each instance's configuration picks the way.
+  it("Feishu's channel is one file whichever way it receives, and its names are listed for whoever fills them", async () => {
+    expect(channelSetup("feishu").env.map((entry) => entry.name)).toEqual([
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "FEISHU_VERIFICATION_TOKEN",
+      "FEISHU_ENCRYPT_KEY",
+    ]);
+    // Each instance's configuration picks the way.
     const dir = await mkdtemp(join(tmpdir(), "fa-feishu-scaffold-"));
     await scaffoldChannel(dir, "feishu");
     const source = await readFile(join(dir, "src", "channels", "feishu.ts"), "utf8");
@@ -76,11 +62,26 @@ describe("appendChannelEnv", () => {
     for (const name of ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN", "FEISHU_ENCRYPT_KEY"]) {
       expect(example).toContain(`# ${name}=`);
     }
-    expect(example).toMatch(/# webhook only \(`start`, every deployment\).*\n# FEISHU_VERIFICATION_TOKEN=/);
+    expect(example).toMatch(/# webhook only: .*\n# FEISHU_VERIFICATION_TOKEN=/);
   });
 });
 
-describe("appendChannelDotEnv", () => {
+/** What a setup keeps in the value file: `generated` under the channel's marker, `overwrite` replacing what is there. */
+function appendChannelDotEnv(
+  dir: string,
+  kind: string,
+  generated: Record<string, string>,
+  overwrite: readonly string[] = [],
+) {
+  return writeValues(
+    dir,
+    `${kind} channel`,
+    Object.entries(generated).map(([name, value]) => ({ name, value })),
+    overwrite,
+  );
+}
+
+describe("the value file a setup writes", () => {
   it("writes to the RESOLVED secrets dir — FASTAGENT_SECRETS_DIR moves the .env target with the protection", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-env-move-"));
     const secrets = await mkdtemp(join(tmpdir(), "fa-env-external-"));
@@ -170,7 +171,7 @@ describe("appendChannelDotEnv", () => {
     expect(r.alreadySet).toEqual(expect.arrayContaining(["LARK_APP_ID", "LARK_APP_SECRET"]));
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toContain("LARK_APP_ID=cli_old");
 
-    // Overwrite: `add feishu`'s create flow just minted these — the stale line loses, in place (no duplicate
+    // Overwrite: a setup just minted these — the stale line loses, in place (no duplicate
     // assignment that last-wins would then shadow).
     r = await appendChannelDotEnv(dir, "lark", { LARK_APP_ID: "cli_new", LARK_APP_SECRET: "s2" }, [
       "LARK_APP_ID",

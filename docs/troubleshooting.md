@@ -285,7 +285,7 @@ Check:
   Encrypt Key configured, the channel refuses plaintext events entirely, so a missing or stale key
   value makes every event fail verification.
 
-`fastagent add feishu` writes these values to `.env` automatically; re-check them after rotating
+`fastagent channels setup feishu` keeps these values in the instance's value file; re-check them after rotating
 keys in the developer console.
 
 ## Feishu bot ignores group messages
@@ -294,8 +294,8 @@ With only the `im:message.group_at_msg:readonly` scope, the platform delivers ju
 @mention the bot. Unmentioned group or thread discussion never reaches the channel, so it cannot be
 buffered, and bare continuations inside Agent-created threads are not delivered either.
 
-Re-run `fastagent add feishu` (or `add lark`). It checks the app's permissions, names every scope that is
-missing, and opens the console page that requests them; approve them (a tenant admin, if your tenant
+Re-run `fastagent channels setup feishu` (or `lark`). It checks the app's permissions, names every scope that is
+missing, and links the console page that requests them; approve them (a tenant admin, if your tenant
 requires it) and publish a new app version. A serving process warns
 `im:message.group_msg is not granted — …` until the granted scope is visible. See the
 [Feishu channel](feishu.md) guide.

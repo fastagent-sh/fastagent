@@ -11,7 +11,7 @@ import { type FeishuChannelOptions, feishuChannel, feishuWebSocketChannel } from
 // Dev reads .secrets/.env; production reads .secrets/production/.env. Interactive `deploy --run`
 // creates a separate production app.
 //
-// `fastagent add feishu` creates and configures the app (scan-to-create). For a hand-made app, in the
+// `fastagent channels setup feishu` creates and configures the app (scan-to-create). For a hand-made app, in the
 // developer console:
 //   1. create a custom app → enable the BOT capability → copy App ID / App Secret into .env
 //   2. Permissions: add `im:message.p2p_msg:readonly` (direct messages), `im:message.group_at_msg:readonly`

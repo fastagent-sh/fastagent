@@ -1,15 +1,19 @@
 import { request } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { SetupRefused } from "../src/channels/setup.ts";
-import { type CredentialsPage, startCredentialsPage } from "../src/credentials-page.ts";
+import { type CredentialsPage, type CredentialsStep, startCredentialsPage } from "../src/credentials-page.ts";
 
-const FIELDS = [
+const STEPS = [
   {
-    name: "SLACK_BOT_TOKEN",
     label: "Bot User OAuth Token",
     guide: { instructions: "Install it.", url: "https://api.slack.com/apps" },
+    fields: [{ name: "SLACK_BOT_TOKEN", label: "Bot User OAuth Token" }],
   },
-  { name: "SLACK_APP_TOKEN", label: "App-Level Token", guide: { instructions: "Generate one." } },
+  {
+    label: "App-Level Token",
+    guide: { instructions: "Generate one." },
+    fields: [{ name: "SLACK_APP_TOKEN", label: "App-Level Token" }],
+  },
 ];
 
 const pages: CredentialsPage[] = [];
@@ -17,8 +21,19 @@ afterEach(async () => {
   await Promise.all(pages.splice(0).map((page) => page.close()));
 });
 
-async function start(accept: (name: string, value: string) => Promise<void>, fields = FIELDS) {
-  const page = await startCredentialsPage({ title: "Connect Slack", doneHeading: "Slack connected", fields, accept });
+/** A page over `steps` whose `accept` is told each value by name, whichever step it came with. */
+async function start(
+  accept: (name: string, value: string) => Promise<void>,
+  steps: readonly CredentialsStep[] = STEPS,
+) {
+  const page = await startCredentialsPage({
+    title: "Connect Slack",
+    doneHeading: "Slack connected",
+    steps,
+    accept: async (_step, values) => {
+      for (const [name, value] of Object.entries(values)) await accept(name, value);
+    },
+  });
   pages.push(page);
   page.done.catch(() => {});
   return page;
@@ -91,7 +106,7 @@ describe("credentials page", () => {
   });
 
   it("is used once: after it is done, the address is gone", async () => {
-    const page = await start(async () => {}, FIELDS.slice(0, 1));
+    const page = await start(async () => {}, STEPS.slice(0, 1));
     expect((await post(page.url, { SLACK_BOT_TOKEN: "x" })).status).toBe(200);
     await page.done;
     expect((await post(page.url, { SLACK_BOT_TOKEN: "y" })).status).toBe(404);
@@ -103,7 +118,7 @@ describe("credentials page", () => {
       async (name) => {
         kept.push(name);
       },
-      FIELDS.slice(0, 1),
+      STEPS.slice(0, 1),
     );
     // Another site's page posting here: the browser says where it came from.
     expect((await post(page.url, { SLACK_BOT_TOKEN: "x" }, { "sec-fetch-site": "cross-site" })).status).toBe(403);
@@ -124,7 +139,43 @@ describe("credentials page", () => {
   });
 
   it("refuses a body larger than a pasted token could be", async () => {
-    const page = await start(async () => {}, FIELDS.slice(0, 1));
+    const page = await start(async () => {}, STEPS.slice(0, 1));
     expect((await post(page.url, { SLACK_BOT_TOKEN: "x".repeat(20_000) })).status).toBe(413);
+  });
+
+  it("a step with two fields is checked as a pair: a refusal keeps neither, and asks for both again", async () => {
+    const pair: CredentialsStep = {
+      label: "App ID and App Secret",
+      guide: { instructions: "Copy both." },
+      fields: [
+        { name: "APP_ID", label: "App ID", secret: false },
+        { name: "APP_SECRET", label: "App Secret" },
+      ],
+    };
+    const kept: Record<string, string>[] = [];
+    const page = await startCredentialsPage({
+      title: "Connect Lark",
+      doneHeading: "Lark connected",
+      steps: [pair],
+      accept: async (_step, values) => {
+        if (values.APP_SECRET === "wrong") throw new SetupRefused("Lark refused that pair.");
+        kept.push(values);
+      },
+    });
+    pages.push(page);
+    const form = await (await fetch(page.url)).text();
+    expect(form).toMatch(/id="APP_ID"[^>]*type="text"/);
+    expect(form).toMatch(/id="APP_SECRET"[^>]*type="password"/);
+
+    const refused = await (await post(page.url, { APP_ID: "cli_1", APP_SECRET: "wrong" })).text();
+    expect(refused).toContain("Lark refused that pair.");
+    expect(refused).toContain('name="APP_ID"');
+    expect(refused).toContain('name="APP_SECRET"');
+    expect(kept).toEqual([]);
+
+    expect(await (await post(page.url, { APP_ID: "cli_1" })).text()).toContain("App Secret is needed.");
+    expect(await (await post(page.url, { APP_ID: "cli_1", APP_SECRET: "good" })).text()).toContain("Lark connected");
+    expect(kept).toEqual([{ APP_ID: "cli_1", APP_SECRET: "good" }]);
+    await page.done;
   });
 });

@@ -53,13 +53,6 @@ describe("cli: deploy", () => {
     expect(result.stderr).toContain(`\`fastagent deploy fly ${dir} --run --json\`, which hands their part to its user`);
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toContain("FEISHU_APP_ID=cli_dev");
     await expect(stat(join(dir, "Dockerfile"))).rejects.toThrow();
-
-    await mkdir(join(dir, ".secrets", "production"));
-    await writeFile(join(dir, ".secrets", "production", ".env"), await readFile(join(dir, ".secrets", ".env"), "utf8"));
-    const copied = await runInProcess(["deploy", "fly", dir, "--run", "--no-input"]);
-    expect(copied.code).toBe(1);
-    expect(copied.stderr).toContain("dev and production use the same app");
-    await expect(stat(join(dir, "Dockerfile"))).rejects.toThrow();
   });
 
   it("deploy WIRES the ownership rule — the real command keeps a file it did not generate", async () => {

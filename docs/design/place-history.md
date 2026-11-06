@@ -209,7 +209,7 @@ short list, a bounded read.
   active" would rank a thread resolved yesterday by when it opened, and #374's question is exactly whether it was.
 - **The read** is the history fold over the thread with no cursor and nothing left out: another session's asks and
   answers are what that thread said. A failed read is the tool's error, for the model to see.
-- An agent created before this gets the tools with `fastagent add <channel> --no-onboard`, which keeps the channel
+- An agent created before this gets the tools with `fastagent add <channel>`, which keeps the channel
   file and rewrites the package's tools.
 
 Docs move with the phases: participant-model.md §2 (hearing vs knowing), §7 and §8 (rung 3's source);

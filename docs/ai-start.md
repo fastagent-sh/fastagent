@@ -310,14 +310,14 @@ webhook servers, token refresh loops, or reply pipelines:
 |---|---|---|
 | Telegram | `fastagent add telegram`, then `fastagent channels setup telegram --json` | Create the bot with @BotFather and paste its token on the page it returns. [Telegram](telegram.md) |
 | Slack | `fastagent add slack`, then `fastagent channels setup slack --json` | Create the app from the link it gives (Create, then Install to Workspace), and paste the bot token and the app-level token on the page it returns. [Slack](slack.md) |
-| Feishu | `fastagent add feishu --json` | Confirm the new app at the address it returns, then publish its version in the console. [Feishu](feishu.md) |
-| Lark | `fastagent add lark --json` | Open the page it returns, create the app in the international console, and paste its App ID and App Secret on that page. [Lark compatibility](feishu.md) |
+| Feishu | `fastagent add feishu`, then `fastagent channels setup feishu --json` | Confirm the new app at the address it returns, then publish its version in the console. [Feishu](feishu.md) |
+| Lark | `fastagent add lark`, then `fastagent channels setup lark --json` | Open the page it returns, create the app from the launcher link, and paste its App ID and App Secret on that page. [Lark compatibility](feishu.md) |
 
-`add telegram|slack` changes the program only; the app and its credentials are `channels setup`'s. With `--json`,
-`channels setup telegram|slack` and `add feishu|lark` answer `need_user_action` for each part only the owner can do,
+`add` changes the program only; the app and its credentials are `channels setup`'s. With `--json`,
+`channels setup` answers `need_user_action` for each part only the owner can do,
 with the address, what to write where, and a `check_command`; relay it, wait for the owner to say it is done, and run
 the command it names. The setup's ticket ends `done` with the variables it wrote, the next steps, and what is left for
-the owner (`afterwards`, such as publishing a version). Never ask for a token in the conversation: the response names
+the owner (such as publishing a version, in `next_steps`). Never ask for a token in the conversation: the response names
 the file or page the owner enters it in ([`fastagent channels setup`](cli.md#fastagent-channels-setup),
 [`fastagent add`](cli.md#fastagent-add-telegramslackfeishulark)).
 
