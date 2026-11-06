@@ -352,7 +352,7 @@ Every serve (`dev`, `start`, an app's `serve()`; not `fastagent invoke`) gives t
 ```ts
 import { AgentError, defineAgent, defineChannel, defineSchedule, needs, openAgent, sessionIdOf } from "@fastagent-sh/fastagent";
 import { createAgent, credentialFile, providerAuth, signIn, signInOptions, SignInCancelled } from "@fastagent-sh/fastagent";
-import { telegramChannel, telegramTransport } from "@fastagent-sh/fastagent/telegram";
+import { telegramChannel, telegramPollingChannel, telegramTransport } from "@fastagent-sh/fastagent/telegram";
 import { slackChannel, slackThreads, slackTransport } from "@fastagent-sh/fastagent/slack";
 import { feishuChannel, feishuThreads, feishuTransport } from "@fastagent-sh/fastagent/feishu";
 import { larkChannel, larkThreads, larkTransport } from "@fastagent-sh/fastagent/lark";

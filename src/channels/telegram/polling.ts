@@ -145,6 +145,12 @@ export function pollTelegramUpdates(options: TelegramPollingOptions, signal: Abo
       closed.resolve();
     },
     (error: unknown) => {
+      if (signal.aborted) {
+        // A call cut short by the abort is the cancellation, not a failure of the connection.
+        markReady();
+        closed.resolve();
+        return;
+      }
       const failure = error instanceof Error ? error : new Error(String(error));
       if (!isReady) {
         isReady = true;

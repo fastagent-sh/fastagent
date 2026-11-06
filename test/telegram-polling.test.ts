@@ -12,13 +12,14 @@ import { type Prompt, promptOf, scriptedAgent } from "./scripted-agent.ts";
 const API = "http://tg.test";
 const TOKEN = "1:A";
 
-type Answer = { status?: number; body: unknown } | (() => { status?: number; body: unknown });
+type Answer = { status?: number; body: unknown } | (() => { status?: number; body: unknown }) | "hang";
 type Script = Record<string, Answer[]>;
 
 /**
  * A Bot API that answers each method from its script, in order, and remembers what it was asked. A script's last
  * answer repeats, except for `getUpdates`: once its answers are spent a poll is held open as Telegram holds one, until
- * it is aborted, so a quiet bot is not a hot loop.
+ * it is aborted, so a quiet bot is not a hot loop. Like a real fetch, a call honours its signal: one already aborted
+ * fails at once, and an answer of "hang" holds the call until the abort.
  */
 function botApi(script: Script) {
   const asked: { method: string; params: Record<string, unknown> }[] = [];
@@ -26,15 +27,17 @@ function botApi(script: Script) {
     const method = String(url).split("/").pop() as string;
     const params = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     asked.push({ method, params });
-    const answers = script[method];
-    if (method === "getUpdates" && (answers === undefined || answers.length === 0)) {
-      return new Promise<Response>((_, reject) =>
+    if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
+    const held = () =>
+      new Promise<Response>((_, reject) =>
         init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
       );
-    }
+    const answers = script[method];
+    if (method === "getUpdates" && (answers === undefined || answers.length === 0)) return held();
+    if (answers?.[0] === "hang") return held();
     const next =
       method === "getUpdates" ? answers?.shift() : answers && answers.length > 1 ? answers.shift() : answers?.[0];
-    const answer = typeof next === "function" ? next() : next;
+    const answer = typeof next === "function" ? next() : next === "hang" ? undefined : next;
     // A method nobody scripted is fine for the channel's own calls (getMe, sendMessage…): ok, with an empty result.
     const { status = 200, body } = answer ?? {
       body: { ok: true, result: method === "sendMessage" ? { message_id: 1 } : {} },
@@ -209,20 +212,28 @@ describe("telegram long polling", () => {
     expect(api.calls("getUpdates")).toHaveLength(2);
   });
 
-  it("an abort ends it cleanly, and one before the first answer is a cancellation, not a failure", async () => {
+  it("an abort ends it cleanly", async () => {
     botApi({ getWebhookInfo: [ok({})], getUpdates: [ok([])] });
     const running = poll(() => {});
     await running.connection.ready;
     running.abort.abort();
     await expect(running.connection.closed).resolves.toBeUndefined();
+  });
 
-    botApi({ getWebhookInfo: [ok({})], getUpdates: [ok([])] });
-    const early = pollTelegramUpdates(
+  it("an abort before the first answer is a cancellation, not a failure: while the webhook is read, or before it", async () => {
+    const api = botApi({ getWebhookInfo: ["hang"] });
+    const during = poll(() => {});
+    await vi.waitFor(() => expect(api.calls("getWebhookInfo")).toHaveLength(1));
+    during.abort.abort();
+    await expect(during.connection.ready).resolves.toBeUndefined();
+    await expect(during.connection.closed).resolves.toBeUndefined();
+
+    const before = pollTelegramUpdates(
       { apiBaseUrl: API, botToken: TOKEN, accept: () => {}, timing: FAST },
       AbortSignal.abort(),
     );
-    await expect(early.ready).resolves.toBeUndefined();
-    await expect(early.closed).resolves.toBeUndefined();
+    await expect(before.ready).resolves.toBeUndefined();
+    await expect(before.closed).resolves.toBeUndefined();
   });
 });
 
