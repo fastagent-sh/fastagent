@@ -80,7 +80,7 @@ describe("destroy agentcore", () => {
       "stack fastagent-probe",
       `bucket fa-probe-${ACCOUNT} (0 object version(s))`,
       "repository fastagent/probe",
-      "secret fastagent/probe",
+      "secret fastagent/probe (its values are deleted for good, with no recovery window)",
       "log group /aws/lambda/fastagent-probe-forwarder",
       `log group ${RUNTIME_GROUP}`,
     ]);

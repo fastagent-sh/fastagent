@@ -138,16 +138,18 @@ describe("railwayStore", () => {
     expect(failure?.message).not.toContain("hunter2");
   });
 
-  it("uses the project that has the service, and makes one (with its service) only when it is not linked", async () => {
+  it("uses the project named for the agent, and makes one (with its service) only when it is not linked", async () => {
     const service = (project: string) => ({
       name: project,
       environments: { edges: [{ node: { serviceInstances: { edges: [{ node: { serviceName: "bot" } }] } } }] },
     });
-    for (const project of ["bot", "elsewhere"]) {
-      const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify(service(project)) } : {}));
-      await railwayStore(linked.run, "bot", quiet, { redeploy: false }).ensure();
-      expect(linked.cmds()).toEqual(["status --json"]);
-    }
+    const linked = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify(service("bot")) } : {}));
+    await railwayStore(linked.run, "bot", quiet, { redeploy: false }).ensure();
+    expect(linked.cmds()).toEqual(["status --json"]);
+    // Another project is refused even when it holds a service of this name: values are not written into it.
+    const sameName = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify(service("prod-app")) } : {}));
+    await expect(railwayStore(sameName.run, "bot", quiet, { redeploy: false }).ensure()).rejects.toThrow("prod-app");
+    expect(sameName.cmds()).toEqual(["status --json"]);
     // A project named for the agent that lacks the service gets it; an unrelated one is refused.
     const bare = fake((args) => (args[0] === "status" ? { stdout: JSON.stringify({ name: "bot" }) } : {}));
     await railwayStore(bare.run, "bot", quiet, { redeploy: false }).ensure();

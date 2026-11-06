@@ -281,7 +281,7 @@ export async function destroyAgentcoreDeployment(
   if (stackExists) found.push(`stack ${stack}`);
   if (bucketExists) found.push(`bucket ${bucket} (${keys.length} object version(s))`);
   if (repoExists) found.push(`repository ${repo}`);
-  if (secretExists) found.push(`secret ${secretName}`);
+  if (secretExists) found.push(`secret ${secretName} (its values are deleted for good, with no recovery window)`);
   for (const name of listedGroups) found.push(`log group ${name}`);
 
   // The one thing this command refuses to delete.

@@ -296,9 +296,9 @@ Generates `Dockerfile` and `.dockerignore`, and prints the runbook:
 fastagent deploy railway --run   # provisions an unlinked dir end to end, and redeploys a provisioned one
 ```
 
-`--run` continues a linked project that already has the agent's service (`fastagent secrets set railway` and an earlier
-`--run` make one), gives the service to a project named for the agent that lacks it, and refuses a dir linked to any
-other project unless `--into-linked`. No Railway config file is generated:
+`--run` continues the linked project named for the agent (`fastagent secrets set railway` and an earlier `--run` make
+one) and gives it the service when it lacks one. It refuses a dir linked to any other project, whatever that project
+holds, unless `--into-linked`; `fastagent secrets … railway` refuses it too. No Railway config file is generated:
 Railway retires `railway.json` on 2026-12-01, and its replacement (`.railway/railway.ts`) would make every agent
 install Railway's SDK. Railway builds the `Dockerfile` at the root of the upload and restarts a crashed service by
 default. It does not wait for `/health`, so it marks a deploy live once the container starts; `--run` probes the
@@ -368,7 +368,7 @@ the values it read until it ends (its idle timeout) or the next deploy. The comm
 IAM user holding only this policy (replace `<region>` and `<account-id>`; as a customer managed policy, since an inline
 user policy is capped at 2048 bytes). Every resource is scoped to the names a deploy derives (`fastagent-*`, `fa-*`,
 `fastagent/*`); CloudFormation makes the stack's calls with the caller's own permissions, which is why Lambda, IAM and
-AgentCore actions are here. It is a verified set, not a proven minimum. `fastagent login --deployment agentcore` also
+AgentCore actions are here. It is a verified set, not a proven minimum. Its `Slr` statement, which lets a first deploy into an account create the two AgentCore service-linked roles, was not exercised: the account already held them. `fastagent login --deployment agentcore` also
 needs `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
 
 ```json
@@ -385,7 +385,7 @@ needs `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
   {"Sid": "Secrets", "Effect": "Allow", "Action": ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue", "secretsmanager:DeleteSecret", "secretsmanager:TagResource"], "Resource": "arn:aws:secretsmanager:<region>:<account-id>:secret:fastagent/*"},
   {"Sid": "Logs", "Effect": "Allow", "Action": ["logs:DescribeLogGroups", "logs:DescribeLogStreams", "logs:FilterLogEvents", "logs:GetLogEvents", "logs:DeleteLogGroup", "logs:PutRetentionPolicy"], "Resource": "*"},
   {"Sid": "Scheduler", "Effect": "Allow", "Action": ["scheduler:ListSchedules", "scheduler:GetSchedule", "scheduler:DeleteSchedule"], "Resource": "*"},
-  {"Sid": "Slr", "Effect": "Allow", "Action": "iam:CreateServiceLinkedRole", "Resource": "*", "Condition": {"StringEquals": {"iam:AWSServiceName": "runtime.bedrock-agentcore.amazonaws.com"}}}
+  {"Sid": "Slr", "Effect": "Allow", "Action": "iam:CreateServiceLinkedRole", "Resource": "*", "Condition": {"StringEquals": {"iam:AWSServiceName": ["runtime-identity.bedrock-agentcore.amazonaws.com", "network.bedrock-agentcore.amazonaws.com"]}}}
 ]}
 ```
 

@@ -307,7 +307,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     }
   });
 
-  it("a linked project that has this agent's service is continued with no flag: `secrets set` or an earlier run made it", async () => {
+  it("the project named for the agent, with its service, is continued with no flag: `secrets set` or an earlier run made it", async () => {
     const { railway, cmds } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: LINKED };
       if (a[0] === "volume" && a[1] === "list") return { stdout: volumes({ serviceName: "bot" }) };
@@ -319,14 +319,26 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(cmds()).not.toContain("init --name bot");
     expect(cmds().some((c) => c.startsWith("add --service"))).toBe(false);
     expect(cmds()).toContain("up --ci --service bot");
-    // Another project's, named differently, that holds the service: provisioned with --into-linked earlier, so still this agent's.
-    const other = fakeRailway((a) => {
-      if (a[0] === "status") return { stdout: JSON.stringify(withService({ name: "elsewhere" }, "bot")) };
+  });
+
+  it("gate (SAFETY): another project that happens to hold a service of this name is not the agent's, without --into-linked", async () => {
+    // A directory called `bot`, linked to a production project that has its own `bot` service: a same-named service
+    // does not make the project this agent's, so nothing is set, added or uploaded there.
+    const production = JSON.stringify(withService({ name: "prod-app", id: "prod-99" }, "bot"));
+    const refused = fakeRailway((a) => (a[0] === "status" ? { stdout: production } : {}));
+    const out = await run(plan(), refused.railway);
+    expect(out.ok).toBe(false);
+    expect(out.ok ? "" : out.gate).toContain("prod-app");
+    expect(refused.cmds()).toEqual(["whoami", "status --json"]);
+    // Named by the person: --into-linked provisions into it, and finds the service already there.
+    const named = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: production };
       if (a[0] === "volume" && a[1] === "list") return { stdout: volumes({ serviceName: "bot" }) };
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
-    expect((await run(plan(), other.railway)).ok).toBe(true);
+    expect((await run(plan({ intoLinked: true }), named.railway)).ok).toBe(true);
+    expect(named.cmds().some((c) => c.startsWith("add --service"))).toBe(false);
   });
 
   it("a project named for the agent with no service gets the service, and nothing else is made", async () => {

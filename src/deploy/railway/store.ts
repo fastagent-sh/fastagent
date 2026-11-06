@@ -37,10 +37,11 @@ function hasService(stdout: string, name: string): boolean {
 }
 
 /**
- * The project and service a deployment's values and image belong to. A linked project that already has the agent's
- * service is the agent's (`secrets set` or an earlier `--run` made it, or `--into-linked` did), and one named for the
- * agent that lacks it is given the service. A directory linked to another project is refused unless `intoLinked` says to
- * provision into it, and an unlinked one is given a new project. Resolves the gate line when it cannot be done.
+ * The project and service a deployment's values and image belong to. The project named for the agent (`secrets set` or
+ * an earlier `--run` made and linked it) is continued, and given the service when it lacks one. A directory linked to
+ * any other project is refused unless `intoLinked` says to provision into it, whatever that project holds: a service of
+ * the same name does not make it the agent's. An unlinked directory is given a new project. Resolves the gate line when
+ * it cannot be done.
  */
 export async function ensureRailwayService(
   railway: CliRunner,
@@ -50,7 +51,6 @@ export async function ensureRailwayService(
   const status = await railway(["status", "--json"], { capture: true });
   if (isLinked(status.stdout)) {
     const name = linkedName(status.stdout);
-    if (hasService(status.stdout, plan.name)) return undefined;
     if (!plan.intoLinked && name !== plan.name) {
       return (
         `this directory is already linked to Railway project ${name ? `"${name}"` : "(name unreadable)"}, not to ` +
@@ -59,6 +59,7 @@ export async function ensureRailwayService(
       );
     }
     if (plan.intoLinked) log(`provisioning into linked project ${name ?? plan.name} (--into-linked)`);
+    if (hasService(status.stdout, plan.name)) return undefined;
     return addService(railway, plan, log);
   } else {
     // --into-linked means "provision into the project this dir is linked to" — but it isn't linked.
