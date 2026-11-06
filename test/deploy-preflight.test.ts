@@ -929,7 +929,11 @@ export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" 
       expect(pre.boxLogin).toBeUndefined();
       const unknown = await call(dir, { model: "gw/nope" }, { run: true });
       expect(unknown.ok).toBe(false);
-      if (!unknown.ok) expect(unknown.gate).toMatch(/no provider of the deployed agent offers "gw\/nope"/);
+      if (!unknown.ok) {
+        expect(unknown.gate).toMatch(/no provider of the deployed agent offers "gw\/nope"/);
+        // What it could have been, and the command that lists the rest.
+        expect(unknown.gate).toContain("gw's models include gw/m1 (`fastagent models gw` lists all 1)");
+      }
     } finally {
       await rm(host, { recursive: true, force: true });
     }

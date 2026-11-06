@@ -451,6 +451,23 @@ describe("a ticket as its command reports it", () => {
     expect(device.agent_next_steps).toMatch(/^The user has not finished yet\. Give the URL and the code ABCD/);
   });
 
+  it("a failed step carries the last lines of its log, without colors, so one report says why", () => {
+    const failing = { ...createTicket(request("login:tail")), status: "failed" as const, message: "deploy stopped" };
+    const lines = Array.from({ length: 30 }, (_, i) => `line ${i}`);
+    writeFileSync(
+      ticketLogPath(failing.ticket),
+      `\u001b[33mWARN\u001b[0m early\n${lines.join("\n")}\n\n\u001b[31mError: builder unreachable\u001b[0m ${"x".repeat(400)}\n`,
+    );
+    const { json, text } = ticketReport(failing, "checked");
+    const tail = json.log_tail as string[];
+    expect(tail).toHaveLength(12);
+    expect(tail.at(-1)).toMatch(/^Error: builder unreachable x+$/);
+    expect(tail.at(-1)?.length).toBe(300);
+    expect(tail[0]).toBe("line 19");
+    expect(tail.join("")).not.toContain("\u001b");
+    expect(text).toContain("  | line 19");
+  });
+
   it("a done step: its own fields, what is left for the person, and the step's own sentence", () => {
     const done = {
       ...base,
@@ -471,10 +488,14 @@ describe("a ticket as its command reports it", () => {
     expect(ticketReport({ ...base, status: "working" }, "checked").json.agent_next_steps).toMatch(
       /Run check_command again/,
     );
-    expect(ticketReport({ ...base, status: "failed", message: "no" }, "checked").json).toMatchObject({
+    const failed = ticketReport({ ...base, status: "failed", message: "no" }, "checked").json;
+    expect(failed).toMatchObject({
       message: "no",
-      agent_next_steps: "To try again, run: fastagent login openai --method account --json",
+      agent_next_steps: expect.stringMatching(
+        /^The cause is in log_tail .*then run: fastagent login openai --method account --json\./,
+      ),
     });
+    expect(failed).not.toHaveProperty("log_tail"); // no log was written
     // What it reached before it failed is still the person's: where to get the value it stopped for.
     const reached = { instructions: "copy the Verification Token", url: "https://open.larksuite.com/app/cli/event" };
     expect(
@@ -484,9 +505,9 @@ describe("a ticket as its command reports it", () => {
       ).json,
     ).toMatchObject({
       afterwards: [reached],
-      agent_next_steps:
-        "Tell the user what the steps it reached leave them: copy the Verification Token " +
-        "https://open.larksuite.com/app/cli/event To try again, run: fastagent login openai --method account --json",
+      agent_next_steps: expect.stringMatching(
+        /^Tell the user what the steps it reached leave them: copy the Verification Token https:\/\/open\.larksuite\.com\/app\/cli\/event The cause is in log_tail/,
+      ),
     });
     expect(ticketReport({ ...base, status: "expired" }, "checked").json).toMatchObject({
       message: "it was not finished in time",

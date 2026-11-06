@@ -47,6 +47,19 @@ describe("cli: invoke", () => {
     });
   });
 
+  it("a model with no credential here says to sign in or set its key, not what a deployment needs", async () => {
+    const dir = await agent("fa-invoke-auth-");
+    const result = await runInProcess(["invoke", "--model", "openai/gpt-4o-mini", "hello", dir], undefined, {
+      ...process.env,
+      OPENAI_API_KEY: "",
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("failed: auth_required");
+    expect(result.stderr).toContain(
+      "next: sign in with `fastagent login`, or set the provider's API key in .secrets/.env",
+    );
+  });
+
   it("without --session, each run starts a session of its own", async () => {
     const dir = await agent("fa-invoke-fresh-");
     await whileServed(dir, async () => {
@@ -144,6 +157,20 @@ registerHooks({
         env,
       );
       expect([selected.code, selected.stdout.trim()], selected.stderr).toEqual([0, "seen 1 by m2"]);
+    });
+  });
+
+  it("a model the deployment has no credential for says how to give it one, naming the deployment's commands", async () => {
+    await withServedAgent(async (dir, url) => {
+      const env = { ...process.env, OPENAI_API_KEY: "" };
+      const result = await runInProcess(
+        ["invoke", "--url", url, "--key", "the-key", "--model", "openai/gpt-4o-mini", "hello", dir],
+        undefined,
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("failed: auth_required");
+      expect(result.stderr).toContain("next: give the deployment a credential: `fastagent secrets set <host>");
     });
   });
 

@@ -457,7 +457,9 @@ registration is the instance's own where its credentials allow (Telegram, Feishu
 the owner can set it (Slack's Request URL). Finish any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
 host. A deployed agent is reached through its channels and schedules, and on Docker, Fly and Railway through the
 Agent API under `/v1`, whose key `deploy` writes into `.secrets/production/.env` ([The Agent API](deploy.md#the-agent-api)).
-Check the deployment the way you checked the agent: `fastagent invoke --url <the URL deploy reports> "..."`, with the
+A ticket that ends `failed` carries the last lines of its log as `log_tail`: read it for the cause, fix that, then run
+the deploy again ([Troubleshooting](troubleshooting.md#a-deploy-stopped-and-the-message-does-not-say-why) lists the usual
+ones). Check the deployment the way you checked the agent: `fastagent invoke --url <the URL deploy reports> "..."`, with the
 same output and exit code. AgentCore's public webhook URL belongs to its forwarder; its IAM-gated door takes only the
 deploy's `probe`.
 `fastagent logs agentcore --follow` reads runtime logs; `--source forwarder` selects ingress logs.
