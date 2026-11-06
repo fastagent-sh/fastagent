@@ -1,12 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  type RailwayRunPlan,
-  deployRailwayRun,
-  isLinked,
-  linkedName,
-  parseDomainUrl,
-  volumeOn,
-} from "../src/deploy/railway/run.ts";
+import { type RailwayRunPlan, deployRailwayRun, parseDomainUrl, volumeOn } from "../src/deploy/railway/run.ts";
+import { isLinked, linkedName } from "../src/deploy/railway/store.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
@@ -39,9 +33,7 @@ function fakeRailway(script: (args: string[]) => { code?: number; stdout?: strin
 const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   name: "bot",
   mountPath: "/data",
-  secrets: {},
-  missingSecrets: [],
-  valueFile: ".secrets/.env",
+  provideSecrets: async () => undefined,
   channels: [],
   intoLinked: false,
   forAgent: "fastagent deploy railway ../bot --into-linked --run --json",
@@ -84,7 +76,6 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     const out = await run(
       plan({
         channels: declaredChannels(["telegram"]),
-        secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
         deliverPublicUrl: async (url) => {
           delivered.push({ url, before: cmds() });
           return url;
@@ -105,8 +96,6 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "init --name bot",
       "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state", // a bare `add` prompts in a terminal
       "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets --service bot", // first --service cmd, BEFORE the volume
-      "variables set TELEGRAM_BOT_TOKEN --stdin --service bot",
-      "variables set TELEGRAM_SECRET_TOKEN --stdin --service bot",
       "volume list --json",
       "volume add --mount-path /data",
       "volume list --json", // attached to `bot` and Ready before the deploy that needs it
@@ -185,36 +174,37 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(registerFeishu).toHaveBeenCalledWith("https://bot-production.up.railway.app", "feishu");
   });
 
-  it("names the secrets it sets — the list is no longer only what the author typed", async () => {
-    // A mounted tool/channel/schedule declares its own names, so a count is not enough for the
-    // operator to see what `--run` read from this machine and pushed to the host.
-    const { railway } = fakeRailway((args) => {
-      if (args[0] === "status") return { stdout: "" };
-      if (args[0] === "domain") return { stdout: DOMAIN_JSON };
-      return {};
-    });
-    const logs: string[] = [];
-    await deployRailwayRun(
-      plan({ secrets: { OPENAI_API_KEY: "sk", X_API_KEY: "x" } }),
-      railway,
-      (message) => logs.push(message),
-      {},
-      async () => true,
-    );
-    expect(logs.join("\n")).toContain("2 secret(s): OPENAI_API_KEY, X_API_KEY");
-  });
-
-  it("secret values go over stdin (variable set --stdin), never argv", async () => {
+  it("the secrets step runs once the service exists and before its machinery variables, on the service's store", async () => {
     const { railway, calls } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" };
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      if (a[0] === "variable" && a[1] === "list")
+        return { stdout: JSON.stringify({ RAILWAY_ENVIRONMENT: "production" }) };
       return {};
     });
-    await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", GH_TOKEN: "ghp_x" } }), railway);
-    const setKey = calls.find((c) => c.args[0] === "variables" && c.args[2] === "OPENAI_API_KEY")!;
-    expect(setKey.args.join(" ")).not.toContain("sk-x"); // not in argv
-    expect(setKey.args).toContain("--stdin");
-    expect(setKey.input).toBe("sk-x"); // on stdin
+    const seen: string[] = [];
+    await run(
+      plan({
+        provideSecrets: async (store) => {
+          seen.push(...(await store.names()));
+          await store.write({ OPENAI_API_KEY: "sk-x" });
+          return undefined;
+        },
+      }),
+      railway,
+    );
+    const cmds = calls.map((c) => c.args.join(" "));
+    expect(seen).toEqual(["RAILWAY_ENVIRONMENT"]);
+    expect(cmds.indexOf("add --service bot --variables FASTAGENT_STATE_DIR=/data/.state")).toBeLessThan(
+      cmds.indexOf("variable list --json --service bot"),
+    );
+    expect(cmds.indexOf("variables set OPENAI_API_KEY --stdin --skip-deploys --service bot")).toBeLessThan(
+      cmds.indexOf("variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets --service bot"),
+    );
+    // A value goes over stdin, never argv.
+    const setKey = calls.find((c) => c.args[2] === "OPENAI_API_KEY")!;
+    expect(setKey.args.join(" ")).not.toContain("sk-x");
+    expect(setKey.input).toBe("sk-x");
   });
 
   it("--into-linked: provisions INTO the linked project (skips init/add), reuses an existing volume", async () => {
@@ -396,14 +386,15 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(refused.cmds()).toEqual(["whoami"]);
   });
 
-  it("gate: a missing secret value stops before creating infra", async () => {
-    // Signed out as well: no person is asked to sign in for a deploy that stops here anyway.
-    const { railway, cmds } = fakeRailway((a) => (a[0] === "whoami" ? { code: 1 } : {}));
-    const hostLogin = vi.fn(async () => undefined);
-    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"], hostLogin }), railway);
-    expect(out).toEqual({ ok: false, gate: expect.stringContaining("TELEGRAM_BOT_TOKEN") });
-    expect(cmds()).toEqual([]); // not even whoami
-    expect(hostLogin).not.toHaveBeenCalled();
+  it("gate: a name the service lacks stops the run before the upload, with the service already made", async () => {
+    const { railway, cmds } = fakeRailway((a) => (a[0] === "status" ? { stdout: "" } : {}));
+    const out = await run(
+      plan({ provideSecrets: async () => "Railway has no value for: TELEGRAM_BOT_TOKEN" }),
+      railway,
+    );
+    expect(out).toEqual({ ok: false, gate: "Railway has no value for: TELEGRAM_BOT_TOKEN" });
+    expect(cmds()).toContain("add --service bot --variables FASTAGENT_STATE_DIR=/data/.state");
+    expect(cmds().some((c) => c.startsWith("up "))).toBe(false);
   });
 
   it("gate: `railway init` failure surfaces the workspace hint", async () => {

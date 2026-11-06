@@ -11,6 +11,7 @@ import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import {
   environmentAuth,
   interactiveLoginKind,
+  keyVariables,
   loginProviders,
   modelsOver,
   providerOf,
@@ -63,6 +64,11 @@ interface DeployFacts {
    * ({@link credentialRoute}).
    */
   modelAuth: string | undefined;
+  /**
+   * The variables the model's provider reads its key from, and whether the deployment needs one of them set on its
+   * target: when no key is in the value file and the provider has no login to run on the box, the key is the only way in.
+   */
+  modelKey: { variables: string[]; required: boolean };
   /**
    * The provider the deployment must log in to itself (`fastagent login --deployment`): the model's credential does
    * not travel, because it is neither a variable in the value file nor resolved by the definition's own provider code.
@@ -335,11 +341,16 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       valueFile,
     });
   }
+  const modelProvider = modelSpec ? loginProviders(providers).find((p) => p.id === providerOf(modelSpec)) : undefined;
+  const modelKey = {
+    variables: modelProvider ? await keyVariables(modelProvider) : [],
+    required: boxLogin !== undefined && !hasLogin(boxLogin, providers),
+  };
   if (boxLogin !== undefined) {
-    if (!hasLogin(boxLogin, providers)) {
-      report.issue(
-        `no credential for ${modelSpec} reaches the deployment, and "${boxLogin}" has no login to run there — set ` +
-          `its API key in ${valueFile}`,
+    if (modelKey.required) {
+      report.note(
+        `${modelSpec}: "${boxLogin}" has no login to run on the box, so its API key (${modelKey.variables.join(" or ")}) ` +
+          `must be set on the target`,
       );
     } else {
       report.note(
@@ -442,11 +453,12 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     values,
     valueFile,
     modelAuth,
+    modelKey,
     boxLogin,
     container,
     port,
     declaredSecrets,
-    secrets: deploymentSecrets(modelAuth, declaredSecrets, values, valueFile),
+    secrets: deploymentSecrets(modelAuth, declaredSecrets),
   };
 }
 

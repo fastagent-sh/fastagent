@@ -1051,7 +1051,7 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
 describe("preflight: what the definition declares", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("requires what tools DECLARED, and lists the rest of the value file after them", async () => {
+  it("requires what tools DECLARED, and lists nothing else", async () => {
     const dir = await agent({
       "src/tools/x-post.ts": `import { needs } from "@fastagent-sh/fastagent";
 export default needs(["X_API_KEY", "X_API_SECRET"], () => ({
@@ -1073,12 +1073,11 @@ export default needs(["X_API_KEY", "X_API_SECRET"], () => ({
       { name: "X_API_SECRET", declaredIn: "src/tools/x-post.ts", optional: false },
       { name: "GH_HOST", declaredIn: "context.json", description: "the GitHub host gh talks to", optional: false },
     ]);
-    // The runbook names the file to open for a required one, and the value file for the rest.
+    // The runbook names the file to open for each declared name, and no variable a file merely holds (GH_TOKEN).
     expect(pre.secrets).toEqual([
       { name: "X_API_KEY", hint: "required by src/tools/x-post.ts" },
       { name: "X_API_SECRET", hint: "required by src/tools/x-post.ts" },
       { name: "GH_HOST", hint: "required by context.json: the GitHub host gh talks to" },
-      { name: "GH_TOKEN", hint: "from .secrets/.env" },
     ]);
   });
 

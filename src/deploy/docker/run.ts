@@ -4,7 +4,6 @@ import type { BoxLoginStep } from "../box-shell.ts";
 import { waitForHealth } from "../../channels/wait-health.ts";
 import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
-import { missingValuesGate } from "../secrets.ts";
 
 export interface DockerRunPlan {
   /** Compose file relative to the runner cwd (the agent directory). */
@@ -12,14 +11,10 @@ export interface DockerRunPlan {
   /** Container port from config; used to ask Compose for the effective published host port. */
   port: number;
   /**
-   * What `--run` assembled. The container reads the value file itself through the generated `env_file`, so nothing
-   * travels through this process: the names are reported to the operator and otherwise unused.
+   * Make sure the value file Compose reads by `env_file:` holds a value for every name the deployment needs, asking for
+   * the ones it lacks: resolves a gate line, or undefined. Nothing travels through this process.
    */
-  secrets: Record<string, string>;
-  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
-  missingSecrets: string[];
-  /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
-  valueFile: string;
+  provideSecrets: () => Promise<string | undefined>;
   /**
    * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
@@ -131,17 +126,9 @@ export async function deployDockerRun(
     return gate("Docker Compose plugin is unavailable — install/enable `docker compose`, then re-run");
   }
 
-  // The values gate precedes the first side effect (build/create).
-  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
-  if (missingValues) return gate(missingValues);
-
-  // Name what the container must find, and WHERE — the generated Compose reads the value file itself, so this run
-  // hands Compose nothing. Saying "passing N secrets to Compose" would be false, and doubly so on a hand-owned
-  // Compose file that has no `env_file` entry at all.
-  const secretNames = Object.keys(plan.secrets);
-  if (secretNames.length > 0) {
-    log(`${secretNames.length} value(s) the container reads from ${plan.valueFile}: ${secretNames.join(", ")}`);
-  }
+  // The values come before the first side effect (build/create).
+  const secretsGate = await plan.provideSecrets();
+  if (secretsGate !== undefined) return gate(secretsGate);
 
   if ((await docker(["info"], { capture: true })).code !== 0) {
     return gate("Docker daemon is unavailable — start Docker Engine/Desktop, then re-run");

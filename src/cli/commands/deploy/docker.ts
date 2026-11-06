@@ -13,8 +13,12 @@ import {
 import { deployDockerRun } from "../../../deploy/docker/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
-import { assembleSecrets } from "../../../deploy/secrets.ts";
+import { fileStore } from "../../../deploy/file-store.ts";
+import { dotEnvPath } from "../../../value-file.ts";
+import { deploySecrets } from "./secrets-step.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
+import type { DeploymentApi } from "../../../deploy/api.ts";
+import type { ModelKey } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, leftToPerson } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
@@ -42,8 +46,8 @@ export const dockerHost: HostDeploy = {
     if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
     // Compose interpolates `$VAR` INSIDE env_file values (`format: raw` needs Compose 2.30), so a credential
     // containing `$` reaches the container rewritten — silently, and differently from what this pre-flight read.
-    // No escaping advice: this ONE file is also read literally by `dev`/`start` (`parseEnvContent`) and pushed
-    // as-is by every other host, so `$$` would fix Docker by corrupting all of them.
+    // No escaping advice: this ONE file is also read literally by `dev`/`start` (`parseEnvContent`) and is the source
+    // `secrets push` sets every other host's values from, so `$$` would fix Docker by corrupting all of them.
     const dollarValues = [...values].filter(([, value]) => value.includes("$")).map(([name]) => name);
     if (dollarValues.length > 0) {
       console.error(
@@ -69,13 +73,16 @@ export const dockerHost: HostDeploy = {
         composeFile: plan.composePath,
         port,
         modelAuth,
+        modelKey: pre.modelKey,
         boxLogin,
         answerer: ctx.answerer,
+        api: ctx.api,
         channels,
         declaredSecrets,
         values,
         valueFile,
         publicUrl: ownPublicUrl(container.config),
+        config: opts.config,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -89,31 +96,42 @@ async function runDeployDocker(params: {
   composeFile: string;
   port: number;
   modelAuth: string | undefined;
+  modelKey: ModelKey;
   /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
   boxLogin: string | undefined;
   /** Who answers the box's login: `--run` continues into it rather than stopping at "not logged in". */
   answerer: Answerer;
+  api: DeploymentApi;
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
   valueFile: string;
   /** The `http.publicUrl` the configuration names: where the agent points its own webhook channels. */
   publicUrl: string | undefined;
+  /** The `--config` file, named by the commands a gate suggests. */
+  config: string | undefined;
 }): Promise<string | undefined> {
   const { agentDir, composeFile, port, channels } = params;
   const leave = leftToPerson(params.answerer);
-  const { secrets, missingSecrets } = assembleSecrets({
+  const valueFile = dotEnvPath(agentDir);
+  const provide = deploySecrets({
+    host: "docker",
+    label: "Docker",
+    agentDir,
+    opts: { config: params.config },
+    answerer: params.answerer,
+    api: params.api,
     modelAuth: params.modelAuth,
-    declared: params.declaredSecrets,
+    modelKey: params.modelKey,
+    declaredSecrets: params.declaredSecrets,
+    valueFile: params.valueFile,
     values: params.values,
   });
   const outcome = await deployDockerRun(
     {
       composeFile,
       port,
-      secrets,
-      missingSecrets,
-      valueFile: params.valueFile,
+      provideSecrets: () => provide(fileStore(agentDir, valueFile)),
       ...boxLoginStep("docker", params, () => composeShell(composeFile, agentDir)),
     },
     spawnRunner("docker", agentDir),

@@ -124,7 +124,8 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   if (secrets.length > 0) {
     runbook.push(
       ``,
-      `# Secrets (replace each <value>):`,
+      `# Secrets the app needs a value for. \`fastagent secrets push fly\` sets the ones a value file holds and`,
+      `# \`fastagent secrets set fly <NAME>\` one typed without echo; or with flyctl (replace each <value>):`,
       ...secrets.map((s) => `#   ${s.name}: ${s.hint}`),
       `fly secrets set --app ${appName} ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );

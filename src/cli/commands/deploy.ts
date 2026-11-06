@@ -4,15 +4,14 @@
  */
 import { resolve } from "node:path";
 import type { DeployHost } from "../../deploy/hosts.ts";
-import { assembleSecrets, missingValuesGate } from "../../deploy/secrets.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
 import { channelAppNames, prepareChannelApps, unpreparedChannelApps } from "./deploy/channel-apps.ts";
 import { displayPath, selectAgentEnvironment } from "../../paths.ts";
 import { buildProject } from "../../harnesses/pi-durable/build.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
-import { unprotectedSecretsNote } from "../../value-file.ts";
+import { apiReport, deploymentApi } from "../../deploy/api.ts";
+import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
 import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
@@ -142,11 +141,7 @@ async function deploy(
     .catch(failStartup);
   // Never `dev`, whatever spawned this: a channel's way of receiving is chosen as the box will choose it.
   unmarkDevServe();
-  const api = deploymentApi({
-    config,
-    hostServes: host !== "agentcore",
-    values: loadEnvValues(dotEnvPath(agentDir)),
-  });
+  const api = deploymentApi({ config, hostServes: host !== "agentcore" });
   const target = HOSTS[host];
   const preflight = async () => {
     const facts = await preflightDeploy({
@@ -213,16 +208,6 @@ async function deploy(
       const kinds = unprepared.map(({ kind }) => kind);
       const { values } = pre;
       const absent = supplied.filter((name) => !values.get(name)?.trim());
-      const { missingSecrets } = assembleSecrets({
-        modelAuth: pre.modelAuth,
-        declared: pre.declaredSecrets,
-        values: pre.values,
-      });
-      const missing = missingValuesGate(
-        missingSecrets.filter((name) => !supplied.includes(name)),
-        pre.valueFile,
-      );
-      if (missing) failStartup(new Error(`deploy stopped: ${missing}`));
       if (host === "docker" && unprepared.some(({ way }) => way === "webhook")) {
         failStartup(
           new Error(
@@ -249,12 +234,6 @@ async function deploy(
       ).catch(failStartup);
       pre = await preflight();
     }
-    if (api.served && api.generatesKey) {
-      // Past every refusal the pre-flight makes, and read again, so this deploy carries it.
-      const unprotected = await writeApiKey(agentDir).catch(failStartup);
-      if (unprotected !== undefined) console.error(`[fastagent] note: ${unprotectedSecretsNote(unprotected)}`);
-      pre = await preflight();
-    }
     for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
     // The box starts the build, never the source: dist/ is made here, from what the image will hold.
     const built = await buildProject(agentDir).catch(failStartup);
@@ -271,6 +250,7 @@ async function deploy(
       agentDir,
       config,
       pre,
+      api,
       channels,
       webhookChannels: channels.filter((channel) => channel.ingress === "webhook"),
       // The ownership predicate is bound HERE, from the same lookup that chose the host, so no host module can pass
@@ -294,7 +274,8 @@ async function deploy(
         await applyArtifactPlan(plan);
       },
     });
-    const notes = apiReport(api, { valueFile: pre.valueFile, agentArg }, reachedAt);
+    const keyInFile = apiKeysFrom(loadEnvValues(dotEnvPath(agentDir)).get(API_KEY_VARIABLE)).length > 0;
+    const notes = apiReport(api, { valueFile: pre.valueFile, agentArg, keyInFile, run: !!opts.run }, reachedAt);
     for (const line of notes) console.error(`[fastagent] ${line}`);
     return { ...(reachedAt === undefined ? {} : { url: reachedAt }), notes };
   };

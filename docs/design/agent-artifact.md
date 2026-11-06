@@ -623,18 +623,28 @@ chunked carriers, Compose rewriting `$` in values, gates for a value that differ
 | AgentCore | one JSON secret in Secrets Manager per deployment | the secret's keys |
 | `fastagent start`, an embedding app | `--env-file`, the environment, `openAgent({ secrets })` (§4.1) | — |
 
-`fastagent secrets set <host> <NAME>` writes one value: at a terminal it asks without echoing, otherwise it reads
-standard input, never the command line. `fastagent secrets push <host> --env-file <file>` writes every value a file
-holds, the batch form for CI (`wrangler secret bulk`'s counterpart). `fastagent secrets list <host>` prints the declared
-names and which the target has. `--generate` sets a random value and prints it once, for the values FastAgent itself
-mints, such as `FASTAGENT_API_KEY`.
+No platform has a person type a deployment's values one at a time: Wrangler, Fly, Railway, Vercel, Render and SST all
+take a batch from a file (`wrangler secret bulk`, `fly secrets import`, `railway variable import`, a pasted `.env`), and
+Kamal's secrets come from a password manager at deploy time. The first deploy is therefore a batch from a source, and
+only a name no source has is asked for.
 
-`deploy --run` lists the target's names before its first build, once the app or service it sets values on exists (on
-Fly and Railway, creating one is the first step and is repeatable). For each missing name it reports what it is for,
-where it is declared and whether it is optional, and the command that sets it. At a terminal it asks for each value
-then and there and sets it; with `--json` the ticket waits as `need_user_action` with those commands, saying the
-person runs them in a terminal and the agent never asks for a value in the conversation, and carries on once the names
-are present; with nobody to ask, it stops with the same list.
+`fastagent secrets set <host> <NAME>` writes one value: at a terminal it asks without echoing, otherwise it reads
+standard input, never the command line. `fastagent secrets push <host>` writes, in one batch, every *declared* name its
+source holds (`wrangler` likewise loads only `secrets.required` from `.dev.vars`): `--env-file <file>`, else
+`--from-env`, else the production value file `.secrets/production/.env`, which exists for `start` and is Docker's store
+already. `--from-env` reads the environment of the command that injected the values, so a secret manager (`op run`,
+`doppler run`, `infisical run`, `dotenvx run`) or a CI job joins in with no adapter of ours. `fastagent secrets list
+<host>` prints the declared names and which the target has. `--generate` sets a random value and prints it once.
+`set` and `push` create the Fly app or Railway service when it does not exist, so a CI job can push before its first
+deploy (as `wrangler secret put` creates its Worker).
+
+`deploy --run` lists the target's names once the app or service it sets values on exists (on Fly and Railway, creating
+one is the first step and is repeatable), before it builds. For each missing name it reports what it is for, where it is
+declared and whether it is optional, and the commands that set it. At a terminal it asks one question to set the
+names the production file holds, then each remaining value typed without echo. In a coding agent's deploy, or with nobody
+to ask, it stops with the commands (the ticket fails with them; the person runs them in a terminal, the agent never asks
+for a value in the conversation, and the deploy is run again). A value FastAgent makes itself (the Agent API's key) is
+set on the target by the deploy when neither the target nor the file has one, and kept in the file for `invoke --url`.
 
 What `deploy` read values for becomes a name or configuration:
 
@@ -650,8 +660,8 @@ What `deploy` read values for becomes a name or configuration:
   §5).
 - **A channel's platform app** is set up per instance by `fastagent channels setup <name>`, which writes its
   credentials to the target's store; `deploy` runs it for a target that lacks them ([channel-setup.md](channel-setup.md)
-  §2). The check that a production Feishu or Lark app is not the development one runs at that setup, which holds both
-  App IDs; an app set by hand is the operator's to keep apart.
+  §2). Nothing refuses a production app that is the development one: two instances on one app are documented, as for
+  Telegram and Slack.
 
 The production value file stays what local `start` reads and Docker's store; another host's values are set with
 `fastagent secrets`.

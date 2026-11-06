@@ -444,8 +444,10 @@ an approved region, and local Docker/buildx for its arm64 image. `fastagent depl
 the CloudFormation topology, forwarder, and clock wiring required by the definition; `--run` provisions
 and verifies it. Review [Deploy](deploy.md) before authorizing resource creation or cost.
 
-Put the model in config and every value the deployment needs in `.secrets/production/.env`; `deploy` carries the whole
-file, never the dev one. A
+Put the model in config. The values the deployment needs live on its target: `fastagent secrets list <host>` shows
+which names are missing, and `fastagent secrets push <host>` sets the ones `.secrets/production/.env` holds (never the dev
+file); the owner types the others with `fastagent secrets set <host> <NAME>`, since you never ask for a value in the
+conversation. A
 model without an API key there (an OAuth subscription) is logged in on the deployment by the owner. Deploy with
 `fastagent deploy <host> --run --json`: it returns a ticket, and `fastagent deploy <host> --check <ticket>` reports
 `working`, a `need_user_action` for each step only the owner can take (signing the host's CLI in, confirming a

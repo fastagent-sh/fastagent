@@ -51,11 +51,11 @@ own. See [`fastagent deploy`](cli.md#commands).
 | Requirement | How |
 |---|---|
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
-| **`.secrets/production/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`needs([...])`), the variables `context.json` declares, and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
-| **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable in `.secrets/production/.env` travels, and so does a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
+| **The target holds the values** | On Fly and Railway the values live in the target's own store (Fly secrets, the service's variables), on Docker in `.secrets/production/.env`, which Compose reads. `--run` checks names, never carries a file: the names declared by code (`needs([...])`), the variables `context.json` declares and a model key with no login to fall back on must have a value on the target, or `--run` stops before building. At a terminal it asks: the names `.secrets/production/.env` holds are set there from it after one question, the rest are typed without echo. In a coding agent's deploy, or in CI, it stops naming `fastagent secrets push <host>` and `fastagent secrets set <host> <NAME>`; run them, then re-run. A variable the definition does not declare is not pushed. AgentCore still carries the file; it moves to Secrets Manager next. See [Secrets](cli.md#fastagent-secrets). |
+| **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable is a name the target may hold (set it with `fastagent secrets`), and so is a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Something reaches it** | A channel, a schedule, or the [Agent API](#the-agent-api). A deployment with none of them is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
 | **Durable storage** | Docker, Fly and Railway make a volume at `/data` the agent's working directory, holding `.state/`, `.secrets/`, `content/` and what the agent writes. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
-| **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/production/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A directory in the configuration `--config` delivers is refused: the host has no such path. Copy what the agent only reads into the agent directory, outside `content/`, which every release ships; move what it works on and must keep to a repository. |
+| **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` (set it like any other value, with `fastagent secrets`), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A directory in the configuration `--config` delivers is refused: the host has no such path. Copy what the agent only reads into the agent directory, outside `content/`, which every release ships; move what it works on and must keep to a repository. |
 
 ### Reproduce it here first
 
@@ -73,9 +73,9 @@ an amd64 host) is not caught here.
 ## The Agent API
 
 Docker, Fly and Railway deployments serve the [Agent API](SPEC.md#9-http) under `/v1`, behind
-`FASTAGENT_API_KEY`. When `.secrets/production/.env` holds none, `deploy` generates one there once the pre-flight
-passes, and it travels with the other values; a host's own check that stops that deploy afterwards (a stale artifact,
-a missing `flyctl`) leaves the key for the next. The report names the API's URL and the check:
+`FASTAGENT_API_KEY`. When neither the target nor `.secrets/production/.env` has one, `--run` makes one, sets it on the
+target and keeps it in that file, where `invoke --url` reads it; `fastagent secrets set <host> FASTAGENT_API_KEY
+--generate` does the same by hand and prints the key once. The report names the API's URL and the check:
 
 ```bash
 fastagent invoke --url https://<app>.fly.dev "hello"
@@ -158,8 +158,8 @@ A coding agent runs `fastagent login <provider> --method account --deployment <h
 the sign-in's address (and a device code) for its user, and a ticket: a process of its own holds the box's shell,
 catches the browser's return to `localhost` on this machine, and takes the address from `login --check <ticket>
 --code <address>` when the browser is elsewhere. `login --check <ticket>` reports `done` once the box holds the login.
-For an API key it names the variable to set in `.secrets/production/.env`; the next `deploy <host> --run` carries it,
-unless the box already holds an account sign-in for that provider, which outranks it (below).
+For an API key it names the variable to set on the target (`fastagent secrets set <host> <NAME>`);
+the box uses it unless it already holds an account sign-in for that provider, which outranks it (below).
 
 `deploy --run` asks the box once it answers `/health` and before it reads the webhooks' outcomes: the box keeps a
 credential it already authenticates the model's provider with (a login it holds, unexpired or refreshable; a

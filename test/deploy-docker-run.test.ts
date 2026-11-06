@@ -22,9 +22,7 @@ function fakeDocker(script: (args: string[]) => { code?: number; stdout?: string
 const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   composeFile: "fastagent.compose.yml",
   port: 8787,
-  secrets: {},
-  missingSecrets: [],
-  valueFile: "fastagent/.secrets/.env",
+  provideSecrets: async () => undefined,
   ...override,
 });
 
@@ -159,7 +157,7 @@ describe("deploy/docker/run: local Compose journey", () => {
       if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
       return {};
     });
-    await deployDockerRun(plan({ secrets: { OPENAI_API_KEY: "sk-secret" } }), docker, () => {}, healthy);
+    await deployDockerRun(plan(), docker, () => {}, healthy);
 
     expect(calls.some((call) => call.args.join(" ").includes("sk-secret"))).toBe(false);
     const up = calls.find((call) => call.args.includes("up"))!;
@@ -167,25 +165,16 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(up.env).toBeUndefined();
   });
 
-  it("names the values the container must find, and the file it reads them from", async () => {
-    // A mounted tool/channel/schedule declares its own names, so the list has to be visible, not a count. It is
-    // NOT "passing N secrets to Compose": the container reads the value file itself, and a hand-owned Compose
-    // file may have no `env_file` entry at all — saying we handed them over would be false.
-    const { docker } = fakeDocker((args) => {
-      if (args.includes("--services")) return { stdout: "agent\n" };
-      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
-      return {};
-    });
-    const logs: string[] = [];
-    await deployDockerRun(
-      plan({ secrets: { OPENAI_API_KEY: "sk", X_API_KEY: "x" } }),
+  it("asks for the values before the first side effect: a name it lacks stops the run with nothing built", async () => {
+    const { docker, commands } = fakeDocker();
+    const out = await deployDockerRun(
+      plan({ provideSecrets: async () => "Docker has no value for: BOT_TOKEN" }),
       docker,
-      (message) => logs.push(message),
+      () => {},
       healthy,
     );
-    expect(logs.join("\n")).toContain(
-      "2 value(s) the container reads from fastagent/.secrets/.env: OPENAI_API_KEY, X_API_KEY",
-    );
+    expect(out).toEqual({ ok: false, gate: "Docker has no value for: BOT_TOKEN" });
+    expect(commands().some((c) => c.includes("up") || c.includes("build"))).toBe(false);
   });
 
   it("accepts a running custom topology with no host-published port (operator-owned ingress)", async () => {
@@ -218,7 +207,6 @@ describe("deploy/docker/run: local Compose journey", () => {
         script: (args) => (args[0] === "compose" && args[1] === "version" ? { code: 1 } : {}),
         gate: /Compose plugin/,
       },
-      { name: "secret", override: { missingSecrets: ["BOT_TOKEN"] }, gate: /BOT_TOKEN/ },
       {
         name: "daemon",
         script: (args) => (args[0] === "info" ? { code: 1 } : {}),
