@@ -308,7 +308,7 @@ webhook servers, token refresh loops, or reply pipelines:
 
 | Channel | Command from the agent directory | Owner action and reference |
 |---|---|---|
-| Telegram | `fastagent add telegram` | Supply the bot token and webhook verification secret. [Telegram](telegram.md) |
+| Telegram | `fastagent add telegram` | Supply the bot token (a webhook deployment also needs its verification secret). [Telegram](telegram.md) |
 | Slack | `fastagent add slack --json` | Paste an App Configuration token pair on the page it returns, then click Allow on Slack's install page. [Slack](slack.md) |
 | Feishu | `fastagent add feishu --json` | Confirm the new app at the address it returns, then publish its version in the console. [Feishu](feishu.md) |
 | Lark | `fastagent add lark --json` | Open the page it returns, create the app in the international console, and paste its App ID and App Secret on that page. [Lark compatibility](feishu.md) |

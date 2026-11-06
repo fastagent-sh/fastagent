@@ -1,12 +1,12 @@
 ---
 title: Telegram channel
-description: "Serve your agent as a Telegram bot: setup, webhook registration, live streamed replies, group-chat behavior, and durable at-least-once turn replay."
+description: "Serve your agent as a Telegram bot: long polling or webhook, live streamed replies, group-chat behavior, and durable at-least-once turn replay."
 status: current
 ---
 
 # Telegram channel
 
-The Telegram channel turns a Telegram Bot API webhook update into a message to the agent and sends the agent's reply back to the chat.
+The Telegram channel turns a Telegram Bot API update, polled or sent to a webhook, into a message to the agent and sends the agent's reply back to the chat.
 
 Telegram is request/reply: the channel holds the bot token, streams a live preview message while the turn runs, and edits it into the final answer.
 
@@ -21,7 +21,7 @@ fastagent add telegram
 This creates:
 
 ```txt
-src/channels/telegram.ts      # inbound webhook adapter + routing policy
+src/channels/telegram.ts      # inbound adapter (long polling or webhook) + routing policy
 src/tools/telegram-send.ts    # optional outbound send tool for the agent (message or file)
 ```
 
@@ -35,45 +35,55 @@ Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token i
 TELEGRAM_BOT_TOKEN=...
 ```
 
-`fastagent add telegram` writes a generated `TELEGRAM_SECRET_TOKEN` to `.secrets/.env` (gitignored by the scaffolded `.secrets/.gitignore`). If it could not write one, add it yourself:
+That is all `fastagent dev` needs: it polls Telegram (`getUpdates`), so there is no public URL, no tunnel and no webhook
+secret. Message the bot.
 
-```bash
-TELEGRAM_SECRET_TOKEN=... # any random string; verifies inbound updates
-```
+## Long polling or webhook
 
-For local webhook testing:
+How the channel receives is the instance's choice, `channels.telegram.ingress` in its configuration (`webhook` or
+`connection`, which for Telegram is long polling; `add telegram --ingress` writes it). Unset, `dev` polls and everything
+else receives by webhook, since a host that scales to zero is woken by a request.
 
-```bash
-fastagent dev --tunnel
-```
+- **Long polling** needs only `TELEGRAM_BOT_TOKEN`. It takes the bot's webhook away first (`getUpdates` does not work
+  while one is set) and says so. A bot is polled by one process or reached by one webhook, never both: a second process
+  polling the same bot gets a 409 from Telegram, and the connection ends with `another process polls this bot` after three
+  retries, five seconds apart. A network failure after it is running is retried with a growing wait; a refused token or a
+  webhook set under the poll ends it with the reason.
+- **Webhook** also needs `TELEGRAM_SECRET_TOKEN`, any random string that verifies inbound updates
+  (`add telegram --ingress webhook` generates one into `.secrets/.env`, gitignored by the scaffolded
+  `.secrets/.gitignore`). At a public URL, `https://<host>/telegram`, the instance points Telegram at itself on every
+  start (`http.publicUrl`); see [Deploy](deploy.md).
 
-When `cloudflared` is installed, FastAgent opens a public HTTPS URL and calls Telegram `setWebhook` using the env vars above.
-
-For production, set the webhook URL yourself or run behind a stable public HTTPS endpoint:
-
-```txt
-https://<host>/telegram
-```
+To try the webhook path locally, name `webhook` for the channel in the dev instance's `fastagent.json` and add
+`--tunnel`: with `cloudflared` installed, FastAgent opens a public HTTPS URL and calls `setWebhook` with it. The tunnel
+itself is independent of how a channel receives.
 
 ## Scaffolded channel
 
 A minimal channel module looks like this:
 
 ```ts
-import { needs } from "@fastagent-sh/fastagent";
-import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
+import { byIngress, needs } from "@fastagent-sh/fastagent";
+import { telegramChannel, telegramPollingChannel } from "@fastagent-sh/fastagent/telegram";
 
-export default needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) =>
-  telegramChannel({
-    secretToken: secrets.TELEGRAM_SECRET_TOKEN,
-    botToken: secrets.TELEGRAM_BOT_TOKEN,
-    // Optional. The scaffold uses this for development transparency.
-    onError: (failed) => `⚠️ ${failed.details}`,
-  }),
-);
+// Optional. The scaffold uses this for development transparency.
+const onError = (failed: { details: string }) => `⚠️ ${failed.details}`;
+
+export default byIngress({
+  webhook: needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) =>
+    telegramChannel({
+      secretToken: secrets.TELEGRAM_SECRET_TOKEN,
+      botToken: secrets.TELEGRAM_BOT_TOKEN,
+      onError,
+    }),
+  ),
+  connection: needs(["TELEGRAM_BOT_TOKEN"], (secrets) =>
+    telegramPollingChannel({ botToken: secrets.TELEGRAM_BOT_TOKEN, onError }),
+  ),
+});
 ```
 
-Both `secretToken` and `botToken` are required. Construction fails if either is empty, so a public endpoint never silently accepts forged updates or fails later without a bot token.
+`botToken` is required, and `secretToken` too for `telegramChannel`. Construction fails if either is empty, so a public endpoint never silently accepts forged updates or fails later without a bot token. The two channels take the same policy options (`route`, `onError`, `botUsername`); a channel that only ever receives one way can default-export `telegramChannel` or `telegramPollingChannel` alone.
 
 ## Routing policy
 
@@ -94,7 +104,7 @@ A group is one shared conversation (`<chat>`, or `<chat>:<thread>` in a topic), 
 - **Serialized turns.** Concurrent summons in the same conversation run one at a time (FIFO) — the right UX when several people talk in one group. Different conversations still run in parallel.
 - **Queue feedback.** A summon that lands while the session is busy gets an immediate "⏳ Queued" notice (reply-quoted to the asker, so a group sees whose ask is waiting); when its turn starts, the live preview edits that same message in place — the notice morphs into the answer, no orphan messages. Not group-specific: any busy conversation answers this way, including a private chat with two quick asks.
 - **Sender attribution.** Each message is prefixed with its sender, and a group is flagged in the prompt, so the model can tell participants apart and answer "summarize the discussion".
-- **Context buffer.** The channel keeps a small per-chat buffer of recent **un-summoned** messages (bounded by a character budget; the oldest are dropped) and folds it into the next answered turn — annotated with message ids and reply relations, so "the one Alex replied to" resolves. Attachments posted without summoning ride along too: the next summon downloads the most recent few files (readable by the agent's tools) and includes recent photos as vision inputs (photos ride along without per-photo attribution — the fold marks every attachment line with `[photo]`/`[document: …]` next to its sender, caption or not), so "summarize the file from earlier" actually works; a stale or cap-skipped earlier attachment is counted in a visible note instead of silently missing or failing the ask. The buffer is durable: persisted before each webhook ACK and reloaded on start, so a restart keeps the discussion; folded discussion lives in the session, in the instance's storage.
+- **Context buffer.** The channel keeps a small per-chat buffer of recent **un-summoned** messages (bounded by a character budget; the oldest are dropped) and folds it into the next answered turn — annotated with message ids and reply relations, so "the one Alex replied to" resolves. Attachments posted without summoning ride along too: the next summon downloads the most recent few files (readable by the agent's tools) and includes recent photos as vision inputs (photos ride along without per-photo attribution — the fold marks every attachment line with `[photo]`/`[document: …]` next to its sender, caption or not), so "summarize the file from earlier" actually works; a stale or cap-skipped earlier attachment is counted in a visible note instead of silently missing or failing the ask. The buffer is durable: persisted before the update is acknowledged (a webhook's 200, or the next `getUpdates` offset) and reloaded on start, so a restart keeps the discussion; folded discussion lives in the session, in the instance's storage.
 
 The buffer needs Telegram **group privacy mode off** (@BotFather → `/setprivacy` → Disable) to receive un-summoned messages at all. The channel resolves the bot's privacy flag once at startup and warns when it is on.
 
@@ -104,6 +114,7 @@ import { defaultTelegramRoute, telegramChannel, telegramEnvelope } from "@fastag
 
 const botUsername = "my_bot";
 
+// The policy is the same for both ways; this shows the webhook way, and `telegramPollingChannel` takes it unchanged.
 export default needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) =>
   telegramChannel({
     secretToken: secrets.TELEGRAM_SECRET_TOKEN,

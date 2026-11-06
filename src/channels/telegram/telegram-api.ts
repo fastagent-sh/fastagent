@@ -21,6 +21,7 @@ import { basename } from "node:path";
 import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
 import { attachmentPath } from "../kit/attachment-path.ts";
 import type { CallOptions } from "../kit/transport.ts";
+import type { TelegramUpdate } from "./parse.ts";
 
 /** Telegram's hard text limit per message. */
 export const TELEGRAM_MAX_TEXT = 4096;
@@ -78,15 +79,25 @@ interface Api {
   getMe: { username?: string; can_read_all_group_messages?: boolean };
   getFile: { file_path?: string; file_size?: number };
   setWebhook: unknown;
+  deleteWebhook: unknown;
+  getWebhookInfo: { url?: string };
+  getUpdates: TelegramUpdate[];
+}
+
+/** What a Telegram call may be told beyond the shared budget: a longer wait (a long poll) and a way to be cut short. */
+export interface TelegramCallOptions extends CallOptions {
+  /** Replaces the per-attempt timeout; a long poll must outlast the wait it asks Telegram for. */
+  readonly timeoutMs?: number;
+  /** Ends the call early, as a failure the caller reads as its own cancellation. */
+  readonly signal?: AbortSignal;
 }
 
 /** A named Bot API failure. `status` 0 = the transport itself failed (network error / timeout) before
  *  any HTTP status existed; otherwise the HTTP status with Telegram's own description (or a note that
- *  the body carried no usable answer). Module-private: no EXTERNAL caller matches on the type; it
- *  stays a typed class (not a plain Error) because this module's own retry logic — sendMessage's
- *  parse-mode fallback, editMessageText's "not modified" swallow — does `instanceof` + reads
- *  `.description`. */
-class TelegramApiError extends Error {
+ *  the body carried no usable answer). A typed class (not a plain Error) because callers tell failures apart:
+ *  sendMessage's parse-mode fallback, editMessageText's "not modified" swallow, and the long poll's reading of a
+ *  401 or a 409 — each does `instanceof` + reads `.status` / `.description`. */
+export class TelegramApiError extends Error {
   readonly method: string;
   readonly status: number;
   readonly description: string;
@@ -106,6 +117,10 @@ class TelegramApiError extends Error {
   }
 }
 
+/** The per-attempt timeout, also ended by the caller's own signal when it gave one. */
+const withCancel = (timeout: AbortSignal, cancel: AbortSignal | undefined): AbortSignal =>
+  cancel === undefined ? timeout : AbortSignal.any([timeout, cancel]);
+
 /** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers. */
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -119,7 +134,7 @@ export async function callApi<M extends keyof Api>(
   method: M,
   /** JSON params, or a multipart form for an upload (a file's bytes; its own, longer timeout). */
   params: Record<string, unknown> | FormData,
-  opts: CallOptions = {},
+  opts: TelegramCallOptions = {},
 ): Promise<Api[M]> {
   const retries = opts.retries ?? RETRIES;
   const upload = params instanceof FormData;
@@ -132,7 +147,10 @@ export async function callApi<M extends keyof Api>(
         ...(upload
           ? { body: params }
           : { headers: { "content-type": "application/json" }, body: JSON.stringify(params) }),
-        signal: AbortSignal.timeout(upload ? DOWNLOAD_TIMEOUT_MS : API_TIMEOUT_MS),
+        signal: withCancel(
+          AbortSignal.timeout(opts.timeoutMs ?? (upload ? DOWNLOAD_TIMEOUT_MS : API_TIMEOUT_MS)),
+          opts.signal,
+        ),
       });
       raw = await res.text(); // the body read shares the timeout — a mid-body stall is a transport failure too
     } catch (e) {

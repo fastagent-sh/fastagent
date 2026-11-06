@@ -454,7 +454,7 @@ fastagent add lark [agent]     # Lark international: console + credential valida
 
 Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion tools (`src/tools/<kind>-send.ts`, and
 `src/tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), appends variables to
-`.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
+`.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` (for a channel that receives by webhook) to `.secrets/.env`. Re-run
 `add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
 `--env production` selects `.secrets/production/.env` and `.fastagent/start/.state` without changing dev credentials.
 `deploy --run` creates the separate Feishu/Lark production app automatically, at a terminal or, with `--json`, for a

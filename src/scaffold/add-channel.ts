@@ -43,7 +43,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot", required: true },
       {
         name: "TELEGRAM_SECRET_TOKEN",
-        hint: "any random string; verifies inbound updates",
+        hint: "webhook only: any random string; verifies inbound updates",
         required: true,
         generate: true,
       },
@@ -133,6 +133,15 @@ const DEPLOYMENT_STEP =
   "run `{serve}` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and " +
   "`deploy --run` creates a separate production app for it";
 
+const pollingSetup = (): ChannelScaffold => ({
+  env: CHANNEL_SCAFFOLDS.telegram.env.filter((entry) => entry.name === "TELEGRAM_BOT_TOKEN"),
+  steps: [
+    "edit {channel} — customise routing with route() (optional; the defaults already work)",
+    "a deployment receives by webhook unless the configuration `deploy --config` delivers names `connection`",
+    "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
+  ],
+});
+
 const websocketSetup = (kind: "feishu" | "lark"): ChannelScaffold => {
   const prefix = kind.toUpperCase();
   return {
@@ -157,8 +166,10 @@ export function channelSetup(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
 ): { env: ChannelEnv[]; steps: string[] } {
-  if (ingress !== "connection" || (kind !== "feishu" && kind !== "lark")) return CHANNEL_SCAFFOLDS[kind];
-  return websocketSetup(kind);
+  if (ingress !== "connection") return CHANNEL_SCAFFOLDS[kind];
+  if (kind === "telegram") return pollingSetup();
+  if (kind === "feishu" || kind === "lark") return websocketSetup(kind);
+  return CHANNEL_SCAFFOLDS[kind];
 }
 
 /**
