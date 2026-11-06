@@ -109,6 +109,39 @@ describe("slack socket mode: connecting", () => {
     expect(socket.url).toBe("wss://wss.test/link/?ticket=1");
   });
 
+  it("says which app it connected to and what its events depend on, once, at the first hello", async () => {
+    const info = vi.spyOn(log, "info").mockImplementation(() => {});
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const fake = slack();
+    const { connection } = connect(fake);
+    const first = await greeted(fake);
+    await connection.ready;
+    expect(info).toHaveBeenCalledWith(
+      "[slack] Socket Mode connected to app A1; events arrive only while Socket Mode is on in the app's settings",
+    );
+    expect(warn).not.toHaveBeenCalled();
+    // A refresh opens a second connection by design: it is not another process, and it is not said again.
+    first.say({ type: "disconnect", reason: "refresh_requested" });
+    const second = await greeted(fake, 1);
+    second.say({ ...hello, num_connections: 2 });
+    await vi.waitFor(() => expect(first.closed).toBe(true));
+    expect(info.mock.calls.filter(([line]) => String(line).includes("Socket Mode connected"))).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns when another connection is open for the app at the start, since Slack splits events between them", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    vi.spyOn(log, "info").mockImplementation(() => {});
+    const fake = slack();
+    const { connection } = connect(fake);
+    await vi.waitFor(() => expect(fake.sockets).toHaveLength(1));
+    (fake.sockets[0] as FakeSocket).say({ ...hello, num_connections: 2 });
+    await connection.ready;
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("2 connections are open for this app, and Slack splits its events between them"),
+    );
+  });
+
   it("ends with the reason when the token is refused, before it ever connected", async () => {
     const { connection } = connect(slack([{ ok: false, error: "invalid_auth" }]));
     await expect(connection.ready).rejects.toThrow("apps.connections.open failed: invalid_auth");

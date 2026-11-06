@@ -108,6 +108,8 @@ class TerminalSocketError extends Error {}
 /** One open connection: what ended it is what its `ended` says. */
 interface Connection {
   socket: SlackSocket;
+  /** What Slack's `hello` said of this app: its id, and how many connections it has open (this one included). */
+  hello: { appId?: string; connections?: number };
   /**
    * `refresh`: Slack said it is about to replace this one. `lost`: it is gone, or stopped answering. Rejects with the
    * reason when no retry can fix it.
@@ -243,8 +245,13 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
             stopWatching();
             helloed = true;
             ping();
+            const info = envelope.connection_info as { app_id?: unknown } | undefined;
             resolve({
               socket,
+              hello: {
+                ...(typeof info?.app_id === "string" ? { appId: info.app_id } : {}),
+                ...(typeof envelope.num_connections === "number" ? { connections: envelope.num_connections } : {}),
+              },
               ended: ended.promise,
               close: () => {
                 finish("lost");
@@ -278,6 +285,25 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
       });
     });
 
+  /**
+   * Slack answers `apps.connections.open` and says `hello` whether or not Socket Mode is on for the app, and sends
+   * events only while it is, so a connection that is "ready" can be deaf with nothing to say so. The first `hello` is
+   * where to say which app this is and what it depends on. Slack also splits an app's events among its connections, so
+   * another one open at the start (another process, another developer) takes some of them.
+   */
+  const announce = ({ appId, connections }: Connection["hello"]): void => {
+    log.info(
+      `[slack] Socket Mode connected${appId ? ` to app ${appId}` : ""}; events arrive only while Socket Mode is on in ` +
+        "the app's settings",
+    );
+    if (connections !== undefined && connections > 1) {
+      log.warn(
+        `[slack] ${connections} connections are open for this app, and Slack splits its events between them: ` +
+          "another process uses the same app-level token, so this one will miss some messages",
+      );
+    }
+  };
+
   const run = async (): Promise<void> => {
     let current: Connection | undefined;
     let waitMs = retryFirstMs;
@@ -298,6 +324,7 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
         current?.close();
         current = next;
         waitMs = retryFirstMs;
+        if (!isReady) announce(next.hello);
         markReady();
         const outcome = await new Promise<"refresh" | "lost">((resolve, reject) => {
           const stopWatching = whenAborted(signal, () => resolve("lost"));

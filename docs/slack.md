@@ -162,6 +162,10 @@ growing wait. What retrying cannot fix ends the serve with its reason: a refused
 `token_revoked`, …), Socket Mode turned off for the app (`link_disabled`), or a start that cannot connect. An event
 that cannot be taken (Slack authentication unavailable) is left unacknowledged, and Slack sends it again.
 
+"Ready" means Slack accepted the token, not that events flow: with Socket Mode off in the app's settings a new
+connection is accepted and receives nothing, and nothing says so (see
+[troubleshooting](troubleshooting.md#slack-socket-mode-is-connected-but-nothing-answers)).
+
 ## Scaffolded channel
 
 ```ts

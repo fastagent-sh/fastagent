@@ -232,6 +232,20 @@ rotation/update fails, re-run `fastagent add slack` and choose **Replace App Con
 does not replace the installed Bot Token. A scaffold created with `--no-onboard`, or a missing onboarding
 state file, deliberately falls back to printing the manual Slack console URL.
 
+## Slack Socket Mode is connected but nothing answers
+
+`long connection ready: slack socket mode` means Slack accepted the app-level token and said hello; it does **not** mean
+events will arrive. Slack answers the connection the same way whether or not Socket Mode is on for the app, and sends
+events only while it is on (with it off, they go to the app's Request URL, which a Socket Mode app does not have). It
+says so only to a connection that was already open when the switch was turned off (`link_disabled`, which ends the
+serve), so a process started afterwards is connected and deaf. The first line of the connection names the app
+(`Socket Mode connected to app A…`): open that app → **Socket Mode** → **Enable Socket Mode**, and check it is the app
+whose tokens are in `.secrets/.env`.
+
+The same line is followed by a warning when other connections are already open for the app: Slack hands each event to
+one of them at random, so a second process with the same app-level token (another `dev`, a colleague's) takes some of
+the messages. Give each instance its own app, or stop the other.
+
 ## Slack file input fails
 
 The app needs `files:read`. Slack Connect, deleted files, Canvas/remote files without downloadable bytes,
