@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -158,6 +159,18 @@ describe("telegram long polling", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("getUpdates failed, retrying in 0.001s"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("retrying in 0.002s"));
     expect(api.calls("getUpdates").length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("does not leave a listener on the signal for each wait it has made", async () => {
+    vi.spyOn(log, "warn").mockImplementation(() => {});
+    const api = botApi({
+      getWebhookInfo: [ok({})],
+      getUpdates: [ok([]), ...Array.from({ length: 14 }, () => fail(502, "Bad Gateway"))],
+    });
+    const { abort } = poll(() => {});
+    await vi.waitFor(() => expect(api.calls("getUpdates").length).toBeGreaterThanOrEqual(15));
+    // Node warns past ten, and a signal lives as long as the connection.
+    expect(getEventListeners(abort.signal, "abort").length).toBeLessThanOrEqual(2);
   });
 
   it("a second process polling the same bot is asked again three times, then ends the connection", async () => {
