@@ -2,14 +2,16 @@
 title: A channel's platform app, set up per instance
 description: "`add` changes the program; `channels setup` binds an instance to its Slack, Feishu, Lark or Telegram app, keeps each credential with its holder, and the platform stays pointed at the instance with no developer credential."
 type: design-doc
-status: proposed
-updated: 2026-11-05
+status: partly implemented (steps 1-3 and 4a)
+updated: 2026-11-06
 ---
 
 # A channel's platform app, set up per instance
 
-**Status: proposed (#900, stage C).** Not implemented. Where this and the code disagree, the code is current behavior
-and this is the target. It changes [channel-environments.md](channel-environments.md) §3–§4 and builds on
+**Status: partly implemented (#900, stage C).** Steps 1-3 and 4a of §10 are built: `channels setup` for Telegram and
+Slack, the instance registering itself, `connection` for Slack and Telegram. Not built: Feishu and Lark in `channels
+setup` (4b), `dev` setting up on first run and the ignored `fastagent.json` (4c), and `--host` (it comes with
+`fastagent secrets`). Where this and the code disagree, the code is current behavior and this is the target. It changes [channel-environments.md](channel-environments.md) §3–§4 and builds on
 [agent-artifact.md](agent-artifact.md) §6.2 (a deployment's values are the target's state).
 
 ## 1. The problem
@@ -234,6 +236,8 @@ app itself through hooks.
   the OS keychain for every credential FastAgent keeps, decided with where credentials live.
 
 ## 10. Delivery
+
+Done: 1, 2, 3 and 4a. Left: 4b and 4c.
 
 1. The SPEC: `http.publicUrl`, `Service.registerWebhooks()`, `Service.webhooks` and `/health` (#932);
    `channels.<name>.app` as the binding with its verified `url`.
