@@ -313,7 +313,8 @@ webhook servers, token refresh loops, or reply pipelines:
 | Feishu | `fastagent add feishu`, then `fastagent channels setup feishu --json` | Confirm the new app at the address it returns, then publish its version in the console. [Feishu](feishu.md) |
 | Lark | `fastagent add lark`, then `fastagent channels setup lark --json` | Open the page it returns, create the app from the launcher link, and paste its App ID and App Secret on that page. [Lark compatibility](feishu.md) |
 
-`add` changes the program only; the app and its credentials are `channels setup`'s. With `--json`,
+`add` changes the program only; the app and its credentials are `channels setup`'s. `fastagent dev` without a terminal
+refuses a channel that has no credentials (exit 2), naming `channels setup <name> --json`. With `--json`,
 `channels setup` answers `need_user_action` for each part only the owner can do,
 with the address, what to write where, and a `check_command`; relay it, wait for the owner to say it is done, and run
 the command it names. The setup's ticket ends `done` with the variables it wrote, the next steps, and what is left for

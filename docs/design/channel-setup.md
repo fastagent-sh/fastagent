@@ -2,15 +2,15 @@
 title: A channel's platform app, set up per instance
 description: "`add` changes the program; `channels setup` binds an instance to its Slack, Feishu, Lark or Telegram app, keeps each credential with its holder, and the platform stays pointed at the instance with no developer credential."
 type: design-doc
-status: partly implemented (steps 1-3, 4a and 4b)
+status: implemented except `--host` (it comes with `fastagent secrets`)
 updated: 2026-11-06
 ---
 
 # A channel's platform app, set up per instance
 
-**Status: partly implemented (#900, stage C).** Steps 1-3, 4a and 4b of §10 are built: `channels setup` for all four
-channels, the instance registering itself, `connection` for Slack and Telegram. Not built: `dev` setting up on first run
-and the ignored `fastagent.json` (4c), and `--host` (it comes with `fastagent secrets`). Where this and the code disagree, the code is current behavior and this is the target. It changes [channel-environments.md](channel-environments.md) §3–§4 and builds on
+**Status: implemented except `--host` (#900, stage C).** Every step of §10 is built: `channels setup` for all four
+channels, `dev` setting up on first run, the ignored `fastagent.json`, the instance registering itself, `connection`
+for Slack and Telegram. Not built: `--host` (it comes with `fastagent secrets`). Where this and the code disagree, the code is current behavior and this is the target. It changes [channel-environments.md](channel-environments.md) §3–§4 and builds on
 [agent-artifact.md](agent-artifact.md) §6.2 (a deployment's values are the target's state).
 
 ## 1. The problem
@@ -236,7 +236,7 @@ app itself through hooks.
 
 ## 10. Delivery
 
-Done: 1, 2, 3, 4a and 4b. Left: 4c.
+Done: all.
 
 1. The SPEC: `http.publicUrl`, `Service.registerWebhooks()`, `Service.webhooks` and `/health` (#932);
    `channels.<name>.app` as the binding with its verified `url`.
@@ -255,4 +255,6 @@ Done: 1, 2, 3, 4a and 4b. Left: 4c.
      one; the Verification Token is captured when the app allows it and asked for when not; what is left depends on
      what the platform says of the app); `deploy`'s production-app creation calls the same setup; `add feishu|lark`
      change the program only. The refusal of a production app that is dev's is dropped, as for Slack and Telegram.
-   - 4c: `dev` sets up what it lacks on first run; `fastagent.json` in the scaffold's `.gitignore`.
+   - 4c: `dev` sets up what it lacks on first run (in the parent process, at a terminal, for a first-party channel whose
+     declared secrets the setup supplies; without a terminal it exits 2 naming `channels setup <name> --json`);
+     `fastagent.json` in the scaffold's `.gitignore`.

@@ -71,6 +71,7 @@ src/
 │   │                       # once at the command's entry into absolute paths in the process environment
 │   ├── invoke-stream.ts    # `invoke`: one message's answer, as messages.stream delivers it, as text or JSON lines → exit code
 │   ├── models-view.ts, auth-view.ts, content-view.ts # `models` / auth-report / content output
+│   ├── first-run-channels.ts # `dev`'s first run: a first-party channel without credentials is set up, in the parent, at a terminal
 │   ├── channel-setup.ts    # `channels setup <name>`: ask a person for a channel's credentials, at a terminal or on a page,
 │   │                       # check each with the platform, keep them in the instance's value file
 │   ├── person.ts           # what an app's setup says to the person for the steps only they can take: printed at a

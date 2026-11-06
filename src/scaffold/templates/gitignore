@@ -15,6 +15,10 @@ node_modules
 /content
 .cache
 
+# the development instance's configuration: its app is one person's, so it is personal. What a team shares goes in
+# `defaults` of fastagent.config.ts, or in a deployment's configuration (`deploy --config`).
+fastagent.json
+
 # fastagent reads the agent's env from .secrets/.env (which un-ignores its own .env.example). A bare
 # .env at THIS level is the file habit puts here — `dev` says so when it finds one; this keeps it
 # uncommittable meanwhile.

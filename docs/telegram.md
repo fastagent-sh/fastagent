@@ -33,7 +33,8 @@ and lists the variables they read in `.secrets/.env.example`. It asks nothing an
 `/newbot` and copy the token, asks for it (hidden input), checks it with Telegram (`getMe`), and keeps it in the
 instance's value file, `.secrets/.env` for the development instance. A coding agent runs `channels setup telegram --json`:
 the person pastes the token on a page on this machine, never in the agent's conversation. It is safe to run again: a token
-Telegram still accepts is kept, one it refuses is asked for again.
+Telegram still accepts is kept, one it refuses is asked for again. `fastagent dev` runs it for you the first time it finds
+the bot without a token, at a terminal.
 
 That is all `fastagent dev` needs: it polls Telegram (`getUpdates`), so there is no public URL, no tunnel and no webhook
 secret. Message the bot.

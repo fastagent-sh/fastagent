@@ -22,6 +22,9 @@ fastagent channels setup slack # the app, and this instance's credentials for it
 fastagent dev                  # no tunnel, no public URL
 ```
 
+`dev` runs the setup itself the first time it finds the channel without credentials, at a terminal; run it yourself to do
+it ahead of time or again.
+
 `add slack` changes the program only. It creates
 
 ```txt

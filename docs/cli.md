@@ -350,6 +350,13 @@ same agent is refused, naming the file.
 With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`, `deploy`) show the model
 catalog and use the pick for this run, printing the line to put in the config.
 
+A first-party channel (`telegram`, `slack`, `feishu`, `lark`) whose credentials `.secrets/.env` lacks is set up the first
+time `dev` runs, with a terminal attached: the same [`channels setup`](#fastagent-channels-setup), in the parent process
+before the worker starts, so it asks once and a restart does not ask again. Without a terminal, or with `--no-input`,
+nothing is asked: `dev` exits 2 naming `fastagent channels setup <name> --json`. Stopping the setup stops `dev`, as the
+missing credentials always did. A channel added while `dev` runs is asked for on the next start. A channel file that
+reads other variables than the setup supplies is left to its author.
+
 `--tunnel` opens a Cloudflare Quick Tunnel (needs `cloudflared`), prints the public URL, and registers webhooks
 where it can; see [Local webhook development](channels.md#local-webhook-development).
 

@@ -143,7 +143,8 @@ fastagent add feishu     # 飞书 (open.feishu.cn)
 fastagent add lark       # Lark international
 ```
 
-Then set up the bot or app for this instance, asking for its credentials and checking them:
+`dev` sets up what this instance lacks the first time it runs, so `fastagent dev` alone is enough. To do it ahead of time,
+or again, set up the bot or app for this instance, asking for its credentials and checking them:
 
 ```bash
 fastagent channels setup telegram   # opens @BotFather and asks for the token
