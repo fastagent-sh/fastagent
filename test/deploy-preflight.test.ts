@@ -457,6 +457,18 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (!gated.ok) expect(gated.gate).toMatch(/your Dockerfile\.dockerignore \(kept\) does not exclude/);
   });
 
+  it("tells a kept .dockerignore that excludes nothing of .fastagent to exclude it AND let the deploy's directory through", async () => {
+    // Following the first half alone drops `.fastagent/deploy/`, which the image is built from.
+    const agentDir = await agent();
+    await mkdir(join(agentDir, ".fastagent"), { recursive: true });
+    await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n**/.secrets/**\n**/.state\n**/.env\n");
+    const planned = await call(agentDir, { model: "openai/gpt-4o-mini" });
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    const said = planned.messages.map((m) => m.text).find((text) => text.includes("does not exclude `.fastagent`"));
+    expect(said).toContain("`/.fastagent` and `!/.fastagent/deploy`");
+  });
+
   it("--run gates on a kept .dockerignore that would bake secrets or drop the agent", async () => {
     // Missing **/.secrets and **/.env excludes: warn generate-only (asserted above), GATE under --run —
     // a full deploy must not push a secret-laden image (same discipline as the model-travel gate).
