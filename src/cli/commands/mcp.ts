@@ -4,7 +4,7 @@ import { inspectMcp, mcpContext, writeMcpBinding, httpServer } from "../../mcp/h
 import { signInMcp } from "../../mcp/sign-in.ts";
 import { holdingInstance } from "../../harnesses/pi-durable/serve.ts";
 import { declareMcp, mcpInstance, resolveMcpServers } from "../../mcp/config.ts";
-import { devInstanceConfig } from "../../harnesses/pi-durable/config.ts";
+import { devInstanceConfig, namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
 import { McpError } from "../../mcp-api.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
@@ -63,8 +63,12 @@ export async function runMcp(
   if (environment !== "dev" && environment !== "production") return failUsage("--env must be dev or production");
   selectAgentEnvironment(environment);
   enterAgentEnv(target);
-  // The servers `dev` opens: the program's, and the configuration `--config` or the project names adds its own.
-  const config = (await devInstanceConfig(target).catch(failStartup))?.label;
+  // The servers the instance of this environment opens: the program's, and what its configuration adds. `dev` reads the
+  // one `--config` names or else the project's; `start` never reads the project's.
+  const instance = await (environment === "production" ? namedInstanceConfig() : devInstanceConfig(target)).catch(
+    failStartup,
+  );
+  const config = instance?.label;
   if (action === "list") {
     const servers = await inspectMcp(target, config === undefined ? {} : { config }).catch(failStartup);
     if (options.json) console.log(JSON.stringify(servers));

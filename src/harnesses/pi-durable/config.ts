@@ -151,7 +151,8 @@ export function instanceConfigSchema(settings: Schema | undefined): Schema {
     content: opt(map(CONTENT_ENTRY)),
     mcpServers: opt(
       map(unknown(), {
-        description: "MCP servers this instance adds to the program's, by name, in the MCP ecosystem's entry shape",
+        description:
+          "MCP servers this instance adds to the program's, by name, in the MCP ecosystem's entry shape (checked when the instance opens)",
       }),
     ),
     instructions: paths("Files of instructions added after the program's AGENTS.md, relative to this file"),
