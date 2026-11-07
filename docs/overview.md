@@ -141,5 +141,5 @@ Implemented today:
 
 Not implemented yet:
 
-- Context packages ([architecture.md](design/architecture.md) §4), and an instance's own instructions, skills and prompt templates ([agent-artifact.md](design/agent-artifact.md) §7).
+- Context packages ([architecture.md](design/architecture.md) §4).
 - One instance spread over several processes (one process holds an instance's storage).

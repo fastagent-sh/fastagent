@@ -8,15 +8,25 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { type Schema, bool, compile, int, map, obj, oneOf, opt, str, union } from "@earendil-works/pi-schema";
+import { type Schema, arr, bool, compile, int, map, obj, oneOf, opt, str, union } from "@earendil-works/pi-schema";
+import type { ContentEntry } from "../../content/declare.ts";
 import { instanceContent } from "../../content/file.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { INSTANCE_CONFIG_ENV, INSTANCE_CONFIG_FILE, resolveOverridePath } from "../../paths.ts";
 import type { AgentConfig, AgentDefaults, Ingress } from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
 
-/** What an instance may set over the program's defaults: `fastagent.json`, or the same shape as an object. */
-export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings>;
+/**
+ * What an instance may set over the program's defaults: `fastagent.json`, or the same shape as an object. Beside the
+ * defaults, what only an instance adds: content, and instructions, skills and prompt templates (relative paths are the
+ * file's directory's).
+ */
+export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings> & {
+  content?: Record<string, ContentEntry>;
+  instructions?: string[];
+  skills?: string[];
+  prompts?: string[];
+};
 
 /** An instance configuration and where it is from, said in a refusal and as a value's source. */
 export interface InstanceConfigSource {
@@ -36,9 +46,6 @@ const THINKING_LEVELS = [
   "max",
 ] as const satisfies readonly ModelThinkingLevel[];
 const PROGRAM_DEFAULT = "program default";
-
-/** Keys of SPEC.md §8's `InstanceConfig` that a later release reads: refused by name until then, not as unknown. */
-const NOT_READ_YET = ["instructions", "skills", "prompts"];
 
 const CONSTANTS = ["name", "description", "extensions", "providers"];
 /** Keys that were the program's own before they became defaults. */
@@ -121,7 +128,17 @@ function shape(settings: Schema | undefined) {
 
 /** The JSON Schema of an instance's `fastagent.json` for a program with `settings`: what `fastagent build` publishes. */
 export function instanceConfigSchema(settings: Schema | undefined): Schema {
-  return obj({ $schema: opt(str()), ...shape(settings), content: opt(map(CONTENT_ENTRY)) });
+  const paths = (description: string) => opt(arr(str({ minLength: 1 }), { description, uniqueItems: true }));
+  return obj({
+    $schema: opt(str()),
+    ...shape(settings),
+    content: opt(map(CONTENT_ENTRY)),
+    instructions: paths("Files of instructions added after the program's AGENTS.md, relative to this file"),
+    skills: paths(
+      "Directories of skills (one SKILL.md per subdirectory) added to the program's, relative to this file",
+    ),
+    prompts: paths("Directories of prompt templates (one .md file each) added to the program's, relative to this file"),
+  });
 }
 
 /** Refuse `value`, naming `where`, when `schema` does not accept it: each failing path, and why. */
@@ -186,8 +203,6 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
 function checkInstanceConfig(source: InstanceConfigSource, settings: Schema | undefined): InstanceConfig {
   const { values, label } = source;
   if (typeof values === "object" && values !== null) {
-    const unread = NOT_READ_YET.filter((key) => key in values);
-    if (unread.length > 0) throw new Error(`${label}: ${unread.join(", ")} is not read by this FastAgent yet`);
     // Its own refusals name the entry and say what is wrong with it, which a schema's cannot.
     instanceContent(source);
   }

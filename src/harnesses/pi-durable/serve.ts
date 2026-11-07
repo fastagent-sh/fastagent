@@ -37,6 +37,7 @@ import {
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
 import { type StorageLocking, openLockedStorage } from "./storage.ts";
+import { openText } from "./text.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
   mcp?: McpOptions;
@@ -166,6 +167,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
   const config = resolveConfig(definition, options.config);
+  const text = openText(dir, options.config);
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
   const secrets = definedValues(options.secrets);
@@ -211,6 +213,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       storage,
       code,
       config,
+      text,
       content,
       workdir,
       processEnv,

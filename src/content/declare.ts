@@ -5,9 +5,8 @@
  * program declares is not one it may take. Pure: what is on the disk is resolve.ts's question.
  * docs/design/agent-artifact.md §3.3 and §4.2 are the rule.
  */
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
-import { CONTEXT_FILE, isUnderDir } from "../paths.ts";
+import { isAbsolute } from "node:path";
+import { CONTEXT_FILE, configurationPath, isUnderDir } from "../paths.ts";
 
 /** One content entry as a file holds it, under its name: a repository, or a directory of this machine. */
 export type ContentEntry =
@@ -151,12 +150,11 @@ function objectWithKeys(at: string, value: unknown, keys: readonly string[]): Re
 
 /** `path` as written in an instance configuration, absolute: `~/` is the home directory, a relative one `base`'s. */
 function absolutePath(path: string, from: ContentSource, at: string): string {
-  if (path === "~" || path.startsWith("~/")) return join(homedir(), path.slice(1));
-  if (isAbsolute(path)) return resolve(path);
-  if (from.base === undefined) {
+  const absolute = configurationPath(path, from.base);
+  if (absolute === undefined) {
     throw new Error(`${at}: "path" must be absolute here, since ${from.file} is not a file its directory could anchor`);
   }
-  return resolve(from.base, path);
+  return absolute;
 }
 
 function declareOne(name: string, entry: unknown, from: ContentSource): DeclaredContent {

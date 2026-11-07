@@ -25,6 +25,7 @@ import { modelsOver } from "../src/harnesses/models/models.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { buildDefinition, assembleAgent, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../src/harnesses/pi-durable/text.ts";
+import { programText } from "../src/harnesses/pi-durable/text-sources.ts";
 import { runInProcess } from "./cli-run.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
@@ -132,7 +133,7 @@ describe("init: scaffoldAgent", () => {
     const definition = await loadSourceDefinition(dir);
     expect(definition.name).toBe("reviewer");
     expect(buildDefinition(definition, {})).toMatchObject({ tools: [], channels: new Map(), schedules: [] });
-    expect(readSkills(dir).map((s) => s.name)).toEqual(["writing-great-skills"]);
+    expect(readSkills(programText(dir).skills).map((s) => s.name)).toEqual(["writing-great-skills"]);
   });
 
   it("the skill SYSTEM.md sends the agent to is listed in its prompt, with where it is", async () => {
@@ -512,7 +513,7 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(r.hasScripts).toBe(true); // scripts/ → trust-warning path
     expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true);
     expect(await exists(join(ws, "skills", "greeter", "scripts", "hi.sh"))).toBe(true);
-    expect(readSkills(ws).map((s) => s.name)).toContain("greeter"); // really read by the agent's loader
+    expect(readSkills(programText(ws).skills).map((s) => s.name)).toContain("greeter"); // really read by the agent's loader
 
     await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/already exists/); // refuse overwrite
   });

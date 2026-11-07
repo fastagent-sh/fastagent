@@ -439,8 +439,7 @@ for an end.
 
 This section is the surface of the release that closes [#900](https://github.com/fastagent-sh/fastagent/issues/900).
 Until then `openAgent` takes the definition and the instance location below, plus `config`, `secrets`, `env`, `model`,
-`credentials` and `mcp`, and reads each as described. Not yet read: `mcpServers` and `name`, and the `instructions`,
-`skills` and `prompts` of `config`, which an open refuses by name. Still as before: the model credentials and the MCP
+`credentials` and `mcp`, and reads each as described. Not yet read: `mcpServers` and `name`. Still as before: the model credentials and the MCP
 grants are kept in the instance's `.secrets/` (under `root`, or `workdir`), not in the state directory, and an open reads
 `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` from the process's environment to place them. FastAgent's own work for
 the instance, installing the declared packages and cloning content, runs in the process's environment plus `secrets`;

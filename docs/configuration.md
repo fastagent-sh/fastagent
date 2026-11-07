@@ -66,7 +66,26 @@ replace. `fastagent dev` reads the `fastagent.json` at the project root when the
 `fastagent deploy` read only the one `--config` names, and otherwise run on the defaults; an app gives `openAgent` a `config` object, or the absolute path of such a file. An
 unknown key, a value of the wrong type and a required setting no one gave each refuse the open, naming the file and the
 path (`fastagent.json: /http/port expected <= 65535`). Its `content` adds to the program's ([Content](#content)).
-`instructions`, `skills` and `prompts` are in the design but not read by this release, and are refused by name.
+
+`instructions`, `skills` and `prompts` add the instance's own text to the program's:
+
+```json
+{
+  "instructions": ["./notes/house-rules.md"],
+  "skills": ["./extra-skills"],
+  "prompts": ["./extra-prompts"]
+}
+```
+
+`instructions` names files that follow the program's `AGENTS.md` in the prompt; `skills` and `prompts` name directories
+(`<dir>/<name>/SKILL.md`, `<dir>/<name>.md`). Paths are relative to the `fastagent.json` that names them (an object
+`config` needs absolute ones), and only what is named is read: a skill elsewhere in the workspace is not a capability.
+The files in them are read for every message, so an edit lands on the next one; a path added to the list takes a
+restart. An instance only adds: a skill or prompt template named like the program's (or another of the instance's)
+refuses the open, naming both files, and so does a path that is not a file or directory, or is the program's own
+`AGENTS.md`, `skills/` or `prompts/`. In a development project the program is the project, so the instance's text lives
+elsewhere (`./dev/skills`), and the build does not package it. A declared path that goes missing while the agent runs is
+reported, not read as empty.
 
 A program whose `settings` has a required key with no default starts and deploys only with a configuration that gives
 it: `start --config <file>`, `deploy --config <file>`.
