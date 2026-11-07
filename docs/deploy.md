@@ -374,15 +374,20 @@ any role named `fastagent-*` with any permissions and hand it to a function they
 principal as able to escalate within the account; a permissions boundary on those roles would narrow that, and was not
 tried. It is a verified set, not a proven minimum.
 
-The `Slr` statement is for a first deploy into an account that has never used AgentCore. What was measured: against real
-IAM, `CreateServiceLinkedRole` for `runtime-identity.` and `network.bedrock-agentcore.amazonaws.com` passed authorization
-and one for an unrelated service was denied; and in a second account that held the `RuntimeIdentity` role but not the
-`Network` one, a `PUBLIC`-mode deploy with this policy succeeded and neither
-created that role nor called `CreateServiceLinkedRole`. So `network.` is probably not needed for what `deploy agentcore`
-generates (`NetworkMode: PUBLIC`) and is left in as the one a VPC mode would use. Creating the `RuntimeIdentity` role by
-a deploy was not exercised: both accounts already held it. If a first deploy into a new account stops at the runtime with
-a bare `AccessDenied`, have someone with IAM rights run
-`aws iam create-service-linked-role --aws-service-name runtime-identity.bedrock-agentcore.amazonaws.com`, then deploy again.
+Before it builds anything, `deploy agentcore --run` looks for the service-linked role the runtime needs
+(`AWSServiceRoleForBedrockAgentCoreRuntimeIdentity`, the `SlrRead` statement) and creates it when the account has never
+used AgentCore (the `Slr` statement). It reads first, since IAM authorizes `CreateServiceLinkedRole` before it says the
+role exists, and a deployer without that permission would otherwise be refused in every account that already has it.
+Without the permission and without the role it stops there, naming the command for someone with IAM rights to run
+(`aws iam create-service-linked-role --aws-service-name runtime-identity.bedrock-agentcore.amazonaws.com`); if it cannot
+read the role either, it warns and goes on.
+
+What was measured: against real IAM, `CreateServiceLinkedRole` for `runtime-identity.` and
+`network.bedrock-agentcore.amazonaws.com` passed authorization and one for an unrelated service was denied; and in an
+account that held the `RuntimeIdentity` role but not the `Network` one, a `PUBLIC`-mode deploy with this policy succeeded
+and created neither that role nor called `CreateServiceLinkedRole`. So `network.` is probably not needed for what
+`deploy agentcore` generates (`NetworkMode: PUBLIC`) and stays as the one a VPC mode would use. A deploy creating the
+`RuntimeIdentity` role in an account that has never had it was not exercised: both accounts held it.
 
 ```json
 {"Version":"2012-10-17","Statement":[
@@ -398,6 +403,7 @@ a bare `AccessDenied`, have someone with IAM rights run
   {"Sid": "Secrets", "Effect": "Allow", "Action": ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue", "secretsmanager:DeleteSecret", "secretsmanager:TagResource"], "Resource": "arn:aws:secretsmanager:<region>:<account-id>:secret:fastagent/*"},
   {"Sid": "Logs", "Effect": "Allow", "Action": ["logs:DescribeLogGroups", "logs:DescribeLogStreams", "logs:FilterLogEvents", "logs:GetLogEvents", "logs:DeleteLogGroup", "logs:PutRetentionPolicy"], "Resource": "*"},
   {"Sid": "Scheduler", "Effect": "Allow", "Action": ["scheduler:ListSchedules", "scheduler:GetSchedule", "scheduler:DeleteSchedule"], "Resource": "*"},
+  {"Sid": "SlrRead", "Effect": "Allow", "Action": "iam:GetRole", "Resource": "arn:aws:iam::<account-id>:role/aws-service-role/runtime-identity.bedrock-agentcore.amazonaws.com/AWSServiceRoleForBedrockAgentCoreRuntimeIdentity"},
   {"Sid": "Slr", "Effect": "Allow", "Action": "iam:CreateServiceLinkedRole", "Resource": "*", "Condition": {"StringEquals": {"iam:AWSServiceName": ["runtime-identity.bedrock-agentcore.amazonaws.com", "network.bedrock-agentcore.amazonaws.com"]}}}
 ]}
 ```

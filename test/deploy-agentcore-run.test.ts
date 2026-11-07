@@ -224,6 +224,8 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "sts get-caller-identity --output json",
       // The pre-flight region probe: cheap, and BEFORE the multi-minute build it would otherwise waste.
       "bedrock-agentcore-control list-agent-runtimes --max-items 1 --region us-west-2",
+      // The role the runtime needs in this account: there, so nothing is created.
+      "iam get-role --role-name AWSServiceRoleForBedrockAgentCoreRuntimeIdentity",
       // The stack is read ONCE, here: what it says (a redeploy that replaces state, or a failed first create) is
       // only actionable before the build, and step 7 reuses this answer instead of asking again.
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].StackStatus --output text",
@@ -326,6 +328,27 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(cmds().some((c) => /^(ecr|s3|cloudformation) /.test(c) && !c.startsWith("cloudformation describe"))).toBe(
       false,
     );
+  });
+
+  it("stops before the secret, the bucket and the build when the account lacks the role and may not make it", async () => {
+    const { cli: aws, cmds } = fakeCli((a) => {
+      if (a[0] === "iam" && a[1] === "get-role") {
+        return { code: 254, stderr: "An error occurred (NoSuchEntity) when calling the GetRole operation" };
+      }
+      if (a[0] === "iam" && a[1] === "create-service-linked-role") {
+        return {
+          code: 254,
+          stderr: "An error occurred (AccessDenied) when calling the CreateServiceLinkedRole operation",
+        };
+      }
+      return happyAws(a);
+    });
+    const { cli: docker, cmds: dockerCmds } = fakeCli();
+    const out = await run(plan(), aws, docker);
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("iam:CreateServiceLinkedRole") });
+    expect(out.ok ? "" : out.gate).toContain("aws iam create-service-linked-role --aws-service-name runtime-identity");
+    expect(cmds().some((c) => /^(ecr|s3|s3api|secretsmanager|cloudformation) /.test(c))).toBe(false);
+    expect(dockerCmds().some((c) => c.startsWith("buildx build"))).toBe(false);
   });
 
   it("hands the secrets step the deployment's secret, made first when it is not there", async () => {
@@ -467,7 +490,11 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       // And nothing but reads precedes the question, so the warning cannot arrive after this deploy changed something.
       const asked = calls.findIndex((c) => c.args.includes("Stacks[0].StackStatus"));
       expect(
-        calls.slice(0, asked).every((c) => ["sts", "configure", "bedrock-agentcore-control"].includes(c.args[0]!)),
+        calls
+          .slice(0, asked)
+          .every(
+            (c) => ["sts", "configure", "bedrock-agentcore-control"].includes(c.args[0]!) || c.args[1] === "get-role",
+          ),
       ).toBe(true);
     });
 
