@@ -500,7 +500,6 @@ interface DeclaredSecret {
 type InstanceInputs<Settings = unknown> = {
   /** The instance configuration (`fastagent.json`'s schema), or the absolute path of a `fastagent.json`. */
   config?: InstanceConfig<Settings> | string;
-  /**
   /** Secret values: the declared names, and model providers' variables. No variable of the host's reaches the agent. */
   secrets?: Record<string, string>;
   /** The base environment of the processes the agent starts. Default: empty. `baseEnv(process.env)` is the app's. */

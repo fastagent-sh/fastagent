@@ -149,26 +149,28 @@ export default defineAgent({
 
 ### 3.3 `context.json`
 
-`context.json` keeps its current shape: `content`, the baseline sources the agent works on, and `environment`, the
-commands, runtimes and variable names it needs. Its name matches the vocabulary in
+`context.json` holds `content`, the baseline sources the agent works on; `environment`, the commands, runtimes and
+variable names it needs; and `mcpServers`, its default MCP servers (below). Its name matches the vocabulary in
 [agent-model.md](agent-model.md): context is content, connectors and environment.
 `fastagent env add` rewrites its `environment` (the environment belongs only to the program).
 `fastagent content add --program` rewrites its `content` baseline; without `--program`, `content add` writes the
 instance configuration instead (§4.2). Both edits keep the existing lock. `context.local.json` is gone: a machine's
-own directories belong to the instance's configuration. Every edit of the file (`env add`, `content add --program`,
-`content remove`) writes the whole file and keeps `mcpServers` exactly as read, so an edit of one part never drops
-another: the reader and the writer share one list of the file's parts.
+own directories belong to the instance's configuration.
 
 `mcpServers` is the program's default MCP servers: the map of the standard shape, each entry as the MCP ecosystem writes
 it (a server's documentation gives the `"mcpServers"` property to paste in). It is published with the package, so its
 secrets are `${VAR}` references (§4.1), and a relative stdio command resolves against the package (§5). It sits beside
 `content` and `environment` because it is the same kind of thing: what the agent works with, declared by the program.
+Every edit of the file (`env add`, `content add --program`, `content remove`) writes the whole file and keeps
+`mcpServers` exactly as read, so an edit of one part never drops another: the reader and the writer share one list of
+the file's parts.
 
 **FastAgent neither reads nor writes `.mcp.json`.** That file belongs to the coding tools that keep it for the person
 working in a directory (Claude Code and Copilot read it; `claude mcp add --scope project` writes it, and its documentation
 steers keys into the `env` field). It often holds the author's own tooling servers and credentials, and it takes
 `${VAR:-default}`, which this format does not. Publishing a declaration sourced from it would ship what another tool wrote.
-The other clients do the same: pi, Cursor and VS Code each read a file of their own, with this entry shape.
+The other clients do the same: pi and Cursor read a file of their own with this shape, and VS Code one whose top-level
+key is `servers`.
 
 Language dependencies stay in `package.json`. Names already declared by `needs()` or MCP references are aggregated, not
 registered again.
@@ -345,7 +347,7 @@ Composition:
 references) is configuration: the program's `context.json` `mcpServers` declares the servers every instance connects, an
 instance's `mcpServers` (in its `fastagent.json`, the same entry shape) adds its own, and a name both declare refuses the open. The values those references name are secrets, the same input `needs()` reads; today's `McpOptions.variables` merges into `secrets`. An OAuth grant, created
 when a person authorizes in a browser and refreshed afterwards, is state. `mcp` keeps `store`, `bindings` and `fetch`
-([mcp-auth.md](mcp-auth.md)). A program-declared server without its required value or grant refuses the open and says
+([mcp-auth.md](mcp-auth.md)). A declared server, the program's or the instance's, without its required value or grant refuses the open and says
 what is missing.
 
 OAuth tokens never enter an MCP file, as in every client using this format: they live in the grant store below. A
