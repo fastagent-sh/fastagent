@@ -4,6 +4,11 @@
  */
 import { basename } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
+import {
+  RAILWAYIGNORE_FILE,
+  isGeneratedRailwayignore,
+  keptRailwayignoreProblem,
+} from "../../../deploy/railway/ignore.ts";
 import { planRailwayDeploy, toRailwayName } from "../../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../../deploy/railway/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
@@ -18,9 +23,14 @@ import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorde
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const railwayHost: HostDeploy = {
-  // Railway's only artifacts are the container's, which planArtifacts owns for every host.
-  isOurs: () => false,
+  isOurs: (path, content) => path === RAILWAYIGNORE_FILE && isGeneratedRailwayignore(content),
   shell: async (agentDir) => railwayShell(toRailwayName(basename(agentDir)), agentDir),
+  validate({ opts, agentDir }) {
+    const problem = keptRailwayignoreProblem(agentDir);
+    if (problem === undefined) return;
+    if (opts.run) failStartup(new Error(`deploy stopped: ${problem}`));
+    console.error(`[fastagent] warn: ${problem}`);
+  },
   async deploy(ctx) {
     const { opts, agentDir, pre, channels, write } = ctx;
     const { hasCron, modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;

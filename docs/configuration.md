@@ -135,7 +135,7 @@ fastagent build && FASTAGENT_MODEL=openai/gpt-5.5 fastagent start
 
 `deploy` evaluates the same chain in production: `FASTAGENT_MODEL` from `.secrets/production/.env`, else
 `config.model`. Your shell is not read, and `deploy` has no `--model` flag. The production value is recorded in the
-release manifest (`fastagent.release.json`); a variable already set on the platform wins over it. `deploy` prints the
+release manifest (`.fastagent/deploy/fastagent.release.json`); a variable already set on the platform wins over it. `deploy` prints the
 effective model and its source.
 
 ### Model lists

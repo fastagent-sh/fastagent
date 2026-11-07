@@ -1,6 +1,6 @@
 /**
  * The instance text a deploy delivers (agent-artifact.md §6.1): the files and directories the delivered configuration
- * names, copied beside it into `fastagent.deploy/` with their layout, so the paths the configuration wrote, relative to
+ * names, copied beside it into `.fastagent/deploy/` with their layout, so the paths the configuration wrote, relative to
  * its file, resolve the same in the image's `/etc/fastagent/`. Only what is beside the configuration is delivered: a
  * path elsewhere on this machine does not exist on the host.
  */
@@ -62,13 +62,13 @@ export function deliveredTextProblem(agentDir: string, source: InstanceConfigSou
 }
 
 /**
- * Replace `fastagent.deploy/` in `agentDir` with the text `source` names, whole: what an earlier deploy delivered and
+ * Replace `.fastagent/deploy/` in `agentDir` with the text `source` names, whole: what an earlier deploy delivered and
  * this one does not is gone, as the release manifest and the configuration are rewritten. The configuration's own file
  * is written after, with the other build outputs. Answers how many paths were copied.
  */
 export async function deliverText(agentDir: string, source: InstanceConfigSource | undefined): Promise<number> {
   // Copying is an act, not a finding: whatever the pre-flight only warned about (a generate-only run) must not be
-  // carried out, or a path outside the configuration's directory would be written outside `fastagent.deploy/`.
+  // carried out, or a path outside the configuration's directory would be written outside `.fastagent/deploy/`.
   const problem = source === undefined ? undefined : deliveredTextProblem(agentDir, source);
   if (problem !== undefined) throw new Error(problem);
   const target = join(agentDir, DELIVERED_CONFIG_DIR);

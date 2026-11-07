@@ -3,7 +3,7 @@
  * ownership rule.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import { registerFeishuWebhook } from "../../../channels/feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../../channels/registration.ts";
@@ -189,11 +189,7 @@ export async function planArtifacts(
   for (const a of artifacts) {
     const abs = join(target, a.path);
     // Pure build output, not operator-owned configuration. It must track the generated template/runbook.
-    if (
-      BUILD_OUTPUTS.includes(a.path) ||
-      BUILD_OUTPUTS.includes(basename(a.path)) ||
-      options.alwaysWrite?.includes(a.path)
-    ) {
+    if (BUILD_OUTPUTS.includes(a.path) || options.alwaysWrite?.includes(a.path)) {
       write(a.path, abs, a.content);
       continue;
     }

@@ -265,7 +265,7 @@ platform. The author never writes mise's files.
   the agent (`dev`, `start`, `invoke`, an app's `openAgent`) installs what is missing and puts the packages
   first on the `PATH` of the agent's commands. A change to `context.json` restarts `dev`.
 - **The image installs every package when it is built.** It installs `aptPackages` in its apt layer, with what
-  FastAgent needs there (git, CA certificates, curl for rust), then copies `fastagent.packages`, the list every
+  FastAgent needs there (git, CA certificates, curl for rust), then copies `.fastagent/deploy/fastagent.packages`, the list every
   deploy writes, and runs `mise install --system` of what it lists, in a layer rebuilt only when the packages or the
   dependencies change. The Dockerfile reads the list rather than holding it, since a generated Dockerfile is kept once
   written and a changed one stops `deploy --run`. The tools go to mise's

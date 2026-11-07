@@ -9,6 +9,7 @@ import { unmarkDevServe } from "../../serving-command.ts";
 import { channelAppNames, prepareChannelApps, unpreparedChannelApps } from "./deploy/channel-apps.ts";
 import { displayPath, selectAgentEnvironment } from "../../paths.ts";
 import { buildProject } from "../../harnesses/pi-durable/build.ts";
+import { DELIVERED_CONFIG_DIR } from "../../deploy/container.ts";
 import { deliverText } from "../../deploy/delivered-text.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { apiReport, deploymentApi } from "../../deploy/api.ts";
@@ -244,9 +245,7 @@ async function deploy(
     // What follows is the host's work: a deadline meant for the person must never cut it halfway. Its own steps for
     // the person (a host sign-in, the box's login) wait again, and are bounded again.
     if (answerer.kind === "ticket") answerer.step.person.carriesOn();
-    const copied = await deliverText(agentDir, delivered?.source).catch(failStartup);
-    if (copied > 0)
-      console.error(`[fastagent] delivered ${copied} path(s) of the instance's text into fastagent.deploy/`);
+    let textDelivered = false;
     const reachedAt = await target.deploy({
       opts,
       answerer,
@@ -274,6 +273,17 @@ async function deploy(
                 `marker to own it yourself.`,
             ),
           );
+        }
+        // Once, after the gate and before the first artifact lands: the directory is replaced whole, so a refused
+        // run must leave it as it was, and the build outputs the host writes next go into the fresh one.
+        if (!textDelivered) {
+          textDelivered = true;
+          const copied = await deliverText(agentDir, delivered?.source).catch(failStartup);
+          if (copied > 0) {
+            console.error(
+              `[fastagent] delivered ${copied} path(s) of the instance's text into ${DELIVERED_CONFIG_DIR}/`,
+            );
+          }
         }
         await applyArtifactPlan(plan);
       },
