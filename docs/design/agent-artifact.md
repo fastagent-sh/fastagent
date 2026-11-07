@@ -94,8 +94,7 @@ explicit inputs below rather than whatever the process happens to find.
 my-agent/
   package.json
   fastagent.config.ts      constants, defaults, settings schema, providers/extensions
-  context.json             content baseline and environment requirements
-  .mcp.json                default MCP servers, the MCP ecosystem's file; published, so secrets are ${VAR} references
+  context.json             content baseline, environment requirements, default MCP servers (published: secrets as ${VAR})
   SYSTEM.md  AGENTS.md
   skills/  prompts/
   src/tools/ src/extensions/ src/channels/ src/schedules/
@@ -148,21 +147,28 @@ export default defineAgent({
   `@fastagent-sh/fastagent` and needs its dependencies installed; the scaffold starts literal and the author switches to
   `defineAgent` when adding settings.
 
-### 3.3 `context.json` and `.mcp.json`
+### 3.3 `context.json`
 
 `context.json` keeps its current shape: `content`, the baseline sources the agent works on, and `environment`, the
 commands, runtimes and variable names it needs. Its name matches the vocabulary in
-[agent-model.md](agent-model.md): context is content, connectors and environment; connectors are `.mcp.json`.
+[agent-model.md](agent-model.md): context is content, connectors and environment.
 `fastagent env add` rewrites its `environment` (the environment belongs only to the program).
 `fastagent content add --program` rewrites its `content` baseline; without `--program`, `content add` writes the
 instance configuration instead (§4.2). Both edits keep the existing lock. `context.local.json` is gone: a machine's
-own directories belong to the instance's configuration.
+own directories belong to the instance's configuration. Every edit of the file (`env add`, `content add --program`,
+`content remove`) writes the whole file and keeps `mcpServers` exactly as read, so an edit of one part never drops
+another: the reader and the writer share one list of the file's parts.
 
-`.mcp.json` is the default MCP servers in the standard `mcpServers` shape, the file the MCP ecosystem uses for a
-directory's servers (Claude Code, Copilot): an agent directory that already has one needs no rewrite, which is the
-point of serving a directory as it is. It is published with the package, so its secrets are `${VAR}` references (§4.1),
-and a relative stdio command resolves against the package (§5). FastAgent only reads it. What one instance adds goes in
-its `fastagent.json` (§4.2), never in this file.
+`mcpServers` is the program's default MCP servers: the map of the standard shape, each entry as the MCP ecosystem writes
+it (a server's documentation gives the `"mcpServers"` property to paste in). It is published with the package, so its
+secrets are `${VAR}` references (§4.1), and a relative stdio command resolves against the package (§5). It sits beside
+`content` and `environment` because it is the same kind of thing: what the agent works with, declared by the program.
+
+**FastAgent neither reads nor writes `.mcp.json`.** That file belongs to the coding tools that keep it for the person
+working in a directory (Claude Code and Copilot read it; `claude mcp add --scope project` writes it, and its documentation
+steers keys into the `env` field). It often holds the author's own tooling servers and credentials, and it takes
+`${VAR:-default}`, which this format does not. Publishing a declaration sourced from it would ship what another tool wrote.
+The other clients do the same: pi, Cursor and VS Code each read a file of their own, with this entry shape.
 
 Language dependencies stay in `package.json`. Names already declared by `needs()` or MCP references are aggregated, not
 registered again.
@@ -176,7 +182,7 @@ dist/
   bin.js                   generated executable (package.json `bin`): runs the same start as `fastagent start`
   fastagent.config.js
   fastagent.schema.json    generated JSON Schema for an instance's fastagent.json
-  context.json  .mcp.json
+  context.json
   SYSTEM.md  AGENTS.md  skills/  prompts/
   src/                     compiled JavaScript and the files it needs
   assets/
@@ -336,8 +342,8 @@ Composition:
 - An instance layers only on the program's defaults, never on another instance.
 
 **MCP: three different things.** A server's declaration (`command` or `url`, `args`, headers with `${VAR}`
-references) is configuration: the program's `.mcp.json` declares the servers every instance connects, an instance's
-`mcpServers` (in its `fastagent.json`, the same entry shape) adds its own, and a name both declare refuses the open. The values those references name are secrets, the same input `needs()` reads; today's `McpOptions.variables` merges into `secrets`. An OAuth grant, created
+references) is configuration: the program's `context.json` `mcpServers` declares the servers every instance connects, an
+instance's `mcpServers` (in its `fastagent.json`, the same entry shape) adds its own, and a name both declare refuses the open. The values those references name are secrets, the same input `needs()` reads; today's `McpOptions.variables` merges into `secrets`. An OAuth grant, created
 when a person authorizes in a browser and refreshed afterwards, is state. `mcp` keeps `store`, `bindings` and `fetch`
 ([mcp-auth.md](mcp-auth.md)). A program-declared server without its required value or grant refuses the open and says
 what is missing.
@@ -348,8 +354,8 @@ an entry copied from a server's documentation works as it is. A file that travel
 instead, with the value supplied as `secrets`. FastAgent cannot tell whether a string is a secret, so it warns and
 never refuses, and only where the file travels because of FastAgent:
 
-- `fastagent build` warns about a literal in the program's `.mcp.json` `headers` or `env`, which is published;
-- `fastagent deploy` warns the same for the `mcpServers` of a configuration it bakes into an image or delivers to a host;
+- `fastagent build` warns about a literal in the program's `mcpServers` `headers` or `env`, which is published;
+- `fastagent deploy` warns the same for the program's, which the image bakes in, and for the `mcpServers` of a configuration it delivers to a host;
 - a workbench app warns the same when it exports an instance folder (Kage's "give someone the agent").
 
 An instance file that stays on its machine is its owner's choice and draws no warning: it needs no `${VAR}`.
@@ -417,11 +423,10 @@ instance declares paths of its own, such as `./dev/AGENTS.md` and `./dev/skills`
 (§3.4). The example is an instance configuration directory of its own (a deployment's `/etc/fastagent/`, a Kage folder, §4.6). `content add` writes this file by default: the
 development instance's at the project root, or the one `--config <file>` names; `--program` targets the program's `context.json` instead (§3.3).
 
-`mcpServers` has the shape of the program's `.mcp.json`, so the `"mcpServers"` property a server's documentation gives pastes in
-unchanged. It adds to the program's servers: a name the program declares refuses the open, naming both. It lives here
+`mcpServers` has the shape of the program's `context.json` `mcpServers`, so the `"mcpServers"` property a server's
+documentation gives pastes in unchanged. It adds to the program's servers: a name the program declares refuses the open, naming both. It lives here
 rather than in a second file because it is one more thing this instance adds, like `content` and `skills`: one input,
-one place, delivered with the configuration. The program's `.mcp.json` is the directory's file the ecosystem knows;
-this one is the instance's.
+one place, delivered with the configuration.
 
 `fastagent.json` holds no secret values; secrets are referenced by name. Its `mcpServers` follows the rule for MCP
 entries in §4.1.
@@ -430,9 +435,9 @@ entries in §4.1.
 
 In a project, `fastagent dev` defaults its inputs so a new agent needs no flags: configuration from the
 project root when present, secrets from `.secrets/.env`, and the instance root `.fastagent/dev/` (§4.1). The
-workspace is kept apart from the source, so `dev` runs the same shape as a deployment. At the root, `.mcp.json` is the
-program's (packaged defaults, and what Claude Code reads here too) and `fastagent.json` is the development instance's: a
-server only this instance wants goes in its `mcpServers`. Other environments are other inputs, given
+workspace is kept apart from the source, so `dev` runs the same shape as a deployment. At the root, the program's servers
+are in `context.json` and the development instance's in `fastagent.json`; a `.mcp.json` there is the author's coding
+tools' and is left alone. Other environments are other inputs, given
 explicitly. How a team lays out per-environment files, what it commits and whether it keeps a personal local layer is
 the developer's choice; the framework adds no local layer.
 
@@ -518,7 +523,7 @@ Everything downstream sees only absolute paths, so no subsystem picks its own ba
   relative one is refused rather than resolved against the process's cwd.
 - A module's packaged resource is relative to the module (`import.meta.url`); a skill's resource to the skill's root;
   a coding tool's relative path to the workspace.
-- MCP: a command containing a path resolves against its declaration file (the program's `.mcp.json` against the
+- MCP: a command containing a path resolves against its declaration file (the program's `context.json` against the
   package, an instance's `fastagent.json` against its own directory); a bare command uses the child environment's
   `PATH`; `args` pass verbatim, since FastAgent cannot know which strings are paths. A stdio server runs in the
   instance's workspace, whoever declared it, so the read-only package is never its working directory and a writable
@@ -707,7 +712,7 @@ FastAgent installs nothing for them and mutates no host globally.
   program's stays.
 - **Connections and executables** (MCP servers, tools) are read once per open and take effect at an explicit close and
   reopen, which selects one snapshot of the configuration for the life of that open. `dev` restarts after the current
-  turns finish when `.mcp.json`, `fastagent.json` or code change; an embedding host closes and reopens itself; no hot
+  turns finish when `context.json`, `fastagent.json` or code change; an embedding host closes and reopens itself; no hot
   replacement of loaded code.
 - An open that cannot assemble its configured set refuses before reporting ready, releases what it acquired and keeps
   its diagnostics. No configured capability is silently dropped.
