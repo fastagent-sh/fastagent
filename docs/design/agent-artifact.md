@@ -153,7 +153,9 @@ export default defineAgent({
 baseline sources the agent works on; `environment`, the commands, runtimes and variable names it needs; and
 `mcpServers`, the MCP servers every instance connects. Its name matches the vocabulary in
 [agent-model.md](agent-model.md): context is content, connectors and environment.
-`fastagent env add` rewrites its `environment` (the environment belongs only to the program).
+`fastagent env add` rewrites its `environment` (the environment belongs only to the program). Every edit of the file
+(`env add`, `content add --program`, `content remove`) writes the whole file and keeps `mcpServers` exactly as read, so
+an edit of one part never drops another: the reader and the writer share one list of the file's parts.
 `fastagent content add --program` rewrites its `content` baseline; without `--program`, `content add` writes the
 instance configuration instead (§4.2). Both edits keep the existing lock. `context.local.json` is gone: a machine's
 own directories belong to the instance's configuration.
@@ -165,7 +167,7 @@ relative stdio command resolves against the package (§5).
 **One name, one lifecycle.** The program's servers are not in a file named `mcp.json`, and the name `.mcp.json` means
 one thing everywhere: the MCP servers of whoever runs the agent here, a file of the MCP ecosystem that Claude Code in
 the same directory reads too. Two files differing by a dot would put the author's own tooling (a browser MCP for their
-Claude Code) into a published package, which one file doing both jobs did (§4.3). FastAgent writes the formats that are
+Claude Code) into a published package, as 0.29.0's single `.mcp.json` did. FastAgent writes the formats that are
 its own, `context.json` and `fastagent.json`, and only reads `.mcp.json`: the ecosystem has tools to edit it. Authors
 edit `mcpServers` by hand, like any JSON.
 
@@ -239,7 +241,7 @@ An instance is four inputs:
 
 | Input | Holds | FastAgent |
 |---|---|---|
-| **Configuration** | `fastagent.json` and `.mcp.json`, or the same schema as an API object | Reads only |
+| **Configuration** | `fastagent.json` and `.mcp.json`, or the same schema as an API object | Read by an open; only `fastagent.json` is ever written, by `content add`, and `.mcp.json` never |
 | **Secrets** | Values for the names `needs()`, MCP `${VAR}` references and `context.json`'s environment declare, and the model provider's variables | Reads only; held in memory, never written |
 | **State** | Sessions, model credentials, MCP grants, model lists, channel state | Writes |
 | **Workspace** | The agent's working directory: acquired content and what the agent produces | The agent writes; may be disposable |
