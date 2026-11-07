@@ -4,6 +4,7 @@
  * its file, resolve the same in the image's `/etc/fastagent/`. Only what is beside the configuration is delivered: a
  * path elsewhere on this machine does not exist on the host.
  */
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { cp, mkdir, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { isUnderDir } from "../paths.ts";
@@ -18,6 +19,16 @@ function declared(agentDir: string, source: InstanceConfigSource): { kind: strin
   return (["instructions", "skills", "prompts"] as const).flatMap((kind) =>
     text[kind].filter((entry) => entry.declaredBy !== undefined).map((entry) => ({ kind, source: entry })),
   );
+}
+
+/** The first symbolic link under `root` that points at nothing, which `cp` would fail on after the person's steps. */
+function danglingLink(root: string): string | undefined {
+  if (!statSync(root).isDirectory()) return undefined;
+  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+    const path = join(entry.parentPath, entry.name);
+    if (entry.isSymbolicLink() && !existsSync(path)) return path;
+  }
+  return undefined;
 }
 
 /**
@@ -41,6 +52,8 @@ export function deliveredTextProblem(agentDir: string, source: InstanceConfigSou
       if (isUnderDir(agentDir, entry.path)) {
         return `${at} contains the agent directory ${agentDir}: it cannot be delivered into it`;
       }
+      const dangling = danglingLink(entry.path);
+      if (dangling !== undefined) return `${at} holds a symbolic link to nothing: ${dangling}`;
     }
     return undefined;
   } catch (error) {

@@ -142,8 +142,10 @@ describe("deploy: the instance text it delivers", () => {
     expect(await readFile(join(delivered, "SKILL.md"), "utf8")).toContain("name: audit");
     // A link to nothing stops the deploy instead of shipping a skill the box would silently skip.
     await symlink(join(outside, "gone"), join(configDir, "sk/ghost"));
-    const dangling = await runInProcess(["deploy", "docker", dir, "--config", config]);
+    const dangling = await runInProcess(["deploy", "docker", dir, "--config", config, "--run"]);
     expect(dangling.code, dangling.stderr).toBe(1);
+    // Found by the pre-flight, before a person's steps and before anything is built.
+    expect(dangling.stderr).toMatch(/deploy stopped: .*holds a symbolic link to nothing: .*sk\/ghost/);
   });
 
   it("refuses a path that contains the agent directory, which it could not copy into itself", async () => {
