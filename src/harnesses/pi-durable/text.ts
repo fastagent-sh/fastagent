@@ -14,7 +14,7 @@ import { log } from "../../log.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import type { AgentCommand } from "./agent.ts";
 import type { InstanceConfigSource } from "./config.ts";
-import { type TextSource, type TextSources, declareText, programText } from "./text-sources.ts";
+import { NOUN, type TextSource, type TextSources, declareText, programText, whatIs } from "./text-sources.ts";
 
 export interface Skill {
   name: string;
@@ -70,10 +70,16 @@ function directories(dir: string): string[] {
     });
 }
 
-/** Whether a source is there to read: one an instance declared that has gone is reported, not read as empty. */
-function present({ path, declaredBy }: TextSource): boolean {
-  if (existsSync(path)) return true;
-  if (declaredBy !== undefined) report(`${path}: ${declaredBy} declares it, and it is gone`);
+/**
+ * Whether a source is there to read as `kind`: one an instance declared that has gone, or become what its kind is not,
+ * is reported, not read as empty.
+ */
+function present({ path, declaredBy }: TextSource, kind: keyof typeof NOUN): boolean {
+  const found = whatIs(path);
+  if (found === NOUN[kind] || (found !== undefined && declaredBy === undefined)) return true;
+  if (declaredBy !== undefined) {
+    report(`${path}: ${declaredBy} declares it, and ${found === undefined ? "it is gone" : `it is a ${found} now`}`);
+  }
   return false;
 }
 
@@ -88,7 +94,7 @@ const collisionOf = (kind: string, name: string, taken: string, file: string, by
 function loadSkills(sources: readonly TextSource[], collide: Collide): Skill[] {
   const skills: Skill[] = [];
   for (const source of sources) {
-    if (present(source)) readSkillsOf(source, skills, collide);
+    if (present(source, "skills")) readSkillsOf(source, skills, collide);
   }
   return skills;
 }
@@ -142,7 +148,7 @@ function loadTemplates(sources: readonly TextSource[], collide: Collide): Templa
   const templates: Template[] = [];
   const files = new Map<string, string>();
   for (const source of sources) {
-    if (!present(source)) continue;
+    if (!present(source, "prompts")) continue;
     for (const entry of readdirSync(source.path).sort()) {
       if (!entry.endsWith(".md")) continue;
       const file = join(source.path, entry);
@@ -292,7 +298,7 @@ const fileText = (path: string): string | undefined => {
 
 /** The instance's files of instructions, in the order it declared them. */
 function instructionsText(sources: readonly TextSource[]): string | undefined {
-  const texts = sources.filter(present).flatMap(({ path }) => fileText(path) ?? []);
+  const texts = sources.filter((source) => present(source, "instructions")).flatMap(({ path }) => fileText(path) ?? []);
   return texts.length === 0 ? undefined : texts.join("\n\n");
 }
 

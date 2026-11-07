@@ -24,7 +24,7 @@ export interface TextSources {
 
 type Kind = keyof TextSources;
 
-const NOUN = { instructions: "file", skills: "directory", prompts: "directory" } as const;
+export const NOUN = { instructions: "file", skills: "directory", prompts: "directory" } as const;
 
 /** The program's own text, which `AGENTS.md` and `SYSTEM.md` already put in the prompt. */
 export function programText(dir: string): TextSources {
@@ -32,7 +32,7 @@ export function programText(dir: string): TextSources {
 }
 
 /** What `path` is: a file, a directory, or nothing. */
-function whatIs(path: string): "file" | "directory" | undefined {
+export function whatIs(path: string): "file" | "directory" | undefined {
   try {
     return statSync(path).isDirectory() ? "directory" : "file";
   } catch (error) {
