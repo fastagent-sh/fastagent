@@ -5,6 +5,7 @@ import { channelIngress } from "../../channels/discover.ts";
 import { loadContent, loadEnvironment } from "../../content/file.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
+import { INSTANCE_NAME_ENV, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
@@ -94,7 +95,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       JSON.stringify(
         {
           agentDir,
-          name: definition.name,
+          name: instanceName(definition.name, process.env[INSTANCE_NAME_ENV] || undefined),
           content,
           contentError: contentError ?? null,
           environment: environment ?? null,
@@ -124,7 +125,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const line = (label: string, value: string): void => console.log(`${`${label}:`.padEnd(13)} ${value}`);
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
-  line("agent", `${definition.name} — ${agentDir}`);
+  line("agent", `${instanceName(definition.name, process.env[INSTANCE_NAME_ENV] || undefined)} — ${agentDir}`);
   for (const [label, value] of contentLines(content)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");

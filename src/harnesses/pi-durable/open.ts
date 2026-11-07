@@ -24,6 +24,7 @@ import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { fastagentVersion } from "../../version.ts";
 import { InstanceExecutionEnv } from "./execution-env.ts";
+import { instanceName } from "../../instance-name.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
@@ -302,6 +303,8 @@ export interface AssembleAgentOptions {
   storage: Storage;
   /** What the agent works on (`context.json`'s content), resolved for this instance. */
   content?: readonly ResolvedContent[];
+  /** The instance's name (`instanceName`): what `info().name` reports. Default: the definition's, as one segment. */
+  name?: string;
   /** The agent's working directory: the definition's own, unless the instance is elsewhere. */
   workdir?: string;
   /** The definition's code, built once with its secrets (`buildDefinition`). */
@@ -376,7 +379,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     storage: options.storage,
     models,
     registry,
-    name: definition.name,
+    name: options.name ?? instanceName(definition.name),
     ...(definition.config.description === undefined ? {} : { description: definition.config.description }),
     ...(model === undefined ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),

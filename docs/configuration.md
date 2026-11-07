@@ -508,6 +508,10 @@ keeps a serve from answering the API with a key its environment still holds.
 
 ### Where an instance lives
 
+An instance's name is one path segment: `--name <name>` (`FASTAGENT_NAME`, `openAgent`'s `name`), else the program's name made
+one (`@acme/reviewer` is `acme-reviewer`). `info` and the report `dev` and `start` print say it, and `info().name` is it; a
+name that is not a segment refuses.
+
 An instance has a working directory, where the agent runs and `content/` clones land, and a state root. By default both
 are in the project's `.fastagent/dev/` for `dev` and `.fastagent/start/` for `start`, as above. `--root <dir>` (`FASTAGENT_ROOT`) makes `<dir>` the working directory with the state
 in `<dir>/.state`; `--state <dir>` (`FASTAGENT_STATE_DIR`) and `--workdir <dir>` (`FASTAGENT_WORKDIR`) place either apart
