@@ -13,6 +13,23 @@ status: current
   `fastagent.json`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
+## Two configuration files
+
+An agent's program has one configuration file, `fastagent.config.ts`; an instance of it may have another, `fastagent.json`. They answer different questions:
+
+| | `fastagent.config.ts` | `fastagent.json` |
+|---|---|---|
+| Belongs to | The program: the agent's author | An instance: whoever runs this agent |
+| Written by | The author, published with the agent | The person or machine running one instance |
+| Holds | Constants (`name`, `description`, `providers`, `extensions`), the `settings` schema, and `defaults`: what an instance starts with | Overrides of `defaults` (`model`, `http`, `deploy`, `channels`), values for `settings`, and what only an instance adds: `content`, `instructions`, `skills`, `prompts` |
+| Format | TypeScript: it can import, and `defineAgent` types it | JSON, with a `$schema` for completion; no code |
+| Read by | Every command: `dev` as source, `build` into `dist/` | `--config` (or `FASTAGENT_CONFIG`) names the file for every command; without it `dev` reads the one at the project root, and `start` and `deploy` read none. An app: the `config` it passes `openAgent` |
+| In git | Committed | The development one is ignored by the scaffold's `.gitignore` (it is one person's); a deployment's is delivered by `deploy --config` |
+
+Take one agent that runs for two customers: the author writes `settings: obj({ repo: str() })` in `fastagent.config.ts` once, and
+each customer's instance writes `{ "settings": { "repo": "acme/api" } }` in its own `fastagent.json`. Same program, two
+instances. Precedence is in [Model selection](#model-selection) and [Instance configuration](#instance-configuration).
+
 ## Config file
 
 An agent is identified by one filename, `fastagent.config.ts`:
