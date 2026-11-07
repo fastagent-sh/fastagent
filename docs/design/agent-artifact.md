@@ -685,9 +685,12 @@ FastAgent installs nothing for them and mutates no host globally.
   workspace never becomes a capability. The harness records each change of the rendered prompt in the session, so the
   text a turn ran with is observable. This is the current source-directory behavior ([agent-model.md
   §6](agent-model.md#6-an-agent-changes-itself)), extended to the instance's declared paths, and it is what Claude Code
-  does with skill directories. A declared path that is missing refuses the open; a file that breaks its rules while
-  running is reported once and skipped, as today, and a name an instance file takes from a program entry is refused
-  at the open and skipped with a report when it appears later.
+  does with skill directories. The list of declared paths is part of the configuration and is read at open: a path
+  added to it takes a reopen, and the files inside a declared path are read for each message. A declared path that is
+  missing refuses the open; one that disappears while the instance runs is reported, not read as empty. A file that
+  breaks its rules while running is reported once and skipped, as today; a name an instance file takes from a program
+  entry is refused at the open, and when it appears later the instance's entry is skipped with a report and the
+  program's stays.
 - **Connections and executables** (MCP servers, tools) are read once per open and take effect at an explicit close and
   reopen, which selects one snapshot of the configuration for the life of that open. `dev` restarts after the current
   turns finish when `.mcp.json`, `fastagent.json` or code change; an embedding host closes and reopens itself; no hot
