@@ -461,6 +461,10 @@ would keep its name from the agent's next deployment), both log groups and pendi
 `aws cloudformation delete-stack` alone leaves behind. It prints the account and region first. A read it cannot
 complete stops the command. A stack that does not reach `DELETE_COMPLETE` stops the rest.
 
+It leaves the account's `AWSServiceRoleForBedrockAgentCoreRuntimeIdentity` role in place, one a first deploy created
+included: the role belongs to the account and any other AgentCore runtime uses it. It costs nothing; remove it with
+`aws iam delete-service-linked-role --role-name AWSServiceRoleForBedrockAgentCoreRuntimeIdentity` once nothing uses it.
+
 - Conversations are deleted with the stack. A bucket holding anything besides forwarder packages is kept and
   reported.
 - Webhook registrations on Telegram, Slack or Feishu are not removed. Clear them yourself (Telegram:

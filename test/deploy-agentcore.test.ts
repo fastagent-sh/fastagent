@@ -78,6 +78,10 @@ describe("deploy agentcore: the plan", () => {
     expect(template).not.toContain("AWS::Scheduler::Schedule");
     expect(template).not.toContain("WEBHOOKS_ENABLED"); // no channel: the forwarder relays no webhook
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
+    // A first use of AgentCore in an account needs its role before the stack; the manual path says so as `--run` does.
+    expect(plan.runbook.join("\n")).toContain(
+      "aws iam create-service-linked-role --aws-service-name runtime-identity.bedrock-agentcore.amazonaws.com",
+    );
     // A manual deploy passes the ingress secret, and activates the container THROUGH THE FORWARDER: that is what
     // tells it where to set its alarms (an invoke-agent-runtime call goes through IAM and carries no address).
     expect(plan.runbook.join("\n")).toContain("FastagentIngressSecret=<another random string>");
