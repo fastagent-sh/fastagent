@@ -553,7 +553,7 @@ A container instance:
 /app/definition/          the image: the program, read-only, with its build in dist/ and the release manifest
 /etc/fastagent/           configuration, read-only, delivered with the release: FASTAGENT_CONFIG names its fastagent.json
   fastagent.json  (.mcp.json  AGENTS.md  skills/  prompts/, when an instance adds them)
-/data/                    the volume, the agent's cwd (/mnt/data/ on AgentCore); the image names it with FASTAGENT_STORAGE_DIR
+/data/                    the volume, the agent's cwd (/mnt/data/ on AgentCore), named by FASTAGENT_ROOT
   .state/                 sessions, channel and schedule state, mise's data
   .secrets/               model credentials (auth.json) and MCP grants (mcp-auth.json)
   .deployment/            the lease, and the release last started on this storage
@@ -562,8 +562,7 @@ A container instance:
 environment               secrets injected by the platform, or AgentCore's secret ARN
 ```
 
-This is the layout as built. The target of §4.1 is smaller: `.secrets/` goes (its two files move under `.state/`) and
-the image names the root with `FASTAGENT_ROOT`, as every other host of an instance does.
+This is the layout as built. The target of §4.1 is smaller: `.secrets/` goes, and its two files move under `.state/`.
 
 The volume no longer holds a copy of the definition (today's `/data/definition`): the program lives only in the image,
 and a volume holds only state and work.
