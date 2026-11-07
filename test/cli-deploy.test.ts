@@ -277,31 +277,32 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     expect(delivered.code, delivered.stderr).toBe(0);
     // The configuration decides the deployment's own choices: here, no Agent API key.
     expect(delivered.stderr).toMatch(/Agent API: not served/);
-    const manifest = JSON.parse(await readFile(join(dir, "fastagent.release.json"), "utf8"));
+    const manifest = JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.release.json"), "utf8"));
     // In a directory of its own, apart from the program's, which the image copies to /etc/fastagent/ and names.
     expect(manifest.config).toBeUndefined();
     const dockerfile = await readFile(join(dir, "Dockerfile"), "utf8");
     expect(dockerfile).toContain(
-      "COPY fastagent.deploy/ /etc/fastagent/\nENV FASTAGENT_CONFIG=/etc/fastagent/fastagent.json",
+      "COPY .fastagent/deploy/ /etc/fastagent/\nENV FASTAGENT_CONFIG=/etc/fastagent/fastagent.json",
     );
     // With the app's URL as its http.publicUrl, which Fly's is known before the build: the box points its channels
     // there.
     const flyUrl = expect.stringMatching(/^https:\/\/fa-deploy-config-[a-z0-9-]+\.fly\.dev$/);
-    expect(JSON.parse(await readFile(join(dir, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
+    expect(JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"))).toEqual({
       settings: { repo: "acme/api" },
       http: { api: false, publicUrl: flyUrl },
     });
     // The project's own development configuration stays out of the image.
     const ignore = await readFile(join(dir, ".dockerignore"), "utf8");
     expect(ignore).toMatch(/^\/fastagent\.json$/m);
-    const { default: ignoreMatcher } = await import("ignore");
-    expect(ignoreMatcher().add(ignore).ignores("fastagent.deploy/fastagent.json")).toBe(false);
+    // Docker lets a negation re-include inside an excluded directory, which BuildKit and the classic builder both
+    // answer for `/.fastagent` followed by `!/.fastagent/deploy` (verified); the order is the whole rule.
+    expect(ignore.indexOf("!/.fastagent/deploy")).toBeGreaterThan(ignore.indexOf("\n/.fastagent\n"));
 
     // Every deploy writes it again, whoever wrote it before: a build output, never a file kept as the author's.
     await writeFile(config, JSON.stringify({ settings: { repo: "acme/web" } }));
     const again = await runInProcess(["deploy", "fly", dir, "--config", config]);
     expect(again.code, again.stderr).toBe(0);
-    expect(JSON.parse(await readFile(join(dir, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
+    expect(JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"))).toEqual({
       settings: { repo: "acme/web" },
       http: { publicUrl: flyUrl },
     });
@@ -312,7 +313,7 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     );
     const own = await runInProcess(["deploy", "fly", dir, "--config", config]);
     expect(own.code, own.stderr).toBe(0);
-    expect(JSON.parse(await readFile(join(dir, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
+    expect(JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"))).toEqual({
       settings: { repo: "acme/web" },
       http: { publicUrl: "https://agent.acme.com" },
     });
@@ -324,7 +325,7 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     expect((await runInProcess(["deploy", "fly", other, "--config", config])).code).toBe(0);
     const plain = await runInProcess(["deploy", "fly", other]);
     expect(plain.code, plain.stderr).toBe(0);
-    expect(JSON.parse(await readFile(join(other, "fastagent.deploy", "fastagent.json"), "utf8"))).toEqual({
+    expect(JSON.parse(await readFile(join(other, ".fastagent/deploy", "fastagent.json"), "utf8"))).toEqual({
       http: { publicUrl: expect.stringMatching(/\.fly\.dev$/) },
     });
 

@@ -64,7 +64,7 @@ describe("cli: deploy docker", () => {
     // Keep the marker (it is still ours), change the content: drifted, not disowned.
     await writeFile(compose, `${await readFile(compose, "utf8")}# drifted\n`);
 
-    const release = join(dir, "fastagent.release.json");
+    const release = join(dir, ".fastagent/deploy", "fastagent.release.json");
     const before = await readFile(release, "utf8");
 
     const gated = await runInProcess(["deploy", "docker", dir, "--run"]);

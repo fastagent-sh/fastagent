@@ -5,6 +5,7 @@ import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } f
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
+import { RAILWAYIGNORE_FILE, railwayignore } from "./ignore.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
   // No `port`: Railway injects PORT and the container CMD never names one (unlike Fly's internal_port) — the server
@@ -53,14 +54,14 @@ export function toRailwayName(basename: string): string {
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, channels } = input;
-  const artifacts: Artifact[] = containerArtifacts(input);
+  const artifacts: Artifact[] = [...containerArtifacts(input), { path: RAILWAYIGNORE_FILE, content: railwayignore() }];
 
   const secrets = input.secrets ?? [];
 
   // Order matters, not cosmetics: `railway init` creates a PROJECT with no service, but the volume and variables are
   // service-scoped and `railway up` deploys THE service.
   const runbook: string[] = [
-    `# Deploy to Railway. Dockerfile(.dockerignore) are generated above.`,
+    `# Deploy to Railway. Dockerfile(.dockerignore, .railwayignore) are generated above.`,
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
     ``,
     `# One-time setup (init → service → volume → variables). Skip it on redeploy: repeating it creates`,

@@ -58,9 +58,9 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.artifacts.map((a) => a.path)).toEqual([
       TEMPLATE_FILE,
       FORWARDER_FILE,
-      "fastagent.release.json",
-      "fastagent.deploy/fastagent.json",
-      "fastagent.packages",
+      ".fastagent/deploy/fastagent.release.json",
+      ".fastagent/deploy/fastagent.json",
+      ".fastagent/deploy/fastagent.packages",
       "Dockerfile",
       ".dockerignore",
     ]);

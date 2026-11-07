@@ -718,7 +718,7 @@ each content entry becomes on the host: a `github` one is cloned there (afresh o
 storage starts over); a `local` one stays on this machine, and preflight says how to ship what the agent only reads (the
 agent directory) or work on it from a host (a repository). Git history ships when the host packer permits it, and the
 image installs Git when the agent directory contains `.git` or a content entry is `github`. The agent's `aptPackages`
-join the image's apt layer. Every deploy writes `fastagent.packages` (build output beside the release manifest,
+join the image's apt layer. Every deploy writes `.fastagent/deploy/fastagent.packages` (build output beside the release manifest,
 `BUILD_OUTPUTS`: rewritten every deploy, never kept or stale, and empty without packages), one package per line as mise
 is given it (`packageSpecs`); with packages declared, the generated Dockerfile copies it and installs what it lists with
 the agent's own mise (`install --system`), between the dependency install and `COPY . .`, so the layer is rebuilt only

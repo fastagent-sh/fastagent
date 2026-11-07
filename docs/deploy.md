@@ -32,11 +32,11 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 
 A deployment runs on the program's defaults, and `--config <file>` gives it an instance configuration of its own (a
 `fastagent.json`: model, settings, `http`, `deploy`, repositories it works on). The deploy decides with it (its model,
-whether it serves the Agent API, AgentCore's idle timeout), and carries it in the image: it writes it into `fastagent.deploy/` (a build output, like
-`fastagent.release.json`; `{}` without `--config`), and the generated Dockerfile copies that directory to
+whether it serves the Agent API, AgentCore's idle timeout), and carries it in the image: it writes it into `.fastagent/deploy/` (FastAgent's own directory, git-ignored, with the
+release manifest and the package list; `{}` without `--config`), and the generated Dockerfile copies that directory to
 `/etc/fastagent/` and names it with `FASTAGENT_CONFIG`, which the box reads at every start. A hand-written Dockerfile does
 the same, or a delivered configuration stops `--run`. The `instructions`, `skills` and `prompts` it names travel with it:
-the deploy copies those files and directories into `fastagent.deploy/` with their layout, so a path the configuration
+the deploy copies those files and directories into `.fastagent/deploy/` with their layout, so a path the configuration
 wrote relative to its file resolves the same in `/etc/fastagent/`, and each deploy replaces what an earlier one delivered.
 Only what is inside the configuration's directory can be delivered, written as a relative path: an absolute or `~/` path,
 one outside that directory, one that is not the kind it names, and a skill or prompt template named like the program's
@@ -55,7 +55,7 @@ own. See [`fastagent deploy`](cli.md#commands).
 
 | Requirement | How |
 |---|---|
-| **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
+| **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is recorded in `.fastagent/deploy/fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
 | **The target holds the values** | On Fly and Railway the values live in the target's own store (Fly secrets, the service's variables), on Docker in `.secrets/production/.env`, which Compose reads. `--run` checks names, never carries a file: the names declared by code (`needs([...])`), the variables `context.json` declares and a model key with no login to fall back on must have a value on the target, or `--run` stops before building. At a terminal it asks: the names `.secrets/production/.env` holds are set there from it after one question, the rest are typed without echo. In a coding agent's deploy, or in CI, it stops naming `fastagent secrets push <host>` and `fastagent secrets set <host> <NAME>`; run them, then re-run. A variable the definition does not declare is not pushed. On AgentCore the values are one Secrets Manager secret, `fastagent/<name>`. See [Secrets](cli.md#fastagent-secrets). |
 | **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable is a name the target may hold (set it with `fastagent secrets`), and so is a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Something reaches it** | A channel, a schedule, or the [Agent API](#the-agent-api). A deployment with none of them is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
@@ -491,8 +491,8 @@ directory is the persistent storage:
 └── .deployment/          # the lease, and the release last started here
 ```
 
-- Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json`, and the packages the image
-  installs to `fastagent.packages`, empty without any (both rewritten every time; do not edit them). A new release
+- Every `fastagent deploy <host>` writes a new release id to `.fastagent/deploy/fastagent.release.json`, and the packages the image
+  installs to `.fastagent/deploy/fastagent.packages`, empty without any (both rewritten every time; do not edit them). A new release
   replaces the image, and so the definition; everything on the storage stays. The agent's definition is read as the
   image built it: a change it makes to a copy in its working directory is not read.
 - A file lock at `.deployment/lock` excludes competing starters; do not delete it. Custom images need `flock`. A
@@ -505,7 +505,7 @@ directory is the persistent storage:
   need a restart.
 
 **The environment**: with [packages](configuration.md#environment) declared, `deploy` lists them in
-`fastagent.packages`, and the image copies that file and installs each package at the newest release its version allows,
+`.fastagent/deploy/fastagent.packages`, and the image copies that file and installs each package at the newest release its version allows,
 with the agent's own mise, in a layer that is rebuilt only when the packages or the dependencies change. The packages go
 to mise's system directory (`/usr/local/share/mise`), so a start on the host downloads nothing. The agent's
 `aptPackages` join the image's apt layer. `deploy` checks the packages as `fastagent env add` does, and installs nothing
@@ -516,9 +516,14 @@ declared; without `--run`, these are warnings. Chromium with CJK fonts adds abou
 each with its description, and a deploy whose target has no value for one stops before it builds anything.
 
 **Artifacts** land in the agent directory: `Dockerfile` and `.dockerignore`, and `fastagent.compose.yml` / `fly.toml` /
-`agentcore.template.yaml` (Railway has none of its own). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
-`**/.state`, `/.fastagent`, `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
+`agentcore.template.yaml` (Railway also gets a `.railwayignore`, below). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
+`**/.state`, `/.fastagent` (but not `/.fastagent/deploy`, which the image is built from), `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
 
+- **Railway** uploads the directory with `railway up`, which follows `.gitignore` and only inside a git repository: a
+  project without one would upload its credentials, and one with one would leave out `.fastagent/deploy/`, which
+  `.gitignore` ignores and the image is built from. The generated `.railwayignore` (it outranks `.gitignore`) keeps
+  `.secrets`, `.state`, `content/` and `.env*` home and lets `.fastagent/deploy/` through. One you kept that, with
+  `.gitignore`, would drop that directory warns, and stops `--run`.
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
   never touched.
 - A generated artifact that no longer matches the definition is kept and reported, and gates `--run`.

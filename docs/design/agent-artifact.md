@@ -573,7 +573,7 @@ app (Fly, Railway, AgentCore) or per Compose project, whose volume is the projec
 separation and would move every deployed app's mount.
 
 The configuration rides in the image the deploy builds, in the filesystem hierarchy's place for it: `deploy --config
-<file>` writes it into `fastagent.deploy/` in the build context, a build output like the release manifest, and the
+<file>` writes it into `.fastagent/deploy/` in the build context, with the release manifest and the package list, and the
 generated Dockerfile copies that directory to `/etc/fastagent/` after the build and names it with `FASTAGENT_CONFIG`. Without `--config` the directory holds `{}`: the program's defaults. Every
 host carries it the same way, AgentCore included. It is a directory of its own, never a file in the program's, because
 what an instance configuration names beside it (its `.mcp.json`, its instructions, skills and prompt templates) is read
