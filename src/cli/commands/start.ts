@@ -88,9 +88,9 @@ export async function prepareStartWorkspace(dirArg: string): Promise<string> {
   const root = resolve(storage);
   const manifest = parseDeploymentRelease(await readFile(manifestPath, "utf8"));
   await prepareDeployment(root, manifest);
+  process.env[INSTANCE_ROOT_ENV] = root;
   // Defaults, not overrides: an operator who pointed a directory somewhere else meant it, and silently relocating
   // their state is the one failure they could not diagnose from the logs.
-  process.env[INSTANCE_ROOT_ENV] = root;
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
   // mise's data directory, on the storage rather than the container's disk. The image's packages are in mise's system
