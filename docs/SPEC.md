@@ -504,8 +504,6 @@ type InstanceInputs<Settings = unknown> = {
   secrets?: Record<string, string>;
   /** The base environment of the processes the agent starts. Default: empty. `baseEnv(process.env)` is the app's. */
   env?: Record<string, string>;
-  /** The instance's name. Default: the definition's name, as one path segment. */
-  name?: string;
   /** Where the model credentials are kept. Default: `auth.json` in the state directory. */
   credentials?: CredentialStore;
   mcp?: McpOptions;
@@ -552,6 +550,12 @@ interface InstanceConfig<Settings = unknown> {
     }
   >;
   settings?: Partial<Settings>;
+  /**
+   * The instance's name, one path segment of letters, digits, `-` and `_`, any other value refusing the open. Default: the
+   * definition's name made one (`@scope/pkg` is `scope-pkg`). The CLI's `--name` and `FASTAGENT_NAME` override it. It is
+   * the instance's, so the program's `defaults` do not carry it.
+   */
+  name?: string;
   /** Content the instance adds to the program's: a name may not be one the program declares. */
   content?: Record<string, { github: string; ref?: string } | { path: string }>;
   /**
@@ -665,8 +669,7 @@ relative one is refused rather than resolved against the process's working direc
   and `context.json`'s environment declare; a stdio MCP server's own `env`; and `GIT_CEILING_DIRECTORIES` at the
   workspace's parent. Nothing else of the host's reaches it. A model provider's
   variable and a value an MCP declaration references in its headers reach no process.
-- `name` names the instance: `info().name` is it, and what FastAgent creates for the instance outside its root is
-  named after it.
+- `name` (of `config`) names the instance: `info().name` is it, and so is what a host reports of it.
 - `http` is how the instance is served: `listen` defaults to `http.port`, and with `http.api: false`, `serve` refuses
   `apiKeys` instead of serving the HTTP API. `deploy` is read by `fastagent deploy` only.
 - The open prepares the declared environment, clones the content and opens the instance's storage, which one process
