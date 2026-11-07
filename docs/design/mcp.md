@@ -13,6 +13,12 @@ The consumer [Agent API](../SPEC.md) sessions/messages are unchanged.
 
 ## 1. Decided boundary
 
+**Target (the [artifact design](agent-artifact.md) §3.3 supersedes the next bullet for the program's servers, §3's "carries
+`.mcp.json`" and §5's first row):** the program's servers are the `mcpServers` map of its `context.json`, published with it;
+an instance adds its own under `mcpServers` in its `fastagent.json`, the same entry shape, layered on the program's and
+never replacing it, a name in both refusing the open. FastAgent reads and writes no `.mcp.json`: it is the coding
+tools' file. The boundary below describes 0.29.0, where one `.mcp.json` did both jobs.
+
 - Call the feature **MCP servers**. There is no generic `Connector` interface or configuration kind.
 - The agent directory's **`.mcp.json`**, with a top-level **`mcpServers`** map, is the one configuration source.
   Do not also define servers in `context.json`, `fastagent.config.ts`, or a machine-wide MCP configuration.

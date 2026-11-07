@@ -11,7 +11,7 @@ status: implemented
 an author declares and what an agent sees, not how it is stored or implemented, and it does not cover
 synchronization, distribution or deployment (§8). Tracking issue: [#684](https://github.com/fastagent-sh/fastagent/issues/684).
 The [artifact design](agent-artifact.md) changes the target: an immutable built definition, opened with explicit
-instance inputs (configuration in `fastagent.json` and `.mcp.json`, secrets, state, a workspace apart from the program),
+instance inputs (configuration in `fastagent.json`, secrets, state, a workspace apart from the program),
 so it assembles the same way in development, inside an app and on a host. Those are not current 0.29.0 behavior; this note's own-directory, shared-content and self-edit rules describe the existing source-directory model,
 not constraints that the new design must preserve.
 
