@@ -553,12 +553,16 @@ A container instance:
 /app/definition/          the image: the program, read-only, with its build in dist/ and the release manifest
 /etc/fastagent/           configuration, read-only, delivered with the release: FASTAGENT_CONFIG names its fastagent.json
   fastagent.json  (.mcp.json  AGENTS.md  skills/  prompts/, when an instance adds them)
-/data/                    the volume, FASTAGENT_ROOT: the agent's cwd (/mnt/data/ on AgentCore)
-  .state/
+/data/                    the volume, the agent's cwd (/mnt/data/ on AgentCore), named by FASTAGENT_ROOT
+  .state/                 sessions, channel and schedule state, mise's data
+  .secrets/               model credentials (auth.json) and MCP grants (mcp-auth.json)
+  .deployment/            the lease, and the release last started on this storage
   content/<entry>/
   ...
 environment               secrets injected by the platform, or AgentCore's secret ARN
 ```
+
+This is the layout as built. The target of §4.1 is smaller: `.secrets/` goes, and its two files move under `.state/`.
 
 The volume no longer holds a copy of the definition (today's `/data/definition`): the program lives only in the image,
 and a volume holds only state and work.
@@ -570,8 +574,7 @@ separation and would move every deployed app's mount.
 
 The configuration rides in the image the deploy builds, in the filesystem hierarchy's place for it: `deploy --config
 <file>` writes it into `fastagent.deploy/` in the build context, a build output like the release manifest, and the
-generated Dockerfile copies that directory to `/etc/fastagent/` after the build (a change of configuration builds nothing
-again) and names it with `FASTAGENT_CONFIG`. Without `--config` the directory holds `{}`: the program's defaults. Every
+generated Dockerfile copies that directory to `/etc/fastagent/` after the build and names it with `FASTAGENT_CONFIG`. Without `--config` the directory holds `{}`: the program's defaults. Every
 host carries it the same way, AgentCore included. It is a directory of its own, never a file in the program's, because
 what an instance configuration names beside it (its `.mcp.json`, its instructions, skills and prompt templates) is read
 from its own directory. It carries no name, as `/data` does not: an image holds one agent. A mounted configuration (a

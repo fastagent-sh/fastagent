@@ -209,7 +209,7 @@ export const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
 const BUILD_STEP_NOTE = "# `start` opens dist/, which an upload that follows .gitignore leaves out: build it here.";
 
 /**
- * The instance configuration's layer, after the build so a change of configuration builds nothing again: the directory
+ * The instance configuration's layer, after the build: the directory
  * the deploy wrote, read-only where the image's configuration goes, and named to `start`.
  */
 const CONFIG_LAYER = `# The instance configuration \`deploy --config\` delivers ({} without one: the program's defaults).
