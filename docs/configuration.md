@@ -15,7 +15,7 @@ status: current
 
 ## Two configuration files
 
-An agent has two files with similar names. They answer different questions:
+An agent's program has one configuration file, `fastagent.config.ts`; an instance of it may have another, `fastagent.json`. They answer different questions:
 
 | | `fastagent.config.ts` | `fastagent.json` |
 |---|---|---|
@@ -23,10 +23,10 @@ An agent has two files with similar names. They answer different questions:
 | Written by | The author, published with the agent | The person or machine running one instance |
 | Holds | Constants (`name`, `description`, `providers`, `extensions`), the `settings` schema, and `defaults`: what an instance starts with | Overrides of `defaults` (`model`, `http`, `deploy`, `channels`), values for `settings`, and what only an instance adds: `content`, `instructions`, `skills`, `prompts` |
 | Format | TypeScript: it can import, and `defineAgent` types it | JSON, with a `$schema` for completion; no code |
-| Read by | Every command: `dev` as source, `build` into `dist/` | `dev`: the one at the project root. `start` and `deploy`: only the one `--config` names. An app: the `config` it passes `openAgent` |
+| Read by | Every command: `dev` as source, `build` into `dist/` | `--config` (or `FASTAGENT_CONFIG`) names the file for every command; without it `dev` reads the one at the project root, and `start` and `deploy` read none. An app: the `config` it passes `openAgent` |
 | In git | Committed | The development one is ignored by the scaffold's `.gitignore` (it is one person's); a deployment's is delivered by `deploy --config` |
 
-One agent run for two customers: the author writes `settings: obj({ repo: str() })` in `fastagent.config.ts` once, and
+Take one agent that runs for two customers: the author writes `settings: obj({ repo: str() })` in `fastagent.config.ts` once, and
 each customer's instance writes `{ "settings": { "repo": "acme/api" } }` in its own `fastagent.json`. Same program, two
 instances. Precedence is in [Model selection](#model-selection) and [Instance configuration](#instance-configuration).
 
