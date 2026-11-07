@@ -487,7 +487,7 @@ interface DeclaredSecret {
    * model provider's variable, so it is optional.
    */
   optional: boolean;
-  /** Every place it is declared: a module of `src/`, `mcp.json`, `context.json`, the default model's provider. */
+  /** Every place it is declared: a module of `src/`, `context.json` (its environment, and the references of its `mcpServers`), the default model's provider. */
   declaredIn: string[];
   /**
    * Set when only some channels' ways of receiving read it (`byIngress`): an instance needs it only when one of these
@@ -502,7 +502,9 @@ type InstanceInputs<Settings = unknown> = {
   config?: InstanceConfig<Settings> | string;
   /**
    * MCP servers the instance adds, in `.mcp.json`'s standard shape, or the absolute path of one. Default: the
-   * `.mcp.json` beside a `config` path. A stdio server given as an object carries an absolute `cwd`.
+   * `.mcp.json` beside a `config` path. They add to the program's (`context.json`'s `mcpServers`): a name both declare
+   * refuses the open. A stdio server runs in the instance's workspace, and one given as an object names a command that
+   * is a bare name or an absolute path. `inspectMcp` and `signInMcp` take the same input.
    */
   mcpServers?: { mcpServers: Record<string, object> } | string;
   /** Secret values: the declared names, and model providers' variables. No variable of the host's reaches the agent. */
