@@ -374,10 +374,15 @@ any role named `fastagent-*` with any permissions and hand it to a function they
 principal as able to escalate within the account; a permissions boundary on those roles would narrow that, and was not
 tried. It is a verified set, not a proven minimum.
 
-The `Slr` statement lets a first deploy into an account create the two service-linked roles AgentCore uses. Against real
+The `Slr` statement is for a first deploy into an account that has never used AgentCore. What was measured: against real
 IAM, `CreateServiceLinkedRole` for `runtime-identity.` and `network.bedrock-agentcore.amazonaws.com` passed authorization
-(the roles already existed, so IAM answered that the name is taken) and one for an unrelated service was denied. The
-creation itself was not exercised: the account held both roles, in use by other runtimes.
+and one for an unrelated service was denied; and in a second account that held the `RuntimeIdentity` role but not the
+`Network` one, a `PUBLIC`-mode deploy with this policy succeeded and neither
+created that role nor called `CreateServiceLinkedRole`. So `network.` is probably not needed for what `deploy agentcore`
+generates (`NetworkMode: PUBLIC`) and is left in as the one a VPC mode would use. Creating the `RuntimeIdentity` role by
+a deploy was not exercised: both accounts already held it. If a first deploy into a new account stops at the runtime with
+a bare `AccessDenied`, have someone with IAM rights run
+`aws iam create-service-linked-role --aws-service-name runtime-identity.bedrock-agentcore.amazonaws.com`, then deploy again.
 
 ```json
 {"Version":"2012-10-17","Statement":[
