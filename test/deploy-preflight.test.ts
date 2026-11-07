@@ -203,7 +203,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // the ordinary multi-variable spelling: reading only the first name after `ENV` false-gates a working file.
     for (const env of [
       "ENV FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
-      "ENV FASTAGENT_STORAGE_DIR=/data FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
+      "ENV FASTAGENT_ROOT=/data FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
     ]) {
       const own = await agent({ Dockerfile: `FROM node:22-slim\n${env}\n` });
       await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");

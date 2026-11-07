@@ -83,14 +83,14 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 export async function prepareStartWorkspace(dirArg: string): Promise<string> {
   const manifestPath = process.env.FASTAGENT_RELEASE_FILE;
   if (!manifestPath) return dirArg;
-  const storage = process.env.FASTAGENT_STORAGE_DIR;
-  if (!storage) throw new Error("FASTAGENT_STORAGE_DIR is required for a deployment");
+  const storage = process.env[INSTANCE_ROOT_ENV];
+  if (!storage) throw new Error(`${INSTANCE_ROOT_ENV} is required for a deployment`);
   const root = resolve(storage);
   const manifest = parseDeploymentRelease(await readFile(manifestPath, "utf8"));
   await prepareDeployment(root, manifest);
   // Defaults, not overrides: an operator who pointed a directory somewhere else meant it, and silently relocating
   // their state is the one failure they could not diagnose from the logs.
-  process.env[INSTANCE_ROOT_ENV] ||= root;
+  process.env[INSTANCE_ROOT_ENV] = root;
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
   // mise's data directory, on the storage rather than the container's disk. The image's packages are in mise's system

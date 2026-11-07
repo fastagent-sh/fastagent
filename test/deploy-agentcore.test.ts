@@ -72,6 +72,7 @@ describe("deploy agentcore: the plan", () => {
     expect(template).not.toContain("EfsAccessPoint");
     expect(template).toContain('FASTAGENT_AGENTCORE: "1"');
     expect(template).toContain('PORT: "8080"');
+    expect(template).toContain(`FASTAGENT_ROOT: ${MOUNT}`);
     expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}/.state`);
     expect(template).toContain(`FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`);
     expect(template).toContain("AWS::Lambda::Function");

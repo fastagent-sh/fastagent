@@ -143,6 +143,9 @@ describe("deploy/container: shared Docker context", () => {
       expect(content).toMatch(/^WORKDIR \/app\/definition$/m);
       expect(content).toMatch(/"start", "\/app\/definition"\]$/m);
       expect(content).not.toContain("FASTAGENT_AGENT");
+      // The root is one variable on the box, as everywhere else an instance is placed.
+      expect(content).toMatch(/^ENV FASTAGENT_ROOT=\/data$/m);
+      expect(content).not.toContain("STORAGE_DIR");
     }
     const manifest = containerArtifacts(input).find((a) => a.path === "fastagent.release.json")!;
     expect(JSON.parse(manifest.content)).toEqual({ version: 1, id: "release-one", agent: "reviewer" });

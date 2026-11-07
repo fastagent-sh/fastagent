@@ -210,7 +210,7 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
   const envLines: string[] = [
     `        PORT: "8080"`, // the Runtime service contract's fixed port (config.http.port does not apply here)
     `        FASTAGENT_AGENTCORE: "1"`, // serve mounts /invocations + /ping, arms no resident cron
-    `        FASTAGENT_STORAGE_DIR: ${MOUNT}`,
+    `        FASTAGENT_ROOT: ${MOUNT}`,
     `        FASTAGENT_STATE_DIR: ${MOUNT}/.state`,
     `        FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`,
     `        ${SECRET_ARN_ENV}: !Ref SecretArn`,

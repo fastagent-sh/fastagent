@@ -62,7 +62,7 @@ const STDIO_PREDATED = JSON.stringify({
   message: BOX_CLI_PREDATES,
 }).replaceAll('"', '\\"');
 
-/** Where a generated image keeps its storage (`FASTAGENT_STORAGE_DIR`); every host mounts its volume here. */
+/** Where a generated image keeps its storage (`FASTAGENT_ROOT`); every host mounts its volume here. */
 const STORAGE_DIR = "/data";
 
 /** Where a generated image holds the definition: the build context, which is the agent directory. */
@@ -93,7 +93,7 @@ export function boxLoginCommand(
     ...(storage
       ? [`root="${storage}"`, `export FASTAGENT_SECRETS_DIR="$root/.secrets"`]
       : [
-          `root="\${FASTAGENT_STORAGE_DIR:-${STORAGE_DIR}}"`,
+          `root="\${FASTAGENT_ROOT:-${STORAGE_DIR}}"`,
           `export FASTAGENT_SECRETS_DIR="\${FASTAGENT_SECRETS_DIR:-$root/.secrets}"`,
         ]),
     `cd "${program}" || exit 1`,
@@ -226,7 +226,7 @@ function dockerfile(input: ContainerInput): string {
   // slim image lacks.
   const apt = aptLayer(input.apt);
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
-  const deployment = `ENV FASTAGENT_RELEASE_FILE=${dir}/${RELEASE_FILE}\nENV FASTAGENT_STORAGE_DIR=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
+  const deployment = `ENV FASTAGENT_RELEASE_FILE=${dir}/${RELEASE_FILE}\nENV FASTAGENT_ROOT=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   const environment = input.packages && input.packages.length > 0 ? environmentLayer(dir) : "";
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : NODE_IMAGE;

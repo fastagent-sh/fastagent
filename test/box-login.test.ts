@@ -41,7 +41,7 @@ function onBox(command: string, env: NodeJS.ProcessEnv) {
 
 const envFor = (root: string, bin: string): NodeJS.ProcessEnv => {
   const { FASTAGENT_SECRETS_DIR: _s, FASTAGENT_AUTH_PATH: _a, ...rest } = process.env;
-  return { ...rest, PATH: `${bin}:/usr/bin:/bin`, FASTAGENT_STORAGE_DIR: root };
+  return { ...rest, PATH: `${bin}:/usr/bin:/bin`, FASTAGENT_ROOT: root };
 };
 
 describe("the box half of `login --deployment`", () => {
@@ -181,7 +181,7 @@ export default {
       join(agentDir, "node_modules", ".bin", "fastagent"),
       `echo "error: unknown option '--stdio'" >&2; exit 2`,
     );
-    vi.stubEnv("FASTAGENT_STORAGE_DIR", root);
+    vi.stubEnv("FASTAGENT_ROOT", root);
     try {
       const failed = await loginOnBox({
         host: "fly",
