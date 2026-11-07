@@ -25,17 +25,20 @@ Install the server and its runtime in the agent's environment, then declare its 
 {
   "mcpServers": {
     "project": {
-      "command": "node",
-      "args": ["./node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "./content/project"],
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/srv/project"],
       "env": { "LOG_LEVEL": "info" }
     }
   }
 }
 ```
 
-This example requires the server package and an existing `content/project` directory. FastAgent does not install MCP
-packages automatically. Commands containing a path resolve relative to the agent directory; bare names use the instance's
-PATH. The server runs with the agent directory as cwd, with arguments passed verbatim, without a shell.
+FastAgent does not install MCP packages automatically: `npx -y` fetches the server when it first starts. A command
+containing a path resolves relative to the file that declares it (the program's `context.json` against its package, an
+instance's `fastagent.json` against its own directory); bare names use the instance's PATH. The server runs in the
+instance's working directory, whoever declared it, with arguments passed verbatim (so a path in `args` is relative to that
+directory, and a script is better named absolutely or run by `npx`), without a shell. A program's command that is a path
+must be a file `build` copies (put it under `assets/`): `build` refuses one that `dev` would run and a box would not find.
 
 Only execution necessities (`PATH`, `HOME`, `USERPROFILE`, `SystemRoot`, `SYSTEMROOT`, `TEMP`, `TMP`, `TMPDIR`, `LANG`,
 `LC_ALL`) and the server's declared `env` are forwarded. The SDK may also inherit its small platform-default environment;

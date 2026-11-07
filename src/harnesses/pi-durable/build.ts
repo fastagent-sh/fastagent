@@ -291,12 +291,16 @@ function requireShippedCommands(dir: string, staging: string): void {
     const inProject = resolve(dir, command);
     const shipped = join(staging, relative(dir, inProject));
     if (isUnderDir(inProject, dir) && existsSync(shipped)) continue;
+    const dependency = isUnderDir(inProject, dir) && relative(dir, inProject).split(sep)[0] === "node_modules";
     throw new Error(
       `${file} mcpServers.${name}: the command "${command}" ` +
-        (existsSync(inProject)
-          ? `is not in ${DIST_DIR}/, which holds only what the build copies (assets/, skills/, prompts/ and the ` +
-            `resources beside code): move it under assets/`
-          : `does not exist in the project`),
+        (dependency
+          ? `is in node_modules, which the box installs for itself and ${DIST_DIR}/ does not hold: run the package by ` +
+            `name (\`npx <package>\`) or give the absolute path it has there`
+          : existsSync(inProject)
+            ? `is not in ${DIST_DIR}/, which holds only what the build copies (assets/, skills/, prompts/ and the ` +
+              `resources beside code): move it under assets/`
+            : `does not exist in the project`),
     );
   }
 }

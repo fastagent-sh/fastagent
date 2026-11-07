@@ -278,6 +278,33 @@ describe("fastagent build", () => {
       expect(listing(dist)).toEqual(before);
     });
 
+    it("names a dependency's executable for what it is, not as a file to move under assets/", async () => {
+      const dir = project({ "context.json": servers("./node_modules/.bin/mcp-server") });
+      mkdirSync(join(dir, "node_modules/.bin"), { recursive: true });
+      writeFileSync(join(dir, "node_modules/.bin/mcp-server"), "#!/bin/sh\n");
+      const refusal = await buildProject(dir).then(
+        () => undefined,
+        (error: Error) => error.message,
+      );
+      expect(refusal).toMatch(
+        /the command "\.\/node_modules\/\.bin\/mcp-server" is in node_modules, which the box installs/,
+      );
+      expect(refusal).toContain("npx <package>");
+      expect(refusal).not.toContain("under assets/");
+    });
+
+    it("refuses an mcpServers that cannot be read before dist/ is replaced, and leaves the one before", async () => {
+      const dir = project({ "context.json": servers("npx") });
+      const { dist } = await buildProject(dir);
+      const before = listing(dist);
+      writeFileSync(
+        join(dir, "context.json"),
+        JSON.stringify({ mcpServers: { x: { type: "sse", url: "https://x.test" } } }),
+      );
+      await expect(buildProject(dir)).rejects.toThrow(/context\.json: invalid MCP configuration/);
+      expect(listing(dist)).toEqual(before);
+    });
+
     it("refuses one that is not in the project at all, and one that points out of it", async () => {
       const missing = project({ "context.json": servers("./assets/missing") });
       await expect(buildProject(missing)).rejects.toThrow(
