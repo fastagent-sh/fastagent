@@ -8,9 +8,23 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { type Schema, arr, bool, compile, int, map, obj, oneOf, opt, str, union } from "@earendil-works/pi-schema";
+import {
+  type Schema,
+  arr,
+  bool,
+  compile,
+  int,
+  map,
+  obj,
+  oneOf,
+  opt,
+  str,
+  union,
+  unknown,
+} from "@earendil-works/pi-schema";
 import type { ContentEntry } from "../../content/declare.ts";
 import { instanceContent } from "../../content/file.ts";
+import { type McpServerDeclaration, checkInstanceServers } from "../../mcp/config.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { INSTANCE_CONFIG_ENV, INSTANCE_CONFIG_FILE, resolveOverridePath } from "../../paths.ts";
 import type { AgentConfig, AgentDefaults, Ingress } from "./define.ts";
@@ -23,6 +37,8 @@ import type { AgentDefinition } from "./definition.ts";
  */
 export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings> & {
   content?: Record<string, ContentEntry>;
+  /** MCP servers the instance adds to the program's: a name both declare refuses the open. */
+  mcpServers?: Record<string, McpServerDeclaration>;
   instructions?: string[];
   skills?: string[];
   prompts?: string[];
@@ -133,6 +149,11 @@ export function instanceConfigSchema(settings: Schema | undefined): Schema {
     $schema: opt(str()),
     ...shape(settings),
     content: opt(map(CONTENT_ENTRY)),
+    mcpServers: opt(
+      map(unknown(), {
+        description: "MCP servers this instance adds to the program's, by name, in the MCP ecosystem's entry shape",
+      }),
+    ),
     instructions: paths("Files of instructions added after the program's AGENTS.md, relative to this file"),
     skills: paths(
       "Directories of skills (one SKILL.md per subdirectory) added to the program's, relative to this file",
@@ -205,6 +226,7 @@ function checkInstanceConfig(source: InstanceConfigSource, settings: Schema | un
   if (typeof values === "object" && values !== null) {
     // Its own refusals name the entry and say what is wrong with it, which a schema's cannot.
     instanceContent(source);
+    checkInstanceServers(source);
   }
   checkValues(values, settings, label, instanceConfigSchema);
   const { $schema: _schema, ...config } = values as Record<string, unknown>;
@@ -232,6 +254,11 @@ export async function namedInstanceConfig(
 ): Promise<InstanceConfigSource | undefined> {
   const path = resolveOverridePath(env[INSTANCE_CONFIG_ENV]);
   return path === undefined ? undefined : readInstanceConfigFile(path);
+}
+
+/** The instance configuration `dev` runs a project with: the one named by `--config` or `FASTAGENT_CONFIG`, else the project's own. */
+export async function devInstanceConfig(dir: string): Promise<InstanceConfigSource | undefined> {
+  return (await namedInstanceConfig()) ?? (await projectInstanceConfig(dir));
 }
 
 /** The `fastagent.json` a development project holds at its root, when it holds one. */

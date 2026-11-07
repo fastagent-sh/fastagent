@@ -303,7 +303,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const modelSpec = model.spec;
 
   const declaredSecrets = [
-    ...(definition ? definitionSecrets(definition, config) : declaredVariables(loadEnvironment(agentDir))),
+    ...(definition
+      ? definitionSecrets(definition, config, delivered?.source)
+      : declaredVariables(loadEnvironment(agentDir))),
     // The host's clone of a github entry reads it, so `secrets list|push|set` and `deploy` know the name.
     ...(content.some((entry) => entry.kind === "github") ? [GITHUB_TOKEN_SECRET] : []),
   ];

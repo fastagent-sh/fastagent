@@ -16,7 +16,7 @@ mechanics and exposes its own types, without leaking SDK types into an embedding
 
 | Identity | Meaning | Owner |
 |---|---|---|
-| Server name | A declaration in `.mcp.json`, such as `linear`; not a credential key | Agent definition |
+| Server name | A declaration in `mcpServers`, such as `linear`; not a credential key | Agent definition or instance |
 | Grant ID | An opaque ID allocated for one completed authorization, not an account ID inferred from a token | Grant store |
 | Binding | This instance chooses this grant for this declared server | Embedding host, or CLI instance state |
 
@@ -45,7 +45,7 @@ and reopens the affected instance; no hidden hot-swapping of credentials under a
 | `openAgent(dir, { stateDir, mcp: { store, bindings } })` | Resolve the named grants for this instance, validate their targets and open clients. Never launches browser login implicitly |
 
 A binding map is `Readonly<Record<string, string>>`: declared server name to opaque grant ID. MCP declarations remain
-solely in `.mcp.json`; the host does not pass a second map of commands or URLs.
+solely in `mcpServers` (the program's `context.json`, the instance's `fastagent.json`); the host does not pass a second map of commands or URLs.
 
 `inspectMcp` reports local authorization separately from connectivity: no binding, usable locally, refresh needed,
 reauthorization needed, or binding mismatch. An unreadable/corrupt store rejects; it is not an empty store. A locally

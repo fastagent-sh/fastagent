@@ -190,7 +190,7 @@ join-on-interrupt combinator that differed only in the word before `Failure`.
 built `dist/` (`loadProjectBuild`, `built.ts`), with where the Agent keeps its sessions and what becomes of an earlier
 process's messages; an app calls `openAgent(definition, { root })`, which is it with a serve's defaults, and may give
 its own credential store and `{ stateDir, workdir }`. The definition's own directory (`definition.dir`) is only read:
-its text, `context.json`, `.mcp.json` and declared environment. The instance's directory (`workdir`) holds everything
+its text, `context.json` (with its `mcpServers`) and declared environment. The instance's directory (`workdir`) holds everything
 that is written: the agent's working directory, its secrets, its content's clones and, by default, its state. A source
 project is its own instance directory. It works in this order:
 

@@ -5,7 +5,7 @@
 import { loadEnvironment } from "../../content/file.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { declaredVariables } from "../../environment/declare.ts";
-import { mcpSecrets } from "../../mcp/config.ts";
+import { type McpInstance, declareMcp, mcpSecrets } from "../../mcp/config.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { servedByDev } from "../../serving-command.ts";
 import { type AgentConfig, type Ingress, isByIngress, isNeeds } from "./define.ts";
@@ -201,7 +201,14 @@ export function codeSecrets(definition: Declaring, config?: ChannelsConfig): Dec
   ];
 }
 
-/** Every declaration of a secret, each where it is: the code's, then `mcp.json`'s references. */
-export function definitionSecrets(definition: Declaring, config?: ChannelsConfig): DeclaredSecret[] {
-  return [...codeSecrets(definition, config), ...mcpSecrets(definition.dir)];
+/**
+ * Every declaration of a secret, each where it is: the code's, then the references of the MCP servers, the program's
+ * and, given `instance`, the ones it adds.
+ */
+export function definitionSecrets(
+  definition: Declaring,
+  config?: ChannelsConfig,
+  instance?: McpInstance,
+): DeclaredSecret[] {
+  return [...codeSecrets(definition, config), ...mcpSecrets(declareMcp(definition.dir, instance))];
 }

@@ -18,9 +18,11 @@ export interface ContextFile {
   content: Record<string, ContentEntry>;
   declared: DeclaredContent[];
   environment?: DeclaredEnvironment;
+  /** The program's MCP servers as written. Their shape is the MCP reader's to check; an edit keeps them as they are. */
+  mcpServers?: Record<string, unknown>;
 }
 
-const FILE_KEYS = ["$schema", "content", "environment"] as const;
+const FILE_KEYS = ["$schema", "content", "environment", "mcpServers"] as const;
 
 /** `text`, the contents of `path`, as the object a context file is: refused when the file itself is wrong. */
 function parseFile(text: string, path: string): Record<string, unknown> {
@@ -39,6 +41,12 @@ function parseFile(text: string, path: string): Record<string, unknown> {
   }
   if (file.$schema !== undefined && typeof file.$schema !== "string") {
     throw new Error(`${path}: "$schema" must be a string`);
+  }
+  if (
+    file.mcpServers !== undefined &&
+    (typeof file.mcpServers !== "object" || file.mcpServers === null || Array.isArray(file.mcpServers))
+  ) {
+    throw new Error(`${path}: "mcpServers" must be an object of servers by name`);
   }
   return file;
 }
@@ -62,6 +70,7 @@ export function parseContextFile(text: string, path: string): ContextFile {
     content: (file.content ?? {}) as Record<string, ContentEntry>,
     declared,
     ...(environment !== undefined ? { environment } : {}),
+    ...(file.mcpServers !== undefined ? { mcpServers: file.mcpServers as Record<string, unknown> } : {}),
   };
 }
 
@@ -125,11 +134,18 @@ export function loadEnvironment(agentDir: string): DeclaredEnvironment | undefin
   return declarePart(path, () => declareEnvironment(file.environment));
 }
 
+/** The program's `mcpServers` map as written in `context.json`, and the file's path, which names it in a refusal. */
+export function readProgramMcpServers(agentDir: string): { values: unknown; path: string } {
+  const { path, text } = contextFileAt(agentDir);
+  return { values: text === undefined ? undefined : parseFile(text, path).mcpServers, path };
+}
+
 /** The text `context.json` is written as. An environment that declares nothing is left out. */
 export function contextFileText(file: {
   $schema?: string;
   content: Record<string, ContentEntry>;
   environment?: DeclaredEnvironment;
+  mcpServers?: Record<string, unknown>;
 }): string {
   const packages = file.environment?.packages ?? {};
   const aptPackages = file.environment?.aptPackages ?? [];
@@ -143,6 +159,9 @@ export function contextFileText(file: {
     ...(file.$schema !== undefined ? { $schema: file.$schema } : {}),
     content: file.content,
     ...(Object.keys(environment).length > 0 ? { environment } : {}),
+    ...(file.mcpServers !== undefined && Object.keys(file.mcpServers).length > 0
+      ? { mcpServers: file.mcpServers }
+      : {}),
   };
   return `${JSON.stringify(out, null, 2)}\n`;
 }

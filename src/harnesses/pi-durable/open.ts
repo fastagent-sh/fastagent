@@ -28,13 +28,7 @@ import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isByIngress, isNeeds } from "./define.ts";
-import {
-  type EffectiveConfig,
-  type InstanceConfigSource,
-  checkProgramConfig,
-  namedInstanceConfig,
-  projectInstanceConfig,
-} from "./config.ts";
+import { type EffectiveConfig, type InstanceConfigSource, checkProgramConfig, devInstanceConfig } from "./config.ts";
 import {
   type AgentDefinition,
   type ChannelsConfig,
@@ -85,7 +79,7 @@ export interface Project {
 /** The development project in `dir`, as `dev` opens it: its source and the `fastagent.json` at its root, if any. */
 export async function loadDevProject(dir: string): Promise<Project> {
   const definition = await loadSourceDefinition(dir);
-  const instance = (await namedInstanceConfig()) ?? (await projectInstanceConfig(dir));
+  const instance = await devInstanceConfig(dir);
   return instance === undefined ? { definition } : { definition, instance };
 }
 

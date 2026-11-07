@@ -3,7 +3,8 @@ import { confirm, isCancel } from "@clack/prompts";
 import { inspectMcp, mcpContext, writeMcpBinding, httpServer } from "../../mcp/host.ts";
 import { signInMcp } from "../../mcp/sign-in.ts";
 import { holdingInstance } from "../../harnesses/pi-durable/serve.ts";
-import { resolveMcpServers } from "../../mcp/config.ts";
+import { declareMcp, mcpInstance, resolveMcpServers } from "../../mcp/config.ts";
+import { devInstanceConfig } from "../../harnesses/pi-durable/config.ts";
 import { McpError } from "../../mcp-api.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
@@ -62,13 +63,18 @@ export async function runMcp(
   if (environment !== "dev" && environment !== "production") return failUsage("--env must be dev or production");
   selectAgentEnvironment(environment);
   enterAgentEnv(target);
+  // The servers `dev` opens: the program's, and the configuration `--config` or the project names adds its own.
+  const config = (await devInstanceConfig(target).catch(failStartup))?.label;
   if (action === "list") {
-    const servers = await inspectMcp(target).catch(failStartup);
+    const servers = await inspectMcp(target, config === undefined ? {} : { config }).catch(failStartup);
     if (options.json) console.log(JSON.stringify(servers));
     else for (const item of servers) console.log(`${item.name}\t${item.transport}\t${item.authorization}`);
     return;
   }
-  if (!server) return failUsage(`mcp ${action} needs a server name from .mcp.json`);
+  if (!server)
+    return failUsage(
+      `mcp ${action} needs a server name from the program's context.json or the instance's fastagent.json`,
+    );
   const context = mcpContext(target);
   if (action === "disconnect") {
     await holdingInstance(context.stateRoot, () => writeMcpBinding(context.stateRoot, server, undefined)).catch(
@@ -81,13 +87,18 @@ export async function runMcp(
         server,
         grant_revoked: false,
         agent_next_steps:
-          "The instance binding was removed. The stored grant was not revoked; reauthorize or update .mcp.json before reopening.",
+          "The instance binding was removed. The stored grant was not revoked; reauthorize or update the server's declaration before reopening.",
       },
-      ["Binding removed; the stored grant was not revoked. Reauthorize or update .mcp.json before reopening."],
+      [
+        "Binding removed; the stored grant was not revoked. Reauthorize or update the server's declaration before reopening.",
+      ],
     );
     return;
   }
-  httpServer(resolveMcpServers(target, context.environment, server, target, {}), server);
+  httpServer(
+    resolveMcpServers(declareMcp(target, mcpInstance(config)), context.environment, server, target, {}),
+    server,
+  );
   const seconds = options.timeout === undefined ? 900 : Number(options.timeout);
   if (!Number.isInteger(seconds) || seconds <= 0)
     return failUsage("--timeout must be a positive whole number of seconds");
@@ -103,6 +114,7 @@ export async function runMcp(
   const run = async (step?: TicketStep) => {
     const grant = await signInMcp({
       agentDir: target,
+      ...(config === undefined ? {} : { config }),
       server,
       store: context.auth.store,
       scopes,

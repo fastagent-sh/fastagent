@@ -2,13 +2,19 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as Schema from "effect/Schema";
-import { type McpAuthorization, McpError, type McpOptions, type McpServerSummary } from "../mcp-api.ts";
+import {
+  type McpAuthorization,
+  McpError,
+  type McpInspectOptions,
+  type McpOptions,
+  type McpServerSummary,
+} from "../mcp-api.ts";
 import { resolveSecretsDir, resolveStateRoot } from "../paths.ts";
 import { agentValues, prepareSecretsDirectory, unprotectedSecretsNote } from "../value-file.ts";
 import { log } from "../log.ts";
 import { withLockedFile } from "../locked-file.ts";
 import { checkedGrant, mcpGrantFile } from "./grants.ts";
-import { type McpServer, readMcpConfiguration, checkMcpUrl } from "./config.ts";
+import { type McpServer, checkMcpUrl, declareMcp, mcpInstance } from "./config.ts";
 
 const Bindings = Schema.Record(Schema.String, Schema.String);
 function decodeBindings(raw: string | undefined): Record<string, string> {
@@ -96,10 +102,10 @@ export function httpServer(servers: readonly McpServer[], name: string): Extract
   return server;
 }
 
-export async function inspectMcp(dir: string, options: McpOptions = {}): Promise<McpServerSummary[]> {
+export async function inspectMcp(dir: string, options: McpInspectOptions = {}): Promise<McpServerSummary[]> {
   const { agentDir, auth } = mcpContext(dir, options);
   return Promise.all(
-    Object.entries(readMcpConfiguration(agentDir).mcpServers).map(async ([name, declaration]) => {
+    declareMcp(agentDir, mcpInstance(options.config)).map(async ({ name, server: declaration }) => {
       const server = { ...declaration, name, type: declaration.type ?? "stdio" };
       const id = Object.hasOwn(auth.bindings, server.name) ? auth.bindings[server.name] : undefined;
       const raw = id === undefined ? undefined : await auth.store.read(id);

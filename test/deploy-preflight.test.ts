@@ -2,13 +2,13 @@ import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import { type AnyModel, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { keepCatalog } from "./kept-catalog.ts";
-import { type EffectiveConfig, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
+import { type EffectiveConfig, readInstanceConfigFile, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
@@ -387,23 +387,35 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (pre.ok) expect(JSON.stringify(pre.messages)).not.toMatch(/ship WITHOUT the/);
   });
 
-  it("keeps declared MCP servers in the image and excludes their saved grants", async () => {
+  it("lists the secrets the MCP servers of the program and of the delivered configuration reference", async () => {
     const dir = await agent({
-      ".mcp.json": JSON.stringify({ mcpServers: { test: { command: "node", env: { TOKEN: "$" + "{MCP_TOKEN}" } } } }),
-      ".secrets/mcp-auth.json": "{}",
-      ".dockerignore": ".mcp.json\n.secrets\n",
+      "context.json": JSON.stringify({
+        mcpServers: { test: { command: "node", env: { TOKEN: "$" + "{MCP_TOKEN}" } } },
+      }),
     });
-    const rejected = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(rejected.ok).toBe(true);
-    if (rejected.ok) {
-      expect(rejected.messages.some((m) => m.text.includes("excludes .mcp.json"))).toBe(true);
-      expect(rejected.declaredSecrets).toContainEqual(
-        expect.objectContaining({ name: "MCP_TOKEN", declaredIn: ".mcp.json mcpServers.test" }),
-      );
-    }
-    await writeFile(join(dir, ".dockerignore"), ".secrets\n");
-    const kept = await call(dir, { model: "openai/gpt-4o-mini" });
-    if (kept.ok) expect(kept.messages.some((m) => m.text.includes("excludes .mcp.json"))).toBe(false);
+    const config = join(dir, "..", `delivered-${basename(dir)}.json`);
+    await writeFile(
+      config,
+      JSON.stringify({
+        mcpServers: {
+          notes: {
+            type: "http",
+            url: "https://notes.example.com/mcp",
+            headers: { Authorization: "Bearer $" + "{NOTES_KEY}" },
+          },
+        },
+      }),
+    );
+    const delivered = await readInstanceConfigFile(config);
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: { source: delivered, text: "{}" } });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.declaredSecrets).toContainEqual(
+      expect.objectContaining({ name: "MCP_TOKEN", declaredIn: "context.json mcpServers.test" }),
+    );
+    expect(pre.declaredSecrets).toContainEqual(
+      expect.objectContaining({ name: "NOTES_KEY", declaredIn: `${config} mcpServers.notes` }),
+    );
   });
 
   it("the secret checks follow FASTAGENT_SECRETS_DIR — a custom in-tree dir is gated AND excluded", async () => {

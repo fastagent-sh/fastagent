@@ -46,7 +46,7 @@ A context has three kinds of parts, each reaching the agent its own way ([agent 
 - **Content** is data the agent reads and writes as files: a project, a folder, a repository. Most of this note is
   about content.
 - **External systems** are reached by code tools, extensions or through [MCP support](../mcp.md), servers declared
-  in `.mcp.json`. "Connector" in older conceptual diagrams is not a public type or a `context.json` field.
+  in `mcpServers` (`context.json`, and an instance's `fastagent.json`). "Connector" in older conceptual diagrams is not a public type or a `context.json` field.
   Credentials belong to the instance or its host-selected grant store.
 - **The environment** is the commands and runtimes the agent runs, declared under `environment` in its `context.json`
   and installed on every instance, each at the newest release its version allows there
@@ -110,11 +110,10 @@ FastAgent's, and the definition says which ([architecture.md](architecture.md) Â
 | `SYSTEM.md`, `prompts/<name>.md` | Markdown; a prompt template has a `description` in its frontmatter | FastAgent, as pi spells them |
 | `src/tools/`, `src/extensions/` | TypeScript modules: pi-durable's `defineTool` and `defineExtension` | pi-durable |
 | `src/channels/`, `src/schedules/`, `fastagent.config.ts` | TypeScript modules: a channel, `defineSchedule`, `defineAgent`; `needs([...])` around any module that reads a secret | FastAgent |
-| `context.json` | JSON | FastAgent |
-| `.mcp.json` | JSON, `mcpServers`; supported stdio/HTTP subset | MCP client ecosystem convention |
+| `context.json` | JSON: content, environment, and `mcpServers` in the MCP ecosystem's entry shape (supported stdio/HTTP subset) | FastAgent |
 | `package.json` | npm | npm |
 
-[MCP tools](../mcp.md) are declared separately in `.mcp.json`, with instance-owned clients and explicit OAuth bindings. `src/tools/` holds tools. `src/extensions/` holds what is
+[MCP tools](../mcp.md) are declared separately, as `mcpServers`, with instance-owned clients and explicit OAuth bindings. `src/tools/` holds tools. `src/extensions/` holds what is
 not only a tool: prompt sections, hooks, named bundles of tools.
 
 Each file of the definition has one place, so there is no order to decide between two: no `.pi/` directory, no

@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { instanceConfigSchema } from "./config.ts";
 import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "./built.ts";
-import { readMcpConfiguration, MCP_FILE } from "../../mcp/config.ts";
+import { declareMcp, literalCredentials } from "../../mcp/config.ts";
 import { AGENT_CONFIG_FILE, exists } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { HARNESS_PACKAGES } from "../../version.ts";
@@ -36,7 +36,7 @@ export interface BuildOptions {
 export interface BuildResult {
   dist: string;
   definition: AgentDefinition;
-  /** What the build would publish that the author should look at: a literal credential in `.mcp.json`, say. */
+  /** What the build would publish that the author should look at: a literal credential in `mcpServers`, say. */
   warnings: string[];
 }
 
@@ -280,23 +280,11 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
-/**
- * The header and environment values of `.mcp.json` with no `${VAR}` in them: the format allows a literal credential,
- * and a build publishes the file, so each is said. FastAgent cannot tell a secret from a setting, so it never refuses.
- */
+/** What a build says of a literal credential in the program's `mcpServers`, which the package publishes. */
 function literalMcpCredentials(dir: string): string[] {
-  const warnings: string[] = [];
-  for (const [server, config] of Object.entries(readMcpConfiguration(dir).mcpServers)) {
-    const [field, entries]: [string, Readonly<Record<string, string>>] =
-      config.type === "http" ? ["headers", config.headers ?? {}] : ["env", config.env ?? {}];
-    for (const [key, value] of Object.entries(entries)) {
-      if (value !== "" && !value.includes("${")) {
-        warnings.push(
-          `${MCP_FILE} mcpServers.${server}.${field}.${key} is a literal value, and ${DIST_DIR}/ is published: ` +
-            `write \${${key.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}} and give the value as a secret`,
-        );
-      }
-    }
-  }
-  return warnings;
+  return literalCredentials(declareMcp(dir)).map(
+    ({ file, server, field, key }) =>
+      `${file} mcpServers.${server}.${field}.${key} is a literal value, and ${DIST_DIR}/ is published: ` +
+      `write \${${key.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}} and give the value as a secret`,
+  );
 }

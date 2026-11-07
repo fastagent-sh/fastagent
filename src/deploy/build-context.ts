@@ -18,7 +18,6 @@ import {
   resolveStateRoot,
 } from "../paths.ts";
 import { DELIVERED_CONFIG_DIR, isGeneratedDockerignore } from "./container.ts";
-import { MCP_FILE } from "../mcp/config.ts";
 import type { DeployReport } from "./preflight.ts";
 
 /**
@@ -153,11 +152,6 @@ export async function checkKeptIgnoreFiles(
         `your ${rel} (kept) excludes \`${AGENT_CONFIG_FILE}\` — the image would ship WITHOUT the agent's ` +
         `config (the deployed box has no agent to open and crash-loops). Remove that rule before deploying.`;
       report.issue(text);
-    }
-    if (excluded(MCP_FILE) && (await exists(join(agentDir, MCP_FILE)))) {
-      report.issue(
-        `your ${rel} excludes ${MCP_FILE}; the deployment would lose its MCP servers. Remove that rule before deploying.`,
-      );
     }
     // Resolved paths, not spellings: dockerignore patterns are root-anchored (unlike .gitignore).
     const leaks = leakCandidates.filter((p) => !excluded(p));

@@ -220,9 +220,9 @@ describe("fastagent build", () => {
     await expect(buildProject(dir)).rejects.toThrow(/TS1294/);
   });
 
-  it("warns of a literal credential in .mcp.json, which the package publishes", async () => {
+  it("warns of a literal credential in the program's mcpServers, which the package publishes", async () => {
     const dir = project({
-      ".mcp.json": JSON.stringify({
+      "context.json": JSON.stringify({
         mcpServers: {
           docs: { type: "http", url: "https://mcp.example.com", headers: { Authorization: "Bearer abc" } },
           // biome-ignore lint/suspicious/noTemplateCurlyInString: an MCP reference, not a JavaScript template
@@ -231,8 +231,16 @@ describe("fastagent build", () => {
       }),
     });
     const { warnings, dist } = await buildProject(dir);
-    expect(warnings).toEqual([expect.stringContaining(".mcp.json mcpServers.docs.headers.Authorization is a literal")]);
-    expect(listing(dist)).toContain(".mcp.json");
+    expect(warnings).toEqual([
+      expect.stringContaining("context.json mcpServers.docs.headers.Authorization is a literal"),
+    ]);
+    expect(listing(dist)).toContain("context.json");
+  });
+
+  it("does not copy a .mcp.json: it is the coding tools' file, not the program's", async () => {
+    const dir = project({ ".mcp.json": JSON.stringify({ mcpServers: { tooling: { command: "npx" } } }) });
+    const { dist } = await buildProject(dir);
+    expect(listing(dist)).not.toContain(".mcp.json");
   });
 
   it("packs all of dist/ and no secret file: npm pack holds what the build wrote, none of it a .env", async () => {

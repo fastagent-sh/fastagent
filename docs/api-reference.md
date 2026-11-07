@@ -147,7 +147,7 @@ durable and go on after a restart. An agent is served once; a `serve` that faile
 
 ### MCP authorization and tools
 
-`openAgent` reads `.mcp.json` and acquires instance-owned MCP clients before registering their tools. `mcp` supplies
+`openAgent` reads the program's `mcpServers` (`context.json`) and the instance's (`config.mcpServers`) and acquires instance-owned MCP clients before registering their tools. `mcp` supplies
 an explicit `store`/`bindings` pair, optional interpolation `variables`, and an optional trusted `fetch` override. The default
 HTTP transport pins DNS-validated destinations; a custom transport must enforce equivalent connection-level safety. Close releases
 clients and joins refresh work without deleting grants. `inspectMcp`, `signInMcp`, `mcpGrantFile` and `McpError` are

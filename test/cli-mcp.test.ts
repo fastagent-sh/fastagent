@@ -1,11 +1,11 @@
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getRequestListener } from "@hono/node-server";
 import { expect, it, vi, onTestFinished } from "vitest";
-import { agentWorkspace, run } from "./cli-run.ts";
+import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
 import { mcpFixture } from "./mcp-fixture.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -29,7 +29,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   if (!address || typeof address === "string") throw new Error("no port");
   remote = mcpFixture(`http://127.0.0.1:${address.port}`);
   const dir = await agentWorkspace("fa-cli-mcp-", {
-    ".mcp.json": JSON.stringify({ mcpServers: { test: { type: "http", url: remote.url } } }),
+    "context.json": JSON.stringify({ mcpServers: { test: { type: "http", url: remote.url } } }),
   });
   execFileSync("git", ["-C", dir, "init", "-q", "--template="]);
   const home = await mkdtemp(join(tmpdir(), "fa-cli-mcp-home-"));
@@ -164,3 +164,23 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   expect(await readFile(join(dir, ".secrets", "mcp-auth.json"), "utf8")).toBe(grants);
   expect(JSON.parse(await readFile(join(dir, ".fastagent", "dev", ".state", "mcp-bindings.json"), "utf8"))).toEqual({});
 }, 45000);
+
+it("`mcp list` shows the program's servers and the ones the project's fastagent.json adds, and `info` the same", async () => {
+  const dir = await agentWorkspace("fa-cli-mcp-list-", {
+    "context.json": JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } } }),
+    "fastagent.json": JSON.stringify({ mcpServers: { notes: { type: "http", url: "https://notes.example.com/mcp" } } }),
+    // The coding tools' file is not read.
+    ".mcp.json": JSON.stringify({ mcpServers: { tooling: { command: "npx" } } }),
+  });
+  const listed = await runInProcess(["mcp", "list", dir, "--json"]);
+  expect(listed.code, listed.stderr).toBe(0);
+  expect(JSON.parse(listed.stdout).map((server: { name: string }) => server.name)).toEqual(["docs", "notes"]);
+  const info = await runInProcess(["info", "--json"], dir);
+  expect(info.code, info.stderr).toBe(0);
+  expect(JSON.parse(info.stdout).mcp.map((server: { name: string }) => server.name)).toEqual(["docs", "notes"]);
+
+  await writeFile(join(dir, "fastagent.json"), JSON.stringify({ mcpServers: { docs: { command: "node" } } }));
+  const refused = await runInProcess(["mcp", "list", dir, "--json"]);
+  expect(refused.code).toBe(1);
+  expect(refused.stderr).toMatch(/MCP server "docs" is declared by the program \(context\.json\) and by the instance/);
+});
