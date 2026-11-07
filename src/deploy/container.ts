@@ -16,7 +16,7 @@ const PACKAGES_FILE = "fastagent.packages";
  * {@link IMAGE_CONFIG_DIR}. A directory of its own, never a file in the program's: what an instance configuration names
  * beside it (its `.mcp.json`, its text) is read from its own directory, and the program's directory holds the program's.
  */
-const DELIVERED_CONFIG_DIR = "fastagent.deploy";
+export const DELIVERED_CONFIG_DIR = "fastagent.deploy";
 const DELIVERED_CONFIG_FILE = `${DELIVERED_CONFIG_DIR}/${INSTANCE_CONFIG_FILE}`;
 
 /** Where a generated image has the instance configuration, read-only: the filesystem hierarchy's for configuration. */

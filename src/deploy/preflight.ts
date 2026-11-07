@@ -34,6 +34,7 @@ import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
+import { deliveredTextProblem } from "./delivered-text.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
@@ -242,6 +243,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   const content = loadContent(agentDir, delivered?.source);
   checkContent(content, delivered?.source.label, storageResets, report);
+  const textProblem = delivered === undefined ? undefined : deliveredTextProblem(agentDir, delivered.source);
+  if (textProblem !== undefined) report.issue(textProblem);
   // The project's own, the development instance's: a deploy carries only the configuration it is given.
   const own = await projectInstanceConfig(agentDir);
   if (own !== undefined && own.label !== delivered?.source.label) {
