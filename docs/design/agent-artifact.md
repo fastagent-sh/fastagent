@@ -269,7 +269,7 @@ Every input can be placed anywhere, so a host can mount each on the storage that
 | MCP authorization (OAuth grant store, bindings, transport) | — | — | `mcp` |
 | Secrets | `--env-file <file>` | the process environment | `secrets` (`Record<string, string>`) |
 | Child-process base environment (§5) | — | the CLI's own `PATH`, `HOME`, locale, proxy variables | `env` |
-| Instance name (§4.5) | `--name <name>` | `FASTAGENT_NAME` | `config`'s `name` |
+| Instance name (§4.5) | `--name <name>` | `FASTAGENT_NAME` | `name` (over `config`'s `name`) |
 | Instance root | `--root <dir>` | `FASTAGENT_ROOT` | `root` |
 | State, apart from the root | `--state <dir>` | `FASTAGENT_STATE_DIR` | `stateDir` |
 | Workspace, apart from the root | `--workdir <dir>` | `FASTAGENT_WORKDIR` | `workdir` |
@@ -491,7 +491,7 @@ host sees and authorizes exactly the servers the instance opens, the program's a
 ### 4.5 Identity
 
 An instance's name is a key of its configuration, `name` in `fastagent.json` (§4.2), which the CLI's `--name` and
-`FASTAGENT_NAME` override as `--model` overrides `model`. It is one path segment, refused otherwise, and defaults to the
+`FASTAGENT_NAME`, and `openAgent`'s `name`, override as `--model` and `openAgent`'s `model` override `model`. It is one path segment, refused otherwise, and defaults to the
 definition's name made one (`@scope/pkg` is `scope-pkg`), because a deployment joins it onto storage and resource names;
 two instances of one definition on one machine take distinct names by being given them. It is the instance's, so the
 program's `defaults` do not carry it, and `fastagent.config.ts`'s `name`, the program's, is only its default.
@@ -511,7 +511,7 @@ one:
   ...                       what the agent produces
 ```
 
-- Kage passes `root`, `config` as the path of the folder's `fastagent.json`, whose `name` is the instance's (so its relative entries resolve
+- Kage passes `root`, `config` as the path of the folder's `fastagent.json` (whose `name` is the instance's, so it passes no `name`) (so its relative entries resolve
   against the folder, and the model choice and folder bindings Kage records there are what the person and the agent
   see), `secrets` from its own store, `env` with its proxy, `credentials` and `mcp` bindings. No secret value is written
   into the folder.

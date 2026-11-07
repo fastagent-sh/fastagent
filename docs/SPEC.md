@@ -504,6 +504,8 @@ type InstanceInputs<Settings = unknown> = {
   secrets?: Record<string, string>;
   /** The base environment of the processes the agent starts. Default: empty. `baseEnv(process.env)` is the app's. */
   env?: Record<string, string>;
+  /** The instance's name, over `config`'s `name`, as `model` is over `config`'s `model`: one path segment. */
+  name?: string;
   /** Where the model credentials are kept. Default: `auth.json` in the state directory. */
   credentials?: CredentialStore;
   mcp?: McpOptions;
@@ -552,8 +554,8 @@ interface InstanceConfig<Settings = unknown> {
   settings?: Partial<Settings>;
   /**
    * The instance's name, one path segment of letters, digits, `-` and `_`, any other value refusing the open. Default: the
-   * definition's name made one (`@scope/pkg` is `scope-pkg`). The CLI's `--name` and `FASTAGENT_NAME` override it. It is
-   * the instance's, so the program's `defaults` do not carry it.
+   * definition's name made one (`@scope/pkg` is `scope-pkg`). The CLI's `--name` and `FASTAGENT_NAME`, and `openAgent`'s
+   * `name`, override it. It is the instance's, so the program's `defaults` do not carry it.
    */
   name?: string;
   /** Content the instance adds to the program's: a name may not be one the program declares. */
