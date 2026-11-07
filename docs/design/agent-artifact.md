@@ -327,23 +327,11 @@ Precedence of configuration values, lowest first:
 Composition:
 
 - Settings override by key: objects merge recursively, arrays replace.
-- Content and MCP entries only add. An instance entry whose name collides with a program entry is refused; nothing is
-  shadowed, deep-merged or written back into the program files.
-- Skills and prompt templates are namespaced instead of refused. A program's have a full name `<program>-<name>`
-  (`reviewer-review`), built from the program name normalized to one segment (§4.5); an instance's are bare, since an
-  instance is what opens. A full name obeys the rule of its kind, which differs. A skill name is lowercase letters,
-  digits and single hyphens, at most 64 characters (the Agent Skills rule, enforced where skills are read), so
-  `/skill:reviewer-review` needs no special syntax and the open refuses a program name and skill name whose join breaks
-  the rule. A prompt template's name is its file name, and the only constraint is that it contains no whitespace,
-  because a message's `/<name>` is matched up to the first whitespace; existing names such as `Review_PR` stay valid, and
-  the join is refused only if it would contain whitespace, which a normalized program name cannot add. A program's bare
-  name is an alias while no instance entry takes it.
-  When one does, the bare name is the instance's, the program's stays listed and invocable by its full name, and the
-  open reports the overlap. A program upgrade that adds a name an instance already uses therefore never stops the
-  instance from opening. One program's full names never collide with each other, since its bare names are distinct.
-  An instance's bare name can equal a program entry's full name (an instance `reviewer-review` beside a program
-  `review`). Then the instance's entry takes that name and the program's entry is not invocable; the open reports it
-  as shadowed, naming both files, and `info` lists it, so the drop is visible (§7) and an upgrade still opens.
+- Content, MCP servers, skills and prompt templates only add. An instance entry whose name collides with a program
+  entry is refused at open, naming both; nothing is shadowed, renamed, deep-merged or written back into the program
+  files. A program's author avoids names an instance would take, as they avoid two of their own. Namespacing a
+  program's skills (`<program>-<name>`) is deferred to running a published third-party program, the only case where
+  an upgrade can add a name an instance already uses.
 
 - An instance layers only on the program's defaults, never on another instance.
 
@@ -417,7 +405,7 @@ instance's own instructions, skills and prompt templates. `instructions` names f
 `skills` and `prompts` name directories. All are relative to `fastagent.json`, and only what is declared loads: a file
 the agent writes elsewhere in its workspace never becomes a capability. Where the configuration directory is the
 writable instance root (a local instance, §4.6), the person and the agent can add to these directories, taking effect
-at the next open (§7); deployed, they ship in the read-only configuration (`/etc/fastagent/skills/`). A directory that
+on the next message (§7); deployed, they ship in the read-only configuration (`/etc/fastagent/skills/`). A directory that
 resolves to, or inside, text the program loads (its `SYSTEM.md`, `AGENTS.md`, `skills/` or `prompts/`), and an
 `instructions` file that is one of them, is a configuration error reported at open: it would load the program's text
 twice. Other paths are allowed wherever they are. In a development project the program is the source project, so the
@@ -451,10 +439,9 @@ imitate, `start` already runs (§1, acceptance 2).
 
 In development the instance configuration sits at the project root and the agent's cwd is `.fastagent/dev/`, so the
 agent's tools reach the configuration only by absolute path; nothing steers them there, and an agent that does edit it
-is acceptable for the reason in §4.2 (one trust domain, effective at the next open, visible in version control). A
+is acceptable for the reason in §4.2 (one trust domain, effective on the next message, visible in version control). A
 local instance whose configuration directory is its instance root (§4.6) is where an agent adds its own skills in
-ordinary use. Deployed configuration is read-only (§6.1). A local host watches the declared configuration (§7) and
-reopens after the current turns finish, so an edit lands without a manual restart.
+ordinary use. Deployed configuration is read-only (§6.1).
 
 Running follows the npm and web-framework conventions, three entries over one start:
 
@@ -510,8 +497,8 @@ one:
   into the folder.
 - `GIT_CEILING_DIRECTORIES` is `~/Agents`, so a person can keep each agent in git of its own.
 - Giving someone the agent copies the folder without `.state/`; the recipient opens it with the same program.
-- Kage watches the declared files and reopens after current turns, as `dev` does.
-- When Kage ships a newer program, names an instance already uses stay the instance's (§4.1).
+- An edit to the folder's instructions, skills or prompt templates takes effect on the next message with nothing for
+  Kage to watch; an `.mcp.json` edit takes a reopen, which Kage does itself (§7).
 
 ## 5. Paths
 
@@ -691,18 +678,23 @@ FastAgent installs nothing for them and mutates no host globally.
 
 ## 7. When additions take effect
 
-**Every addition takes effect at an explicit close and reopen**, which selects one snapshot of the configuration for
-the life of that open:
+**Text takes effect on the next message; connections and code take effect at an explicit close and reopen.**
 
-- **Text** (instance instructions, skills and prompt templates) is read at open from what the configuration declares
-  (§4.2), named as §4.1 says. No per-message rescan bypasses this boundary: one would let one open present different
-  model-facing text, and let files the agent writes anywhere in its workspace become capabilities. A local host
-  (`dev`, a workbench app) watches the declared files and reopens once the current turns finish; FastAgent provides the
-  change notification, so the edit lands without a manual restart. This
-  keeps the first draft's rule and changes the current source-directory behavior, where skills and `AGENTS.md` in the
-  agent directory are read on the next message ([agent-model.md §6](agent-model.md#6-an-agent-changes-itself)).
-- **Connections and executables** (MCP servers, tools) take effect the same way. Apart from that watched reopen, no
-  automatic restart and no hot replacement of loaded code.
+- **Text** (instance instructions, skills and prompt templates, and the program's own) is read for each message from
+  exactly what the configuration declares (§4.2): no other path is scanned, so a file the agent writes elsewhere in its
+  workspace never becomes a capability. The harness records each change of the rendered prompt in the session, so the
+  text a turn ran with is observable. This is the current source-directory behavior ([agent-model.md
+  §6](agent-model.md#6-an-agent-changes-itself)), extended to the instance's declared paths, and it is what Claude Code
+  does with skill directories. The list of declared paths is part of the configuration and is read at open: a path
+  added to it takes a reopen, and the files inside a declared path are read for each message. A declared path that is
+  missing refuses the open; one that disappears while the instance runs is reported, not read as empty. A file that
+  breaks its rules while running is reported once and skipped, as today; a name an instance file takes from a program
+  entry is refused at the open, and when it appears later the instance's entry is skipped with a report and the
+  program's stays.
+- **Connections and executables** (MCP servers, tools) are read once per open and take effect at an explicit close and
+  reopen, which selects one snapshot of the configuration for the life of that open. `dev` restarts after the current
+  turns finish when `.mcp.json`, `fastagent.json` or code change; an embedding host closes and reopens itself; no hot
+  replacement of loaded code.
 - An open that cannot assemble its configured set refuses before reporting ready, releases what it acquired and keeps
   its diagnostics. No configured capability is silently dropped.
 
@@ -757,7 +749,7 @@ Done (#907, #909, #911; #913-#918, #921, #922; #923-#925; a channel's way of rec
 3. **Deployment.** Derived from the same artifact with delivered configuration in the image's `/etc/fastagent/` and the instance
    root at `/data/` (`/mnt/data/` on AgentCore); values as the target's state (`fastagent secrets`, names checked by deploy, channel shape as configuration, webhook
    registration on the box), AgentCore through Secrets Manager.
-4. **Instance additions.** Content and `.mcp.json` entries, text additions, the reopen boundary.
+4. **Instance additions.** Content (done), text additions, the delivery of declared text and `.mcp.json` to a deployment, instance MCP servers.
 5. Any public [SPEC](../SPEC.md) change is reviewed on its own.
 
 No backward-compatibility or migration layer is carried; there are no users to migrate.

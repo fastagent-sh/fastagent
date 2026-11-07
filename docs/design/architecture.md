@@ -161,8 +161,8 @@ same wherever it runs.
 
 **Runtime evolution: new target, not implemented.** The definition package is immutable, including its original text,
 skills, prompts, tools and MCP declarations. An instance adds content, MCP servers, skills and prompt templates through
-its configuration, never replacing or shadowing the packaged ones; every addition, text included, takes effect at an
-explicit reopen that selects one configuration snapshot. Persistent capabilities an agent writes for itself are deferred. The current source-directory behavior
+its configuration, never replacing or shadowing the packaged ones; text takes effect on the next message, MCP servers
+and code at an explicit reopen. Persistent capabilities an agent writes for itself are deferred. The current source-directory behavior
 remains described in [agent-model.md §6](agent-model.md#6-an-agent-changes-itself); the [artifact design](agent-artifact.md)
 owns the target. Author changes produce a new version. Recurring `wake` work remains instance state, not package mutation.
 

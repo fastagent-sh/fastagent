@@ -648,13 +648,11 @@ relative one is refused rather than resolved against the process's working direc
 - `settings` is the program's defaults with `config.settings` over them, checked against the definition's `settings`
   schema at open: a required setting no one gave, or a value the schema refuses, refuses the open and names the key.
   The compiler checks the keys and types `config.settings` gives, not that every required one is there.
-- `content`, `instructions`, `skills` and `prompts` add to the program's. A content entry whose name the program
-  declares refuses the open. A program's skills and prompt templates are also named `<program>-<name>`, `<program>`
-  being the definition's name as one segment (`reviewer-review`). An instance entry takes its own name from the
-  program: one named like a program entry's bare name takes that bare name, and the program's entry keeps its full
-  name; one named like a program entry's full name takes that, and the program's entry is not offered under either
-  name. Otherwise a program entry is offered under both. The open reports each overlap, and `info().commands` lists
-  the names a message may start with (§5.1).
+- `content`, `instructions`, `skills` and `prompts` add to the program's. An entry whose name the program declares (a
+  content entry, a skill, a prompt template) refuses the open, naming both. `instructions`, `skills` and `prompts` are
+  read for each message, from only the files and directories `config` names, so an edit inside them takes effect on
+  the next message (a path added to `config` takes a reopen; a declared path that goes missing is reported, not read
+  as empty); `info().commands` lists the names a message may start with (§5.1).
 - `secrets` holds values, `credentials` the model providers' stored sign-ins and keys. A required secret without a
   value refuses the open and names it. The model's auth reads a provider's variable from `secrets`, for whichever
   provider a session's model is; the declared inputs list only the default model's, as optional. A name `secrets`
