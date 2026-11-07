@@ -418,6 +418,71 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     );
   });
 
+  describe("the MCP servers the box will open", () => {
+    const delivering = async (dir: string, mcpServers: unknown) => {
+      const config = join(dir, "..", `mcp-${basename(dir)}.json`);
+      await writeFile(config, JSON.stringify({ mcpServers }));
+      return { source: await readInstanceConfigFile(config), text: "{}", config };
+    };
+    const said = (pre: Awaited<ReturnType<typeof call>>) => (pre.ok ? pre.messages : []);
+
+    it("warns of a literal credential in the program's servers and in the delivered configuration's, never refusing", async () => {
+      const dir = await agent({
+        "context.json": JSON.stringify({
+          mcpServers: {
+            docs: { type: "http", url: "https://docs.example.com/mcp", headers: { Authorization: "Bearer abc" } },
+          },
+        }),
+      });
+      const delivered = await delivering(dir, {
+        notes: { command: "node", env: { NOTES_TOKEN: "ghp_x", OK: "$" + "{OK_VALUE}" } },
+      });
+      const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered, run: true });
+      expect(pre.ok).toBe(true);
+      const literals = said(pre).filter((m) => m.text.includes("is a literal value"));
+      expect(literals.map((m) => m.level)).toEqual(["warn", "warn"]);
+      expect(literals[0]?.text).toMatch(
+        /^context\.json mcpServers\.docs\.headers\.Authorization is a literal value, and this deploy puts it in the image: replace the secret in it with \$\{AUTHORIZATION\} \(a scheme stays: `Bearer \$\{AUTHORIZATION\}`\)/,
+      );
+      expect(literals[1]?.text).toContain(`${delivered.config} mcpServers.notes.env.NOTES_TOKEN is a literal value`);
+      expect(literals[1]?.text).toContain("write ${NOTES_TOKEN}");
+      expect(literals[1]?.text).toContain("fastagent secrets set <host> <NAME>");
+    });
+
+    it("refuses a relative stdio command in the delivered configuration, which nothing delivers, and allows the others", async () => {
+      const dir = await agent({
+        "context.json": JSON.stringify({ mcpServers: { packaged: { command: "./assets/server" } } }),
+      });
+      const relative = await delivering(dir, { scripted: { command: "./notes-server" } });
+      const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: relative, run: true });
+      expect(gated.ok).toBe(false);
+      if (!gated.ok)
+        expect(gated.gate).toMatch(/mcpServers\.scripted: the command "\.\/notes-server" is a relative path/);
+      const warned = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: relative });
+      expect(said(warned).some((m) => m.level === "warn" && m.text.includes("is a relative path"))).toBe(true);
+      // The program's own relative command is the package's (what `build` copies, `assets/` among it); a bare or absolute command, or a
+      // variable that supplies the directory, is the box's to find.
+      const fine = await delivering(dir, {
+        bare: { command: "npx" },
+        absolute: { command: "/opt/mcp/server" },
+        variable: { command: "$" + "{MCP_HOME}/server" },
+      });
+      const ok = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: fine, run: true });
+      expect(ok.ok).toBe(true);
+    });
+
+    it("reports a name both declare as an issue, instead of failing when the box opens", async () => {
+      const dir = await agent({ "context.json": JSON.stringify({ mcpServers: { docs: { command: "node" } } }) });
+      const delivered = await delivering(dir, { docs: { command: "npx" } });
+      const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered, run: true });
+      expect(gated.ok).toBe(false);
+      if (!gated.ok) expect(gated.gate).toMatch(/MCP server "docs" is declared by the program/);
+      const warned = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered });
+      expect(warned.ok).toBe(true);
+      expect(said(warned).some((m) => m.text.includes('MCP server "docs" is declared by the program'))).toBe(true);
+    });
+  });
+
   it("the secret checks follow FASTAGENT_SECRETS_DIR — a custom in-tree dir is gated AND excluded", async () => {
     // The name-based `**/.secrets` excludes reach a directory called `.secrets`; an override pointing
     // somewhere else in the baked tree is invisible to them, and `COPY . .` would ship the credential.

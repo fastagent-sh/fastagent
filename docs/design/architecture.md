@@ -158,7 +158,7 @@ the agent's commands ([Agent API](../SPEC.md) §5.1). The result is the Agent
 API's `Agent`, plus `harness`. `dev`, `start` and an embedder's process call the same function, so an agent behaves the
 same wherever it runs.
 
-**Runtime evolution: new target, not implemented.** The definition package is immutable, including its original text,
+**Runtime evolution: built (#900), not yet released.** The definition package is immutable, including its original text,
 skills, prompts, tools and MCP declarations. An instance adds content, MCP servers, skills and prompt templates through
 its configuration, never replacing or shadowing the packaged ones; text takes effect on the next message, MCP servers
 and code at an explicit reopen. Persistent capabilities an agent writes for itself are deferred. The current source-directory behavior

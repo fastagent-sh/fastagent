@@ -44,6 +44,15 @@ each stop the deploy (`--run` or not) before any artifact is written. A symbolic
 is the development instance's: a deploy never carries it, and the generated `.dockerignore` keeps it out of the image.
 A configuration holds no secret value.
 
+The MCP servers the box opens (the program's `mcpServers` in `context.json`, and the delivered configuration's) are checked
+before anything is built. A name both declare, and a relative stdio command in the delivered configuration (nothing
+delivers the script it names; write an absolute path on the box, or a command on its `PATH`), stop `--run`. `args` are
+passed on as written and are not checked: a script named there must be on the box too. The program's own relative
+command is relative to its package, which holds what `build` copies (`assets/`, `skills/`, `prompts/`, and the resources
+beside its code), so a script a program ships belongs under `assets/`; a literal
+header or environment value, which ships in the image, is warned about: write `${NAME}` and set the name with
+`fastagent secrets set <host> <NAME>`.
+
 A coding agent deploys with `--run --json`. The deploy runs in a process of its own and the command returns its
 ticket; the agent checks it with `fastagent deploy <host> --check <ticket>` and relays each `need_user_action`: the
 host's CLI sign-in (`fly auth login`, `railway login`, run for the person, who approves in the browser), a production

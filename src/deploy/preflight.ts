@@ -4,7 +4,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
@@ -35,6 +35,7 @@ import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { type ContainerInput, DELIVERED_CONFIG_DIR, isGeneratedDockerfile } from "./container.ts";
 import { deliveredTextProblem } from "./delivered-text.ts";
+import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
@@ -107,6 +108,47 @@ const GITHUB_TOKEN_SECRET: DeclaredSecret = {
   description: "git's credential for a private repository, and for the agent to push",
   optional: true,
 };
+
+/**
+ * The MCP servers the box will open: the program's, in the image, and the delivered configuration's. A name both
+ * declare, or one that cannot be read, is an issue (the box would refuse to open); a literal credential is a warning,
+ * since it ships in the image and FastAgent cannot tell a secret from a setting; a relative stdio command in the
+ * delivered configuration is an issue, since nothing delivers the script it names. (The program's own is relative to
+ * its package, which holds only what `build` copies: `assets/`, `skills/`, `prompts/` and code directories' resources.)
+ * `args` are not checked: FastAgent cannot know which strings are paths. Answers whether the list reads.
+ */
+function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined, report: DeployReport): boolean {
+  let declarations: McpDeclaration[];
+  try {
+    declarations = declareMcp(agentDir, delivered);
+  } catch (error) {
+    report.issue(messageOf(error));
+    return false;
+  }
+  for (const literal of literalCredentials(declarations)) {
+    report.warn(
+      `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key} is a literal value, and this ` +
+        `deploy puts it in the image: ${literalCredentialAdvice(literal)} and set that name with ` +
+        `\`fastagent secrets set <host> <NAME>\``,
+    );
+  }
+  for (const { name, server, file, origin } of declarations) {
+    const command = server.type === "http" ? undefined : server.command;
+    if (
+      origin === "instance" &&
+      command !== undefined &&
+      /[/\\]/.test(command) &&
+      !isAbsolute(command) &&
+      !command.startsWith("${")
+    ) {
+      report.issue(
+        `${file} mcpServers.${name}: the command "${command}" is a relative path, and a deploy delivers the configuration ` +
+          `but not the script it names: write an absolute path on the box, or a command found on its PATH`,
+      );
+    }
+  }
+  return true;
+}
 
 /**
  * What each content entry becomes on the host, one line each, so none is missing there unsaid (agent-model.md §3). A
@@ -245,6 +287,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   checkContent(content, delivered?.source.label, storageResets, report);
   const textProblem = delivered === undefined ? undefined : deliveredTextProblem(agentDir, delivered.source);
   if (textProblem !== undefined) report.issue(textProblem);
+  const mcpOpens = checkMcp(agentDir, delivered?.source, report);
   // The project's own, the development instance's: a deploy carries only the configuration it is given.
   const own = await projectInstanceConfig(agentDir);
   if (own !== undefined && own.label !== delivered?.source.label) {
@@ -304,7 +347,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   const declaredSecrets = [
     ...(definition
-      ? definitionSecrets(definition, config, delivered?.source)
+      ? definitionSecrets(definition, config, mcpOpens ? delivered?.source : undefined)
       : declaredVariables(loadEnvironment(agentDir))),
     // The host's clone of a github entry reads it, so `secrets list|push|set` and `deploy` know the name.
     ...(content.some((entry) => entry.kind === "github") ? [GITHUB_TOKEN_SECRET] : []),

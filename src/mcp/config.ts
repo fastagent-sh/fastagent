@@ -194,6 +194,14 @@ export function literalCredentials(
   });
 }
 
+/** What to write instead of a literal credential, which a header's value usually carries a scheme in front of. */
+export function literalCredentialAdvice({ field, key }: { field: "headers" | "env"; key: string }): string {
+  const name = key.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+  return field === "headers"
+    ? `replace the secret in it with \${${name}} (a scheme stays: \`Bearer \${${name}}\`)`
+    : `write \${${name}}`;
+}
+
 export function checkMcpUrl(value: string, server?: string, file = "mcpServers"): URL {
   const url = URL.parse(value);
   if (
