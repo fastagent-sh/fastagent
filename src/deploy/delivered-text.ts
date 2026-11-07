@@ -54,14 +54,23 @@ export function deliveredTextProblem(agentDir: string, source: InstanceConfigSou
  * is written after, with the other build outputs. Answers how many paths were copied.
  */
 export async function deliverText(agentDir: string, source: InstanceConfigSource | undefined): Promise<number> {
+  // Copying is an act, not a finding: whatever the pre-flight only warned about (a generate-only run) must not be
+  // carried out, or a path outside the configuration's directory would be written outside `fastagent.deploy/`.
+  const problem = source === undefined ? undefined : deliveredTextProblem(agentDir, source);
+  if (problem !== undefined) throw new Error(problem);
   const target = join(agentDir, DELIVERED_CONFIG_DIR);
+  if (source?.directory !== undefined && isUnderDir(source.directory, target)) {
+    throw new Error(
+      `${source.label} is inside ${target}, which every deploy replaces: keep the configuration elsewhere`,
+    );
+  }
   await rm(target, { recursive: true, force: true });
   if (source?.directory === undefined) return 0;
   const entries = declared(agentDir, source);
   for (const { source: entry } of entries) {
     const to = join(target, relative(source.directory, entry.path));
     await mkdir(dirname(to), { recursive: true });
-    await cp(entry.path, to, { recursive: true, verbatimSymlinks: true });
+    await cp(entry.path, to, { recursive: true, dereference: true });
   }
   return entries.length;
 }

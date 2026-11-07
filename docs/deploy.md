@@ -40,7 +40,7 @@ the deploy copies those files and directories into `fastagent.deploy/` with thei
 wrote relative to its file resolves the same in `/etc/fastagent/`, and each deploy replaces what an earlier one delivered.
 Only what is inside the configuration's directory can be delivered, written as a relative path: an absolute or `~/` path,
 one outside that directory, one that is not the kind it names, and a skill or prompt template named like the program's
-each stop `--run` before anything is built. The project's own `fastagent.json`
+each stop the deploy (`--run` or not) before any artifact is written. A symbolic link is delivered as what it points at, and one that points at nothing stops the deploy. The project's own `fastagent.json`
 is the development instance's: a deploy never carries it, and the generated `.dockerignore` keeps it out of the image.
 A configuration holds no secret value.
 
