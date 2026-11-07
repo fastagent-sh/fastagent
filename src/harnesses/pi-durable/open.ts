@@ -45,6 +45,7 @@ import {
 } from "./definition.ts";
 import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
+import { type TextSources, programText } from "./text-sources.ts";
 import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
 
 const DEFINITION_EXTENSION = "fastagent.definition";
@@ -313,6 +314,8 @@ export interface AssembleAgentOptions {
   code: BuiltDefinition;
   /** The configuration this instance opens with (`resolveConfig`). */
   config: EffectiveConfig;
+  /** The text it reads for each message (`openText`). Default: the program's own. */
+  text?: TextSources;
   mcpTools?: ToolRegistration[];
   /**
    * pi-ai's built-ins and the definition's providers over the instance's credentials, lists refreshed: the model
@@ -338,6 +341,7 @@ export interface AssembleAgentOptions {
 export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
   const { dir } = definition;
   const { code, models, config } = options;
+  const text = options.text ?? programText(dir);
   const spec = options.model ?? config.model;
   const model = spec === undefined ? undefined : modelRefOf(spec, "the default model");
   if (model !== undefined && models.getModel(model.provider, model.modelId) === undefined) {
@@ -362,6 +366,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
       sections: definitionSections(dir, options.content ?? [], {
         wake: ownWake || options.stateRoot !== undefined,
         workdir: options.workdir ?? dir,
+        text,
       }),
       tools: [...code.tools, ...(options.mcpTools ?? [])],
     }),
@@ -385,6 +390,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
     env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
-    commands: () => readCommands(dir),
+    commands: () => readCommands(text),
   });
 }

@@ -89,11 +89,9 @@ describe("resolveConfig", () => {
     ["a model that is not provider/modelId", { model: "nomodel" }, '/model must be "provider/modelId"'],
     ["a setting the program does not declare", { settings: { team: "x" } }, "/settings/team unknown field"],
     ["a setting of the wrong type", { settings: { repo: 7 } }, "/settings/repo"],
-    [
-      "instructions, which a later release reads",
-      { instructions: [] },
-      "instructions is not read by this FastAgent yet",
-    ],
+    ["instructions that are not a list of paths", { instructions: "./AGENTS.md" }, "/instructions"],
+    ["a skills list with an empty path", { skills: [""] }, "/skills/0"],
+    ["a prompts list naming one directory twice", { prompts: ["./p", "./p"] }, "/prompts"],
   ])("refuses %s, naming the file and the path", (_what, values, message) => {
     expect(() => resolveConfig(reviewer, instance({ settings: { repo: "r" }, ...values }))).toThrow(message);
   });
@@ -134,6 +132,17 @@ describe("instanceConfigSchema", () => {
     expect(() => resolveConfig(program({ defaults: { content: { x: { path: "/x" } } } }))).toThrow(
       /\/content unknown field/,
     );
+  });
+
+  it("describes the text an instance adds, which the program's defaults do not carry", () => {
+    const check = compile(instanceConfigSchema(undefined));
+    expect(check.check({ instructions: ["./AGENTS.md"], skills: ["./skills"], prompts: ["./prompts"] })).toBe(true);
+    // Relative to the instance's file, which a program's defaults have none of.
+    for (const key of ["instructions", "skills", "prompts"]) {
+      expect(() => resolveConfig(program({ defaults: { [key]: ["./x"] } }))).toThrow(
+        new RegExp(`/${key} unknown field`),
+      );
+    }
   });
 
   it("refuses a bad content entry in an instance's file by naming it and the file, not as a schema path", () => {

@@ -11,7 +11,7 @@ import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { type EffectiveConfig, configValue, resolveConfig } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
-import { readCommands } from "../../harnesses/pi-durable/text.ts";
+import { openText, readCommands } from "../../harnesses/pi-durable/text.ts";
 import { inspectMcp } from "../../mcp/host.ts";
 import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
@@ -75,7 +75,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     tz: s.tz ?? null,
     next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
   }));
-  const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
+  const text = await Promise.resolve()
+    .then(() => openText(agentDir, instance))
+    .catch(failStartup);
+  const commands = readCommands(text).map(({ name, description }) => ({ name, description: description ?? null }));
   const stateRoot = resolveStateRoot(agentDir);
   const auth = models.auth;
   const mcp = await inspectMcp(agentDir).catch(failStartup);

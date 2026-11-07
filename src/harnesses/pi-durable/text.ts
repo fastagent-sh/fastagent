@@ -1,7 +1,8 @@
 /**
- * The definition's text (architecture.md §3), read for each request so an edit takes effect on the next answer:
- * `SYSTEM.md` and `AGENTS.md` as prompt sections, `skills/` as Agent Skills (agentskills.io) and `prompts/` as prompt
- * templates. A skill is loaded as pi does it: the prompt lists each one's name, description and location, the model
+ * The definition's text (architecture.md §3) and the instance's (agent-artifact.md §4.2), read for each request so an
+ * edit takes effect on the next answer: `SYSTEM.md` and `AGENTS.md` as prompt sections, `skills/` as Agent Skills
+ * (agentskills.io) and `prompts/` as prompt templates, each with the files and directories the instance adds
+ * (text-sources.ts). A skill is loaded as pi does it: the prompt lists each one's name, description and location, the model
  * reads its `SKILL.md` when a task matches, and `/skill:<name>` loads it into the message.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -12,6 +13,8 @@ import type { ResolvedContent } from "../../content/resolve.ts";
 import { log } from "../../log.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import type { AgentCommand } from "./agent.ts";
+import type { InstanceConfigSource } from "./config.ts";
+import { NOUN, type TextSource, type TextSources, declareText, programText, whatIs } from "./text-sources.ts";
 
 export interface Skill {
   name: string;
@@ -67,14 +70,42 @@ function directories(dir: string): string[] {
     });
 }
 
-/** The agent's skills: `skills/<name>/SKILL.md`. One that breaks the specification is reported and skipped. */
-export function readSkills(agentDir: string): Skill[] {
-  const root = join(agentDir, "skills");
+/**
+ * Whether a source is there to read as `kind`: one an instance declared that has gone, or become what its kind is not,
+ * is reported, not read as empty.
+ */
+function present({ path, declaredBy }: TextSource, kind: keyof typeof NOUN): boolean {
+  const found = whatIs(path);
+  if (found === NOUN[kind] || (found !== undefined && declaredBy === undefined)) return true;
+  if (declaredBy !== undefined) {
+    report(`${path}: ${declaredBy} declares it, and ${found === undefined ? "it is gone" : `it is a ${found} now`}`);
+  }
+  return false;
+}
+
+/** What a name taken twice is told as: where, so the entry that is skipped can be found. */
+type Collide = (problem: string, byInstance: boolean) => void;
+
+const collisionOf = (kind: string, name: string, taken: string, file: string, byInstance: boolean): string =>
+  `${kind} "${name}" is declared by ${taken} and ${file}` +
+  (byInstance ? `: an instance adds to the program's ${kind}s and does not replace them — name it otherwise` : "");
+
+/** The skills in `sources`: `<dir>/<name>/SKILL.md`. One that breaks the specification is reported and skipped. */
+function loadSkills(sources: readonly TextSource[], collide: Collide): Skill[] {
   const skills: Skill[] = [];
+  for (const source of sources) {
+    if (present(source, "skills")) readSkillsOf(source, skills, collide);
+  }
+  return skills;
+}
+
+/** The skills of one directory, added to `skills`. */
+function readSkillsOf(source: TextSource, skills: Skill[], collide: Collide): void {
+  const root = source.path;
   for (const entry of directories(root)) {
     const baseDir = join(root, entry);
     const filePath = join(baseDir, "SKILL.md");
-    const label = `skills/${entry}/SKILL.md`;
+    const label = filePath;
     if (!existsSync(filePath)) continue;
     let fields: Record<string, unknown>;
     try {
@@ -93,8 +124,10 @@ export function readSkills(agentDir: string): Skill[] {
       report(`${label}: "description" must be a text of at most 1024 characters`);
       continue;
     }
-    if (skills.some((skill) => skill.name === name)) {
-      report(`${label}: another skill is named "${name}"`);
+    const taken = skills.find((skill) => skill.name === name);
+    if (taken !== undefined) {
+      const byInstance = source.declaredBy !== undefined;
+      collide(collisionOf("skill", name, taken.filePath, filePath, byInstance), byInstance);
       continue;
     }
     skills.push({
@@ -105,27 +138,52 @@ export function readSkills(agentDir: string): Skill[] {
       disableModelInvocation: fields["disable-model-invocation"] === true,
     });
   }
-  return skills;
 }
 
-/** The agent's prompt templates: `prompts/<name>.md`, a `description` in the frontmatter and the body as the text. */
-function readTemplates(agentDir: string): Template[] {
-  const root = join(agentDir, "prompts");
-  if (!existsSync(root)) return [];
-  return readdirSync(root)
-    .sort()
-    .flatMap((entry) => {
-      if (!entry.endsWith(".md")) return [];
-      const label = `prompts/${entry}`;
-      try {
-        const { fields, body } = frontmatter(readFileSync(join(root, entry), "utf8"), label);
-        const description = typeof fields.description === "string" ? fields.description : undefined;
-        return [{ name: entry.slice(0, -3), ...(description === undefined ? {} : { description }), body }];
-      } catch (error) {
-        report(`${label}: ${error instanceof Error ? error.message : String(error)}`);
-        return [];
+/** The skills the agent offers, reported and skipped as above. */
+export const readSkills = (sources: readonly TextSource[]): Skill[] => loadSkills(sources, report);
+
+/** The prompt templates in `sources`: `<dir>/<name>.md`, a `description` in the frontmatter and the body as the text. */
+function loadTemplates(sources: readonly TextSource[], collide: Collide): Template[] {
+  const templates: Template[] = [];
+  const files = new Map<string, string>();
+  for (const source of sources) {
+    if (!present(source, "prompts")) continue;
+    for (const entry of readdirSync(source.path).sort()) {
+      if (!entry.endsWith(".md")) continue;
+      const file = join(source.path, entry);
+      const name = entry.slice(0, -3);
+      const taken = files.get(name);
+      if (taken !== undefined) {
+        const byInstance = source.declaredBy !== undefined;
+        collide(collisionOf("prompt template", name, taken, file, byInstance), byInstance);
+        continue;
       }
-    });
+      try {
+        const { fields, body } = frontmatter(readFileSync(file, "utf8"), file);
+        const description = typeof fields.description === "string" ? fields.description : undefined;
+        templates.push({ name, ...(description === undefined ? {} : { description }), body });
+        files.set(name, file);
+      } catch (error) {
+        report(`${file}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+  return templates;
+}
+
+/**
+ * The instance's text as it will be read: declared, and refused when an instance entry takes a name the program (or an
+ * earlier instance entry) has. Called at open; what goes wrong afterwards is reported as each message reads it.
+ */
+export function openText(dir: string, instance: InstanceConfigSource | undefined): TextSources {
+  const text = declareText(dir, instance);
+  const refuse: Collide = (problem, byInstance) => {
+    if (byInstance) throw new Error(`${instance?.label}: ${problem}`);
+  };
+  loadSkills(text.skills, refuse);
+  loadTemplates(text.prompts, refuse);
+  return text;
 }
 
 /** Arguments as a shell splits them: by whitespace, with `"…"` or `'…'` keeping one argument together. */
@@ -184,16 +242,16 @@ function loadedSkill(skill: Skill, args: string): string {
 }
 
 /** What a Caller may offer as `/<name>`: the prompt templates, then `skill:<name>` for each skill. */
-export function readCommands(agentDir: string): AgentCommand[] {
+export function readCommands(text: TextSources): AgentCommand[] {
   return [
-    ...readTemplates(agentDir).map(
+    ...loadTemplates(text.prompts, report).map(
       (template): AgentCommand => ({
         name: template.name,
         ...(template.description === undefined ? {} : { description: template.description }),
         expand: (args) => expandTemplate(template.body, parseArguments(args)),
       }),
     ),
-    ...readSkills(agentDir).map(
+    ...readSkills(text.skills).map(
       (skill): AgentCommand => ({
         name: `skill:${skill.name}`,
         description: skill.description,
@@ -238,6 +296,12 @@ const fileText = (path: string): string | undefined => {
   return text === "" ? undefined : text;
 };
 
+/** The instance's files of instructions, in the order it declared them. */
+function instructionsText(sources: readonly TextSource[]): string | undefined {
+  const texts = sources.filter((source) => present(source, "instructions")).flatMap(({ path }) => fileText(path) ?? []);
+  return texts.length === 0 ? undefined : texts.join("\n\n");
+}
+
 /**
  * The prompt the definition contributes: `SYSTEM.md` as written, `AGENTS.md` as project context, the skills, where it
  * works, and, deployed, what of a change it makes to itself lasts. `wake`: the agent has the wake tool.
@@ -245,12 +309,14 @@ const fileText = (path: string): string | undefined => {
 export function definitionSections(
   agentDir: string,
   content: readonly ResolvedContent[],
-  options: { wake: boolean; workdir?: string },
+  options: { wake: boolean; workdir?: string; text?: TextSources },
 ): PromptSection[] {
+  const text = options.text ?? programText(agentDir);
   return [
     section("system", () => fileText(join(agentDir, "SYSTEM.md")), { tag: false }),
     section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
-    section("skills", () => skillsPrompt(readSkills(agentDir))),
+    section("instance_context", () => instructionsText(text.instructions)),
+    section("skills", () => skillsPrompt(readSkills(text.skills))),
     section("content", () => contentSection({ agentDir, workdir: options.workdir ?? agentDir, content })),
     section("self_change", () => (isDeployedWorkspace() ? selfChangeSection(options.wake) : undefined)),
   ];
