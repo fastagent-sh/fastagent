@@ -65,8 +65,8 @@ const STDIO_PREDATED = JSON.stringify({
 /** Where a generated image keeps its storage (`FASTAGENT_STORAGE_DIR`); every host mounts its volume here. */
 const STORAGE_DIR = "/data";
 
-/** Where a generated image holds the definition: the build context, which is the agent directory. */
-export const IMAGE_DEFINITION_DIR = "/app";
+/** Where a generated image holds the agent: the build context, which is the agent directory. */
+export const IMAGE_APP_DIR = "/app";
 
 /**
  * The shell command that runs `fastagent login --stdio <args>` inside a running generated image, as the server there
@@ -84,7 +84,7 @@ export const IMAGE_DEFINITION_DIR = "/app";
  */
 export function boxLoginCommand(
   args: readonly string[],
-  { storage, program = IMAGE_DEFINITION_DIR }: { storage?: string; program?: string } = {},
+  { storage, program = IMAGE_APP_DIR }: { storage?: string; program?: string } = {},
 ): string {
   for (const value of [...args, ...(storage ? [storage] : []), program]) {
     if (!/^[\w.@/-]+$/.test(value)) throw new Error(`cannot pass ${JSON.stringify(value)} to a shell on the box`);
@@ -218,9 +218,9 @@ ENV FASTAGENT_CONFIG=${IMAGE_CONFIG_DIR}/${INSTANCE_CONFIG_FILE}
 `;
 
 function dockerfile(input: ContainerInput): string {
-  // The build context is the agent directory, baked at IMAGE_DEFINITION_DIR; deps install (and the local bin lives)
+  // The build context is the agent directory, baked at IMAGE_APP_DIR; deps install (and the local bin lives)
   // there.
-  const dir = IMAGE_DEFINITION_DIR;
+  const dir = IMAGE_APP_DIR;
   const layoutNote = `The agent directory is baked at ${dir}`;
   // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc., which the
   // slim image lacks.
