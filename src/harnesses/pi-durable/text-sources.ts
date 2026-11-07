@@ -13,6 +13,8 @@ export interface TextSource {
   path: string;
   /** The instance configuration that declared it, and so expects it to exist. None for the program's own. */
   declaredBy?: string;
+  /** The path as the configuration wrote it. */
+  given?: string;
 }
 
 /** Each kind's sources in the order they load: the program's first, so a later one never replaces its entries. */
@@ -65,7 +67,7 @@ export function declareText(dir: string, instance: InstanceConfigSource | undefi
       if (own !== undefined) {
         throw new Error(`${at} (${path}) is the program's own text (${own}), which loads already: declare another`);
       }
-      return { path, declaredBy: instance.label };
+      return { path, declaredBy: instance.label, given };
     });
   return {
     instructions: declared("instructions"),

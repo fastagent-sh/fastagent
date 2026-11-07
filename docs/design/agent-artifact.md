@@ -577,7 +577,10 @@ The configuration rides in the image the deploy builds, in the filesystem hierar
 generated Dockerfile copies that directory to `/etc/fastagent/` after the build and names it with `FASTAGENT_CONFIG`. Without `--config` the directory holds `{}`: the program's defaults. Every
 host carries it the same way, AgentCore included. It is a directory of its own, never a file in the program's, because
 what an instance configuration names beside it (its `.mcp.json`, its instructions, skills and prompt templates) is read
-from its own directory. It carries no name, as `/data` does not: an image holds one agent. A mounted configuration (a
+from its own directory. The deploy copies the instructions, skills and prompt templates the configuration names into it
+with their layout, replacing what an earlier deploy delivered, and refuses a path that is not relative or not inside the
+configuration's directory, or that would not open there. The configuration's `.mcp.json` follows with instance MCP
+servers. It carries no name, as `/data` does not: an image holds one agent. A mounted configuration (a
 ConfigMap) is the same directory placed by the host instead, named with `FASTAGENT_CONFIG`.
 `HOME` stays the user's home (§5's base environment), so files
 such as `~/.gitconfig` do not land in the instance root.
@@ -752,7 +755,7 @@ Done (#907, #909, #911; #913-#918, #921, #922; #923-#925; a channel's way of rec
 3. **Deployment.** Derived from the same artifact with delivered configuration in the image's `/etc/fastagent/` and the instance
    root at `/data/` (`/mnt/data/` on AgentCore); values as the target's state (`fastagent secrets`, names checked by deploy, channel shape as configuration, webhook
    registration on the box), AgentCore through Secrets Manager.
-4. **Instance additions.** Content (done), text additions, the delivery of declared text and `.mcp.json` to a deployment, instance MCP servers.
+4. **Instance additions.** Content and text additions with their delivery to a deployment (done); instance MCP servers with the delivery of `.mcp.json`.
 5. Any public [SPEC](../SPEC.md) change is reviewed on its own.
 
 No backward-compatibility or migration layer is carried; there are no users to migrate.
