@@ -49,7 +49,7 @@ before anything is built. A name both declare, and a relative stdio command in t
 delivers the script it names; write an absolute path on the box, or a command on its `PATH`), stop `--run`. `args` are
 passed on as written and are not checked: a script named there must be on the box too. The program's own relative
 command is relative to its package, which holds what `build` copies (`assets/`, `skills/`, `prompts/`, and the resources
-beside its code), so a script a program ships belongs under `assets/`; a literal
+beside its code), so a script a program ships belongs under `assets/`, and `build` refuses one that is not there; a literal
 header or environment value, which ships in the image, is warned about: write `${NAME}` and set the name with
 `fastagent secrets set <host> <NAME>`.
 

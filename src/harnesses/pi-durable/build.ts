@@ -7,12 +7,12 @@
 import { spawn } from "node:child_process";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { instanceConfigSchema } from "./config.ts";
 import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "./built.ts";
-import { declareMcp, literalCredentialAdvice, literalCredentials } from "../../mcp/config.ts";
-import { AGENT_CONFIG_FILE, exists } from "../../paths.ts";
+import { declareMcp, literalCredentialAdvice, literalCredentials, relativeCommands } from "../../mcp/config.ts";
+import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { HARNESS_PACKAGES } from "../../version.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "./definition.ts";
@@ -53,6 +53,7 @@ export async function buildProject(directory: string, options: BuildOptions = {}
     await mkdir(staging, { recursive: true });
     const code = await compile(dir, staging, definition, options.check !== false);
     await copyFiles(dir, staging, await copyPlan(dir, code));
+    requireShippedCommands(dir, staging);
     await writeEntry(staging, definition);
     await writeFile(join(staging, "package.json"), await distPackageJson(dir, definition));
     await writeFile(
@@ -278,6 +279,30 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
     ...(Object.keys(peerDependencies).length > 0 ? { peerDependencies } : {}),
   };
   return `${JSON.stringify(out, null, 2)}\n`;
+}
+
+/**
+ * A program's stdio command with a path is relative to its package, which in `dev` is the project and after a build is
+ * `dist/`, holding only what the build copied. One the build did not copy works in `dev` and is not there on a box, so
+ * it is refused here, against what was actually written to `staging`, rather than found when the box starts.
+ */
+function requireShippedCommands(dir: string, staging: string): void {
+  for (const { name, file, command } of relativeCommands(declareMcp(dir))) {
+    const inProject = resolve(dir, command);
+    const shipped = join(staging, relative(dir, inProject));
+    if (isUnderDir(inProject, dir) && existsSync(shipped)) continue;
+    const dependency = isUnderDir(inProject, dir) && relative(dir, inProject).split(sep)[0] === "node_modules";
+    throw new Error(
+      `${file} mcpServers.${name}: the command "${command}" ` +
+        (dependency
+          ? `is in node_modules, which the box installs for itself and ${DIST_DIR}/ does not hold: run the package by ` +
+            `name (\`npx <package>\`) or give the absolute path it has there`
+          : existsSync(inProject)
+            ? `is not in ${DIST_DIR}/, which holds only what the build copies (assets/, skills/, prompts/ and the ` +
+              `resources beside code): move it under assets/`
+            : `does not exist in the project`),
+    );
+  }
 }
 
 /** What a build says of a literal credential in the program's `mcpServers`, which the package publishes. */

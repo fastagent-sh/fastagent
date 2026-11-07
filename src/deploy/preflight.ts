@@ -4,7 +4,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
@@ -35,7 +35,13 @@ import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { type ContainerInput, DELIVERED_CONFIG_DIR, isGeneratedDockerfile } from "./container.ts";
 import { deliveredTextProblem } from "./delivered-text.ts";
-import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
+import {
+  type McpDeclaration,
+  declareMcp,
+  literalCredentialAdvice,
+  literalCredentials,
+  relativeCommands,
+} from "../mcp/config.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
@@ -114,7 +120,7 @@ const GITHUB_TOKEN_SECRET: DeclaredSecret = {
  * declare, or one that cannot be read, is an issue (the box would refuse to open); a literal credential is a warning,
  * since it ships in the image and FastAgent cannot tell a secret from a setting; a relative stdio command in the
  * delivered configuration is an issue, since nothing delivers the script it names. (The program's own is relative to
- * its package, which holds only what `build` copies: `assets/`, `skills/`, `prompts/` and code directories' resources.)
+ * its package, and `build` refuses one that it does not copy.)
  * `args` are not checked: FastAgent cannot know which strings are paths. Answers whether the list reads.
  */
 function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined, report: DeployReport): boolean {
@@ -132,20 +138,11 @@ function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined,
         `\`fastagent secrets set <host> <NAME>\``,
     );
   }
-  for (const { name, server, file, origin } of declarations) {
-    const command = server.type === "http" ? undefined : server.command;
-    if (
-      origin === "instance" &&
-      command !== undefined &&
-      /[/\\]/.test(command) &&
-      !isAbsolute(command) &&
-      !command.startsWith("${")
-    ) {
-      report.issue(
-        `${file} mcpServers.${name}: the command "${command}" is a relative path, and a deploy delivers the configuration ` +
-          `but not the script it names: write an absolute path on the box, or a command found on its PATH`,
-      );
-    }
+  for (const { name, file, command } of relativeCommands(declarations).filter(({ origin }) => origin === "instance")) {
+    report.issue(
+      `${file} mcpServers.${name}: the command "${command}" is a relative path, and a deploy delivers the configuration ` +
+        `but not the script it names: write an absolute path on the box, or a command found on its PATH`,
+    );
   }
   return true;
 }
