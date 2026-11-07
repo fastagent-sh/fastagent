@@ -260,7 +260,7 @@ Every input can be placed anywhere, so a host can mount each on the storage that
 | Secrets | `--env-file <file>` | the process environment | `secrets` (`Record<string, string>`) |
 | Child-process base environment (§5) | — | the CLI's own `PATH`, `HOME`, locale, proxy variables | `env` |
 | Instance name (§4.5) | `--name <name>` | `FASTAGENT_NAME` | `name` |
-| Instance root | `--root <dir>` | `FASTAGENT_ROOT` (replaces `FASTAGENT_STORAGE_DIR`) | `root` |
+| Instance root | `--root <dir>` | `FASTAGENT_ROOT` | `root` |
 | State, apart from the root | `--state <dir>` | `FASTAGENT_STATE_DIR` | `stateDir` |
 | Workspace, apart from the root | `--workdir <dir>` | `FASTAGENT_WORKDIR` | `workdir` |
 

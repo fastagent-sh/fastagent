@@ -127,7 +127,7 @@ export default defineTool({
     Object.assign(env, {
       FASTAGENT_RELEASE_FILE: manifest,
       FASTAGENT_CONFIG: delivered,
-      FASTAGENT_STORAGE_DIR: root,
+      FASTAGENT_ROOT: root,
     });
     const workspaceUrl = pathToFileURL(join(repo, "src/deploy/workspace.ts")).href;
     const startUrl = pathToFileURL(join(repo, "src/cli/commands/start.ts")).href;
