@@ -194,6 +194,21 @@ export function literalCredentials(
   });
 }
 
+/**
+ * The stdio servers whose command is a path relative to the file that declares it, as it is written: what a build or a
+ * deploy has to be able to deliver, since a script is not found on a `PATH`. A command that starts with a `${VAR}` is
+ * left to the variable, and `args` are never read as paths, since FastAgent cannot know which strings are.
+ */
+export function relativeCommands(declarations: readonly McpDeclaration[]): (McpDeclaration & { command: string })[] {
+  return declarations.flatMap((declaration) => {
+    const { server } = declaration;
+    const command = server.type === "http" ? undefined : server.command;
+    return command !== undefined && /[/\\]/.test(command) && !isAbsolute(command) && !command.startsWith("${")
+      ? [{ ...declaration, command }]
+      : [];
+  });
+}
+
 /** What to write instead of a literal credential, which a header's value usually carries a scheme in front of. */
 export function literalCredentialAdvice({ field, key }: { field: "headers" | "env"; key: string }): string {
   const name = key.toUpperCase().replace(/[^A-Z0-9_]/g, "_");

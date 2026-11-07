@@ -142,7 +142,7 @@ Compiles the agent into `dist/`, a package of its own ([agent-artifact.md](desig
 
 It refuses what `dev` refuses before writing anything, and replaces `dist/` whole. No `.env`, `.secrets/`, state,
 clone or `node_modules` is copied. A header or environment value in the `mcpServers` of `context.json` with no `${VAR}` in it is warned
-about: the package publishes it. A `.mcp.json` is not read or copied. Prints where `dist/` is; `--json` adds the name, version and warnings.
+about: the package publishes it. A `.mcp.json` is not read or copied. A program's stdio `command` that is a path (`./assets/server`) must be among the files copied, so `build` refuses one that works in `dev` and would not be in `dist/`. Prints where `dist/` is; `--json` adds the name, version and warnings.
 
 ## `fastagent content`
 

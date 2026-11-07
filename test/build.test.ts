@@ -3,7 +3,17 @@
  * test/fixtures so their imports resolve this repository's packages, TypeScript included, as an installed agent's do.
  */
 import { execFile } from "node:child_process";
-import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
@@ -243,6 +253,47 @@ describe("fastagent build", () => {
     const dir = project({ ".mcp.json": JSON.stringify({ mcpServers: { tooling: { command: "npx" } } }) });
     const { dist } = await buildProject(dir);
     expect(listing(dist)).not.toContain(".mcp.json");
+  });
+
+  describe("a stdio command with a path in the program's mcpServers", () => {
+    const servers = (command: string) => JSON.stringify({ mcpServers: { local: { command } } });
+
+    it("is shipped when it is under a directory the build copies, with its executable bit", async () => {
+      const dir = project({ "context.json": servers("./assets/server"), "assets/server": "#!/bin/sh\n" });
+      chmodSync(join(dir, "assets/server"), 0o755);
+      const { dist } = await buildProject(dir);
+      expect(statSync(join(dist, "assets/server")).mode & 0o111).not.toBe(0);
+    });
+
+    it("refuses one the build does not copy, which `dev` runs from the project, and leaves the dist before it", async () => {
+      const dir = project({ "context.json": servers("./assets/server"), "assets/server": "#!/bin/sh\n" });
+      const { dist } = await buildProject(dir);
+      const before = listing(dist);
+      writeFileSync(join(dir, "context.json"), servers("./bin/server"));
+      mkdirSync(join(dir, "bin"));
+      writeFileSync(join(dir, "bin/server"), "#!/bin/sh\n");
+      await expect(buildProject(dir)).rejects.toThrow(
+        /context\.json mcpServers\.local: the command "\.\/bin\/server" is not in dist\/, which holds only what the build copies .*move it under assets\//,
+      );
+      expect(listing(dist)).toEqual(before);
+    });
+
+    it("refuses one that is not in the project at all, and one that points out of it", async () => {
+      const missing = project({ "context.json": servers("./assets/missing") });
+      await expect(buildProject(missing)).rejects.toThrow(
+        /the command "\.\/assets\/missing" does not exist in the project/,
+      );
+      const outside = project({ "context.json": servers("../elsewhere/server") });
+      await expect(buildProject(outside)).rejects.toThrow(
+        /the command "\.\.\/elsewhere\/server" does not exist in the project/,
+      );
+    });
+
+    it("leaves a bare command, an absolute path and a variable's directory to the box", async () => {
+      for (const command of ["npx", "/opt/mcp/server", "$" + "{MCP_HOME}/server"]) {
+        await expect(buildProject(project({ "context.json": servers(command) })), command).resolves.toBeDefined();
+      }
+    });
   });
 
   it("packs all of dist/ and no secret file: npm pack holds what the build wrote, none of it a .env", async () => {
