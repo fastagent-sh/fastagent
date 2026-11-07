@@ -550,7 +550,7 @@ list is part of the assembly that `info` reports.
 A container instance:
 
 ```text
-/app/definition/          the image: the program, read-only, with its build in dist/ and the release manifest
+/app/                     the image: the program, read-only, with its build in dist/ and the release manifest
 /etc/fastagent/           configuration, read-only, delivered with the release: FASTAGENT_CONFIG names its fastagent.json
   fastagent.json  (.mcp.json  AGENTS.md  skills/  prompts/, when an instance adds them)
 /data/                    the volume, FASTAGENT_ROOT: the agent's cwd (/mnt/data/ on AgentCore)

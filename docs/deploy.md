@@ -337,7 +337,7 @@ fastagent deploy agentcore
 fastagent deploy agentcore --run
 ```
 
-Generates `agentcore.template.yaml`, `lambda/index.js`, container files and a release manifest.
+Generates `agentcore.template.yaml`, `agentcore/forwarder/index.js`, container files and a release manifest.
 The runbook: create the ECR repository and the values secret, `docker buildx build --platform linux/arm64 … --push` with a unique tag
 per deploy, `aws cloudformation deploy`, read the outputs, register webhooks. `--run` does all of it.
 
@@ -474,7 +474,7 @@ included: the role belongs to the account and any other AgentCore runtime uses i
 
 ## What deploy bakes
 
-The agent directory is the build context: the image holds it at `/app/definition`, minus what the ignore file
+The agent directory is the build context: the image holds it at `/app`, minus what the ignore file
 excludes, and builds its `dist/` there. The deployed agent runs that build where the image has it, and its working
 directory is the persistent storage:
 
@@ -510,8 +510,7 @@ declared; without `--run`, these are warnings. Chromium with CJK fonts adds abou
 [variables](configuration.md#environment) `context.json` declares are required like a module's secrets: the runbook lists
 each with its description, and a deploy whose target has no value for one stops before it builds anything.
 
-**Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
-rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /
+**Artifacts** land in the agent directory: `Dockerfile` and `.dockerignore`, and `fastagent.compose.yml` / `fly.toml` /
 `agentcore.template.yaml` (Railway has none of its own). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
 `**/.state`, `/.fastagent`, `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
 

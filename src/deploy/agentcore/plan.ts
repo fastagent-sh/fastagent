@@ -70,7 +70,7 @@ export const DEFAULT_IDLE_TIMEOUT_SECONDS = 180;
 /** One session's compute lifetime — AWS's own default. Both lifecycle fields cap at 1209600 (14 d). */
 export const MAX_LIFETIME_SECONDS = 28800;
 
-export const FORWARDER_FILE = "lambda/index.js";
+export const FORWARDER_FILE = "agentcore/forwarder/index.js";
 
 /**
  * Where the forwarder puts the one-shot schedule for a wake-up. The id inside the name is minted in the
@@ -179,7 +179,7 @@ export function ingressSessionId(name: string): string {
 
 /**
  * The forwarder Lambda source — `forwarder.js` beside this file, the ONE text both the deployment package and the
- * readable `lambda/index.js` artifact are generated from.
+ * readable `agentcore/forwarder/index.js` artifact are generated from.
  */
 export function forwarderSource(): string {
   return readFileSync(new URL("./forwarder.js", import.meta.url), "utf8");
@@ -473,8 +473,8 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     ``,
     `# 1b. Package the forwarder and upload it. Name the object by its CONTENT (a hash/date):`,
     `#     CloudFormation rolls the function only when the ForwarderS3Key VALUE changes.`,
-    `(cd lambda && zip -q forwarder.zip index.js)`,
-    `aws s3 cp lambda/forwarder.zip s3://${bucketHint}/forwarder/<hash>.zip`,
+    `(cd agentcore/forwarder && zip -q forwarder.zip index.js)`,
+    `aws s3 cp agentcore/forwarder/forwarder.zip s3://${bucketHint}/forwarder/<hash>.zip`,
     ``,
     `# 2. Build (linux/arm64) + push. Use a UNIQUE tag per deploy (a git sha / date): CloudFormation only`,
     `#    rolls the runtime when the ImageUri VALUE changes — re-pushing the same tag deploys nothing.`,

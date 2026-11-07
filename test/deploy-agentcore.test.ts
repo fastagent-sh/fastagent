@@ -63,7 +63,6 @@ describe("deploy agentcore: the plan", () => {
       "fastagent.packages",
       "Dockerfile",
       ".dockerignore",
-      "Dockerfile.dockerignore",
     ]);
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::BedrockAgentCore::Runtime");
@@ -189,8 +188,8 @@ describe("deploy agentcore: the plan", () => {
   it("ships the forwarder as a REAL Lambda entry (index.js) loaded from S3 by content-hashed key", () => {
     const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
     // The artifact IS the deployment package's entry: zipping it as-is matches `Handler: index.handler`.
-    expect(FORWARDER_FILE).toBe("lambda/index.js");
-    expect(plan.artifacts.map((a) => a.path)).toContain("lambda/index.js");
+    expect(FORWARDER_FILE).toBe("agentcore/forwarder/index.js");
+    expect(plan.artifacts.map((a) => a.path)).toContain("agentcore/forwarder/index.js");
     const template = plan.artifacts[0]!.content;
     expect(template).not.toContain("ZipFile");
     expect(template).toContain("S3Bucket: !Ref ForwarderBucket");

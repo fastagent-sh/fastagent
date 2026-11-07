@@ -37,7 +37,6 @@ describe("deploy/docker: planDockerDeploy", () => {
       "fastagent.packages",
       "Dockerfile",
       ".dockerignore",
-      "Dockerfile.dockerignore",
     ]);
 
     const yaml = compose(plan);

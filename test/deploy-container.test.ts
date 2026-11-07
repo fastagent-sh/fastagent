@@ -17,9 +17,9 @@ describe("deploy/container: shared Docker context", () => {
   it("keeps tracked secrets scaffolds without shipping credentials, state or clones", () => {
     const artifacts = containerArtifacts(input);
     const rootIgnore = artifacts.find((artifact) => artifact.path === ".dockerignore")!.content;
-    const dockerfileIgnore = artifacts.find((artifact) => artifact.path === "Dockerfile.dockerignore")!.content;
 
-    expect(dockerfileIgnore).toBe(rootIgnore);
+    // One ignore file serves both builders: a second one beside the Dockerfile would shadow an author's own.
+    expect(artifacts.map((artifact) => artifact.path)).not.toContain("Dockerfile.dockerignore");
     expect(rootIgnore).toMatch(/^\*\*\/\.secrets\/\*\*$/m);
     expect(rootIgnore).toMatch(/^!\*\*\/\.env\.example$/m);
     expect(rootIgnore).toMatch(/^!\*\*\/\.secrets\/\.gitignore$/m);
@@ -91,7 +91,7 @@ describe("deploy/container: shared Docker context", () => {
           "MISE_PYTHON_COMPILE=false",
       );
       expect(text).toContain(
-        'MISE="/app/definition/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise"',
+        'MISE="/app/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise"',
       );
     }
   });
@@ -137,11 +137,11 @@ describe("deploy/container: shared Docker context", () => {
       (i) => containerArtifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content,
     );
     const values = dockerfiles.map((content) => /^ENV FASTAGENT_RELEASE_FILE=(\S+)$/m.exec(content)?.[1]);
-    expect(values).toEqual(Array(3).fill("/app/definition/fastagent.release.json"));
+    expect(values).toEqual(Array(3).fill("/app/fastagent.release.json"));
     // Every image opens the baked definition by path; nothing selects an agent by name any more.
     for (const content of dockerfiles) {
-      expect(content).toMatch(/^WORKDIR \/app\/definition$/m);
-      expect(content).toMatch(/"start", "\/app\/definition"\]$/m);
+      expect(content).toMatch(/^WORKDIR \/app$/m);
+      expect(content).toMatch(/"start", "\/app"\]$/m);
       expect(content).not.toContain("FASTAGENT_AGENT");
     }
     const manifest = containerArtifacts(input).find((a) => a.path === "fastagent.release.json")!;

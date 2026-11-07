@@ -66,7 +66,7 @@ const STDIO_PREDATED = JSON.stringify({
 const STORAGE_DIR = "/data";
 
 /** Where a generated image holds the definition: the build context, which is the agent directory. */
-export const IMAGE_DEFINITION_DIR = "/app/definition";
+export const IMAGE_DEFINITION_DIR = "/app";
 
 /**
  * The shell command that runs `fastagent login --stdio <args>` inside a running generated image, as the server there
@@ -313,8 +313,6 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
     // Written without packages too, empty: a list an earlier deploy left would otherwise outlive the last package.
     { path: PACKAGES_FILE, content: (input.packages ?? []).map((spec) => `${spec}\n`).join("") },
     { path: "Dockerfile", content: dockerfile(input) },
-    // Both names: BuildKit prefers the one beside the Dockerfile, the classic builder reads the context root's.
     { path: ".dockerignore", content: ignore },
-    { path: "Dockerfile.dockerignore", content: ignore },
   ];
 }

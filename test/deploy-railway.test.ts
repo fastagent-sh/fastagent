@@ -35,7 +35,6 @@ describe("deploy/railway: planRailwayDeploy", () => {
       "fastagent.packages",
       "Dockerfile",
       ".dockerignore",
-      "Dockerfile.dockerignore",
     ]);
     // .git is deliberately SHIPPED (the agent's pull/push loop needs it) — the exclusion must not
     // creep back in silently; machinery/secret excludes are the hard contract instead.
