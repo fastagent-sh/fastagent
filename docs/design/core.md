@@ -712,7 +712,7 @@ persistent-volume wiring, required secret names, and a runbook. Docker adds a us
 `fastagent.compose.yml`; ingress stays operator-owned (there is no tunnel service). `--run` alone causes host
 side effects.
 
-The build context is the agent directory, baked at `/app/definition`; the artifacts and the ignore file sit at its root,
+The build context is the agent directory, baked at `/app`; the artifacts and the ignore file sit at its root,
 and preflight checks that a kept ignore file ships `fastagent.config.ts` and excludes credentials. Preflight says what
 each content entry becomes on the host: a `github` one is cloned there (afresh on every deployment on AgentCore, whose
 storage starts over); a `local` one stays on this machine, and preflight says how to ship what the agent only reads (the
@@ -730,7 +730,7 @@ mise packages, the agent's mise is not installed here to check with, a package r
 package's runtime is not declared; it warns a kept hand-written Dockerfile that it installs the environment only if it
 says so.
 
-`deploy/workspace.ts` owns the shared deployed lifecycle. The program is the image's (`/app/definition`, built there),
+`deploy/workspace.ts` owns the shared deployed lifecycle. The program is the image's (`/app`, built there),
 opened where it is; the storage is the instance's root (`FASTAGENT_ROOT`): the agent's cwd, with `.state/`,
 `.secrets/`, `content/` and `.deployment/`. The release manifest names the agent the storage belongs to, and a
 storage another agent started on is refused. A process-lifetime lease is taken first. Nothing on the storage is

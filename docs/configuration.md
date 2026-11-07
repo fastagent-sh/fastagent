@@ -495,7 +495,7 @@ are in the project's `.fastagent/dev/` for `dev` and `.fastagent/start/` for `st
 in `<dir>/.state`; `--state <dir>` (`FASTAGENT_STATE_DIR`) and `--workdir <dir>` (`FASTAGENT_WORKDIR`) place either apart
 from it, a flag over its variable, and a variable over the default. The commands that open an instance or read its state
 take them: `dev`, `start`, `invoke`, `info` and `schedules`. A relative path resolves once, against the directory the
-command started in (in a generated image, its `WORKDIR`, `/app/definition`), and a root or workdir that does not exist is created; one that cannot be (a file, a read-only parent) refuses. `--config <file>` (`FASTAGENT_CONFIG`) names
+command started in (in a generated image, its `WORKDIR`, `/app`), and a root or workdir that does not exist is created; one that cannot be (a file, a read-only parent) refuses. `--config <file>` (`FASTAGENT_CONFIG`) names
 the [instance configuration](#instance-configuration) for `dev`, `start`, `invoke`, `info` and `schedules run`; `dev`
 and the others read the `fastagent.json` at the project root without it, and `start` reads none.
 

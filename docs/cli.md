@@ -40,7 +40,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). |
 | `deploy fly [agent]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
 | `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end and continues the project that holds the agent's service; a dir linked to another project needs `--into-linked`. |
-| `deploy agentcore [agent]` | Generate `agentcore.template.yaml`, `lambda/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
+| `deploy agentcore [agent]` | Generate `agentcore.template.yaml`, `agentcore/forwarder/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
 | `deploy <host> --config <file>` | Every host: deliver an instance configuration (a `fastagent.json`) the deployment runs on, carried in the image at `/etc/fastagent/` (`FASTAGENT_CONFIG` names it). Without it, the program's defaults; the project's own `fastagent.json` is never carried. |
 | `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
 | `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
@@ -605,7 +605,7 @@ content:  <workdir>/content/<name> (clones)
 The same `--root`, `--state` and `--workdir` place the instance for `dev`, `invoke`, `info` and `schedules`
 (`list`, `run`, `unwake`), and `--config` names the configuration for `dev`, `invoke`, `info` and `schedules run`;
 a relative path resolves once, against the directory the command started in (in a generated image, its `WORKDIR`,
-`/app/definition`), and the root and workdir are created when missing, or refused when they cannot be. [Configuration](configuration.md#where-an-instance-lives) says what each holds.
+`/app`), and the root and workdir are created when missing, or refused when they cannot be. [Configuration](configuration.md#where-an-instance-lives) says what each holds.
 
 ## Global options
 

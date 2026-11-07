@@ -12,7 +12,7 @@ import type { Registrars, UrlRecorder } from "../../../deploy/channel-ingress.ts
 import { recordChannelUrl } from "../../channel-app.ts";
 import {
   BUILD_OUTPUTS,
-  IMAGE_DEFINITION_DIR,
+  IMAGE_APP_DIR,
   isGeneratedDockerfile,
   isGeneratedDockerignore,
 } from "../../../deploy/container.ts";
@@ -208,7 +208,7 @@ export async function planArtifacts(
           (a.path.endsWith(".dockerignore")
             ? `; see the preflight warnings for what it must exclude`
             : a.path.endsWith("Dockerfile")
-              ? `; deploy still assumes it listens on $PORT and runs \`fastagent start ${IMAGE_DEFINITION_DIR}\``
+              ? `; deploy still assumes it listens on $PORT and runs \`fastagent start ${IMAGE_APP_DIR}\``
               : ``),
       );
       continue;
