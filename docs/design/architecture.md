@@ -96,8 +96,8 @@ to another with `configure`.
 ## 3. The definition and its assembly
 
 **Artifact target, not current runtime behavior.** The [artifact design](agent-artifact.md) keeps the program in
-`fastagent.config.ts` (constants, `defaults`, a `settings` schema), `context.json` and `mcp.json`, builds a complete
-`dist/`, and takes each instance's `fastagent.json`, `.mcp.json`, secrets, state and workspace as explicit inputs.
+`fastagent.config.ts` (constants, `defaults`, a `settings` schema), `context.json` and `.mcp.json`, builds a complete
+`dist/`, and takes each instance's `fastagent.json`, secrets, state and workspace as explicit inputs.
 `core.md` documents the current 0.29.0 source-directory implementation.
 
 ```
@@ -113,7 +113,7 @@ my-agent/
     channels/*.ts
     schedules/*.ts                defineSchedule
   context.json                    content baseline and environment requirements
-  mcp.json                        default MCP servers; an instance adds servers in its .mcp.json
+  .mcp.json                       default MCP servers; an instance adds servers under mcpServers in its fastagent.json
   .fastagent/                     generated, not committed
   dist/                           the build output
 ```
@@ -171,7 +171,7 @@ owns the target. Author changes produce a new version. Recurring `wake` work rem
 ### 4.1 The artifact
 
 The artifact is an **npm package** exporting a compiled definition with relocatable resources, not a live Agent singleton.
-It carries authored text and skills, `fastagent.config.ts`, `context.json` and `mcp.json`, and a generated JSON Schema
+It carries authored text and skills, `fastagent.config.ts`, `context.json` and `.mcp.json`, and a generated JSON Schema
 for instance configuration. Instance configuration, fetched data and secret values do not enter it. An app imports it and
 opens it with `openAgent(definition, inputs)`; it depends on FastAgent as a peer and records a format version. The
 [detailed design](agent-artifact.md) fixes the layout and the exported definition. An ordinary npm library does not
@@ -215,7 +215,8 @@ an instance's `fastagent.json` does.
 
 The agent's own parts carry no prefix. Since the agent chooses the aliases, two aliases cannot collide either.
 
-MCP configuration is the agent's [`.mcp.json`](mcp.md), not a `connectors` field in `context.json`.
+MCP configuration is the agent's [`.mcp.json`](mcp.md), not a `connectors` field in `context.json`; an instance adds
+servers under `mcpServers` in its `fastagent.json`, in the same entry shape.
 How future packages contribute MCP declarations is deferred; packages must not create a parallel authoritative format.
 
 ### 4.3 Hosts and storage

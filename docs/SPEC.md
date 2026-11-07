@@ -487,7 +487,7 @@ interface DeclaredSecret {
    * model provider's variable, so it is optional.
    */
   optional: boolean;
-  /** Every place it is declared: a module of `src/`, `mcp.json`, `context.json`, the default model's provider. */
+  /** Every place it is declared: a module of `src/`, `.mcp.json`, `context.json`, the default model's provider. */
   declaredIn: string[];
   /**
    * Set when only some channels' ways of receiving read it (`byIngress`): an instance needs it only when one of these
@@ -501,10 +501,6 @@ type InstanceInputs<Settings = unknown> = {
   /** The instance configuration (`fastagent.json`'s schema), or the absolute path of a `fastagent.json`. */
   config?: InstanceConfig<Settings> | string;
   /**
-   * MCP servers the instance adds, in `.mcp.json`'s standard shape, or the absolute path of one. Default: the
-   * `.mcp.json` beside a `config` path. A stdio server given as an object carries an absolute `cwd`.
-   */
-  mcpServers?: { mcpServers: Record<string, object> } | string;
   /** Secret values: the declared names, and model providers' variables. No variable of the host's reaches the agent. */
   secrets?: Record<string, string>;
   /** The base environment of the processes the agent starts. Default: empty. `baseEnv(process.env)` is the app's. */
@@ -559,6 +555,12 @@ interface InstanceConfig<Settings = unknown> {
   settings?: Partial<Settings>;
   /** Content the instance adds to the program's: a name may not be one the program declares. */
   content?: Record<string, { github: string; ref?: string } | { path: string }>;
+  /**
+   * MCP servers the instance adds, in the shape of the program's `.mcp.json` `mcpServers` map. They add to the program's:
+   * a name both declare refuses the open. A stdio server runs in the instance's workspace, and one given in an object
+   * names a command that is a bare name or an absolute path. `inspectMcp` and `signInMcp` take the same `config`.
+   */
+  mcpServers?: Record<string, object>;
   /** Files added after the program's text; directories of skills and of prompt templates. */
   instructions?: string[];
   skills?: string[];

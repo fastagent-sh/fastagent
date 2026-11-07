@@ -16,6 +16,8 @@ The consumer [Agent API](../SPEC.md) sessions/messages are unchanged.
 - Call the feature **MCP servers**. There is no generic `Connector` interface or configuration kind.
 - The agent directory's **`.mcp.json`**, with a top-level **`mcpServers`** map, is the one configuration source.
   Do not also define servers in `context.json`, `fastagent.config.ts`, or a machine-wide MCP configuration.
+  An instance adds its own under `mcpServers` in its `fastagent.json` (the [artifact design](agent-artifact.md) §4.2): the
+  same entry shape, layered on the program's and never replacing it, a name in both refusing the open.
 - File location does not own resources. Each opened agent instance owns its clients and resolved bindings.
   OAuth grants persist beyond open/close in a credential store controlled by the host; clients are never cached globally
   by server name or agent-directory path, and credentials are never implicitly shared between agents.
