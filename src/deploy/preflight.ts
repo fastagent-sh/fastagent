@@ -35,7 +35,7 @@ import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { type ContainerInput, DELIVERED_CONFIG_DIR, isGeneratedDockerfile } from "./container.ts";
 import { deliveredTextProblem } from "./delivered-text.ts";
-import { type McpDeclaration, declareMcp, literalCredentials } from "../mcp/config.ts";
+import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
@@ -113,7 +113,9 @@ const GITHUB_TOKEN_SECRET: DeclaredSecret = {
  * The MCP servers the box will open: the program's, in the image, and the delivered configuration's. A name both
  * declare, or one that cannot be read, is an issue (the box would refuse to open); a literal credential is a warning,
  * since it ships in the image and FastAgent cannot tell a secret from a setting; a relative stdio command in the
- * delivered configuration is an issue, since nothing delivers the script it names. Answers whether the list reads.
+ * delivered configuration is an issue, since nothing delivers the script it names. (The program's own is relative to
+ * its package, which holds only what `build` copies: `assets/`, `skills/`, `prompts/` and code directories' resources.)
+ * `args` are not checked: FastAgent cannot know which strings are paths. Answers whether the list reads.
  */
 function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined, report: DeployReport): boolean {
   let declarations: McpDeclaration[];
@@ -123,10 +125,11 @@ function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined,
     report.issue(messageOf(error));
     return false;
   }
-  for (const { file, server, field, key } of literalCredentials(declarations)) {
+  for (const literal of literalCredentials(declarations)) {
     report.warn(
-      `${file} mcpServers.${server}.${field}.${key} is a literal value, and this deploy puts it in the image: write ` +
-        `\${${key.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}} and set that name with \`fastagent secrets set <host> <NAME>\``,
+      `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key} is a literal value, and this ` +
+        `deploy puts it in the image: ${literalCredentialAdvice(literal)} and set that name with ` +
+        `\`fastagent secrets set <host> <NAME>\``,
     );
   }
   for (const { name, server, file, origin } of declarations) {

@@ -442,15 +442,16 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       const literals = said(pre).filter((m) => m.text.includes("is a literal value"));
       expect(literals.map((m) => m.level)).toEqual(["warn", "warn"]);
       expect(literals[0]?.text).toMatch(
-        /^context\.json mcpServers\.docs\.headers\.Authorization is a literal value, and this deploy puts it in the image: write \$\{AUTHORIZATION\}/,
+        /^context\.json mcpServers\.docs\.headers\.Authorization is a literal value, and this deploy puts it in the image: replace the secret in it with \$\{AUTHORIZATION\} \(a scheme stays: `Bearer \$\{AUTHORIZATION\}`\)/,
       );
       expect(literals[1]?.text).toContain(`${delivered.config} mcpServers.notes.env.NOTES_TOKEN is a literal value`);
+      expect(literals[1]?.text).toContain("write ${NOTES_TOKEN}");
       expect(literals[1]?.text).toContain("fastagent secrets set <host> <NAME>");
     });
 
     it("refuses a relative stdio command in the delivered configuration, which nothing delivers, and allows the others", async () => {
       const dir = await agent({
-        "context.json": JSON.stringify({ mcpServers: { packaged: { command: "./bin/server" } } }),
+        "context.json": JSON.stringify({ mcpServers: { packaged: { command: "./assets/server" } } }),
       });
       const relative = await delivering(dir, { scripted: { command: "./notes-server" } });
       const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: relative, run: true });
@@ -459,7 +460,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         expect(gated.gate).toMatch(/mcpServers\.scripted: the command "\.\/notes-server" is a relative path/);
       const warned = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: relative });
       expect(said(warned).some((m) => m.level === "warn" && m.text.includes("is a relative path"))).toBe(true);
-      // The program's own relative command is the package's, which the image holds; a bare or absolute command, or a
+      // The program's own relative command is the package's (what `build` copies, `assets/` among it); a bare or absolute command, or a
       // variable that supplies the directory, is the box's to find.
       const fine = await delivering(dir, {
         bare: { command: "npx" },

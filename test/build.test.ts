@@ -234,6 +234,8 @@ describe("fastagent build", () => {
     expect(warnings).toEqual([
       expect.stringContaining("context.json mcpServers.docs.headers.Authorization is a literal"),
     ]);
+    // The same advice the deploy gives, which keeps a header's scheme.
+    expect(warnings[0]).toContain("a scheme stays");
     expect(listing(dist)).toContain("context.json");
   });
 

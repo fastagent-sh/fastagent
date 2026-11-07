@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { instanceConfigSchema } from "./config.ts";
 import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "./built.ts";
-import { declareMcp, literalCredentials } from "../../mcp/config.ts";
+import { declareMcp, literalCredentialAdvice, literalCredentials } from "../../mcp/config.ts";
 import { AGENT_CONFIG_FILE, exists } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { HARNESS_PACKAGES } from "../../version.ts";
@@ -283,8 +283,8 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
 /** What a build says of a literal credential in the program's `mcpServers`, which the package publishes. */
 function literalMcpCredentials(dir: string): string[] {
   return literalCredentials(declareMcp(dir)).map(
-    ({ file, server, field, key }) =>
-      `${file} mcpServers.${server}.${field}.${key} is a literal value, and ${DIST_DIR}/ is published: ` +
-      `write \${${key.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}} and give the value as a secret`,
+    (literal) =>
+      `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key} is a literal value, and ` +
+      `${DIST_DIR}/ is published: ${literalCredentialAdvice(literal)} and give the value as a secret`,
   );
 }
