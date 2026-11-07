@@ -156,8 +156,8 @@ export default defineAgent({
 - The provider id joins the model id into a spec (`mygw/deepseek-v3`). `@earendil-works/pi-ai` is a dependency of
   the agent's `package.json` (`init` adds it).
 - A key belongs in the environment, read through `needs`: the config ships in the image, so a key written into it
-  ships too. `needs` makes the value required (the start refuses without it) and carries it to a deployment like any
-  declared secret.
+  ships too. `needs` makes the value required (the start refuses without it), and `deploy` checks that the target holds it, like
+  any declared secret.
 - A provider that resolves its own auth counts as authenticated: `info`, the startup report and `deploy`'s pre-flight
   report it so, and `login` is not needed for it.
 - `fastagent models` lists its models beside the built-ins, and `fastagent info --model mygw/deepseek-v3` says whether
@@ -303,8 +303,8 @@ needs, installed on every machine that runs it and in its image:
   FastAgent never runs apt itself, and elsewhere it says nothing.
 - **`variables`** are the environment variables the agent's commands read, declared by name with what each is for, as code
   declares the secrets it reads with `needs`. Their values come from the environment, never from `context.json`: `.secrets/.env` here,
-  and `.secrets/production/.env` for a deployment, the one file `deploy` reads and carries (a variable exported where
-  you run `deploy` does not reach the deployment). Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
+  and `.secrets/production/.env` for a deployment, the file `fastagent secrets push` reads to set them on the deployment's target (a variable
+  exported where you run `deploy` does not reach the deployment). Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
   start without its value and name `context.json`, `deploy` refuses before it changes anything and lists each
   with its description, and `info` and `fastagent env list` say which have a value here. A value you would share across
   stages, like an enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template.
@@ -365,7 +365,7 @@ to `openAgent`.
 | `fastagent login` | Writes credentials to `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`). `-g`, or running outside any agent, writes `~/.fastagent/.secrets/auth.json`. |
 | Provider env vars | Servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
 | Dev `.env` | `<agent dir>/.secrets/.env`, loaded by local commands and `add <channel>`. Excluded from git by `.secrets/.gitignore`. |
-| Production `.env` | `<agent dir>/.secrets/production/.env`, loaded by `start`, `deploy` and `add <channel> --env production`. `deploy` carries it whole, never falling back to dev. |
+| Production `.env` | `<agent dir>/.secrets/production/.env`, loaded by `start`, `deploy` and `add <channel> --env production`. It is Docker's own store, and the source `fastagent secrets push` copies a deployment's declared names from; neither falls back to dev. |
 
 For one provider, the agent uses the first of:
 

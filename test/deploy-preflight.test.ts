@@ -538,6 +538,15 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     });
   });
 
+  it("declares no GITHUB_TOKEN where no repository is cloned: the name is the host's clone's, not every agent's", async () => {
+    const dir = await agent({});
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.declaredSecrets.map((secret) => secret.name)).not.toContain("GITHUB_TOKEN");
+    expect(pre.messages.some((m) => m.text.includes("GITHUB_TOKEN"))).toBe(false);
+  });
+
   it("says what each repository context becomes on the host, bakes git, and names the token it clones with", async () => {
     const dir = await agent({
       "context.json": JSON.stringify({
@@ -556,7 +565,14 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       "works on handbook: github acme/handbook@main, cloned on the host, and brought up to date in place at each start",
     );
     expect(notes).toContainEqual(
-      expect.stringMatching(/^no GITHUB_TOKEN in \.secrets\/\.env: the host clones without a credential/),
+      expect.stringMatching(
+        /^no GITHUB_TOKEN in \.secrets\/\.env: unless the target holds one, the host clones without/,
+      ),
+    );
+    expect(notes.join("\n")).toContain("`fastagent secrets set <host> GITHUB_TOKEN`");
+    // The name is declared (optional) so `secrets list|push|set` and `deploy` know it, only where a github entry is.
+    expect(pre.declaredSecrets).toContainEqual(
+      expect.objectContaining({ name: "GITHUB_TOKEN", optional: true, declaredIn: expect.stringContaining("github") }),
     );
     expect(pre.container.apt).toEqual(["git"]);
 

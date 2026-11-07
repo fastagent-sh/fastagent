@@ -7,9 +7,9 @@ status: implemented in part
 
 # Architecture
 
-**Status: implemented through §6 step 5 (0.29.0); artifact/instance refactor under design.** The code serves an agent
-on pi-durable through the [Agent API](../SPEC.md), with content authoring and MCP support. The artifact (§4.1), context
-packages (§4.2) and §4.4 are not built. [The artifact and instance inputs](agent-artifact.md) records the decided
+**Status: implemented through §6 step 5 (0.29.0); the artifact, instance inputs and deployment are built (#900), instance additions are under design.** The code serves an agent
+on pi-durable through the [Agent API](../SPEC.md), with content authoring and MCP support. The artifact (§4.1) is built
+(`fastagent build`); context packages (§4.2) and §4.4 are not. [The artifact and instance inputs](agent-artifact.md) records the decided
 constraints and direction for the artifact: an immutable built definition, assembled deterministically from explicit
 instance inputs. It supersedes runtime modification of packaged files as the target, not the current code. §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol
 (never released), a harness port, and the conformance levels behind them (§5).

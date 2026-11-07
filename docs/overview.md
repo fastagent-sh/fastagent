@@ -16,7 +16,7 @@ Coding agents made it cheap to vibe useful agent directories. The next gap is se
 reviewer/                   # the agent: its definition, in a git repository
 ├── fastagent.config.ts     # the marker: defineAgent({ defaults, providers, … })
 ├── context.json            # its content and environment: the repositories it works on, the commands it runs
-├── fastagent.json          # optional: this instance's configuration, and the content it adds (a deploy does not carry it yet)
+├── fastagent.json          # optional: this instance's configuration, and the content it adds (`deploy --config` delivers a configuration of its own to a deployment)
 ├── SYSTEM.md               # the system prompt
 ├── AGENTS.md               # optional: how this agent is built and changed, a section of every prompt
 ├── skills/  prompts/       # optional skills; prompt templates (run as /<name>)
@@ -141,5 +141,5 @@ Implemented today:
 
 Not implemented yet:
 
-- An npm package as the deployable artifact, and context packages ([architecture.md](design/architecture.md) §4).
+- Context packages ([architecture.md](design/architecture.md) §4), and an instance's own instructions, skills and prompt templates ([agent-artifact.md](design/agent-artifact.md) §7).
 - One instance spread over several processes (one process holds an instance's storage).

@@ -283,15 +283,15 @@ platform. The author never writes mise's files.
   code reads: convention over configuration. The sentence sits in an object, because a string beside a variable's name is
   read as its value in every format an author knows (`.env`, Heroku's `app.json`, Compose), and a string is refused with
   where its value goes. The value comes from the stage's value file (`.secrets/.env` for dev, `.secrets/production/.env`
-  for production, which `deploy` reads and carries) or, for a process started by hand, the variables it is started with,
+  for production, the source `fastagent secrets push` sets a deployment's values from) or, for a process started by hand, the variables it is started with,
   the same way a tool's secret does; a stage is one of the two environments the [channel
   environments](channel-environments.md) define. Nothing in `context.json` holds a value, so no value can be committed
   with it, and nothing needs rules for which of two values wins.
   - Every declared variable is required, as a module's secret is: a serving path refuses to start without its value and
     names `context.json`, `deploy` refuses before its first side effect and lists it with its sentence, and `info` and
     `fastagent env list` say which are set. `env exec` runs one command, and is not gated by the agent's declarations.
-  - A name the deployment sets itself (`PORT`, `FASTAGENT_MODEL`, the state and storage paths) is refused: the value
-    file's copy never travels, so its declaration could never be satisfied.
+  - A name the deployment sets itself (`PORT`, `FASTAGENT_MODEL`, the state and storage paths) is refused: the deployment sets
+    it itself, so its declaration could never be satisfied.
   - A shared default that is not a secret (an enterprise host) goes in each stage's value file too; `.env.example` is
     the committed template for them. Defaults written in `context.json` were considered and left out: they make a
     committed file the place a secret can land, and need an order for which value wins.
@@ -397,7 +397,7 @@ A declaration does what it does for tools and channels today:
 
 | Obtained as | Examples | Stored | Provided locally | On a deployed host | Renewed |
 |---|---|---|---|---|---|
-| A value | API keys, bot tokens, signing secrets, a GitHub App's private key | `.secrets/.env`, by env-var name | Written by the author, or by `add <channel>` | `deploy` carries the value file | Rotated by hand |
+| A value | API keys, bot tokens, signing secrets, a GitHub App's private key | `.secrets/.env`, by env-var name | Written by the author, or by `add <channel>` | Set on the target (`fastagent secrets set\|push <host>`); `deploy` checks the name is there | Rotated by hand |
 | A grant to a model | OAuth to a model subscription | `.secrets/auth.json`, by provider | `fastagent login <provider>` | `fastagent login <provider> --deployment <host>` runs the flow on the box | Refreshed in place by the runtime |
 | A grant to an MCP server | Browser OAuth | Selected `.secrets/mcp-auth.json`, by opaque grant ID; bindings in the state root | `fastagent mcp login <server>` or host `signInMcp` | Authorize separately on the target; a fixed callback port may be forwarded, with no automatic deployment relay or desktop grant copy | Serialized refresh with a durable rotation marker |
 

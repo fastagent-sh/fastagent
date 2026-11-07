@@ -84,8 +84,8 @@ warning. No directory is ever replaced or deleted, so a running agent's writes, 
 stake. A clone of another repository under the entry's name stops the start, named. `info` and `content list` resolve without cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, or a directory); `authoring.ts` edits the program's file
 and the instance's under one lock, `context.json`'s, since whether a name is taken is asked of both, and writes only the
 files an edit changes, so a refusal leaves both as they were. A deployed host links each release's `content/` to its
-storage's (`workspace.ts`), so a `github` entry is a clone there that outlives releases. The instance's `fastagent.json`
-is not carried by a deploy yet, so what it adds stays on the machine whose it is; the deploy preflight names each such
+storage's (`workspace.ts`), so a `github` entry is a clone there that outlives releases. The development instance's
+`fastagent.json` is not carried by a deploy (`deploy --config <file>` delivers a configuration of its own), so what it adds stays on the machine whose it is; the deploy preflight names each such
 entry, a warning for one the agent works on (agent model §3).
 Every clone of fastagent's names a credential helper in its config that answers with `GITHUB_TOKEN` when git has
 no credential of its own, so the token reaches git, and the agent's push, without being stored.
@@ -107,8 +107,8 @@ for, and no environment variable selects an agent.
 `init <dir>` creates the agent in `dir` itself, which must be new or empty and not inside another agent, and writes
 each `--content` (checked before anything is written) into `context.json` (a repository) or `fastagent.json` (a directory).
 
-The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
-store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a
+The two machinery dirs map onto deploy lifecycles: `.secrets/` values live in the host's own store
+(`fastagent secrets`), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a
 container).
 
 **Creating an agent makes it a git repository (`init` and `createAgent` alike); after that, git is the author's, with one exception.** An agent
@@ -805,7 +805,7 @@ and says up front that an idle reset needs the same login again (nothing on this
 the runtime's own startup report). An unattended agent there takes an API key. The
 shell opens on the fixed ingress session, which is the one that sees the server's `/mnt/data`; it does
 not inherit the runtime's environment, so `boxLoginCommand` names the storage root outright. A provider
-API key in the value file avoids the login.
+API key in the deployment's values (`fastagent secrets set <host> <its variable>`) avoids the login.
 
 Runtime filesystems appear on invocation, so `deferAgentcoreService` exposes `/ping` before any
 persistent definition or credentials are opened. Initialization runs in two stages, split by what a

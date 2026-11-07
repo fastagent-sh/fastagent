@@ -77,9 +77,9 @@ interface DeployFacts {
    * Nothing from this machine's credentials file is ever copied, so a login on the box is its only holder.
    */
   boxLogin: string | undefined;
-  /** Every declaration the definition makes — the names the value file must supply, by declaring file. */
+  /** Every declaration the definition makes — the names the target must hold, by declaring file. */
   declaredSecrets: readonly DeclaredSecret[];
-  /** The runbook's variable list: the declared names, then everything else the value file carries. */
+  /** The runbook's variable list: the declared names, each hinted by the file that declared it. */
   secrets: DeploymentSecret[];
   /** Container facts shared by the plan and the generated Dockerfile — ONE source, so they can't drift. */
   container: ContainerInput;
@@ -98,6 +98,14 @@ export interface DeployReport {
   warn(text: string): void;
   issue(text: string): void;
 }
+
+/** What a host's clone of a `github` entry reads; optional, since a public repository needs none. */
+const GITHUB_TOKEN_SECRET: DeclaredSecret = {
+  name: "GITHUB_TOKEN",
+  declaredIn: "context.json (a github content entry)",
+  description: "git's credential for a private repository, and for the agent to push",
+  optional: true,
+};
 
 /**
  * What each content entry becomes on the host, one line each, so none is missing there unsaid (agent-model.md §3). A
@@ -256,12 +264,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // cannot disagree about it.
   const valueFile = relative(agentDir, dotEnvPath(agentDir));
   const values = loadEnvValues(dotEnvPath(agentDir));
-  // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, which travels like every value.
+  // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, a value of the target like any other.
+  // This reads this machine's file only, so a target that already holds one is told as much.
   if (content.length > 0 && !values.get("GITHUB_TOKEN")) {
     report.note(
-      `no GITHUB_TOKEN in ${valueFile}: the host clones without a credential, which reaches public repositories ` +
-        `only, and the agent cannot push from its clones. Set one there to give it access; it travels with the ` +
-        `other values`,
+      `no GITHUB_TOKEN in ${valueFile}: unless the target holds one, the host clones without a credential, which ` +
+        `reaches public repositories only, and the agent cannot push from its clones. \`fastagent secrets set <host> ` +
+        `GITHUB_TOKEN\` gives it access`,
     );
   }
   const model = resolveDeployModel(config, values, valueFile);
@@ -290,9 +299,11 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   const modelSpec = model.spec;
 
-  const declaredSecrets = definition
-    ? definitionSecrets(definition, config)
-    : declaredVariables(loadEnvironment(agentDir));
+  const declaredSecrets = [
+    ...(definition ? definitionSecrets(definition, config) : declaredVariables(loadEnvironment(agentDir))),
+    // The host's clone of a github entry reads it, so `secrets list|push|set` and `deploy` know the name.
+    ...(content.some((entry) => entry.kind === "github") ? [GITHUB_TOKEN_SECRET] : []),
+  ];
   const code = definition ? buildShapes(definition, values, config, report) : undefined;
   const channels = [...(code?.channels ?? [])].map(
     ([name, module]): DeclaredChannel => ({
@@ -590,7 +601,7 @@ function checkKeptDockerfile(
   deliversConfig: boolean,
   report: DeployReport,
 ): void {
-  // What the image installs: the packages and apt packages. Variables travel with the value file, whatever the image.
+  // What the image installs: the packages and apt packages. Variables are the target's, whatever the image.
   const environment = loadEnvironment(agentDir);
   if (Object.keys(environment?.packages ?? {}).length > 0 || (environment?.aptPackages.length ?? 0) > 0) {
     report.warn(

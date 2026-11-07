@@ -23,8 +23,7 @@ export interface RailwayPlanInput extends ContainerInput {
   channels: readonly DeclaredChannel[];
   // Container facts (runtime, hasLockfile, bunVersion, apt) come from ContainerInput.
   /**
-   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
-   * carries.
+   * The runbook's variable list (`deploymentSecrets`): the declared names, each hinted by the file that declared it.
    */
   secrets?: readonly DeploymentSecret[];
   /** `schedules/` declares a schedule — one of the things that forbids App Sleeping (deploy/residency.ts). */

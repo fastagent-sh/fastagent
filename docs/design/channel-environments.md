@@ -25,7 +25,7 @@ on one Feishu app split its events; changing its subscription mode affects every
 
 The files are complete environments, not overlays. A missing production file is empty; dev credentials,
 provider keys, proxy settings and other values are never copied or inherited from the dev file. Production keys
-must be supplied explicitly. `deploy --run` carries only production values and never the builder's stored login.
+must be supplied explicitly. `deploy` and `fastagent secrets push` read only production values, and a deployment never gets the builder's stored login.
 
 `FASTAGENT_ENVIRONMENT` communicates the command's selection across installed package copies and a dev worker.
 It is command-owned and never carried as an operator-supplied deploy secret. Explicit `FASTAGENT_SECRETS_DIR`,

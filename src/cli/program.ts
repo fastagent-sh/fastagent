@@ -381,7 +381,7 @@ const deploy: CommandSpec = {
       description:
         "drive the target CLI to completion. Docker builds (pulling the base image) and runs `docker compose up -d`. Fly/Railway provision app/service + volume + " +
         "secrets + deploy + webhook setup. AgentCore builds/pushes the arm64 image and deploys the " +
-        "stack (aws + docker CLIs). A model key in the value file travels; any other credential is a login on " +
+        "stack (aws + docker CLIs). A model key is a value of the target (fastagent secrets); any other credential is a login on " +
         "the deployment itself, which --run starts once the box is up (fastagent login --deployment). " +
         "Stops at a gate (missing CLI/daemon/login/secret) with one actionable line. Without it: prints " +
         "the runbook",
