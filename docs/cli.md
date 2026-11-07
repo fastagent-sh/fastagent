@@ -134,15 +134,15 @@ Compiles the agent into `dist/`, a package of its own ([agent-artifact.md](desig
   TypeScript (`npm install --save-dev typescript`; `init` adds it). FastAgent sets the compiler's options and does not
   read `tsconfig.json`, which stays the editor's. It needs TypeScript 7 or newer. A type error fails the build (`--no-check` emits anyway), and so does
   syntax `dev` could not run (an `enum`, a parameter property) or an import from outside the project;
-- `SYSTEM.md`, `AGENTS.md`, `context.json`, `.mcp.json`, `README.md`, a license, `skills/`, `prompts/`, `assets/`, and
+- `SYSTEM.md`, `AGENTS.md`, `context.json`, `README.md`, a license, `skills/`, `prompts/`, `assets/`, and
   every other file in a directory the code was compiled into (a module's resource, read by `import.meta.url`); a
   symlink is copied as the file or directory it names, and one that links back into what is being copied is refused;
 - `index.js`, whose default export is the definition, and `package.json`: the project's name, version and own
   dependencies, with FastAgent and the pi packages as peers.
 
 It refuses what `dev` refuses before writing anything, and replaces `dist/` whole. No `.env`, `.secrets/`, state,
-clone or `node_modules` is copied. A header or environment value in `.mcp.json` with no `${VAR}` in it is warned
-about: the package publishes the file. Prints where `dist/` is; `--json` adds the name, version and warnings.
+clone or `node_modules` is copied. A header or environment value in the `mcpServers` of `context.json` with no `${VAR}` in it is warned
+about: the package publishes it. A `.mcp.json` is not read or copied. Prints where `dist/` is; `--json` adds the name, version and warnings.
 
 ## `fastagent content`
 
@@ -547,7 +547,7 @@ See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](fe
 
 ## `fastagent mcp`
 
-Read the agent's `.mcp.json`, authorize a remote MCP server, or remove an instance binding:
+Read the agent's declared MCP servers (the program's and the instance's), authorize a remote MCP server, or remove an instance binding:
 
 ```bash
 fastagent mcp list --json

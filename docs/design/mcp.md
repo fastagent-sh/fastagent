@@ -1,6 +1,6 @@
 ---
 title: MCP servers
-description: "The MCP configuration boundary: one .mcp.json, a supported subset of mcpServers, and instance-owned runtime resources."
+description: "The MCP configuration boundary: mcpServers in context.json and fastagent.json, a supported subset, and instance-owned runtime resources."
 type: design-doc
 status: implemented subset
 ---
@@ -13,15 +13,12 @@ The consumer [Agent API](../SPEC.md) sessions/messages are unchanged.
 
 ## 1. Decided boundary
 
-**Target (the [artifact design](agent-artifact.md) §3.3 supersedes the next bullet for the program's servers, §3's "carries
-`.mcp.json`" and §5's first row):** the program's servers are the `mcpServers` map of its `context.json`, published with it;
-an instance adds its own under `mcpServers` in its `fastagent.json`, the same entry shape, layered on the program's and
-never replacing it, a name in both refusing the open. FastAgent reads and writes no `.mcp.json`: it is the coding
-tools' file. The boundary below describes 0.29.0, where one `.mcp.json` did both jobs.
-
 - Call the feature **MCP servers**. There is no generic `Connector` interface or configuration kind.
-- The agent directory's **`.mcp.json`**, with a top-level **`mcpServers`** map, is the one configuration source.
-  Do not also define servers in `context.json`, `fastagent.config.ts`, or a machine-wide MCP configuration.
+- The program's servers are the **`mcpServers`** map of its `context.json`, published with it. An instance adds its own
+  under `mcpServers` in its `fastagent.json`, the same entry shape, layered on the program's and never replacing it: a
+  name in both refuses the open. One reader gives every consumer the same list (`declareMcp`). FastAgent reads and
+  writes no `.mcp.json`, the file the coding tools keep for the person working in a directory ([artifact
+  design](agent-artifact.md) §3.3). Do not also define servers in `fastagent.config.ts` or a machine-wide MCP configuration.
 - File location does not own resources. Each opened agent instance owns its clients and resolved bindings.
   OAuth grants persist beyond open/close in a credential store controlled by the host; clients are never cached globally
   by server name or agent-directory path, and credentials are never implicitly shared between agents.
@@ -108,7 +105,7 @@ and test the inherited-variable allowlist and explicit overrides during implemen
 An MCP declaration is authority to run code or contact a service. The author or embedding host must explicitly trust the
 definition before opening it; do not treat a downloaded configuration as passive data or promise a sandbox that does not
 exist. Do not write secret values or machine-specific grants into the distributable definition. The directory artifact
-carries `.mcp.json`; dependencies belong to the agent's package/environment, not a new MCP installer.
+carries the program's `mcpServers` in `context.json`; dependencies belong to the agent's package/environment, not a new MCP installer.
 
 ## 4. Protocol target and evidence
 
@@ -167,7 +164,7 @@ one grant are not proof of two isolated agent instances or two accounts.
 
 | Concern | Owner |
 |---|---|
-| Which servers the agent uses | `.mcp.json` in the definition |
+| Which servers the agent uses | The program's `context.json` `mcpServers`, and the instance's `fastagent.json` `mcpServers` |
 | Secret values and local execution environment | The selected instance/deployment or its embedding host |
 | Durable OAuth grants and refresh coordination | A host-controlled store; each instance has an explicit grant binding |
 | Consent to execute the definition and expose data | The person or embedding host |
@@ -255,7 +252,7 @@ Keep these gates when changing the subset:
 - Complete a real browser OAuth flow against a target MCP service through the packed FastAgent CLI/public host API, then
   call a tool. A controlled authorization server is necessary for regressions but does not replace interoperability
   acceptance. Recheck current-transport interoperability when changing discovery, authorization or network policy.
-- Confirm `.mcp.json` is shipped and inspected consistently by open/dev/start/deploy, with no copied credentials.
+- Confirm the program's `mcpServers` ship and are inspected consistently by open/dev/start/deploy, with no copied credentials.
 - Verify the claimed runtime matrix with the selected dependency before publishing. Windows, actual Kage UI/secure storage
   and deployment OAuth relay have not been accepted; local loopback authorization does not prove those paths.
   Kage is a downstream consumer, not a release prerequisite or a substitute for the broader FastAgent scenario set.
@@ -268,7 +265,7 @@ models make lifecycle checks reproducible, but are not evidence of a real model 
 
 | Scenario | Acceptance evidence |
 |---|---|
-| Author and CLI | Official Filesystem/Everything servers loaded from `.mcp.json`; CLI invocation, workspace read/write, explicit unsupported-content/version refusals and secret-safe startup failures |
+| Author and CLI | Official Filesystem/Everything servers loaded from `mcpServers`; CLI invocation, workspace read/write, explicit unsupported-content/version refusals and secret-safe startup failures |
 | Embedded hosts | Two `openAgent` instances, including one directory with distinct state/variables; independent clients, workspace restrictions and close isolation |
 | Agent API service | MCP-backed messages through `connectAgent`; API-key refusal, persistent conversation ids and reads after restart |
 | Real model | An authenticated provider performs MCP tool calls; verify successful `tool_result` entries and actual filesystem effects, not just the final answer |

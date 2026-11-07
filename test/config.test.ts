@@ -134,6 +134,26 @@ describe("instanceConfigSchema", () => {
     );
   });
 
+  it("describes the MCP servers an instance adds, which the program's defaults do not carry", () => {
+    const check = compile(instanceConfigSchema(undefined));
+    expect(check.check({ mcpServers: { notes: { type: "http", url: "https://notes.example.com/mcp" } } })).toBe(true);
+    expect(check.check({ mcpServers: [] })).toBe(false);
+    expect(() => resolveConfig(program({ defaults: { mcpServers: {} } }))).toThrow(/\/mcpServers unknown field/);
+  });
+
+  it("refuses an instance's MCP server that is not one, naming the file, and accepts it once it is", () => {
+    const given = (mcpServers: unknown) => () =>
+      resolveConfig(reviewer, instance({ settings: { repo: "r" }, mcpServers }));
+    expect(given({ x: { type: "http", url: "http://outside.example/mcp" } })).toThrow(
+      /fastagent\.json: MCP endpoints require HTTPS/,
+    );
+    expect(given({ x: { command: "node", args: ["$" + "{input:token}"] } })).toThrow(
+      /fastagent\.json: x supports only/,
+    );
+    expect(given({ x__y: { command: "node" } })).toThrow(/fastagent\.json: server names must be/);
+    expect(given({ x: { command: "node" } })).not.toThrow();
+  });
+
   it("describes the text an instance adds, which the program's defaults do not carry", () => {
     const check = compile(instanceConfigSchema(undefined));
     expect(check.check({ instructions: ["./AGENTS.md"], skills: ["./skills"], prompts: ["./prompts"] })).toBe(true);

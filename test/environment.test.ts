@@ -29,7 +29,7 @@ import {
   miseBinary,
   prepareEnvironment,
 } from "../src/environment/mise.ts";
-import { addContent, writeEnvironment } from "../src/authoring.ts";
+import { addContent, removeContent, writeEnvironment } from "../src/authoring.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { log } from "../src/log.ts";
@@ -224,6 +224,25 @@ describe("environment: what context.json may declare", () => {
       content: { app: { github: "acme/app" } },
       environment: { packages: { jq: "latest" } },
     });
+  });
+
+  it("every edit of context.json keeps the MCP servers exactly as written, so an edit of one part never drops another", async () => {
+    const dir = await agentDir();
+    const mcpServers = { docs: { type: "http", url: "https://docs.example.com/mcp" }, local: { command: "./srv" } };
+    await writeFile(join(dir, "context.json"), JSON.stringify({ content: {}, mcpServers }));
+    const kept = async () => JSON.parse(await readFile(join(dir, "context.json"), "utf8")).mcpServers;
+    await writeEnvironment(dir, () => ({ packages: { gh: "2" }, aptPackages: [], variables: {} }));
+    expect(await kept()).toEqual(mcpServers);
+    await addContent(dir, { name: "app", entry: { github: "acme/app" }, program: true });
+    expect(await kept()).toEqual(mcpServers);
+    await removeContent(dir, "app");
+    expect(await kept()).toEqual(mcpServers);
+    expect(parseContextFile(JSON.stringify({ content: {}, mcpServers }), "/a/context.json").mcpServers).toEqual(
+      mcpServers,
+    );
+    expect(() => parseContextFile(`{ "mcpServers": [] }`, "/a/context.json")).toThrow(
+      '/a/context.json: "mcpServers" must be an object of servers by name',
+    );
   });
 
   it("refuses a registry name by the backend mise resolves it to, unless that backend is allowed", () => {

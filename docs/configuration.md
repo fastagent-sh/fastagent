@@ -22,7 +22,7 @@ An agent's program has one configuration file, `fastagent.config.ts`; an instanc
 | Belongs to | The program: the agent's author | An instance: whoever runs this agent |
 | Written by | The author, published with the agent | The person or machine running one instance |
 | Holds | Constants (`name`, `description`, `providers`, `extensions`), the `settings` schema, and `defaults`: what an instance starts with | Overrides of `defaults` (`model`, `http`, `deploy`, `channels`), values for `settings`, and what only an instance adds: `content`, `instructions`, `skills`, `prompts` |
-| Format | TypeScript: it can import, and `defineAgent` types it | JSON, with a `$schema` for completion; no code |
+| Format | TypeScript: it can import, and `defineAgent` types it | JSON, with a `$schema` that checks its shape; no code |
 | Read by | Every command: `dev` as source, `build` into `dist/` | `--config` (or `FASTAGENT_CONFIG`) names the file for every command; without it `dev` reads the one at the project root, and `start` and `deploy` read none. An app: the `config` it passes `openAgent` |
 | In git | Committed | The development one is ignored by the scaffold's `.gitignore` (it is one person's); a deployment's is delivered by `deploy --config` |
 
@@ -82,7 +82,8 @@ An instance sets its own values over the defaults in a `fastagent.json`: `model`
 replace. `fastagent dev` reads the `fastagent.json` at the project root when there is one; `fastagent start` and
 `fastagent deploy` read only the one `--config` names, and otherwise run on the defaults; an app gives `openAgent` a `config` object, or the absolute path of such a file. An
 unknown key, a value of the wrong type and a required setting no one gave each refuse the open, naming the file and the
-path (`fastagent.json: /http/port expected <= 65535`). Its `content` adds to the program's ([Content](#content)).
+path (`fastagent.json: /http/port expected <= 65535`). Its `content` adds to the program's ([Content](#content)), and so do its `mcpServers`: MCP servers in the entry shape of
+the program's `context.json` `mcpServers`, with a name both declare refusing the open ([MCP servers](mcp.md)).
 
 `instructions`, `skills` and `prompts` add the instance's own text to the program's:
 
@@ -582,8 +583,8 @@ export default defineTool({
 
 `parameters` is a TypeBox schema: the harness validates a call's arguments against it before `execute`. A tool of the
 definition's own with a coding tool's name replaces it. Every serve also gives the agent `wake` and `unwake`
-([self-scheduling](api-reference.md#self-scheduling)). [MCP servers](mcp.md) are declared in `.mcp.json`, not a field in
-`context.json`. `fastagent info` lists authored tools and declared MCP servers; MCP tool discovery occurs when the agent opens.
+([self-scheduling](api-reference.md#self-scheduling)). [MCP servers](mcp.md) are declared under `mcpServers` in `context.json` (the program's) and `fastagent.json` (an
+instance's), not in a tool. `fastagent info` lists authored tools and declared MCP servers; MCP tool discovery occurs when the agent opens.
 
 A tool that needs to know which session it runs in asks `await sessionIdOf(api, context)` (from
 `@fastagent-sh/fastagent`): the id the Agent hands out, the one a channel's map records.

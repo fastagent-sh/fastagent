@@ -1009,7 +1009,7 @@ const mcp: CommandSpec = {
     {
       name: "list",
       summary: "inspect declarations and local auth",
-      description: "Read .mcp.json and local grant metadata without contacting servers.",
+      description: "Read the declared MCP servers and local grant metadata without contacting servers.",
       examples: [{ cmd: "fastagent mcp list --json" }],
       args: [AGENT_ARG],
       flags: [CHANNEL_ENVIRONMENT, JSON_FLAG],
@@ -1027,7 +1027,10 @@ const mcp: CommandSpec = {
         { cmd: "fastagent mcp login linear --scopes read --json" },
         { cmd: "fastagent mcp login --check <ticket> --json" },
       ],
-      args: [{ name: "[server]", description: "the server name in .mcp.json" }, AGENT_ARG],
+      args: [
+        { name: "[server]", description: "the name of an MCP server the program or the instance declares" },
+        AGENT_ARG,
+      ],
       flags: [
         CHANNEL_ENVIRONMENT,
         ...UNATTENDED_SETUP,

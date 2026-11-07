@@ -75,7 +75,7 @@ Agent = model + harness + context, composed by a definition
   harness        the loop that runs it: pi-durable
   context        everything it works with from outside, in three kinds:
     content        data it reads and writes as files, synced to where it runs: repositories, directories
-    external APIs  code tools and MCP servers in .mcp.json, with credentials supplied per instance
+    external APIs  code tools and MCP servers in mcpServers, with credentials supplied per instance
     environment    what it runs in: the commands and runtimes it needs, on every platform (context.json)
   definition     its own directory: who it is and how it works, and which model and contexts it uses
   remembers in   sessions: conversations
@@ -345,8 +345,8 @@ OpenAI's Codex base image installs its runtimes with mise.
 ## 5. MCP servers and external APIs
 
 [MCP server design](mcp.md) owns the configuration and lifecycle boundary; [the guide](../mcp.md) names the supported subset.
-Servers are declared in the agent's `.mcp.json` under `mcpServers`, with a documented supported subset.
-There is no `context.json.connectors` field, generic `Connector` API, or implicit discovery of `.pi/mcp.json`,
+Servers are declared under `mcpServers`, in the program's `context.json` and the instance's `fastagent.json`, with a documented supported subset.
+There is no `context.json.connectors` field (the servers are its `mcpServers`), generic `Connector` API, or implicit discovery of `.pi/mcp.json`,
 editor configurations or a user's global servers. Client configurations are not universally interchangeable.
 
 Each opened instance owns its MCP clients and resolved credentials/paths. Multiple agents in one embedding process
@@ -381,7 +381,7 @@ the `variables` of the agent's environment (§4), every one of them required.
 | A code tool, an extension, a provider | `needs([...])` around it | Exists |
 | A channel | `needs([...])` around its module | Exists |
 | Content | Its kind's credential: `github` content reads `GITHUB_TOKEN` after git's own helpers, and may name another variable | Read; `deploy` notes when it is missing; not declared |
-| An MCP server | [`.mcp.json`](mcp.md) secret references or a host-selected OAuth grant; values resolved per instance | Implemented: browser OAuth, atomic grants and explicit instance bindings |
+| An MCP server | [`mcpServers`](mcp.md) secret references or a host-selected OAuth grant; values resolved per instance | Implemented: browser OAuth, atomic grants and explicit instance bindings |
 | A command the agent runs (`gh`, `aws`) | The variables it reads, by name, in `environment.variables` in `context.json` (§4) | Exists |
 
 A declaration does what it does for tools and channels today:

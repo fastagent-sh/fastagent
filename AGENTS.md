@@ -34,7 +34,7 @@ src/
 │                           # types (CredentialStore, SignInInteraction, …), SignInCancelled; imports nothing
 ├── mcp-api.ts              # embedding-facing MCP grants, bindings, sign-in interaction and errors; imports nothing
 ├── mcp/                    # MCP 2026-07-28, independent of the agent harness
-│   ├── config.ts           # .mcp.json validation, secret references and instance-local resolution
+│   ├── config.ts           # `mcpServers` validation (context.json's and the instance's), secret references and resolution
 │   ├── grants.ts           # grant records and durable writes under a shared storage lock
 │   ├── auth.ts             # OAuth discovery, target binding, serialized refresh and safe diagnostics
 │   ├── network.ts          # MCP URL policy and instance-owned HTTP transport, with DNS-validated IP pinning

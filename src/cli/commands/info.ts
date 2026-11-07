@@ -37,7 +37,13 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     }
   })();
   const modelSpec = modelSpecFor(config, opts.model);
-  const declared = definitionSecrets(definition, config);
+  const declared = (() => {
+    try {
+      return definitionSecrets(definition, config, instance);
+    } catch (error) {
+      return failStartup(error);
+    }
+  })();
   const unsetSecrets = missingSecrets(declared, process.env);
   // Built only when every required secret has a value: building is what reads them. A module that is not what its
   // directory holds is said as the refusal `dev` and `start` would stop on.
@@ -81,7 +87,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const commands = readCommands(text).map(({ name, description }) => ({ name, description: description ?? null }));
   const stateRoot = resolveStateRoot(agentDir);
   const auth = models.auth;
-  const mcp = await inspectMcp(agentDir).catch(failStartup);
+  const mcp = await inspectMcp(agentDir, instance === undefined ? {} : { config: instance.label }).catch(failStartup);
 
   if (opts.json) {
     console.log(

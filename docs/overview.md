@@ -137,7 +137,7 @@ Implemented today:
 - `openAgent` and its `serve()`: an agent directory opened and served inside an app; `createAgent`, model credentials
   and sign-in for a host that runs agents for a person (a desktop app beside `fastagent dev`).
 
-- MCP stdio/Streamable HTTP tools from `.mcp.json`, browser OAuth, and explicit instance bindings ([guide](mcp.md)).
+- MCP stdio/Streamable HTTP tools from `mcpServers`, browser OAuth, and explicit instance bindings ([guide](mcp.md)).
 
 Not implemented yet:
 

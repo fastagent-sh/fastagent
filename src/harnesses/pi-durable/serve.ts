@@ -14,7 +14,7 @@ import { piCredentials } from "../models/host.ts";
 import type { CredentialStore } from "../../sign-in-api.ts";
 import type { McpOptions } from "../../mcp-api.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
-import { resolveMcpServers } from "../../mcp/config.ts";
+import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
 import { mcpAuthorization } from "../../mcp/host.ts";
 import { mcpTools } from "./mcp.ts";
 import { loadContent } from "../../content/file.ts";
@@ -168,6 +168,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const projectDir = options.projectDir ?? workdir;
   const config = resolveConfig(definition, options.config);
   const text = openText(dir, options.config);
+  const mcpServers = declareMcp(dir, options.config);
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
   const secrets = definedValues(options.secrets);
@@ -204,7 +205,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   try {
     const mcpEnvironment = { ...secrets, ...options.mcp?.variables };
     mcp = await openMcpClients(
-      resolveMcpServers(dir, mcpEnvironment, undefined, workdir, processEnv),
+      resolveMcpServers(mcpServers, mcpEnvironment, undefined, workdir, processEnv),
       mcpAuthorization(projectDir, env, stateRoot, options.mcp),
       options.mcp,
     );

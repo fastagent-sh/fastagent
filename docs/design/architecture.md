@@ -332,7 +332,7 @@ What the previous design had, and what took its place:
 4. **Done, released in 0.28.0** ([#875](https://github.com/fastagent-sh/fastagent/pull/875)). Per-agent content
    authoring through the embedding API: create an agent with folders or repositories, then read and edit its declarations.
 5. **Done, released in [0.29.0](https://github.com/fastagent-sh/fastagent/releases/tag/v0.29.0)** (#895, #898).
-   [MCP servers](mcp.md) use the agent's `.mcp.json` (`mcpServers`): stdio/Streamable HTTP tools, OAuth, instance-owned
+   [MCP servers](mcp.md) (`mcpServers` in `context.json`, 0.29.0 read `.mcp.json`): stdio/Streamable HTTP tools, OAuth, instance-owned
    clients and explicit grant bindings. Packed CLI, embedding/HTTP APIs, multi-instance lifecycle, current-policy Linear
    OAuth/proxy access and native container persistence passed [acceptance](https://github.com/fastagent-sh/fastagent/issues/678).
    Provider resource cleanup remains an independent [known issue](https://github.com/fastagent-sh/fastagent/issues/896),

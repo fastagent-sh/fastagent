@@ -6,8 +6,11 @@ status: current
 
 # MCP servers
 
-Declare servers in **`.mcp.json` at the agent directory's root**. Each opened agent owns its clients. Servers are not read
-from `context.json`, editor settings, parent folders or your home directory.
+Declare the agent's servers under **`mcpServers` in its `context.json`**: they ship with the package, so every instance
+connects them. An instance adds its own under `mcpServers` in its `fastagent.json`, the same entry shape; a name both
+declare refuses the open. Each opened agent owns its clients. Servers are not read from `.mcp.json` (the file Claude Code
+and Copilot keep for the person working in a directory), editor settings, parent folders or your home directory. To
+reuse a server's documentation, paste the entries it gives under `"mcpServers"` into `context.json` or `fastagent.json`.
 
 FastAgent uses MCP **2026-07-28**. An older-only server is refused, not silently downgraded. The first implementation
 supports tools with text/JSON results over stdio and Streamable HTTP. It does not provide resources/prompts, sampling,
@@ -126,7 +129,7 @@ fastagent mcp disconnect linear --json
 ```
 
 Disconnect removes only this instance's binding. It does not delete or revoke a grant another instance may use. Update
-`.mcp.json` or authorize again before reopening a required server. Remote revocation is an action in the provider's
+the server's declaration or authorize again before reopening a required server. Remote revocation is an action in the provider's
 account settings; local deletion or client close is not evidence of revocation.
 
 ## Embedding in Kage or another app
@@ -150,7 +153,7 @@ const grant = await signInMcp({
   },
 });
 
-// Persist this choice in the host's instance record, not in .mcp.json.
+// Persist this choice in the host's instance record, not in the server's declaration.
 const mcp = { store, bindings: { linear: grant.id } };
 const state = await inspectMcp(agentDir, mcp);
 const agent = await openAgent(definition, { workdir, stateDir: instanceStateDir, mcp });
@@ -194,6 +197,7 @@ messages, paths, arguments, response data and cause objects remain private.
 The SDK probes stdio protocol support in a short-lived sibling process before starting the serving process, so server
 startup can run twice. Do not put irreversible business work in server startup.
 
-`dev` restarts on `.mcp.json` edits after active turns drain. The file travels in the deployment image; a kept Docker
-ignore file that excludes it is refused. MCP credential files remain in `.secrets`, never in the image. Package/runtime
+`dev` restarts on `context.json` and `fastagent.json` edits after active turns drain. The program's servers travel in the
+image with `context.json`; an instance's travel in the configuration `deploy --config` delivers. MCP credential files
+remain in `.secrets`, never in the image. Package/runtime
 dependencies for local servers must be declared in the agent's package/environment for the target machine.

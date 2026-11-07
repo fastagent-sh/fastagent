@@ -9,7 +9,7 @@ import { BOX_CLI_PREDATES } from "./box-shell.ts";
  * What a deploy builds the image from beyond the program, in the build context: the instance configuration it delivers
  * and the text that configuration names, the release manifest and the package list. FastAgent's own directory, so it is
  * ignored by git and absent from the author's root, and the image copies it to {@link IMAGE_CONFIG_DIR}. A directory of
- * its own, never a file in the program's: what an instance configuration names beside it (its `.mcp.json`, its text) is
+ * its own, never a file in the program's: what an instance configuration names beside it (its text) is
  * read from its own directory, and the program's directory holds the program's.
  */
 export const DELIVERED_CONFIG_DIR = `${INSTANCES_DIRNAME}/deploy`;
