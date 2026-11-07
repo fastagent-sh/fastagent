@@ -25,6 +25,7 @@ import {
 } from "./plan.ts";
 import { zipSingleFile } from "./zip.ts";
 import type { SecretStore } from "../secret-store.ts";
+import { RUNTIME_IDENTITY_ROLE, ensureServiceLinkedRole } from "./slr.ts";
 import { agentcoreSecretStore } from "./store.ts";
 
 export interface AgentcoreRunPlan {
@@ -297,7 +298,12 @@ export async function deployAgentcoreRun(
     );
   }
 
-  // 3d. Read the stack here, for the two questions that both depend on it: does this deploy destroy the agent's
+  // 3d. The role the runtime needs in this account, made if a first deploy finds it missing: a stop here costs nothing,
+  // and the same fault found by CloudFormation costs the build.
+  const roleGate = await ensureServiceLinkedRole(cli, RUNTIME_IDENTITY_ROLE, log);
+  if (roleGate !== undefined) return gate(roleGate);
+
+  // 3e. Read the stack here, for the two questions that both depend on it: does this deploy destroy the agent's
   // memory (below), and is there a failed first create to clear (step 7)? The destructive one is only worth saying
   // while the multi-minute build has not run yet, and step 7 reuses this answer unless it was still in flight.
   // An unanswered question must not read as "a first deploy, nothing to lose": `sts get-caller-identity` succeeding
@@ -338,7 +344,7 @@ export async function deployAgentcoreRun(
     );
   }
 
-  // 3e. The deployment's values, after the only questions that precede a write and before the build: the secret the stack reads, made to hold every name the definition
+  // 3f. The deployment's values, after the only questions that precede a write and before the build: the secret the stack reads, made to hold every name the definition
   // requires (a coding agent's run, with nobody to ask, stops here naming the commands).
   const secretStore = agentcoreSecretStore(aws, agentcoreSecretName(plan.name), log);
   try {
@@ -429,7 +435,7 @@ export async function deployAgentcoreRun(
     return gate("`docker buildx build` failed — see the output above; fix and re-run");
   }
 
-  // 7. The 3d answer stands unless it was still settling then — a second read is the narrow exception, not the rule.
+  // 7. The 3e answer stands unless it was still settling then — a second read is the narrow exception, not the rule.
   const beforeDeploy = settling ? await readStackStatus() : stackStatus;
   if ("ok" in beforeDeploy && beforeDeploy.ok === "ROLLBACK_COMPLETE") {
     log(`stack ${stack} is ROLLBACK_COMPLETE (a failed first create) — deleting it before re-creating…`);
