@@ -58,7 +58,7 @@ describe("ensureServiceLinkedRole: the role AgentCore's runtime needs, before th
     const gate = await ensureServiceLinkedRole(cli, RUNTIME_IDENTITY_ROLE, () => {});
     expect(gate).toContain("AWSServiceRoleForBedrockAgentCoreRuntimeIdentity");
     expect(gate).toContain("AccessDenied");
-    expect(gate).toContain(`\`aws ${CREATE.replace("iam ", "iam ")}\``);
+    expect(gate).toContain(`\`aws ${CREATE}\``);
     expect(gate).toContain("iam:CreateServiceLinkedRole");
     expect(gate).not.toMatch(/\n/);
   });
