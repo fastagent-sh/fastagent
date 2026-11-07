@@ -364,14 +364,25 @@ the values it read until it ends (its idle timeout) or the next deploy. The comm
 
 ### The permissions a deployer needs
 
-`deploy agentcore --run`, a redeploy, `logs agentcore`, `secrets … agentcore` and `destroy agentcore` ran end to end as an
-IAM user holding only this policy (replace `<region>` and `<account-id>`; as a customer managed policy, since an inline
-user policy is capped at 2048 bytes). Every resource is scoped to the names a deploy derives (`fastagent-*`, `fa-*`,
-`fastagent/*`); CloudFormation makes the stack's calls with the caller's own permissions, which is why Lambda, IAM and
-AgentCore actions are here. The `Iam` statement lets its holder create any role named `fastagent-*` with any permissions
-and hand it to a function they create (`CAPABILITY_IAM`), so treat this principal as able to escalate within the account;
-a permissions boundary on those roles would narrow that, and was not tried. It is a verified set, not a proven minimum. Its `Slr` statement, which lets a first deploy into an account create the two AgentCore service-linked roles, was not exercised: the account already held them. `fastagent login --deployment agentcore` also
-needs `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
+`deploy agentcore --run`, a redeploy, `logs agentcore`, `secrets … agentcore`, `login <provider> --deployment agentcore`
+(up to the box's own sign-in) and `destroy agentcore` ran end to end as an IAM user holding only this policy (replace
+`<region>` and `<account-id>`; as a customer managed policy, since an inline user policy is capped at 2048 bytes). Every
+resource is scoped to the names a deploy derives (`fastagent-*`, `fa-*`, `fastagent/*`); CloudFormation makes the stack's
+calls with the caller's own permissions, which is why Lambda, IAM and AgentCore actions are here. Without
+`bedrock-agentcore:InvokeAgentRuntimeCommandShell` the login stops naming it. The `Iam` statement lets its holder create
+any role named `fastagent-*` with any permissions and hand it to a function they create (`CAPABILITY_IAM`), so treat this
+principal as able to escalate within the account; a permissions boundary on those roles would narrow that, and was not
+tried. It is a verified set, not a proven minimum.
+
+The `Slr` statement is for a first deploy into an account that has never used AgentCore. What was measured: against real
+IAM, `CreateServiceLinkedRole` for `runtime-identity.` and `network.bedrock-agentcore.amazonaws.com` passed authorization
+and one for an unrelated service was denied; and in a second account that held the `RuntimeIdentity` role but not the
+`Network` one, a `PUBLIC`-mode deploy with this policy succeeded and neither
+created that role nor called `CreateServiceLinkedRole`. So `network.` is probably not needed for what `deploy agentcore`
+generates (`NetworkMode: PUBLIC`) and is left in as the one a VPC mode would use. Creating the `RuntimeIdentity` role by
+a deploy was not exercised: both accounts already held it. If a first deploy into a new account stops at the runtime with
+a bare `AccessDenied`, have someone with IAM rights run
+`aws iam create-service-linked-role --aws-service-name runtime-identity.bedrock-agentcore.amazonaws.com`, then deploy again.
 
 ```json
 {"Version":"2012-10-17","Statement":[
@@ -380,7 +391,7 @@ needs `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
   {"Sid": "Iam", "Effect": "Allow", "Action": ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:PassRole", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:TagRole", "iam:UpdateAssumeRolePolicy"], "Resource": "arn:aws:iam::<account-id>:role/fastagent-*"},
   {"Sid": "Lambda", "Effect": "Allow", "Action": ["lambda:CreateFunction", "lambda:DeleteFunction", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetPolicy", "lambda:CreateFunctionUrlConfig", "lambda:DeleteFunctionUrlConfig", "lambda:GetFunctionUrlConfig", "lambda:UpdateFunctionUrlConfig", "lambda:ListTags", "lambda:TagResource"], "Resource": "arn:aws:lambda:<region>:<account-id>:function:fastagent-*"},
   {"Sid": "LambdaGlobal", "Effect": "Allow", "Action": ["lambda:GetAccountSettings"], "Resource": "*"},
-  {"Sid": "AgentCore", "Effect": "Allow", "Action": ["bedrock-agentcore:CreateAgentRuntime", "bedrock-agentcore:UpdateAgentRuntime", "bedrock-agentcore:DeleteAgentRuntime", "bedrock-agentcore:GetAgentRuntime", "bedrock-agentcore:ListAgentRuntimes", "bedrock-agentcore:ListTagsForResource", "bedrock-agentcore:TagResource", "bedrock-agentcore:CreateWorkloadIdentity", "bedrock-agentcore:DeleteWorkloadIdentity", "bedrock-agentcore:GetWorkloadIdentity", "bedrock-agentcore:StopRuntimeSession", "bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:CreateAgentRuntimeEndpoint", "bedrock-agentcore:GetAgentRuntimeEndpoint", "bedrock-agentcore:UpdateAgentRuntimeEndpoint", "bedrock-agentcore:DeleteAgentRuntimeEndpoint", "bedrock-agentcore:ListAgentRuntimeEndpoints", "bedrock-agentcore:UntagResource", "bedrock-agentcore:PassCapacityProvider"], "Resource": "*"},
+  {"Sid": "AgentCore", "Effect": "Allow", "Action": ["bedrock-agentcore:CreateAgentRuntime", "bedrock-agentcore:UpdateAgentRuntime", "bedrock-agentcore:DeleteAgentRuntime", "bedrock-agentcore:GetAgentRuntime", "bedrock-agentcore:ListAgentRuntimes", "bedrock-agentcore:ListTagsForResource", "bedrock-agentcore:TagResource", "bedrock-agentcore:CreateWorkloadIdentity", "bedrock-agentcore:DeleteWorkloadIdentity", "bedrock-agentcore:GetWorkloadIdentity", "bedrock-agentcore:StopRuntimeSession", "bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:CreateAgentRuntimeEndpoint", "bedrock-agentcore:GetAgentRuntimeEndpoint", "bedrock-agentcore:UpdateAgentRuntimeEndpoint", "bedrock-agentcore:DeleteAgentRuntimeEndpoint", "bedrock-agentcore:ListAgentRuntimeEndpoints", "bedrock-agentcore:UntagResource", "bedrock-agentcore:PassCapacityProvider", "bedrock-agentcore:InvokeAgentRuntimeCommandShell"], "Resource": "*"},
   {"Sid": "EcrAuth", "Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
   {"Sid": "Ecr", "Effect": "Allow", "Action": ["ecr:CreateRepository", "ecr:DescribeRepositories", "ecr:DeleteRepository", "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], "Resource": "arn:aws:ecr:<region>:<account-id>:repository/fastagent/*"},
   {"Sid": "S3", "Effect": "Allow", "Action": ["s3:CreateBucket", "s3:PutBucketPublicAccessBlock", "s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketLocation", "s3:PutObject", "s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:DeleteBucket"], "Resource": ["arn:aws:s3:::fa-*", "arn:aws:s3:::fa-*/*"]},
