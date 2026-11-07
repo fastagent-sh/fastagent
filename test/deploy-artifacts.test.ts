@@ -107,7 +107,8 @@ describe("deploy: ownership decides what --force may replace", () => {
 
   it("build output is written by every deploy, never kept or reported stale: the release manifest and the package list", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-own-build-"));
-    for (const path of ["fastagent.release.json", "fastagent.packages"]) {
+    await mkdir(join(dir, ".fastagent/deploy"), { recursive: true });
+    for (const path of [".fastagent/deploy/fastagent.release.json", ".fastagent/deploy/fastagent.packages"]) {
       await writeFile(join(dir, path), "from an earlier deploy\n");
       const plan = await planArtifacts(dir, [{ path, content: "this deploy's\n" }], {
         force: false,

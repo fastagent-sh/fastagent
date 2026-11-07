@@ -135,10 +135,10 @@ describe("deploy/fly: planFlyDeploy", () => {
     const p = planFlyDeploy({ ...base, channels: [] });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore",
+      ".fastagent/deploy/fastagent.json",
+      ".fastagent/deploy/fastagent.packages",
+      ".fastagent/deploy/fastagent.release.json",
       "Dockerfile",
-      "fastagent.deploy/fastagent.json",
-      "fastagent.packages",
-      "fastagent.release.json",
       "fly.toml",
     ]);
     // Both ignore forms carry the same content (recursive patterns, .git not excluded).

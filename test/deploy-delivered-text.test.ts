@@ -1,6 +1,6 @@
 /**
  * The instance text a deploy delivers (agent-artifact.md §6.1): copied beside the configuration into
- * `fastagent.deploy/` so the paths it wrote resolve in the image, replaced whole by each deploy, and refused when it
+ * `.fastagent/deploy/` so the paths it wrote resolve in the image, replaced whole by each deploy, and refused when it
  * could not be delivered or would not open there.
  */
 import { access, lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
@@ -52,13 +52,13 @@ describe("deploy: the instance text it delivers", () => {
     const { dir, config } = await layout(DECLARED, FILES);
     const run = await runInProcess(["deploy", "docker", dir, "--config", config]);
     expect(run.code, run.stderr).toBe(0);
-    expect(run.stderr).toContain("delivered 3 path(s) of the instance's text into fastagent.deploy/");
-    for (const file of Object.keys(FILES)) expect(await exists(join(dir, "fastagent.deploy", file)), file).toBe(true);
+    expect(run.stderr).toContain("delivered 3 path(s) of the instance's text into .fastagent/deploy/");
+    for (const file of Object.keys(FILES)) expect(await exists(join(dir, ".fastagent/deploy", file)), file).toBe(true);
 
     // What the box does: the delivered directory is /etc/fastagent, and its configuration is read from there.
-    const onTheBox = await readInstanceConfigFile(join(dir, "fastagent.deploy", "fastagent.json"));
+    const onTheBox = await readInstanceConfigFile(join(dir, ".fastagent/deploy", "fastagent.json"));
     const text = openText(dir, onTheBox);
-    expect(text.instructions.map((entry) => entry.path)).toEqual([join(dir, "fastagent.deploy/notes/rules.md")]);
+    expect(text.instructions.map((entry) => entry.path)).toEqual([join(dir, ".fastagent/deploy/notes/rules.md")]);
     expect(
       readCommands(text)
         .map((command) => command.name)
@@ -72,14 +72,14 @@ describe("deploy: the instance text it delivers", () => {
     await writeFile(config, JSON.stringify({ skills: ["./extra-skills"] }));
     const fewer = await runInProcess(["deploy", "docker", dir, "--config", config]);
     expect(fewer.code, fewer.stderr).toBe(0);
-    expect(await exists(join(dir, "fastagent.deploy/extra-skills/audit/SKILL.md"))).toBe(true);
-    expect(await exists(join(dir, "fastagent.deploy/notes"))).toBe(false);
-    expect(await exists(join(dir, "fastagent.deploy/extra-prompts"))).toBe(false);
+    expect(await exists(join(dir, ".fastagent/deploy/extra-skills/audit/SKILL.md"))).toBe(true);
+    expect(await exists(join(dir, ".fastagent/deploy/notes"))).toBe(false);
+    expect(await exists(join(dir, ".fastagent/deploy/extra-prompts"))).toBe(false);
 
     const none = await runInProcess(["deploy", "docker", dir]);
     expect(none.code, none.stderr).toBe(0);
-    expect(await exists(join(dir, "fastagent.deploy/extra-skills"))).toBe(false);
-    expect(await readFile(join(dir, "fastagent.deploy/fastagent.json"), "utf8")).toBe("{}\n");
+    expect(await exists(join(dir, ".fastagent/deploy/extra-skills"))).toBe(false);
+    expect(await readFile(join(dir, ".fastagent/deploy/fastagent.json"), "utf8")).toBe("{}\n");
     expect(await exists(join(configDir, "extra-skills/audit/SKILL.md"))).toBe(true);
   });
 
@@ -103,29 +103,29 @@ describe("deploy: the instance text it delivers", () => {
     await stops({ skills: ["./triage"] }, /skill "triage" is declared by/);
   });
 
-  it("carries out nothing it would refuse: a generate-only deploy stops too, and writes nothing outside fastagent.deploy/", async () => {
+  it("carries out nothing it would refuse: a generate-only deploy stops too, and writes nothing outside .fastagent/deploy/", async () => {
     const { dir, configDir, config } = await layout({}, {});
     const elsewhere = join(dirname(configDir), `elsewhere-${basename(configDir)}`);
     await write(elsewhere, { "x/SKILL.md": skill("x") });
-    // Relative to the configuration, it would land beside fastagent.deploy/ in the agent directory, over what is there.
+    // Relative to the configuration, it would land beside .fastagent/deploy/ in the agent directory, over what is there.
     await writeFile(config, JSON.stringify({ skills: [relative(configDir, elsewhere)] }));
     const run = await runInProcess(["deploy", "docker", dir, "--config", config]);
     expect(run.code, run.stderr).toBe(1);
     expect(run.stderr).toMatch(/is outside the configuration's directory/);
     expect(await exists(join(dir, basename(elsewhere)))).toBe(false);
-    expect(await exists(join(dir, "fastagent.deploy"))).toBe(false);
+    expect(await exists(join(dir, ".fastagent/deploy"))).toBe(false);
   });
 
-  it("refuses a configuration kept inside fastagent.deploy/, which every deploy replaces, before deleting it", async () => {
+  it("refuses a configuration kept inside .fastagent/deploy/, which every deploy replaces, before deleting it", async () => {
     const { dir } = await layout({}, {});
-    const kept = join(dir, "fastagent.deploy");
+    const kept = join(dir, ".fastagent/deploy");
     await write(kept, {
       "fastagent.json": JSON.stringify({ skills: ["./extra"] }),
       "extra/audit/SKILL.md": skill("audit"),
     });
     const run = await runInProcess(["deploy", "docker", dir, "--config", join(kept, "fastagent.json")]);
     expect(run.code, run.stderr).toBe(1);
-    expect(run.stderr).toMatch(/is inside .*fastagent\.deploy, which every deploy replaces/);
+    expect(run.stderr).toMatch(/is inside .*\.fastagent\/deploy, which every deploy replaces/);
     expect(await exists(join(kept, "extra/audit/SKILL.md"))).toBe(true);
   });
 
@@ -137,7 +137,7 @@ describe("deploy: the instance text it delivers", () => {
     await symlink(join(outside, "audit"), join(configDir, "sk/audit"));
     const run = await runInProcess(["deploy", "docker", dir, "--config", config]);
     expect(run.code, run.stderr).toBe(0);
-    const delivered = join(dir, "fastagent.deploy/sk/audit");
+    const delivered = join(dir, ".fastagent/deploy/sk/audit");
     expect((await lstat(delivered)).isSymbolicLink()).toBe(false);
     expect(await readFile(join(delivered, "SKILL.md"), "utf8")).toContain("name: audit");
     // A link to nothing stops the deploy instead of shipping a skill the box would silently skip.

@@ -33,7 +33,7 @@ import { loadContent, loadEnvironment } from "../content/file.ts";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
-import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
+import { type ContainerInput, DELIVERED_CONFIG_DIR, isGeneratedDockerfile } from "./container.ts";
 import { deliveredTextProblem } from "./delivered-text.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
@@ -639,7 +639,7 @@ function checkKeptDockerfile(
   if (deliversConfig && !/^\s*ENV\s[^\n]*\bFASTAGENT_CONFIG[=\s]/m.test(dockerfileText)) {
     report.issue(
       `your Dockerfile does not set FASTAGENT_CONFIG, and --config delivers the instance configuration in the ` +
-        `image, which \`start\` reads only where that ENV points: copy fastagent.deploy/ into the image and set it ` +
+        `image, which \`start\` reads only where that ENV points: copy ${DELIVERED_CONFIG_DIR}/ into the image and set it ` +
         `(see a generated Dockerfile).`,
     );
   }
