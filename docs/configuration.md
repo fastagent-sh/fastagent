@@ -508,8 +508,9 @@ keeps a serve from answering the API with a key its environment still holds.
 
 ### Where an instance lives
 
-An instance's name is one path segment: `--name <name>` (`FASTAGENT_NAME`, `openAgent`'s `name`), else the program's name made
-one (`@acme/reviewer` is `acme-reviewer`). `info` and the report `dev` and `start` print say it, and `info().name` is it; a
+An instance's name is one path segment: `--name <name>` (`FASTAGENT_NAME`, `openAgent`'s `name`), over the `name` of its
+`fastagent.json`, over the program's name made one (`@acme/reviewer` is `acme-reviewer`). The program's `defaults` do not
+carry it. `info` and the report `dev` and `start` print say it, and `info().name` is it; a
 name that is not a segment refuses.
 
 An instance has a working directory, where the agent runs and `content/` clones land, and a state root. By default both

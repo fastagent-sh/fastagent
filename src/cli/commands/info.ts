@@ -37,7 +37,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       return failStartup(error);
     }
   })();
-  const name = instanceName(definition.name, enteredInstanceName());
+  const name = instanceName(definition.name, enteredInstanceName() ?? config.name);
   const modelSpec = modelSpecFor(config, opts.model);
   const declared = (() => {
     try {

@@ -1,8 +1,9 @@
 /**
- * An instance's name (agent-artifact.md §4.5): an input, one path segment, defaulting to the definition's made into one;
- * `info().name` and what a command reports are it.
+ * An instance's name (agent-artifact.md §4.5): a key of its configuration, over which a flag, a variable and `openAgent`'s
+ * option stand; one path segment, defaulting to the definition's made into one. `info().name` and what a command reports
+ * are it.
  */
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +45,34 @@ describe("an app's open", () => {
     expect((await named.info()).name).toBe("reviewer-2");
   });
 
+  it("takes it from the configuration, over the program's, and an option over the configuration's", async () => {
+    const dir = await fauxAgent("fa-name-config-");
+    const state = async () => join(await mkdtemp(join(tmpdir(), "fa-name-")), "s");
+    const filed = await openSource(dir, { config: { name: "from-file" }, stateDir: await state() });
+    opened.push(filed);
+    expect((await filed.info()).name).toBe("from-file");
+    const over = await openSource(dir, { config: { name: "from-file" }, name: "from-option", stateDir: await state() });
+    opened.push(over);
+    expect((await over.info()).name).toBe("from-option");
+  });
+
+  it("refuses a configuration's name that is not one segment, naming where it is, before anything is opened", async () => {
+    const dir = await fauxAgent("fa-name-config-refused-");
+    const state = join(await mkdtemp(join(tmpdir(), "fa-name-")), "state");
+    await expect(openSource(dir, { config: { name: "a/b" }, stateDir: state })).rejects.toThrow(
+      /^the config object: the instance name "a\/b" must be one path segment/,
+    );
+    await expect(readFile(join(state, "agent.sqlite"))).rejects.toThrow(/ENOENT/);
+  });
+
+  it("is the instance's alone: the program's defaults refuse it", async () => {
+    const dir = await fauxAgent("fa-name-defaults-");
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { defaults: { name: "x" } };\n`);
+    await expect(openSource(dir, { stateDir: join(await mkdtemp(join(tmpdir(), "fa-name-")), "s") })).rejects.toThrow(
+      /\/name unknown field/,
+    );
+  });
+
   it("refuses a name that is not one segment before anything of the instance is opened", async () => {
     const dir = await fauxAgent("fa-name-refused-");
     const state = join(await mkdtemp(join(tmpdir(), "fa-name-")), "state");
@@ -63,6 +92,20 @@ describe("the commands", () => {
     expect((await name([])).name).toMatch(/^fa-name-cli-[A-Za-z0-9]+$/);
     expect((await name([], { FASTAGENT_NAME: "from-env" })).name).toBe("from-env");
     expect((await name(["--name", "from-flag"], { FASTAGENT_NAME: "from-env" })).name).toBe("from-flag");
+  });
+
+  it("the project's fastagent.json names it, and a flag or the variable overrides that", async () => {
+    const dir = await agentWorkspace("fa-name-file-", { "fastagent.json": JSON.stringify({ name: "from-file" }) });
+    const info = async (args: string[], env?: Record<string, string>) =>
+      (JSON.parse((await runInProcess(["info", dir, "--json", ...args], undefined, env)).stdout) as { name: string })
+        .name;
+    expect(await info([])).toBe("from-file");
+    expect(await info([], { FASTAGENT_NAME: "from-env" })).toBe("from-env");
+    expect(await info(["--name", "from-flag"], { FASTAGENT_NAME: "from-env" })).toBe("from-flag");
+    await writeFile(join(dir, "fastagent.json"), JSON.stringify({ name: "a b" }));
+    const refused = await runInProcess(["info", dir, "--json"]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/fastagent\.json: the instance name "a b" must be one path segment/);
   });
 
   it("refuses a name that is not a segment, naming where it came from, and an empty flag", async () => {

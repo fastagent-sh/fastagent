@@ -42,7 +42,7 @@ import { instanceName } from "../../instance-name.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
   mcp?: McpOptions;
-  /** The instance's name. Default: the definition's, as one path segment. */
+  /** The instance's name, over the configuration's. Default: the configuration's, else the definition's as one segment. */
   name?: string;
   /**
    * The values the instance's code, its MCP servers and its model's authentication read by name (`needs`, `${VAR}`,
@@ -171,8 +171,8 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const { dir } = definition;
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
-  const name = instanceName(definition.name, options.name);
   const config = resolveConfig(definition, options.config);
+  const name = instanceName(definition.name, options.name ?? config.name);
   const text = openText(dir, options.config);
   const mcpServers = declareMcp(dir, options.config);
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
@@ -295,7 +295,7 @@ export type InstanceLocation = { root: string } | { stateDir: string; workdir: s
 export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
   /** The instance configuration, over the program's defaults: an object, or the absolute path of a `fastagent.json`. */
   config?: InstanceConfig<Settings> | string;
-  /** The instance's name, one path segment. Default: the definition's name, as one. `info().name` reports it. */
+  /** The instance's name, over `config`'s: one path segment. Default: `config`'s, else the definition's as one. */
   name?: string;
   /**
    * The values the agent's code (`needs`), its MCP servers (`${VAR}`) and its model's authentication read by name. The
