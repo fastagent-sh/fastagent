@@ -114,7 +114,8 @@ set; without it, it says which paths receive nothing yet. It reads no outcome it
 
 - **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
   `.secrets/production/.env`. Production never falls back to dev values. A deployment's values live on its target and are
-  set with `fastagent secrets` (from that file, the environment or a prompt), never from the dev file; use
+  set with `fastagent secrets` (by default from that file; `--env-file` or `--from-env` name another source, and a prompt
+  needs none), and never falls back to the dev file on its own; use
   `.secrets/.env.example` as a template, not the filled dev file.
 - **Feishu/Lark receive by webhook on every host** unless the configuration `--config` delivers sets
   `channels.feishu.ingress` (`channels.lark.ingress`) to `"connection"`, while `dev` keeps WebSocket
