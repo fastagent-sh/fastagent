@@ -24,8 +24,7 @@ export interface FlyPlanInput extends ContainerInput {
    */
   channels: readonly DeclaredChannel[];
   /**
-   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
-   * carries.
+   * The runbook's variable list (`deploymentSecrets`): the declared names, each hinted by the file that declared it.
    */
   secrets?: readonly DeploymentSecret[];
   /** `schedules/` declares a schedule — one of the things that forces a machine up (deploy/residency.ts). */

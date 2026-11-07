@@ -19,8 +19,7 @@ export interface AgentcorePlanInput extends ContainerInput {
    */
   channels: readonly DeclaredChannel[];
   /**
-   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
-   * carries.
+   * The runbook's variable list (`deploymentSecrets`): the declared names, each hinted by the file that declared it.
    */
   secrets?: readonly DeploymentSecret[];
   /**
@@ -581,7 +580,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# and .secrets/ across compute stop/resume — an idle-reclaimed agent resumes with its memory. AWS`,
     `# RESETS it on every runtime version update (i.e. every deploy) and after 14 idle days, so a deploy`,
     `# replaces the state along with the image: sessions, channel state and pending wake-ups start blank.`,
-    `# A provider API key in the value file travels with every deploy; a login on the runtime survives neither reset.`,
+    `# A provider API key in the deployment's secret survives every deploy; a login on the runtime survives neither reset.`,
     `# Cross-deploy memory needs EFS or S3 Files, which are VPC-only (a NAT gateway for model/channel`,
     `# egress, ~$33/mo standing): use \`deploy fly\` or \`deploy railway\` for a real volume instead.`,
     `# Keep one runtime writer per agent; use the fixed runtime session id printed above for every entry point.`,

@@ -113,8 +113,10 @@ named, `--run` ends by pointing at the agent's `/health` (each channel's outcome
 set; without it, it says which paths receive nothing yet. It reads no outcome itself.
 
 - **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
-  `.secrets/production/.env`. Production never falls back to dev values. Put production provider keys and other
-  required values there explicitly; use `.secrets/.env.example` as a template, not the filled dev file.
+  `.secrets/production/.env`. Production never falls back to dev values. A deployment's values live on its target and are
+  set with `fastagent secrets` (by default from that file; `--env-file` or `--from-env` name another source, and a prompt
+  needs none), and never falls back to the dev file on its own; use
+  `.secrets/.env.example` as a template, not the filled dev file.
 - **Feishu/Lark receive by webhook on every host** unless the configuration `--config` delivers sets
   `channels.feishu.ingress` (`channels.lark.ingress`) to `"connection"`, while `dev` keeps WebSocket
   ([design note](design/channel-environments.md)): a host that scales to zero wakes on an inbound request. Interactive
@@ -131,8 +133,8 @@ set; without it, it says which paths receive nothing yet. It reads no outcome it
 
 ## Logging a deployment in
 
-A model with no API key in `.secrets/production/.env` (an account sign-in such as ChatGPT for `openai`, or a key you
-entered with `fastagent login`) authenticates on the deployment itself:
+A model with no API key on the target (an account sign-in such as ChatGPT for `openai`, or a key you entered with
+`fastagent login`) authenticates on the deployment itself:
 
 ```bash
 fastagent login --deployment railway    # the host is always named
@@ -506,8 +508,7 @@ here. `--run` stops when `package.json` does not list mise, when mise is not ins
 `fastagent env install`), on a package whose backend FastAgent refuses, or on a PyPI package without `python` and `uv`
 declared; without `--run`, these are warnings. Chromium with CJK fonts adds about 1 GB to the image. The
 [variables](configuration.md#environment) `context.json` declares are required like a module's secrets: the runbook lists
-each with its description, and a deploy whose `.secrets/production/.env` has no value for one stops before it changes
-anything.
+each with its description, and a deploy whose target has no value for one stops before it builds anything.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /

@@ -20,8 +20,7 @@ export interface DockerPlanInput extends ContainerInput {
   /** Every declared channel and its ingress — the source of the ingress note. */
   channels: readonly DeclaredChannel[];
   /**
-   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
-   * carries.
+   * The runbook's variable list (`deploymentSecrets`): the declared names, each hinted by the file that declared it.
    */
   secrets?: readonly DeploymentSecret[];
   /** The value file as the pre-flight resolved it (it follows `FASTAGENT_SECRETS_DIR`), agent-dir-relative. */

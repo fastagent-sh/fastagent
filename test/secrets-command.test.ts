@@ -291,3 +291,23 @@ describe("secrets on AgentCore (one Secrets Manager secret)", () => {
     expect(result.stderr).toContain("FASTAGENT_API_KEY");
   });
 });
+
+describe("secrets with a github content entry", () => {
+  it("knows GITHUB_TOKEN as the host's clone reads it: `push` sets it, and `set` does not warn it is unread", async () => {
+    const fly = await fakeFly([]);
+    const dir = await agent({
+      "context.json": JSON.stringify({ content: { app: { github: "acme/app" } } }),
+      ".secrets/production/.env": "GH_TOKEN=ghp_x\nGITHUB_TOKEN=ghp_clone\n",
+    });
+    const listed = await runInProcess(["secrets", "list", "fly", dir, "--json"], undefined, fly.env);
+    expect(JSON.parse(listed.stdout).secrets).toContainEqual(
+      expect.objectContaining({ name: "GITHUB_TOKEN", set: false, required: false }),
+    );
+    const pushed = await runInProcess(["secrets", "push", "fly", dir], undefined, fly.env);
+    expect(pushed.code, pushed.stderr).toBe(0);
+    expect(await fly.stdin()).toContain("ghp_clone");
+    Object.defineProperty(process, "stdin", { value: Readable.from(["ghp_other\n"]), configurable: true });
+    const set = await runInProcess(["secrets", "set", "fly", "GITHUB_TOKEN", dir], undefined, fly.env);
+    expect(set.stderr).not.toContain("is not declared");
+  });
+});

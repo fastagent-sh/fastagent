@@ -423,7 +423,7 @@ instance's storage and files ([security boundary](design/security-boundary.md#3-
 
 Choose a host, cost budget, credentials, and public ingress with the owner. Generate only the selected
 host's artifacts from the **agent directory**, preserving the CLI's formats and existing user-owned files.
-A `github` content entry is cloned on the host (put `GITHUB_TOKEN` in `.secrets/production/.env` for a private
+A `github` content entry is cloned on the host (`fastagent secrets set <host> GITHUB_TOKEN` for a private
 repository or for pushes); a `local` entry stays on this machine, and the deployed agent works without it (`deploy` says so).
 Copy reference material the agent only reads into the agent directory, outside `content/`, which every release
 ships; move data it works on to a repository.
@@ -456,7 +456,7 @@ deployment's URL ([Deploy](deploy.md), [Logging a deployment in](deploy.md#loggi
 registration is the instance's own where its credentials allow (Telegram, Feishu, Lark) and a printed step where only
 the owner can set it (Slack's Request URL). Finish any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
 host. A deployed agent is reached through its channels and schedules, and on Docker, Fly and Railway through the
-Agent API under `/v1`, whose key `deploy` writes into `.secrets/production/.env` ([The Agent API](deploy.md#the-agent-api)).
+Agent API under `/v1`, whose key `deploy` sets on the target and keeps in `.secrets/production/.env` ([The Agent API](deploy.md#the-agent-api)).
 A ticket that ends `failed` carries the last lines of its log as `log_tail`: read it for the cause, fix that, then run
 the deploy again ([Troubleshooting](troubleshooting.md#a-deploy-stopped-and-the-message-does-not-say-why) lists the usual
 ones). Check the deployment the way you checked the agent: `fastagent invoke --url <the URL deploy reports> "..."`, with the
@@ -468,7 +468,7 @@ deploy's `probe`.
 |---|---|
 | Prompt files, skills, code, config, and package lockfile | The image holds the agent directory and installs its dependencies; the deployed agent reads its definition there, as built, and changes it only through a new release. Git is optional version control. |
 | The instance's storage (`agent.sqlite`: sessions and messages), channel state, pending work, fired-slot claims | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
-| Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. A model login is the box's own (`fastagent login --deployment`); a redeploy keeps it. AgentCore clears them on deploy, so a login there is repeated after every deploy; an API key in the value file avoids it. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
+| Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. A model login is the box's own (`fastagent login --deployment`); a redeploy keeps it. AgentCore clears them on deploy, so a login there is repeated after every deploy; an API key set on the deployment (`fastagent secrets set <host> <its variable>`) avoids it. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
 | Business notes, approvals, generated artifacts | Locally, write ongoing work into content the agent works on. On a host, the agent's own directory is replaced by every release and local content is not deployed, so use an external store. |
 
 An accepted message is durable: the agent answers it after a restart. Telegram, Slack, and Feishu/Lark also replay

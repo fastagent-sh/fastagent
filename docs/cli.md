@@ -292,8 +292,7 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
 - `--deployment <host>` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway,
   AgentCore) and the credential stays there. `deploy` never carries `auth.json`. Without a terminal, an account's
   sign-in returns a ticket as a local one does (`deployment` names the host), its process holding the box's shell
-  until the box answers; an API key is named for the person to set in `.secrets/production/.env`, which the next
-  `deploy <host> --run` carries. `login --check` reads that ticket as any other, without `--deployment`. A box whose
+  until the box answers; an API key is named for the person to set on the target with `fastagent secrets set <host> <NAME>`. `login --check` reads that ticket as any other, without `--deployment`. A box whose
   agent installed an older `@fastagent-sh/fastagent` than this CLI fails the login naming the version to align. See
   [Logging a deployment in](deploy.md#logging-a-deployment-in).
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:

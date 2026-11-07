@@ -232,7 +232,7 @@ describe("deploy agentcore: the plan", () => {
     const runbook = planAgentcoreDeploy(baseInput()).runbook.join("\n");
     expect(runbook).toContain("across compute stop/resume");
     expect(runbook).toContain("RESETS it on every runtime version update");
-    expect(runbook).toContain("provider API key in the value file");
+    expect(runbook).toContain("provider API key in the deployment's secret survives every deploy");
     expect(runbook).toContain(ingressSessionId("my-agent"));
   });
 
