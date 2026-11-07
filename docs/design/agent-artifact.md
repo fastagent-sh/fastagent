@@ -760,7 +760,7 @@ boundary experiments, not a supported format.
 ## 10. Delivery
 
 Done (#907, #909, #911; #913-#918, #921, #922; #923-#925; a channel's way of receiving and platform app per instance,
-[channel-setup.md](channel-setup.md) §10; #948 and the AgentCore secret): items 1, 2 and 3, and content of item 4. Not started: the rest of item 4.
+[channel-setup.md](channel-setup.md) §10; #948 and the AgentCore secret): items 1, 2 and 3, and item 4 (content, text, instance MCP servers and their delivery checks).
 
 1. **Artifact.** A compiled `dist/` with its `bin`, installed under `node_modules`, opened read-only with explicit
    inputs, two independent instances, on Node and Bun. Add pi-schema; the move to pi 1.5.0 is separate (#903).
@@ -770,7 +770,7 @@ Done (#907, #909, #911; #913-#918, #921, #922; #923-#925; a channel's way of rec
 3. **Deployment.** Derived from the same artifact with delivered configuration in the image's `/etc/fastagent/` and the instance
    root at `/data/` (`/mnt/data/` on AgentCore); values as the target's state (`fastagent secrets`, names checked by deploy, channel shape as configuration, webhook
    registration on the box), AgentCore through Secrets Manager.
-4. **Instance additions.** Content and text additions with their delivery to a deployment (done); instance MCP servers (`mcpServers` in `fastagent.json`).
+4. **Instance additions.** Content, text and MCP servers (`mcpServers` in `fastagent.json`), with their delivery to a deployment.
 5. Any public [SPEC](../SPEC.md) change is reviewed on its own.
 
 No backward-compatibility or migration layer is carried; there are no users to migrate.
