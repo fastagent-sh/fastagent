@@ -19,7 +19,7 @@ import {
   resolveStateRoot,
   resolveWorkdir,
 } from "../paths.ts";
-import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
+import { INSTANCE_NAME_ENV, checkInstanceName, enteredInstanceName } from "../instance-name.ts";
 import { useValueFile } from "../value-file.ts";
 import { failUsage } from "./fail.ts";
 import type { FlagSpec } from "./kernel.ts";
@@ -144,10 +144,10 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
     process.env[variable] = path;
     if (key === "root" || key === "workdir") makeDirectory(path, given === undefined ? variable : flag);
   }
-  const name = flags.name ?? (process.env[INSTANCE_NAME_ENV] || undefined);
+  const name = flags.name ?? enteredInstanceName();
   if (name === undefined) return;
   try {
-    instanceName("", name);
+    checkInstanceName(name);
   } catch (error) {
     failUsage(`${flags.name === undefined ? INSTANCE_NAME_ENV : "--name"}: ${(error as Error).message}`);
   }
@@ -166,7 +166,7 @@ export function instanceInputs(
   makeDirectory(workdir, "the working directory");
   return {
     projectDir: agentDir,
-    ...(process.env[INSTANCE_NAME_ENV] ? { name: process.env[INSTANCE_NAME_ENV] } : {}),
+    ...(enteredInstanceName() === undefined ? {} : { name: enteredInstanceName() as string }),
     workdir,
     stateRoot: resolveStateRoot(agentDir),
     secrets: definedValues(process.env),

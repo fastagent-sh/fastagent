@@ -100,7 +100,7 @@ A `fastagent.config.ts` makes a directory an agent, whatever its name. Its conte
 ## `fastagent info`
 
 ```bash
-fastagent info [agent] [--json] [--model provider/modelId] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+fastagent info [agent] [--json] [--model provider/modelId] [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 ```
 
 Prints what the agent builds into, without serving it:
@@ -335,7 +335,7 @@ global one, then the environment, with a login due a refresh refreshed. `--json`
 
 ```bash
 fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-input]
-               [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+               [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 ```
 
 Serves the agent locally: its channels, schedules and wake-ups. `SYSTEM.md`, `AGENTS.md`, `skills/` and `prompts/` are
@@ -364,7 +364,7 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 
 ```bash
 fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--json] [--session <id>]
-                                 [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                                 [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 fastagent invoke <message> [agent] --url <base> [--key <key>] [--model provider/modelId] [--json] [--session <id>]
 ```
 
@@ -397,7 +397,7 @@ given and grows with them; delete it, while no `invoke` runs, to start from none
 ## `fastagent schedules list`
 
 ```bash
-fastagent schedules list [agent] [--json] [--root dir] [--state dir] [--workdir dir]
+fastagent schedules list [agent] [--json] [--name name] [--root dir] [--state dir] [--workdir dir]
 ```
 
 Lists every schedule (`src/schedules/<name>.ts`, see [Schedules](configuration.md#schedules)) with its next cron
@@ -418,7 +418,7 @@ What the agent said is in the schedule's session, in the instance's storage. A f
 
 ```bash
 fastagent schedules run <name> [agent] [--model provider/modelId] [--no-input]
-                       [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                       [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 ```
 
 Fires the schedule `<name>` now, the way its clock would: in the schedule's own session, with its claim and its
@@ -436,7 +436,7 @@ fires a schedule of this machine's instance; a deployed one keeps its own state.
 ## `fastagent schedules unwake`
 
 ```bash
-fastagent schedules unwake <id> [agent] [--root dir] [--state dir] [--workdir dir]
+fastagent schedules unwake <id> [agent] [--name name] [--root dir] [--state dir] [--workdir dir]
 ```
 
 Cancels the pending wake-up `<id>` (`schedules list` shows the ids), whatever session set it. The agent cancels its
@@ -579,7 +579,7 @@ from the machine's skill directories. `--update` overwrites an existing one.
 
 ```bash
 fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
-                [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 ```
 
 Serves the project's `dist/`, never its source, without watching: it refuses, naming `fastagent build`, when `dist/`
