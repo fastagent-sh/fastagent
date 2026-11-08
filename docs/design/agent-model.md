@@ -10,10 +10,10 @@ status: implemented
 **Status: implemented.** This note fixes the concepts and the vocabulary, seen from the author's side. It says what
 an author declares and what an agent sees, not how it is stored or implemented, and it does not cover
 synchronization, distribution or deployment (§8). Tracking issue: [#684](https://github.com/fastagent-sh/fastagent/issues/684).
-The [artifact design](agent-artifact.md) changes the target: an immutable built definition, opened with explicit
+The [artifact design](agent-artifact.md) is built: an immutable built definition, opened with explicit
 instance inputs (configuration in `fastagent.json`, secrets, state, a workspace apart from the program),
-so it assembles the same way in development, inside an app and on a host. Those are not current 0.29.0 behavior; this note's own-directory, shared-content and self-edit rules describe the existing source-directory model,
-not constraints that the new design must preserve.
+so it assembles the same way in development, inside an app and on a host. This note's own-directory, shared-content
+and self-edit rules describe the source project `dev` opens, not constraints on a built definition, which is read-only.
 
 The test every rule here answers to: an agent an author shaped with a coding agent runs as a service without being
 rewritten, and behaves the same wherever it runs.

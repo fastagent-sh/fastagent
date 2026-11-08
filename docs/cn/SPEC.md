@@ -14,7 +14,7 @@ status: current
 一个部署好的 agent 像互联网上任何一个服务一样被调用：从程序里调，走 HTTP，带一个 key。Agent API 只定义这个 agent 对
 **调用方**提供的接口：一个 `Agent`，下面是 `sessions` 和 `messages` 两组操作。同一套模型有两种绑定：进程内的 TypeScript
 接口（`openAgent`），和 HTTP（`/v1` 加 `connectAgent`）。两者名字、对象、错误都一样，调用方换一行拿到 agent 的代码，就能在
-"打开本地目录"和"连到部署"之间切换。改 agent 的定义、查看会话内部这类运维操作，是 harness（pi-durable）自己的 API，
+"在进程里打开 agent"和"连到部署"之间切换。改 agent 的定义、查看会话内部这类运维操作，是 harness（pi-durable）自己的 API，
 不在这里。
 
 ## 1. 它要保证的四件事

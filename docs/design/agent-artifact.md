@@ -2,15 +2,16 @@
 title: The agent framework's artifact and instance inputs
 description: "FastAgent as an agent framework: one immutable built definition, assembled deterministically from explicit instance inputs (configuration, secrets, state, workspace) on a laptop, inside an app or in the cloud."
 type: design-doc
-status: partly implemented (stages A, B and most of C); secrets as the target's state and instance additions are not
+status: implemented, except that the model credentials and the MCP grants are still kept in `.secrets/` (§4.1)
 ---
 
 # The agent framework's artifact and instance inputs
 
-**Status: partly implemented.** Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900), whose progress
-comment lists the PRs. The artifact (§3), the instance inputs (§4.1-§4.3) and most of the deployment (§6.1) are built;
-what is not is the instance additions of §4.2/§7 beyond content. Where this and the code disagree, the code is
-current behavior and this is the target; §10 says which part is which. This revises the first draft merged in
+**Status: implemented, except one item.** Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900),
+whose progress comment lists the PRs. The artifact (§3), the instance inputs (§4), the deployment (§6) and the
+instance additions (§7) are built. Not built: moving the model credentials and the MCP grants out of `.secrets/` and
+under `.state/` (§4.1), so `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` still place them. Where this and the code
+disagree, the code is current behavior and this is the target. This revises the first draft merged in
 [#901](https://github.com/fastagent-sh/fastagent/pull/901). Items marked *implementation research* are decided in
 direction and settled while building.
 
@@ -138,8 +139,7 @@ export default defineAgent({
 - `settings` uses [`@earendil-works/pi-schema`](https://www.npmjs.com/package/@earendil-works/pi-schema): plain JSON
   Schema with static types and no dependencies of its own, so it is added as a dependency of FastAgent whatever pi
   release is in use. It is the schema language pi-durable 1.5.0 uses for tool parameters, so tools and settings share
-  one language once FastAgent moves to 1.5.0 ([#903](https://github.com/fastagent-sh/fastagent/issues/903)); the
-  settings work does not wait for it. Secrets stay with `needs()` beside the code that reads them; `settings` is for
+  one language (FastAgent moved to 1.5.0 in [#903](https://github.com/fastagent-sh/fastagent/issues/903)). Secrets stay with `needs()` beside the code that reads them; `settings` is for
   non-secret values.
 - `fastagent build` runs the configuration check, so a mistake fails before publication rather than at a host's open.
 - A configuration without `settings` can stay a literal with a type-only import, as today's scaffold writes it, and
@@ -304,16 +304,20 @@ instances.
   `secrets` is distinct from `credentials`, the model providers' credential store (sign-ins and stored API keys),
   which today's `openAgent` already takes. A model provider's environment variable (`ANTHROPIC_API_KEY`, or a name a
   definition's `providers` read) is a secret: the model's auth reads it from the `secrets` input, the CLI's included,
-  and never from `process.env` (today `modelsOver` falls back to `process.env`; that changes). The declared inputs
+  and never from `process.env`. The declared inputs
   list the names the default model's provider reads, optional because a stored credential satisfies them too; they
   reach the model's auth only, not child processes (§5). An implicit read would let a stray shell variable open a
-  different instance, breaking assembly determinism. (Today `openAgent` falls back to `FASTAGENT_STATE_DIR`; that changes.)
+  different instance, breaking assembly determinism.
 - External data the agent works on needs no separate root: it is a `path` entry under `content`, and clones live in the
   workspace.
-- `FASTAGENT_AUTH_PATH` remains a finer override of where the model credentials file lives; its default is
-  `<state>/auth.json`. `FASTAGENT_SECRETS_DIR` and the `.secrets/` directory are no longer part of an instance: secrets
-  are an in-memory input (`--env-file`, the environment, `secrets`), and the two files that lived there, the model
-  credentials and the MCP grants, move under `.state/`. `.secrets/.env` remains only `dev`'s default env file (§4.3).
+- **Target, not built:** `FASTAGENT_AUTH_PATH` remains a finer override of where the model credentials file lives; its
+  default is `<state>/auth.json`. `FASTAGENT_SECRETS_DIR` and the `.secrets/` directory are no longer part of an
+  instance: secrets are an in-memory input (`--env-file`, the environment, `secrets`), and the two files that lived
+  there, the model credentials and the MCP grants, move under `.state/`. `.secrets/.env` remains only `dev`'s default
+  env file (§4.3). Built today: secrets are an input, but the credentials and the grants are still kept in
+  `.secrets/auth.json` and `.secrets/mcp-auth.json` (over the machine's own `~/.fastagent` credentials when no path is
+  named), and an open that is given no `credentials` or `mcp` store reads `FASTAGENT_AUTH_PATH` and
+  `FASTAGENT_SECRETS_DIR` from the process's environment to find them.
 
 Storage each input tolerates:
 
@@ -384,9 +388,9 @@ A grant is created where the instance runs. Locally, `fastagent mcp login <serve
 A deployed instance authorizes for itself and is never given a copy of a local or Kage grant, since two holders of one
 grant log each other out when either refreshes. Today that means running the login against the deployment with its
 callback port forwarded to the browser's machine; an automatic relay is a known gap (§8). A server that needs no OAuth
-uses static values instead. (0.29.0 keeps grants in `.secrets/mcp-auth.json` and bindings in the state root's
-`mcp-bindings.json`; with `.secrets/` no longer part of an instance, grants move under `.state/` beside the model
-credentials' `auth.json`.)
+uses static values instead. (Grants are kept in `.secrets/mcp-auth.json` and bindings in the state root's
+`mcp-bindings.json`; with `.secrets/` no longer part of an instance, grants would move under `.state/` beside the model
+credentials' `auth.json`, which is not built.)
 
 ### 4.2 `fastagent.json`
 
@@ -584,7 +588,7 @@ environment               secrets injected by the platform, or AgentCore's secre
 
 This is the layout as built. The target of §4.1 is smaller: `.secrets/` goes, and its two files move under `.state/`.
 
-The volume no longer holds a copy of the definition (today's `/data/definition`): the program lives only in the image,
+The volume no longer holds a copy of the definition (0.29.0's `/data/definition`): the program lives only in the image,
 and a volume holds only state and work.
 
 The volume keeps the path generated deployments have always used, `/data` (`/mnt/data` on AgentCore). The filesystem
@@ -620,7 +624,7 @@ target's own store, set there by a command of their own; `deploy` checks names a
 fails `wrangler deploy` naming each one the Worker lacks and never uploads `.dev.vars`; Encore checks its `secret()`
 declarations before a deploy; SST fails with the `sst secret set` command to run. A local `.env` is development's.
 
-Carrying a file was the alternative, and what 0.29.0 does: `--run` uploads the whole production value file. It made
+Carrying a file was the alternative, and what 0.29.0 did: `--run` uploaded the whole production value file. It made
 the person deploying hold every production secret, in the project directory a coding agent working there can read,
 and it took a run of machinery that exists only to carry: names a deployment sets itself filtered out of the file,
 chunked carriers, Compose rewriting `$` in values, gates for a value that differs between the shell and the file. Keeping both
@@ -735,12 +739,13 @@ Recorded, not solved here:
 - A deployed instance's MCP OAuth sign-in has no automatic relay (no `mcp login --deployment`): it runs against the
   deployment with a forwarded callback port, and on AgentCore a grant is lost with the storage on every deploy.
 
-## 9. Current implementation seams and evidence
+## 9. Seams that changed, and evidence
 
-The *Current* column is 0.29.0. Stages A to C have made every change below except the one on secrets at deploy (§6.2);
-the runtime prompt's description of the definition is partly done (#919).
+The *Before* column is 0.29.0. Every change below is made, except that the runtime prompt's description of the
+definition still speaks of an editable directory (#919), and that the model credentials and the MCP grants are still
+read from `.secrets/` (§4.1).
 
-| Current | Change |
+| Before | Change |
 |---|---|
 | A source project is read as a definition value, its modules imported where they are and nothing written; `start` opens the project's `dist/`, and `openAgent` takes a definition | Build prepares; open loads a built definition |
 | `agentDir` supplies cwd, values, local bindings and clone paths | Configuration, state and workspace are separate inputs |
