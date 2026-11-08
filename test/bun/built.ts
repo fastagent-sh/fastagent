@@ -32,7 +32,7 @@ try {
   const definition = await loadBuiltDefinition(installed);
   const roots = [scratch("fa-bun-a-"), scratch("fa-bun-b-")];
   for (const root of roots) {
-    const agent = await openAgent(definition, { root });
+    const agent = await openAgent(definition, { root, offline: true });
     const session = await agent.sessions.create();
     const end = await agent.messages.send(
       { sessionId: session.id, content: JSON.stringify({ name: "write", args: { path: "out.txt", content: root } }) },

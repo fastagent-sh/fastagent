@@ -11,6 +11,7 @@ import { openPreparedStartService } from "../src/cli/commands/start.ts";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { buildable } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ defaults: { model: "${CODEX_MODEL}" } }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
@@ -26,7 +27,13 @@ async function agentDir(files: Record<string, string> = {}, config = `{ defaults
 
 /** The directory opened as a serve opens it, with no storage of its own, as the mount takes it. */
 const open = async (dir: string) =>
-  openServing(await loadSourceDefinition(dir), { secrets: {}, env: {}, storage: "memory" });
+  openServing(await loadSourceDefinition(dir), {
+    secrets: {},
+    env: {},
+    ownEnv: process.env,
+    runsAs: NOT_HOSTED,
+    storage: "memory",
+  });
 
 const DIGEST = `import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({ cron: "0 9 * * *", prompt: "hi" });\n`;
@@ -167,6 +174,8 @@ describe("mountAgentcoreService: the container points its own webhook channels",
       await openServing(await loadSourceDefinition(dir), {
         secrets: { TELEGRAM_BOT_TOKEN: "123:abc", TELEGRAM_SECRET_TOKEN: "s3cret" },
         env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
         storage: "memory",
         config: { values: config, label: "test" },
       }),

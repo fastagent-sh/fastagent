@@ -30,7 +30,7 @@ function createAndOpen(dir: string): Promise<string> {
     import { loadSourceDefinition } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/open.ts"))};
     import { openServing } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/serve.ts"))};
     await createAgent(${JSON.stringify(dir)});
-    await loadSourceDefinition(${JSON.stringify(dir)}).then((definition) => openServing(definition, { secrets: {}, env: {}, storage: "memory" })).then(
+    await loadSourceDefinition(${JSON.stringify(dir)}).then((definition) => openServing(definition, { secrets: {}, env: {}, ownEnv: process.env, runsAs: { dev: false, deployed: false, agentcore: false }, storage: "memory" })).then(
       async (opened) => {
         await opened.agent.close();
         console.log("opened");

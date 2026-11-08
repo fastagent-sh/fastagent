@@ -11,7 +11,7 @@ import { type PromptSection, section } from "@earendil-works/pi-durable";
 import { parse as parseYaml } from "yaml";
 import type { ResolvedContent } from "../../content/resolve.ts";
 import { log } from "../../log.ts";
-import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
+import type { RunsAs } from "../../serving-command.ts";
 import type { AgentCommand } from "./agent.ts";
 import type { InstanceConfigSource } from "./config.ts";
 import { NOUN, type TextSource, type TextSources, declareText, programText, whatIs } from "./text-sources.ts";
@@ -304,12 +304,13 @@ function instructionsText(sources: readonly TextSource[]): string | undefined {
 
 /**
  * The prompt the definition contributes: `SYSTEM.md` as written, `AGENTS.md` as project context, the skills, where it
- * works, and, deployed, what of a change it makes to itself lasts. `wake`: the agent has the wake tool.
+ * works, and, deployed, what of a change it makes to itself lasts. `wake`: the agent has the wake tool; `runsAs` says
+ * whether it is deployed, and where.
  */
 export function definitionSections(
   agentDir: string,
   content: readonly ResolvedContent[],
-  options: { wake: boolean; workdir?: string; text?: TextSources },
+  options: { wake: boolean; runsAs: RunsAs; workdir?: string; text?: TextSources },
 ): PromptSection[] {
   const text = options.text ?? programText(agentDir);
   return [
@@ -318,7 +319,9 @@ export function definitionSections(
     section("instance_context", () => instructionsText(text.instructions)),
     section("skills", () => skillsPrompt(readSkills(text.skills))),
     section("content", () => contentSection({ agentDir, workdir: options.workdir ?? agentDir, content })),
-    section("self_change", () => (isDeployedWorkspace() ? selfChangeSection(options.wake) : undefined)),
+    section("self_change", () =>
+      options.runsAs.deployed ? selfChangeSection(options.wake, options.runsAs.agentcore) : undefined,
+    ),
   ];
 }
 
@@ -329,8 +332,8 @@ export function definitionSections(
  * which every deployment keeps. Its definition is the image's either way, so the sentence says where a capability that
  * should outlast a deployment has to go.
  */
-function selfChangeSection(wake: boolean): string {
-  const storage = isAgentcoreRuntime()
+function selfChangeSection(wake: boolean, agentcore: boolean): string {
+  const storage = agentcore
     ? "Every deployment of a new version resets this host's storage entirely, your directory with it, so anything " +
       "that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database)."
     : "Your directory is this host's storage and survives deployments of a new version.";

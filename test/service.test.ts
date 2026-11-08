@@ -18,6 +18,7 @@ import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { connectAgent } from "../src/http/client.ts";
 import { type ServeOptions, serveAgent } from "../src/service.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const opened: DurableAgent[] = [];
 afterAll(async () => {
@@ -26,7 +27,13 @@ afterAll(async () => {
 
 /** The directory opened as a serve opens it, with no storage of its own, and mounted. */
 async function createAgentService(dir: string, options: ServeOptions = {}) {
-  const served = await openServing(await loadSourceDefinition(dir), { secrets: {}, env: {}, storage: "memory" });
+  const served = await openServing(await loadSourceDefinition(dir), {
+    secrets: {},
+    env: {},
+    ownEnv: process.env,
+    runsAs: NOT_HOSTED,
+    storage: "memory",
+  });
   opened.push(served.agent);
   return serveAgent(served, options);
 }
@@ -53,6 +60,8 @@ describe("serveAgent over an opened directory", () => {
     const served = await openServing(await loadSourceDefinition(relative(process.cwd(), dir)), {
       secrets: {},
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
     });
     opened.push(served.agent);
@@ -458,6 +467,8 @@ describe("a serve points its webhook channels at itself", () => {
     const served = await openServing(await loadSourceDefinition(dir), {
       secrets,
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
       config: { values: config, label: "test" },
     });
@@ -543,6 +554,8 @@ describe("a serve points its webhook channels at itself", () => {
     const served = await openServing(await loadSourceDefinition(dir), {
       secrets: { SLACK_BOT_TOKEN: "xoxb-1" },
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
       config: { values: { http: { publicUrl: "https://agent.example.com" } }, label: "test" },
     });
@@ -570,6 +583,8 @@ describe("a serve points its webhook channels at itself", () => {
       const served = await openServing(await loadSourceDefinition(dir), {
         secrets: {},
         env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
         storage: "memory",
         config: { values: { http: { publicUrl: "https://agent.acme.com/bot" }, ...values }, label: "test" },
       });
@@ -620,6 +635,8 @@ describe("a serve points its webhook channels at itself", () => {
     const served = await openServing(await loadSourceDefinition(dir), {
       secrets: {},
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
       config: {
         values: {
@@ -656,6 +673,8 @@ describe("a serve points its webhook channels at itself", () => {
     const served = await openServing(await loadSourceDefinition(dir), {
       secrets: {},
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
       config: { values: { http: { publicUrl: "https://agent.example.com" } }, label: "test" },
     });

@@ -29,7 +29,7 @@ import {
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { openSource } from "./open-source.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
-import { DEV_SERVE_ENV } from "../src/serving-command.ts";
+import { DEV_SERVE_ENV, NOT_HOSTED } from "../src/serving-command.ts";
 import { expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
 
 // Under test/fixtures, so the agent's modules resolve this repository's packages and its src/ by a fixed depth.
@@ -262,6 +262,7 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       const code = buildDefinition(definition, ENV);
       const agent = await assembleAgent(definition, {
         storage: new MemoryStorage(),
+        runsAs: NOT_HOSTED,
         processEnv: {},
         models: modelsOver(new InMemoryCredentialStore(), code.providers),
         code,
@@ -451,6 +452,8 @@ describe("two agents in one process", () => {
         await openServing(await loadSourceDefinition(dir), {
           secrets: values,
           env: {},
+          ownEnv: process.env,
+          runsAs: NOT_HOSTED,
           storage: "memory",
           credentialStore: new InMemoryCredentialStore(),
         }),
@@ -500,6 +503,8 @@ describe("the secrets an instance is given name where its state and credentials 
         FASTAGENT_AUTH_PATH: join(elsewhere, "auth.json"),
       },
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
     });
     try {
       expect(opened.stateRoot).toBe(join(elsewhere, "state"));
@@ -521,6 +526,7 @@ describe("the environment of the processes an agent starts", () => {
     const agent = await openAgent(await loadSourceDefinition(dir), {
       workdir,
       stateDir: join(dir, "state"),
+      offline: true,
       env: { PATH: "/usr/bin:/bin", HOME: "/home/instance" },
       secrets: {
         WEATHER_KEY: "k",
@@ -567,6 +573,7 @@ describe("git discovery in the agent's working directory", () => {
     const agent = await openAgent(await loadSourceDefinition(dir), {
       workdir,
       stateDir: join(dir, "state"),
+      offline: true,
       env: { PATH: process.env.PATH ?? "" },
       secrets: ENV,
     });

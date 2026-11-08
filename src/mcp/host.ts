@@ -26,12 +26,33 @@ function decodeBindings(raw: string | undefined): Record<string, string> {
   }
 }
 
+/** Where grants are kept when no store is given, and what makes the directory holding them safe to write to. */
+interface GrantsHome {
+  file: string;
+  prepare?: () => Promise<string | undefined>;
+}
+
+/** The project's `.secrets/`: where the CLI keeps them. A write first makes the directory ignored by git. */
 export function mcpAuthorization(
   dir: string,
   env: NodeJS.ProcessEnv,
   stateRoot: string,
   options: McpOptions = {},
 ): McpAuthorization {
+  const secretsDir = resolveSecretsDir(dir, env);
+  return authorizationIn(
+    { file: join(secretsDir, "mcp-auth.json"), prepare: () => prepareSecretsDirectory(dir, secretsDir) },
+    stateRoot,
+    options,
+  );
+}
+
+/** The instance's state directory: where an app that is given no store keeps them, beside its other state. */
+export function mcpAuthorizationInState(stateRoot: string, options: McpOptions = {}): McpAuthorization {
+  return authorizationIn({ file: join(stateRoot, "mcp-auth.json") }, stateRoot, options);
+}
+
+function authorizationIn(home: GrantsHome, stateRoot: string, options: McpOptions): McpAuthorization {
   if ((options.store === undefined) !== (options.bindings === undefined))
     throw new McpError("configuration", "MCP store and bindings must be supplied together");
   if (options.store && options.bindings) return { store: options.store, bindings: { ...options.bindings } };
@@ -42,10 +63,9 @@ export function mcpAuthorization(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  const secretsDir = resolveSecretsDir(dir, env);
-  const file = mcpGrantFile(join(secretsDir, "mcp-auth.json"));
+  const file = mcpGrantFile(home.file);
   const protectedWrite = async (write: () => Promise<void>) => {
-    const unprotected = await prepareSecretsDirectory(dir, secretsDir);
+    const unprotected = await home.prepare?.();
     await write();
     if (unprotected !== undefined) log.warn(`[fastagent] ${unprotectedSecretsNote(unprotected)}`);
   };

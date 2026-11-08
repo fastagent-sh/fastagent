@@ -32,6 +32,8 @@ async function openedContent(dir: string, secrets: Record<string, string> = {}) 
   const opened = await openServing(definition, {
     secrets,
     env: {},
+    ownEnv: process.env,
+    runsAs: NOT_HOSTED,
     storage: "memory",
     ...(instance === undefined ? {} : { config: instance }),
   });
@@ -41,6 +43,7 @@ async function openedContent(dir: string, secrets: Record<string, string> = {}) 
 import { git, githubStandIn } from "./github-standin.ts";
 import { log } from "../src/log.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -77,6 +80,28 @@ describe("github content: resolved, without touching the network or the disk", (
     expect(() => readContentSource(join(root, "app"), root)).toThrow(
       "git is not installed: github content needs it on this machine",
     );
+  });
+});
+
+describe("github content: the git it runs for an instance is the environment it is given", () => {
+  it("answers about an existing clone in `env`, whatever git variables the process holds", async () => {
+    const { agentDir } = await agent();
+    const entry = resolveOne(agentDir, { github: "acme/web" });
+    const clean = { PATH: process.env.PATH ?? "", HOME: agentDir, GIT_CONFIG_NOSYSTEM: "1" };
+    await mkdir(entry.location, { recursive: true });
+    for (const args of [
+      ["init", "-q", "-b", "main"],
+      ["remote", "add", "origin", "https://github.com/acme/web.git"],
+    ]) {
+      execFileSync("git", args, { cwd: entry.location, env: clean });
+    }
+    const reason = "it is on branch main, declared the default branch";
+    expect(await cloneContent(entry, clean)).toEqual({ outcome: "kept", reason });
+    // The process says this clone's origin is another repository; the environment the open was given does not.
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", "remote.origin.url");
+    vi.stubEnv("GIT_CONFIG_VALUE_0", "https://github.com/other/thing.git");
+    expect(await cloneContent(entry, clean)).toEqual({ outcome: "kept", reason });
   });
 });
 
@@ -392,6 +417,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     const definition = await loadSourceDefinition(agentDir);
     const running = await assembleAgent(definition, {
       storage: new MemoryStorage(),
+      runsAs: NOT_HOSTED,
       processEnv: {},
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
       config: resolveConfig(definition),

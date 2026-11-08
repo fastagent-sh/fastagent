@@ -1,5 +1,5 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: MCP configuration uses literal environment references.
-import { mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -186,6 +186,27 @@ it("HTTP clients keep bindings isolated and closing one leaves a shared grant us
   expect((await ask(b, "mcp__remote__bad")).answer?.text).toContain("fixture refused");
   expect((await ask(b, "mcp__remote__structured")).answer?.text).toBe('{"value":42}');
   expect((await ask(b, "mcp__remote__resource")).answer?.text).toContain("MCP tool returned unsupported content");
+});
+it("grants an instance is given no store for are the state directory's, and not the secrets directory's", async () => {
+  vi.stubEnv("FASTAGENT_OFFLINE", "1");
+  const remote = mcpFixture();
+  const dir = await directory({ mcpServers: { remote: { type: "http", url: remote.url } } });
+  const stateDir = join(dir, "state");
+  await mkdir(stateDir, { recursive: true });
+  await mcpGrantFile(join(stateDir, "mcp-auth.json")).withGrant("shared", (tx) =>
+    tx.write(remote.grant("state", false)),
+  );
+  await writeFile(join(stateDir, "mcp-bindings.json"), JSON.stringify({ remote: "shared" }));
+  const decoy = join(dir, "decoy-secrets");
+  await mkdir(decoy, { recursive: true });
+  await mcpGrantFile(join(decoy, "mcp-auth.json")).withGrant("shared", (tx) => tx.write(remote.grant("decoy", false)));
+  vi.stubEnv("FASTAGENT_SECRETS_DIR", decoy);
+  await mkdir(join(dir, ".secrets"), { recursive: true });
+  await mcpGrantFile(join(dir, ".secrets", "mcp-auth.json")).withGrant("shared", (tx) =>
+    tx.write(remote.grant("project", false)),
+  );
+  const agent = await opened(dir, { stateDir, mcp: { fetch: remote.fetch } });
+  expect((await ask(agent, "mcp__remote__identity")).answer?.text).toBe("state");
 });
 it("closing a caller during refresh joins the durable rotation and preserves another agent's grant", async () => {
   vi.stubEnv("FASTAGENT_OFFLINE", "1");

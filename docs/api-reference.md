@@ -78,7 +78,8 @@ function openAgent(
   definition: AgentDefinition, // an agent package's default export, which `fastagent build` generates
   options: InstanceLocation & {
     secrets?: Record<string, string | undefined>;
-    env?: Record<string, string>; // the base environment of the processes the agent starts; `baseEnv(process.env)` is an app's own
+    env?: Record<string, string>; // the base environment of the processes the agent starts, and of FastAgent's own installing and cloning; `baseEnv(process.env)` is an app's own
+    offline?: boolean; // refresh the model lists without the network; default false
     config?: InstanceConfig | string;
     model?: string;
     credentials?: CredentialStore;
@@ -114,16 +115,18 @@ interface WebhookRegistration {
 
 `openAgent` opens one instance of a definition the way `dev` and `start` do: a definition `fastagent build` made for
 another format is refused, naming the FastAgent version that opens it. It builds the code with the secrets it declares (a required one without a value refuses, naming where it is declared), prepares the declared
-environment, clones the content, builds the model environment over the agent's credentials (`.secrets/auth.json` over
-the machine's, or the store `credentials` gives) with its [model lists](configuration.md#model-lists) refreshed (a request to
+environment, clones the content, builds the model environment over the agent's credentials (the store `credentials` gives, else `auth.json` in the state
+root, and never the project's `.secrets/`, the machine's own credentials or `FASTAGENT_AUTH_PATH`) with its [model lists](configuration.md#model-lists) refreshed (a request to
 `https://pi.dev` of at most 5 s, and to a provider that fetches its own list, unless what `<state root>/models/` keeps
-is less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage,
+is less than 4 hours old; `offline: true` makes none), and opens the instance's storage,
 `<state root>/agent.sqlite`, which one process holds at a time: a second opener is refused. The state root is
 `stateDir`, else `<root>/.state`, and the agent's working directory is `workdir`, else `root`; the definition's own
 files are only read. `secrets` is the one source of the values the agent reads by name: its code's `needs()`, an MCP
 `${VAR}` reference, and its model's authentication and what each model request reads, such as Bedrock's region or
 Azure's endpoint. The open reads none of them from this process's environment or from a file, so an app passes what the
-agent needs (`secrets: process.env` is a choice it can make); without one a required secret refuses the open. A
+agent needs (`secrets: process.env` is a choice it can make); without one a required secret refuses the open.
+Installing the declared packages and cloning the content run in `env` plus `secrets` and not in this process's
+environment, so an app that clones over SSH adds `SSH_AUTH_SOCK` to `env`. A
 process the agent starts (the shell tool, a stdio MCP server, a skill's script) gets `env` (default: empty), the
 commands of its declared packages ahead on its `PATH`, the values `secrets` holds for the names the definition
 declares (`needs()` and `context.json`'s environment), a stdio MCP server's own `env`, and `GIT_CEILING_DIRECTORIES` at

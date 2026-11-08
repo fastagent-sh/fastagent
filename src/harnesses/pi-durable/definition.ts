@@ -141,15 +141,24 @@ function conditionsOf(deciding: readonly DeclaredSecret[]): IngressCondition[] |
 }
 
 /** The channels part of a configuration: how each channel that receives either way receives. */
-export interface ChannelsConfig {
+interface ChannelsConfig {
   channels?: Readonly<Record<string, { ingress?: Ingress }>>;
+}
+
+/** A channels configuration and whether `fastagent dev` serves the instance (else the process's own say, `servedByDev`). */
+export interface IngressConfig extends ChannelsConfig {
+  dev?: boolean;
 }
 
 /**
  * How the channel `name` receives under `config`: what it names, else WebSocket under `dev` (no public URL there) and
  * webhook everywhere else (a host that wakes on a request reaches it only that way).
  */
-export function chosenIngress(config: ChannelsConfig, name: string, dev = servedByDev()): Ingress {
+export function chosenIngress(
+  config: IngressConfig,
+  name: string,
+  dev: boolean = config.dev ?? servedByDev(),
+): Ingress {
   return config.channels?.[name]?.ingress ?? (dev ? "connection" : "webhook");
 }
 
@@ -166,7 +175,7 @@ interface Declarer {
  */
 function declarers(
   { registry, config }: Pick<DefinitionSpec, "registry" | "config">,
-  instance?: ChannelsConfig,
+  instance?: IngressConfig,
 ): Declarer[] {
   const ways = ({ file, name, value }: { file: string; name: string; value: unknown }): Declarer[] => {
     if (!isByIngress(value)) return [{ declaredIn: file, value }];
@@ -190,7 +199,7 @@ type Declaring = Pick<DefinitionSpec, "registry" | "config" | "dir">;
  * The secrets the definition's code reads (`needs()`) and its commands do (`context.json`'s variables): an instance's,
  * under its `config`, or every way's with none.
  */
-export function codeSecrets(definition: Declaring, config?: ChannelsConfig): DeclaredSecret[] {
+export function codeSecrets(definition: Declaring, config?: IngressConfig): DeclaredSecret[] {
   return [
     ...declarers(definition, config).flatMap(({ declaredIn, value, when }) =>
       isNeeds(value)
@@ -207,7 +216,7 @@ export function codeSecrets(definition: Declaring, config?: ChannelsConfig): Dec
  */
 export function definitionSecrets(
   definition: Declaring,
-  config?: ChannelsConfig,
+  config?: IngressConfig,
   instance?: McpInstance,
 ): DeclaredSecret[] {
   return [...codeSecrets(definition, config), ...mcpSecrets(declareMcp(definition.dir, instance))];

@@ -2,16 +2,14 @@
 title: The agent framework's artifact and instance inputs
 description: "FastAgent as an agent framework: one immutable built definition, assembled deterministically from explicit instance inputs (configuration, secrets, state, workspace) on a laptop, inside an app or in the cloud."
 type: design-doc
-status: implemented, except that the model credentials and the MCP grants are still kept in `.secrets/` (§4.1)
+status: implemented
 ---
 
 # The agent framework's artifact and instance inputs
 
-**Status: implemented, except one item.** Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900),
-whose progress comment lists the PRs. The artifact (§3), the instance inputs (§4), the deployment (§6) and the
-instance additions (§7) are built. Not built: moving the model credentials and the MCP grants out of `.secrets/` and
-under `.state/` (§4.1), so `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` still place them. Where this and the code
-disagree, the code is current behavior and this is the target. This revises the first draft merged in
+**Status: implemented.** Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900), whose progress
+comment lists the PRs. The artifact (§3), the instance inputs (§4), the deployment (§6) and the instance additions (§7)
+are built. Where this and the code disagree, the code is current behavior and this is the target. This revises the first draft merged in
 [#901](https://github.com/fastagent-sh/fastagent/pull/901). Items marked *implementation research* are decided in
 direction and settled while building.
 
@@ -300,7 +298,15 @@ instances.
 - For the CLI, a flag beats its environment variable, which beats the default. Relative paths resolve once at the
   command's entry, against the directory it was started in.
 - `openAgent` reads only its options, never these environment variables and never `process.env` for secret values: an
-  embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice).
+  embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice). FastAgent's
+  own work for the instance (installing packages, cloning content) runs in the `env` option plus `secrets`. Who runs
+  the instance (`FASTAGENT_DEV`, `FASTAGENT_RELEASE_FILE`, `FASTAGENT_AGENTCORE`: `dev`, a deployed box, AgentCore) is
+  not an input of `openAgent` at all: an app's instance is none of them, so a channel that names no way receives by
+  webhook and its prompt describes no deployment. The CLI reads those variables once, from its own process
+  (`runsAsIn`), and gives the result to the open (`OpenServingOptions.runsAs`). The one variable of the process's that
+  FastAgent itself still reads in an open is `FASTAGENT_LOG_LEVEL`. Code it runs is not held to this: a model provider's SDK reads
+  what its own credential chain names (a Bedrock request reads `AWS_PROFILE` from the process whatever `secrets` holds),
+  and the MCP SDK reads six variables to build a stdio server's default environment, which FastAgent withholds.
   `secrets` is distinct from `credentials`, the model providers' credential store (sign-ins and stored API keys),
   which today's `openAgent` already takes. A model provider's environment variable (`ANTHROPIC_API_KEY`, or a name a
   definition's `providers` read) is a secret: the model's auth reads it from the `secrets` input, the CLI's included,
@@ -583,7 +589,7 @@ A container instance:
 environment               secrets injected by the platform, or AgentCore's secret ARN
 ```
 
-This is the layout as built. The target of §4.1 is smaller: `.secrets/` goes, and its two files move under `.state/`.
+A deployed box runs the CLI's instance, so it keeps `.secrets/`; an app's instance (§4.1) has no such directory.
 
 The volume no longer holds a copy of the definition (0.29.0's `/data/definition`): the program lives only in the image,
 and a volume holds only state and work.
@@ -739,8 +745,7 @@ Recorded, not solved here:
 ## 9. Seams that changed, and evidence
 
 The *Before* column is 0.29.0. Every change below is made, except that the runtime prompt's description of the
-definition still speaks of an editable directory (#919), and that the model credentials and the MCP grants are still
-read from `.secrets/` (§4.1).
+definition still speaks of an editable directory (#919).
 
 | Before | Change |
 |---|---|

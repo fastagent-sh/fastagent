@@ -1,6 +1,7 @@
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts, imageHasGit } from "../src/deploy/container.ts";
+import { NOT_HOSTED, type RunsAs } from "../src/serving-command.ts";
 import { definitionSections } from "../src/harnesses/pi-durable/text.ts";
 
 const input = {
@@ -153,41 +154,27 @@ describe("deploy/container: shared Docker context", () => {
     }
     const manifest = containerArtifacts(input).find((a) => a.path === ".fastagent/deploy/fastagent.release.json")!;
     expect(JSON.parse(manifest.content)).toEqual({ version: 1, id: "release-one", agent: "reviewer" });
-    const before = process.env.FASTAGENT_RELEASE_FILE;
-    const beforeAgentcore = process.env.FASTAGENT_AGENTCORE;
-    try {
-      delete process.env.FASTAGENT_RELEASE_FILE;
-      delete process.env.FASTAGENT_AGENTCORE;
-      const note = (wake = false) => {
-        const section = definitionSections("/agent", [], { wake }).find(({ key }) => key === "self_change");
-        return (section?.render({} as never, {} as never) as string | undefined) ?? "";
-      };
-      expect(note()).not.toContain("survives restarts");
-      process.env.FASTAGENT_RELEASE_FILE = values[0];
-      expect(note()).toContain("Your directory survives restarts");
-      // The directory is the host's storage, which a new release keeps; the definition is the image's.
-      expect(note()).toContain("Your directory is this host's storage and survives deployments of a new version");
-      // The definition is the release, read as built: the prompt must not invite an edit that is never read.
-      expect(note()).toContain("is the author's release, read as it was built");
-      expect(note()).not.toContain("write a skill");
-      // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
-      expect(note()).not.toContain("wake tool");
-      expect(note(true)).toContain("use the wake tool.");
-      // What the agent installs itself is the machine's.
-      expect(note()).toContain("A tool you install yourself (apt-get, npm install -g) belongs to this machine");
-      // The host whose storage a deploy RESETS says so, rather than the release replacing only the directory.
-      process.env.FASTAGENT_AGENTCORE = "1";
-      expect(note()).not.toContain("survives deployments of a new version");
-      expect(note()).toContain("resets this host's storage entirely");
-      expect(note()).toContain("is the author's release, read as it was built");
-    } finally {
-      for (const [key, value] of [
-        ["FASTAGENT_RELEASE_FILE", before],
-        ["FASTAGENT_AGENTCORE", beforeAgentcore],
-      ] as const) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
+    const note = (runsAs: RunsAs, wake = false) => {
+      const section = definitionSections("/agent", [], { wake, runsAs }).find(({ key }) => key === "self_change");
+      return (section?.render({} as never, {} as never) as string | undefined) ?? "";
+    };
+    const deployed: RunsAs = { dev: false, deployed: true, agentcore: false };
+    expect(note(NOT_HOSTED)).not.toContain("survives restarts");
+    expect(note(deployed)).toContain("Your directory survives restarts");
+    // The directory is the host's storage, which a new release keeps; the definition is the image's.
+    expect(note(deployed)).toContain("Your directory is this host's storage and survives deployments of a new version");
+    // The definition is the release, read as built: the prompt must not invite an edit that is never read.
+    expect(note(deployed)).toContain("is the author's release, read as it was built");
+    expect(note(deployed)).not.toContain("write a skill");
+    // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
+    expect(note(deployed)).not.toContain("wake tool");
+    expect(note(deployed, true)).toContain("use the wake tool.");
+    // What the agent installs itself is the machine's.
+    expect(note(deployed)).toContain("A tool you install yourself (apt-get, npm install -g) belongs to this machine");
+    // The host whose storage a deploy RESETS says so, rather than the release replacing only the directory.
+    const agentcore: RunsAs = { ...deployed, agentcore: true };
+    expect(note(agentcore)).not.toContain("survives deployments of a new version");
+    expect(note(agentcore)).toContain("resets this host's storage entirely");
+    expect(note(agentcore)).toContain("is the author's release, read as it was built");
   });
 });

@@ -31,7 +31,6 @@ import { log } from "./log.ts";
 import { once } from "./once.ts";
 import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
 import type { Schedule } from "./schedule/schedule.ts";
-import { servedByDev } from "./serving-command.ts";
 import { stripTrailingSlashes } from "./strip-edges.ts";
 
 export type { WebhookRegistration } from "./channels/webhooks.ts";
@@ -268,7 +267,7 @@ function webhookRegistry(
       const run = previous.then(async () => {
         base = at;
         replace(pendingWebhooks(kinds));
-        if (at === undefined && kinds.length > 0 && !servedByDev()) {
+        if (at === undefined && kinds.length > 0) {
           log.info(`[fastagent] webhooks: no http.publicUrl, so nothing points ${kinds.join(", ")} at this instance`);
         }
         replace(confirm(await registerOwnWebhooks(at, kinds, env, options), at));
