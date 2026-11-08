@@ -262,6 +262,7 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       const code = buildDefinition(definition, ENV);
       const agent = await assembleAgent(definition, {
         storage: new MemoryStorage(),
+        ownEnv: process.env,
         processEnv: {},
         models: modelsOver(new InMemoryCredentialStore(), code.providers),
         code,
@@ -451,6 +452,7 @@ describe("two agents in one process", () => {
         await openServing(await loadSourceDefinition(dir), {
           secrets: values,
           env: {},
+          ownEnv: process.env,
           storage: "memory",
           credentialStore: new InMemoryCredentialStore(),
         }),
@@ -500,6 +502,7 @@ describe("the secrets an instance is given name where its state and credentials 
         FASTAGENT_AUTH_PATH: join(elsewhere, "auth.json"),
       },
       env: {},
+      ownEnv: process.env,
     });
     try {
       expect(opened.stateRoot).toBe(join(elsewhere, "state"));
@@ -521,6 +524,7 @@ describe("the environment of the processes an agent starts", () => {
     const agent = await openAgent(await loadSourceDefinition(dir), {
       workdir,
       stateDir: join(dir, "state"),
+      offline: true,
       env: { PATH: "/usr/bin:/bin", HOME: "/home/instance" },
       secrets: {
         WEATHER_KEY: "k",
@@ -567,6 +571,7 @@ describe("git discovery in the agent's working directory", () => {
     const agent = await openAgent(await loadSourceDefinition(dir), {
       workdir,
       stateDir: join(dir, "state"),
+      offline: true,
       env: { PATH: process.env.PATH ?? "" },
       secrets: ENV,
     });

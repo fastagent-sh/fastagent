@@ -26,7 +26,7 @@ async function agentDir(files: Record<string, string> = {}, config = `{ defaults
 
 /** The directory opened as a serve opens it, with no storage of its own, as the mount takes it. */
 const open = async (dir: string) =>
-  openServing(await loadSourceDefinition(dir), { secrets: {}, env: {}, storage: "memory" });
+  openServing(await loadSourceDefinition(dir), { secrets: {}, env: {}, ownEnv: process.env, storage: "memory" });
 
 const DIGEST = `import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({ cron: "0 9 * * *", prompt: "hi" });\n`;
@@ -167,6 +167,7 @@ describe("mountAgentcoreService: the container points its own webhook channels",
       await openServing(await loadSourceDefinition(dir), {
         secrets: { TELEGRAM_BOT_TOKEN: "123:abc", TELEGRAM_SECRET_TOKEN: "s3cret" },
         env: {},
+        ownEnv: process.env,
         storage: "memory",
         config: { values: config, label: "test" },
       }),

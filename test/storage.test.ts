@@ -71,11 +71,12 @@ it("an agent that fails to open lets go of the storage, so the same process can 
   const dir = await mkdtemp(join(tmpdir(), "fa-storage-retry-"));
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
   await expect(
-    openServing(await loadSourceDefinition(dir), { secrets: {}, env: {}, model: "nope/missing" }),
+    openServing(await loadSourceDefinition(dir), { secrets: {}, env: {}, ownEnv: process.env, model: "nope/missing" }),
   ).rejects.toThrow(/unknown model "nope\/missing"/);
   const opened = await openServing(await loadSourceDefinition(dir), {
     secrets: {},
     env: {},
+    ownEnv: process.env,
     model: "anthropic/claude-sonnet-4-5",
   });
   await opened.agent.close();

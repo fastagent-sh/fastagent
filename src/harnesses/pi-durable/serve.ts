@@ -16,6 +16,7 @@ import type { McpOptions } from "../../mcp-api.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
 import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
 import { mcpAuthorization, mcpAuthorizationInState } from "../../mcp/host.ts";
+import { servedByDev } from "../../serving-command.ts";
 import { mcpTools } from "./mcp.ts";
 import { loadContent } from "../../content/file.ts";
 import { type ResolvedContent, cloneContent, resolveContent } from "../../content/resolve.ts";
@@ -56,6 +57,14 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    * process's reaches them.
    */
   env: Readonly<Record<string, string>>;
+  /**
+   * The environment FastAgent's own work for the instance runs in: installing the declared packages, cloning content,
+   * finding `git` and `mise`, and where a CLI instance's files are. The CLI gives this process's; an app, its `env`.
+   * The instance's secrets are added to it.
+   */
+  ownEnv: Readonly<Record<string, string | undefined>>;
+  /** Whether the model lists are refreshed without the network. Default: `ownEnv`'s `FASTAGENT_OFFLINE` is `1`. */
+  offline?: boolean;
   /** What the instance sets over the program's defaults (`fastagent.json`, or an object); none runs on the defaults. */
   config?: InstanceConfigSource;
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
@@ -185,10 +194,10 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
   const secrets = definedValues(options.secrets);
-  const code = buildDefinition(definition, secrets, config);
+  const code = buildDefinition(definition, secrets, { ...config, dev: servedByDev(options.ownEnv) });
   // FastAgent's own work for the instance (installing packages, cloning content, finding its files) runs in this
   // process's environment and the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
-  const env = { ...process.env, ...secrets };
+  const env = { ...options.ownEnv, ...secrets };
   const packages = await prepareEnvironment(dir, env, { ...env, PATH: options.env.PATH });
   const processEnv = processEnvironment(
     {
@@ -212,7 +221,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       ...(options.credentialStore === undefined ? {} : { credentialStore: options.credentialStore }),
     },
     code.providers,
-    { stateRoot, environment: secrets },
+    { stateRoot, environment: secrets, env, offline: options.offline ?? env.FASTAGENT_OFFLINE === "1" },
   );
   const chosen = options.storage ?? { instance: "posix" };
   const storage = await openStorage(stateRoot, chosen);
@@ -230,6 +239,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     agent = await assembleAgent(definition, {
       name,
       mcpTools: mcpTools(mcp.tools),
+      ownEnv: options.ownEnv,
       storage,
       code,
       config,
@@ -325,8 +335,10 @@ export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
   mcp?: McpOptions;
   /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
   model?: string;
-  /** Where provider credentials are kept, instead of the agent's own `.secrets/auth.json` over the machine's. */
+  /** Where provider credentials are kept, instead of the state directory's `auth.json`. */
   credentials?: CredentialStore;
+  /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
+  offline?: boolean;
 };
 
 /** The `config` input as a source: an object as it is, a path (absolute, like every path here) read. */
@@ -373,6 +385,8 @@ export async function openAgent<Settings = unknown>(
     stateRoot,
     secrets: options.secrets ?? {},
     env: options.env ?? {},
+    ownEnv: options.env ?? {},
+    offline: options.offline === true,
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(config === undefined ? {} : { config }),
     wakeTicking: () => ticking,

@@ -298,7 +298,11 @@ instances.
 - For the CLI, a flag beats its environment variable, which beats the default. Relative paths resolve once at the
   command's entry, against the directory it was started in.
 - `openAgent` reads only its options, never these environment variables and never `process.env` for secret values: an
-  embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice).
+  embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice). FastAgent's
+  own work for the instance (installing packages, cloning content) runs in the `env` option plus `secrets`, and what says
+  how the instance is served and where it runs (`FASTAGENT_DEV`, `FASTAGENT_RELEASE_FILE`, `FASTAGENT_AGENTCORE`) is read
+  from `env`; the CLI gives its own process's environment as `env`. The one variable of the process's that an open still
+  reads is `FASTAGENT_LOG_LEVEL`.
   `secrets` is distinct from `credentials`, the model providers' credential store (sign-ins and stored API keys),
   which today's `openAgent` already takes. A model provider's environment variable (`ANTHROPIC_API_KEY`, or a name a
   definition's `providers` read) is a secret: the model's auth reads it from the `secrets` input, the CLI's included,

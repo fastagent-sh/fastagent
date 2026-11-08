@@ -60,7 +60,7 @@ export interface Catalogs {
    * {@link OFFLINE_VARIABLE} is set, what the network has newer. Never rejects: resolves with why a list is not
    * current, when one is not.
    */
-  refresh(models: Models, options?: { force?: boolean }): Promise<string | undefined>;
+  refresh(models: Models, options?: { force?: boolean; offline?: boolean }): Promise<string | undefined>;
 }
 
 /** The catalogs kept in `dir`, or, without one, for this process alone. `url` and `timeoutMs` are for tests. */
@@ -150,8 +150,7 @@ export function catalogsIn(dir: string | undefined, options: { url?: string; tim
       } as Provider;
     },
     fetched,
-    async refresh(models, { force = false } = {}) {
-      const offline = process.env[OFFLINE_VARIABLE] === "1";
+    async refresh(models, { force = false, offline = process.env[OFFLINE_VARIABLE] === "1" } = {}) {
       const signal = AbortSignal.timeout(timeoutMs);
       const why = (error: unknown) =>
         signal.aborted ? `no answer within ${timeoutMs / 1000}s` : messageOf(error as Error);

@@ -52,7 +52,7 @@ import support from "@acme/support-agent"; // the default export of a package `f
 const agent = await openAgent(support, {
   root: "/var/lib/myapp/support",
   secrets: { ZENDESK_TOKEN: vault.read("zendesk") }, // what the agent's code and model read by name
-  env: baseEnv(process.env), // PATH, HOME, locale and proxy: what its commands start from; without it, nothing
+  env: baseEnv(process.env), // PATH, HOME, locale and proxy: what its commands and FastAgent's own installing and cloning start from; without it, nothing
   model: "openai/gpt-5.5",
 });
 // ...
@@ -72,7 +72,7 @@ relative one is refused. The open builds the definition's code with the secrets 
 [environment](configuration.md#environment) where it has no install yet and puts it first on the `PATH` of the
 commands the agent runs, clones its content, refreshes its [model lists](configuration.md#model-lists) (a request to
 `https://pi.dev` of at most 5 s, and to a provider that fetches its own list, unless what `<state>/models/` keeps is
-less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage (`<state>/agent.sqlite`),
+less than 4 hours old; `offline: true` makes none), and opens the instance's storage (`<state>/agent.sqlite`),
 which one process holds at a time. Without a
 `model`, the config's is the default; with none at all the agent still
 opens, and a session needs a model of its own (`sessions.create({ model })`, `sessions.update`) before a message is

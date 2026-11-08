@@ -289,6 +289,7 @@ describe("model catalogs", () => {
     const serving = await openServing(await loadSourceDefinition(agent), {
       secrets: {},
       env: {},
+      ownEnv: process.env,
       storage: "memory",
       credentialStore: new InMemoryCredentialStore(),
     });
@@ -312,6 +313,7 @@ describe("model catalogs", () => {
       openServing(await loadSourceDefinition(agent), {
         secrets: {},
         env: {},
+        ownEnv: process.env,
         storage: "memory",
         credentialStore: new InMemoryCredentialStore(),
       }),

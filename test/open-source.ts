@@ -13,6 +13,8 @@ export async function openSource(
 ): Promise<LocalAgent> {
   return openAgent(
     await loadSourceDefinition(dir),
-    stateDir === undefined ? { root: dir, secrets, ...options } : { workdir: dir, stateDir, secrets, ...options },
+    stateDir === undefined
+      ? { root: dir, secrets, offline: true, ...options }
+      : { workdir: dir, stateDir, secrets, offline: true, ...options },
   );
 }

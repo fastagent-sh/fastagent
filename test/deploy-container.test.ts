@@ -159,7 +159,9 @@ describe("deploy/container: shared Docker context", () => {
       delete process.env.FASTAGENT_RELEASE_FILE;
       delete process.env.FASTAGENT_AGENTCORE;
       const note = (wake = false) => {
-        const section = definitionSections("/agent", [], { wake }).find(({ key }) => key === "self_change");
+        const section = definitionSections("/agent", [], { wake, env: process.env }).find(
+          ({ key }) => key === "self_change",
+        );
         return (section?.render({} as never, {} as never) as string | undefined) ?? "";
       };
       expect(note()).not.toContain("survives restarts");

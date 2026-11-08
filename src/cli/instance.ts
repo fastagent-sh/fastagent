@@ -160,7 +160,7 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
  */
 export function instanceInputs(
   agentDir: string,
-): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "name"> {
+): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "name"> {
   const workdir = resolveWorkdir(agentDir);
   // A default one is the project's own `.fastagent/<environment>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");
@@ -171,5 +171,6 @@ export function instanceInputs(
     stateRoot: resolveStateRoot(agentDir),
     secrets: definedValues(process.env),
     env: baseEnv(process.env),
+    ownEnv: process.env,
   };
 }

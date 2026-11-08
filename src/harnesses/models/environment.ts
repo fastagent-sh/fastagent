@@ -69,10 +69,18 @@ export async function modelEnvironment(
   agentDir: string | undefined,
   source: CredentialSourceOptions & FastagentAuthOptions = {},
   providers: readonly Provider[] = [],
-  options: { force?: boolean; stateRoot?: string; environment?: Readonly<Record<string, string>> } = {},
+  options: {
+    force?: boolean;
+    stateRoot?: string;
+    environment?: Readonly<Record<string, string>>;
+    /** The environment `FASTAGENT_AUTH_PATH` and `FASTAGENT_STATE_DIR` are read from. Default: this process's. */
+    env?: Readonly<Record<string, string | undefined>>;
+    /** Refresh the lists without the network. Default: `FASTAGENT_OFFLINE` is `1` in this process's environment. */
+    offline?: boolean;
+  } = {},
 ): Promise<ModelEnvironment> {
   const environment = options.environment ?? {};
-  const env = { ...process.env, ...environment };
+  const env = { ...(options.env ?? process.env), ...environment };
   assertOneCredentialSource(source);
   const files = source.credentialStore
     ? undefined
@@ -84,7 +92,10 @@ export async function modelEnvironment(
   const stateRoot = options.stateRoot ?? (agentDir === undefined ? undefined : resolveStateRoot(agentDir, env));
   const catalogs = catalogsIn(stateRoot === undefined ? undefined : join(stateRoot, "models"));
   const models = modelsOver(credentials, providers, catalogs, environment);
-  const catalogProblem = await catalogs.refresh(models, { force: options.force === true });
+  const catalogProblem = await catalogs.refresh(models, {
+    force: options.force === true,
+    ...(options.offline === undefined ? {} : { offline: options.offline }),
+  });
   if (catalogProblem !== undefined) log.warn(`[fastagent] ${catalogProblem}`);
   return {
     ...(files ? { auth: files } : {}),

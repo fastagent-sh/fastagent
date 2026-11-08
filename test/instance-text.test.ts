@@ -60,6 +60,7 @@ async function openAgentOn(dir: string, instance: InstanceConfigSource | undefin
   const definition = await loadSourceDefinition(dir);
   const agent: DurableAgent = await assembleAgent(definition, {
     storage: new MemoryStorage(),
+    ownEnv: process.env,
     processEnv: {},
     code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
     config: resolveConfig(definition, instance),
@@ -262,6 +263,7 @@ describe("an instance's text through the entries that open an instance", () => {
       root: join(config, "root"),
       config: join(config, "fastagent.json"),
       secrets: {},
+      offline: true,
     });
     try {
       expect((await agent.info()).commands.map((c) => c.name)).toEqual(["review", "skill:triage", "skill:audit"]);

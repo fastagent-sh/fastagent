@@ -32,8 +32,8 @@ import { type AgentConfig, type DefinedSchedule, type Needs, isByIngress, isNeed
 import { type EffectiveConfig, type InstanceConfigSource, checkProgramConfig, devInstanceConfig } from "./config.ts";
 import {
   type AgentDefinition,
-  type ChannelsConfig,
   DEFINITION_FORMAT,
+  type IngressConfig,
   chosenIngress,
   codeSecrets,
   defineDefinition,
@@ -151,7 +151,7 @@ export interface BuiltDefinition {
 }
 
 /** What a build reads of an instance's configuration: its settings, and how its channels receive. */
-export interface BuildConfig extends ChannelsConfig {
+export interface BuildConfig extends IngressConfig {
   settings: Readonly<Record<string, unknown>>;
 }
 
@@ -301,6 +301,8 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
 
 export interface AssembleAgentOptions {
   storage: Storage;
+  /** The environment the process is in, as far as the prompt says where the agent runs (deployed, on AgentCore). */
+  ownEnv: NodeJS.ProcessEnv;
   /** What the agent works on (`context.json`'s content), resolved for this instance. */
   content?: readonly ResolvedContent[];
   /** The instance's name (`instanceName`): what `info().name` reports. Default: the definition's, as one segment. */
@@ -362,6 +364,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
       name: DEFINITION_EXTENSION,
       sections: definitionSections(dir, options.content ?? [], {
         wake: ownWake || options.stateRoot !== undefined,
+        env: options.ownEnv,
         workdir: options.workdir ?? dir,
         text,
       }),

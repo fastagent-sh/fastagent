@@ -78,8 +78,8 @@ describe("an installed package, opened as instances", () => {
     const before = snapshot(installed as string);
     const rootA = scratch(tmpdir(), "fa-instance-a-");
     const rootB = scratch(tmpdir(), "fa-instance-b-");
-    const a = await openAgent(definition, { root: rootA });
-    const b = await openAgent(definition, { root: rootB });
+    const a = await openAgent(definition, { root: rootA, offline: true });
+    const b = await openAgent(definition, { root: rootB, offline: true });
     agents.push(a, b);
     // A path relative to the working directory, which is the instance's own.
     await ask(a, "write", { path: "out.txt", content: "from a" });
@@ -98,7 +98,7 @@ describe("an installed package, opened as instances", () => {
 
   it("refuses a second open over the same state, and a relative location", async () => {
     const root = scratch(tmpdir(), "fa-instance-held-");
-    const first = await openAgent(definition, { root });
+    const first = await openAgent(definition, { root, offline: true });
     agents.push(first);
     await expect(openAgent(definition, { root })).rejects.toThrow();
     await expect(openAgent(definition, { root: "relative/root" })).rejects.toThrow(

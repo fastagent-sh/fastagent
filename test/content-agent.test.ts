@@ -28,6 +28,7 @@ async function askOnce(agentDir: string, provider: Provider, content?: readonly 
   const definition = await loadSourceDefinition(agentDir);
   const agent = await assembleAgent(definition, {
     storage: new MemoryStorage(),
+    ownEnv: process.env,
     processEnv: {},
     code: { ...buildDefinition(definition, {}), providers: [provider] },
     config: resolveConfig(definition),
@@ -135,6 +136,7 @@ describe("one resolution", () => {
       const opened = await openServing(definition, {
         secrets: {},
         env: {},
+        ownEnv: process.env,
         storage: "memory",
         ...(instance === undefined ? {} : { config: instance }),
       });

@@ -32,6 +32,7 @@ async function openedContent(dir: string, secrets: Record<string, string> = {}) 
   const opened = await openServing(definition, {
     secrets,
     env: {},
+    ownEnv: process.env,
     storage: "memory",
     ...(instance === undefined ? {} : { config: instance }),
   });
@@ -392,6 +393,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     const definition = await loadSourceDefinition(agentDir);
     const running = await assembleAgent(definition, {
       storage: new MemoryStorage(),
+      ownEnv: process.env,
       processEnv: {},
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
       config: resolveConfig(definition),
