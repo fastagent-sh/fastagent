@@ -61,10 +61,12 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
     await rm(dir, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
   });
-  const listing = await run(["mcp", "list", dir, "--json"], undefined, env);
+  // A process of its own only where the test needs one: a ticket's start (its step is `process.argv[1]`, which is not
+  // the CLI in process) and a refusal by another process's lock. Each spawn is a cold start, seconds on a loaded runner.
+  const listing = await runInProcess(["mcp", "list", dir, "--json"], undefined, env);
   expect(JSON.parse(listing.stdout)).toMatchObject([{ name: "test", authorization: "not_bound" }]);
   expect(remote.calls).toEqual([]);
-  const noScopes = await run(["mcp", "login", "test", dir, "--json"], undefined, env);
+  const noScopes = await runInProcess(["mcp", "login", "test", dir, "--json"], undefined, env);
   expect(noScopes.code).toBe(2);
   expect(noScopes.stderr).toContain("--scopes");
   const invalid = await run(
@@ -90,7 +92,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
     async () => {
       if (failed.status === "working")
         failed = JSON.parse(
-          (await run(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
+          (await runInProcess(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
         );
       expect(failed.status).toBe("failed");
     },
@@ -108,7 +110,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
     async () => {
       if (status.status === "working")
         status = JSON.parse(
-          (await run(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
+          (await runInProcess(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
         );
       expect(status.status).toBe("need_user_action");
     },
@@ -117,7 +119,9 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   expect((await remote.approve(status.url)).status).toBe(200);
   await vi.waitFor(
     async () => {
-      status = JSON.parse((await run(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout);
+      status = JSON.parse(
+        (await runInProcess(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
+      );
       expect(status.status).toBe("done");
     },
     { timeout: 15000 },
@@ -158,7 +162,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   } finally {
     await held.close(BACKGROUND_CONTEXT);
   }
-  const disconnected = await run(["mcp", "disconnect", "test", dir, "--json"], undefined, env);
+  const disconnected = await runInProcess(["mcp", "disconnect", "test", dir, "--json"], undefined, env);
   expect(disconnected.code).toBe(0);
   expect(JSON.parse(disconnected.stdout).grant_revoked).toBe(false);
   expect(await readFile(join(dir, ".secrets", "mcp-auth.json"), "utf8")).toBe(grants);
