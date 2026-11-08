@@ -8,7 +8,7 @@ import { basename, dirname, join } from "node:path";
 import { gitFor } from "../git.ts";
 
 const WHY = "github content needs it on this machine";
-const { answer: gitAnswer } = gitFor(WHY);
+const { answer: checkoutAnswer } = gitFor(WHY);
 
 /** The `owner/repo` a GitHub remote URL names, in any of its spellings (https, ssh, scp-like), or undefined. */
 export function githubRepoOf(url: string): string | undefined {
@@ -30,9 +30,9 @@ function githubUrl(repo: string): string {
  */
 export function checkoutOf(dir: string): { root: string; origin?: string } | undefined {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) return undefined;
-  const root = gitAnswer(["rev-parse", "--show-toplevel"], dir);
+  const root = checkoutAnswer(["rev-parse", "--show-toplevel"], dir);
   if (root === undefined) return undefined;
-  const origin = gitAnswer(["config", "--get", "remote.origin.url"], root);
+  const origin = checkoutAnswer(["config", "--get", "remote.origin.url"], root);
   return { root, ...(origin ? { origin } : {}) };
 }
 
@@ -85,7 +85,7 @@ export async function refreshClone(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<CloneOutcome> {
   // The agent's environment, whose GITHUB_TOKEN the clone's credential helper reads.
-  const { run: runGit } = gitFor(WHY, env);
+  const { run: runGit, answer: gitAnswer } = gitFor(WHY, env);
   // A library caller can hand this anything; git reads a leading "-" as an option, and no repository or ref has one
   // (a declaration with one is refused at load, declare.ts).
   if (repo.startsWith("-") || ref?.startsWith("-")) {

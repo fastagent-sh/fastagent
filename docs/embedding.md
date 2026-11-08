@@ -217,7 +217,9 @@ app.register(async (scope) => {
 (`<root>/.state/auth.json`), and the provider's variable from `secrets`. It reads nothing else: not the project's
 `.secrets/`, not `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR`, not the machine's `~/.fastagent`, so a person's own
 `fastagent login` never becomes an app's credential. MCP grants are kept the same way: the `mcp` store you give, else
-`mcp-auth.json` in the state directory.
+`mcp-auth.json` in the state directory. The state directory holds secrets (these two files) beside the conversation
+history, and FastAgent writes no `.gitignore` into it: an app whose `root` is a git repository, or whose agent commits
+its working directory, keeps `.state/` out of version control itself.
 
 `credentials` replaces the file with a `CredentialStore` of your own, refreshes included; the provider variables in `secrets` and a
 provider's own auth still apply. Implement one over an OS keychain or Electron `safeStorage`, or keep FastAgent's file
