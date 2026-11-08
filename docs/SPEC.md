@@ -437,14 +437,6 @@ for an end.
 
 ## 8. In process (TypeScript)
 
-This section is the surface of the release that closes [#900](https://github.com/fastagent-sh/fastagent/issues/900).
-Until then `openAgent` takes the definition and the instance location below, plus `config`, `secrets`, `env`, `model`,
-`credentials`, `mcp` and `name`, and reads each as described. Still as before: the model credentials and the MCP
-grants are kept in the instance's `.secrets/` (under `root`, or `workdir`), not in the state directory, and an open reads
-`FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` from the process's environment to place them. FastAgent's own work for
-the instance, installing the declared packages and cloning content, runs in the process's environment plus `secrets`;
-what the agent starts does not (§8, `env`).
-
 The interface is §4's. MCP server configuration and OAuth are [host operations](mcp.md), not changes to sessions,
 messages or their HTTP binding. The package's entry points are one per kind of user:
 
@@ -508,6 +500,7 @@ type InstanceInputs<Settings = unknown> = {
   name?: string;
   /** Where the model credentials are kept. Default: `auth.json` in the state directory. */
   credentials?: CredentialStore;
+  /** Where MCP grants are kept (`store` with its `bindings`). Default: `mcp-auth.json` in the state directory. */
   mcp?: McpOptions;
 } & InstanceLocation;
 
@@ -642,10 +635,14 @@ addressed elsewhere proves nothing and is warned of in the log, and one whose ad
 Otherwise `manual`, its `step` naming the URL to paste and the page to paste it on.
 
 `openAgent` opens one instance of a built definition, the default export of an agent's package
-(`import support from "@acme/support"`), from its inputs and nothing else. It reads no environment variable, no
-`process.env` value and no file its inputs do not name, and it writes neither `process.env` nor the package: one process
-may open several instances, and two opens share nothing their inputs do not name (two given one `workdir` share
-that workspace, which is the caller's to avoid). Every path it is given is absolute; a
+(`import support from "@acme/support"`), from its inputs and nothing else. It reads no variable that places or
+configures the instance (`FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`,
+`FASTAGENT_CONFIG`, `FASTAGENT_MODEL`, `FASTAGENT_NAME`), no file its inputs do not name (the machine's own model
+credentials included), and it puts no `process.env` value in front of the agent; it writes neither `process.env` nor
+the package. The process's own settings still apply: `FASTAGENT_LOG_LEVEL` and `FASTAGENT_OFFLINE`, and FastAgent's own
+work for the instance, installing the declared packages and cloning content, runs in the process's environment plus
+`secrets` (what the agent starts does not: `env`). One process may open several instances, and two opens share nothing
+their inputs do not name (two given one `workdir` share that workspace, which is the caller's to avoid). Every path it is given is absolute; a
 relative one is refused rather than resolved against the process's working directory.
 
 - A definition `fastagent build` made for another format refuses, naming the FastAgent version it needs.
@@ -664,7 +661,7 @@ relative one is refused rather than resolved against the process's working direc
   provider a session's model is; the declared inputs list only the default model's, as optional. A name `secrets`
   holds that nothing declares or reads is ignored.
 - The state is the instance's storage, its channels' and schedules' state, its model lists, its model credentials
-  (when `credentials` is absent) and MCP grants; the workspace is the agent's working directory, where its content is
+  (`auth.json`, when `credentials` is absent) and its MCP grants (`mcp-auth.json`, when `mcp` gives no store); the workspace is the agent's working directory, where its content is
   cloned and what it produces lands.
 - A process the agent starts (a command, a stdio MCP server, a skill's script) gets `env`, with the commands of the
   declared environment ahead on its `PATH`; the values `secrets` holds for the names the definition's code (`needs()`)
