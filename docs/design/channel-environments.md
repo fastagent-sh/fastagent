@@ -8,7 +8,7 @@ updated: 2026-10-09
 
 # Channels across environments
 
-**Status: implemented for dev and production.** Its §3 and §4 change per [channel-setup.md](channel-setup.md) (proposed): `add` changes the program, and a
+**Status: implemented for dev and production.** Its §3 and §4 are superseded by [channel-setup.md](channel-setup.md) (implemented): `add` changes the program, and a
 platform app is set up per instance by `channels setup`. An agent directory has one definition and two independent
 runtime environments. Staging and multiple production deployments are not selected by this mechanism.
 
