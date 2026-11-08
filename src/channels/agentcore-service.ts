@@ -11,6 +11,7 @@ import {
   routesFor,
   serviceOver,
   startSchedules,
+  webhooksOf,
 } from "../service.ts";
 import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./agentcore.ts";
 import * as Effect from "effect/Effect";
@@ -108,10 +109,11 @@ export async function mountAgentcoreService(opened: ServableAgent): Promise<Serv
   // recurring schedule the container sets (`armAlarms`), ONE path per instant, so the reply to that delivery says
   // whether it ran. The clock still pumps wake-ups; a redelivered fire claims its slot once.
   const mirror = armAlarms(stateRoot, () => schedules);
+  const webhooks = webhooksOf(opened);
   const scheduled = startSchedules(agent, stateRoot, schedules, { localClock: false });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
-    const lazy = routesFor(agent, stateRoot, opened.channels);
+    const lazy = routesFor(agent, stateRoot, opened.channels, webhooks.list);
     if (lazy.longConnections.length > 0) {
       throw new Error(
         `long-connection channel(s) ${lazy.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +
@@ -126,6 +128,11 @@ export async function mountAgentcoreService(opened: ServableAgent): Promise<Serv
     stateRoot,
     schedules: () => schedules,
     ...(mirror ? { onStateReady: mirror } : {}),
+    webhooks: {
+      list: webhooks.list,
+      // A custom domain the operator named in the configuration is where the platforms reach it, not the Function URL.
+      point: (forwarderUrl) => webhooks.register(opened.config.http?.publicUrl ?? forwarderUrl),
+    },
     channels: lazyChannels,
   });
   const handler = router(adapterRoutes);
@@ -133,7 +140,10 @@ export async function mountAgentcoreService(opened: ServableAgent): Promise<Serv
 
   return {
     // Nothing to open: no port of its own, no resident connections.
-    ...serviceOver(handler, Promise.resolve(), async () => scheduled.stop()),
+    ...serviceOver(handler, Promise.resolve(), async () => {
+      webhooks.dispose();
+      await scheduled.stop();
+    }),
     // The adapter IS the surface here; the channel routes arrive lazily BEHIND it.
     routes: adapterRoutes,
     agentDir,
@@ -156,8 +166,9 @@ export function mountAgentcore(options: {
   onStateReady?: () => void;
   /** The channel surface, initialized once by the adapter on trusted ingress. */
   channels: AgentcoreAdapterOptions["channels"];
+  webhooks?: AgentcoreAdapterOptions["webhooks"];
 }): Routes {
-  const { agent, stateRoot, schedules, onStateReady, channels } = options;
+  const { agent, stateRoot, schedules, onStateReady, channels, webhooks } = options;
   // OCCURRENCE SEMANTICS, because this host's clock is ours: the container set the recurring schedule that names this
   // instant and the forwarder relays it behind the ingress secret, so a claim means something (dedup across
   // EventBridge's redeliveries, a fire history, the overlap policy).
@@ -195,6 +206,7 @@ export function mountAgentcore(options: {
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
     onStateReady,
     fireSchedule,
+    ...(webhooks ? { webhooks } : {}),
   });
 }
 

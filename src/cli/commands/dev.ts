@@ -11,6 +11,7 @@ import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
+import { setUpMissingChannels } from "../first-run-channels.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
@@ -45,6 +46,8 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
     );
   // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both).
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
+  // Once, in the parent: the worker inherits what it writes, and a restart does not ask again.
+  if (!isWorker) await setUpMissingChannels(agentDir, opts);
   if (isWorker || opts.watch === false) {
     await serveOnce(agentDir, modelSpec, opts);
     return;
@@ -76,6 +79,6 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   serveService(
     service,
     { port: portFlag ?? config.http?.port ?? DEFAULT_HTTP_PORT, host },
-    { tunnel, agentDir, stateRoot: opened.stateRoot, config },
+    { tunnel, agentDir, config },
   );
 }

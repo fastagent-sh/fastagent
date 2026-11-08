@@ -1,5 +1,5 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: MCP configuration uses literal environment references.
-import { mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +25,7 @@ async function directory(config: unknown) {
   roots.push(dir);
   await symlink(NODE_MODULES, join(dir, "node_modules"), "dir");
   await writeFile(join(dir, "package.json"), '{"type":"module","dependencies":{"@fastagent-sh/fastagent":"*"}}');
-  await writeFile(join(dir, ".mcp.json"), JSON.stringify(config));
+  await writeFile(join(dir, "context.json"), JSON.stringify(config));
   await writeFile(join(dir, "SYSTEM.md"), "Use the requested tool.");
   await writeFile(
     join(dir, "fastagent.config.ts"),
@@ -111,11 +111,8 @@ it("a stdio server gets the base, the declared secrets and its own env, and noth
   vi.stubEnv("UNRELATED_MCP_SECRET", "do-not-forward");
   const dir = await directory({
     mcpServers: { constructor: { command: process.execPath, args: [FIXTURE], env: { MCP_VALUE: "own" } } },
+    environment: { variables: { FA_MCP_DECLARED: { description: "for the server" } } },
   });
-  await writeFile(
-    join(dir, "context.json"),
-    JSON.stringify({ environment: { variables: { FA_MCP_DECLARED: { description: "for the server" } } } }),
-  );
   const agent = await opened(dir, {
     stateDir: join(dir, "state"),
     secrets: { FA_MCP_DECLARED: "declared", UNRELATED_MCP_SECRET: "given-but-undeclared" },
@@ -128,6 +125,27 @@ it("a stdio server gets the base, the declared secrets and its own env, and noth
   expect(who.ceiling).toBe(dirname(dir));
 });
 
+it("an instance adds servers through its configuration, beside the program's, and a name in both refuses the open", async () => {
+  vi.stubEnv("FASTAGENT_OFFLINE", "1");
+  const dir = await directory({ mcpServers: { constructor: { command: process.execPath, args: [FIXTURE] } } });
+  const added = { command: process.execPath, args: [FIXTURE], env: { MCP_VALUE: "${ADDED_VALUE}" } };
+  const config = { mcpServers: { extra: added } };
+  expect(await inspectMcp(dir, { config })).toMatchObject([{ name: "constructor" }, { name: "extra" }]);
+  const agent = await opened(dir, { config, secrets: { ADDED_VALUE: "mine" } });
+  const program = JSON.parse((await ask(agent, "mcp__constructor__who")).answer?.text ?? "null");
+  const instance = JSON.parse((await ask(agent, "mcp__extra__who")).answer?.text ?? "null");
+  expect(instance).toMatchObject({ value: "mine" });
+  expect(program.pid).not.toBe(instance.pid);
+
+  // Refused before anything of the instance is opened, naming both.
+  const taken = { mcpServers: { constructor: added } };
+  await expect(openSource(dir, { config: taken, stateDir: join(dir, "refused") })).rejects.toThrow(
+    /MCP server "constructor" is declared by the program \(context\.json\) and by the instance/,
+  );
+  await expect(readFile(join(dir, "refused", "agent.sqlite"))).rejects.toThrow(/ENOENT/);
+  // The reference an instance's server makes is a secret it needs, like the program's.
+  await expect(openSource(dir, { config, secrets: {}, stateDir: join(dir, "third") })).rejects.toThrow(/ADDED_VALUE/);
+});
 it("a stdio server's base is the one given, over the host's own HOME and PATH", async () => {
   vi.stubEnv("FASTAGENT_OFFLINE", "1");
   const dir = await directory({ mcpServers: { constructor: { command: process.execPath, args: [FIXTURE] } } });
@@ -169,6 +187,27 @@ it("HTTP clients keep bindings isolated and closing one leaves a shared grant us
   expect((await ask(b, "mcp__remote__structured")).answer?.text).toBe('{"value":42}');
   expect((await ask(b, "mcp__remote__resource")).answer?.text).toContain("MCP tool returned unsupported content");
 });
+it("grants an instance is given no store for are the state directory's, and not the secrets directory's", async () => {
+  vi.stubEnv("FASTAGENT_OFFLINE", "1");
+  const remote = mcpFixture();
+  const dir = await directory({ mcpServers: { remote: { type: "http", url: remote.url } } });
+  const stateDir = join(dir, "state");
+  await mkdir(stateDir, { recursive: true });
+  await mcpGrantFile(join(stateDir, "mcp-auth.json")).withGrant("shared", (tx) =>
+    tx.write(remote.grant("state", false)),
+  );
+  await writeFile(join(stateDir, "mcp-bindings.json"), JSON.stringify({ remote: "shared" }));
+  const decoy = join(dir, "decoy-secrets");
+  await mkdir(decoy, { recursive: true });
+  await mcpGrantFile(join(decoy, "mcp-auth.json")).withGrant("shared", (tx) => tx.write(remote.grant("decoy", false)));
+  vi.stubEnv("FASTAGENT_SECRETS_DIR", decoy);
+  await mkdir(join(dir, ".secrets"), { recursive: true });
+  await mcpGrantFile(join(dir, ".secrets", "mcp-auth.json")).withGrant("shared", (tx) =>
+    tx.write(remote.grant("project", false)),
+  );
+  const agent = await opened(dir, { stateDir, mcp: { fetch: remote.fetch } });
+  expect((await ask(agent, "mcp__remote__identity")).answer?.text).toBe("state");
+});
 it("closing a caller during refresh joins the durable rotation and preserves another agent's grant", async () => {
   vi.stubEnv("FASTAGENT_OFFLINE", "1");
   const remote = mcpFixture();
@@ -208,7 +247,7 @@ it("partial open cleans previously started children and releases the state lease
   await expect(openSource(dir, { mcp: { variables: { PID_FILE: pidFile } } })).rejects.toThrow();
   const pids = (await readFile(pidFile, "utf8")).trim().split("\n").map(Number);
   await vi.waitFor(() => expect(pids.filter(alive)).toEqual([]));
-  await writeFile(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: {} }));
+  await writeFile(join(dir, "context.json"), JSON.stringify({ mcpServers: {} }));
   const a = await opened(dir, {});
   expect(a).toBeDefined();
 });

@@ -14,6 +14,7 @@ import type { ChannelHandler, Routes } from "../channel.ts";
 import { router } from "../channels/router.ts";
 import { log } from "../log.ts";
 import { once } from "../once.ts";
+import type { WebhookRegistration } from "./webhooks.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
 import { readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
@@ -54,6 +55,14 @@ export interface AgentcoreAdapterOptions {
   ingressSecret?: string;
   /** Runs once on activation, after accepting the current forwarder callback URL. */
   onStateReady?: () => void;
+  /**
+   * The webhook channels this container points at the forwarder: `point` is called once, on the first trusted
+   * envelope that constructed the channels, with the URL that envelope names; `list` is what a probe reports.
+   */
+  webhooks?: {
+    point(forwarderUrl: string): Promise<unknown>;
+    list(): readonly WebhookRegistration[];
+  };
 }
 
 const jsonHeaders = { "content-type": "application/json" } as const;
@@ -102,8 +111,25 @@ function createActivation(deps: {
 }
 
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { channels, stateRoot, isBusy, fireSchedule, ingressSecret, onStateReady } = options;
+  const { channels, stateRoot, isBusy, fireSchedule, ingressSecret, onStateReady, webhooks } = options;
   const activation = createActivation({ stateRoot, onStateReady, channels });
+  // Under the process's busy signal: AgentCore reclaims a microVM with nothing in flight, and a registration is a
+  // call to the platform that must end.
+  let pointed = false;
+  const pointWebhooks = (url: string): void => {
+    if (webhooks === undefined || pointed) return;
+    pointed = true;
+    void (async () => {
+      const done = beginWork();
+      try {
+        await webhooks.point(url);
+      } catch (error) {
+        log.error(`[agentcore] could not point the webhook channels at ${url}: ${String(error)}`);
+      } finally {
+        done();
+      }
+    })();
+  };
   const carried = (request: CarriedRequest): Request => {
     const { method, path, query, headers, bodyB64 } = request;
     return new Request(`http://agentcore.local${path}${typeof query === "string" && query !== "" ? `?${query}` : ""}`, {
@@ -162,6 +188,8 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       }
     }
 
+    if (dispatch && typeof envelope.wake?.url === "string") pointWebhooks(envelope.wake.url);
+
     switch (envelope.kind) {
       case "webhook": {
         const { bodyB64 } = envelope;
@@ -218,10 +246,13 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       case "probe": {
         // The structured verdict (transport-200 — see the envelope doc). From the IAM door (untrusted) nothing was
         // activated, so `ok` says only that the definition opened; channel construction is the forwarder probe's.
+        if (constructionError !== undefined) {
+          return json({ ok: false, error: `channel construction failed: ${constructionError}` }, 200);
+        }
         return json(
-          constructionError === undefined
-            ? { ok: true }
-            : { ok: false, error: `channel construction failed: ${constructionError}` },
+          trusted
+            ? { ok: true, webhooks: (webhooks?.list() ?? []).map((w) => ({ channel: w.channel, outcome: w.outcome })) }
+            : { ok: true },
           200,
         );
       }

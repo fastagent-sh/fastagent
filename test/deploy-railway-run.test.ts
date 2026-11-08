@@ -1,12 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  type RailwayRunPlan,
-  deployRailwayRun,
-  isLinked,
-  linkedName,
-  parseDomainUrl,
-  volumeOn,
-} from "../src/deploy/railway/run.ts";
+import { type RailwayRunPlan, deployRailwayRun, parseDomainUrl, volumeOn } from "../src/deploy/railway/run.ts";
+import { isLinked, linkedName } from "../src/deploy/railway/store.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
@@ -39,9 +33,7 @@ function fakeRailway(script: (args: string[]) => { code?: number; stdout?: strin
 const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   name: "bot",
   mountPath: "/data",
-  secrets: {},
-  missingSecrets: [],
-  valueFile: ".secrets/.env",
+  provideSecrets: async () => undefined,
   channels: [],
   intoLinked: false,
   forAgent: "fastagent deploy railway ../bot --into-linked --run --json",
@@ -51,7 +43,12 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
 
 // `railway status --json` for a linked project — only the top-level `name` is used (for the gate/log).
 // Mirrors the real 5.15.0 sample (keys {buckets, deletedAt, environments, id, name, services, workspace}).
-const LINKED = JSON.stringify({ name: "bot", id: "proj-1" });
+const withService = (project: object, service: string) => ({
+  ...project,
+  environments: { edges: [{ node: { serviceInstances: { edges: [{ node: { serviceName: service } }] } } }] },
+});
+const LINKED_NO_SERVICE = JSON.stringify({ name: "bot", id: "proj-1" });
+const LINKED = JSON.stringify(withService({ name: "bot", id: "proj-1" }, "bot"));
 // A minted domain, as `railway domain --json` would return it (field name unknown → parser scans values).
 const DOMAIN_JSON = JSON.stringify({ domain: "bot-production.up.railway.app" });
 
@@ -84,7 +81,6 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     const out = await run(
       plan({
         channels: declaredChannels(["telegram"]),
-        secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
         deliverPublicUrl: async (url) => {
           delivered.push({ url, before: cmds() });
           return url;
@@ -105,8 +101,6 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "init --name bot",
       "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state", // a bare `add` prompts in a terminal
       "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets --service bot", // first --service cmd, BEFORE the volume
-      "variables set TELEGRAM_BOT_TOKEN --stdin --service bot",
-      "variables set TELEGRAM_SECRET_TOKEN --stdin --service bot",
       "volume list --json",
       "volume add --mount-path /data",
       "volume list --json", // attached to `bot` and Ready before the deploy that needs it
@@ -147,7 +141,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     );
     expect(out).toMatchObject({
       ok: false,
-      gate: expect.stringMatching(/^not logged in: …\. This deploy registered no webhook.*railway --run --into-linked/),
+      gate: expect.stringMatching(/^not logged in: …\. This deploy confirmed no webhook.*railway --run --into-linked/),
     });
     expect(order).toEqual(["health", "login"]);
   });
@@ -185,36 +179,37 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(registerFeishu).toHaveBeenCalledWith("https://bot-production.up.railway.app", "feishu");
   });
 
-  it("names the secrets it sets — the list is no longer only what the author typed", async () => {
-    // A mounted tool/channel/schedule declares its own names, so a count is not enough for the
-    // operator to see what `--run` read from this machine and pushed to the host.
-    const { railway } = fakeRailway((args) => {
-      if (args[0] === "status") return { stdout: "" };
-      if (args[0] === "domain") return { stdout: DOMAIN_JSON };
-      return {};
-    });
-    const logs: string[] = [];
-    await deployRailwayRun(
-      plan({ secrets: { OPENAI_API_KEY: "sk", X_API_KEY: "x" } }),
-      railway,
-      (message) => logs.push(message),
-      {},
-      async () => true,
-    );
-    expect(logs.join("\n")).toContain("2 secret(s): OPENAI_API_KEY, X_API_KEY");
-  });
-
-  it("secret values go over stdin (variable set --stdin), never argv", async () => {
+  it("the secrets step runs once the service exists and before its machinery variables, on the service's store", async () => {
     const { railway, calls } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" };
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      if (a[0] === "variable" && a[1] === "list")
+        return { stdout: JSON.stringify({ RAILWAY_ENVIRONMENT: "production" }) };
       return {};
     });
-    await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", GH_TOKEN: "ghp_x" } }), railway);
-    const setKey = calls.find((c) => c.args[0] === "variables" && c.args[2] === "OPENAI_API_KEY")!;
-    expect(setKey.args.join(" ")).not.toContain("sk-x"); // not in argv
-    expect(setKey.args).toContain("--stdin");
-    expect(setKey.input).toBe("sk-x"); // on stdin
+    const seen: string[] = [];
+    await run(
+      plan({
+        provideSecrets: async (store) => {
+          seen.push(...(await store.names()));
+          await store.write({ OPENAI_API_KEY: "sk-x" });
+          return undefined;
+        },
+      }),
+      railway,
+    );
+    const cmds = calls.map((c) => c.args.join(" "));
+    expect(seen).toEqual(["RAILWAY_ENVIRONMENT"]);
+    expect(cmds.indexOf("add --service bot --variables FASTAGENT_STATE_DIR=/data/.state")).toBeLessThan(
+      cmds.indexOf("variable list --json --service bot"),
+    );
+    expect(cmds.indexOf("variables set OPENAI_API_KEY --stdin --skip-deploys --service bot")).toBeLessThan(
+      cmds.indexOf("variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets --service bot"),
+    );
+    // A value goes over stdin, never argv.
+    const setKey = calls.find((c) => c.args[2] === "OPENAI_API_KEY")!;
+    expect(setKey.args.join(" ")).not.toContain("sk-x");
+    expect(setKey.input).toBe("sk-x");
   });
 
   it("--into-linked: provisions INTO the linked project (skips init/add), reuses an existing volume", async () => {
@@ -312,6 +307,52 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     }
   });
 
+  it("the project named for the agent, with its service, is continued with no flag: `secrets set` or an earlier run made it", async () => {
+    const { railway, cmds } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: LINKED };
+      if (a[0] === "volume" && a[1] === "list") return { stdout: volumes({ serviceName: "bot" }) };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const out = await run(plan(), railway);
+    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
+    expect(cmds()).not.toContain("init --name bot");
+    expect(cmds().some((c) => c.startsWith("add --service"))).toBe(false);
+    expect(cmds()).toContain("up --ci --service bot");
+  });
+
+  it("gate (SAFETY): another project that happens to hold a service of this name is not the agent's, without --into-linked", async () => {
+    // A directory called `bot`, linked to a production project that has its own `bot` service: a same-named service
+    // does not make the project this agent's, so nothing is set, added or uploaded there.
+    const production = JSON.stringify(withService({ name: "prod-app", id: "prod-99" }, "bot"));
+    const refused = fakeRailway((a) => (a[0] === "status" ? { stdout: production } : {}));
+    const out = await run(plan(), refused.railway);
+    expect(out.ok).toBe(false);
+    expect(out.ok ? "" : out.gate).toContain("prod-app");
+    expect(refused.cmds()).toEqual(["whoami", "status --json"]);
+    // Named by the person: --into-linked provisions into it, and finds the service already there.
+    const named = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: production };
+      if (a[0] === "volume" && a[1] === "list") return { stdout: volumes({ serviceName: "bot" }) };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    expect((await run(plan({ intoLinked: true }), named.railway)).ok).toBe(true);
+    expect(named.cmds().some((c) => c.startsWith("add --service"))).toBe(false);
+  });
+
+  it("a project named for the agent with no service gets the service, and nothing else is made", async () => {
+    const { railway, cmds } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: LINKED_NO_SERVICE };
+      if (a[0] === "volume" && a[1] === "list") return { stdout: volumes({ serviceName: "bot" }) };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    expect((await run(plan(), railway)).ok).toBe(true);
+    expect(cmds()).not.toContain("init --name bot");
+    expect(cmds()).toContain("add --service bot --variables FASTAGENT_STATE_DIR=/data/.state");
+  });
+
   it("gate (SAFETY): a linked dir WITHOUT --into-linked is refused before any side effect — names the project", async () => {
     // The near-miss: the dir is linked to an unrelated/production project. `--run` only creates on an
     // unlinked dir, so a link is refused; the gate names the project so the operator sees it isn't theirs.
@@ -396,14 +437,15 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(refused.cmds()).toEqual(["whoami"]);
   });
 
-  it("gate: a missing secret value stops before creating infra", async () => {
-    // Signed out as well: no person is asked to sign in for a deploy that stops here anyway.
-    const { railway, cmds } = fakeRailway((a) => (a[0] === "whoami" ? { code: 1 } : {}));
-    const hostLogin = vi.fn(async () => undefined);
-    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"], hostLogin }), railway);
-    expect(out).toEqual({ ok: false, gate: expect.stringContaining("TELEGRAM_BOT_TOKEN") });
-    expect(cmds()).toEqual([]); // not even whoami
-    expect(hostLogin).not.toHaveBeenCalled();
+  it("gate: a name the service lacks stops the run before the upload, with the service already made", async () => {
+    const { railway, cmds } = fakeRailway((a) => (a[0] === "status" ? { stdout: "" } : {}));
+    const out = await run(
+      plan({ provideSecrets: async () => "Railway has no value for: TELEGRAM_BOT_TOKEN" }),
+      railway,
+    );
+    expect(out).toEqual({ ok: false, gate: "Railway has no value for: TELEGRAM_BOT_TOKEN" });
+    expect(cmds()).toContain("add --service bot --variables FASTAGENT_STATE_DIR=/data/.state");
+    expect(cmds().some((c) => c.startsWith("up "))).toBe(false);
   });
 
   it("gate: `railway init` failure surfaces the workspace hint", async () => {
@@ -417,9 +459,8 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
   });
 
   it("gate: `railway add --service` failure gives PRECISE recovery (project made, service not)", async () => {
-    // init OK (dir now linked) → add fails. A plain re-run would hit the linked-gate, and --into-linked
-    // skips add → fails at the volume (no service). So the gate must name the exact manual recovery, not
-    // just "fix and re-run" (which the deleted marker design had, and the redesign must not lose).
+    // init OK (dir now linked) → add fails. A re-run finds the project and adds the service again, but the cause may
+    // not be transient, so the gate names the exact manual step and the way to start over.
     const { railway } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" }; // unlinked → create path
       if (a[0] === "add") return { code: 1 }; // service creation fails after init
@@ -429,7 +470,6 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(out.ok).toBe(false);
     const gate = out.ok ? "" : out.gate;
     expect(gate).toContain("railway add --service bot"); // the exact manual step to run
-    expect(gate).toMatch(/--into-linked/); // ...then --into-linked
     expect(gate).toMatch(/railway unlink/); // ...or unlink to restart
   });
 

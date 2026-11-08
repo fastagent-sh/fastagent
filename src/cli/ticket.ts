@@ -6,9 +6,11 @@
  * there is something for the person to do. The command's `--check <ticket>` reads where it stands from any process,
  * and hands the step the address a browser ended on when that browser could not reach this machine.
  *
- * A ticket is a file in the machine's own state, ~/.fastagent/.state/tickets, written whole by one process at a time:
- * the starting command until the step starts, then the step alone (or whoever finds its process gone). One that has
- * ended stays as it ended. A newer step for the same subject stops an older one still waiting on its person, whose
+ * A ticket is two files in the machine's own state, ~/.fastagent/.state/tickets. One is the step as its process keeps
+ * it, written by one process at a time: the starting command until the step starts, then the step. The other is its
+ * end, written once, by whoever ends it first: the step itself, or a process that stops it, replaces it or finds it
+ * gone. An end is decided before what it decides is done, so a stop is the end of the step it stops even when the step
+ * hears the consequences of being stopped first, and nothing the step writes after reopens it. A newer step for the same subject stops an older one still waiting on its person, whose
  * process would otherwise hold what it holds (a sign-in's callback port, OpenAI's fixed) until it expires; so does one
  * still getting ready (reaching a box, opening a tunnel), which may hang there. One finishing what its person did (a
  * code exchanged, an app created from a pasted token) is never stopped halfway, and the newer attempt is answered
@@ -18,9 +20,22 @@
  * stopped with it, by `stop` and when it exits.
  */
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { STATE_DIRNAME, globalHome } from "../paths.ts";
 import { recordFailures } from "./fail.ts";
@@ -72,6 +87,7 @@ const ADDRESS_TIMEOUT_MS = 15_000;
 /** How long a stopped step's process has to let go of what it holds before it is killed. */
 const STOP_TIMEOUT_MS = 5_000;
 const POLL_MS = 200;
+const DAY_MS = 24 * 60 * 60 * 1000;
 /** Ticket files are random hex: anything else names no ticket, and no file outside the directory. */
 const TICKET_ID = /^[0-9a-f]{16}$/;
 
@@ -81,43 +97,107 @@ const addressPath = (id: string) => join(ticketsDir(), `${id}.address`);
 /** What the step's process says while it runs: the place to look when it fails. */
 export const ticketLogPath = (id: string) => join(ticketsDir(), `${id}.log`);
 
-function readTicket(id: string): Ticket | undefined {
-  if (!TICKET_ID.test(id)) return undefined;
+const endPath = (id: string) => join(ticketsDir(), `${id}.end.json`);
+
+function readJson<T>(path: string): T | undefined {
   try {
-    return JSON.parse(readFileSync(ticketPath(id), "utf8")) as Ticket;
+    return JSON.parse(readFileSync(path, "utf8")) as T;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
 }
 
+/** The ticket `id`: the step as its process keeps it, with its end over it once it has one. */
+function readTicket(id: string): Ticket | undefined {
+  if (!TICKET_ID.test(id)) return undefined;
+  const kept = readJson<Ticket>(ticketPath(id));
+  if (kept === undefined) return undefined;
+  const end = readJson<Partial<Ticket>>(endPath(id));
+  return end === undefined ? kept : { ...kept, ...end };
+}
+
+/** The step as its process keeps it: one writer at a time, the starting command and then the step. */
 const writeTicket = (ticket: Ticket): void => writeFileAtomic(ticketPath(ticket.ticket), JSON.stringify(ticket));
 
 const waiting = (ticket: Ticket) =>
   ticket.status === "starting" || ticket.status === "need_user_action" || ticket.status === "working";
 
+const ENDS: readonly TicketStatus[] = ["done", "failed", "expired"];
+
 /**
- * Change the ticket `id` while its step still runs; one that has ended is returned as it ended. A writer that read it
- * before it ended (a check that found its process gone the moment it finished) cannot reopen it.
+ * End the ticket `id` with `end`, unless something ended it first: the end is a file created once, by a hard link,
+ * which the kernel lets only one writer make, so two that both read the ticket as running (the step finishing as a
+ * person stops it) end it once. Answers the ticket as whoever ended it ended it. Not public: `update` ends a ticket,
+ * and a test seam.
+ */
+export function endTicket(id: string, end: Partial<Ticket>): Ticket {
+  const draft = `${endPath(id)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(draft, JSON.stringify(end));
+  try {
+    linkSync(draft, endPath(id));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  } finally {
+    rmSync(draft, { force: true });
+  }
+  return readTicket(id) as Ticket;
+}
+
+/**
+ * Change the ticket `id` while its step still runs; one that has ended is returned as it ended. An end is
+ * `endTicket`'s, so the first one written is the one that stays; anything else is the step's own record, which its
+ * process alone writes.
  */
 function update(id: string, change: Partial<Ticket>): Ticket {
   const current = readTicket(id);
   if (current === undefined) throw new Error(`ticket ${id} is gone from ${ticketsDir()}`);
   if (!waiting(current)) return current;
+  if (change.status !== undefined && ENDS.includes(change.status)) return endTicket(id, change);
   const next = { ...current, ...change };
   writeTicket(next);
   return next;
 }
 
-/** Whether the process `pid` still runs: signal 0 delivers nothing and only says whether it could. */
+/**
+ * Whether the process `pid` still runs: signal 0 delivers nothing and only says whether it could. A process that has
+ * exited and that its parent has not reaped answers it too; where /proc says what a process is, one that has exited is
+ * taken for stopped. That is Linux, where a container whose PID 1 does not reap keeps an orphaned step a zombie for
+ * good; macOS's launchd reaps an orphan at once, so it is not asked there.
+ */
 function running(pid: number | undefined): boolean {
   if (pid === undefined) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
+  return !exited(pid);
+}
+
+/**
+ * Whether `/proc/self/stat` (`selfStat`) is the process `pid`'s, so `/proc/<pid>` names the process `kill(pid, 0)` does:
+ * a sandbox may give a process a PID namespace of its own and leave it the host's /proc. Not public: a test seam.
+ */
+export function procfsIsOurs(selfStat: string, pid: number): boolean {
+  return selfStat.startsWith(`${pid} `);
+}
+
+const PROCFS = existsSync("/proc/self/stat") && procfsIsOurs(readFileSync("/proc/self/stat", "utf8"), process.pid);
+
+/** Whether /proc has `pid` as exited: a zombie (Z) or dead (X), or gone since signal 0 answered. */
+function exited(pid: number): boolean {
+  if (!PROCFS) return false;
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+  // The state follows the command name, which is in parentheses and may hold either.
+  const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
+  return state === "Z" || state === "X";
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -181,22 +261,22 @@ async function supersede(subject: string, now: number): Promise<Ticket | undefin
   const finishing = runs.find((ticket) => ticket.finishing === true);
   if (finishing !== undefined) return finishing;
   for (const ticket of runs) {
-    if (ticket.pid !== undefined) await stop(ticket.pid);
     update(ticket.ticket, { status: "failed", message: `replaced by a newer attempt to ${ticket.action}` });
+    if (ticket.pid !== undefined) await stop(ticket.pid);
   }
   return undefined;
 }
 
-/** Tickets a day past their end: each one's files go. */
+/** Tickets a day past their end: every file of each one goes. */
 function prune(now: number): void {
   if (!existsSync(ticketsDir())) return;
-  for (const file of readdirSync(ticketsDir())) {
-    const id = file.slice(0, 16);
-    const ticket = TICKET_ID.test(id) ? readTicket(id) : undefined;
-    if (ticket !== undefined && ticket.expiresAt < now - 24 * 60 * 60 * 1000) {
-      for (const path of [ticketPath(id), addressPath(id), ticketLogPath(id)]) rmSync(path, { force: true });
-    }
-  }
+  const files = readdirSync(ticketsDir());
+  const past = new Set(
+    files
+      .map((file) => file.slice(0, 16))
+      .filter((id) => TICKET_ID.test(id) && (readTicket(id)?.expiresAt ?? Number.POSITIVE_INFINITY) < now - DAY_MS),
+  );
+  for (const file of files) if (past.has(file.slice(0, 16))) rmSync(join(ticketsDir(), file), { force: true });
 }
 
 export interface TicketRequest {
@@ -284,12 +364,10 @@ export async function startTicket(
   if (settled(ticket)) return ticket;
   // Claimed and at work: the step writes the ticket now, so this command reports it as it is.
   if (!exited && !input.waitsFirst && ticket.status === "working") return ticket;
-  // Given up on, unclaimed or giving the person nothing: its process goes first, or it would hold its port and write
-  // the ticket after this.
+  // Given up on, unclaimed or giving the person nothing: the end first, then its process, which would hold its port.
   const stoppedItself = exited;
-  if (!stoppedItself && child.pid !== undefined) await stop(child.pid);
   const within = `${startTimeoutMs / 1000}s: ${ticketLogPath(id)} says why`;
-  return update(id, {
+  const ended = update(id, {
     status: "failed",
     message: stoppedItself
       ? `it stopped before it started: ${ticketLogPath(id)} says why`
@@ -297,6 +375,8 @@ export async function startTicket(
         ? `it did not start within ${within}`
         : `it gave the person nothing to do within ${within}`,
   });
+  if (!stoppedItself && child.pid !== undefined) await stop(child.pid);
+  return ended;
 }
 
 /**
@@ -307,7 +387,7 @@ export async function checkTicket(id: string, address?: string): Promise<Ticket 
   let ticket = readTicket(id);
   if (ticket === undefined) return undefined;
   if (address !== undefined && ticket.status === "need_user_action") {
-    writeFileAtomic(addressPath(id), address);
+    writeFileAtomic(addressPath(id), address, undefined, true);
     for (const deadline = Date.now() + ADDRESS_TIMEOUT_MS; Date.now() < deadline; ) {
       ticket = readTicket(id) as Ticket;
       if (ticket.status !== "need_user_action" || !running(ticket.pid)) break;
@@ -330,11 +410,12 @@ export async function stopTicket(id: string): Promise<Ticket> {
   const ticket = readTicket(id);
   if (ticket === undefined) throw new Error(`ticket ${id} is gone from ${ticketsDir()}`);
   if (!waiting(ticket)) return ticket;
-  if (ticket.pid !== undefined) await stop(ticket.pid);
-  return update(id, {
+  const ended = update(id, {
     status: "failed",
     message: `stopped on request; what it was doing may be left half-done (${ticketLogPath(id)} says where it was)`,
   });
+  if (ticket.pid !== undefined) await stop(ticket.pid);
+  return ended;
 }
 
 /**
@@ -454,6 +535,33 @@ async function awaitAddress(id: string, signal: AbortSignal): Promise<string> {
   throw new Error("the step no longer waits for an address");
 }
 
+const LOG_TAIL_LINES = 12;
+const LOG_TAIL_BYTES = 8192;
+const LOG_LINE_CHARS = 300;
+
+/**
+ * The last lines of a ticket's log, without terminal colors: where a failed step says why. A coding agent reads a
+ * report once, and "see the output above" points at a log it has not opened.
+ */
+function logTail(id: string): string[] {
+  const path = ticketLogPath(id);
+  if (!existsSync(path)) return [];
+  const size = statSync(path).size;
+  const start = Math.max(0, size - LOG_TAIL_BYTES);
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.alloc(size - start);
+    readSync(fd, buffer, 0, buffer.length, start);
+    return stripVTControlCharacters(buffer.toString("utf8"))
+      .split("\n")
+      .map((line) => line.trim().slice(0, LOG_LINE_CHARS))
+      .filter((line) => line !== "")
+      .slice(-LOG_TAIL_LINES);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * A ticket as its command reports it, with what to do next (`agent_next_steps`): one JSON object, or its lines for a
  * person. `done` is what the step's `result` adds to the report, beside a sentence for the agent.
@@ -489,17 +597,27 @@ export function ticketReport(
     const message = ticket.status === "expired" ? "it was not finished in time" : (ticket.message as string);
     // What the step reached before it ended is still the person's: where to get the value it stopped for, say.
     const reached = left.length === 0 ? "" : `Tell the user what the steps it reached leave them: ${left.join(" ")} `;
+    // An expired step is not a fault: nobody finished it in time, and its log says nothing more.
+    const expired = ticket.status === "expired";
+    const tail = expired ? [] : logTail(ticket.ticket);
     return {
       json: {
         ...base,
         message,
         log,
+        ...(tail.length === 0 ? {} : { log_tail: tail }),
         ...(ticket.afterwards ? { afterwards: ticket.afterwards } : {}),
-        agent_next_steps: `${reached}To try again, run: ${ticket.restart} --json`,
+        agent_next_steps: expired
+          ? `${reached}The step was not finished in time, which is not a fault: ask the user to complete it as soon ` +
+            `as you run: ${ticket.restart} --json`
+          : `${reached}The cause is in log_tail (the whole log is at log): fix what it names, then run: ` +
+            `${ticket.restart} --json. The same inputs fail the same way unless the log shows a transient network or ` +
+            `builder error.`,
       },
       text: [
         `${ticket.status}: ${message}`,
         `log: ${log}`,
+        ...tail.map((line) => `  | ${line}`),
         ...left.map((line) => `left for the person: ${line}`),
         `to try again: ${ticket.restart}`,
       ],

@@ -1,4 +1,6 @@
 import { createHmac } from "node:crypto";
+import { channelStateDir } from "../src/channels/context.ts";
+import { readReached } from "../src/channels/webhook-evidence.ts";
 import { type Asked, type Prompt, asked, promptOf, scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
 import { ev } from "./scripted-run.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,10 +14,13 @@ import {
   type SlackChannelOptions,
   type SlackEventEnvelope,
   slackChannel,
+  slackSocketChannel,
   slackThreads,
   verifySlackSignature,
 } from "../src/slack.ts";
 import { resolveStateRoot } from "../src/paths.ts";
+import { log } from "../src/log.ts";
+import type { OpenSlackSocket, SlackSocketHandlers } from "../src/channels/slack/socket.ts";
 
 const SECRET = "slack-signing-secret";
 const API = "https://slack.test/api";
@@ -420,6 +425,24 @@ describe("Slack signed ingress", () => {
     expect(challenge.status).toBe(200);
     expect(await challenge.json()).toEqual({ challenge: "abc" });
     expect((await handler(signedRequest(message("1.0"), { signature: "v0=bad" }))).status).toBe(401);
+  });
+
+  it("records where a signed request reached it, and nothing for one that is not signed", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent } = replyingAgent();
+    const stateRoot = root();
+    const { handler } = mount(agent, {}, stateRoot);
+    const stateDir = channelStateDir(stateRoot, "slack");
+    expect((await handler(signedRequest(message("1.0"), { signature: "v0=bad" }))).status).toBe(401);
+    expect(readReached(stateDir)).toBeUndefined();
+    const proxied = signedRequest({ type: "url_verification", challenge: "abc" });
+    const behindProxy = new Request("http://10.0.0.7:8787/slack", {
+      method: "POST",
+      headers: { ...Object.fromEntries(proxied.headers), "x-forwarded-proto": "https", host: "agent.acme.com" },
+      body: await proxied.text(),
+    });
+    expect((await handler(behindProxy)).status).toBe(200);
+    expect(readReached(stateDir)).toBe("https://agent.acme.com/slack");
   });
 
   it("refuses a VALID signature over a stale timestamp, in either direction", async () => {
@@ -1052,5 +1075,129 @@ describe("Slack stop command", () => {
     expect(aborted).toEqual([]);
     expect(invoked).toEqual([]);
     expect(slackBodies(fetchMock, "chat.postMessage").map((b) => String(b.text))).toEqual(["Nothing is running."]);
+  });
+});
+
+describe("Slack Socket Mode channel", () => {
+  /** A Socket Mode connection a test drives: the socket Slack would give, and what the channel sent on it. */
+  function socketMode(agent: Agent, options: { stateRoot?: string } = {}) {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) =>
+      String(input).endsWith("/apps.connections.open")
+        ? Response.json({ ok: true, url: "wss://wss.test/link" })
+        : fetchMock(input, init),
+    );
+    let handlers: SlackSocketHandlers | undefined;
+    const sent: unknown[] = [];
+    const openSocket: OpenSlackSocket = (_url, given) => {
+      handlers = given;
+      return { send: (data) => sent.push(JSON.parse(data)), close: () => {} };
+    };
+    const abort = new AbortController();
+    const stateRoot = options.stateRoot ?? root();
+    const channel = slackSocketChannel(
+      { botToken: "xoxb-test", appToken: "xapp-1-A1-1-abc", apiBaseUrl: API },
+      { openSocket },
+    );
+    const connection = channel.connect(channelContext(agent, stateRoot, "slack"), abort.signal);
+    connection.ready.catch(() => {});
+    connection.closed.catch(() => {});
+    return {
+      channel,
+      connection,
+      abort,
+      sent,
+      fetchMock,
+      stateRoot,
+      /** Slack says `message` on the socket, once the channel has opened it. */
+      say: async (message: unknown) => {
+        await vi.waitFor(() => expect(handlers).toBeDefined());
+        handlers?.message(JSON.stringify(message));
+      },
+    };
+  }
+
+  const delivery = (id: string, envelope: SlackEventEnvelope) => ({
+    envelope_id: id,
+    type: "events_api",
+    accepts_response_payload: false,
+    payload: envelope,
+  });
+
+  it("answers an event it received over the socket the way the webhook channel answers a signed one", async () => {
+    const { agent, calls } = replyingAgent("hello back");
+    const slack = socketMode(agent);
+    expect(slack.channel.name).toBe("slack socket mode");
+    await slack.say({ type: "hello" });
+    await slack.connection.ready;
+    await slack.say(delivery("E1", message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
+    await vi.waitFor(() => expect(slack.sent).toEqual([{ envelope_id: "E1" }]));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    // The same turn as a signed delivery: asked under the message's own key, queued.
+    expect(calls.map((c) => [c.idempotencyKey, c.whenBusy])).toEqual([["T1:D1:1.0", "queue"]]);
+    // …and the answer goes back through the Web API, as it does for a signed one.
+    await vi.waitFor(() =>
+      expect(slack.fetchMock.mock.calls.some(([input]) => /\/chat\.[a-zA-Z]+$/.test(String(input)))).toBe(true),
+    );
+    slack.abort.abort();
+  });
+
+  it("takes a redelivered event once: Slack sends again what it was not told was taken", async () => {
+    const { agent, calls } = replyingAgent("ok");
+    const slack = socketMode(agent);
+    await slack.say({ type: "hello" });
+    await slack.connection.ready;
+    const event = message("2.0", { channel: "D1", channel_type: "im", text: "once" });
+    await slack.say(delivery("E1", event));
+    await slack.say(delivery("E2", event));
+    await vi.waitFor(() => expect(slack.sent).toEqual([{ envelope_id: "E1" }, { envelope_id: "E2" }]));
+    await settle();
+    expect(calls).toHaveLength(1);
+    slack.abort.abort();
+  });
+
+  it("leaves an event unacknowledged while Slack authentication is unusable, as the webhook channel answers 503", async () => {
+    vi.spyOn(log, "error").mockImplementation(() => {});
+    const { agent } = replyingAgent();
+    const fetchMock = vi.fn(async (input: string | URL) =>
+      String(input).endsWith("/apps.connections.open")
+        ? Response.json({ ok: true, url: "wss://wss.test/link" })
+        : Response.json({ ok: false, error: "invalid_auth" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    let handlers: SlackSocketHandlers | undefined;
+    const sent: unknown[] = [];
+    const abort = new AbortController();
+    const connection = slackSocketChannel(
+      { botToken: "xoxb-test", appToken: "xapp-1-A1-1-abc", apiBaseUrl: API },
+      {
+        openSocket: (_url, given) => {
+          handlers = given;
+          return { send: (data) => sent.push(JSON.parse(data)), close: () => {} };
+        },
+      },
+    ).connect(channelContext(agent, root(), "slack"), abort.signal);
+    connection.ready.catch(() => {});
+    await vi.waitFor(() => expect(handlers).toBeDefined());
+    handlers?.message(JSON.stringify({ type: "hello" }));
+    await connection.ready;
+    handlers?.message(JSON.stringify(delivery("E1", message("3.0", { channel: "D1", channel_type: "im" }))));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sent).toEqual([]);
+    abort.abort();
+  });
+
+  it("asks for an app-level token, not a bot token, before it connects", () => {
+    const { agent } = replyingAgent();
+    const channel = slackSocketChannel({ botToken: "xoxb-test", appToken: "xoxb-test", apiBaseUrl: API });
+    expect(() => channel.connect(channelContext(agent, root(), "slack"), new AbortController().signal)).toThrow(
+      "slackSocketChannel requires an app-level token (xapp-…",
+    );
+  });
+
+  it("refuses the policy the webhook channel refuses, at construction", () => {
+    expect(() =>
+      slackSocketChannel({ botToken: "xoxb-test", appToken: "xapp-1-A1-1-abc", rendering: "wide" as never }),
+    ).toThrow('slackChannel rendering must be "native" or "classic"');
   });
 });

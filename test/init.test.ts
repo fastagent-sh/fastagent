@@ -25,11 +25,13 @@ import { modelsOver } from "../src/harnesses/models/models.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { buildDefinition, assembleAgent, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../src/harnesses/pi-durable/text.ts";
+import { programText } from "../src/harnesses/pi-durable/text-sources.ts";
 import { runInProcess } from "./cli-run.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
 
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const freshDir = () => mkdtemp(join(tmpdir(), "fa-init-"));
 async function exists(p: string): Promise<boolean> {
@@ -71,6 +73,9 @@ describe("init: scaffoldAgent", () => {
     const ig = ignore({ ignorecase: false }).add(rootIgnore);
     expect(ig.ignores(".env")).toBe(true);
     expect(ig.ignores(".env.local")).toBe(true);
+    // The development instance's configuration is personal (its app is one person's); a team shares `defaults`.
+    expect(ig.ignores("fastagent.json")).toBe(true);
+    expect(ig.ignores("prod.json")).toBe(false);
     const secretsIgnore = ignore({ ignorecase: false }).add(
       await readFile(join(dir, ".secrets", ".gitignore"), "utf8"),
     );
@@ -129,7 +134,7 @@ describe("init: scaffoldAgent", () => {
     const definition = await loadSourceDefinition(dir);
     expect(definition.name).toBe("reviewer");
     expect(buildDefinition(definition, {})).toMatchObject({ tools: [], channels: new Map(), schedules: [] });
-    expect(readSkills(dir).map((s) => s.name)).toEqual(["writing-great-skills"]);
+    expect(readSkills(programText(dir).skills).map((s) => s.name)).toEqual(["writing-great-skills"]);
   });
 
   it("the skill SYSTEM.md sends the agent to is listed in its prompt, with where it is", async () => {
@@ -149,6 +154,7 @@ describe("init: scaffoldAgent", () => {
     const definition = await loadSourceDefinition(dir);
     const agent = await assembleAgent(definition, {
       storage: new MemoryStorage(),
+      runsAs: NOT_HOSTED,
       processEnv: {},
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
       config: resolveConfig(definition),
@@ -368,7 +374,8 @@ describe("add: fastagent add <channel>", () => {
     expect(await exists(join(root, "src", "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
     expect(await exists(join(dir, "src"))).toBe(false); // NOT where the command ran
     expect(await readFile(join(root, ".secrets", ".env.example"), "utf8")).toContain("TELEGRAM_BOT_TOKEN");
-    expect(await readFile(join(root, ".secrets", ".env"), "utf8")).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
+    // The program only: no value is written, whatever the app will need.
+    expect(await exists(join(root, ".secrets", ".env"))).toBe(false);
   });
 
   it("scaffolds src/channels/telegram.ts into a ready agent, mutates nothing else, and keeps authored glue", async () => {
@@ -379,18 +386,19 @@ describe("add: fastagent add <channel>", () => {
     expect(out).toContain("src/channels/telegram.ts");
     const src = await readFile(join(dir, "src", "channels", "telegram.ts"), "utf8");
     expect(src).toContain('from "@fastagent-sh/fastagent/telegram"'); // the adapter
-    expect(src).toContain("POST /telegram");
-    expect(src).toContain("telegramChannel({"); // policy-only glue (agent/stateDir arrive via ctx)
+    // Both ways, one policy: the instance's `channels.telegram.ingress` picks (agent/stateDir arrive via ctx).
+    expect(src).toContain("byIngress({");
+    expect(src).toContain("telegramChannel({");
+    expect(src).toContain("telegramPollingChannel({");
     expect(src).not.toContain("sendDocument"); // the channel file is the channel, NOT the send-tool (no misroute)
     // the companion tool lands in tools/ by the bundle convention (so the agent can send files back)
     const sendTool = await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8");
     expect(sendTool).toContain('from "@fastagent-sh/fastagent"');
     // It rides the channel's transport, which is what records a sent message into the chat's discussion.
     expect(sendTool).toContain("telegramTransport(TELEGRAM_BOT_TOKEN)");
-    // next steps carry this channel's env vars (with hints)
-    expect(out).toContain("TELEGRAM_BOT_TOKEN");
-    expect(out).toContain("@BotFather");
-    expect(out).toContain("--tunnel");
+    // next steps name where the app and its values come from
+    expect(out).toContain("fastagent channels setup telegram");
+    expect(out).not.toContain("--tunnel");
     // add does NOT bootstrap: package.json is untouched and no .npmrc is written.
     expect(JSON.parse(await readFile(join(dir, "package.json"), "utf8"))).toEqual({
       type: "module",
@@ -398,13 +406,11 @@ describe("add: fastagent add <channel>", () => {
     });
     expect(await exists(join(dir, ".npmrc"))).toBe(false);
 
-    // env vars are injected into .secrets/.env.example so a copy-to-.env finds them; the generated
-    // secret itself is materialized into .secrets/.env (self-gitignored by construction).
+    // env vars are named in .secrets/.env.example so a copy-to-.env finds them; their values are `channels setup`'s.
     const envExample = await readFile(join(dir, ".secrets", ".env.example"), "utf8");
     expect(envExample).toContain("telegram channel");
     expect(envExample).toContain("TELEGRAM_SECRET_TOKEN");
-    expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
-    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .secrets/.env");
+    expect(await exists(join(dir, ".secrets", ".env"))).toBe(false);
 
     // Re-running add on an existing channel keeps the authored glue and rewrites the package-owned
     // companion tool — the upgrade path for an agent scaffolded by an earlier release.
@@ -416,122 +422,24 @@ describe("add: fastagent add <channel>", () => {
     expect(await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8")).toBe(sendTool);
   });
 
-  it("writes a generated channel secret to .secrets/.env (kind-neutral), keeping any value already there", async () => {
-    const dir = await readyAgent();
-    const out = await cliInit(["add", "telegram"], dir);
-
-    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .secrets/.env");
-    expect(out).toContain("set TELEGRAM_BOT_TOKEN in .secrets/.env");
-    expect(out).not.toMatch(/set TELEGRAM_SECRET_TOKEN=/);
-    const envFile = await readFile(join(dir, ".secrets", ".env"), "utf8");
-    expect(envFile).toContain("# --- telegram channel ---");
-    expect(envFile).toContain("# TELEGRAM_BOT_TOKEN=");
-    expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
-
-    // `add` says nothing about git — the .gitignore was the scaffold's job at init, once.
-    expect(out).not.toMatch(/gitignore|committed/i);
-
-    // An existing non-empty value is KEPT, and not reported as written.
-    const kept = await readyAgent();
-    await mkdir(join(kept, ".secrets"), { recursive: true });
-    await writeFile(join(kept, ".secrets", ".env"), "TELEGRAM_SECRET_TOKEN=keep-me\n");
-    const keptOut = await cliInit(["add", "telegram"], kept);
-    expect(keptOut).not.toContain("wrote TELEGRAM_SECRET_TOKEN");
-    const keptEnv = await readFile(join(kept, ".secrets", ".env"), "utf8");
-    expect(keptEnv.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1);
-    expect(keptEnv).toContain("TELEGRAM_SECRET_TOKEN=keep-me");
-  });
-
-  it("a .env copied from .env.example (marker present) gets the secret slotted UNDER the marker", async () => {
-    const dir = await readyAgent();
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    // What a user gets from `cp .env.example .env` after a previous add appended the block there.
-    await writeFile(
-      join(dir, ".secrets", ".env"),
-      "# mine\nOPENAI_API_KEY=sk-x\n\n# --- telegram channel ---\n# from @BotFather → /newbot\n# TELEGRAM_BOT_TOKEN=\n",
-    );
-    const out = await cliInit(["add", "telegram"], dir);
-    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .secrets/.env");
-    const envFile = await readFile(join(dir, ".secrets", ".env"), "utf8");
-    // Slotted under the existing marker — not orphaned at the end of the file.
-    expect(envFile).toMatch(/# --- telegram channel ---\nTELEGRAM_SECRET_TOKEN=[0-9a-f]{48}\n/);
-    // The commented BOT_TOKEN placeholder is mentioned already — not duplicated.
-    expect(envFile.match(/TELEGRAM_BOT_TOKEN/g)).toHaveLength(1);
-    expect(envFile).toContain("OPENAI_API_KEY=sk-x"); // untouched
-  });
-
-  it("an ACTIVE but EMPTY assignment is replaced IN PLACE — never shadowed by a line elsewhere (last-wins)", async () => {
-    const dir = await readyAgent();
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    // The uncommented-but-unfilled placeholder: marker block present, `KEY=` active and empty, and a
-    // LATER unrelated line — a slot-under-marker write would lose to last-wins here.
-    await writeFile(
-      join(dir, ".secrets", ".env"),
-      "# --- telegram channel ---\nTELEGRAM_SECRET_TOKEN=\nOPENAI_API_KEY=sk-x\n",
-    );
-    const out = await cliInit(["add", "telegram"], dir);
-    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .secrets/.env");
-    const envFile = await readFile(join(dir, ".secrets", ".env"), "utf8");
-    expect(envFile.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1); // replaced, not duplicated
-    expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m); // …with a real value in place
-    expect(envFile).toContain("OPENAI_API_KEY=sk-x");
-  });
-
-  it("--no-onboard upgrades an existing Feishu or Lark agent's tools without touching its app", async () => {
+  it("a re-add upgrades an existing Feishu or Lark agent's tools without touching its channel file or app", async () => {
     for (const kind of ["feishu", "lark"]) {
       const dir = await readyAgent();
-      expect(await cliInit(["add", kind, "--no-onboard"], dir)).not.toMatch(/Error|creating the Feishu app/);
+      expect(await cliInit(["add", kind], dir)).not.toMatch(/Error|creating the Feishu app/);
       // An agent from an earlier release: its channel edited, and no thread tool yet.
       const channel = join(dir, "src", "channels", `${kind}.ts`);
       const authored = `${await readFile(channel, "utf8")}// edited\n`;
       await writeFile(channel, authored);
       await rm(join(dir, "src", "tools", `${kind}-threads.ts`));
-      const out = await cliInit(["add", kind, "--no-onboard"], dir);
+      const out = await cliInit(["add", kind], dir);
       expect(out).not.toMatch(/Error|creating the Feishu app/);
+      expect(out).toContain(`fastagent channels setup ${kind}`);
       expect(await readFile(channel, "utf8")).toBe(authored);
       expect(await readFile(join(dir, "src", "tools", `${kind}-threads.ts`), "utf8")).toContain("defineTool(");
+      // The program only: no value and no configuration, whatever the app will need.
+      expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
+      expect(existsSync(join(dir, "fastagent.json"))).toBe(false);
     }
-  });
-
-  it("--ingress is the instance configuration's channels.<kind>.ingress; without it nothing is written", async () => {
-    const plain = await readyAgent();
-    await cliInit(["add", "feishu", "--no-onboard"], plain);
-    expect(existsSync(join(plain, "fastagent.json"))).toBe(false);
-
-    const chosen = await readyAgent();
-    const out = await cliInit(["add", "feishu", "--no-onboard", "--ingress", "webhook"], chosen);
-    expect(out).not.toMatch(/Error/);
-    expect(JSON.parse(await readFile(join(chosen, "fastagent.json"), "utf8"))).toMatchObject({
-      channels: { feishu: { ingress: "webhook" } },
-    });
-
-    // A later `add` without the flag follows the saved setting: its next steps are webhook's, not WebSocket's.
-    const again = await cliInit(["add", "feishu", "--no-onboard"], chosen);
-    expect(again).toContain("for webhook ingress");
-    expect(again).toContain("fastagent dev --tunnel");
-    expect(again).not.toContain("no public URL or tunnel required");
-  });
-
-  it("add --env production keeps the dev credentials and channel file while setting up a separate app", async () => {
-    const dir = await readyAgent();
-    await cliInit(["add", "feishu", "--no-onboard"], dir);
-    const file = join(dir, "src", "channels", "feishu.ts");
-    const channel = await readFile(file, "utf8");
-    const dev = "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\n";
-    await writeFile(join(dir, ".secrets", ".env"), dev);
-    const result = await cliInit(["add", "feishu", "--env", "production", "--no-onboard"], dir);
-    expect(result).not.toMatch(/Error/);
-    expect(result).toContain(".secrets/production/.env");
-    expect(result).toContain("fastagent deploy <host> --run");
-    expect(await readFile(file, "utf8")).toBe(channel);
-    expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toBe(dev);
-    expect(await readFile(join(dir, ".secrets", "production", ".env"), "utf8")).not.toContain("cli_dev");
-    const invalid = await cliInit(["add", "feishu", "--env", "../dev", "--no-onboard"], dir);
-    expect(invalid).toContain('--env must be "dev" or "production"');
-    const lark = await cliInit(["add", "lark", "--env", "production", "--no-onboard"], dir);
-    expect(lark).toContain("fastagent start --tunnel");
-    expect(lark).toContain("manually switch Subscription mode to webhook");
-    expect(lark).not.toContain("fastagent dev");
   });
 
   it("rewrites the companion tool on every add — it is the package's, so a re-add upgrades it", async () => {
@@ -607,7 +515,7 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(r.hasScripts).toBe(true); // scripts/ → trust-warning path
     expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true);
     expect(await exists(join(ws, "skills", "greeter", "scripts", "hi.sh"))).toBe(true);
-    expect(readSkills(ws).map((s) => s.name)).toContain("greeter"); // really read by the agent's loader
+    expect(readSkills(programText(ws).skills).map((s) => s.name)).toContain("greeter"); // really read by the agent's loader
 
     await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/already exists/); // refuse overwrite
   });

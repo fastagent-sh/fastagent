@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { agentValues } from "../value-file.ts";
-import { resolveMcpServers } from "./config.ts";
+import { declareMcp, mcpInstance, resolveMcpServers } from "./config.ts";
 import {
   registerClient,
   startAuthorization,
@@ -36,7 +36,13 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
   }
   const dir = resolve(request.agentDir);
   const server = httpServer(
-    resolveMcpServers(dir, { ...process.env, ...agentValues(dir), ...request.variables }, request.server, dir, {}),
+    resolveMcpServers(
+      declareMcp(dir, mcpInstance(request.config)),
+      { ...process.env, ...agentValues(dir), ...request.variables },
+      request.server,
+      dir,
+      {},
+    ),
     request.server,
   );
   let saved: McpGrantSummary | undefined;

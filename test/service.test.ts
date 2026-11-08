@@ -4,6 +4,8 @@
  * These are the properties an embedder gets for free by calling one function instead of composing
  * the parts. Each was, at some point, composed wrong — inside this repo's own CLI.
  */
+import { channelStateDir } from "../src/channels/context.ts";
+import { recordReached } from "../src/channels/webhook-evidence.ts";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -16,6 +18,7 @@ import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { connectAgent } from "../src/http/client.ts";
 import { type ServeOptions, serveAgent } from "../src/service.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const opened: DurableAgent[] = [];
 afterAll(async () => {
@@ -24,7 +27,13 @@ afterAll(async () => {
 
 /** The directory opened as a serve opens it, with no storage of its own, and mounted. */
 async function createAgentService(dir: string, options: ServeOptions = {}) {
-  const served = await openServing(await loadSourceDefinition(dir), { secrets: {}, env: {}, storage: "memory" });
+  const served = await openServing(await loadSourceDefinition(dir), {
+    secrets: {},
+    env: {},
+    ownEnv: process.env,
+    runsAs: NOT_HOSTED,
+    storage: "memory",
+  });
   opened.push(served.agent);
   return serveAgent(served, options);
 }
@@ -51,6 +60,8 @@ describe("serveAgent over an opened directory", () => {
     const served = await openServing(await loadSourceDefinition(relative(process.cwd(), dir)), {
       secrets: {},
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
     });
     opened.push(served.agent);
@@ -456,6 +467,8 @@ describe("a serve points its webhook channels at itself", () => {
     const served = await openServing(await loadSourceDefinition(dir), {
       secrets,
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
       config: { values: config, label: "test" },
     });
@@ -541,6 +554,8 @@ describe("a serve points its webhook channels at itself", () => {
     const served = await openServing(await loadSourceDefinition(dir), {
       secrets: { SLACK_BOT_TOKEN: "xoxb-1" },
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
       config: { values: { http: { publicUrl: "https://agent.example.com" } }, label: "test" },
     });
@@ -560,6 +575,96 @@ describe("a serve points its webhook channels at itself", () => {
     }
   });
 
+  it("confirms Slack's URL by the platform reaching it there, as it happens and after a restart", async () => {
+    const dir = await agentDir({
+      "src/channels/slack.mjs": `export default () => ({ "POST /slack": () => new Response("ok") });`,
+    });
+    const open = async (values: Record<string, unknown>) => {
+      const served = await openServing(await loadSourceDefinition(dir), {
+        secrets: {},
+        env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
+        storage: "memory",
+        config: { values: { http: { publicUrl: "https://agent.acme.com/bot" }, ...values }, label: "test" },
+      });
+      opened.push(served.agent);
+      return { served, service: await serveAgent(served) };
+    };
+    const signed = (url: string, headers: Record<string, string> = {}) => new Request(url, { method: "POST", headers });
+    const first = await open({});
+    const stateDir = channelStateDir(first.served.stateRoot, "slack");
+    const warnings = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      expect((await first.service.registerWebhooks())[0]).toMatchObject({ outcome: "manual" });
+      // Reached at another address (an old domain still routed here): no proof, and said.
+      recordReached(stateDir, signed("https://old.fly.dev/slack"));
+      expect(first.service.webhooks[0]).toMatchObject({ outcome: "manual" });
+      expect(warnings.mock.calls.flat().join("\n")).toContain(
+        "slack: the platform reached this instance at https://old.fly.dev/slack, not https://agent.acme.com/bot/slack",
+      );
+      // Reached where it is to be, behind a proxy and a mount prefix the router stripped: registered at once.
+      recordReached(
+        stateDir,
+        signed("http://10.0.0.7/slack", { host: "agent.acme.com", "x-forwarded-proto": "https" }),
+      );
+      expect(first.service.webhooks).toEqual([
+        { channel: "slack", outcome: "registered", url: "https://agent.acme.com/bot/slack" },
+      ]);
+      expect(await health(first.service)).toEqual({
+        status: "ok",
+        webhooks: [{ channel: "slack", outcome: "registered" }],
+      });
+    } finally {
+      warnings.mockRestore();
+      await first.service.close();
+    }
+    // The record outlives the process: the next serve reports it from the start.
+    const again = await open({});
+    try {
+      expect((await again.service.registerWebhooks())[0]).toMatchObject({ outcome: "registered" });
+    } finally {
+      await again.service.close();
+    }
+  });
+
+  it("confirms Slack's URL from the binding's recorded url, with nothing in the state", async () => {
+    const dir = await agentDir({
+      "src/channels/slack.mjs": `export default () => ({ "POST /slack": () => new Response("ok") });`,
+    });
+    const served = await openServing(await loadSourceDefinition(dir), {
+      secrets: {},
+      env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
+      storage: "memory",
+      config: {
+        values: {
+          http: { publicUrl: "https://agent.acme.com" },
+          channels: { slack: { app: { id: "A1", url: "https://agent.acme.com/slack" } } },
+        },
+        label: "test",
+      },
+    });
+    opened.push(served.agent);
+    const service = await serveAgent(served);
+    try {
+      expect(await service.registerWebhooks()).toEqual([
+        { channel: "slack", outcome: "registered", url: "https://agent.acme.com/slack" },
+      ]);
+      // Recorded for another URL: a person set it elsewhere, and this one is theirs to set.
+      expect((await service.registerWebhooks("https://new.acme.com"))[0]).toMatchObject({ outcome: "manual" });
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("refuses channels.<name>.app on a channel whose URL its own credentials set", async () => {
+    await expect(telegramService({ channels: { telegram: { app: { id: "1" } } } })).rejects.toThrow(
+      "test: channels.telegram.app is for a channel whose platform lets only a person set its URL (slack, lark)",
+    );
+  });
+
   it("registers nothing, and says nothing of webhooks, for a serve that never became ready", async () => {
     const dir = await agentDir({
       "src/channels/telegram.mjs": `export default () => ({ "POST /telegram": () => new Response("ok") });`,
@@ -568,6 +673,8 @@ describe("a serve points its webhook channels at itself", () => {
     const served = await openServing(await loadSourceDefinition(dir), {
       secrets: {},
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
       config: { values: { http: { publicUrl: "https://agent.example.com" } }, label: "test" },
     });

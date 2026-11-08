@@ -7,20 +7,16 @@ import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
 import { assertInsideAgentDir, exists } from "../paths.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
-import { type ValueWriteResult, writeValues } from "../value-file.ts";
 import { envExamplePath } from "../value-file.ts";
-import { FEISHU_AGENT_SCOPES, type FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
-import { slackBotScopes } from "../channels/slack/manifest.ts";
 
 export type ChannelKind = "telegram" | "slack" | "feishu" | "lark";
 
 /** An env var a scaffolded channel reads. */
-export interface ChannelEnv {
+interface ChannelEnv {
   name: string;
   hint: string;
   /** Required for the channel to run. */
   required: boolean;
-  generate?: boolean;
 }
 
 interface ChannelScaffold {
@@ -29,39 +25,22 @@ interface ChannelScaffold {
   steps: string[];
 }
 
-const AGENT_SCOPE_LIST = FEISHU_AGENT_SCOPES.map((entry) => entry.request).join(", ");
-const FEISHU_PERMISSION_STEP =
-  `before publishing: the app needs ${AGENT_SCOPE_LIST} — \`add feishu\` requests them with the app and names any ` +
-  "your tenant withheld (approve those, then publish)";
-const LARK_PERMISSION_STEP =
-  `before publishing: add ${AGENT_SCOPE_LIST} — \`add lark\` checks them and opens the permission page for any that ` +
-  "are missing";
-
 const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
+  // A channel's app is set up by `channels setup`, which asks for these values; `add` only names them.
   telegram: {
     env: [
       { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot", required: true },
-      {
-        name: "TELEGRAM_SECRET_TOKEN",
-        hint: "any random string; verifies inbound updates",
-        required: true,
-        generate: true,
-      },
+      { name: "TELEGRAM_SECRET_TOKEN", hint: "webhook only: verifies inbound updates", required: true },
     ],
-    steps: [
-      "edit {channel} — customise routing with route() (optional; the defaults already work)",
-      "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
-    ],
+    steps: ["the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool"],
   },
   slack: {
     env: [
-      { name: "SLACK_BOT_TOKEN", hint: "Slack app → OAuth & Permissions → Bot User OAuth Token", required: true },
-      { name: "SLACK_SIGNING_SECRET", hint: "Slack app → Basic Information → App Credentials", required: true },
+      { name: "SLACK_BOT_TOKEN", hint: "Install App → Bot User OAuth Token", required: true },
+      { name: "SLACK_APP_TOKEN", hint: "connection only: Basic Information → App-Level Tokens", required: true },
+      { name: "SLACK_SIGNING_SECRET", hint: "webhook only: Basic Information → Signing Secret", required: true },
     ],
     steps: [
-      `Slack Bot Token Scopes: ${slackBotScopes().join(", ")}`,
-      "enable Agents (agent_view) and leave token rotation OFF (it cannot be turned off again); subscribe app_home_opened, app_context_changed, app_mention, message.im, message.channels, message.groups, message.mpim; set Request URL to <public-url>/slack",
-      "reinstall the app after changing scopes, then invite it to each channel it should read",
       "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
       "the agent reads the threads of the channel it is asked in via the scaffolded {tools}/slack-threads.ts tool",
     ],
@@ -72,17 +51,17 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     env: [
       {
         name: "FEISHU_APP_ID",
-        hint: "created + written automatically by `add feishu` (console → Credentials & Basic Info)",
+        hint: "`channels setup feishu` creates the app (console → Credentials & Basic Info)",
         required: true,
       },
       {
         name: "FEISHU_APP_SECRET",
-        hint: "created + written automatically by `add feishu` (console → Credentials & Basic Info)",
+        hint: "`channels setup feishu` keeps it (console → Credentials & Basic Info)",
         required: true,
       },
       {
         name: "FEISHU_VERIFICATION_TOKEN",
-        hint: "webhook only (`start`, every deployment) — captured by `deploy --run` (console → Events & Callbacks)",
+        hint: "webhook only: `channels setup feishu` captures it (console → Events & Callbacks)",
         required: true,
       },
       {
@@ -92,10 +71,6 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
     ],
     steps: [
-      FEISHU_PERMISSION_STEP,
-      "PUBLISH the app version in the developer console after permission approval — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
-      "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
-      "for webhook ingress, run `{serve} --tunnel` locally or `deploy --run` to register the selected app's event Request URL",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
       "the agent reads the threads of the group it is asked in via the scaffolded {tools}/feishu-threads.ts tool",
     ],
@@ -106,7 +81,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info", required: true },
       {
         name: "LARK_VERIFICATION_TOKEN",
-        hint: "webhook only (`start`, every deployment) — console → Events & Callbacks; authenticates inbound events",
+        hint: "webhook only — console → Events & Callbacks; authenticates inbound events",
         required: true,
       },
       {
@@ -116,9 +91,6 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
     ],
     steps: [
-      "finish the console setup: enable Bot and add the required permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
-      LARK_PERMISSION_STEP,
-      "for webhook ingress, run `{serve} --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
       "the agent reads the threads of the group it is asked in via the scaffolded {tools}/lark-threads.ts tool",
     ],
@@ -128,37 +100,9 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
 /** The channel kinds `fastagent add <kind>` can scaffold. */
 export const CHANNEL_KINDS = Object.keys(CHANNEL_SCAFFOLDS) as ChannelKind[];
 
-/** Local setup never changes the production app or how a deployment receives. */
-const DEPLOYMENT_STEP =
-  "run `{serve}` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and " +
-  "`deploy --run` creates a separate production app for it";
-
-const websocketSetup = (kind: "feishu" | "lark"): ChannelScaffold => {
-  const prefix = kind.toUpperCase();
-  return {
-    env: CHANNEL_SCAFFOLDS[kind].env.filter((entry) =>
-      [`${prefix}_APP_ID`, `${prefix}_APP_SECRET`].includes(entry.name),
-    ),
-    steps: [
-      kind === "feishu" ? FEISHU_PERMISSION_STEP : LARK_PERMISSION_STEP,
-      kind === "feishu"
-        ? "PUBLISH the app version in the developer console after permission approval — long-connection event subscriptions become active with the published version"
-        : "in Events & Callbacks choose long connection, subscribe im.message.receive_v1, then create + publish a version",
-      "edit {channel} — routing policy",
-      DEPLOYMENT_STEP,
-      `the agent can push messages from scheduled turns via the scaffolded {tools}/${kind}-send.ts tool`,
-      `the agent reads the threads of the group it is asked in via the scaffolded {tools}/${kind}-threads.ts tool`,
-    ],
-  };
-};
-
-/** The mode-specific env vars + next-step lines a scaffolded channel needs. */
-export function channelSetup(
-  kind: ChannelKind,
-  ingress: FeishuSubscriptionMode = "webhook",
-): { env: ChannelEnv[]; steps: string[] } {
-  if (ingress !== "connection" || (kind !== "feishu" && kind !== "lark")) return CHANNEL_SCAFFOLDS[kind];
-  return websocketSetup(kind);
+/** The env vars and next-step lines a scaffolded channel has. */
+export function channelSetup(kind: ChannelKind): ChannelScaffold {
+  return CHANNEL_SCAFFOLDS[kind];
 }
 
 /**
@@ -181,25 +125,6 @@ export async function appendChannelEnv(dir: string, kind: ChannelKind): Promise<
   const block = `\n${marker}\n${CHANNEL_SCAFFOLDS[kind].env.map((e) => `# ${e.hint}\n# ${e.name}=`).join("\n")}\n`;
   await appendFile(file, block);
   return true;
-}
-
-/**
- * Append generated channel secrets to the selected environment's value file, and a placeholder for each the channel
- * reads that nothing generated. Existing non-empty values are kept.
- */
-export function appendChannelDotEnv(
-  dir: string,
-  kind: ChannelKind,
-  generated: Record<string, string>,
-  overwrite: readonly string[] = [],
-  ingress: FeishuSubscriptionMode = "webhook",
-): Promise<ValueWriteResult> {
-  const entries = channelSetup(kind, ingress).env.map(({ name, hint }) => ({
-    name,
-    hint,
-    ...(generated[name] === undefined ? {} : { value: generated[name] }),
-  }));
-  return writeValues(dir, `${kind} channel`, entries, overwrite);
 }
 
 /** The path `add <kind>` scaffolds to. */

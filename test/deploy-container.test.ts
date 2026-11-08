@@ -1,6 +1,7 @@
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts, imageHasGit } from "../src/deploy/container.ts";
+import { NOT_HOSTED, type RunsAs } from "../src/serving-command.ts";
 import { definitionSections } from "../src/harnesses/pi-durable/text.ts";
 
 const input = {
@@ -17,9 +18,9 @@ describe("deploy/container: shared Docker context", () => {
   it("keeps tracked secrets scaffolds without shipping credentials, state or clones", () => {
     const artifacts = containerArtifacts(input);
     const rootIgnore = artifacts.find((artifact) => artifact.path === ".dockerignore")!.content;
-    const dockerfileIgnore = artifacts.find((artifact) => artifact.path === "Dockerfile.dockerignore")!.content;
 
-    expect(dockerfileIgnore).toBe(rootIgnore);
+    // One ignore file serves both builders: a second one beside the Dockerfile would shadow an author's own.
+    expect(artifacts.map((artifact) => artifact.path)).not.toContain("Dockerfile.dockerignore");
     expect(rootIgnore).toMatch(/^\*\*\/\.secrets\/\*\*$/m);
     expect(rootIgnore).toMatch(/^!\*\*\/\.env\.example$/m);
     expect(rootIgnore).toMatch(/^!\*\*\/\.secrets\/\.gitignore$/m);
@@ -56,12 +57,12 @@ describe("deploy/container: shared Docker context", () => {
       artifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content;
     expect(dockerfile(input)).not.toMatch(/mise/);
     // Empty without packages, so a list an earlier deploy wrote does not outlive the last package.
-    expect(artifacts(input).find((a) => a.path === "fastagent.packages")?.content).toBe("");
+    expect(artifacts(input).find((a) => a.path === ".fastagent/deploy/fastagent.packages")?.content).toBe("");
     const packages = ["gh@2", "npm:@biomejs/biome@latest"];
     // The list is build output, one per line; the Dockerfile reads it, so a package change is no Dockerfile change.
-    expect(artifacts({ ...input, packages }).find((a) => a.path === "fastagent.packages")?.content).toBe(
-      "gh@2\nnpm:@biomejs/biome@latest\n",
-    );
+    expect(
+      artifacts({ ...input, packages }).find((a) => a.path === ".fastagent/deploy/fastagent.packages")?.content,
+    ).toBe("gh@2\nnpm:@biomejs/biome@latest\n");
     expect(dockerfile({ ...input, packages })).toBe(dockerfile({ ...input, packages: ["jq@1"] }));
     // `start` opens dist/, which `railway up` leaves out as git-ignored: the image builds it, after the copy.
     for (const [runtime, build] of [
@@ -76,13 +77,17 @@ describe("deploy/container: shared Docker context", () => {
       const text = dockerfile({ ...input, runtime, packages });
       const order = ["RUN npm ci", "RUN bun install"].find((line) => text.includes(line)) as string;
       // Cached while the definition changes, and built again when the packages do.
-      expect(text.indexOf(order)).toBeLessThan(text.indexOf("COPY fastagent.packages ./\nRUN export "));
-      expect(text.indexOf("COPY fastagent.packages ./")).toBeLessThan(text.indexOf("COPY . ."));
+      expect(text.indexOf(order)).toBeLessThan(
+        text.indexOf("COPY .fastagent/deploy/fastagent.packages /tmp/fastagent.packages\nRUN export "),
+      );
+      expect(text.indexOf("COPY .fastagent/deploy/fastagent.packages /tmp/fastagent.packages")).toBeLessThan(
+        text.indexOf("COPY . ."),
+      );
       // In mise's system directory; the build's own mise directories are thrown away with the layer.
       expect(text).not.toContain("ENV MISE_DATA_DIR");
       expect(text).toContain("MISE_DATA_DIR=/tmp/mise ");
       expect(text).toContain(
-        ` && xargs -d '\\n' -a fastagent.packages "$MISE" install --system \\\n && rm -rf /tmp/mise\n`,
+        ` && xargs -d '\\n' -a /tmp/fastagent.packages "$MISE" install --system \\\n && rm -rf /tmp/mise\n`,
       );
       // The same isolation every run here has.
       expect(text).toContain(
@@ -91,7 +96,7 @@ describe("deploy/container: shared Docker context", () => {
           "MISE_PYTHON_COMPILE=false",
       );
       expect(text).toContain(
-        'MISE="/app/definition/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise"',
+        'MISE="/app/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise"',
       );
     }
   });
@@ -116,13 +121,13 @@ describe("deploy/container: shared Docker context", () => {
     // A delivered configuration is a directory of its own, which the image copies and names; the manifest says nothing
     // of it. Without one it is `{}`, so one an earlier deploy delivered never ships again.
     const file = (i: typeof input & { config?: string }) =>
-      containerArtifacts(i).find((a) => a.path === "fastagent.deploy/fastagent.json")?.content;
+      containerArtifacts(i).find((a) => a.path === ".fastagent/deploy/fastagent.json")?.content;
     expect(file({ ...input, config: '{"thinkingLevel":"high"}' })).toBe('{"thinkingLevel":"high"}');
     expect(file(input)).toBe("{}\n");
     expect(manifest({ ...input, config: "{}" }).config).toBeUndefined();
     const generated = containerArtifacts(input).find((a) => a.path === "Dockerfile")!.content;
     // After the build, so a change of configuration builds nothing again.
-    expect(generated.indexOf("COPY fastagent.deploy/ /etc/fastagent/")).toBeGreaterThan(
+    expect(generated.indexOf("COPY .fastagent/deploy/ /etc/fastagent/")).toBeGreaterThan(
       generated.indexOf("fastagent build"),
     );
     // It is NOT in the image's instructions — a credential could never ride this carrier, and neither does this.
@@ -137,50 +142,39 @@ describe("deploy/container: shared Docker context", () => {
       (i) => containerArtifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content,
     );
     const values = dockerfiles.map((content) => /^ENV FASTAGENT_RELEASE_FILE=(\S+)$/m.exec(content)?.[1]);
-    expect(values).toEqual(Array(3).fill("/app/definition/fastagent.release.json"));
+    expect(values).toEqual(Array(3).fill("/etc/fastagent/fastagent.release.json"));
     // Every image opens the baked definition by path; nothing selects an agent by name any more.
     for (const content of dockerfiles) {
-      expect(content).toMatch(/^WORKDIR \/app\/definition$/m);
-      expect(content).toMatch(/"start", "\/app\/definition"\]$/m);
+      expect(content).toMatch(/^WORKDIR \/app$/m);
+      expect(content).toMatch(/"start", "\/app"\]$/m);
       expect(content).not.toContain("FASTAGENT_AGENT");
+      // The root is one variable on the box, as everywhere else an instance is placed.
+      expect(content).toMatch(/^ENV FASTAGENT_ROOT=\/data$/m);
+      expect(content).not.toContain("STORAGE_DIR");
     }
-    const manifest = containerArtifacts(input).find((a) => a.path === "fastagent.release.json")!;
+    const manifest = containerArtifacts(input).find((a) => a.path === ".fastagent/deploy/fastagent.release.json")!;
     expect(JSON.parse(manifest.content)).toEqual({ version: 1, id: "release-one", agent: "reviewer" });
-    const before = process.env.FASTAGENT_RELEASE_FILE;
-    const beforeAgentcore = process.env.FASTAGENT_AGENTCORE;
-    try {
-      delete process.env.FASTAGENT_RELEASE_FILE;
-      delete process.env.FASTAGENT_AGENTCORE;
-      const note = (wake = false) => {
-        const section = definitionSections("/agent", [], { wake }).find(({ key }) => key === "self_change");
-        return (section?.render({} as never, {} as never) as string | undefined) ?? "";
-      };
-      expect(note()).not.toContain("survives restarts");
-      process.env.FASTAGENT_RELEASE_FILE = values[0];
-      expect(note()).toContain("Your directory survives restarts");
-      // The directory is the host's storage, which a new release keeps; the definition is the image's.
-      expect(note()).toContain("Your directory is this host's storage and survives deployments of a new version");
-      // The definition is the release, read as built: the prompt must not invite an edit that is never read.
-      expect(note()).toContain("is the author's release, read as it was built");
-      expect(note()).not.toContain("write a skill");
-      // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
-      expect(note()).not.toContain("wake tool");
-      expect(note(true)).toContain("use the wake tool.");
-      // What the agent installs itself is the machine's.
-      expect(note()).toContain("A tool you install yourself (apt-get, npm install -g) belongs to this machine");
-      // The host whose storage a deploy RESETS says so, rather than the release replacing only the directory.
-      process.env.FASTAGENT_AGENTCORE = "1";
-      expect(note()).not.toContain("survives deployments of a new version");
-      expect(note()).toContain("resets this host's storage entirely");
-      expect(note()).toContain("is the author's release, read as it was built");
-    } finally {
-      for (const [key, value] of [
-        ["FASTAGENT_RELEASE_FILE", before],
-        ["FASTAGENT_AGENTCORE", beforeAgentcore],
-      ] as const) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
+    const note = (runsAs: RunsAs, wake = false) => {
+      const section = definitionSections("/agent", [], { wake, runsAs }).find(({ key }) => key === "self_change");
+      return (section?.render({} as never, {} as never) as string | undefined) ?? "";
+    };
+    const deployed: RunsAs = { dev: false, deployed: true, agentcore: false };
+    expect(note(NOT_HOSTED)).not.toContain("survives restarts");
+    expect(note(deployed)).toContain("Your directory survives restarts");
+    // The directory is the host's storage, which a new release keeps; the definition is the image's.
+    expect(note(deployed)).toContain("Your directory is this host's storage and survives deployments of a new version");
+    // The definition is the release, read as built: the prompt must not invite an edit that is never read.
+    expect(note(deployed)).toContain("is the author's release, read as it was built");
+    expect(note(deployed)).not.toContain("write a skill");
+    // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
+    expect(note(deployed)).not.toContain("wake tool");
+    expect(note(deployed, true)).toContain("use the wake tool.");
+    // What the agent installs itself is the machine's.
+    expect(note(deployed)).toContain("A tool you install yourself (apt-get, npm install -g) belongs to this machine");
+    // The host whose storage a deploy RESETS says so, rather than the release replacing only the directory.
+    const agentcore: RunsAs = { ...deployed, agentcore: true };
+    expect(note(agentcore)).not.toContain("survives deployments of a new version");
+    expect(note(agentcore)).toContain("resets this host's storage entirely");
+    expect(note(agentcore)).toContain("is the author's release, read as it was built");
   });
 });

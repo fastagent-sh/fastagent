@@ -1,148 +1,154 @@
 ---
 title: Slack channel
-description: "Serve an agent as a Slack-native Agent with signed Events API ingress, durable threads/context, native streams with inline tool traces, and file IO."
+description: "Serve an agent as a Slack-native Agent over Socket Mode or the signed Events API, with durable threads/context, native streams with inline tool traces, and file IO."
 status: current
 ---
 
 # Slack channel
 
-The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/) at `POST /slack`. It verifies Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/), persists accepted work before ACK, serializes turns per conversation, and renders threaded replies with Slack's native [`chat.*Stream`](https://docs.slack.dev/reference/methods/chat.startStream) Agent APIs. A rate-limited edited-message renderer remains available for top-level replies and compatibility use.
+The first-party Slack channel receives Slack's events one of two ways, the instance's choice
+([Socket Mode or webhook](#socket-mode-or-webhook)): over a [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/)
+WebSocket the process opens, so it needs no public URL; or at `POST /slack` by the [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/),
+verifying Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/). Either
+way it persists accepted work before acknowledging, serializes turns per conversation, and renders threaded replies with
+Slack's native [`chat.*Stream`](https://docs.slack.dev/reference/methods/chat.startStream) Agent APIs. A rate-limited
+edited-message renderer remains available for top-level replies and compatibility use.
 
-## Add the channel
+## Add the channel, then set up its app
 
 ```bash
-fastagent add slack
-fastagent add slack --env production  # separate app, credentials and local onboarding state
+fastagent add slack            # the program: the channel file and its tools
+fastagent channels setup slack # the app, and this instance's credentials for it
+fastagent dev                  # no tunnel, no public URL
 ```
 
-The created app subscribes the channel, private-channel and MPIM message streams with their history scopes,
-which is what lets the Agent take part in a thread and read recent discussion
-([Group context](#group-context)). There is no mention-only variant: the Agent takes part in the channels it is
-invited to.
+`dev` runs the setup itself the first time it finds the channel without credentials, at a terminal; run it yourself to do
+it ahead of time or again.
 
-The command creates:
+`add slack` changes the program only. It creates
 
 ```txt
-src/channels/slack.ts       # signed Events API adapter + policy
+src/channels/slack.ts       # the channel, both ways of receiving, + policy
 src/tools/slack-send.ts     # text and external-upload file tool
 src/tools/slack-threads.ts  # reads the threads of the channel a message was asked in
 ```
 
-It also adds `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` placeholders to `.env.example` and, by
-default, starts single-workspace internal-app onboarding.
+and lists the variables they read in `.secrets/.env.example`. It asks nothing and creates no app.
+
+`channels setup slack` sets up the app for **one instance** and keeps its credentials in that instance's value file:
+
+1. It opens Slack's *create an app* page with the app's manifest filled in (scopes, event subscriptions, the Socket Mode
+   switch, token rotation off). You pick a workspace and click **Create**, then **Install App → Install to Workspace →
+   Allow**, and paste the **Bot User OAuth Token**.
+2. For Socket Mode it then asks for an **App-Level Token**: Basic Information → App-Level Tokens → *Generate Token and
+   Scopes*, scope `connections:write`. For a webhook it asks for the **Signing Secret** (Basic Information → App
+   Credentials) instead.
+3. Each value is checked with Slack before it is kept: the bot token with `auth.test`, the app-level token by opening a
+   connection with it. The signing secret can only be checked by shape; the first signed request will say.
+
+It is safe to run again: a value already set that Slack still accepts is kept, one it refuses is asked for again. The
+values are typed with hidden input at a terminal. A coding agent runs `channels setup slack --json`: the person is sent
+a page on this machine (`127.0.0.1`) to paste them, so a token never passes through the agent's conversation and no
+tunnel is opened.
+
+The way the app receives is `--ingress webhook|connection`, else the instance's `channels.slack.ingress`, else
+Socket Mode for the development instance and webhook for any other (a host that scales to zero is woken by a request).
+A deployment is another instance: `channels setup slack --config prod.json` sets up an
+app of its own (a Socket Mode app receives over the socket alone, so two instances never share one) and writes its
+values to that file. Webhook apps are created with a placeholder Request URL (`http.publicUrl` when the configuration
+names one): Slack allows an app whose URL does not answer yet. Once the instance is served, open **Event Subscriptions**,
+set the URL (`<where it is served>/slack`), and Slack verifies it as you save. `fastagent channels setup slack
+--record-url --config prod.json` then records it for later deploys.
+
+The app is created for a single workspace (internal use), not for Marketplace distribution, and with Slack's Agent
+features, which a free workspace has too. The channel falls back to the compatibility renderer where one is missing.
 
 ## Credentials
 
-Three things, in three places:
-
 | Credential | Made by | Used for | Lives in |
 |---|---|---|---|
-| App Configuration Token pair (`xoxe.xoxp-…` + `xoxe-…`) | You, once, at [Your Apps](https://api.slack.com/apps) | `apps.manifest.create` / `apps.manifest.update`: creating the app, and updating its Request URL on `dev --tunnel` and `deploy --run`. Slack expires it in 12 hours; the CLI rotates it. | Builder machine only: `<state root>/channels/slack/onboarding.json` (0600). Never `.env`, never a deploy. |
-| OAuth client id / secret | `apps.manifest.create` | The one OAuth code exchange that installs the app. Setup-only. | `onboarding.json`; the secret is dropped once the install completes. |
-| `SLACK_BOT_TOKEN` (`xoxb-…`) and `SLACK_SIGNING_SECRET` | The OAuth install / `apps.manifest.create` | Everything at runtime: replies, files, `slack-send`, and verifying each inbound webhook. Long-lived. | Dev: `.secrets/.env`; production: `.secrets/production/.env` and the deploy's secrets. |
+| `SLACK_BOT_TOKEN` (`xoxb-…`) | Install App | Everything the channel sends: replies, files, `slack-send`, history reads, `auth.test` | The instance's value file |
+| `SLACK_APP_TOKEN` (`xapp-…`, `connections:write`) | Basic Information → App-Level Tokens | Opening the Socket Mode connection, and nothing else | The instance's value file; Socket Mode only |
+| `SLACK_SIGNING_SECRET` | Basic Information → App Credentials | Verifying each inbound webhook request | The instance's value file; webhook only |
 
-Production onboarding state lives at `.state/production/channels/slack/` by default; dev uses
-`.state/channels/slack/`. The production config token updates only the production app. `deploy` does not
-create Slack apps automatically, and never copies the dev app or its runtime credentials.
+The bot token sends and the app-level token (or the signing secret) receives. The app's Client ID and Client Secret are
+for OAuth installation of an app distributed to other workspaces and are not used. Dev's value file is `.secrets/.env`;
+a deployment's is its own: `channels setup slack --config <file>` keeps it in `.secrets/production/.env`, and
+`fastagent secrets push <host>` sets it on the target.
 
 Bot-token rotation is off in the manifest. Do not turn it on: it cannot be turned off again, and FastAgent does not
 support it.
 
 ### If token rotation is on
 
-Two symptoms name it: `slackChannel` refuses the `xoxe.…` token at startup, and `dev --tunnel` / `deploy --run`
-report that the app's manifest update was refused (`cannot_disable_once_enabled`). Create a new app: delete
-`src/channels/slack.ts`, `<state root>/channels/slack/onboarding.json` and the `SLACK_*` lines in `.secrets/.env`, then run
-`fastagent add slack` again; the runtime secrets it writes are `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` alone.
-Remove the old app in the Slack console when the new one answers.
+`channels setup slack` and the channel refuse a rotating (`xoxe.…`) bot token. Create the app again from the setup's
+link, which leaves rotation off, and set it up again with the new app's tokens; remove the old app in the Slack console
+when the new one answers.
 
-## Internal-app onboarding
+### Manual setup
 
-Slack's [App Manifest API](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/) requires a user/workspace **App Configuration Token**. The command opens
-[Your Apps](https://api.slack.com/apps); generate one under **Your App Configuration Tokens**, then paste
-its access and refresh tokens into the hidden prompts. Run by a coding agent (`add slack --json`), the command
-asks for no prompt: it returns the address of a one-time page the setup serves through its temporary tunnel; you
-paste the pair there, and the page takes you on to Slack's install page. These configuration credentials can manage
-apps owned by your user in that workspace, so FastAgent:
+An app made by hand works the same: give it these Bot Token Scopes (`app_mentions:read`, `assistant:write`,
+`chat:write`, `files:read`, `files:write`, `im:history`, `reactions:write`, `users:read`, and for group context
+`channels:history`, `groups:history`, `mpim:history`), turn on the **Agents** feature (native mode needs `assistant:write`
+and `agent_view`; an app without them uses `rendering: "classic"`), subscribe `app_home_opened`, `app_context_changed`,
+`app_mention`, `message.im`, `message.channels`, `message.groups` and `message.mpim`, then run `channels setup slack`
+and paste its tokens.
 
-- stores them only in owner-readable (`0600`) `<state root>/channels/slack/onboarding.json`;
-- never puts it in `.env`, an image, a deploy secret, argv, or logs;
-- uses it locally to rotate the 12-hour access token and update the App Manifest.
+## Socket Mode or webhook
 
-Slack labels configuration-token rotation / Manifest management as a control-plane API surface that may
-change. FastAgent treats every failure as visible and keeps `--no-onboard` plus the manual console path as
-the fallback; it never silently claims that an unverified Request URL was installed.
+`slackSocketChannel` receives over Slack's Socket Mode: the process opens a WebSocket to Slack, so there is no Request URL,
+no tunnel and no signing secret. The scaffolded channel offers both ways:
 
-The command then:
-
-1. starts a temporary Cloudflare Quick Tunnel (`cloudflared` is required);
-2. creates the internal app from a mode-specific manifest;
-3. enables Slack's irreversible `agent_view`, native Agent streaming, suggested prompts, the writable Messages tab, scopes, and Events API subscriptions;
-4. opens [Slack OAuth v2](https://docs.slack.dev/authentication/installing-with-oauth/), validates its `state`, exchanges the code, and installs into one workspace;
-5. writes the Signing Secret and the Bot User OAuth Token to the agent's `.secrets/.env`.
-
-App creation is an irreversible persisted boundary. If OAuth is cancelled or the process stops afterward,
-re-run `fastagent add slack`; it resumes the same App rather than creating another. Once installed, run:
-
-```bash
-fastagent dev --tunnel
+```ts
+export default byIngress({
+  webhook: needs(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"], (secrets) =>
+    slackChannel({ botToken: secrets.SLACK_BOT_TOKEN, signingSecret: secrets.SLACK_SIGNING_SECRET, ...policy }),
+  ),
+  connection: needs(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], (secrets) =>
+    slackSocketChannel({ botToken: secrets.SLACK_BOT_TOKEN, appToken: secrets.SLACK_APP_TOKEN, ...policy }),
+  ),
+});
 ```
 
-The temporary onboarding URL is replaced automatically with the live `<quick-tunnel>/slack` Request URL.
-Each later Quick Tunnel receives the same update. `deploy fly --run`, `deploy railway --run`, and Docker
-`--run --tunnel` likewise update the deployed URL from the local machine without sending the configuration
-token to the host. Invite the App to each channel it should read.
+The instance's `channels.slack.ingress` picks the way (unset: `dev` uses Socket Mode, everything else the webhook).
+Both take the same policy options (`rendering`, `route`, `onError`, …) and answer the same way. An app in Socket Mode
+receives over the socket **alone** (turning it on stops HTTP delivery), so keep a separate app for each instance that
+receives by webhook, a deployment included. Apps that use Socket Mode cannot be listed in the Slack Marketplace.
 
-This is an internal, single-workspace installation—not Marketplace/multi-workspace OAuth token storage.
-Slack may require a paid plan or Developer Program sandbox for platform AI features. If native Agent
-features are unavailable, use the manual path with `rendering: "classic"`; a definitive native capability
-rejection also falls back to one compatibility Markdown reply without retrying ambiguous stream writes.
+The connection is refreshed by Slack every few hours; FastAgent opens the next one before the old one goes, so no event
+falls between them, and it pings the socket and reconnects when one stops answering. A lost network is retried with a
+growing wait. What retrying cannot fix ends the serve with its reason: a refused token (`invalid_auth`,
+`token_revoked`, …), Socket Mode turned off for the app (`link_disabled`), or a start that cannot connect. An event
+that cannot be taken (Slack authentication unavailable) is left unacknowledged, and Slack sends it again.
 
-### Manual/scaffold-only setup
-
-Use `fastagent add slack --no-onboard` to create only the channel/tool files. In that mode, create the App
-in Slack yourself and configure these base Bot Token Scopes:
-
-```txt
-app_mentions:read
-assistant:write
-chat:write
-im:history
-files:read
-files:write
-reactions:write
-users:read
-```
-
-A `context` app additionally needs `channels:history`, `groups:history`, and `mpim:history`. Native mode
-requires `assistant:write` and the **Agents** feature with the Agent messaging experience (`agent_view`);
-a manually configured classic-only app may omit those two Agent capabilities. Subscribe `app_home_opened`,
-`app_context_changed`, `app_mention`, and `message.im`; a `context` app additionally subscribes
-`message.channels`, `message.groups`, and `message.mpim`. Set `https://<host>/slack` under Event
-Subscriptions while FastAgent is running,
-then put the Bot Token and Signing Secret in `.env`. Without local onboarding state, tunnel/deploy commands
-print this manual Request URL instead of claiming registration succeeded. On the machine that onboarded the
-app, `fastagent add slack --replace-config` replaces an expired or revoked App Configuration token pair
-without touching the installed app or its runtime credentials.
+"Ready" means Slack accepted the token, not that events flow: with Socket Mode off in the app's settings a new
+connection is accepted and receives nothing, and nothing says so (see
+[troubleshooting](troubleshooting.md#slack-socket-mode-is-connected-but-nothing-answers)).
 
 ## Scaffolded channel
 
 ```ts
-import { needs } from "@fastagent-sh/fastagent";
-import { slackChannel } from "@fastagent-sh/fastagent/slack";
+import { byIngress, needs } from "@fastagent-sh/fastagent";
+import { type SlackChannelOptions, slackChannel, slackSocketChannel } from "@fastagent-sh/fastagent/slack";
 
-export default needs(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"], (secrets) =>
-  slackChannel({
-    botToken: secrets.SLACK_BOT_TOKEN,
-    signingSecret: secrets.SLACK_SIGNING_SECRET,
-    rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
-    // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-    // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
-    // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
-    // No session modes: an answer attaches to its question with a thread, and that thread is the conversation.
-    onError: (failed) => `⚠️ ${failed.details}`, // development transparency
-  }),
-);
+// Your policy, the same whichever way the channel receives.
+const policy: Pick<SlackChannelOptions, "rendering" | "onError"> = {
+  rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
+  // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
+  // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
+  // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
+  // No session modes: an answer attaches to its question with a thread, and that thread is the conversation.
+  onError: (failed) => `⚠️ ${failed.details}`, // development transparency
+};
+
+export default byIngress({
+  webhook: needs(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"], (secrets) =>
+    slackChannel({ botToken: secrets.SLACK_BOT_TOKEN, signingSecret: secrets.SLACK_SIGNING_SECRET, ...policy }),
+  ),
+  connection: needs(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], (secrets) =>
+    slackSocketChannel({ botToken: secrets.SLACK_BOT_TOKEN, appToken: secrets.SLACK_APP_TOKEN, ...policy }),
+  ),
+});
 ```
 
 Required credentials are validated when serving activates the module, so deployment inspection remains
@@ -230,8 +236,8 @@ belongs to that thread. What the Agent posted itself, with `slack-send` from a s
   shown by name (`bot <name>`), with what an integration put in legacy attachments. Slack's own messages (joins, topic
   changes) and messages with nothing to show are left out.
 - An app installed before `users:read` was in the manifest shows everyone by user id, and the channel says so once.
-  Add the scope under the app's OAuth & Permissions → Bot Token Scopes (an app `fastagent add slack` created gets it
-  in its manifest with the next `dev --tunnel` or `deploy --run`), then Reinstall to Workspace. A running channel
+  Add the scope under the app's OAuth & Permissions → Bot Token Scopes (an app `channels setup slack` creates has it),
+  then Reinstall to Workspace. A running channel
   asks again every 10 minutes, so names appear without a restart, unless the reinstall issued a new Bot Token: then
   update `SLACK_BOT_TOKEN` and restart.
 - A post written as Markdown (every answer and `slack-send` post) is read from its blocks, tables included; Slack's
@@ -259,7 +265,7 @@ how a question about another thread ("was the deploy failure resolved?") reaches
   custom `route` it answers that it cannot read threads.
 - The list is the threads among the channel's newest 100 messages, by their last reply, at most 20.
 - A read is the thread's newest 20 messages, bounded like the place history above, the agent's own answers included.
-- An agent created before this release gets the tool with `fastagent add slack --no-onboard`: it keeps the channel
+- An agent created before this release gets the tool by running `fastagent add slack` again: it keeps the channel
   file and writes the package's tools.
 
 ## Inbound files
@@ -405,18 +411,17 @@ thread instead of crash-looping forever — unless its answer was already record
 
 ## Production
 
-`fastagent deploy docker|fly|railway|agentcore` discovers Slack and carries `SLACK_BOT_TOKEN` and
-`SLACK_SIGNING_SECRET`. For a reachable webhook ingress, `--run` updates the Request
-URL using the builder's local onboarding state. Without that state, it reports the required manual
-console action. App Configuration tokens stay on the builder. Docker's optional Quick Tunnel URL is
-ephemeral; resident hosts need durable storage and one replica. [AgentCore resets its storage on
-every deploy](deploy.md#aws-bedrock-agentcore), so thread state and delivery dedup start blank after
-each one; both secrets ride the runtime environment and are unaffected.
+`fastagent deploy docker|fly|railway|agentcore` discovers Slack and checks that the deployment has the values its way of
+receiving reads. A deployment receives by webhook, so it needs `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`, from an app of
+its own (`channels setup slack --config prod.json`). Slack's Request URL is the app's
+page, which no credential on the box can change: `deploy` prints the URL to set under Event Subscriptions, and the box
+confirms it once Slack reaches it there ([Deploy](deploy.md#chat-channels)). Resident hosts need durable storage and one
+replica. [AgentCore resets its storage on every deploy](deploy.md#aws-bedrock-agentcore), so thread state and delivery
+dedup start blank after each one; both secrets ride the runtime environment and are unaffected.
 
 ## Current boundaries
 
-- HTTP Events API only; Socket Mode is not included.
 - One Slack workspace installation/token per channel instance; no OAuth installation store or Marketplace multi-tenancy.
 - Edited/deleted messages do not change what a session already holds. A later read of the place sees them as they are then.
-- Slack's Agent messaging experience is enabled for newly onboarded apps and cannot be switched back to the legacy Assistant experience.
+- Slack's Agent messaging experience is enabled for apps `channels setup slack` creates and cannot be switched back to the legacy Assistant experience.
 - `rendering: "classic"` exists for plans/apps without native Agent streaming and for intentional top-level replies.

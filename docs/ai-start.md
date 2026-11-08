@@ -306,38 +306,41 @@ servers with a cleanup path or delegate them to the owner.
 A module in `src/channels/` enables a channel. Prefer the existing integrations over application-authored
 webhook servers, token refresh loops, or reply pipelines:
 
-| Channel | Command from the agent directory | Owner action and reference |
+| Channel | Commands from the agent directory | Owner action and reference |
 |---|---|---|
-| Telegram | `fastagent add telegram` | Supply the bot token and webhook verification secret. [Telegram](telegram.md) |
-| Slack | `fastagent add slack --json` | Paste an App Configuration token pair on the page it returns, then click Allow on Slack's install page. [Slack](slack.md) |
-| Feishu | `fastagent add feishu --json` | Confirm the new app at the address it returns, then publish its version in the console. [Feishu](feishu.md) |
-| Lark | `fastagent add lark --json` | Open the page it returns, create the app in the international console, and paste its App ID and App Secret on that page. [Lark compatibility](feishu.md) |
+| Telegram | `fastagent add telegram`, then `fastagent channels setup telegram --json` | Create the bot with @BotFather and paste its token on the page it returns. [Telegram](telegram.md) |
+| Slack | `fastagent add slack`, then `fastagent channels setup slack --json` | Create the app from the link it gives (Create, then Install to Workspace), and paste the bot token and the app-level token on the page it returns. [Slack](slack.md) |
+| Feishu | `fastagent add feishu`, then `fastagent channels setup feishu --json` | Confirm the new app at the address it returns, then publish its version in the console. [Feishu](feishu.md) |
+| Lark | `fastagent add lark`, then `fastagent channels setup lark --json` | Open the page it returns, create the app from the launcher link, and paste its App ID and App Secret on that page. [Lark compatibility](feishu.md) |
 
-With `--json`, `add slack|feishu|lark` answers `need_user_action` for each part only the owner can do, with the
-address, what to write where, and a `check_command`; relay it, wait for the owner to say it is done, and run the
-command it names. The setup's ticket ends `done` with the variables it wrote, the next steps, and what is left for
-the owner (`afterwards`, such as publishing a version). Never ask for a token in the conversation: the response names
-the file or page the owner enters it in ([`fastagent add`](cli.md#fastagent-add-telegramslackfeishulark)).
+`add` changes the program only; the app and its credentials are `channels setup`'s. At a terminal, `fastagent dev` sets up a
+channel that has no credentials by asking for them; run it as `fastagent dev --no-input` (the owner's own terminal can
+answer, your run cannot) and it exits 2 instead, naming `channels setup <name> --json`. With `--json`,
+`channels setup` answers `need_user_action` for each part only the owner can do,
+with the address, what to write where, and a `check_command`; relay it, wait for the owner to say it is done, and run
+the command it names. The setup's ticket ends `done` with the variables it wrote, the next steps, and what is left for
+the owner (such as publishing a version, in `next_steps`). Never ask for a token in the conversation: the response names
+the file or page the owner enters it in ([`fastagent channels setup`](cli.md#fastagent-channels-setup),
+[`fastagent add`](cli.md#fastagent-add-telegramslackfeishulark)).
 
-After owner-approved setup, use `fastagent dev --tunnel` for webhook testing (`cloudflared` required).
-Confirm each channel loads, inspect registration results, and send a real message from the authorized
-account. A URL verification challenge proves reachability, not a completed conversation. Keep manual
+After owner-approved setup, run `fastagent dev --no-input`: Telegram, Slack and Feishu/Lark receive over a connection the process
+opens, so no tunnel is needed (`dev --tunnel` is for trying a webhook path, with a channel set to `webhook`). Confirm
+each channel loads and send a real message from the authorized account. A URL verification challenge proves reachability, not a completed conversation. Keep manual
 console steps visible. Rename a channel to, for example, `src/channels/slack.ts.disabled` to disable it; a broken
 enabled channel must fail serving instead of silently disappearing.
 
 ### Slack installation and credential ownership
 
-`fastagent add slack` scaffolds both the channel and `slack-send`, then offers single-workspace internal-app
-onboarding. The owner supplies the App Configuration access/refresh tokens (through hidden prompts at a terminal,
-or the one-time page `add slack --json` returns) and approves installation in Slack. This enables Slack's irreversible Agent messaging experience;
-platform plan requirements and the manual `--no-onboard` path are in [Slack onboarding](slack.md#internal-app-onboarding).
+`fastagent add slack` scaffolds the channel and `slack-send`. `fastagent channels setup slack` then creates the
+single-workspace internal app from a manifest link: the owner clicks Create and Install in Slack and pastes the bot
+token and the app-level token (hidden input at a terminal, or the one-time page `--json` returns, on this machine). This
+enables Slack's irreversible Agent messaging experience; the steps and the manual path are in
+[Slack](slack.md#add-the-channel-then-set-up-its-app).
 
-The credentials and where each lives are one table in [Slack → Credentials](slack.md#credentials): the
-App Configuration Token pair stays on the builder machine (`onboarding.json`), the OAuth client
-credentials are spent on the install, and the runtime has exactly `SLACK_BOT_TOKEN` and
-`SLACK_SIGNING_SECRET`. Retain the builder's onboarding state for automated Request URL registration;
-without it the CLI reports the manual console action. `fastagent add slack --replace-config` replaces
-only the builder's App Configuration credentials.
+The credentials and where each lives are one table in [Slack → Credentials](slack.md#credentials): the instance's
+value file holds `SLACK_BOT_TOKEN` and, by how it receives, `SLACK_APP_TOKEN` (Socket Mode) or `SLACK_SIGNING_SECRET`
+(webhook). No credential of the owner's own (no configuration token) is kept: Slack's Request URL for a webhook is a
+page the owner sets once, and `deploy` prints it.
 
 `slack-send` delivers through the mounted channel's transport (`slackTransport(SLACK_BOT_TOKEN)`); every
 `fastagent add slack` rewrites `src/tools/slack-send.ts`.
@@ -420,7 +423,7 @@ instance's storage and files ([security boundary](design/security-boundary.md#3-
 
 Choose a host, cost budget, credentials, and public ingress with the owner. Generate only the selected
 host's artifacts from the **agent directory**, preserving the CLI's formats and existing user-owned files.
-A `github` content entry is cloned on the host (put `GITHUB_TOKEN` in `.secrets/production/.env` for a private
+A `github` content entry is cloned on the host (`fastagent secrets set <host> GITHUB_TOKEN` for a private
 repository or for pushes); a `local` entry stays on this machine, and the deployed agent works without it (`deploy` says so).
 Copy reference material the agent only reads into the agent directory, outside `content/`, which every release
 ships; move data it works on to a repository.
@@ -441,18 +444,22 @@ an approved region, and local Docker/buildx for its arm64 image. `fastagent depl
 the CloudFormation topology, forwarder, and clock wiring required by the definition; `--run` provisions
 and verifies it. Review [Deploy](deploy.md) before authorizing resource creation or cost.
 
-Put the model in config and every value the deployment needs in `.secrets/production/.env`; `deploy` carries the whole
-file, never the dev one. A
+Put the model in config. The values the deployment needs live on its target: `fastagent secrets list <host>` shows
+which names are missing, and `fastagent secrets push <host>` sets the ones `.secrets/production/.env` holds (never the dev
+file); the owner types the others with `fastagent secrets set <host> <NAME>`, since you never ask for a value in the
+conversation. A
 model without an API key there (an OAuth subscription) is logged in on the deployment by the owner. Deploy with
 `fastagent deploy <host> --run --json`: it returns a ticket, and `fastagent deploy <host> --check <ticket>` reports
 `working`, a `need_user_action` for each step only the owner can take (signing the host's CLI in, confirming a
 production Feishu app, the box's model login: relay the address, and a code when there is one), then `done` with the
 deployment's URL ([Deploy](deploy.md), [Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
-registration uses the selected host's ingress and local onboarding credentials where supported. Finish
-any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
+registration is the instance's own where its credentials allow (Telegram, Feishu, Lark) and a printed step where only
+the owner can set it (Slack's Request URL). Finish any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
 host. A deployed agent is reached through its channels and schedules, and on Docker, Fly and Railway through the
-Agent API under `/v1`, whose key `deploy` writes into `.secrets/production/.env` ([The Agent API](deploy.md#the-agent-api)).
-Check the deployment the way you checked the agent: `fastagent invoke --url <the URL deploy reports> "..."`, with the
+Agent API under `/v1`, whose key `deploy` sets on the target and keeps in `.secrets/production/.env` ([The Agent API](deploy.md#the-agent-api)).
+A ticket that ends `failed` carries the last lines of its log as `log_tail`: read it for the cause, fix that, then run
+the deploy again ([Troubleshooting](troubleshooting.md#a-deploy-stopped-and-the-message-does-not-say-why) lists the usual
+ones). Check the deployment the way you checked the agent: `fastagent invoke --url <the URL deploy reports> "..."`, with the
 same output and exit code. AgentCore's public webhook URL belongs to its forwarder; its IAM-gated door takes only the
 deploy's `probe`.
 `fastagent logs agentcore --follow` reads runtime logs; `--source forwarder` selects ingress logs.
@@ -461,7 +468,7 @@ deploy's `probe`.
 |---|---|
 | Prompt files, skills, code, config, and package lockfile | The image holds the agent directory and installs its dependencies; the deployed agent reads its definition there, as built, and changes it only through a new release. Git is optional version control. |
 | The instance's storage (`agent.sqlite`: sessions and messages), channel state, pending work, fired-slot claims | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
-| Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. A model login is the box's own (`fastagent login --deployment`); a redeploy keeps it. AgentCore clears them on deploy, so a login there is repeated after every deploy; an API key in the value file avoids it. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
+| Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. A model login is the box's own (`fastagent login --deployment`); a redeploy keeps it. AgentCore clears them on deploy, so a login there is repeated after every deploy; an API key set on the deployment (`fastagent secrets set <host> <its variable>`) avoids it. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
 | Business notes, approvals, generated artifacts | Locally, write ongoing work into content the agent works on. On a host, the agent's own directory is replaced by every release and local content is not deployed, so use an external store. |
 
 An accepted message is durable: the agent answers it after a restart. Telegram, Slack, and Feishu/Lark also replay

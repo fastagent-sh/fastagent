@@ -14,7 +14,7 @@ status: current
 一个部署好的 agent 像互联网上任何一个服务一样被调用：从程序里调，走 HTTP，带一个 key。Agent API 只定义这个 agent 对
 **调用方**提供的接口：一个 `Agent`，下面是 `sessions` 和 `messages` 两组操作。同一套模型有两种绑定：进程内的 TypeScript
 接口（`openAgent`），和 HTTP（`/v1` 加 `connectAgent`）。两者名字、对象、错误都一样，调用方换一行拿到 agent 的代码，就能在
-"打开本地目录"和"连到部署"之间切换。改 agent 的定义、查看会话内部这类运维操作，是 harness（pi-durable）自己的 API，
+"在进程里打开 agent"和"连到部署"之间切换。改 agent 的定义、查看会话内部这类运维操作，是 harness（pi-durable）自己的 API，
 不在这里。
 
 ## 1. 它要保证的四件事
@@ -124,8 +124,8 @@ entry 是持久的，在哪里读到都一样。`delta`（回答正在写的部�
 - **发消息的 key 走 `Idempotency-Key` 头**，和 `by-key` 路径一样做百分号编码：头只能放 Latin-1、首尾空白会被裁掉，而 key 可以是
   任意 1 到 256 个字符。
 - **`connectAgent` 给没带 key 的发送自己生成一个**，这样回答丢失时能以 `unconfirmed` 带上这个 key，调用方用它查到消息。
-- **CLI。** `fastagent deploy` 在 `.secrets/production/.env` 里没有 key 时生成一个，随其他值一起带到部署，报告里给出 API 地址和
-  检查命令；`fastagent invoke --url <base>` 用和本地 `invoke` 一样的输出和退出码检查一个部署。
+- **CLI。** `fastagent deploy --run` 在目标和 `.secrets/production/.env` 都没有 key 时生成一个，设置到目标上并记在该文件里；
+  目标缺少文件里已有的 key（重新创建的部署）时，用文件里的那个。报告里给出 API 地址和检查命令；`fastagent invoke --url <base>` 用和本地 `invoke` 一样的输出和退出码检查一个部署。
 - **AgentCore 上不提供。** 那里只能通过 `/invocations` 访问，HTTP API 要单独设计（经由 forwarder Lambda，加响应流）。
 
 ## 7. 安全模型

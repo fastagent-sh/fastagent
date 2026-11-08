@@ -13,16 +13,17 @@
  * terminal, so the command switches it to raw, no echo (answers are not echoed back, and a long line is not cut by
  * the terminal's line editor) before handing it to `exec`.
  */
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { SignatureV4 } from "@smithy/signature-v4";
-import { WebSocket, ping } from "undici";
+import { RuntimeWebSocket, pinger } from "../../runtime-websocket.ts";
 import type { BoxChannel, BoxShell } from "../box-shell.ts";
 import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson } from "./aws-cli.ts";
+import { Sha256 } from "./sigv4.ts";
 import { MOUNT, PROBE_PAYLOAD } from "./plan.ts";
 
 const STDIN = 0x00;
@@ -32,6 +33,8 @@ const STATUS = 0x03;
 const HEARTBEAT = 0x05;
 /** The service closes a connection whose frame is larger (code 1009). */
 const MAX_PAYLOAD = 64 * 1024 - 1;
+const WS_OPEN = 1;
+
 /** The SDK's interval; a connection with no ping for ~60s is dropped by the service. */
 const KEEPALIVE_MS = 30_000;
 /** The longest a presigned shell URL may live (the SDK refuses more). */
@@ -61,21 +64,6 @@ async function awsCliCredentials(aws: CliRunner): Promise<AwsCredentials> {
   throw new Error(
     `could not read AWS credentials from the AWS CLI (${"absent" in read ? "none configured" : read.unreadable})`,
   );
-}
-
-/** SHA-256 / HMAC-SHA-256 over node:crypto, in the shape SigV4's signer takes. */
-class Sha256 {
-  private readonly hash;
-  constructor(secret?: string | ArrayBuffer | ArrayBufferView) {
-    const key = secret instanceof ArrayBuffer ? Buffer.from(secret) : secret;
-    this.hash = key === undefined ? createHash("sha256") : createHmac("sha256", key as string | NodeJS.ArrayBufferView);
-  }
-  update(data: string | ArrayBuffer | ArrayBufferView): void {
-    this.hash.update(data instanceof ArrayBuffer ? Buffer.from(data) : (data as string | NodeJS.ArrayBufferView));
-  }
-  async digest(): Promise<Uint8Array> {
-    return new Uint8Array(this.hash.digest());
-  }
 }
 
 /** The runtime's region, from its ARN (`arn:<partition>:bedrock-agentcore:<region>:<account>:runtime/<id>`). */
@@ -134,7 +122,14 @@ export function shellExit(status: string): string | undefined {
 /** Open `command` in a new shell on `url`: stdin/stdout as streams, the other channels folded in. */
 export function openShellChannel(url: string, command: string): BoxChannel {
   const output = new PassThrough();
-  const ws = new WebSocket(url);
+  const ws = new RuntimeWebSocket(url);
+  const ping = pinger(ws);
+  if (ping === undefined) {
+    ws.close();
+    throw new Error(
+      "this runtime cannot send WebSocket pings, and the AgentCore service drops a shell connection that has none for about a minute",
+    );
+  }
   ws.binaryType = "arraybuffer";
   const frame = (channel: number, payload: Buffer = Buffer.alloc(0)) =>
     ws.send(Buffer.concat([Buffer.from([channel]), payload]));
@@ -151,7 +146,7 @@ export function openShellChannel(url: string, command: string): BoxChannel {
   ws.addEventListener("open", () => {
     stdin(Buffer.from(`stty raw -echo 2>/dev/null; exec sh -c '${command}'\n`));
     keepalive = setInterval(() => {
-      ping(ws);
+      ping();
       frame(HEARTBEAT);
     }, KEEPALIVE_MS);
   });
@@ -184,7 +179,7 @@ export function openShellChannel(url: string, command: string): BoxChannel {
   const input = new Writable({
     write(chunk: Buffer, _encoding, done) {
       void opened.then((open) => {
-        if (open && ws.readyState === WebSocket.OPEN) stdin(chunk);
+        if (open && ws.readyState === WS_OPEN) stdin(chunk);
         done();
       });
     },

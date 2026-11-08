@@ -6,18 +6,22 @@ import { MISE_ENVIRONMENT } from "../environment/mise.ts";
 import { BOX_CLI_PREDATES } from "./box-shell.ts";
 
 /**
+ * What a deploy builds the image from beyond the program, in the build context: the instance configuration it delivers
+ * and the text that configuration names, the release manifest and the package list. FastAgent's own directory, so it is
+ * ignored by git and absent from the author's root, and the image copies it to {@link IMAGE_CONFIG_DIR}. A directory of
+ * its own, never a file in the program's: what an instance configuration names beside it (its text) is
+ * read from its own directory, and the program's directory holds the program's.
+ */
+export const DELIVERED_CONFIG_DIR = `${INSTANCES_DIRNAME}/deploy`;
+const DELIVERED_CONFIG_FILE = `${DELIVERED_CONFIG_DIR}/${INSTANCE_CONFIG_FILE}`;
+const RELEASE_PATH = `${DELIVERED_CONFIG_DIR}/${RELEASE_FILE}`;
+
+/**
  * The packages the image installs, one per line as mise is given them: build output every deploy writes beside the
  * release manifest, so the layer that installs them is built again when they change and not when anything else does.
  */
 const PACKAGES_FILE = "fastagent.packages";
-
-/**
- * The directory a deploy writes the instance configuration it delivers to, in the build context; the image copies it to
- * {@link IMAGE_CONFIG_DIR}. A directory of its own, never a file in the program's: what an instance configuration names
- * beside it (its `.mcp.json`, its text) is read from its own directory, and the program's directory holds the program's.
- */
-const DELIVERED_CONFIG_DIR = "fastagent.deploy";
-const DELIVERED_CONFIG_FILE = `${DELIVERED_CONFIG_DIR}/${INSTANCE_CONFIG_FILE}`;
+const PACKAGES_PATH = `${DELIVERED_CONFIG_DIR}/${PACKAGES_FILE}`;
 
 /** Where a generated image has the instance configuration, read-only: the filesystem hierarchy's for configuration. */
 const IMAGE_CONFIG_DIR = "/etc/fastagent";
@@ -28,9 +32,14 @@ const IMAGE_CONFIG_DIR = "/etc/fastagent";
  */
 export function withPublicUrl(config: string | undefined, publicUrl: string): { config: string; publicUrl: string } {
   const values = (config === undefined ? {} : JSON.parse(config)) as { http?: { publicUrl?: string } };
-  const own = values.http?.publicUrl;
+  const own = ownPublicUrl(config);
   if (own !== undefined) return { config: config as string, publicUrl: own };
   return { config: `${JSON.stringify({ ...values, http: { ...values.http, publicUrl } }, null, 2)}\n`, publicUrl };
+}
+
+/** The `http.publicUrl` an operator's configuration names, if it does. */
+export function ownPublicUrl(config: string | undefined): string | undefined {
+  return config === undefined ? undefined : (JSON.parse(config) as { http?: { publicUrl?: string } }).http?.publicUrl;
 }
 
 /** The delivered configuration as the artifact a deploy writes, to rewrite it once the host has given the URL. */
@@ -39,7 +48,7 @@ export function deliveredConfigArtifact(config: string): Artifact {
 }
 
 /** What every deploy writes whoever wrote it before: build output, by its path, never kept or reported stale. */
-export const BUILD_OUTPUTS: readonly string[] = [RELEASE_FILE, PACKAGES_FILE, DELIVERED_CONFIG_FILE];
+export const BUILD_OUTPUTS: readonly string[] = [RELEASE_PATH, PACKAGES_PATH, DELIVERED_CONFIG_FILE];
 
 export interface Artifact {
   path: string;
@@ -57,11 +66,11 @@ const STDIO_PREDATED = JSON.stringify({
   message: BOX_CLI_PREDATES,
 }).replaceAll('"', '\\"');
 
-/** Where a generated image keeps its storage (`FASTAGENT_STORAGE_DIR`); every host mounts its volume here. */
+/** Where a generated image keeps its storage (`FASTAGENT_ROOT`); every host mounts its volume here. */
 const STORAGE_DIR = "/data";
 
-/** Where a generated image holds the definition: the build context, which is the agent directory. */
-export const IMAGE_DEFINITION_DIR = "/app/definition";
+/** Where a generated image holds the agent: the build context, which is the agent directory. */
+export const IMAGE_APP_DIR = "/app";
 
 /**
  * The shell command that runs `fastagent login --stdio <args>` inside a running generated image, as the server there
@@ -79,7 +88,7 @@ export const IMAGE_DEFINITION_DIR = "/app/definition";
  */
 export function boxLoginCommand(
   args: readonly string[],
-  { storage, program = IMAGE_DEFINITION_DIR }: { storage?: string; program?: string } = {},
+  { storage, program = IMAGE_APP_DIR }: { storage?: string; program?: string } = {},
 ): string {
   for (const value of [...args, ...(storage ? [storage] : []), program]) {
     if (!/^[\w.@/-]+$/.test(value)) throw new Error(`cannot pass ${JSON.stringify(value)} to a shell on the box`);
@@ -88,7 +97,7 @@ export function boxLoginCommand(
     ...(storage
       ? [`root="${storage}"`, `export FASTAGENT_SECRETS_DIR="$root/.secrets"`]
       : [
-          `root="\${FASTAGENT_STORAGE_DIR:-${STORAGE_DIR}}"`,
+          `root="\${FASTAGENT_ROOT:-${STORAGE_DIR}}"`,
           `export FASTAGENT_SECRETS_DIR="\${FASTAGENT_SECRETS_DIR:-$root/.secrets}"`,
         ]),
     `cd "${program}" || exit 1`,
@@ -170,9 +179,12 @@ function aptLayer(packages?: string[]): string {
 /** mise's own directories for the build, thrown away with the layer: nothing of them is read at run time. */
 const BUILD_MISE_DIR = "/tmp/mise";
 
+/** Where the build holds the package list while it installs them: not the program's directory. */
+const BUILD_PACKAGES = "/tmp/fastagent.packages";
+
 /**
  * The layer that installs the agent's packages, after its dependencies (the agent's own mise among them) and before the
- * definition, so it stays cached while the definition changes. It reads them from {@link PACKAGES_FILE}, which deploy
+ * definition, so it stays cached while the definition changes. It reads them from {@link PACKAGES_PATH}, which deploy
  * writes, rather than listing them: the Dockerfile is kept once written, and a list here would make every package
  * change one that `--run` stops on. The packages go to mise's system directory (`--system`,
  * /usr/local/share/mise/installs), which every mise reads beside its own data directory, so a start installs nothing.
@@ -186,10 +198,10 @@ function environmentLayer(dir: string): string {
   const steps = [
     `export ${isolation} MISE_DATA_DIR=${BUILD_MISE_DIR} MISE_CACHE_DIR=${BUILD_MISE_DIR}/cache MISE_STATE_DIR=${BUILD_MISE_DIR}/state MISE="${mise}"`,
     // One argument per line, read as it is: no quote or backslash in a package means anything to xargs.
-    `xargs -d '\\n' -a ${PACKAGES_FILE} "$MISE" install --system`,
+    `xargs -d '\\n' -a ${BUILD_PACKAGES} "$MISE" install --system`,
     `rm -rf ${BUILD_MISE_DIR}`,
   ];
-  return `COPY ${PACKAGES_FILE} ./
+  return `COPY ${PACKAGES_PATH} ${BUILD_PACKAGES}
 RUN ${steps.join(" \\\n && ")}
 `;
 }
@@ -204,7 +216,7 @@ export const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
 const BUILD_STEP_NOTE = "# `start` opens dist/, which an upload that follows .gitignore leaves out: build it here.";
 
 /**
- * The instance configuration's layer, after the build so a change of configuration builds nothing again: the directory
+ * The instance configuration's layer, after the build: the directory
  * the deploy wrote, read-only where the image's configuration goes, and named to `start`.
  */
 const CONFIG_LAYER = `# The instance configuration \`deploy --config\` delivers ({} without one: the program's defaults).
@@ -213,15 +225,15 @@ ENV FASTAGENT_CONFIG=${IMAGE_CONFIG_DIR}/${INSTANCE_CONFIG_FILE}
 `;
 
 function dockerfile(input: ContainerInput): string {
-  // The build context is the agent directory, baked at IMAGE_DEFINITION_DIR; deps install (and the local bin lives)
+  // The build context is the agent directory, baked at IMAGE_APP_DIR; deps install (and the local bin lives)
   // there.
-  const dir = IMAGE_DEFINITION_DIR;
+  const dir = IMAGE_APP_DIR;
   const layoutNote = `The agent directory is baked at ${dir}`;
   // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc., which the
   // slim image lacks.
   const apt = aptLayer(input.apt);
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
-  const deployment = `ENV FASTAGENT_RELEASE_FILE=${dir}/${RELEASE_FILE}\nENV FASTAGENT_STORAGE_DIR=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
+  const deployment = `ENV FASTAGENT_RELEASE_FILE=${IMAGE_CONFIG_DIR}/${RELEASE_FILE}\nENV FASTAGENT_ROOT=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   const environment = input.packages && input.packages.length > 0 ? environmentLayer(dir) : "";
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : NODE_IMAGE;
@@ -277,6 +289,8 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 **/${SECRETS_DIRNAME}/**
 **/${STATE_DIRNAME}
 /${INSTANCES_DIRNAME}
+# what a deploy writes for the image: the delivered configuration and text, the release manifest, the package list
+!/${DELIVERED_CONFIG_DIR}
 /${CONTENT_DIRNAME}
 # the project's own instance configuration: the development instance's, which a deploy does not carry
 /${INSTANCE_CONFIG_FILE}
@@ -302,14 +316,12 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
   };
   parseDeploymentRelease(JSON.stringify(release));
   return [
-    { path: RELEASE_FILE, content: `${JSON.stringify(release, null, 2)}\n` },
+    { path: RELEASE_PATH, content: `${JSON.stringify(release, null, 2)}\n` },
     // Written without a configuration too, as none: one an earlier deploy delivered would otherwise ship again.
     { path: DELIVERED_CONFIG_FILE, content: input.config ?? "{}\n" },
     // Written without packages too, empty: a list an earlier deploy left would otherwise outlive the last package.
-    { path: PACKAGES_FILE, content: (input.packages ?? []).map((spec) => `${spec}\n`).join("") },
+    { path: PACKAGES_PATH, content: (input.packages ?? []).map((spec) => `${spec}\n`).join("") },
     { path: "Dockerfile", content: dockerfile(input) },
-    // Both names: BuildKit prefers the one beside the Dockerfile, the classic builder reads the context root's.
     { path: ".dockerignore", content: ignore },
-    { path: "Dockerfile.dockerignore", content: ignore },
   ];
 }

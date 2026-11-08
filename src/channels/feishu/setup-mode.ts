@@ -56,7 +56,7 @@ export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
 const FEISHU_APP_CONFIG_REQUEST: FeishuScopeRequest = {
   request: FEISHU_APP_CONFIG_SCOPE,
   withoutIt:
-    "the Verification Token is not captured and no Request URL is registered for you (add, dev --tunnel, deploy --run)",
+    "the Verification Token is not captured and no Request URL is registered for you (channels setup, dev --tunnel, deploy --run)",
 };
 
 /**
@@ -69,7 +69,7 @@ export function feishuAppScopes(ingress: FeishuSubscriptionMode): FeishuScopeReq
 
 /**
  * What a created app carries on top of the platform's agent template — the `addons` merged onto the confirm page. A
- * scope that arrives here needs no console visit; one a tenant withholds is reported after creation (`add-feishu.ts`).
+ * scope that arrives here needs no console visit; one a tenant withholds is reported after creation (`setup.ts`).
  */
 export function feishuAppAddons(ingress: FeishuSubscriptionMode): {
   scopes: { tenant: string[] };

@@ -16,6 +16,7 @@ import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../s
 import { pickedModelLine } from "../src/cli/shared.ts";
 import { buildable, runInProcess } from "./cli-run.ts";
 import { FIXTURES } from "./probe-package.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const made: string[] = [];
 afterAll(() => {
@@ -89,11 +90,9 @@ describe("resolveConfig", () => {
     ["a model that is not provider/modelId", { model: "nomodel" }, '/model must be "provider/modelId"'],
     ["a setting the program does not declare", { settings: { team: "x" } }, "/settings/team unknown field"],
     ["a setting of the wrong type", { settings: { repo: 7 } }, "/settings/repo"],
-    [
-      "instructions, which a later release reads",
-      { instructions: [] },
-      "instructions is not read by this FastAgent yet",
-    ],
+    ["instructions that are not a list of paths", { instructions: "./AGENTS.md" }, "/instructions"],
+    ["a skills list with an empty path", { skills: [""] }, "/skills/0"],
+    ["a prompts list naming one directory twice", { prompts: ["./p", "./p"] }, "/prompts"],
   ])("refuses %s, naming the file and the path", (_what, values, message) => {
     expect(() => resolveConfig(reviewer, instance({ settings: { repo: "r" }, ...values }))).toThrow(message);
   });
@@ -134,6 +133,37 @@ describe("instanceConfigSchema", () => {
     expect(() => resolveConfig(program({ defaults: { content: { x: { path: "/x" } } } }))).toThrow(
       /\/content unknown field/,
     );
+  });
+
+  it("describes the MCP servers an instance adds, which the program's defaults do not carry", () => {
+    const check = compile(instanceConfigSchema(undefined));
+    expect(check.check({ mcpServers: { notes: { type: "http", url: "https://notes.example.com/mcp" } } })).toBe(true);
+    expect(check.check({ mcpServers: [] })).toBe(false);
+    expect(() => resolveConfig(program({ defaults: { mcpServers: {} } }))).toThrow(/\/mcpServers unknown field/);
+  });
+
+  it("refuses an instance's MCP server that is not one, naming the file, and accepts it once it is", () => {
+    const given = (mcpServers: unknown) => () =>
+      resolveConfig(reviewer, instance({ settings: { repo: "r" }, mcpServers }));
+    expect(given({ x: { type: "http", url: "http://outside.example/mcp" } })).toThrow(
+      /fastagent\.json: MCP endpoints require HTTPS/,
+    );
+    expect(given({ x: { command: "node", args: ["$" + "{input:token}"] } })).toThrow(
+      /fastagent\.json: x supports only/,
+    );
+    expect(given({ x__y: { command: "node" } })).toThrow(/fastagent\.json: server names must be/);
+    expect(given({ x: { command: "node" } })).not.toThrow();
+  });
+
+  it("describes the text an instance adds, which the program's defaults do not carry", () => {
+    const check = compile(instanceConfigSchema(undefined));
+    expect(check.check({ instructions: ["./AGENTS.md"], skills: ["./skills"], prompts: ["./prompts"] })).toBe(true);
+    // Relative to the instance's file, which a program's defaults have none of.
+    for (const key of ["instructions", "skills", "prompts"]) {
+      expect(() => resolveConfig(program({ defaults: { [key]: ["./x"] } }))).toThrow(
+        new RegExp(`/${key} unknown field`),
+      );
+    }
   });
 
   it("refuses a bad content entry in an instance's file by naming it and the file, not as a schema path", () => {
@@ -233,6 +263,8 @@ export default needs([], (_secrets, settings: { repo: string; digestChannel?: st
     const opened = await openServing(definition, {
       secrets: {},
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       ...(instance === undefined ? {} : { config: instance }),
       storage: "memory",
     });
@@ -264,9 +296,9 @@ export default needs([], (_secrets, settings: { repo: string; digestChannel?: st
       "config must be an absolute path",
     );
     writeFileSync(join(root, "instance.json"), JSON.stringify({ settings: { repo: "acme/api" } }));
-    const agent = await openAgent(definition, { root, config: join(root, "instance.json") });
+    const agent = await openAgent(definition, { root, config: join(root, "instance.json"), offline: true });
     await agent.close();
-    const second = await openAgent(definition, { root, config: { settings: { repo: "acme/web" } } });
+    const second = await openAgent(definition, { root, config: { settings: { repo: "acme/web" } }, offline: true });
     await second.close();
     await expect(openAgent(definition, { root, config: join(root, "missing.json") })).rejects.toThrow(
       "cannot read the instance configuration",

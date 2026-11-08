@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { declaredChannels } from "../src/channels/discover.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
-import { CARRIER_MAX_CHUNKS, ingressSessionId } from "../src/deploy/agentcore/plan.ts";
-import { applyCarriedEnv, encodeCarriedEnv } from "../src/deploy/secrets.ts";
+import { ingressSessionId } from "../src/deploy/agentcore/plan.ts";
 import {
   type AgentcoreRunPlan,
   deployAgentcoreRun,
@@ -53,11 +52,16 @@ const NO_SUCH_STACK = {
 const happyAws = (args: string[]): { code?: number; stdout?: string; stderr?: string } => {
   if (args[0] === "sts") return { stdout: IDENTITY };
   if (args[0] === "ecr" && args[1] === "get-login-password") return { stdout: "hunter2" };
+  if (args[0] === "secretsmanager" && args[1] === "describe-secret") {
+    return { stdout: args.includes("ARN") ? `${SECRET_ARN}\n` : JSON.stringify({ ARN: SECRET_ARN }) };
+  }
   if (args[0] === "cloudformation" && args[1] === "describe-stacks") {
     return args.includes("Stacks[0].StackStatus") ? NO_SUCH_STACK : { stdout: OUTPUTS };
   }
   return {};
 };
+
+const SECRET_ARN = "arn:aws:secretsmanager:us-west-2:123456789012:secret:fastagent/my-agent-AbCdEf";
 
 const NO_WEBHOOKS = { webhooks: false };
 const FORWARDER = { webhooks: true };
@@ -67,9 +71,9 @@ const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   dockerfilePath: "Dockerfile",
   tag: "20260728",
   region: "us-west-2",
-  secrets: {},
-  missingSecrets: [],
-  valueFile: ".secrets/.env",
+  provideSecrets: async () => undefined,
+  ingressSecret: "ingress-secret",
+  wakeSecret: "wake-secret",
   channels: [],
   topology: NO_WEBHOOKS,
   ...over,
@@ -90,12 +94,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The runtime as the forwarder's probe reaches it: verified, and reporting how it pointed each webhook channel. */
+const runtimeReporting = (webhooks: { channel: string; outcome: string }[]) =>
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ ok: true, webhooks })),
+  );
+
+/** Registration happens on the runtime now: a deploy's own registrar is called for Slack's page alone. */
 const run = (
   p: AgentcoreRunPlan,
   aws: CliRunner,
   docker: CliRunner,
   tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
-) => deployAgentcoreRun(p, aws, docker, () => {}, writeParams, writeZip, { telegram: tg });
+) => deployAgentcoreRun(p, aws, docker, () => {}, writeParams, writeZip, { telegram: tg }, { intervalMs: 1 });
 
 describe("the deployment bucket (the agent's memory outlives the stack)", () => {
   const withForwarder = plan({ topology: FORWARDER });
@@ -158,12 +170,10 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
 });
 
 describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
-  it("the runtime logs in after the probe verified it and before any webhook points at it; a failed login registers none", async () => {
+  it("the runtime logs in after the probe verified it; a failed login ends the deploy before it reads the webhooks", async () => {
     const order: string[] = [];
-    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
-      order.push("register");
-      return "registered";
-    });
+    runtimeReporting([{ channel: "telegram", outcome: "registered" }]);
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const boxLogin = async (runtimeArn: string) => {
       order.push(`login ${runtimeArn}`);
       return "not logged in: …";
@@ -181,52 +191,24 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(out).toMatchObject({
       ok: false,
       gate: expect.stringMatching(
-        /^not logged in: …\. This deploy registered no webhook.*point the channels by hand.*lines above/,
+        /^not logged in: …\. This deploy confirmed no webhook.*they work again: the runtime has pointed its own channels/,
       ),
     });
-    // The shell opens on the runtime this deploy just produced, and nothing is pointed at it.
+    // The shell opens on the runtime this deploy just produced; the one fetch is the probe that verified it.
     expect(order).toEqual(["login arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc"]);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
     expect(tg).not.toHaveBeenCalled();
-  });
-
-  it("a redeploy's failed login says the webhooks an earlier deploy registered are still live, not missing", async () => {
-    // Every deploy wipes the runtime's login, and the forwarder URL outlives it: the channels are already delivering
-    // to a runtime with no model credential, which "point the channels by hand" would misreport.
-    const { cli: aws } = fakeCli((a) =>
-      a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")
-        ? { stdout: "UPDATE_COMPLETE\n" }
-        : happyAws(a),
-    );
-    const logs: string[] = [];
-    const out = await deployAgentcoreRun(
-      plan({
-        channels: declaredChannels(["telegram"]),
-        topology: FORWARDER,
-        boxLogin: { command: "fastagent login p --deployment agentcore", run: async () => "not logged in: …" },
-      }),
-      aws,
-      fakeCli().cli,
-      (m) => logs.push(m),
-      writeParams,
-      writeZip,
-      { telegram: vi.fn() },
-    );
-    expect(out).toMatchObject({
-      ok: false,
-      gate: expect.stringMatching(/still points here, and every message it brings fails.*forwarder URL is unchanged/),
-    });
-    expect(logs.some((l) => l.includes("url=https://"))).toBe(false); // nothing to point by hand
   });
 
   it("happy path: identity → docker checks → ecr → login → buildx push → cfn deploy → outputs → webhook", async () => {
     const { cli: aws, cmds: awsCmds } = fakeCli(happyAws);
     const { cli: docker, cmds: dockerCmds, calls: dockerCalls } = fakeCli();
+    runtimeReporting([{ channel: "telegram", outcome: "registered" }]);
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
       plan({
         channels: declaredChannels(["telegram"]),
         topology: FORWARDER,
-        secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" },
       }),
       aws,
       docker,
@@ -242,9 +224,14 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       "sts get-caller-identity --output json",
       // The pre-flight region probe: cheap, and BEFORE the multi-minute build it would otherwise waste.
       "bedrock-agentcore-control list-agent-runtimes --max-items 1 --region us-west-2",
+      // The role the runtime needs in this account: there, so nothing is created.
+      "iam get-role --role-name AWSServiceRoleForBedrockAgentCoreRuntimeIdentity",
       // The stack is read ONCE, here: what it says (a redeploy that replaces state, or a failed first create) is
       // only actionable before the build, and step 7 reuses this answer instead of asking again.
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].StackStatus --output text",
+      // The deployment's values, after the only reads that precede a write: the secret the stack reads exists (nothing
+      // to create), and the step that fills it ran.
+      "secretsmanager describe-secret --secret-id fastagent/my-agent --output json",
       "ecr describe-repositories --repository-names fastagent/my-agent",
       // The deployment bucket: created if absent, its safety/durability properties re-converged every
       // deploy, then the content-hashed forwarder package uploaded.
@@ -255,6 +242,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         /^s3 cp \/tmp\/forwarder\.zip s3:\/\/fa-my-agent-123456789012\/forwarder\/[0-9a-f]{16}\.zip$/,
       ),
       "ecr get-login-password",
+      "secretsmanager describe-secret --secret-id fastagent/my-agent --query ARN --output text",
       "cloudformation deploy --stack-name fastagent-my-agent --template-file agentcore.template.yaml " +
         "--capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides file:///tmp/params.json",
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
@@ -271,7 +259,8 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     ]);
     // The ECR password flows stdout→stdin between the runners, never argv.
     expect(dockerCalls.find((c) => c.args[0] === "login")?.input).toBe("hunter2");
-    expect(tg).toHaveBeenCalledWith("https://xyz.lambda-url.us-west-2.on.aws");
+    // The runtime pointed Telegram itself; the deploy read what it made of it.
+    expect(tg).not.toHaveBeenCalled();
     // Secrets ride the params FILE (0600 temp), never argv.
     const forwarderKey = awsCmds()
       .find((c) => c.startsWith("s3 cp"))!
@@ -279,12 +268,11 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(writeParams).toHaveBeenCalledWith(
       `${JSON.stringify([
         "ImageUri=123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728",
+        `SecretArn=${SECRET_ARN}`,
         "ForwarderBucket=fa-my-agent-123456789012",
         `ForwarderS3Key=${forwarderKey}`,
-        `FastagentEnv=${encodeCarriedEnv({ TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" })}`,
-        "FastagentEnv2=",
-        "FastagentEnv3=",
-        "FastagentEnv4=",
+        "FastagentIngressSecret=ingress-secret",
+        "FastagentWakeSecret=wake-secret",
       ])}\n`,
     );
   });
@@ -329,11 +317,64 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(cmds()).toContain("configure get region");
   });
 
-  it("gates missing secret values BEFORE any side effect", async () => {
+  it("gates on the secrets step before the build, the bucket and the stack", async () => {
     const { cli: aws, cmds } = fakeCli(happyAws);
-    const out = await run(plan({ missingSecrets: ["TELEGRAM_BOT_TOKEN"] }), aws, fakeCli().cli);
+    const out = await run(
+      plan({ provideSecrets: async () => "AWS Secrets Manager has no value for: TELEGRAM_BOT_TOKEN" }),
+      aws,
+      fakeCli().cli,
+    );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("TELEGRAM_BOT_TOKEN") });
-    expect(cmds().some((c) => c.startsWith("ecr create") || c.startsWith("cloudformation"))).toBe(false);
+    expect(cmds().some((c) => /^(ecr|s3|cloudformation) /.test(c) && !c.startsWith("cloudformation describe"))).toBe(
+      false,
+    );
+  });
+
+  it("stops before the secret, the bucket and the build when the account lacks the role and may not make it", async () => {
+    const { cli: aws, cmds } = fakeCli((a) => {
+      if (a[0] === "iam" && a[1] === "get-role") {
+        return { code: 254, stderr: "An error occurred (NoSuchEntity) when calling the GetRole operation" };
+      }
+      if (a[0] === "iam" && a[1] === "create-service-linked-role") {
+        return {
+          code: 254,
+          stderr: "An error occurred (AccessDenied) when calling the CreateServiceLinkedRole operation",
+        };
+      }
+      return happyAws(a);
+    });
+    const { cli: docker, cmds: dockerCmds } = fakeCli();
+    const out = await run(plan(), aws, docker);
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("iam:CreateServiceLinkedRole") });
+    expect(out.ok ? "" : out.gate).toContain("aws iam create-service-linked-role --aws-service-name runtime-identity");
+    expect(cmds().some((c) => /^(ecr|s3|s3api|secretsmanager|cloudformation) /.test(c))).toBe(false);
+    expect(dockerCmds().some((c) => c.startsWith("buildx build"))).toBe(false);
+  });
+
+  it("hands the secrets step the deployment's secret, made first when it is not there", async () => {
+    const seen: string[] = [];
+    const absent = fakeCli((a) =>
+      a[0] === "secretsmanager" && a[1] === "describe-secret" && !a.includes("ARN") && seen.length === 0
+        ? {
+            code: 254,
+            stderr: "An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation",
+          }
+        : happyAws(a),
+    );
+    const out = await run(
+      plan({
+        provideSecrets: async (store) => {
+          seen.push(`exists:${await store.exists()}`);
+          return undefined;
+        },
+      }),
+      absent.cli,
+      fakeCli().cli,
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(absent.cmds().find((c) => c.startsWith("secretsmanager create-secret"))).toContain(
+      "--name fastagent/my-agent",
+    );
   });
 
   it("skips ECR create when the repository exists; creates it when AWS says it is not there", async () => {
@@ -449,7 +490,11 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       // And nothing but reads precedes the question, so the warning cannot arrive after this deploy changed something.
       const asked = calls.findIndex((c) => c.args.includes("Stacks[0].StackStatus"));
       expect(
-        calls.slice(0, asked).every((c) => ["sts", "configure", "bedrock-agentcore-control"].includes(c.args[0]!)),
+        calls
+          .slice(0, asked)
+          .every(
+            (c) => ["sts", "configure", "bedrock-agentcore-control"].includes(c.args[0]!) || c.args[1] === "get-role",
+          ),
       ).toBe(true);
     });
 
@@ -480,22 +525,6 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       expect(logs[warned]).toContain("/mnt/data");
       expect(logs.findIndex((l) => l.includes("building + pushing"))).toBeGreaterThan(warned);
     });
-  });
-
-  it("gates a value file beyond the chunk ceiling", async () => {
-    const tooBigValues = await run(
-      plan({ secrets: { SOME_BLOB: "x".repeat(6000) } }),
-      fakeCli(happyAws).cli,
-      fakeCli().cli,
-    );
-    expect(tooBigValues).toMatchObject({ ok: false, gate: expect.stringContaining("too large to carry") });
-    // One long value is fine on its own: it is chunked with the rest, not capped per variable.
-    const longValue = await run(
-      plan({ secrets: { SOME_BLOB: "x".repeat(2049) } }),
-      fakeCli(happyAws).cli,
-      fakeCli().cli,
-    );
-    expect(longValue).not.toMatchObject({ gate: expect.stringContaining("too large") });
   });
 
   it("announces account/principal/region/image and flags an unavailable region BEFORE any side effect", async () => {
@@ -637,9 +666,81 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
 
   it("a failed telegram registration gates AFTER the deploy (the app itself deployed)", async () => {
     const { cli: aws } = fakeCli(happyAws);
-    const tg = vi.fn(async (): Promise<RegistrationOutcome> => "failed");
-    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), aws, fakeCli().cli, tg);
+    runtimeReporting([{ channel: "telegram", outcome: "failed" }]);
+    const out = await run(plan({ channels: declaredChannels(["telegram"]) }), aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("telegram") });
+  });
+
+  it("waits while the runtime reports a channel pending, and gates when it never ends", async () => {
+    const pending = [{ channel: "telegram", outcome: "pending" }];
+    const answers = [pending, pending, [{ channel: "telegram", outcome: "registered" }]];
+    const fetchImpl = vi.fn(async () => Response.json({ ok: true, webhooks: answers.shift() ?? [] }));
+    vi.stubGlobal("fetch", fetchImpl);
+    const first = await run(plan({ channels: declaredChannels(["telegram"]) }), fakeCli(happyAws).cli, fakeCli().cli);
+    expect(first).toMatchObject({ ok: true });
+    // The probe that verified it (the runtime is only waking), a read that said pending, one that said registered.
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+
+    runtimeReporting([{ channel: "telegram", outcome: "pending" }]);
+    const never = await deployAgentcoreRun(
+      plan({ channels: declaredChannels(["telegram"]) }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      () => {},
+      writeParams,
+      writeZip,
+      { telegram: vi.fn() },
+      { intervalMs: 1, timeoutMs: 20 },
+    );
+    expect(never).toMatchObject({ ok: false, gate: expect.stringContaining("telegram") });
+  });
+
+  it("asks the runtime for its webhooks every 5 s by default: each ask is a billed Lambda and runtime call", async () => {
+    const pending = [{ channel: "telegram", outcome: "pending" }];
+    const answers = [pending, pending, [{ channel: "telegram", outcome: "registered" }]];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ ok: true, webhooks: answers.shift() })),
+    );
+    const delays: number[] = [];
+    const wait = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
+      delays.push(ms ?? 0);
+      fn();
+      return 0;
+    }) as unknown as typeof setTimeout);
+    try {
+      const out = await deployAgentcoreRun(
+        plan({ channels: declaredChannels(["telegram"]) }),
+        fakeCli(happyAws).cli,
+        fakeCli().cli,
+        () => {},
+        writeParams,
+        writeZip,
+        { telegram: vi.fn() },
+      );
+      expect(out).toMatchObject({ ok: true });
+    } finally {
+      wait.mockRestore();
+    }
+    expect(delays).toContain(5_000);
+    expect(delays).not.toContain(2_000);
+  });
+
+  it("names the configuration's own http.publicUrl as where the platforms reach it, in Slack's step", async () => {
+    runtimeReporting([{ channel: "slack", outcome: "manual" }]);
+    const logs: string[] = [];
+    const out = await deployAgentcoreRun(
+      plan({ channels: declaredChannels(["slack"]), publicUrl: "https://agent.acme.com" }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      { telegram: vi.fn() },
+      { intervalMs: 1 },
+    );
+    expect(out).toMatchObject({ ok: true });
+    expect(logs).toContain("slack: set Event Subscriptions → Request URL → https://agent.acme.com/slack");
   });
 });
 
@@ -653,73 +754,38 @@ describe("deploy/agentcore/run: helpers", () => {
     expect(pickStackOutputs([{ OutputKey: "A", OutputValue: "1" }, { OutputKey: 2 }])).toEqual({ A: "1" });
   });
 
-  it("paramsFileContent: minted secrets by name, the value file as one carrier, every unused chunk cleared", () => {
-    const FWD = { bucket: "b", key: "k" };
+  it("paramsFileContent: the image, the secret's ARN, the forwarder and the two minted secrets, and no value", () => {
     const params = JSON.parse(
-      paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_INGRESS_SECRET: "in" }, FWD),
+      paramsFileContent("img:1", SECRET_ARN, { ingressSecret: "in", wakeSecret: "wk" }, { bucket: "b", key: "k" }),
     ) as string[];
-    expect(params.slice(0, 4)).toEqual([
+    expect(params).toEqual([
       "ImageUri=img:1",
+      `SecretArn=${SECRET_ARN}`,
       "ForwarderBucket=b",
       "ForwarderS3Key=k",
       "FastagentIngressSecret=in",
+      "FastagentWakeSecret=wk",
     ]);
-    // Everything else rides FastagentEnv, and reads back as exactly what was carried.
-    const env = Object.fromEntries(
-      params
-        .filter((p) => p.startsWith("FastagentEnv"))
-        .map((p, i) => [i === 0 ? "FASTAGENT_ENV" : `FASTAGENT_ENV_${i + 1}`, p.slice(p.indexOf("=") + 1)]),
-    );
-    applyCarriedEnv(env);
-    expect(env).toMatchObject({ OPENAI_API_KEY: "sk" });
-
-    // A value file past one env value's 2048-char cap rides across the chunks; an unused chunk is cleared.
-    const long = JSON.parse(paramsFileContent("img:1", { BLOB: "x".repeat(3000) }, FWD)) as string[];
-    const chunks = long.filter((p) => p.startsWith("FastagentEnv"));
-    expect(chunks).toHaveLength(CARRIER_MAX_CHUNKS);
-    expect(chunks[1]).not.toBe("FastagentEnv2=");
-    expect(chunks.at(-1)).toBe("FastagentEnv4=");
-    for (const param of chunks) expect(param.length).toBeLessThanOrEqual(2048 + "FastagentEnv0=".length);
   });
 });
 
 describe("the post-deploy probe (verify restore + construction before registration)", () => {
-  it("names the secrets it carries — the list is no longer only what the author typed", async () => {
-    // A mounted tool/channel/schedule declares its own names, so what `--run` reads from THIS machine
-    // and puts on the runtime has to be visible on this host too.
-    const logs: string[] = [];
-    await deployAgentcoreRun(
-      plan({ secrets: { OPENAI_API_KEY: "sk", X_API_KEY: "x" } }),
-      fakeCli(happyAws).cli,
-      fakeCli().cli,
-      (m) => logs.push(m),
-      writeParams,
-      writeZip,
-      { telegram: vi.fn(async (): Promise<RegistrationOutcome> => "registered") },
-    );
-    expect(logs.join("\n")).toContain("2 secret(s): OPENAI_API_KEY, X_API_KEY");
-  });
-
-  it("POSTs the reserved probe path with the ingress secret BEFORE registration and proceeds on ok:true", async () => {
+  it("POSTs the reserved probe path with the ingress secret, and reads the runtime's webhooks through it", async () => {
     const requests: { url: string; body: string }[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (u: string | URL, init?: RequestInit) => {
         requests.push({ url: String(u), body: String(init?.body) });
-        return Response.json({ ok: true });
+        return Response.json({ ok: true, webhooks: [{ channel: "telegram", outcome: "registered" }] });
       }),
     );
     const logs: string[] = [];
-    const registered: string[] = [];
-    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
-      registered.push("telegram");
-      return "registered";
-    });
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await deployAgentcoreRun(
       plan({
         channels: declaredChannels(["telegram"]),
         topology: FORWARDER,
-        secrets: { FASTAGENT_INGRESS_SECRET: "s3cret" },
+        ingressSecret: "s3cret",
       }),
       fakeCli(happyAws).cli,
       fakeCli().cli,
@@ -733,12 +799,13 @@ describe("the post-deploy probe (verify restore + construction before registrati
     // the deploy's own credential in the body, never argv.
     expect(requests[0]?.url).toBe("https://xyz.lambda-url.us-west-2.on.aws/__fastagent/probe");
     expect(JSON.parse(requests[0]?.body ?? "{}")).toEqual({ auth: "s3cret" });
-    // The probe ran BEFORE the registrar: registration verifies the URL, so the container must
-    // already be restored + constructed when the platform's challenge arrives.
+    // The runtime registers as the probe wakes it, so what the deploy reads afterwards is the same path and secret.
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
     expect(logs.findIndex((l) => l.includes("probing"))).toBeLessThan(
-      logs.findIndex((l) => l.includes("registering telegram")),
+      logs.findIndex((l) => l.includes("waiting for the box to point telegram")),
     );
-    expect(registered).toEqual(["telegram"]);
+    expect(tg).not.toHaveBeenCalled();
   });
 
   it("gates IMMEDIATELY with the runtime's OWN error text on an ok:false verdict", async () => {
@@ -755,7 +822,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       () => {},
       writeParams,
       writeZip,
-      { telegram: async () => "registered", feishu: undefined, slack: undefined },
+      { telegram: async () => "registered", feishu: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 5_000, intervalMs: 1_000 },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("FEISHU_APP_SECRET is not set") });
@@ -771,7 +838,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       () => {},
       writeParams,
       writeZip,
-      { telegram: async () => "registered", feishu: undefined, slack: undefined },
+      { telegram: async () => "registered", feishu: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("403 forbidden") });
@@ -789,7 +856,7 @@ describe("the post-deploy probe (verify restore + construction before registrati
       () => {},
       writeParams,
       writeZip,
-      { telegram: async () => "registered", feishu: undefined, slack: undefined },
+      { telegram: async () => "registered", feishu: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
     );
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("never answered") });

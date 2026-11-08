@@ -24,27 +24,24 @@ import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { fastagentVersion } from "../../version.ts";
 import { InstanceExecutionEnv } from "./execution-env.ts";
+import { instanceName } from "../../instance-name.ts";
+import type { RunsAs } from "../../serving-command.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isByIngress, isNeeds } from "./define.ts";
-import {
-  type EffectiveConfig,
-  type InstanceConfigSource,
-  checkProgramConfig,
-  namedInstanceConfig,
-  projectInstanceConfig,
-} from "./config.ts";
+import { type EffectiveConfig, type InstanceConfigSource, checkProgramConfig, devInstanceConfig } from "./config.ts";
 import {
   type AgentDefinition,
-  type ChannelsConfig,
   DEFINITION_FORMAT,
+  type IngressConfig,
   chosenIngress,
   codeSecrets,
   defineDefinition,
 } from "./definition.ts";
 import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
+import { type TextSources, programText } from "./text-sources.ts";
 import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
 
 const DEFINITION_EXTENSION = "fastagent.definition";
@@ -84,7 +81,7 @@ export interface Project {
 /** The development project in `dir`, as `dev` opens it: its source and the `fastagent.json` at its root, if any. */
 export async function loadDevProject(dir: string): Promise<Project> {
   const definition = await loadSourceDefinition(dir);
-  const instance = (await namedInstanceConfig()) ?? (await projectInstanceConfig(dir));
+  const instance = await devInstanceConfig(dir);
   return instance === undefined ? { definition } : { definition, instance };
 }
 
@@ -155,7 +152,7 @@ export interface BuiltDefinition {
 }
 
 /** What a build reads of an instance's configuration: its settings, and how its channels receive. */
-export interface BuildConfig extends ChannelsConfig {
+export interface BuildConfig extends IngressConfig {
   settings: Readonly<Record<string, unknown>>;
 }
 
@@ -305,14 +302,20 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
 
 export interface AssembleAgentOptions {
   storage: Storage;
+  /** Who runs the instance, as far as the prompt says where the agent runs (deployed, on AgentCore). */
+  runsAs: RunsAs;
   /** What the agent works on (`context.json`'s content), resolved for this instance. */
   content?: readonly ResolvedContent[];
+  /** The instance's name (`instanceName`): what `info().name` reports. Default: the definition's, as one segment. */
+  name?: string;
   /** The agent's working directory: the definition's own, unless the instance is elsewhere. */
   workdir?: string;
   /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;
   /** The configuration this instance opens with (`resolveConfig`). */
   config: EffectiveConfig;
+  /** The text it reads for each message (`openText`). Default: the program's own. */
+  text?: TextSources;
   mcpTools?: ToolRegistration[];
   /**
    * pi-ai's built-ins and the definition's providers over the instance's credentials, lists refreshed: the model
@@ -338,6 +341,7 @@ export interface AssembleAgentOptions {
 export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
   const { dir } = definition;
   const { code, models, config } = options;
+  const text = options.text ?? programText(dir);
   const spec = options.model ?? config.model;
   const model = spec === undefined ? undefined : modelRefOf(spec, "the default model");
   if (model !== undefined && models.getModel(model.provider, model.modelId) === undefined) {
@@ -361,7 +365,9 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
       name: DEFINITION_EXTENSION,
       sections: definitionSections(dir, options.content ?? [], {
         wake: ownWake || options.stateRoot !== undefined,
+        runsAs: options.runsAs,
         workdir: options.workdir ?? dir,
+        text,
       }),
       tools: [...code.tools, ...(options.mcpTools ?? [])],
     }),
@@ -377,7 +383,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     storage: options.storage,
     models,
     registry,
-    name: definition.name,
+    name: options.name ?? instanceName(definition.name),
     ...(definition.config.description === undefined ? {} : { description: definition.config.description }),
     ...(model === undefined ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
@@ -385,6 +391,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
     env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
-    commands: () => readCommands(dir),
+    commands: () => readCommands(text),
   });
 }

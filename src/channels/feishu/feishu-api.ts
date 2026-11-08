@@ -155,7 +155,7 @@ interface ApiBody {
   [k: string]: unknown;
 }
 
-export interface FeishuAppScope {
+interface FeishuAppScope {
   name: string;
   grantStatus: number;
   type?: "user" | "tenant";

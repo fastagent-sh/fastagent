@@ -17,8 +17,7 @@ import {
   resolveSecretsDir,
   resolveStateRoot,
 } from "../paths.ts";
-import { isGeneratedDockerignore } from "./container.ts";
-import { MCP_FILE } from "../mcp/config.ts";
+import { DELIVERED_CONFIG_DIR, isGeneratedDockerignore } from "./container.ts";
 import type { DeployReport } from "./preflight.ts";
 
 /**
@@ -154,11 +153,6 @@ export async function checkKeptIgnoreFiles(
         `config (the deployed box has no agent to open and crash-loops). Remove that rule before deploying.`;
       report.issue(text);
     }
-    if (excluded(MCP_FILE) && (await exists(join(agentDir, MCP_FILE)))) {
-      report.issue(
-        `your ${rel} excludes ${MCP_FILE}; the deployment would lose its MCP servers. Remove that rule before deploying.`,
-      );
-    }
     // Resolved paths, not spellings: dockerignore patterns are root-anchored (unlike .gitignore).
     const leaks = leakCandidates.filter((p) => !excluded(p));
     if (leaks.length > 0) {
@@ -174,7 +168,7 @@ export async function checkKeptIgnoreFiles(
     }
     if (instancesShip && !excluded(`${instancesShip}/dev/content/x`)) {
       report.warn(
-        `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions, channel state and clones of the agent's content would ship in the image. ${remedy([`/${instancesShip}`])}`,
+        `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions, channel state and clones of the agent's content would ship in the image. ${remedy([`/${instancesShip}`, `!/${DELIVERED_CONFIG_DIR}`])}`,
       );
     }
     // An issue, not a warning: a release holding content/ is refused on the host, which links its own there.

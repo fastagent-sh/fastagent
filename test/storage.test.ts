@@ -10,6 +10,7 @@ import { expect, it } from "vitest";
 import { openServing, holdingInstance } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const STORAGE = pathToFileURL(new URL("../src/harnesses/pi-durable/storage.ts", import.meta.url).pathname).href;
 
@@ -71,11 +72,19 @@ it("an agent that fails to open lets go of the storage, so the same process can 
   const dir = await mkdtemp(join(tmpdir(), "fa-storage-retry-"));
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
   await expect(
-    openServing(await loadSourceDefinition(dir), { secrets: {}, env: {}, model: "nope/missing" }),
+    openServing(await loadSourceDefinition(dir), {
+      secrets: {},
+      env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
+      model: "nope/missing",
+    }),
   ).rejects.toThrow(/unknown model "nope\/missing"/);
   const opened = await openServing(await loadSourceDefinition(dir), {
     secrets: {},
     env: {},
+    ownEnv: process.env,
+    runsAs: NOT_HOSTED,
     model: "anthropic/claude-sonnet-4-5",
   });
   await opened.agent.close();

@@ -14,8 +14,9 @@ import { piCredentials } from "../models/host.ts";
 import type { CredentialStore } from "../../sign-in-api.ts";
 import type { McpOptions } from "../../mcp-api.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
-import { resolveMcpServers } from "../../mcp/config.ts";
-import { mcpAuthorization } from "../../mcp/host.ts";
+import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
+import { mcpAuthorization, mcpAuthorizationInState } from "../../mcp/host.ts";
+import { NOT_HOSTED, type RunsAs } from "../../serving-command.ts";
 import { mcpTools } from "./mcp.ts";
 import { loadContent } from "../../content/file.ts";
 import { type ResolvedContent, cloneContent, resolveContent } from "../../content/resolve.ts";
@@ -37,9 +38,13 @@ import {
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
 import { type StorageLocking, openLockedStorage } from "./storage.ts";
+import { openText } from "./text.ts";
+import { instanceName } from "../../instance-name.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
   mcp?: McpOptions;
+  /** The instance's name, over the configuration's. Default: the configuration's, else the definition's as one segment. */
+  name?: string;
   /**
    * The values the instance's code, its MCP servers and its model's authentication read by name (`needs`, `${VAR}`,
    * a provider's variable): the one source of them, never this process's environment. A caller that wants its own
@@ -52,6 +57,16 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    * process's reaches them.
    */
   env: Readonly<Record<string, string>>;
+  /**
+   * The environment FastAgent's own work for the instance runs in: installing the declared packages, cloning content,
+   * finding `git` and `mise`, and where a CLI instance's files are. The CLI gives this process's; an app, its `env`.
+   * The instance's secrets are added to it.
+   */
+  ownEnv: Readonly<Record<string, string | undefined>>;
+  /** Who runs the instance: what decides how a channel that names no way receives, and whether its prompt describes a deployment. */
+  runsAs: RunsAs;
+  /** Whether the model lists are refreshed without the network. Default: `ownEnv`'s `FASTAGENT_OFFLINE` is `1`. */
+  offline?: boolean;
   /** What the instance sets over the program's defaults (`fastagent.json`, or an object); none runs on the defaults. */
   config?: InstanceConfigSource;
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
@@ -80,6 +95,13 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   projectDir?: string;
   /** The instance's state root, over `FASTAGENT_STATE_DIR` and the project directory's own. */
   stateRoot?: string;
+  /**
+   * Where the instance keeps its model credentials and MCP grants when it is given no store: `"secrets"`, the project's
+   * `.secrets/` over the machine's own credentials and as `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` place them
+   * (the CLI's), or `"state"`, `auth.json` and `mcp-auth.json` in the state root and nothing else (an app's).
+   * Default `"secrets"`.
+   */
+  keeps?: "secrets" | "state";
   /** Whether a clock fires the instance's wake-ups now (`assembleAgent`'s `wakeTicking`). Default always. */
   wakeTicking?: () => boolean;
 }
@@ -93,6 +115,8 @@ const INSTANCE_HOLDERS =
 export interface OpenedServing {
   agent: DurableAgent;
   definition: AgentDefinition;
+  /** The instance's name: what `info().name` reports. */
+  name: string;
   code: BuiltDefinition;
   /** The configuration this instance opened with: the program's defaults and the instance's over them. */
   config: EffectiveConfig;
@@ -166,13 +190,16 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
   const config = resolveConfig(definition, options.config);
+  const name = instanceName(definition.name, options.name ?? config.name);
+  const text = openText(dir, options.config);
+  const mcpServers = declareMcp(dir, options.config);
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
   const secrets = definedValues(options.secrets);
-  const code = buildDefinition(definition, secrets, config);
+  const code = buildDefinition(definition, secrets, { ...config, dev: options.runsAs.dev });
   // FastAgent's own work for the instance (installing packages, cloning content, finding its files) runs in this
   // process's environment and the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
-  const env = { ...process.env, ...secrets };
+  const env = { ...options.ownEnv, ...secrets };
   const packages = await prepareEnvironment(dir, env, { ...env, PATH: options.env.PATH });
   const processEnv = processEnvironment(
     {
@@ -186,14 +213,17 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   );
   const content = await contentForThisRun(dir, options.config, workdir, env);
   const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
+  const authPath =
+    options.authPath ??
+    (options.keeps === "state" && options.credentialStore === undefined ? join(stateRoot, "auth.json") : undefined);
   const models = await modelEnvironment(
     projectDir,
     {
-      ...(options.authPath === undefined ? {} : { authPath: options.authPath }),
+      ...(authPath === undefined ? {} : { authPath }),
       ...(options.credentialStore === undefined ? {} : { credentialStore: options.credentialStore }),
     },
     code.providers,
-    { stateRoot, environment: secrets },
+    { stateRoot, environment: secrets, env, offline: options.offline ?? env.FASTAGENT_OFFLINE === "1" },
   );
   const chosen = options.storage ?? { instance: "posix" };
   const storage = await openStorage(stateRoot, chosen);
@@ -202,15 +232,20 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   try {
     const mcpEnvironment = { ...secrets, ...options.mcp?.variables };
     mcp = await openMcpClients(
-      resolveMcpServers(dir, mcpEnvironment, undefined, workdir, processEnv),
-      mcpAuthorization(projectDir, env, stateRoot, options.mcp),
+      resolveMcpServers(mcpServers, mcpEnvironment, undefined, workdir, processEnv),
+      options.keeps === "state"
+        ? mcpAuthorizationInState(stateRoot, options.mcp)
+        : mcpAuthorization(projectDir, env, stateRoot, options.mcp),
       options.mcp,
     );
     agent = await assembleAgent(definition, {
+      name,
       mcpTools: mcpTools(mcp.tools),
+      runsAs: options.runsAs,
       storage,
       code,
       config,
+      text,
       content,
       workdir,
       processEnv,
@@ -246,6 +281,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   return {
     agent,
     definition,
+    name,
     code,
     config,
     secrets,
@@ -283,6 +319,8 @@ export type InstanceLocation = { root: string } | { stateDir: string; workdir: s
 export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
   /** The instance configuration, over the program's defaults: an object, or the absolute path of a `fastagent.json`. */
   config?: InstanceConfig<Settings> | string;
+  /** The instance's name, over `config`'s: one path segment. Default: `config`'s, else the definition's as one. */
+  name?: string;
   /**
    * The values the agent's code (`needs`), its MCP servers (`${VAR}`) and its model's authentication read by name. The
    * only source of them: nothing is read from the process's environment or from a file, so pass what the agent needs
@@ -299,8 +337,10 @@ export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
   mcp?: McpOptions;
   /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
   model?: string;
-  /** Where provider credentials are kept, instead of the agent's own `.secrets/auth.json` over the machine's. */
+  /** Where provider credentials are kept, instead of the state directory's `auth.json`. */
   credentials?: CredentialStore;
+  /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
+  offline?: boolean;
 };
 
 /** The `config` input as a source: an object as it is, a path (absolute, like every path here) read. */
@@ -347,8 +387,13 @@ export async function openAgent<Settings = unknown>(
     stateRoot,
     secrets: options.secrets ?? {},
     env: options.env ?? {},
+    ownEnv: options.env ?? {},
+    runsAs: NOT_HOSTED,
+    offline: options.offline === true,
+    ...(options.name === undefined ? {} : { name: options.name }),
     ...(config === undefined ? {} : { config }),
     wakeTicking: () => ticking,
+    keeps: "state",
     ...(options.mcp === undefined ? {} : { mcp: options.mcp }),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.credentials === undefined ? {} : { credentialStore: piCredentials(options.credentials) }),

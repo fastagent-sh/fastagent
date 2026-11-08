@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,8 +10,11 @@ import {
   type TicketStep,
   checkTicket,
   createTicket,
+  endTicket,
+  procfsIsOurs,
   runTicket,
   startTicket,
+  stopTicket,
   ticketLogPath,
   ticketReport,
 } from "../src/cli/ticket.ts";
@@ -73,7 +76,9 @@ async function waitingStep(
     const ticket = JSON.parse(readFileSync(path, "utf8"));
     ${sidecar === undefined ? "" : `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(stubborn(sidecar))}], { stdio: "ignore" });`}
     ${sidecar === undefined ? "" : `while (!require("node:fs").existsSync(${JSON.stringify(sidecar)})) {}`}
-    writeFileSync(path, JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, ${finishing ? "finishing: true, " : ""}url: "https://auth.example/a", pid: process.pid }));
+    // Whole, as a step's own process writes it: one rewritten in place is read as its old bytes and then its new ones.
+    writeFileSync(path + ".tmp", JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, ${finishing ? "finishing: true, " : ""}url: "https://auth.example/a", pid: process.pid }));
+    require("node:fs").renameSync(path + ".tmp", path);
     writeFileSync(${JSON.stringify(claimed)}, "");
     setInterval(() => {}, 1000);`;
   const started = {
@@ -317,12 +322,13 @@ describe("a step that outlives the command that starts it", () => {
     await vi.waitFor(() => expect(running(started)).toBe(false), { timeout: 10_000 });
   });
 
-  it("a step given up on for giving the person nothing to do is stopped first, so it writes nothing after", async () => {
+  it("a step given up on for giving the person nothing to do is failed and stopped", async () => {
     const sidecar = join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
     const silent = `
       const { readFileSync, writeFileSync } = require("node:fs");
       const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "tickets", process.argv.at(-1) + ".json");
-      writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), status: "working", pid: process.pid }));
+      writeFileSync(path + ".tmp", JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), status: "working", pid: process.pid }));
+      require("node:fs").renameSync(path + ".tmp", path);
       writeFileSync(${JSON.stringify(sidecar)}, String(process.pid));
       setInterval(() => {}, 1000);`;
     const realNow = Date.now;
@@ -419,6 +425,48 @@ describe("a step that outlives the command that starts it", () => {
     });
   });
 
+  // Only where /proc says what a process is: a zombie answers signal 0 everywhere, and only Linux keeps one long (a
+  // container whose PID 1 does not reap); macOS's launchd reaps an orphan at once.
+  it.runIf(existsSync("/proc/self/stat"))(
+    "a step whose process has exited, and that nothing has reaped, is taken for stopped",
+    async () => {
+      // `sh` starts a child that exits at once, then becomes a `sleep` that never waits for it: a zombie. The child's
+      // name holds a space and a parenthesis, as a command's may, and /proc puts its name in parentheses before its state.
+      const named = join(mkdtempSync(join(tmpdir(), "fa-zombie-")), "x) S y");
+      symlinkSync(execFileSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).trim(), named);
+      const parent = spawn("sh", ["-c", `'${named}' 0 & echo $!; exec sleep 30`], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      try {
+        const zombie = Number(
+          await new Promise<string>((resolve) => parent.stdout.once("data", (d) => resolve(String(d)))),
+        );
+        await vi.waitFor(() => expect(readFileSync(`/proc/${zombie}/stat`, "utf8")).toMatch(/\) Z/));
+        const { ticket } = createTicket(request());
+        const waiting = {
+          ...JSON.parse(readFileSync(ticketFile(ticket), "utf8")),
+          status: "need_user_action",
+          pid: zombie,
+        };
+        writeFileSync(ticketFile(ticket), JSON.stringify(waiting));
+        expect(await checkTicket(ticket)).toMatchObject({
+          status: "failed",
+          message: `it stopped: ${ticketLogPath(ticket)} says why`,
+        });
+      } finally {
+        parent.kill("SIGKILL");
+      }
+    },
+  );
+
+  it("reads /proc only when it is this process's PID namespace's", () => {
+    // In a namespace of its own with the host's /proc, a process is pid 1 and /proc/self says 18, and a live child's
+    // /proc/<pid> is not there: taken for gone, a step that runs would be reported stopped and never stopped.
+    expect(procfsIsOurs("1 (node) S 0 1 1", 1)).toBe(true);
+    expect(procfsIsOurs("18 (node) S 0 18 18", 1)).toBe(false);
+    expect(procfsIsOurs("12 (node) S 1 12 12", 1)).toBe(false);
+  });
+
   it("an ended step stays as it ended: a late writer cannot reopen it", async () => {
     const { ticket } = createTicket(request());
     const failed = { ...JSON.parse(readFileSync(ticketFile(ticket), "utf8")), status: "failed", message: "replaced" };
@@ -427,11 +475,93 @@ describe("a step that outlives the command that starts it", () => {
     expect(await checkTicket(ticket)).toMatchObject({ status: "failed", message: "replaced" });
   });
 
+  it("a step its own process records as ended after another ended it stays as the other ended it", async () => {
+    // What a step's process does when it read its ticket just before another process ended it: its write lands after.
+    const { ticket } = createTicket(request());
+    const ended = await stopTicket(ticket);
+    expect(ended).toMatchObject({ status: "failed", message: expect.stringMatching(/^stopped on request/) });
+    const owner = {
+      ...JSON.parse(readFileSync(ticketFile(ticket), "utf8")),
+      status: "need_user_action",
+      pid: process.pid,
+    };
+    writeFileSync(`${ticketFile(ticket)}.tmp`, JSON.stringify(owner));
+    renameSync(`${ticketFile(ticket)}.tmp`, ticketFile(ticket));
+    expect(await checkTicket(ticket)).toMatchObject({ status: "failed", message: ended.message });
+  });
+
+  it("is ended once: a second end, written by one that read it running too, leaves the first", async () => {
+    const { ticket } = createTicket(request());
+    expect(endTicket(ticket, { status: "done" })).toMatchObject({ status: "done" });
+    expect(endTicket(ticket, { status: "failed", message: "stopped on request" })).toMatchObject({ status: "done" });
+    expect(await checkTicket(ticket)).toMatchObject({ status: "done" });
+    expect(await checkTicket(ticket)).not.toHaveProperty("message");
+  });
+
   it("names no file outside its directory: a ticket is 16 hex digits or nothing", async () => {
     const outside = join(process.env.HOME as string, ".fastagent", ".state", "outside.json");
     writeFileSync(outside, readFileSync(ticketFile(createTicket(request()).ticket), "utf8"));
     expect(await checkTicket("../outside")).toBeUndefined();
     expect(await checkTicket("0123456789abcdef")).toBeUndefined();
+  });
+});
+
+/**
+ * A step run by the real `runTicket` that, told SIGTERM, records its own failure before it exits: what a step whose
+ * process catches SIGTERM does (`signal-exit`, which `proper-lockfile` loads) when the host CLI it runs dies of the same
+ * signal and the step hears that first.
+ */
+const recordsItsOwnEnd = (waitsOnItsPerson: boolean) => `
+  import { runTicket } from ${JSON.stringify(fileURLToPath(new URL("../src/cli/ticket.ts", import.meta.url)))};
+  await runTicket(process.argv.at(-1), (step) => new Promise((_, reject) => {
+    process.on("SIGTERM", () => reject(new Error("the host CLI it ran did not sign in (exit 1)")));
+    ${waitsOnItsPerson ? 'step.person.waitsOn("https://auth.example/a");' : ""}
+  }));
+  process.exit(0);`;
+const startRecording = (waitsOnItsPerson = true, startTimeoutMs?: number) =>
+  startTicket({
+    ...request(),
+    waitsFirst: true,
+    whenRunning: "replace",
+    ...(startTimeoutMs === undefined ? {} : { startTimeoutMs }),
+    command: {
+      file: process.execPath,
+      args: ["--input-type=module", "-e", recordsItsOwnEnd(waitsOnItsPerson), "--"],
+      cwd: tmpdir(),
+    },
+  });
+
+describe("what ends a step is the first end written, and a stop writes its own before it stops the process", () => {
+  it("a stop on request is the end, though the step records its own failure as it dies", async () => {
+    const started = await startRecording();
+    expect(started.status).toBe("need_user_action");
+    expect(await stopTicket(started.ticket)).toMatchObject({
+      status: "failed",
+      message: expect.stringMatching(/^stopped on request/),
+    });
+    expect(running(started.pid)).toBe(false);
+  });
+
+  it("a start given up on is the end of its step, though the step records its own failure as it dies", async () => {
+    const given = await startRecording(false, 1_500);
+    expect(given).toMatchObject({
+      status: "failed",
+      message: expect.stringMatching(/^it (gave the person nothing to do|did not start) within 1\.5s/),
+    });
+    expect(running(given.pid)).toBe(false);
+  });
+
+  it("a newer attempt is the end of the one it replaces, though that one records its own failure as it dies", async () => {
+    const older = await startRecording();
+    const newer = await startRecording();
+    try {
+      expect(await checkTicket(older.ticket)).toMatchObject({
+        status: "failed",
+        message: "replaced by a newer attempt to sign in to OpenAI",
+      });
+    } finally {
+      if (running(newer.pid)) process.kill(-(newer.pid as number), "SIGKILL");
+    }
   });
 });
 
@@ -449,6 +579,23 @@ describe("a ticket as its command reports it", () => {
     const device = ticketReport({ ...base, code: "ABCD" }, "checked").json;
     expect(device).not.toHaveProperty("resume_command");
     expect(device.agent_next_steps).toMatch(/^The user has not finished yet\. Give the URL and the code ABCD/);
+  });
+
+  it("a failed step carries the last lines of its log, without colors, so one report says why", () => {
+    const failing = { ...createTicket(request("login:tail")), status: "failed" as const, message: "deploy stopped" };
+    const lines = Array.from({ length: 30 }, (_, i) => `line ${i}`);
+    writeFileSync(
+      ticketLogPath(failing.ticket),
+      `\u001b[33mWARN\u001b[0m early\n${lines.join("\n")}\n\n\u001b[31mError: builder unreachable\u001b[0m ${"x".repeat(400)}\n`,
+    );
+    const { json, text } = ticketReport(failing, "checked");
+    const tail = json.log_tail as string[];
+    expect(tail).toHaveLength(12);
+    expect(tail.at(-1)).toMatch(/^Error: builder unreachable x+$/);
+    expect(tail.at(-1)?.length).toBe(300);
+    expect(tail[0]).toBe("line 19");
+    expect(tail.join("")).not.toContain("\u001b");
+    expect(text).toContain("  | line 19");
   });
 
   it("a done step: its own fields, what is left for the person, and the step's own sentence", () => {
@@ -471,10 +618,14 @@ describe("a ticket as its command reports it", () => {
     expect(ticketReport({ ...base, status: "working" }, "checked").json.agent_next_steps).toMatch(
       /Run check_command again/,
     );
-    expect(ticketReport({ ...base, status: "failed", message: "no" }, "checked").json).toMatchObject({
+    const failed = ticketReport({ ...base, status: "failed", message: "no" }, "checked").json;
+    expect(failed).toMatchObject({
       message: "no",
-      agent_next_steps: "To try again, run: fastagent login openai --method account --json",
+      agent_next_steps: expect.stringMatching(
+        /^The cause is in log_tail .*then run: fastagent login openai --method account --json\./,
+      ),
     });
+    expect(failed).not.toHaveProperty("log_tail"); // no log was written
     // What it reached before it failed is still the person's: where to get the value it stopped for.
     const reached = { instructions: "copy the Verification Token", url: "https://open.larksuite.com/app/cli/event" };
     expect(
@@ -484,13 +635,20 @@ describe("a ticket as its command reports it", () => {
       ).json,
     ).toMatchObject({
       afterwards: [reached],
-      agent_next_steps:
-        "Tell the user what the steps it reached leave them: copy the Verification Token " +
-        "https://open.larksuite.com/app/cli/event To try again, run: fastagent login openai --method account --json",
+      agent_next_steps: expect.stringMatching(
+        /^Tell the user what the steps it reached leave them: copy the Verification Token https:\/\/open\.larksuite\.com\/app\/cli\/event The cause is in log_tail/,
+      ),
     });
-    expect(ticketReport({ ...base, status: "expired" }, "checked").json).toMatchObject({
+    // Expired is nobody's fault to find in a log: no tail, and the agent goes to the user, not to a fix.
+    writeFileSync(ticketLogPath(base.ticket), "waiting for the user\n");
+    const expired = ticketReport({ ...base, status: "expired" }, "checked");
+    expect(expired.json).toMatchObject({
       message: "it was not finished in time",
+      agent_next_steps: expect.stringMatching(/^The step was not finished in time.*ask the user to complete it/),
     });
+    expect(expired.json).not.toHaveProperty("log_tail");
+    expect(expired.json.agent_next_steps).not.toContain("log_tail");
+    expect(expired.text.join("\n")).not.toContain("waiting for the user");
   });
 });
 

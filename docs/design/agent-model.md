@@ -10,10 +10,10 @@ status: implemented
 **Status: implemented.** This note fixes the concepts and the vocabulary, seen from the author's side. It says what
 an author declares and what an agent sees, not how it is stored or implemented, and it does not cover
 synchronization, distribution or deployment (ยง8). Tracking issue: [#684](https://github.com/fastagent-sh/fastagent/issues/684).
-The [artifact design](agent-artifact.md) changes the target: an immutable built definition, opened with explicit
-instance inputs (configuration in `fastagent.json` and `.mcp.json`, secrets, state, a workspace apart from the program),
-so it assembles the same way in development, inside an app and on a host. Those are not current 0.29.0 behavior; this note's own-directory, shared-content and self-edit rules describe the existing source-directory model,
-not constraints that the new design must preserve.
+The [artifact design](agent-artifact.md) is built: an immutable built definition, opened with explicit
+instance inputs (configuration in `fastagent.json`, secrets, state, a workspace apart from the program),
+so it assembles the same way in development, inside an app and on a host. This note's own-directory, shared-content
+and self-edit rules describe the source project `dev` opens, not constraints on a built definition, which is read-only.
 
 The test every rule here answers to: an agent an author shaped with a coding agent runs as a service without being
 rewritten, and behaves the same wherever it runs.
@@ -46,7 +46,7 @@ A context has three kinds of parts, each reaching the agent its own way ([agent 
 - **Content** is data the agent reads and writes as files: a project, a folder, a repository. Most of this note is
   about content.
 - **External systems** are reached by code tools, extensions or through [MCP support](../mcp.md), servers declared
-  in `.mcp.json`. "Connector" in older conceptual diagrams is not a public type or a `context.json` field.
+  in `mcpServers` (`context.json`, and an instance's `fastagent.json`). "Connector" in older conceptual diagrams is not a public type or a `context.json` field.
   Credentials belong to the instance or its host-selected grant store.
 - **The environment** is the commands and runtimes the agent runs, declared under `environment` in its `context.json`
   and installed on every instance, each at the newest release its version allows there
@@ -110,11 +110,10 @@ FastAgent's, and the definition says which ([architecture.md](architecture.md) ย
 | `SYSTEM.md`, `prompts/<name>.md` | Markdown; a prompt template has a `description` in its frontmatter | FastAgent, as pi spells them |
 | `src/tools/`, `src/extensions/` | TypeScript modules: pi-durable's `defineTool` and `defineExtension` | pi-durable |
 | `src/channels/`, `src/schedules/`, `fastagent.config.ts` | TypeScript modules: a channel, `defineSchedule`, `defineAgent`; `needs([...])` around any module that reads a secret | FastAgent |
-| `context.json` | JSON | FastAgent |
-| `.mcp.json` | JSON, `mcpServers`; supported stdio/HTTP subset | MCP client ecosystem convention |
+| `context.json` | JSON: content, environment, and `mcpServers` in the MCP ecosystem's entry shape (supported stdio/HTTP subset) | FastAgent |
 | `package.json` | npm | npm |
 
-[MCP tools](../mcp.md) are declared separately in `.mcp.json`, with instance-owned clients and explicit OAuth bindings. `src/tools/` holds tools. `src/extensions/` holds what is
+[MCP tools](../mcp.md) are declared separately, as `mcpServers`, with instance-owned clients and explicit OAuth bindings. `src/tools/` holds tools. `src/extensions/` holds what is
 not only a tool: prompt sections, hooks, named bundles of tools.
 
 Each file of the definition has one place, so there is no order to decide between two: no `.pi/` directory, no

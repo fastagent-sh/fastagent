@@ -74,6 +74,8 @@ export {
   McpError,
   type McpErrorCode,
   type McpOptions,
+  type McpInspectOptions,
+  type McpConfigInput,
   type McpAuthorization,
   type McpGrantRecord,
   type McpGrantSummary,

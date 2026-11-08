@@ -4,21 +4,33 @@
  */
 import { basename } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
+import {
+  RAILWAYIGNORE_FILE,
+  isGeneratedRailwayignore,
+  keptRailwayignoreProblem,
+} from "../../../deploy/railway/ignore.ts";
 import { planRailwayDeploy, toRailwayName } from "../../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../../deploy/railway/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
-import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { deliveredConfigArtifact, withPublicUrl } from "../../../deploy/container.ts";
+import type { DeploymentApi } from "../../../deploy/api.ts";
+import type { ModelKey } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
+import { deploySecrets } from "./secrets-step.ts";
 import { RAILWAY_LOGIN, hostLogin } from "./host-login.ts";
-import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorder } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const railwayHost: HostDeploy = {
-  // Railway's only artifacts are the container's, which planArtifacts owns for every host.
-  isOurs: () => false,
+  isOurs: (path, content) => path === RAILWAYIGNORE_FILE && isGeneratedRailwayignore(content),
   shell: async (agentDir) => railwayShell(toRailwayName(basename(agentDir)), agentDir),
+  validate({ opts, agentDir }) {
+    const problem = keptRailwayignoreProblem(agentDir);
+    if (problem === undefined) return;
+    if (opts.run) failStartup(new Error(`deploy stopped: ${problem}`));
+    console.error(`[fastagent] warn: ${problem}`);
+  },
   async deploy(ctx) {
     const { opts, agentDir, pre, channels, write } = ctx;
     const { hasCron, modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
@@ -43,14 +55,17 @@ export const railwayHost: HostDeploy = {
         },
         name: serviceName,
         modelAuth,
+        modelKey: pre.modelKey,
         boxLogin,
         answerer: ctx.answerer,
+        api: ctx.api,
         rerun: ctx.rerun,
         channels,
         declaredSecrets,
         values,
         valueFile,
         intoLinked: !!opts.intoLinked,
+        config: opts.config,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -64,10 +79,12 @@ async function runDeployRailway(params: {
   agentDir: string;
   name: string;
   modelAuth: string | undefined;
+  modelKey: ModelKey;
   /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
   boxLogin: string | undefined;
   /** Who answers the box's login: `--run` continues into it rather than stopping at "not logged in". */
   answerer: Answerer;
+  api: DeploymentApi;
   /** The command that runs this deploy again (`DeployContext.rerun`). */
   rerun: string;
   channels: readonly DeclaredChannel[];
@@ -76,6 +93,8 @@ async function runDeployRailway(params: {
   valueFile: string;
   intoLinked: boolean;
   deliverPublicUrl: (url: string) => Promise<string>;
+  /** The `--config` file, where a URL a person set is recorded once the box confirms it. */
+  config: string | undefined;
 }): Promise<string> {
   const { agentDir, name, channels, intoLinked } = params;
   const railway = spawnRunner("railway", agentDir);
@@ -84,29 +103,34 @@ async function runDeployRailway(params: {
     failStartup(new Error(`railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run`));
   }
 
-  const { secrets, missingSecrets } = assembleSecrets({
-    modelAuth: params.modelAuth,
-    declared: params.declaredSecrets,
-    values: params.values,
-  });
-
   const outcome = await deployRailwayRun(
     {
       name,
       mountPath: "/data",
-      secrets,
-      missingSecrets,
-      valueFile: params.valueFile,
+      provideSecrets: deploySecrets({
+        host: "railway",
+        label: "Railway",
+        agentDir,
+        opts: { config: params.config },
+        answerer: params.answerer,
+        api: params.api,
+        modelAuth: params.modelAuth,
+        modelKey: params.modelKey,
+        declaredSecrets: params.declaredSecrets,
+        valueFile: params.valueFile,
+        values: params.values,
+      }),
       channels,
       intoLinked,
       deliverPublicUrl: params.deliverPublicUrl,
+      ...urlRecorder(agentDir, params.config, params.values, params.answerer),
       ...boxLoginStep("railway", params, () => railwayShell(name, agentDir)),
       ...hostLogin(RAILWAY_LOGIN, params.answerer, agentDir),
       forAgent: `${params.rerun} --json`,
     },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
-    registrarsFor(agentDir, params.values, params.answerer),
+    registrarsFor(params.values, params.answerer),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);

@@ -267,34 +267,9 @@ const start: CommandSpec = {
     }),
 };
 
-const INGRESS: FlagSpec = {
-  flags: "--ingress <mode>",
-  description:
-    "Feishu/Lark: write connection or webhook to the instance configuration (channels.<kind>.ingress) and set the " +
-    "app up for it (unset: what the configuration says, else dev uses its connection and everything else webhook)",
-};
-const INGRESS_CONFIG: FlagSpec = {
-  flags: "--config <file>",
-  description:
-    "the instance configuration --ingress writes and the setup reads (default: dev's fastagent.json; for " +
-    "--env production, the file deploy --config delivers)",
-};
 const CHANNEL_ENVIRONMENT: FlagSpec = {
   flags: "--env <environment>",
-  description:
-    "select independent app credentials and onboarding state (default: dev; production uses .secrets/production/.env)",
-};
-const NO_ONBOARD: FlagSpec = {
-  flags: "--no-onboard",
-  description:
-    "scaffold only: write the channel file (if missing) and its tools, and skip the app onboarding " +
-    "(Slack: internal-app creation/OAuth; Feishu/Lark: app creation and credential capture)",
-};
-const REPLACE_CONFIG: FlagSpec = {
-  flags: "--replace-config",
-  description:
-    "Slack: replace the local App Configuration token pair (repairs automatic dev/deploy Request URL " +
-    "updates after the tokens expire or are revoked; runs on the machine that onboarded the app)",
+  description: "select independent credentials and state (default: dev; production uses .secrets/production/.env)",
 };
 
 const channelSub = (
@@ -307,43 +282,12 @@ const channelSub = (
   summary,
   description,
   args: [AGENT_ARG],
-  flags:
-    kind === "feishu" || kind === "lark"
-      ? [CHANNEL_ENVIRONMENT, INGRESS, INGRESS_CONFIG, NO_ONBOARD, ...UNATTENDED_SETUP]
-      : kind === "slack"
-        ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG, ...UNATTENDED_SETUP]
-        : [CHANNEL_ENVIRONMENT, JSON_FLAG],
-  examples: [
-    { cmd: `fastagent add ${kind}` },
-    ...(kind === "telegram" ? [] : [{ cmd: `fastagent add ${kind} --json`, note: "a coding agent" }]),
-  ],
+  flags: [JSON_FLAG],
+  examples: [{ cmd: `fastagent add ${kind}` }],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
-    (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, {
-      ingress: f.ingress as string | undefined,
-      ...(typeof f.config === "string" ? { config: f.config } : {}),
-      environment: f.env as "dev" | "production" | undefined,
-      onboard: f.onboard !== false,
-      replaceConfig: f.replaceConfig === true,
-      input: f.input !== false,
-      json: f.json === true,
-      ...(f.check !== undefined ? { check: f.check as string } : {}),
-      ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
-      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
-    }),
+    (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, { json: f.json === true }),
 });
-
-/**
- * How an app's setup runs with no one at a terminal: what the person provides is named, and their steps come back with
- * a ticket to check (`add` in docs/cli.md).
- */
-const UNATTENDED_SETUP: FlagSpec[] = [
-  { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
-  { flags: "--check <ticket>", description: "where a setup started without a terminal stands" },
-  { flags: "--timeout <seconds>", description: "how long that setup stays open (default 900)" },
-  { flags: "--ticket <id>", description: "the process that runs a ticket's setup", hidden: true },
-  NO_INPUT,
-];
 
 const add: CommandSpec = {
   name: "add",
@@ -354,37 +298,37 @@ const add: CommandSpec = {
   subcommands: [
     channelSub(
       "telegram",
-      "scaffold the Telegram bot channel (durable turns, live preview)",
+      "scaffold the Telegram bot channel (long polling or webhook, durable turns, live preview)",
       "Scaffold src/channels/telegram.ts — the Telegram bot channel with durable turns, a live-preview " +
-        "message pump, and an optional route() policy.",
+        "message pump, and an optional route() policy — and its send tool. Changes the program only: " +
+        "`fastagent channels setup telegram` sets up the bot and keeps its token.",
     ),
     channelSub(
       "slack",
-      "scaffold the Slack Events API channel (files, threads, context, live preview)",
-      "Scaffold src/channels/slack.ts plus its tools (src/tools/slack-send.ts, slack-threads.ts), create a single-workspace " +
-        "internal Slack app from a manifest, and install it through OAuth. The channel provides signed " +
-        "Events API ingress, durable turns, files, threads, context, and an edited live preview.",
-      "Automated onboarding requires Slack App Configuration access + refresh tokens and a temporary " +
-        "cloudflared tunnel. They stay in owner-readable local state and are never deployed; --no-onboard " +
-        "keeps the explicit manual/scaffold-only path.",
+      "scaffold the Slack channel (Socket Mode or Events API, files, threads, context, live preview)",
+      "Scaffold src/channels/slack.ts plus its tools (src/tools/slack-send.ts, slack-threads.ts): durable turns, " +
+        "files, threads, context, and an edited live preview, received over Socket Mode or the Events API. Changes " +
+        "the program only: `fastagent channels setup slack` creates the app from a manifest link and keeps its tokens.",
     ),
     channelSub(
       "feishu",
-      "scaffold the Feishu channel AND create/configure the platform app",
-      "Scaffold src/channels/feishu.ts and create/configure the Feishu app through scan-to-create, writing its " +
-        "credentials to the selected environment. Dev uses WebSocket; deploy --run creates a separate production app for webhook.",
-      "Feishu (open.feishu.cn) is the canonical implementation. WebSocket needs only App ID/Secret and " +
-        "no public URL; webhook additionally captures the Verification Token through a temporary tunnel. " +
-        "The app asks for the scopes that let the agent hear its group chats; any your tenant withholds are named.",
+      "scaffold the Feishu channel (long connection or webhook, durable turns, streaming card)",
+      "Scaffold src/channels/feishu.ts plus its tools (src/tools/feishu-send.ts, feishu-threads.ts). Changes the " +
+        "program only: `fastagent channels setup feishu` creates the app by scan-to-create and keeps its credentials.",
+      "Feishu (open.feishu.cn) is the canonical implementation. A long connection needs only App ID/Secret and " +
+        "no public URL; a webhook additionally needs the Verification Token, which setup captures through a " +
+        "temporary tunnel. The app asks for the scopes that let the agent hear its group chats; any your tenant " +
+        "withholds are named.",
     ),
     channelSub(
       "lark",
-      "scaffold the Lark (international) channel with guided credential setup",
-      "Scaffold src/channels/lark.ts and guide credential setup against the international developer console. " +
-        "Dev uses WebSocket; deploy --run guides setup of a separate production app for webhook.",
-      "Lark international (open.larksuite.com) is Feishu's compatibility profile. WebSocket stops after " +
-        "App ID/Secret validation and a permission check; webhook setup probes config automation and falls " +
-        "back to explicit manual steps on the international config-route 404.",
+      "scaffold the Lark (international) channel",
+      "Scaffold src/channels/lark.ts plus its tools (src/tools/lark-send.ts, lark-threads.ts). Changes the program " +
+        "only: `fastagent channels setup lark` guides the app's creation on Lark's launcher, checks the App ID " +
+        "and Secret, and keeps them.",
+      "Lark international (open.larksuite.com) is Feishu's compatibility profile. A long connection stops after " +
+        "App ID/Secret validation and a permission check; a webhook tries to capture the Verification Token " +
+        "and asks for it when the international config API answers 404.",
     ),
     {
       name: "skill",
@@ -435,19 +379,12 @@ const deploy: CommandSpec = {
     {
       flags: "--run",
       description:
-        "drive the target CLI to completion. Docker builds (pulling the base image) and runs `docker compose up -d`; with a tunnel " +
-        "service, reads its URL and registers webhooks. Fly/Railway provision app/service + volume + " +
+        "drive the target CLI to completion. Docker builds (pulling the base image) and runs `docker compose up -d`. Fly/Railway provision app/service + volume + " +
         "secrets + deploy + webhook setup. AgentCore builds/pushes the arm64 image and deploys the " +
-        "stack (aws + docker CLIs). A model key in the value file travels; any other credential is a login on " +
+        "stack (aws + docker CLIs). A model key is a value of the target (fastagent secrets); any other credential is a login on " +
         "the deployment itself, which --run starts once the box is up (fastagent login --deployment). " +
         "Stops at a gate (missing CLI/daemon/login/secret) with one actionable line. Without it: prints " +
         "the runbook",
-    },
-    {
-      flags: "--tunnel",
-      description:
-        "(docker only) add a Quick Tunnel service to generated Compose; generation-only unless combined " +
-        "with --run. Existing Compose stays authoritative",
     },
     { flags: "--force", description: "overwrite existing target config/Dockerfile/.dockerignore (else kept)" },
     {
@@ -459,8 +396,9 @@ const deploy: CommandSpec = {
     {
       flags: "--into-linked",
       description:
-        "(railway --run) provision INTO the project this dir is already linked to (skip create); by " +
-        "default --run refuses a pre-existing link (could be unrelated/production)",
+        "(railway --run) provision INTO the project this dir is linked to even when it is not the agent's " +
+        "(it holds no service of this name and is not named for it); by default --run refuses that link " +
+        "(could be unrelated/production)",
     },
     {
       flags: "--json",
@@ -482,18 +420,16 @@ const deploy: CommandSpec = {
   examples: [
     { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
     { cmd: "fastagent deploy fly --run --json", note: "a coding agent" },
-    { cmd: "fastagent deploy docker --tunnel --run", note: "Compose + a public URL" },
+    { cmd: "fastagent deploy docker --run", note: "Compose on this machine" },
     { cmd: "fastagent deploy railway", note: "print the runbook only" },
     { cmd: "fastagent deploy agentcore --run", note: "arm64 image + stack + webhooks" },
   ],
   notes:
-    "Definition-read-only: the only writes are generated artifacts (never clobbered without " +
-    "--force). A plain redeploy of an already-provisioned agent is just the host's own command " +
-    "(e.g. `railway up`).",
+    "Definition-read-only: the only writes are generated artifacts (never clobbered without --force). A plain " +
+    "redeploy of an already-provisioned agent is just the host's own command (e.g. `railway up`).",
   run: async (args, f) =>
     (await import("./commands/deploy.ts")).runDeploy(args[0] as DeployHost, args[1] as string, {
       run: f.run === true,
-      tunnel: f.tunnel === true,
       force: f.force === true,
       intoLinked: f.intoLinked === true,
       ...(typeof f.config === "string" ? { config: f.config } : {}),
@@ -708,12 +644,179 @@ const schedules: CommandSpec = {
   ],
 };
 
+/**
+ * How an app's setup runs with no one at a terminal: what the person provides is named, and their steps come back with
+ * a ticket to check (`channels setup` in docs/cli.md).
+ */
+const UNATTENDED_SETUP: FlagSpec[] = [
+  { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
+  { flags: "--check <ticket>", description: "where a setup started without a terminal stands" },
+  { flags: "--timeout <seconds>", description: "how long that setup stays open (default 900)" },
+  { flags: "--ticket <id>", description: "the process that runs a ticket's setup", hidden: true },
+  NO_INPUT,
+];
+
+const channels: CommandSpec = {
+  name: "channels",
+  summary: "a channel's platform app, for one instance",
+  subcommands: [
+    {
+      name: "setup",
+      summary: "set up a channel's platform app for one instance, and keep its credentials",
+      description:
+        "Guide a person through creating the platform app (a Slack app from a manifest link, a Telegram bot from " +
+        "BotFather, a Feishu app by scan-to-create, a Lark app on its launcher), ask for the values only they can " +
+        "read off its pages, check each with the platform, and keep them in the instance's value file. Safe to run again: a value already there that the platform still accepts is " +
+        "kept. How the channel receives (webhook or connection) decides which values it needs: --ingress, else what " +
+        "the configuration says, else connection for the development instance and webhook for any other. With no " +
+        "terminal (--json), the values are pasted on a page on this machine for the person a coding agent hands the " +
+        "step to, never in its conversation. With --record-url: read the deployment's /health, and once <name> (slack, " +
+        "or lark where its config API answers 404) is registered there, the platform having reached it at the URL a " +
+        "person saved on its app's page, write that URL into the binding (channels.<name>.app.url) of the " +
+        "configuration --config names, so every later deploy of it reports it registered from the start.",
+      args: [{ name: "<name>", description: "the channel: telegram, slack, feishu or lark" }, AGENT_ARG],
+      flags: [
+        {
+          flags: "--ingress <mode>",
+          description: "webhook or connection: set the app up for it, and write it to the configuration",
+        },
+        {
+          flags: "--config <file>",
+          description:
+            "the instance configuration: how the channel receives is read from it, and --ingress written to it " +
+            "(default: the project's fastagent.json, the development instance's)",
+        },
+        {
+          flags: "--env-file <file>",
+          description:
+            "the value file the credentials are kept in, which must exist; naming it or --config makes this " +
+            "another instance than the development one (default: .secrets/.env for dev, else " +
+            ".secrets/production/.env, created when missing)",
+        },
+        {
+          flags: "--record-url",
+          description: "record the URL the deployment confirms, in the configuration --config names",
+        },
+        {
+          flags: "--url <url>",
+          description: "with --record-url: where to read its /health (default: the configuration's http.publicUrl)",
+        },
+        ...UNATTENDED_SETUP,
+      ],
+      examples: [
+        { cmd: "fastagent channels setup telegram" },
+        { cmd: "fastagent channels setup slack --json", note: "an agent" },
+        { cmd: "fastagent channels setup slack --config prod.json", note: "a deployment" },
+        { cmd: "fastagent channels setup slack --record-url --config c.json" },
+      ],
+      run: async (args, f) =>
+        (await import("./commands/channels.ts")).runChannelsSetup(args[0] as string, args[1] as string, {
+          recordUrl: f.recordUrl === true,
+          ...(typeof f.ingress === "string" ? { ingress: f.ingress } : {}),
+          ...(typeof f.config === "string" ? { config: f.config } : {}),
+          ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
+          ...(typeof f.url === "string" ? { url: f.url } : {}),
+          json: f.json === true,
+          input: f.input !== false,
+          ...(f.check !== undefined ? { check: f.check as string } : {}),
+          ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
+          ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
+        }),
+    },
+  ],
+};
+
+const SECRETS_HOST = {
+  name: "<host>",
+  description: "the target that keeps the values",
+  choices: ["docker", "fly", "railway", "agentcore"],
+};
+
+const secrets: CommandSpec = {
+  name: "secrets",
+  summary: "a deployment's values, on the target that keeps them",
+  subcommands: [
+    {
+      name: "list",
+      summary: "the names the definition declares, and which the target holds",
+      description:
+        "Print every name the deployment declares (the model's key, `needs()`, `context.json`'s variables, MCP " +
+        "references, for the channels its configuration chooses) with whether the target holds a value for it. A value " +
+        "is never read back.",
+      args: [SECRETS_HOST, AGENT_ARG],
+      flags: [
+        { flags: "--config <file>", description: "the configuration the deployment delivers (`deploy --config`)" },
+        JSON_FLAG,
+      ],
+      examples: [{ cmd: "fastagent secrets list fly" }],
+      run: async (args, f) =>
+        (await import("./commands/secrets.ts")).runSecrets("list", args[0] as "fly", undefined, args[1] as string, {
+          ...(typeof f.config === "string" ? { config: f.config } : {}),
+          json: f.json === true,
+        }),
+    },
+    {
+      name: "set",
+      summary: "set one value: typed without echo, from standard input, or generated",
+      description:
+        "Set one value on the target, creating the app or service when it does not exist. The value is typed without " +
+        "echo at a terminal, else read from standard input; it is never an argument. --generate sets a random value " +
+        "and prints it once, for what FastAgent makes itself (FASTAGENT_API_KEY).",
+      args: [SECRETS_HOST, { name: "<name>", description: "the environment variable" }, AGENT_ARG],
+      flags: [
+        { flags: "--config <file>", description: "the configuration the deployment delivers (`deploy --config`)" },
+        { flags: "--generate", description: "a random value, printed once" },
+      ],
+      examples: [
+        { cmd: "fastagent secrets set fly OPENAI_API_KEY" },
+        { cmd: "fastagent secrets set fly FASTAGENT_API_KEY --generate" },
+      ],
+      run: async (args, f) =>
+        (await import("./commands/secrets.ts")).runSecrets(
+          "set",
+          args[0] as "fly",
+          args[1] as string,
+          args[2] as string,
+          {
+            ...(typeof f.config === "string" ? { config: f.config } : {}),
+            generate: f.generate === true,
+          },
+        ),
+    },
+    {
+      name: "push",
+      summary: "set every declared value a value file or the environment holds",
+      description:
+        "Set, in one batch, every declared name the source holds a value for, creating the app or service when it does " +
+        "not exist. The source is --env-file, else --from-env (the environment of a command that injected the values: " +
+        "`op run`, `doppler run`, `infisical run`, `dotenvx run`, a CI job), else the production value file " +
+        "(.secrets/production/.env). Names the definition does not declare are not pushed.",
+      args: [SECRETS_HOST, AGENT_ARG],
+      flags: [
+        { flags: "--config <file>", description: "the configuration the deployment delivers (`deploy --config`)" },
+        { flags: "--env-file <file>", description: "the value file to push from, which must exist" },
+        { flags: "--from-env", description: "push from this command's environment" },
+      ],
+      examples: [
+        { cmd: "fastagent secrets push fly" },
+        { cmd: "doppler run -- fastagent secrets push fly --from-env", note: "a secret manager" },
+      ],
+      run: async (args, f) =>
+        (await import("./commands/secrets.ts")).runSecrets("push", args[0] as "fly", undefined, args[1] as string, {
+          ...(typeof f.config === "string" ? { config: f.config } : {}),
+          ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
+          fromEnv: f.fromEnv === true,
+        }),
+    },
+  ],
+};
+
 const destroy: CommandSpec = {
   name: "destroy",
   summary: "delete every AWS resource `deploy agentcore` created for an agent",
   description:
     "AgentCore only, and it exists because `aws cloudformation delete-stack` is not enough: the S3 " +
-    "artifact bucket and the ECR repository have to exist BEFORE the stack that reads from them, BOTH " +
+    "artifact bucket, the ECR repository and the values secret have to exist BEFORE the stack that reads from them, BOTH " +
     "log groups (the forwarder's and the runtime's own stdout) are created by AWS on first write so no " +
     "template mentions them, and the EventBridge schedules (one per schedule, one per pending wake-up) " +
     "are minted at runtime by the container — left behind, they keep firing into a deleted Lambda. " +
@@ -906,7 +1009,7 @@ const mcp: CommandSpec = {
     {
       name: "list",
       summary: "inspect declarations and local auth",
-      description: "Read .mcp.json and local grant metadata without contacting servers.",
+      description: "Read the declared MCP servers and local grant metadata without contacting servers.",
       examples: [{ cmd: "fastagent mcp list --json" }],
       args: [AGENT_ARG],
       flags: [CHANNEL_ENVIRONMENT, JSON_FLAG],
@@ -924,7 +1027,10 @@ const mcp: CommandSpec = {
         { cmd: "fastagent mcp login linear --scopes read --json" },
         { cmd: "fastagent mcp login --check <ticket> --json" },
       ],
-      args: [{ name: "[server]", description: "the server name in .mcp.json" }, AGENT_ARG],
+      args: [
+        { name: "[server]", description: "the name of an MCP server the program or the instance declares" },
+        AGENT_ARG,
+      ],
       flags: [
         CHANNEL_ENVIRONMENT,
         ...UNATTENDED_SETUP,
@@ -979,6 +1085,8 @@ export const specs: readonly CommandSpec[] = [
   dev,
   start,
   add,
+  channels,
+  secrets,
   deploy,
   logs,
   destroy,

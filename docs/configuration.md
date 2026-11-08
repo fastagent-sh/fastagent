@@ -13,6 +13,23 @@ status: current
   `fastagent.json`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
+## Two configuration files
+
+An agent's program has one configuration file, `fastagent.config.ts`; an instance of it may have another, `fastagent.json`. They answer different questions:
+
+| | `fastagent.config.ts` | `fastagent.json` |
+|---|---|---|
+| Belongs to | The program: the agent's author | An instance: whoever runs this agent |
+| Written by | The author, published with the agent | The person or machine running one instance |
+| Holds | Constants (`name`, `description`, `providers`, `extensions`), the `settings` schema, and `defaults`: what an instance starts with | Overrides of `defaults` (`model`, `http`, `deploy`, `channels`), values for `settings`, and what only an instance adds: `content`, `instructions`, `skills`, `prompts` |
+| Format | TypeScript: it can import, and `defineAgent` types it | JSON, with a `$schema` that checks its shape; no code |
+| Read by | Every command: `dev` as source, `build` into `dist/` | `--config` (or `FASTAGENT_CONFIG`) names the file for every command; without it `dev` reads the one at the project root, and `start` and `deploy` read none. An app: the `config` it passes `openAgent` |
+| In git | Committed | The development one is ignored by the scaffold's `.gitignore` (it is one person's); a deployment's is delivered by `deploy --config` |
+
+Take one agent that runs for two customers: the author writes `settings: obj({ repo: str() })` in `fastagent.config.ts` once, and
+each customer's instance writes `{ "settings": { "repo": "acme/api" } }` in its own `fastagent.json`. Same program, two
+instances. Precedence is in [Model selection](#model-selection) and [Instance configuration](#instance-configuration).
+
 ## Config file
 
 An agent is identified by one filename, `fastagent.config.ts`:
@@ -47,6 +64,7 @@ what an instance starts with, which its own configuration may override ([instanc
 | `defaults.http.publicUrl` | none | The public base URL the platforms reach the instance at, any mount prefix included: an absolute `https://` URL without a trailing slash. Set, a serve points Telegram, Feishu and Lark there itself once it is ready, on every start; unset, it points none. `deploy fly` and `deploy railway` deliver their host's URL when the configuration names none. Never inferred from the environment. |
 | `defaults.http.api` | `true` | Whether a serve answers the [Agent API](#the-agent-api-over-http) under `/v1` with a key: `dev`, `start` and every deployment, which `deploy` gives a key. `false` keeps them to their channels and schedules, whatever key their environment holds, a host's from an earlier deploy included. Not served on AgentCore either way. |
 | `defaults.channels.<name>.ingress` | `dev`: `connection`; otherwise `webhook` | How a channel that offers both ways (`byIngress`) receives: `webhook` (inbound HTTP, what a host that scales to zero is woken by) or `connection` (a connection the process opens and keeps, such as Feishu's long connection, for one that stays up without a public URL). `<name>` is the channel file's name. |
+| `defaults.channels.<name>.app` | none | `slack` and `lark` only: `{ id, team?, url? }`, the app this instance is bound to and the channel URL a person saved on its page and the platform verified. A serve reports that channel `registered` when `url` is the one it needs; `deploy --run --config` at a terminal writes it once the box confirms it, and `fastagent channels setup <name> --record-url` writes it afterwards. |
 | `defaults.deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM (60–1209600 s). Memory bills for the idle tail; a session past it cold-starts. Changing it changes the template, so a kept `agentcore.template.yaml` needs `--force`. |
 
 A provider or extension that reads a secret is wrapped in [`needs`](#secrets-in-code), like any module.
@@ -64,8 +82,28 @@ An instance sets its own values over the defaults in a `fastagent.json`: `model`
 replace. `fastagent dev` reads the `fastagent.json` at the project root when there is one; `fastagent start` and
 `fastagent deploy` read only the one `--config` names, and otherwise run on the defaults; an app gives `openAgent` a `config` object, or the absolute path of such a file. An
 unknown key, a value of the wrong type and a required setting no one gave each refuse the open, naming the file and the
-path (`fastagent.json: /http/port expected <= 65535`). Its `content` adds to the program's ([Content](#content)).
-`instructions`, `skills` and `prompts` are in the design but not read by this release, and are refused by name.
+path (`fastagent.json: /http/port expected <= 65535`). Its `content` adds to the program's ([Content](#content)), and so do its `mcpServers`: MCP servers in the entry shape of
+the program's `context.json` `mcpServers`, with a name both declare refusing the open ([MCP servers](mcp.md)).
+
+`instructions`, `skills` and `prompts` add the instance's own text to the program's:
+
+```json
+{
+  "instructions": ["./notes/house-rules.md"],
+  "skills": ["./extra-skills"],
+  "prompts": ["./extra-prompts"]
+}
+```
+
+`instructions` names files that follow the program's `AGENTS.md` in the prompt; `skills` and `prompts` name directories
+(`<dir>/<name>/SKILL.md`, `<dir>/<name>.md`). Paths are relative to the `fastagent.json` that names them (an object
+`config` needs absolute ones), and only what is named is read: a skill elsewhere in the workspace is not a capability.
+The files in them are read for every message, so an edit lands on the next one; a path added to the list takes a
+restart. An instance only adds: a skill or prompt template named like the program's (or another of the instance's)
+refuses the open, naming both files, and so does a path that is not a file or directory, or is the program's own
+`AGENTS.md`, `skills/` or `prompts/`. In a development project the program is the project, so the instance's text lives
+elsewhere (`./dev/skills`), and the build does not package it. A declared path that goes missing while the agent runs is
+reported, not read as empty.
 
 A program whose `settings` has a required key with no default starts and deploys only with a configuration that gives
 it: `start --config <file>`, `deploy --config <file>`.
@@ -98,7 +136,7 @@ fastagent build && FASTAGENT_MODEL=openai/gpt-5.5 fastagent start
 
 `deploy` evaluates the same chain in production: `FASTAGENT_MODEL` from `.secrets/production/.env`, else
 `config.model`. Your shell is not read, and `deploy` has no `--model` flag. The production value is recorded in the
-release manifest (`fastagent.release.json`); a variable already set on the platform wins over it. `deploy` prints the
+release manifest (`.fastagent/deploy/fastagent.release.json`); a variable already set on the platform wins over it. `deploy` prints the
 effective model and its source.
 
 ### Model lists
@@ -115,7 +153,7 @@ none kept, every open asks (`fastagent models --refresh` asks now). What it fetc
 so a start without the network has the lists it last had. A refresh that fails is a warning, and each list stays the
 one last kept; a default model only a fetched list has is then refused when no list kept has it, as on a deployed box's
 first start without pi.dev (`deploy` warns of such a model).
-`FASTAGENT_OFFLINE=1` skips the network: each list is the one last kept, or pi-ai's own.
+`FASTAGENT_OFFLINE=1` (the CLI), or `offline: true` to `openAgent`, skips the network: each list is the one last kept, or pi-ai's own.
 
 ## Custom models
 
@@ -155,8 +193,8 @@ export default defineAgent({
 - The provider id joins the model id into a spec (`mygw/deepseek-v3`). `@earendil-works/pi-ai` is a dependency of
   the agent's `package.json` (`init` adds it).
 - A key belongs in the environment, read through `needs`: the config ships in the image, so a key written into it
-  ships too. `needs` makes the value required (the start refuses without it) and carries it to a deployment like any
-  declared secret.
+  ships too. `needs` makes the value required (the start refuses without it), and `deploy` checks that the target holds it, like
+  any declared secret.
 - A provider that resolves its own auth counts as authenticated: `info`, the startup report and `deploy`'s pre-flight
   report it so, and `login` is not needed for it.
 - `fastagent models` lists its models beside the built-ins, and `fastagent info --model mygw/deepseek-v3` says whether
@@ -302,8 +340,8 @@ needs, installed on every machine that runs it and in its image:
   FastAgent never runs apt itself, and elsewhere it says nothing.
 - **`variables`** are the environment variables the agent's commands read, declared by name with what each is for, as code
   declares the secrets it reads with `needs`. Their values come from the environment, never from `context.json`: `.secrets/.env` here,
-  and `.secrets/production/.env` for a deployment, the one file `deploy` reads and carries (a variable exported where
-  you run `deploy` does not reach the deployment). Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
+  and `.secrets/production/.env` for a deployment, the file `fastagent secrets push` reads to set them on the deployment's target (a variable
+  exported where you run `deploy` does not reach the deployment). Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
   start without its value and name `context.json`, `deploy` refuses before it changes anything and lists each
   with its description, and `info` and `fastagent env list` say which have a value here. A value you would share across
   stages, like an enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template.
@@ -364,13 +402,16 @@ to `openAgent`.
 | `fastagent login` | Writes credentials to `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`). `-g`, or running outside any agent, writes `~/.fastagent/.secrets/auth.json`. |
 | Provider env vars | Servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
 | Dev `.env` | `<agent dir>/.secrets/.env`, loaded by local commands and `add <channel>`. Excluded from git by `.secrets/.gitignore`. |
-| Production `.env` | `<agent dir>/.secrets/production/.env`, loaded by `start`, `deploy` and `add <channel> --env production`. `deploy` carries it whole, never falling back to dev. |
+| Production `.env` | `<agent dir>/.secrets/production/.env`, loaded by `start`, `deploy` and `add <channel> --env production`. It is Docker's own store, and the source `fastagent secrets push` copies a deployment's declared names from; neither falls back to dev. |
 
 For one provider, the agent uses the first of:
 
 1. its own `auth.json`;
 2. what the provider resolves itself: its env var, or a provider in code's own `auth`;
 3. the global `~/.fastagent/.secrets/auth.json`.
+
+That is the CLI's order. An app's `openAgent` reads the store `credentials` gives, else `auth.json` in the instance's state
+directory, and the provider's variable from its `secrets` input, and nothing else ([Embedding](embedding.md#4-auth)).
 
 The global file comes last because a deployment never has it: a global login that outranked a key in `.secrets/.env`
 would run one credential locally and another deployed. A refresh is written back to the file the credential was read
@@ -470,12 +511,17 @@ keeps a serve from answering the API with a key its environment still holds.
 
 ### Where an instance lives
 
+An instance's name is one path segment: `--name <name>` (`FASTAGENT_NAME`, `openAgent`'s `name`), over the `name` of its
+`fastagent.json`, over the program's name made one (`@acme/reviewer` is `acme-reviewer`). The program's `defaults` do not
+carry it. `info` and the report `dev` and `start` print say it, and `info().name` is it; a
+name that is not a segment refuses.
+
 An instance has a working directory, where the agent runs and `content/` clones land, and a state root. By default both
 are in the project's `.fastagent/dev/` for `dev` and `.fastagent/start/` for `start`, as above. `--root <dir>` (`FASTAGENT_ROOT`) makes `<dir>` the working directory with the state
 in `<dir>/.state`; `--state <dir>` (`FASTAGENT_STATE_DIR`) and `--workdir <dir>` (`FASTAGENT_WORKDIR`) place either apart
 from it, a flag over its variable, and a variable over the default. The commands that open an instance or read its state
 take them: `dev`, `start`, `invoke`, `info` and `schedules`. A relative path resolves once, against the directory the
-command started in (in a generated image, its `WORKDIR`, `/app/definition`), and a root or workdir that does not exist is created; one that cannot be (a file, a read-only parent) refuses. `--config <file>` (`FASTAGENT_CONFIG`) names
+command started in (in a generated image, its `WORKDIR`, `/app`), and a root or workdir that does not exist is created; one that cannot be (a file, a read-only parent) refuses. `--config <file>` (`FASTAGENT_CONFIG`) names
 the [instance configuration](#instance-configuration) for `dev`, `start`, `invoke`, `info` and `schedules run`; `dev`
 and the others read the `fastagent.json` at the project root without it, and `start` reads none.
 
@@ -545,8 +591,8 @@ export default defineTool({
 
 `parameters` is a TypeBox schema: the harness validates a call's arguments against it before `execute`. A tool of the
 definition's own with a coding tool's name replaces it. Every serve also gives the agent `wake` and `unwake`
-([self-scheduling](api-reference.md#self-scheduling)). [MCP servers](mcp.md) are declared in `.mcp.json`, not a field in
-`context.json`. `fastagent info` lists authored tools and declared MCP servers; MCP tool discovery occurs when the agent opens.
+([self-scheduling](api-reference.md#self-scheduling)). [MCP servers](mcp.md) are declared under `mcpServers` in `context.json` (the program's) and `fastagent.json` (an
+instance's), not in a tool. `fastagent info` lists authored tools and declared MCP servers; MCP tool discovery occurs when the agent opens.
 
 A tool that needs to know which session it runs in asks `await sessionIdOf(api, context)` (from
 `@fastagent-sh/fastagent`): the id the Agent hands out, the one a channel's map records.

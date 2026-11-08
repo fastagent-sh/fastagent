@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CommandSpec } from "../src/cli/kernel.ts";
+import { type CommandSpec, buildProgram } from "../src/cli/kernel.ts";
 import { buildCliProgram, specs } from "../src/cli/program.ts";
 import { agentWorkspace, built, run } from "./cli-run.ts";
 
@@ -42,6 +42,63 @@ async function parse(argv: string[]): Promise<{ code: number; out: string; err: 
   return { code, out, err };
 }
 
+describe("cli kernel: a program option is read only before the subcommand", () => {
+  // A session id is base64url, so 1 in 4096 begin with "-v": read as the program's `-v`, `invoke --session <id>`
+  // printed the version and exited 0, having sent nothing.
+  const seen: unknown[] = [];
+  const probe: CommandSpec = {
+    name: "probe",
+    summary: "a command with a value option and an operand",
+    args: [{ name: "<message>", description: "what to send" }],
+    flags: [{ flags: "--session <id>", description: "the session" }],
+    run: async (args, flags) => {
+      seen.push({ message: args[0], session: flags.session });
+    },
+  };
+  const parseProbe = async (argv: string[]) => {
+    let out = "";
+    let err = "";
+    const program = buildProgram([probe], {
+      version: "9.9.9",
+      colors: false,
+      out: (c) => {
+        out += c;
+      },
+      err: (c) => {
+        err += c;
+      },
+      exit: (code) => {
+        throw new ExitSignal(code);
+      },
+    });
+    let code = 0;
+    try {
+      await program.parseAsync(["node", "fastagent", ...argv]);
+    } catch (e) {
+      if (!(e instanceof ExitSignal)) throw e;
+      code = e.code;
+    }
+    return { code, out, err };
+  };
+
+  it("a value after the subcommand that begins with -v is the subcommand's, not the version", async () => {
+    seen.length = 0;
+    expect(await parseProbe(["probe", "--session", "-vQ2jhwjklm.3", "hello"])).toEqual({ code: 0, out: "", err: "" });
+    expect(seen).toEqual([{ message: "hello", session: "-vQ2jhwjklm.3" }]);
+  });
+
+  it("an operand that begins with -v is refused as an unknown option, never answered with the version", async () => {
+    const refused = await parseProbe(["probe", "-very-urgent: summarize"]);
+    expect(refused.code).toBe(2);
+    expect(refused.out).not.toContain("9.9.9");
+    expect(refused.err).toContain("unknown option");
+  });
+
+  it("-v before the subcommand is still the version", async () => {
+    expect(await parseProbe(["-v"])).toMatchObject({ code: 0, out: "9.9.9\n" });
+  });
+});
+
 describe("cli kernel: spec conformance", () => {
   const walk = (list: readonly CommandSpec[], prefix = ""): { path: string; spec: CommandSpec }[] =>
     list.flatMap((s) => [{ path: `${prefix}${s.name}`, spec: s }, ...walk(s.subcommands ?? [], `${prefix}${s.name} `)]);
@@ -78,13 +135,12 @@ describe("cli kernel: spec conformance", () => {
       [["start"], "--port > PORT env > fastagent.config.ts http.port > 8787"],
       [["start"], "share one credential across projects"],
       [["add", "feishu"], "any your tenant withholds are named"],
-      [["add", "lark"], "config-route 404"],
+      [["add", "lark"], "answers 404"],
       [["add", "skill"], "review with git diff"],
       [["deploy"], "Durable ingress remains operator-owned"],
       [["deploy"], "docker compose up -d"],
       [["deploy"], "provision app/service + volume + secrets + deploy + webhook setup"],
       [["deploy"], "missing CLI/daemon/login/secret"],
-      [["deploy"], "Existing Compose stays authoritative"],
       [["deploy"], "plain redeploy of an already-provisioned agent"],
       [["login"], "outside an agent it writes the global ~/.fastagent/.secrets/auth.json"],
     ];

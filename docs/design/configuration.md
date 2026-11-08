@@ -154,7 +154,7 @@ The point of the ordering is that a run with no usable credential **registers no
 
 ## 8. Credentials
 
-A credential that travels as a variable (a provider API key in the value file) is class D and needs nothing here. Every other one is **created on the deployment**, never carried:
+A credential that is a variable (a provider API key, set on the target by `fastagent secrets`) is class D and needs nothing here. Every other one is **created on the deployment**, never carried:
 
 - `fastagent login --deployment <host>` runs the ordinary login on the box, through the host's own owner-authenticated shell (`docker compose exec`, `fly ssh console`, `railway ssh`, AgentCore's `InvokeAgentRuntimeCommandShell`). The owner's terminal renders it and opens the browser; the box holds the PKCE verifier, exchanges the code, and writes its own `auth.json`. The box is then the only holder of its grant, so neither side can log the other out, and logging in again replaces it. The mechanism is in [core.md](core.md) §9.
 - `deploy --run` starts that login after readiness and before activation (§7), for the model's provider, keeping a credential the box already holds, so a redeploy leaves it alone. Without a terminal it stops with `not logged in` and the command to run: a CI run never reports success for an agent that cannot answer.
@@ -168,21 +168,11 @@ Why not carry a copy of the local `auth.json`: one grant would have two holders 
 
 ## 9. Variable delivery
 
-```
-the selected value file  →  validate/preview  →  the platform's variable storage  →  runtime env
-```
+Superseded by [agent-artifact.md §6.2](agent-artifact.md): a deployment's values are the target's state. The definition declares the names (`needs`, `context.json`'s `variables`, the model's key); `fastagent secrets set|push|list <host>` writes them to the target's own store (Docker's is `.secrets/production/.env`, which Compose reads); `deploy` checks which names the target holds and never reads a value in order to carry it. The environment running a command is a source only when the command is told so (`secrets push --from-env`), and the production value file only when it is named or is the default of `push`.
 
-No `secret push` / `env sync` prerequisite lifecycle (the lesson Kamal 2 encodes by deleting `envify`): edit the file, deploy. CI materializes the same file before running the same command.
+Values are redacted in every output; a store's values are never read back, only its names; a plaintext value file never enters an image, a command-line argument, a generated manifest, or a log; framework-owned storage/ingress/bootstrap names are refused.
 
-**The selected value file is the only source. The environment running `deploy` is not consulted**, so there is no precedence rule to remember and no way for a deployment to carry a value that was written down nowhere. The industry splits on this exactly along the line of what the tool is configuring: dotenv never overrides an already-set variable and Compose lets the shell beat `env_file`, because both configure *this* process; Terraform checks `TF_VAR_*` **last**, after `terraform.tfvars`, because it declares a *remote* object; Kamal 2 goes furthest and stopped loading `.env` into the environment at all. A deployment is the second kind. CI supplies values the same way it supplies `auth.json` in OpenAI's own guide — by writing the file before running the command.
-
-**Ownership is derived, not tracked remotely**: the keys FastAgent owns are every `{ secrets }` declaration ∪ the keys in the selected value file. Nothing outside that union is written, so platform-owned variables survive.
-
-That union describes the *current* intent and cannot say which remote key a past deploy set, so **nothing is deleted implicitly** — and nothing outside it is reported either. What else lives in the platform's variable storage is the platform's business and the operator's: a tool that writes a subset has no standing to audit the rest, and saying "unmanaged" about a variable someone set on purpose is a warning with no action behind it. Tracking a "previously managed" set would need either a remote registry or local state CI does not have, and the whole point of §9 is that neither exists.
-
-Values are redacted in every output; write-only platform secrets are never read back to build a plan; a plaintext value file never enters an image, a command-line argument, a generated manifest, or a log; framework-owned storage/ingress/bootstrap names are refused.
-
-The real guard on missing values is the **declaration-driven gate** (`src/secrets-gate.ts`): a declared name with no value in the selected env fails and names the file that declared it. File existence is a fake guard; a declaration is a real one.
+The real guard on missing values is the **declaration-driven check**: a declared name the target lacks stops `deploy --run` before it builds anything and names the commands that set it. File existence is a fake guard; a declaration is a real one.
 
 ## 10. Isolation
 

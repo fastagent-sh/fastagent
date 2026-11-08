@@ -16,7 +16,7 @@ Coding agents made it cheap to vibe useful agent directories. The next gap is se
 reviewer/                   # the agent: its definition, in a git repository
 ├── fastagent.config.ts     # the marker: defineAgent({ defaults, providers, … })
 ├── context.json            # its content and environment: the repositories it works on, the commands it runs
-├── fastagent.json          # optional: this instance's configuration, and the content it adds (a deploy does not carry it yet)
+├── fastagent.json          # optional: this instance's configuration, and the content it adds (`deploy --config` delivers a configuration of its own to a deployment)
 ├── SYSTEM.md               # the system prompt
 ├── AGENTS.md               # optional: how this agent is built and changed, a section of every prompt
 ├── skills/  prompts/       # optional skills; prompt templates (run as /<name>)
@@ -96,9 +96,9 @@ fastagent build && fastagent start
 Add Telegram, Slack, Feishu, or Lark when the agent should help chat users:
 
 ```bash
-fastagent add telegram
-fastagent add slack
-fastagent add feishu   # 飞书; Lark international: fastagent add lark
+fastagent add telegram && fastagent channels setup telegram
+fastagent add slack && fastagent channels setup slack
+fastagent add feishu && fastagent channels setup feishu   # 飞书; Lark international: lark
 ```
 
 ## Documentation map
@@ -128,18 +128,18 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 Implemented today:
 
 - The Agent API on pi-durable, with one SQLite storage per instance (`.state/agent.sqlite`).
-- Directory assembly from `SYSTEM.md` / `AGENTS.md`, `skills/`, `prompts/`, `src/` and `fastagent.config.ts`, with secrets declared by the code that reads them (`needs`).
+- Program assembly from `SYSTEM.md` / `AGENTS.md`, `skills/`, `prompts/`, `src/`, `fastagent.config.ts` and `context.json`, with secrets declared by the code that reads them (`needs`). `fastagent build` makes the project's `dist/`, which `start`, a deployment and an app open as one immutable definition.
+- An instance of it from explicit inputs: a `fastagent.json` (settings, content, instructions, skills, prompts, MCP servers, name), secrets, state and a workspace. A deployment holds its values on the target (`fastagent secrets`), and `deploy` checks their names.
 - Content: local directories and GitHub repositories (here, a checkout `local` names, used as it is, otherwise a clone; on a host, always a clone; a clone is brought up to date in place at each start).
 - Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Schedules (`src/schedules/`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
 - `dev`, `invoke`, `info`, `schedules`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
-- CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
-- `openAgent` and its `serve()`: an agent directory opened and served inside an app; `createAgent`, model credentials
+- CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`); `login --deployment <host>` logs the deployed box in.
+- `openAgent` and its `serve()`: a built definition opened and served inside an app; `createAgent`, model credentials
   and sign-in for a host that runs agents for a person (a desktop app beside `fastagent dev`).
-
-- MCP stdio/Streamable HTTP tools from `.mcp.json`, browser OAuth, and explicit instance bindings ([guide](mcp.md)).
+- MCP stdio/Streamable HTTP tools from `mcpServers` (the program's in `context.json`, an instance's in `fastagent.json`), browser OAuth, and explicit instance bindings ([guide](mcp.md)).
 
 Not implemented yet:
 
-- An npm package as the deployable artifact, and context packages ([architecture.md](design/architecture.md) §4).
+- Context packages ([architecture.md](design/architecture.md) §4).
 - One instance spread over several processes (one process holds an instance's storage).

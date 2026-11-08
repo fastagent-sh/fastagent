@@ -29,10 +29,11 @@ import {
   miseBinary,
   prepareEnvironment,
 } from "../src/environment/mise.ts";
-import { addContent, writeEnvironment } from "../src/authoring.ts";
+import { addContent, removeContent, writeEnvironment } from "../src/authoring.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { log } from "../src/log.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const savedEnv = { ...process.env };
 afterEach(() => {
@@ -224,6 +225,25 @@ describe("environment: what context.json may declare", () => {
       content: { app: { github: "acme/app" } },
       environment: { packages: { jq: "latest" } },
     });
+  });
+
+  it("every edit of context.json keeps the MCP servers exactly as written, so an edit of one part never drops another", async () => {
+    const dir = await agentDir();
+    const mcpServers = { docs: { type: "http", url: "https://docs.example.com/mcp" }, local: { command: "./srv" } };
+    await writeFile(join(dir, "context.json"), JSON.stringify({ content: {}, mcpServers }));
+    const kept = async () => JSON.parse(await readFile(join(dir, "context.json"), "utf8")).mcpServers;
+    await writeEnvironment(dir, () => ({ packages: { gh: "2" }, aptPackages: [], variables: {} }));
+    expect(await kept()).toEqual(mcpServers);
+    await addContent(dir, { name: "app", entry: { github: "acme/app" }, program: true });
+    expect(await kept()).toEqual(mcpServers);
+    await removeContent(dir, "app");
+    expect(await kept()).toEqual(mcpServers);
+    expect(parseContextFile(JSON.stringify({ content: {}, mcpServers }), "/a/context.json").mcpServers).toEqual(
+      mcpServers,
+    );
+    expect(() => parseContextFile(`{ "mcpServers": [] }`, "/a/context.json")).toThrow(
+      '/a/context.json: "mcpServers" must be an object of servers by name',
+    );
   });
 
   it("refuses a registry name by the backend mise resolves it to, unless that backend is allowed", () => {
@@ -419,7 +439,13 @@ describe("environment: prepared by a process that runs the agent", () => {
   it("requires the variables context.json declares before the agent runs, naming the file", async () => {
     const dir = await agentDir({ variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } } });
     const open = async (secrets: Record<string, string>) =>
-      openServing(await loadSourceDefinition(dir), { secrets, env: {}, storage: "memory" });
+      openServing(await loadSourceDefinition(dir), {
+        secrets,
+        env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
+        storage: "memory",
+      });
     await expect(open({})).rejects.toThrow(/missing required secrets: FA_TEST_HOST \(context\.json\)/);
     // The process's own environment is not where an instance's values come from.
     process.env.FA_TEST_HOST = "github.example.com";
@@ -432,6 +458,8 @@ describe("environment: prepared by a process that runs the agent", () => {
       openServing(await loadSourceDefinition(await agentDir({ packages: { gh: "2" } })), {
         secrets: {},
         env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
         storage: "memory",
       }),
     ).rejects.toThrow(/the agent has no mise installed/);
@@ -439,7 +467,15 @@ describe("environment: prepared by a process that runs the agent", () => {
     const { calls } = await fakeMise(dir);
     vi.spyOn(log, "info").mockImplementation(() => {});
     const secrets = { FAKE_AGENT_VALUE: "from-the-value-file" };
-    await (await openServing(await loadSourceDefinition(dir), { secrets, env: {}, storage: "memory" })).agent.close();
+    await (
+      await openServing(await loadSourceDefinition(dir), {
+        secrets,
+        env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
+        storage: "memory",
+      })
+    ).agent.close();
     // mise reached GitHub, say, with the agent's own token.
     expect((await calls()).map((call) => `${call.args.split(" ")[0]}: ${call.agentValue}`)).toEqual([
       "where: from-the-value-file",

@@ -46,6 +46,7 @@ function fakeAws(replies: Record<string, { code: number; stdout?: string; stderr
     },
     "s3api list-object-versions": { code: 0, stdout: JSON.stringify({ Versions: [] }) },
     "ecr describe-repositories": { code: 0, stdout: JSON.stringify({ repositories: [{}] }) },
+    "secretsmanager describe-secret": { code: 0, stdout: JSON.stringify({ ARN: "arn:aws:secretsmanager:x" }) },
     "logs describe-log-groups": { code: 0, stdout: JSON.stringify(["/aws/lambda/fastagent-probe-forwarder"]) },
   };
   const runner: CliRunner = async (args) => {
@@ -79,6 +80,7 @@ describe("destroy agentcore", () => {
       "stack fastagent-probe",
       `bucket fa-probe-${ACCOUNT} (0 object version(s))`,
       "repository fastagent/probe",
+      "secret fastagent/probe (its values are deleted for good, with no recovery window)",
       "log group /aws/lambda/fastagent-probe-forwarder",
       `log group ${RUNTIME_GROUP}`,
     ]);
@@ -117,6 +119,7 @@ describe("destroy agentcore", () => {
       "cloudformation describe-stacks",
       "s3api list-object-versions",
       "ecr describe-repositories",
+      "secretsmanager describe-secret", // the deployment's values, which no stack owns
       "logs describe-log-groups",
       "logs describe-log-groups", // the RUNTIME's group, named from the definition rather than the stack
       // SCHEDULES WHILE THE STACK STANDS: they are minted at runtime into the default Scheduler group, so the
@@ -134,6 +137,7 @@ describe("destroy agentcore", () => {
       "s3api delete-objects",
       "s3api delete-bucket",
       "ecr delete-repository",
+      "secretsmanager delete-secret",
       "logs delete-log-group",
       "logs delete-log-group", // BOTH: the forwarder's and the runtime's own
     ]);
@@ -146,6 +150,35 @@ describe("destroy agentcore", () => {
       { Key: "forwarder/a.zip", VersionId: "v1" },
       { Key: "forwarder/a.zip", VersionId: "v0" },
     ]);
+  });
+
+  it("deletes the values secret without a recovery window, so the agent's next deployment can reuse its name", async () => {
+    const aws = fakeAws();
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.removed).toContain("secret fastagent/probe");
+    const deleted = aws.calls.find((c) => c[1] === "delete-secret") as string[];
+    expect(deleted).toEqual([
+      "secretsmanager",
+      "delete-secret",
+      "--secret-id",
+      "fastagent/probe",
+      "--force-delete-without-recovery",
+    ]);
+  });
+
+  it("a secret it could not read is a gate, not an absence", async () => {
+    const aws = fakeAws({
+      "secretsmanager describe-secret": { code: 254, stderr: "An error occurred (AccessDeniedException)" },
+    });
+    const outcome = await destroyAgentcoreDeployment({ name: "probe", run: true }, aws.runner);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.gate).toContain("could not tell whether secret fastagent/probe exists");
+    expect(names(aws.calls)).not.toContain("cloudformation delete-stack");
   });
 
   it("a stack that did NOT finish deleting stops everything, and says what is still billing", async () => {
@@ -449,6 +482,7 @@ describe("destroy agentcore", () => {
       "cloudformation describe-stacks": absent,
       "s3api list-object-versions": absent,
       "ecr describe-repositories": absent,
+      "secretsmanager describe-secret": absent,
       "logs describe-log-groups": { code: 0, stdout: "[]" },
       [`logs describe-log-groups --log-group-name-prefix ${RUNTIME_PREFIX} `]: { code: 0, stdout: "[]" },
     });

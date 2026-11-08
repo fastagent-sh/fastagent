@@ -1,11 +1,11 @@
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getRequestListener } from "@hono/node-server";
 import { expect, it, vi, onTestFinished } from "vitest";
-import { agentWorkspace, run } from "./cli-run.ts";
+import { agentWorkspace, run, runInProcess } from "./cli-run.ts";
 import { mcpFixture } from "./mcp-fixture.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -29,7 +29,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   if (!address || typeof address === "string") throw new Error("no port");
   remote = mcpFixture(`http://127.0.0.1:${address.port}`);
   const dir = await agentWorkspace("fa-cli-mcp-", {
-    ".mcp.json": JSON.stringify({ mcpServers: { test: { type: "http", url: remote.url } } }),
+    "context.json": JSON.stringify({ mcpServers: { test: { type: "http", url: remote.url } } }),
   });
   execFileSync("git", ["-C", dir, "init", "-q", "--template="]);
   const home = await mkdtemp(join(tmpdir(), "fa-cli-mcp-home-"));
@@ -61,10 +61,12 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
     await rm(dir, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
   });
-  const listing = await run(["mcp", "list", dir, "--json"], undefined, env);
+  // A process of its own only where the test needs one: a ticket's start (its step is `process.argv[1]`, which is not
+  // the CLI in process) and a refusal by another process's lock. Each spawn is a cold start, seconds on a loaded runner.
+  const listing = await runInProcess(["mcp", "list", dir, "--json"], undefined, env);
   expect(JSON.parse(listing.stdout)).toMatchObject([{ name: "test", authorization: "not_bound" }]);
   expect(remote.calls).toEqual([]);
-  const noScopes = await run(["mcp", "login", "test", dir, "--json"], undefined, env);
+  const noScopes = await runInProcess(["mcp", "login", "test", dir, "--json"], undefined, env);
   expect(noScopes.code).toBe(2);
   expect(noScopes.stderr).toContain("--scopes");
   const invalid = await run(
@@ -90,7 +92,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
     async () => {
       if (failed.status === "working")
         failed = JSON.parse(
-          (await run(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
+          (await runInProcess(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
         );
       expect(failed.status).toBe("failed");
     },
@@ -108,7 +110,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
     async () => {
       if (status.status === "working")
         status = JSON.parse(
-          (await run(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
+          (await runInProcess(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
         );
       expect(status.status).toBe("need_user_action");
     },
@@ -117,7 +119,9 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   expect((await remote.approve(status.url)).status).toBe(200);
   await vi.waitFor(
     async () => {
-      status = JSON.parse((await run(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout);
+      status = JSON.parse(
+        (await runInProcess(["mcp", "login", "--check", ticket as string, "--json"], undefined, env)).stdout,
+      );
       expect(status.status).toBe("done");
     },
     { timeout: 15000 },
@@ -158,9 +162,50 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
   } finally {
     await held.close(BACKGROUND_CONTEXT);
   }
-  const disconnected = await run(["mcp", "disconnect", "test", dir, "--json"], undefined, env);
+  const disconnected = await runInProcess(["mcp", "disconnect", "test", dir, "--json"], undefined, env);
   expect(disconnected.code).toBe(0);
   expect(JSON.parse(disconnected.stdout).grant_revoked).toBe(false);
   expect(await readFile(join(dir, ".secrets", "mcp-auth.json"), "utf8")).toBe(grants);
   expect(JSON.parse(await readFile(join(dir, ".fastagent", "dev", ".state", "mcp-bindings.json"), "utf8"))).toEqual({});
 }, 45000);
+
+it("`mcp list` shows the program's servers and the ones the project's fastagent.json adds, and `info` the same", async () => {
+  const dir = await agentWorkspace("fa-cli-mcp-list-", {
+    "context.json": JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } } }),
+    "fastagent.json": JSON.stringify({ mcpServers: { notes: { type: "http", url: "https://notes.example.com/mcp" } } }),
+    // The coding tools' file is not read.
+    ".mcp.json": JSON.stringify({ mcpServers: { tooling: { command: "npx" } } }),
+  });
+  const listed = await runInProcess(["mcp", "list", dir, "--json"]);
+  expect(listed.code, listed.stderr).toBe(0);
+  expect(JSON.parse(listed.stdout).map((server: { name: string }) => server.name)).toEqual(["docs", "notes"]);
+  const info = await runInProcess(["info", "--json"], dir);
+  expect(info.code, info.stderr).toBe(0);
+  expect(JSON.parse(info.stdout).mcp.map((server: { name: string }) => server.name)).toEqual(["docs", "notes"]);
+
+  await writeFile(join(dir, "fastagent.json"), JSON.stringify({ mcpServers: { docs: { command: "node" } } }));
+  const refused = await runInProcess(["mcp", "list", dir, "--json"]);
+  expect(refused.code).toBe(1);
+  expect(refused.stderr).toMatch(/MCP server "docs" is declared by the program \(context\.json\) and by the instance/);
+});
+
+it("`mcp --env production` lists what `start` opens: the configuration named, never the project's own", async () => {
+  const dir = await agentWorkspace("fa-cli-mcp-env-", {
+    "context.json": JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } } }),
+    "fastagent.json": JSON.stringify({ mcpServers: { personal: { type: "http", url: "https://me.example.com/mcp" } } }),
+  });
+  const names = async (args: string[], env?: Record<string, string>) => {
+    const listed = await runInProcess(["mcp", "list", dir, "--json", ...args], undefined, env);
+    expect(listed.code, listed.stderr).toBe(0);
+    return JSON.parse(listed.stdout).map((server: { name: string }) => server.name);
+  };
+  expect(await names([])).toEqual(["docs", "personal"]);
+  expect(await names(["--env", "production"])).toEqual(["docs"]);
+  const named = join(await mkdtemp(join(tmpdir(), "fa-cli-mcp-env-config-")), "production.json");
+  await writeFile(
+    named,
+    JSON.stringify({ mcpServers: { deployed: { type: "http", url: "https://prod.example.com/mcp" } } }),
+  );
+  expect(await names(["--env", "production"], { FASTAGENT_CONFIG: named })).toEqual(["docs", "deployed"]);
+  expect(await names([], { FASTAGENT_CONFIG: named })).toEqual(["docs", "deployed"]);
+});

@@ -34,11 +34,15 @@ async function readMessage(
   return undefined;
 }
 
-/** The answer as text on `out`, what the tools did and why it failed on `err`. */
+/**
+ * The answer as text on `out`, what the tools did and why it failed on `err`. `authHint` is what to do when the failure
+ * is a model with no credential, which depends on where the agent runs.
+ */
 export async function runInvokeStream(
   events: AsyncIterable<MessageStreamEvent>,
   out: (text: string) => void,
   err: (line: string) => void,
+  authHint?: string,
 ): Promise<number> {
   const toolName = new Map<string, string>(); // a tool result carries the id; its name came with tool_started
   const textOf = answerText();
@@ -74,6 +78,8 @@ export async function runInvokeStream(
         case "done": {
           const failed = failure(event.message);
           if (failed !== undefined) err(`[fastagent] failed: ${failed}`);
+          if (authHint !== undefined && event.message.error?.code === "auth_required")
+            err(`[fastagent] next: ${authHint}`);
           return exitCodeOf(event.message);
         }
         default:

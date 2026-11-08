@@ -135,11 +135,10 @@ describe("deploy/fly: planFlyDeploy", () => {
     const p = planFlyDeploy({ ...base, channels: [] });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore",
+      ".fastagent/deploy/fastagent.json",
+      ".fastagent/deploy/fastagent.packages",
+      ".fastagent/deploy/fastagent.release.json",
       "Dockerfile",
-      "Dockerfile.dockerignore",
-      "fastagent.deploy/fastagent.json",
-      "fastagent.packages",
-      "fastagent.release.json",
       "fly.toml",
     ]);
     // Both ignore forms carry the same content (recursive patterns, .git not excluded).
@@ -147,7 +146,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(rootIgnore).toMatch(/^\*\*\/node_modules$/m);
     expect(rootIgnore).not.toMatch(/^\.git$/m);
     const df = dockerfile(p);
-    expect(df).toContain("WORKDIR /app/definition");
+    expect(df).toContain("WORKDIR /app");
     expect(df).toContain("COPY package.json package-lock.json* *.tgz ./");
     // `*.tgz` rides with the manifest because the install layer runs BEFORE `COPY . .`, and a
     // `"dep": "file:./x.tgz"` resolves against the directory being installed in. Without it the build
@@ -156,13 +155,11 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(df).toContain("COPY . ."); // …then the whole agent directory
     // The npm entrypoint needs NO shell: assert the property (the binary path resolves from the image's
     // WORKDIR) rather than transcribing the line.
-    const cmdBin = /CMD \["(\.\/[^"]+)", "start", "\/app\/definition"\]/.exec(df)?.[1];
+    const cmdBin = /CMD \["(\.\/[^"]+)", "start", "\/app"\]/.exec(df)?.[1];
     expect(cmdBin).toBeDefined();
-    expect(posix.normalize(posix.join("/app/definition", cmdBin as string))).toBe(
-      "/app/definition/node_modules/.bin/fastagent",
-    );
+    expect(posix.normalize(posix.join("/app", cmdBin as string))).toBe("/app/node_modules/.bin/fastagent");
     expect(df).not.toContain("sh"); // exec form: PID 1 is the agent, so SIGTERM reaches it
-    const ignore = p.artifacts.find((a) => a.path === "Dockerfile.dockerignore")?.content ?? "";
+    const ignore = p.artifacts.find((a) => a.path === ".dockerignore")?.content ?? "";
     expect(ignore).not.toMatch(/^\.git$/m); // the definition's .git ships — NOT excluded
     // Recursive on purpose: dockerignore is root-anchored, and a bare `node_modules` would let the build
     // machine's deps (macOS binaries) clobber the image's freshly-installed linux deps.
@@ -181,7 +178,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(bunDf).toContain("COPY package.json bun.lock* *.tgz ./");
     expect(bunDf).toContain("RUN bun install --frozen-lockfile");
     // Bun resolves the script from the package.json in its cwd, which WORKDIR already is: exec form, no shell.
-    expect(bunDf).toContain(`CMD ["bun", "run", "fastagent", "start", "/app/definition"]`);
+    expect(bunDf).toContain(`CMD ["bun", "run", "fastagent", "start", "/app"]`);
     // The image opens the definition by path: nothing selects an agent by name.
     expect(bunDf).not.toContain("FASTAGENT_AGENT");
   });
@@ -195,7 +192,7 @@ describe("deploy/fly: planFlyDeploy", () => {
 
   it("a code agent's CMD runs the LOCAL bin, never npx/bunx (bare `fastagent` on npm is a third party)", () => {
     const npm = dockerfile(planFlyDeploy({ ...base, channels: [] }));
-    expect(npm).toContain(`CMD ["./node_modules/.bin/fastagent", "start", "/app/definition"]`);
+    expect(npm).toContain(`CMD ["./node_modules/.bin/fastagent", "start", "/app"]`);
     expect(npm).not.toContain("npx");
   });
 

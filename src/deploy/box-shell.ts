@@ -23,7 +23,7 @@ export interface BoxShell {
   wake?(): Promise<void>;
   /**
    * The box's storage root, for a shell that does not carry the server's environment (AgentCore's). Unset: the
-   * shell sees `FASTAGENT_STORAGE_DIR` as the server does, or the image's default.
+   * shell sees `FASTAGENT_ROOT` as the server does, or the image's default.
    */
   storage?: string;
   /** Where the box's image has the agent. Unset: where a generated image has it. */

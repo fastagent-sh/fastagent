@@ -82,6 +82,9 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   // The exit-code policy: commander throws only for parse-level events — help/version displays carry exitCode 0 (→
   // 0), everything else it rejects is a usage error (→ 2).
   program.exitOverride((err) => exit(err.exitCode === 0 ? 0 : 2));
+  // commander reads a program option anywhere by default, a subcommand's values included: an `invoke --session <id>`
+  // whose id begins with "-v" (base64url, 1 in 4096) printed the version and exited 0. Only before the subcommand.
+  program.enablePositionalOptions();
   program.configureHelp({
     ...(options.helpWidth !== undefined ? { helpWidth: options.helpWidth } : {}),
     styleTitle: title,

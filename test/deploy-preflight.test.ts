@@ -2,13 +2,13 @@ import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import { type AnyModel, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { keepCatalog } from "./kept-catalog.ts";
-import { type EffectiveConfig, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
+import { type EffectiveConfig, readInstanceConfigFile, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
@@ -203,7 +203,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // the ordinary multi-variable spelling: reading only the first name after `ENV` false-gates a working file.
     for (const env of [
       "ENV FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
-      "ENV FASTAGENT_STORAGE_DIR=/data FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
+      "ENV FASTAGENT_ROOT=/data FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
     ]) {
       const own = await agent({ Dockerfile: `FROM node:22-slim\n${env}\n` });
       await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
@@ -387,23 +387,100 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (pre.ok) expect(JSON.stringify(pre.messages)).not.toMatch(/ship WITHOUT the/);
   });
 
-  it("keeps declared MCP servers in the image and excludes their saved grants", async () => {
+  it("lists the secrets the MCP servers of the program and of the delivered configuration reference", async () => {
     const dir = await agent({
-      ".mcp.json": JSON.stringify({ mcpServers: { test: { command: "node", env: { TOKEN: "$" + "{MCP_TOKEN}" } } } }),
-      ".secrets/mcp-auth.json": "{}",
-      ".dockerignore": ".mcp.json\n.secrets\n",
+      "context.json": JSON.stringify({
+        mcpServers: { test: { command: "node", env: { TOKEN: "$" + "{MCP_TOKEN}" } } },
+      }),
     });
-    const rejected = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(rejected.ok).toBe(true);
-    if (rejected.ok) {
-      expect(rejected.messages.some((m) => m.text.includes("excludes .mcp.json"))).toBe(true);
-      expect(rejected.declaredSecrets).toContainEqual(
-        expect.objectContaining({ name: "MCP_TOKEN", declaredIn: ".mcp.json mcpServers.test" }),
+    const config = join(dir, "..", `delivered-${basename(dir)}.json`);
+    await writeFile(
+      config,
+      JSON.stringify({
+        mcpServers: {
+          notes: {
+            type: "http",
+            url: "https://notes.example.com/mcp",
+            headers: { Authorization: "Bearer $" + "{NOTES_KEY}" },
+          },
+        },
+      }),
+    );
+    const delivered = await readInstanceConfigFile(config);
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: { source: delivered, text: "{}" } });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.declaredSecrets).toContainEqual(
+      expect.objectContaining({ name: "MCP_TOKEN", declaredIn: "context.json mcpServers.test" }),
+    );
+    expect(pre.declaredSecrets).toContainEqual(
+      expect.objectContaining({ name: "NOTES_KEY", declaredIn: `${config} mcpServers.notes` }),
+    );
+  });
+
+  describe("the MCP servers the box will open", () => {
+    const delivering = async (dir: string, mcpServers: unknown) => {
+      const config = join(dir, "..", `mcp-${basename(dir)}.json`);
+      await writeFile(config, JSON.stringify({ mcpServers }));
+      return { source: await readInstanceConfigFile(config), text: "{}", config };
+    };
+    const said = (pre: Awaited<ReturnType<typeof call>>) => (pre.ok ? pre.messages : []);
+
+    it("warns of a literal credential in the program's servers and in the delivered configuration's, never refusing", async () => {
+      const dir = await agent({
+        "context.json": JSON.stringify({
+          mcpServers: {
+            docs: { type: "http", url: "https://docs.example.com/mcp", headers: { Authorization: "Bearer abc" } },
+          },
+        }),
+      });
+      const delivered = await delivering(dir, {
+        notes: { command: "node", env: { NOTES_TOKEN: "ghp_x", OK: "$" + "{OK_VALUE}" } },
+      });
+      const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered, run: true });
+      expect(pre.ok).toBe(true);
+      const literals = said(pre).filter((m) => m.text.includes("is a literal value"));
+      expect(literals.map((m) => m.level)).toEqual(["warn", "warn"]);
+      expect(literals[0]?.text).toMatch(
+        /^context\.json mcpServers\.docs\.headers\.Authorization is a literal value, and this deploy puts it in the image: replace the secret in it with \$\{AUTHORIZATION\} \(a scheme stays: `Bearer \$\{AUTHORIZATION\}`\)/,
       );
-    }
-    await writeFile(join(dir, ".dockerignore"), ".secrets\n");
-    const kept = await call(dir, { model: "openai/gpt-4o-mini" });
-    if (kept.ok) expect(kept.messages.some((m) => m.text.includes("excludes .mcp.json"))).toBe(false);
+      expect(literals[1]?.text).toContain(`${delivered.config} mcpServers.notes.env.NOTES_TOKEN is a literal value`);
+      expect(literals[1]?.text).toContain("write ${NOTES_TOKEN}");
+      expect(literals[1]?.text).toContain("fastagent secrets set <host> <NAME>");
+    });
+
+    it("refuses a relative stdio command in the delivered configuration, which nothing delivers, and allows the others", async () => {
+      const dir = await agent({
+        "context.json": JSON.stringify({ mcpServers: { packaged: { command: "./assets/server" } } }),
+      });
+      const relative = await delivering(dir, { scripted: { command: "./notes-server" } });
+      const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: relative, run: true });
+      expect(gated.ok).toBe(false);
+      if (!gated.ok)
+        expect(gated.gate).toMatch(/mcpServers\.scripted: the command "\.\/notes-server" is a relative path/);
+      const warned = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: relative });
+      expect(said(warned).some((m) => m.level === "warn" && m.text.includes("is a relative path"))).toBe(true);
+      // The program's own relative command is the package's (what `build` copies, `assets/` among it); a bare or absolute command, or a
+      // variable that supplies the directory, is the box's to find.
+      const fine = await delivering(dir, {
+        bare: { command: "npx" },
+        absolute: { command: "/opt/mcp/server" },
+        variable: { command: "$" + "{MCP_HOME}/server" },
+      });
+      const ok = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: fine, run: true });
+      expect(ok.ok).toBe(true);
+    });
+
+    it("reports a name both declare as an issue, instead of failing when the box opens", async () => {
+      const dir = await agent({ "context.json": JSON.stringify({ mcpServers: { docs: { command: "node" } } }) });
+      const delivered = await delivering(dir, { docs: { command: "npx" } });
+      const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered, run: true });
+      expect(gated.ok).toBe(false);
+      if (!gated.ok) expect(gated.gate).toMatch(/MCP server "docs" is declared by the program/);
+      const warned = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered });
+      expect(warned.ok).toBe(true);
+      expect(said(warned).some((m) => m.text.includes('MCP server "docs" is declared by the program'))).toBe(true);
+    });
   });
 
   it("the secret checks follow FASTAGENT_SECRETS_DIR — a custom in-tree dir is gated AND excluded", async () => {
@@ -455,6 +532,18 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(gated.ok).toBe(false);
     if (!gated.ok) expect(gated.gate).toMatch(/your Dockerfile\.dockerignore \(kept\) does not exclude/);
+  });
+
+  it("tells a kept .dockerignore that excludes nothing of .fastagent to exclude it AND let the deploy's directory through", async () => {
+    // Following the first half alone drops `.fastagent/deploy/`, which the image is built from.
+    const agentDir = await agent();
+    await mkdir(join(agentDir, ".fastagent"), { recursive: true });
+    await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n**/.secrets/**\n**/.state\n**/.env\n");
+    const planned = await call(agentDir, { model: "openai/gpt-4o-mini" });
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    const said = planned.messages.map((m) => m.text).find((text) => text.includes("does not exclude `.fastagent`"));
+    expect(said).toContain("`/.fastagent` and `!/.fastagent/deploy`");
   });
 
   it("--run gates on a kept .dockerignore that would bake secrets or drop the agent", async () => {
@@ -538,6 +627,15 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     });
   });
 
+  it("declares no GITHUB_TOKEN where no repository is cloned: the name is the host's clone's, not every agent's", async () => {
+    const dir = await agent({});
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.declaredSecrets.map((secret) => secret.name)).not.toContain("GITHUB_TOKEN");
+    expect(pre.messages.some((m) => m.text.includes("GITHUB_TOKEN"))).toBe(false);
+  });
+
   it("says what each repository context becomes on the host, bakes git, and names the token it clones with", async () => {
     const dir = await agent({
       "context.json": JSON.stringify({
@@ -556,7 +654,14 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       "works on handbook: github acme/handbook@main, cloned on the host, and brought up to date in place at each start",
     );
     expect(notes).toContainEqual(
-      expect.stringMatching(/^no GITHUB_TOKEN in \.secrets\/\.env: the host clones without a credential/),
+      expect.stringMatching(
+        /^no GITHUB_TOKEN in \.secrets\/\.env: unless the target holds one, the host clones without/,
+      ),
+    );
+    expect(notes.join("\n")).toContain("`fastagent secrets set <host> GITHUB_TOKEN`");
+    // The name is declared (optional) so `secrets list|push|set` and `deploy` know it, only where a github entry is.
+    expect(pre.declaredSecrets).toContainEqual(
+      expect.objectContaining({ name: "GITHUB_TOKEN", optional: true, declaredIn: expect.stringContaining("github") }),
     );
     expect(pre.container.apt).toEqual(["git"]);
 
@@ -617,7 +722,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("notes a custom channel (its webhook is the author's to wire; its variables travel like every other)", async () => {
+  it("notes a custom channel (its webhook is the author's to wire; its variables are the target's to hold like every other)", async () => {
     const dir = await agent({ "src/channels/discord.ts": "export default () => ({});\n" });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
@@ -626,7 +731,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       expect(pre.messages).toContainEqual({
         level: "note",
         text: expect.stringContaining(
-          'route channel "discord" is custom — its variables travel from .secrets/.env like every other',
+          'route channel "discord" is custom — the variables it declares are the target\'s to hold (`fastagent secrets`)',
         ),
       });
     }
@@ -929,7 +1034,11 @@ export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" 
       expect(pre.boxLogin).toBeUndefined();
       const unknown = await call(dir, { model: "gw/nope" }, { run: true });
       expect(unknown.ok).toBe(false);
-      if (!unknown.ok) expect(unknown.gate).toMatch(/no provider of the deployed agent offers "gw\/nope"/);
+      if (!unknown.ok) {
+        expect(unknown.gate).toMatch(/no provider of the deployed agent offers "gw\/nope"/);
+        // What it could have been, and the command that lists the rest.
+        expect(unknown.gate).toContain("gw's models include gw/m1 (`fastagent models gw` lists all 1)");
+      }
     } finally {
       await rm(host, { recursive: true, force: true });
     }
@@ -1051,7 +1160,7 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
 describe("preflight: what the definition declares", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("requires what tools DECLARED, and lists the rest of the value file after them", async () => {
+  it("requires what tools DECLARED, and lists nothing else", async () => {
     const dir = await agent({
       "src/tools/x-post.ts": `import { needs } from "@fastagent-sh/fastagent";
 export default needs(["X_API_KEY", "X_API_SECRET"], () => ({
@@ -1073,12 +1182,11 @@ export default needs(["X_API_KEY", "X_API_SECRET"], () => ({
       { name: "X_API_SECRET", declaredIn: "src/tools/x-post.ts", optional: false },
       { name: "GH_HOST", declaredIn: "context.json", description: "the GitHub host gh talks to", optional: false },
     ]);
-    // The runbook names the file to open for a required one, and the value file for the rest.
+    // The runbook names the file to open for each declared name, and no variable a file merely holds (GH_TOKEN).
     expect(pre.secrets).toEqual([
       { name: "X_API_KEY", hint: "required by src/tools/x-post.ts" },
       { name: "X_API_SECRET", hint: "required by src/tools/x-post.ts" },
       { name: "GH_HOST", hint: "required by context.json: the GitHub host gh talks to" },
-      { name: "GH_TOKEN", hint: "from .secrets/.env" },
     ]);
   });
 

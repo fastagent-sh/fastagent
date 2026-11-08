@@ -55,7 +55,17 @@ const refusal = (error: unknown) =>
   error instanceof AgentError ? new Error(`${error.code}: ${error.message}`) : error;
 
 /** Print the message's answer as it is written, then exit with what it ended as: 0 only for `completed`. */
-async function answer(events: AsyncIterable<MessageStreamEvent>, json: boolean | undefined): Promise<number> {
+/** What to do about a model with no credential, where the answer came from. */
+const LOCAL_AUTH_HINT = "sign in with `fastagent login`, or set the provider's API key in .secrets/.env";
+const DEPLOYED_AUTH_HINT =
+  "give the deployment a credential: `fastagent secrets set <host> <the provider's API key variable>` " +
+  "(`fastagent secrets list <host>` names it), or sign its box in with `fastagent login <provider> --deployment <host>`";
+
+async function answer(
+  events: AsyncIterable<MessageStreamEvent>,
+  json: boolean | undefined,
+  authHint: string,
+): Promise<number> {
   // Both renderers exit 1 unless the message completed: CI gates on it.
   const exitCode = json
     ? await runInvokeJson(events, (line) => process.stdout.write(`${line}\n`))
@@ -63,6 +73,7 @@ async function answer(events: AsyncIterable<MessageStreamEvent>, json: boolean |
         events,
         (text) => process.stdout.write(text),
         (line) => console.error(line),
+        authHint,
       );
   if (!json) process.stdout.write("\n");
   return exitCode;
@@ -121,7 +132,7 @@ async function runRemoteInvoke(message: string, dirArg: string, opts: InvokeOpti
     failStartup(refusal(error)),
   );
   console.error(`[fastagent] session ${sessionId} (continue it with --session ${sessionId})`);
-  process.exit(await answer(agent.messages.stream({ sessionId, content: message }), opts.json));
+  process.exit(await answer(agent.messages.stream({ sessionId, content: message }), opts.json, DEPLOYED_AUTH_HINT));
 }
 
 /** The served agent's session to send into: a new one, or `sessionId`, set to `--model` when one is given. */
@@ -170,7 +181,7 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   };
   const sessionId = await sessionFor(agent, opts.session, settings, file).catch(failStartup);
   console.error(`[fastagent] session ${sessionId} (continue it with --session ${sessionId})`);
-  const exitCode = await answer(agent.messages.stream({ sessionId, content: message }), opts.json);
+  const exitCode = await answer(agent.messages.stream({ sessionId, content: message }), opts.json, LOCAL_AUTH_HINT);
   await agent.close();
   // Always exit explicitly: the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
   // after a successful one-shot message.

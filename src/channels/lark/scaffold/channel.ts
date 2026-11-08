@@ -13,7 +13,7 @@ import { type LarkChannelOptions, larkChannel, larkWebSocketChannel } from "@fas
 // guides creation of a separate production app; if Lark refuses its config API, set the Request URL
 // in the console once.
 //
-// `fastagent add lark` guides the console setup and validates the credentials. In the developer
+// `fastagent channels setup lark` guides the console setup and validates the credentials. In the developer
 // console:
 //   1. create a custom app → enable the BOT capability → copy App ID / App Secret into .env
 //   2. Permissions: add `im:message.p2p_msg:readonly` (direct messages), `im:message.group_at_msg:readonly`

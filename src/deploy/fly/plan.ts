@@ -6,6 +6,7 @@ import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } f
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
+import { stripEdges } from "../../strip-edges.ts";
 
 export interface FlyPlanInput extends ContainerInput {
   // Container facts (runtime, hasLockfile, bunVersion, apt) come from ContainerInput.
@@ -24,8 +25,7 @@ export interface FlyPlanInput extends ContainerInput {
    */
   channels: readonly DeclaredChannel[];
   /**
-   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
-   * carries.
+   * The runbook's variable list (`deploymentSecrets`): the declared names, each hinted by the file that declared it.
    */
   secrets?: readonly DeploymentSecret[];
   /** `schedules/` declares a schedule — one of the things that forces a machine up (deploy/residency.ts). */
@@ -124,7 +124,8 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   if (secrets.length > 0) {
     runbook.push(
       ``,
-      `# Secrets (replace each <value>):`,
+      `# Secrets the app needs a value for. \`fastagent secrets push fly\` sets the ones a value file holds and`,
+      `# \`fastagent secrets set fly <NAME>\` one typed without echo; or with flyctl (replace each <value>):`,
       ...secrets.map((s) => `#   ${s.name}: ${s.hint}`),
       `fly secrets set --app ${appName} ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );
@@ -196,9 +197,6 @@ export function parseFlyMinMachines(toml: string): number | undefined {
 
 /** Sanitize a directory basename into a Fly app name: lowercase, [a-z0-9-], must start with a letter. */
 export function toFlyAppName(basename: string): string {
-  const slug = basename
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const slug = stripEdges(basename.toLowerCase().replace(/[^a-z0-9]+/g, "-"), (char) => char === "-");
   return /^[a-z]/.test(slug) ? slug : `app-${slug || "agent"}`;
 }

@@ -3,22 +3,23 @@
  * ownership rule.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import { registerFeishuWebhook } from "../../../channels/feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../../channels/registration.ts";
-import { registerSlackWebhook } from "../../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../../channels/telegram/register-webhook.ts";
-import type { Registrars } from "../../../deploy/channel-ingress.ts";
+import type { Registrars, UrlRecorder } from "../../../deploy/channel-ingress.ts";
+import { recordChannelUrl } from "../../channel-app.ts";
 import {
   BUILD_OUTPUTS,
-  IMAGE_DEFINITION_DIR,
+  IMAGE_APP_DIR,
   isGeneratedDockerfile,
   isGeneratedDockerignore,
 } from "../../../deploy/container.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
+import type { DeploymentApi } from "../../../deploy/api.ts";
 import type { EffectiveConfig } from "../../../harnesses/pi-durable/config.ts";
-import { exists, resolveStateRoot } from "../../../paths.ts";
+import { exists } from "../../../paths.ts";
 import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
 import { loginOnBox, ticketLoginIO } from "../../box-login.ts";
 import type { TicketStep } from "../../ticket.ts";
@@ -26,7 +27,6 @@ import type { DeployHost } from "../../../deploy/hosts.ts";
 
 export interface DeployOptions {
   run?: boolean;
-  tunnel?: boolean;
   force?: boolean;
   intoLinked?: boolean;
   /** `--config <file>`: the instance configuration the deployment delivers. */
@@ -66,6 +66,8 @@ interface DeployContext {
   agentDir: string;
   config: EffectiveConfig;
   pre: Extract<DeployPreflight, { ok: true }>;
+  /** Whether the deployment serves the Agent API, so whether the deploy mints its key. */
+  api: DeploymentApi;
   channels: readonly DeclaredChannel[];
   webhookChannels: readonly DeclaredChannel[];
   /** Write this host's planned artifacts into the agent directory under the ownership rule. */
@@ -94,16 +96,37 @@ export function leftToPerson(answerer: Answerer): ((step: string) => void) | und
   return answerer.kind === "ticket" ? (step) => answerer.step.person.afterwards(step) : undefined;
 }
 
+/**
+ * At a terminal, with a `--config` file to write to: record each URL a person sets on a platform's page once the box
+ * confirms it, so later deploys of that configuration, CI included, report it `registered` from the start.
+ */
+export function urlRecorder(
+  agentDir: string,
+  config: string | undefined,
+  values: ReadonlyMap<string, string>,
+  answerer: Answerer,
+): { recordUrl?: UrlRecorder } {
+  if (answerer.kind !== "terminal" || config === undefined) return {};
+  const file = resolve(config);
+  return {
+    recordUrl: {
+      waitMs: 10 * 60_000,
+      write: async (kind, url) => {
+        await recordChannelUrl(agentDir, file, kind, url, values);
+        return file;
+      },
+    },
+  };
+}
+
 /** The registrars every host driver gets; a channel's manual step also goes to `answerer`'s person. */
-export function registrarsFor(agentDir: string, values: ReadonlyMap<string, string>, answerer: Answerer): Registrars {
+export function registrarsFor(values: ReadonlyMap<string, string>, answerer: Answerer): Registrars {
   const attempts = DEPLOY_REGISTRATION_ATTEMPTS;
   const env = Object.fromEntries(values);
   const leave = leftToPerson(answerer);
   return {
     ...(leave === undefined ? {} : { leave }),
     telegram: (baseUrl) => registerTelegramWebhook(baseUrl, { attempts, env }),
-    slack: (baseUrl) =>
-      registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir), environment: "production", attempts }),
     feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind, { attempts, env }),
   };
 }
@@ -166,11 +189,7 @@ export async function planArtifacts(
   for (const a of artifacts) {
     const abs = join(target, a.path);
     // Pure build output, not operator-owned configuration. It must track the generated template/runbook.
-    if (
-      BUILD_OUTPUTS.includes(a.path) ||
-      BUILD_OUTPUTS.includes(basename(a.path)) ||
-      options.alwaysWrite?.includes(a.path)
-    ) {
+    if (BUILD_OUTPUTS.includes(a.path) || options.alwaysWrite?.includes(a.path)) {
       write(a.path, abs, a.content);
       continue;
     }
@@ -185,7 +204,7 @@ export async function planArtifacts(
           (a.path.endsWith(".dockerignore")
             ? `; see the preflight warnings for what it must exclude`
             : a.path.endsWith("Dockerfile")
-              ? `; deploy still assumes it listens on $PORT and runs \`fastagent start ${IMAGE_DEFINITION_DIR}\``
+              ? `; deploy still assumes it listens on $PORT and runs \`fastagent start ${IMAGE_APP_DIR}\``
               : ``),
       );
       continue;

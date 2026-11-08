@@ -4,25 +4,20 @@
  */
 import { resolve } from "node:path";
 import type { DeployHost } from "../../deploy/hosts.ts";
-import { assembleSecrets, missingValuesGate } from "../../deploy/secrets.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
-import {
-  assertIndependentFeishuApps,
-  feishuAppSecretNames,
-  prepareFeishuApps,
-  unpreparedFeishuApps,
-} from "../add-feishu.ts";
+import { channelAppNames, prepareChannelApps, unpreparedChannelApps } from "./deploy/channel-apps.ts";
 import { displayPath, selectAgentEnvironment } from "../../paths.ts";
 import { buildProject } from "../../harnesses/pi-durable/build.ts";
+import { DELIVERED_CONFIG_DIR } from "../../deploy/container.ts";
+import { deliverText } from "../../deploy/delivered-text.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { apiReport, deploymentApi, writeApiKey } from "../../deploy/api.ts";
-import { unprotectedSecretsNote } from "../../value-file.ts";
+import { apiReport, deploymentApi } from "../../deploy/api.ts";
+import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
 import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive, shellArg } from "../shared.ts";
-import { terminalPerson } from "../person.ts";
 import {
   type Ticket,
   type TicketStep,
@@ -128,10 +123,6 @@ async function deploy(
   step?: TicketStep,
 ): Promise<{ url?: string; notes: string[] }> {
   if (opts.code !== undefined) failUsage("--code hands a code to a deploy's ticket: pass --check <ticket> too");
-  if (opts.tunnel && host !== "docker") {
-    // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
-    failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
-  }
   if (opts.json && !opts.run) failUsage("--json reports a deploy --run drives: pass --run too");
   selectAgentEnvironment("production");
   // The configuration the box runs on: the program's defaults, with the instance configuration `--config` delivers,
@@ -152,19 +143,7 @@ async function deploy(
     .catch(failStartup);
   // Never `dev`, whatever spawned this: a channel's way of receiving is chosen as the box will choose it.
   unmarkDevServe();
-  const independentApps = (values: ReadonlyMap<string, string>) => {
-    try {
-      assertIndependentFeishuApps(agentDir, ["feishu", "lark"], values);
-    } catch (error) {
-      failStartup(error);
-    }
-  };
-  independentApps(loadEnvValues(dotEnvPath(agentDir)));
-  const api = deploymentApi({
-    config,
-    hostServes: host !== "agentcore",
-    values: loadEnvValues(dotEnvPath(agentDir)),
-  });
+  const api = deploymentApi({ config, hostServes: host !== "agentcore" });
   const target = HOSTS[host];
   const preflight = async () => {
     const facts = await preflightDeploy({
@@ -186,8 +165,8 @@ async function deploy(
   const agentArg = displayPath(process.cwd(), agentDir);
   const rerun =
     `fastagent deploy ${host}${agentArg === undefined ? "" : ` ${shellArg(agentArg)}`}` +
-    `${opts.tunnel ? " --tunnel" : ""}${opts.intoLinked ? " --into-linked" : ""} --run`;
-  const unprepared = opts.run ? unpreparedFeishuApps(pre.channels, pre.values) : [];
+    `${opts.intoLinked ? " --into-linked" : ""} --run`;
+  const unprepared = opts.run ? unpreparedChannelApps(pre.channels, pre.values) : [];
 
   if (opts.json && step === undefined) {
     // A coding agent's deploy: what this machine can refuse is refused above, at once; the rest runs in a ticket.
@@ -211,7 +190,6 @@ async function deploy(
           "deploy",
           host,
           agentDir,
-          ...(opts.tunnel ? ["--tunnel"] : []),
           ...(opts.force ? ["--force"] : []),
           ...(delivered === undefined ? [] : ["--config", delivered.source.label]),
           ...(opts.intoLinked ? ["--into-linked"] : []),
@@ -228,26 +206,15 @@ async function deploy(
   /** Everything past the pre-flight, its person's steps taken by `answerer`; the URL and what the API report says. */
   const deployWith = async (answerer: Answerer): Promise<{ url?: string; notes: string[] }> => {
     if (unprepared.length > 0) {
-      const supplied = unprepared.flatMap(({ kind, ingress }) => feishuAppSecretNames(kind, ingress));
+      const supplied = unprepared.flatMap(channelAppNames);
       const kinds = unprepared.map(({ kind }) => kind);
       const { values } = pre;
       const absent = supplied.filter((name) => !values.get(name)?.trim());
-      const { missingSecrets } = assembleSecrets({
-        modelAuth: pre.modelAuth,
-        declared: pre.declaredSecrets,
-        values: pre.values,
-      });
-      const missing = missingValuesGate(
-        missingSecrets.filter((name) => !supplied.includes(name)),
-        pre.valueFile,
-      );
-      if (missing) failStartup(new Error(`deploy stopped: ${missing}`));
-      if (host === "docker" && !opts.tunnel && unprepared.some(({ ingress }) => ingress === "webhook")) {
+      if (host === "docker" && unprepared.some(({ way }) => way === "webhook")) {
         failStartup(
           new Error(
             `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
-              `public URL to point the app at — re-run with --tunnel (the app is prepared then), or set up your own ` +
-              `ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
+              `public URL to point the app at — set up your own ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
               `set ${kinds.map((kind) => `channels.${kind}.ingress`).join(", ")} to "connection" in the configuration ` +
               `--config delivers`,
           ),
@@ -260,16 +227,13 @@ async function deploy(
             `hands their part to its user`,
         );
       }
-      const person = answerer.kind === "ticket" ? answerer.step.person : terminalPerson;
       const again = answerer.kind === "ticket" ? `${rerun} --json` : rerun;
-      await prepareFeishuApps(agentDir, unprepared, again, person).catch(failStartup);
-      pre = await preflight();
-    }
-    independentApps(pre.values);
-    if (api.served && api.generatesKey) {
-      // Past every refusal the pre-flight makes, and read again, so this deploy carries it.
-      const unprotected = await writeApiKey(agentDir).catch(failStartup);
-      if (unprotected !== undefined) console.error(`[fastagent] note: ${unprotectedSecretsNote(unprotected)}`);
+      await prepareChannelApps(
+        agentDir,
+        unprepared,
+        again,
+        answerer.kind === "ticket" ? answerer.step.person : undefined,
+      ).catch(failStartup);
       pre = await preflight();
     }
     for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
@@ -281,6 +245,7 @@ async function deploy(
     // What follows is the host's work: a deadline meant for the person must never cut it halfway. Its own steps for
     // the person (a host sign-in, the box's login) wait again, and are bounded again.
     if (answerer.kind === "ticket") answerer.step.person.carriesOn();
+    let textDelivered = false;
     const reachedAt = await target.deploy({
       opts,
       answerer,
@@ -288,6 +253,7 @@ async function deploy(
       agentDir,
       config,
       pre,
+      api,
       channels,
       webhookChannels: channels.filter((channel) => channel.ingress === "webhook"),
       // The ownership predicate is bound HERE, from the same lookup that chose the host, so no host module can pass
@@ -308,10 +274,22 @@ async function deploy(
             ),
           );
         }
+        // Once, after the gate and before the first artifact lands: the directory is replaced whole, so a refused
+        // run must leave it as it was, and the build outputs the host writes next go into the fresh one.
+        if (!textDelivered) {
+          textDelivered = true;
+          const copied = await deliverText(agentDir, delivered?.source).catch(failStartup);
+          if (copied > 0) {
+            console.error(
+              `[fastagent] delivered ${copied} path(s) of the instance's text into ${DELIVERED_CONFIG_DIR}/`,
+            );
+          }
+        }
         await applyArtifactPlan(plan);
       },
     });
-    const notes = apiReport(api, { valueFile: pre.valueFile, agentArg }, reachedAt);
+    const keyInFile = apiKeysFrom(loadEnvValues(dotEnvPath(agentDir)).get(API_KEY_VARIABLE)).length > 0;
+    const notes = apiReport(api, { valueFile: pre.valueFile, agentArg, keyInFile, run: !!opts.run }, reachedAt);
     for (const line of notes) console.error(`[fastagent] ${line}`);
     return { ...(reachedAt === undefined ? {} : { url: reachedAt }), notes };
   };

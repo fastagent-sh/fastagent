@@ -11,9 +11,9 @@ The design center is decided in `docs/design/architecture.md`: an agent is a def
 | Document | Purpose |
 |---|---|
 | `docs/SPEC.md` | The Agent API v2, in process and over HTTP: what `src/agent-api.ts` and `src/http/` implement. Do not change its semantics without an explicit decision. |
-| `docs/design/architecture.md` | The decided architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
-| `docs/design/agent-artifact.md` | The framework target (#900), not current runtime behavior: one immutable built definition assembled deterministically from explicit instance inputs. Program `fastagent.config.ts` (constants, `defaults`, `settings` schema) + `context.json` + `mcp.json`; instance `fastagent.json` + `.mcp.json`, state and workspace; deployment and secret modes. |
-| `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. |
+| `docs/design/architecture.md` | The architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
+| `docs/design/agent-artifact.md` | The framework design (#900), built: one immutable built definition assembled deterministically from explicit instance inputs. Program `fastagent.config.ts` (constants, `defaults`, `settings` schema) + `context.json` (its `mcpServers` included); instance `fastagent.json` (its `mcpServers` included), state and workspace; deployment and secrets. |
+| `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. Where it and the artifact design differ, the code is current. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
 | `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review policy). |
@@ -34,7 +34,7 @@ src/
 │                           # types (CredentialStore, SignInInteraction, …), SignInCancelled; imports nothing
 ├── mcp-api.ts              # embedding-facing MCP grants, bindings, sign-in interaction and errors; imports nothing
 ├── mcp/                    # MCP 2026-07-28, independent of the agent harness
-│   ├── config.ts           # .mcp.json validation, secret references and instance-local resolution
+│   ├── config.ts           # `mcpServers` validation (context.json's and the instance's), secret references and resolution
 │   ├── grants.ts           # grant records and durable writes under a shared storage lock
 │   ├── auth.ts             # OAuth discovery, target binding, serialized refresh and safe diagnostics
 │   ├── network.ts          # MCP URL policy and instance-owned HTTP transport, with DNS-validated IP pinning
@@ -71,12 +71,15 @@ src/
 │   │                       # once at the command's entry into absolute paths in the process environment
 │   ├── invoke-stream.ts    # `invoke`: one message's answer, as messages.stream delivers it, as text or JSON lines → exit code
 │   ├── models-view.ts, auth-view.ts, content-view.ts # `models` / auth-report / content output
-│   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
+│   ├── first-run-channels.ts # `dev`'s first run: a first-party channel without credentials is set up, in the parent, at a terminal
+│   ├── channel-setup.ts    # `channels setup <name>`: ask a person for a channel's credentials, at a terminal or on a page,
+│   │                       # check each with the platform, keep them in the instance's value file
 │   ├── person.ts           # what an app's setup says to the person for the steps only they can take: printed at a
 │   │                       # terminal, a ticket's `need_user_action` / `afterwards` in a coding agent's run
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
 │   ├── login-relay.ts      # `login` split across a process boundary: LoginIO as JSON lines, box half + terminal half
+│   ├── channel-app.ts      # a channel's binding recorded in an instance configuration (channels.<name>.app)
 │   ├── ticket.ts           # a step a coding agent starts and a person finishes (a sign-in, an app's setup), outliving
 │   │                       # the command: its own process, a ticket under ~/.fastagent/.state/tickets, `--check`
 │   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell;
@@ -89,15 +92,24 @@ src/
 ├── model-ref.ts            # provider/modelId parsed for definitions and remote callers without loading a harness
 ├── log.ts                  # leveled logging singleton (dev=debug, start=info)
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
+├── credentials-page.ts     # the page a person pastes a setup's credentials on when there is no terminal: loopback, one use,
+│                           # each value checked as it is pasted and kept before the next
+├── channels/setup.ts       # what a channel's setup asks a person for (values, guides, checks); `cli/channel-setup.ts` asks
 ├── setup-page.ts           # the pages a person pastes a credential on, one design for every channel (Slack, Lark): form
 │                           # and status cards, and the headers of a page that takes a secret
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code edits (src/, config, package.json, .env); the
 │                           # prompt files and skills are read per message
+├── runtime-websocket.ts    # the runtime's own WebSocket and the pings it can send (undici's, or Bun's own before
+│                           # 1.4.4): what Slack's Socket Mode and AgentCore's shell hold a connection open with
 ├── proxy.ts                # the process's outbound-fetch policy: the declared proxy, loopback exempt by default
 ├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL); only https or
 │                           # loopback http reaches the opener, because some URLs come from a deployed box
 ├── env.ts                  # ENTERING the selected environment: dev `.secrets/.env` or production
 │                           # `.secrets/production/.env` → process.env, then the egress that follows
+├── child-env.ts            # the environment of the processes an instance starts (shell tool, stdio MCP servers, skill
+│                           # scripts): assembled from inputs, never the host's whole `process.env`
+├── instance-name.ts        # an instance's name: one path segment, defaulting to the definition's made into one
+├── strip-edges.ts          # trim the ends of a name or a URL by index (a regex backtracks on a long run)
 ├── serving-command.ts      # which command serves this process (`dev` marks it): the default a channel's ingress
 │                           # setting falls back to, read through the process environment the CLI and the agent share
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
@@ -153,6 +165,8 @@ src/
 │   ├── registration.ts     # the shared registrar outcome (registered|manual|failed) + the ONE retry loop
 │   ├── webhooks.ts         # a serve pointing its platforms at itself: which channels take a webhook, the step a
 │   │                       # person takes for each, and the registration the instance's own credentials can make
+│   ├── webhook-evidence.ts # what proves a platform reaches the instance at a URL only a person sets: an
+│   │                       # authenticated request and the address it was sent to, recorded in the channel's state
 │   ├── kit/                # WRITING a channel. Its defining property is an import fact, asserted in
 │   │   │                   # package-boundary.test.ts: everything here has consumers only under
 │   │   │                   # channels/<platform>/, and serve/router/discover have none there
@@ -174,10 +188,13 @@ src/
 │   │   ├── tasks.ts        # side-task tracking (ACK-independent work); drain is observation only
 │   │   ├── text.ts         # Unicode-safe code-point slicing
 │   │   ├── attachment-path.ts # where an attachment lands (the conversation id encoded into a directory)
+│   │   ├── abortable.ts    # waiting that an abort ends, and a listener on a signal that is removed
 │   │   ├── stop-command.ts # the shared /stop parsing every chat channel accepts, and the abort it dispatches
 │   │   └── thread-fork.ts  # where a new thread forks from: its room at the message its reply chain names (by key)
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
-│   │   ├── telegram.ts     # ingress + per-turn lifecycle + composition
+│   │   ├── telegram.ts     # the runtime (accept an update, run the turn) + its two ways in: webhook route, long polling
+│   │   ├── polling.ts      # getUpdates as a LongConnection: webhook taken away first, confirm by offset, what ends it
+│   │   ├── setup.ts        # what `channels setup telegram` asks for: the bot token, checked with getMe; a webhook's secret
 │   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy
 │   │   ├── invoke-turn.ts  # resolve this platform's attachments for one turn
 │   │   ├── turn-store.ts   # telegram's record + update_id arrival order over the generic store
@@ -189,14 +206,15 @@ src/
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
 │   │   └── scaffold/       # `add telegram` bundle (channel + send tool)
 │   ├── slack/              # Slack Agent: native streams + inline tool traces, signed Events API ingress
-│   │   ├── slack.ts        # ingress + per-turn lifecycle + composition
+│   │   ├── slack.ts        # the runtime (ingest an event, run the turn) + its two ways in: signed webhook, Socket Mode
+│   │   ├── socket.ts       # Socket Mode as a LongConnection: hello, ack by envelope id, refresh before the old one goes, pings
 │   │   ├── parse.ts, model.ts, reaction.ts # pure protocol parsing/shapes + the reaction vocabulary
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + BOTH renderers (native Agent stream, classic edits)
 │   │   ├── history.ts      # a place's history: conversations.history (top level) / .replies (a thread)
 │   │   ├── slack-api.ts    # the Bot API pipeline (retry, markdown/text splitting, files, history reads)
 │   │   ├── shared-api.ts   # the ONE transport per state root the channel and the send tool share
-│   │   ├── onboard.ts, setup-server.ts, manifest.ts, config-api.ts, onboarding-state.ts, welcomed.ts,
-│   │   │                   # register-webhook.ts # `add slack`: the app-creation flow and what it remembers
+│   │   ├── setup.ts, manifest.ts # what `channels setup slack` asks for (the values, how each is checked) + the app's manifest and its link
+│   │   ├── welcomed.ts     # who was greeted
 │   │   └── scaffold/       # `add slack` bundle (channel + slack-send + slack-threads)
 │   ├── feishu/             # CANONICAL Feishu channel engine — see docs/design/core.md
 │   │   ├── feishu.ts       # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
@@ -208,13 +226,13 @@ src/
 │   │   ├── ws-ingress.ts   # the long-connection ingress (the WebSocket form of the same engine)
 │   │   ├── setup-mode.ts   # the onboarding choice (webhook vs websocket) + the scopes every agent app asks for
 │   │   ├── shared-api.ts   # channel/send-tool transport sharing per cloud and state root
-│   │   ├── register-app.ts # `add feishu`: scan-to-create device flow
+│   │   ├── setup.ts        # `channels setup feishu`: scan-to-create, the Verification Token, the permission check; the engine Lark shares
+│   │   ├── register-app.ts # scan-to-create device flow
 │   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation
 │   │   └── scaffold/       # `add feishu` bundle (channel + feishu-send + feishu-threads)
 │   └── lark/               # Lark compatibility/degraded edges over the Feishu engine
 │       ├── lark.ts         # thin branded adapter bound to LARK_COMPAT_CLOUD
-│       ├── onboard.ts      # unbound launcher (its link carries the agent's scopes) + credentials + manual config fallback
-│       ├── credentials-page.ts # loopback-only setup forms: App ID/Secret and a manually copied Verification Token
+│       ├── setup.ts        # `channels setup lark`: the launcher link, the pasted pair checked together
 │       └── scaffold/       # `add lark` bundle
 ├── deploy/                 # `deploy docker|fly|railway|agentcore` (core.md §9). Neutral kernel at top, one
 │   │                       # directory per host. ADDING A HOST: deploy/hosts.ts says what to write and what
@@ -230,27 +248,33 @@ src/
 │   ├── preflight.ts        # host-neutral pre-flight: the definition builds, its model exists and authenticates
 │   │                       # where it runs, channel discovery, warnings
 │   ├── build-context.ts    # what the build context holds that must not ship, and what a KEPT ignore file lets through
+│   ├── delivered-text.ts   # the instance text a deploy delivers: the paths the configuration names, copied beside it
+│   │                       # into `.fastagent/deploy/` so they resolve the same in the image's `/etc/fastagent/`
 │   ├── container.ts        # portable image + ignore files + release manifest (host-neutral), and the one command
 │   │                       # that runs `login --stdio` inside that image where its server runs
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
-│   │                       # process lease, recoverable definition replacement (definition/ is cwd; .state/
-│   │                       # and .secrets/ stay beside it)
-│   ├── secrets.ts          # both directions of the value carry: the NAMES a runbook lists, the VALUES
-│   │                       # `--run` sends, and the FASTAGENT_ENV the container expands back
+│   │                       # process lease, the release last started on it (the storage is the instance's root; the
+│   │                       # program is the image's)
+│   ├── secrets.ts          # the NAMES a deployment needs and declares (secretNeeds, declaredNames, ModelKey)
+│   ├── secret-store.ts, file-store.ts # where a deployment's values live and how a deploy fills the gaps; Docker's store
 │   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
 │   ├── box-shell.ts        # a running box's owner-authenticated shell as a byte channel (`login --deployment`)
-│   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + optional Quick Tunnel) + the compose driver
+│   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + state volume, ingress is the operator's) + the compose driver
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
-│   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
-│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js } # ONE stack:
+│   ├── railway/   { plan.ts, run.ts, ignore.ts } # same two roles — NOT a copy of Fly (thin config, minted URL); ignore.ts is
+│   │                       # what `railway up` uploads (`.railwayignore`, since it follows `.gitignore` only inside a repo)
+│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js, slr.ts,
+│                    store.ts, runtime-secrets.ts, sigv4.ts } # ONE stack:
 │                             # runtime + forwarder Lambda (webhooks, and the alarms the container sets). No public
 │                             # URL, no resident process, no volume — the facts every difference follows from.
-│                             # destroy.ts is the other direction, and it exists because three of the four
+│                             # destroy.ts is the other direction, and it exists because most of the
 │                             # resources cannot be stack resources. aws-cli.ts owns what ONE AWS CLI result
 │                             # MEANS — there / gone / could not find out — because eleven call sites each
 │                             # deciding that produced the same defect five review rounds running. Every AWS
 │                             # read that asks "is it there, and could I tell" goes through it. shell.ts is the
 │                             # command-shell WebSocket `login --deployment` speaks (SigV4 presigned, AWS CLI creds)
+│                             # store.ts is the deployment's values as one Secrets Manager secret outside the stack;
+│                             # runtime-secrets.ts is the container reading it on its first invocation (IMDSv2 + SigV4)
 ├── schedule/               # the N axis: prompts on a cron and the clock that fires them
 │   ├── schedule.ts         # a schedule as built ({ name, cron, tz?, prompt }) from `defineSchedule` in src/schedules/
 │   ├── cron.ts             # the one place touching `croner`: nextRun + cronError
@@ -282,8 +306,11 @@ src/
     │   ├── built.ts        # what dist/ is: which files go into it, the build record `start` checks the project against,
     │   │                   # and the opener of a built package (`loadProjectBuild`, `loadBuiltDefinition`)
     │   ├── registry.ts     # the modules of src/ by directory, imported in file order
+    │   ├── text-sources.ts # where an instance's text is: the program's own, then what the configuration's
+    │   │                   # `instructions`, `skills` and `prompts` name, resolved once at open
     │   ├── text.ts         # SYSTEM.md, AGENTS.md, skills (loaded as pi loads them) and prompt templates, read per
-    │   │                   # message; the deployed agent's self-change section
+    │   │                   # message from exactly those paths; the deployed agent's self-change section
+    │   ├── execution-env.ts # pi-durable's local execution environment with the environment of every process given outright
     │   ├── agent.ts        # openDurableAgent: a Harness on the instance's storage, and the operations over it
     │   ├── reads.ts        # what the operations and the event streams read: a session's conversation, its published
     │   │                   # entries, a message as it is now, the session

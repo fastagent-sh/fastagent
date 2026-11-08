@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import { openPreparedStartService } from "../src/cli/commands/start.ts";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { buildable } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 async function agentDir(files: Record<string, string> = {}, config = `{ defaults: { model: "${CODEX_MODEL}" } }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
@@ -25,7 +27,13 @@ async function agentDir(files: Record<string, string> = {}, config = `{ defaults
 
 /** The directory opened as a serve opens it, with no storage of its own, as the mount takes it. */
 const open = async (dir: string) =>
-  openServing(await loadSourceDefinition(dir), { secrets: {}, env: {}, storage: "memory" });
+  openServing(await loadSourceDefinition(dir), {
+    secrets: {},
+    env: {},
+    ownEnv: process.env,
+    runsAs: NOT_HOSTED,
+    storage: "memory",
+  });
 
 const DIGEST = `import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({ cron: "0 9 * * *", prompt: "hi" });\n`;
@@ -153,6 +161,91 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+});
+
+describe("mountAgentcoreService: the container points its own webhook channels", () => {
+  const FORWARDER = "https://fwd.lambda-url.us-west-2.on.aws";
+  /** A `telegram` route channel and the secrets that point it, on an instance with `config`. */
+  async function telegramMount(config: Record<string, unknown> = {}) {
+    const dir = await agentDir({
+      "src/channels/telegram.mjs": `export default () => ({ "POST /telegram": () => new Response("ok") });`,
+    });
+    return mountAgentcoreService(
+      await openServing(await loadSourceDefinition(dir), {
+        secrets: { TELEGRAM_BOT_TOKEN: "123:abc", TELEGRAM_SECRET_TOKEN: "s3cret" },
+        env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
+        storage: "memory",
+        config: { values: config, label: "test" },
+      }),
+    );
+  }
+  const probe = (service: ServedAgent) =>
+    service
+      .fetch(
+        new Request("http://h/invocations", {
+          method: "POST",
+          body: JSON.stringify({ kind: "probe", auth: "s3cret", wake: { url: FORWARDER } }),
+        }),
+      )
+      .then((r) => r.json());
+  const stubTelegram = () => {
+    const calls: string[] = [];
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.startsWith("https://api.telegram.org/")) return real(input, init);
+      calls.push(String(init?.body));
+      return Response.json({ ok: true, result: true });
+    });
+    return calls;
+  };
+
+  it("registers at the forwarder URL the envelope names, once, and the probe reports the outcome", async () => {
+    process.env.FASTAGENT_INGRESS_SECRET = "s3cret";
+    const calls = stubTelegram();
+    const service = await telegramMount();
+    try {
+      expect(await probe(service)).toEqual({ ok: true, webhooks: [{ channel: "telegram", outcome: "pending" }] });
+      await vi.waitFor(async () =>
+        expect(await probe(service)).toEqual({ ok: true, webhooks: [{ channel: "telegram", outcome: "registered" }] }),
+      );
+      // The /health the forwarder relays tells the same story as the probe.
+      const relayed = await service.fetch(
+        new Request("http://h/invocations", {
+          method: "POST",
+          body: JSON.stringify({ kind: "webhook", auth: "s3cret", method: "GET", path: "/health" }),
+        }),
+      );
+      const reply = (await relayed.json()) as { bodyB64: string };
+      expect(JSON.parse(Buffer.from(reply.bodyB64, "base64").toString())).toEqual({
+        status: "ok",
+        webhooks: [{ channel: "telegram", outcome: "registered" }],
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toContain(`${FORWARDER}/telegram`);
+      expect(calls[0]).toContain("s3cret");
+    } finally {
+      await service.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("registers at the configuration's own http.publicUrl when it names one", async () => {
+    process.env.FASTAGENT_INGRESS_SECRET = "s3cret";
+    const calls = stubTelegram();
+    const service = await telegramMount({ http: { publicUrl: "https://agent.acme.com" } });
+    try {
+      await probe(service);
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]).toContain("https://agent.acme.com/telegram");
+      expect(calls[0]).not.toContain(FORWARDER);
+    } finally {
+      await service.close();
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("mountAgentcoreService", () => {

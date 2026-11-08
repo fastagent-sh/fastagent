@@ -16,8 +16,9 @@ both run the **same** agent.
 - **Node ≥ 24.15** (or Bun ≥ 1.4). Ships compiled JS + types; no build step for FastAgent itself.
 - **Install as a dependency** of your app: `npm i @fastagent-sh/fastagent`. The agent directory has its own
   `package.json` too ([init](cli.md#fastagent-init)); keep the versions aligned.
-- **Model credentials**: `fastagent login` in the agent directory (writes its `.secrets/auth.json`) or a provider API
-  key in the environment (e.g. `OPENAI_API_KEY`). See [Auth](#4-auth).
+- **Model credentials**: a provider API key in `secrets` (e.g. `OPENAI_API_KEY`), a `credentials` store of your own, or
+  an `auth.json` in the instance's state directory. `fastagent login` writes the project's `.secrets/auth.json`, which
+  an app's instance does not read. See [Auth](#4-auth).
 
 ## The one mental model
 
@@ -51,7 +52,7 @@ import support from "@acme/support-agent"; // the default export of a package `f
 const agent = await openAgent(support, {
   root: "/var/lib/myapp/support",
   secrets: { ZENDESK_TOKEN: vault.read("zendesk") }, // what the agent's code and model read by name
-  env: baseEnv(process.env), // PATH, HOME, locale and proxy: what its commands start from; without it, nothing
+  env: baseEnv(process.env), // PATH, HOME, locale and proxy: what its commands and FastAgent's own installing and cloning start from; without it, nothing
   model: "openai/gpt-5.5",
 });
 // ...
@@ -71,7 +72,7 @@ relative one is refused. The open builds the definition's code with the secrets 
 [environment](configuration.md#environment) where it has no install yet and puts it first on the `PATH` of the
 commands the agent runs, clones its content, refreshes its [model lists](configuration.md#model-lists) (a request to
 `https://pi.dev` of at most 5 s, and to a provider that fetches its own list, unless what `<state>/models/` keeps is
-less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage (`<state>/agent.sqlite`),
+less than 4 hours old; `offline: true` makes none), and opens the instance's storage (`<state>/agent.sqlite`),
 which one process holds at a time. Without a
 `model`, the config's is the default; with none at all the agent still
 opens, and a session needs a model of its own (`sessions.create({ model })`, `sessions.update`) before a message is
@@ -82,7 +83,7 @@ A definition is made from a project directory: the prompt is its `SYSTEM.md`, an
 
 ### MCP servers
 
-An agent's `.mcp.json` adds stdio or Streamable HTTP tools. Use `inspectMcp` and `signInMcp` to drive browser OAuth in
+The agent's `mcpServers` (its `context.json`, and `config.mcpServers` for an instance) add stdio or Streamable HTTP tools. Use `inspectMcp` and `signInMcp`, giving them the same `config`, to drive browser OAuth in
 the host before opening an agent, then pass `mcp: { store, bindings }` to `openAgent`. Each open owns its clients;
 sharing a grant is explicit and closing an agent does not sign the user out. See [MCP servers](mcp.md) for the host
 interaction/store contract, instance variables, proxy policy and supported protocol subset.
@@ -212,11 +213,15 @@ app.register(async (scope) => {
 
 ## 4. Auth
 
-`openAgent` reads the instance's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's variable from
-`secrets`, and then the global `~/.fastagent/.secrets/auth.json` for a provider the agent authenticates no other way
-([order](configuration.md#auth-and-secrets)). `fastagent login` in the agent directory signs a provider in.
+`openAgent` reads the model credentials from `credentials`, else from `auth.json` in the instance's state directory
+(`<root>/.state/auth.json`), and the provider's variable from `secrets`. It reads nothing else: not the project's
+`.secrets/`, not `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR`, not the machine's `~/.fastagent`, so a person's own
+`fastagent login` never becomes an app's credential. MCP grants are kept the same way: the `mcp` store you give, else
+`mcp-auth.json` in the state directory. The state directory holds secrets (these two files) beside the conversation
+history, and FastAgent writes no `.gitignore` into it: an app whose `root` is a git repository, or whose agent commits
+its working directory, keeps `.state/` out of version control itself.
 
-`credentials` replaces the files with a `CredentialStore` of your own, refreshes included; the provider variables in `secrets` and a
+`credentials` replaces the file with a `CredentialStore` of your own, refreshes included; the provider variables in `secrets` and a
 provider's own auth still apply. Implement one over an OS keychain or Electron `safeStorage`, or keep FastAgent's file
 somewhere of your choosing with `credentialFile(path)`. To sign a person in from your own UI, list the ways with
 `signInOptions(store)` and run one with `signIn`, which asks and tells through your interaction:

@@ -7,11 +7,11 @@ status: implemented in part
 
 # Architecture
 
-**Status: implemented through §6 step 5 (0.29.0); artifact/instance refactor under design.** The code serves an agent
-on pi-durable through the [Agent API](../SPEC.md), with content authoring and MCP support. The artifact (§4.1), context
-packages (§4.2) and §4.4 are not built. [The artifact and instance inputs](agent-artifact.md) records the decided
-constraints and direction for the artifact: an immutable built definition, assembled deterministically from explicit
-instance inputs. It supersedes runtime modification of packaged files as the target, not the current code. §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol
+**Status: implemented through §6 step 6 (#900).** The code serves an agent on pi-durable through the
+[Agent API](../SPEC.md), with content authoring and MCP support. The artifact (§4.1) is built (`fastagent build`), and
+so are the instance inputs and the deployment from it; context packages (§4.2) and §4.4 are not.
+[The artifact and instance inputs](agent-artifact.md) records the design: an immutable built definition, assembled
+deterministically from explicit instance inputs. It replaces runtime modification of packaged files. §6 is the order. This note and the Agent API replaced a harness-neutral design: the SPEC v1 protocol
 (never released), a harness port, and the conformance levels behind them (§5).
 
 ## 1. What FastAgent is for
@@ -56,10 +56,10 @@ goal needs.
 | **Agent behavior defaults in `fastagent.config.ts`, with `defineAgent()`; every field optional** | It is the `defineConfig` pattern of Vite and its peers: typed, and read by the build. The model, thinking level and tools it names are defaults: a deployment overrides them with a flag or an environment variable, and a session with pi-durable's own API |
 | **Code is registered by where it is**: `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/` | `build` generates the built definition's entry as plain imports of every module, as TanStack Router's route tree and Next.js's route manifest are generated: nothing to import by hand, full types, and a bundler can follow it. A source project, which only `dev` opens, has its modules imported where they are, so opening it writes nothing into it ([agent-artifact.md](agent-artifact.md) §2). Not `import.meta.glob`, which only Vite understands while `dev` runs on Node |
 | **The code is pi-durable's**: tools are its `defineTool` (TypeBox), extensions its `defineExtension` | With one harness, a portable layer over its tool and extension APIs would be a second API to learn for nothing |
-| **Third-party capabilities are pi-durable extensions**, listed in `defineAgent({ extensions })` | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. MCP servers are declared separately in [`.mcp.json`](mcp.md). Context packages (§4.2) are later work, not an MCP prerequisite |
+| **Third-party capabilities are pi-durable extensions**, listed in `defineAgent({ extensions })` | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. MCP servers are declared separately, as the `mcpServers` of `context.json` ([MCP](mcp.md)). Context packages (§4.2) are later work, not an MCP prerequisite |
 | **Schedules are TypeScript**: `defineSchedule({ cron, tz, prompt })`, the prompt a text or a function | A schedule is behaviour, like a tool: a prompt that depends on the time it fires, secrets it may need, and a cron the build checks, including the dialect an external clock accepts |
 | **`SYSTEM.md` is the whole prompt the author writes; `APPEND_SYSTEM.md` goes** | It added to pi-coding-agent's default prompt, which pi-durable does not have |
-| **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; MCP server configuration names its required values in `.mcp.json` ([MCP design](mcp.md)). A declaration may say what the secret is for and that the code runs without it (`{ name, description, optional }`). A missing required one fails the start, naming where it was declared. Whoever deploys or runs the agent reads none of that code: the definition lists every declaration among its inputs (what each is for, whether it is optional, where it is declared), which `info`, runbooks, an `.env.example` and the deploy check are made from |
+| **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; MCP server configuration names its required values in `mcpServers` ([MCP design](mcp.md)). A declaration may say what the secret is for and that the code runs without it (`{ name, description, optional }`). A missing required one fails the start, naming where it was declared. Whoever deploys or runs the agent reads none of that code: the definition lists every declaration among its inputs (what each is for, whether it is optional, where it is declared), which `info`, runbooks, an `.env.example` and the deploy check are made from |
 
 **A mapping is created in one order, in one place.** With Caller-named sessions, a chat's id was its session's, so a
 redelivered first message found its message by key, and two threads created at once met in `conflict`. With sessions
@@ -95,10 +95,10 @@ to another with `configure`.
 
 ## 3. The definition and its assembly
 
-**Artifact target, not current runtime behavior.** The [artifact design](agent-artifact.md) keeps the program in
-`fastagent.config.ts` (constants, `defaults`, a `settings` schema), `context.json` and `mcp.json`, builds a complete
-`dist/`, and takes each instance's `fastagent.json`, `.mcp.json`, secrets, state and workspace as explicit inputs.
-`core.md` documents the current 0.29.0 source-directory implementation.
+The [artifact design](agent-artifact.md) keeps the program in `fastagent.config.ts` (constants, `defaults`, a
+`settings` schema) and `context.json`, builds a complete `dist/`, and takes each instance's `fastagent.json`, secrets,
+state and workspace as explicit inputs. `dev` opens the source project as a definition; `start`, a deployment and an
+embedding open a built one.
 
 ```
 my-agent/
@@ -112,8 +112,7 @@ my-agent/
     extensions/*.ts               pi-durable defineExtension
     channels/*.ts
     schedules/*.ts                defineSchedule
-  context.json                    content baseline and environment requirements
-  mcp.json                        default MCP servers; an instance adds servers in its .mcp.json
+  context.json                    content baseline, environment requirements, default MCP servers (mcpServers)
   .fastagent/                     generated, not committed
   dist/                           the build output
 ```
@@ -159,19 +158,19 @@ the agent's commands ([Agent API](../SPEC.md) §5.1). The result is the Agent
 API's `Agent`, plus `harness`. `dev`, `start` and an embedder's process call the same function, so an agent behaves the
 same wherever it runs.
 
-**Runtime evolution: new target, not implemented.** The definition package is immutable, including its original text,
+**Runtime evolution: built (#900).** The definition package is immutable, including its original text,
 skills, prompts, tools and MCP declarations. An instance adds content, MCP servers, skills and prompt templates through
-its configuration, never replacing or shadowing the packaged ones; every addition, text included, takes effect at an
-explicit reopen that selects one configuration snapshot. Persistent capabilities an agent writes for itself are deferred. The current source-directory behavior
-remains described in [agent-model.md §6](agent-model.md#6-an-agent-changes-itself); the [artifact design](agent-artifact.md)
-owns the target. Author changes produce a new version. Recurring `wake` work remains instance state, not package mutation.
+its configuration, never replacing or shadowing the packaged ones; text takes effect on the next message, MCP servers
+and code at an explicit reopen. Persistent capabilities an agent writes for itself are deferred. The self-edit rules of a source project, which `dev`
+opens, are in [agent-model.md §6](agent-model.md#6-an-agent-changes-itself); a built definition is read-only
+([artifact design](agent-artifact.md)). Author changes produce a new version. Recurring `wake` work remains instance state, not package mutation.
 
 ## 4. Around the agent
 
 ### 4.1 The artifact
 
 The artifact is an **npm package** exporting a compiled definition with relocatable resources, not a live Agent singleton.
-It carries authored text and skills, `fastagent.config.ts`, `context.json` and `mcp.json`, and a generated JSON Schema
+It carries authored text and skills, `fastagent.config.ts` and `context.json`, and a generated JSON Schema
 for instance configuration. Instance configuration, fetched data and secret values do not enter it. An app imports it and
 opens it with `openAgent(definition, inputs)`; it depends on FastAgent as a peer and records a format version. The
 [detailed design](agent-artifact.md) fixes the layout and the exported definition. An ordinary npm library does not
@@ -215,7 +214,9 @@ an instance's `fastagent.json` does.
 
 The agent's own parts carry no prefix. Since the agent chooses the aliases, two aliases cannot collide either.
 
-MCP configuration is the agent's [`.mcp.json`](mcp.md), not a `connectors` field in `context.json`.
+The program's MCP servers are the `mcpServers` map of its `context.json`, in the MCP ecosystem's entry shape; an
+instance adds its own under `mcpServers` in its `fastagent.json`. FastAgent does not read `.mcp.json`, the coding tools'
+file ([artifact design](agent-artifact.md) §3.3). There is no `connectors` kind.
 How future packages contribute MCP declarations is deferred; packages must not create a parallel authoritative format.
 
 ### 4.3 Hosts and storage
@@ -331,16 +332,16 @@ What the previous design had, and what took its place:
 4. **Done, released in 0.28.0** ([#875](https://github.com/fastagent-sh/fastagent/pull/875)). Per-agent content
    authoring through the embedding API: create an agent with folders or repositories, then read and edit its declarations.
 5. **Done, released in [0.29.0](https://github.com/fastagent-sh/fastagent/releases/tag/v0.29.0)** (#895, #898).
-   [MCP servers](mcp.md) use the agent's `.mcp.json` (`mcpServers`): stdio/Streamable HTTP tools, OAuth, instance-owned
+   [MCP servers](mcp.md) (`mcpServers` in `context.json`, 0.29.0 read `.mcp.json`): stdio/Streamable HTTP tools, OAuth, instance-owned
    clients and explicit grant bindings. Packed CLI, embedding/HTTP APIs, multi-instance lifecycle, current-policy Linear
    OAuth/proxy access and native container persistence passed [acceptance](https://github.com/fastagent-sh/fastagent/issues/678).
    Provider resource cleanup remains an independent [known issue](https://github.com/fastagent-sh/fastagent/issues/896),
    accepted in the release notes. Kage is a downstream consumer, not the acceptance prerequisite. No generic `Connector`,
    session cache, context packages or scale-out prerequisite.
-6. **Direction decided** ([#900](https://github.com/fastagent-sh/fastagent/issues/900)): [the artifact and instance
+6. **Done** ([#900](https://github.com/fastagent-sh/fastagent/issues/900)): [the artifact and instance
    inputs](agent-artifact.md), then `fastagent build` and `deploy` from the same artifact. The goal is assembly
-   determinism across development, embedding and deployment; the deployment unit is the author's project. Delivery
-   order and deferred work are in that note's §10.
+   determinism across development, embedding and deployment; the deployment unit is the author's project. What is
+   not built, and the deferred work, are in that note's status and §10.
 7. Context packages, once there is a concrete cross-agent reuse need; they depend on the artifact's build step.
 8. Shared contexts and agents working together.
 

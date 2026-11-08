@@ -2,26 +2,31 @@
 import type { BoxLoginStep } from "../box-shell.ts";
 import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
-import { type Registrars, loginGate, registerWebhooks } from "../channel-ingress.ts";
+import {
+  type BoxWebhooksProbe,
+  type Registrars,
+  type UrlRecorder,
+  confirmWebhooks,
+  loginGate,
+} from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson } from "./aws-cli.ts";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import {
-  CARRIERS,
-  CARRIER_CHUNK_SIZE,
-  CARRIER_MAX_CHUNKS,
   MOUNT,
   agentcoreRepoName,
+  agentcoreSecretName,
   agentcoreStackName,
-  carrierChunk,
   deploymentBucketName,
   forwarderSource,
   ingressSessionId,
   type AgentcoreTopology,
 } from "./plan.ts";
 import { zipSingleFile } from "./zip.ts";
-import { encodeCarriedEnv, missingValuesGate } from "../secrets.ts";
+import type { SecretStore } from "../secret-store.ts";
+import { RUNTIME_IDENTITY_ROLE, ensureServiceLinkedRole } from "./slr.ts";
+import { agentcoreSecretStore } from "./store.ts";
 
 export interface AgentcoreRunPlan {
   /** The base name — stack `fastagent-<name>`, ECR repo `fastagent/<name>`. */
@@ -37,12 +42,12 @@ export interface AgentcoreRunPlan {
    * region`.
    */
   region?: string;
-  /** Env-var name → value: the value file's carried variables. */
-  secrets: Record<string, string>;
-  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
-  missingSecrets: string[];
-  /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
-  valueFile: string;
+  /** Makes the secret hold every value the deployment needs (secrets-step.ts), or says what is missing. */
+  provideSecrets: (store: SecretStore) => Promise<string | undefined>;
+  /** What proves an envelope came from the forwarder: minted by the deploy, a stack parameter. */
+  ingressSecret: string;
+  /** The wake-alarm shared secret between the container and the forwarder: minted by the deploy, a stack parameter. */
+  wakeSecret: string;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
   /**
@@ -51,10 +56,14 @@ export interface AgentcoreRunPlan {
    */
   topology: AgentcoreTopology;
   /**
-   * Log the runtime in (`fastagent login --deployment`) once the probe verified it and before any webhook points at
-   * it. Resolves a gate line, or undefined.
+   * Log the runtime in (`fastagent login --deployment`) once the probe verified it and before the deploy reads its
+   * webhooks. Resolves a gate line, or undefined.
    */
   boxLogin?: BoxLoginStep<[runtimeArn: string]>;
+  /** The `http.publicUrl` the configuration names (a custom domain); default the forwarder's URL. */
+  publicUrl?: string;
+  /** At a terminal with a `--config` file: record each URL a person set once the box confirms it. */
+  recordUrl?: UrlRecorder;
 }
 
 /** AWS keys are typed, so a coding agent's user signs the CLI in at a terminal of their own. */
@@ -79,9 +88,49 @@ const EMPTY_STACK_STATUSES = new Set([
   "DELETE_COMPLETE",
 ]);
 
+/**
+ * How often the deploy asks the runtime how its webhooks went. Each ask is a Lambda and an `InvokeAgentRuntime` that
+ * keeps the microVM up and is billed, where another host's `/health` costs nothing.
+ */
+const WEBHOOKS_INTERVAL_MS = 5_000;
+
 /** Budget for image pull, storage initialization and channel construction. */
 const PROBE_TIMEOUT_MS = 240_000;
 const PROBE_INTERVAL_MS = 3_000;
+
+/** One call to the forwarder's reserved probe path. */
+async function askProbe(
+  probeUrl: string,
+  auth: string,
+  fetchImpl: typeof fetch,
+): Promise<{ status: number; body: string }> {
+  const res = await fetchImpl(probeUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ auth }),
+    signal: AbortSignal.timeout(65_000),
+  });
+  return { status: res.status, body: await res.text() };
+}
+
+/**
+ * The runtime's own report of its webhook channels, through the probe: the container has no `/health` of its own to
+ * read, and the forwarder relays only this path. The address it is handed is the other hosts' `/health`, which this
+ * one has no use for.
+ */
+function forwarderWebhooks(probeUrl: string, auth: string, fetchImpl: typeof fetch): BoxWebhooksProbe {
+  return async () => {
+    try {
+      const { status, body } = await askProbe(probeUrl, auth, fetchImpl);
+      const verdict = status === 200 ? (JSON.parse(body) as { ok?: unknown; webhooks?: unknown }) : undefined;
+      return verdict?.ok === true && Array.isArray(verdict.webhooks)
+        ? (verdict.webhooks as { channel: string; outcome: "pending" | "registered" | "manual" | "failed" }[])
+        : undefined;
+    } catch {
+      return undefined; // polled again until the deadline
+    }
+  };
+}
 
 /** Drive the forwarder's reserved probe path until it answers, and read the runtime's STRUCTURED verdict. */
 async function probeRuntime(
@@ -95,14 +144,8 @@ async function probeRuntime(
   let last: string | undefined;
   for (;;) {
     try {
-      const res = await fetchImpl(probeUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ auth }),
-        signal: AbortSignal.timeout(65_000),
-      });
-      const bodyText = await res.text();
-      if (res.status === 200) {
+      const { status, body: bodyText } = await askProbe(probeUrl, auth, fetchImpl);
+      if (status === 200) {
         let verdict: { ok?: unknown; error?: unknown } | undefined;
         try {
           verdict = JSON.parse(bodyText) as { ok?: unknown; error?: unknown };
@@ -116,7 +159,7 @@ async function probeRuntime(
         }
       }
       const firstLine = bodyText.trim().split("\n")[0] ?? "";
-      last = `${res.status}${firstLine ? ` ${firstLine}` : ""}`;
+      last = `${status}${firstLine ? ` ${firstLine}` : ""}`;
     } catch {
       // not routable yet (Function URL DNS, cold start) — keep polling until the deadline
     }
@@ -151,39 +194,21 @@ export function pickStackOutputs(parsed: unknown): Record<string, string> | unde
   }
   return out;
 }
-/** The secrets `--run` mints for this host, each with the template parameter of its own. */
-const MINTED_PARAMS: Record<string, string> = {
-  FASTAGENT_INGRESS_SECRET: "FastagentIngressSecret",
-  FASTAGENT_WAKE_SECRET: "FastagentWakeSecret",
-};
-
-/** What each carrier holds for this deploy: every variable but the minted ones, as one encoded object. */
-function carrierValues(secrets: Record<string, string>): Record<(typeof CARRIERS)[number]["env"], string> {
-  const carried = Object.fromEntries(Object.entries(secrets).filter(([name]) => !(name in MINTED_PARAMS)));
-  return { FASTAGENT_ENV: encodeCarriedEnv(carried) };
-}
-
 /** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. */
 export function paramsFileContent(
   imageUri: string,
-  secrets: Record<string, string>,
+  secretArn: string,
+  minted: { ingressSecret: string; wakeSecret: string },
   forwarder: { bucket: string; key: string },
 ): string {
-  const params = [`ImageUri=${imageUri}`, `ForwarderBucket=${forwarder.bucket}`, `ForwarderS3Key=${forwarder.key}`];
-  for (const [name, param] of Object.entries(MINTED_PARAMS)) {
-    if (secrets[name] !== undefined) params.push(`${param}=${secrets[name]}`);
-  }
-  // Every chunk is written, empty ones included: an omitted parameter keeps its PREVIOUS value on a stack update.
-  const values = carrierValues(secrets);
-  for (const carrier of CARRIERS) {
-    const value = values[carrier.env];
-    for (let i = 0; i < CARRIER_MAX_CHUNKS; i++) {
-      params.push(
-        `${carrierChunk(carrier, i).param}=${value.slice(i * CARRIER_CHUNK_SIZE, (i + 1) * CARRIER_CHUNK_SIZE)}`,
-      );
-    }
-  }
-  return `${JSON.stringify(params)}\n`;
+  return `${JSON.stringify([
+    `ImageUri=${imageUri}`,
+    `SecretArn=${secretArn}`,
+    `ForwarderBucket=${forwarder.bucket}`,
+    `ForwarderS3Key=${forwarder.key}`,
+    `FastagentIngressSecret=${minted.ingressSecret}`,
+    `FastagentWakeSecret=${minted.wakeSecret}`,
+  ])}\n`;
 }
 
 /** Run the deploy through `aws` + `docker`. */
@@ -243,22 +268,6 @@ export async function deployAgentcoreRun(
     );
   }
 
-  // 3. Gate missing required secret VALUES before any side effect (no half-created infra).
-  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
-  if (missingValues) return gate(missingValues);
-  // 3b.
-  const capacity = CARRIER_CHUNK_SIZE * CARRIER_MAX_CHUNKS;
-  const carried = carrierValues(plan.secrets);
-  if (carried.FASTAGENT_ENV.length > capacity) {
-    return gate(
-      `the variables in ${plan.valueFile} are too large to carry (${carried.FASTAGENT_ENV.length} chars encoded > ` +
-        `${capacity}) — move what the deployment does not need out of that file`,
-    );
-  }
-  // Name what travels from the value file onto the runtime.
-  const secretNames = Object.keys(plan.secrets);
-  if (secretNames.length > 0) log(`carrying ${secretNames.length} secret(s): ${secretNames.join(", ")}`);
-
   // 3c. Say what this deploy is ABOUT TO TOUCH while it can still be stopped for free: until here the account and
   // region only surfaced several hundred log lines in, inside the ECR image URI.
   const source = plan.region ? "the environment" : "aws configure";
@@ -289,7 +298,12 @@ export async function deployAgentcoreRun(
     );
   }
 
-  // 3d. Read the stack here, for the two questions that both depend on it: does this deploy destroy the agent's
+  // 3d. The role the runtime needs in this account, made if a first deploy finds it missing: a stop here costs nothing,
+  // and the same fault found by CloudFormation costs the build.
+  const roleGate = await ensureServiceLinkedRole(cli, RUNTIME_IDENTITY_ROLE, log);
+  if (roleGate !== undefined) return gate(roleGate);
+
+  // 3e. Read the stack here, for the two questions that both depend on it: does this deploy destroy the agent's
   // memory (below), and is there a failed first create to clear (step 7)? The destructive one is only worth saying
   // while the multi-minute build has not run yet, and step 7 reuses this answer unless it was still in flight.
   // An unanswered question must not read as "a first deploy, nothing to lose": `sts get-caller-identity` succeeding
@@ -329,6 +343,17 @@ export async function deployAgentcoreRun(
         `Cross-deploy memory needs a real volume: \`deploy fly\` or \`deploy railway\`.`,
     );
   }
+
+  // 3f. The deployment's values, after the only questions that precede a write and before the build: the secret the stack reads, made to hold every name the definition
+  // requires (a coding agent's run, with nobody to ask, stops here naming the commands).
+  const secretStore = agentcoreSecretStore(aws, agentcoreSecretName(plan.name), log);
+  try {
+    await secretStore.ensure();
+  } catch (error) {
+    return gate(error instanceof Error ? error.message : String(error));
+  }
+  const secretsGate = await plan.provideSecrets(secretStore);
+  if (secretsGate !== undefined) return gate(secretsGate);
 
   // 4.
   const registry = `${account}.dkr.ecr.${region}.amazonaws.com`;
@@ -410,7 +435,7 @@ export async function deployAgentcoreRun(
     return gate("`docker buildx build` failed — see the output above; fix and re-run");
   }
 
-  // 7. The 3d answer stands unless it was still settling then — a second read is the narrow exception, not the rule.
+  // 7. The 3e answer stands unless it was still settling then — a second read is the narrow exception, not the rule.
   const beforeDeploy = settling ? await readStackStatus() : stackStatus;
   if ("ok" in beforeDeploy && beforeDeploy.ok === "ROLLBACK_COMPLETE") {
     log(`stack ${stack} is ROLLBACK_COMPLETE (a failed first create) — deleting it before re-creating…`);
@@ -422,7 +447,13 @@ export async function deployAgentcoreRun(
     }
   }
   log(`deploying stack ${stack}…`);
-  const paramsPath = await writeSecretFile(paramsFileContent(image, plan.secrets, forwarderParams));
+  let secretArn: string;
+  try {
+    secretArn = await secretStore.arn();
+  } catch (error) {
+    return gate(error instanceof Error ? error.message : String(error));
+  }
+  const paramsPath = await writeSecretFile(paramsFileContent(image, secretArn, plan, forwarderParams));
   const deployed = await aws([
     "cloudformation",
     "deploy",
@@ -503,7 +534,7 @@ export async function deployAgentcoreRun(
     log("probing the deployed runtime (storage initialization + channel construction)…");
     const verdict = await probeRuntime(
       `${url}${RESERVED_PATHS.probe}`,
-      plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
+      plan.ingressSecret,
       probe.fetchImpl ?? fetch,
       probe.timeoutMs,
       probe.intervalMs,
@@ -518,24 +549,25 @@ export async function deployAgentcoreRun(
         notLoggedIn,
         channels: plan.channels,
         log,
-        // The forwarder URL outlives a redeploy, so the webhooks an earlier deploy registered already point at it.
-        ...(redeploy
-          ? { afterLogin: "they work again: the forwarder URL is unchanged, so nothing needs pointing" }
-          : { baseUrl: url, afterLogin: "point the channels by hand (a redeploy would wipe that login again)" }),
+        // The runtime points its own channels at the forwarder URL as the probe wakes it, login or not.
+        afterLogin: "they work again: the runtime has pointed its own channels, so nothing needs pointing",
       }),
     );
   }
 
-  // 9.
-  const registrationGateMsg = url
-    ? await registerWebhooks({
-        baseUrl: url,
-        channels: plan.channels,
-        registrars,
-        log,
-        retryHint: "re-run to retry registration (steps already done are skipped)",
-      })
-    : undefined;
+  // 9. The runtime points its own channels as the probe wakes it; this reads what it made of them.
+  const registrationGateMsg = await confirmWebhooks({
+    baseUrl: url,
+    publicUrl: plan.publicUrl ?? url,
+    channels: plan.channels,
+    registrars,
+    log,
+    ...(plan.recordUrl === undefined ? {} : { record: plan.recordUrl }),
+    retryHint: "re-run to retry registration (steps already done are skipped)",
+    probe: forwarderWebhooks(`${url}${RESERVED_PATHS.probe}`, plan.ingressSecret, probe.fetchImpl ?? fetch),
+    intervalMs: probe.intervalMs ?? WEBHOOKS_INTERVAL_MS,
+    ...(probe.timeoutMs === undefined ? {} : { timeoutMs: probe.timeoutMs }),
+  });
   if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true, runtimeArn, url };
 }

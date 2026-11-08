@@ -84,7 +84,7 @@ describe("deploy: ownership decides what --force may replace", () => {
     // AgentCore's Lambda forwarder is generated code, not operator-owned configuration — a stale copy
     // beside a fresh template is a broken deployment. It is the one path that skips the rule, so it is
     // named at the call site rather than inferred from the kind, and the exemption is proven here.
-    const path = "fastagent/lambda/index.js";
+    const path = "fastagent/agentcore/forwarder/index.js";
     const dir = await mkdtemp(join(tmpdir(), "fa-own-"));
     await mkdir(dirname(join(dir, path)), { recursive: true });
     await writeFile(join(dir, path), "// mine\n");
@@ -102,12 +102,13 @@ describe("deploy: ownership decides what --force may replace", () => {
       spy.mockRestore();
     }
     expect(await readFile(join(dir, path), "utf8")).toBe("// fresh\n"); // overwritten without --force
-    expect(said.join("\n")).toMatch(/wrote fastagent\/lambda\/index\.js/);
+    expect(said.join("\n")).toMatch(/wrote fastagent\/agentcore\/forwarder\/index\.js/);
   });
 
   it("build output is written by every deploy, never kept or reported stale: the release manifest and the package list", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-own-build-"));
-    for (const path of ["fastagent.release.json", "fastagent.packages"]) {
+    await mkdir(join(dir, ".fastagent/deploy"), { recursive: true });
+    for (const path of [".fastagent/deploy/fastagent.release.json", ".fastagent/deploy/fastagent.packages"]) {
       await writeFile(join(dir, path), "from an earlier deploy\n");
       const plan = await planArtifacts(dir, [{ path, content: "this deploy's\n" }], {
         force: false,

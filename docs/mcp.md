@@ -6,8 +6,11 @@ status: current
 
 # MCP servers
 
-Declare servers in **`.mcp.json` at the agent directory's root**. Each opened agent owns its clients. Servers are not read
-from `context.json`, editor settings, parent folders or your home directory.
+Declare the agent's servers under **`mcpServers` in its `context.json`**: they ship with the package, so every instance
+connects them. An instance adds its own under `mcpServers` in its `fastagent.json`, the same entry shape; a name both
+declare refuses the open. Each opened agent owns its clients. Servers are not read from `.mcp.json` (the file Claude Code
+and Copilot keep for the person working in a directory), editor settings, parent folders or your home directory. To
+reuse a server's documentation, paste the entries it gives under `"mcpServers"` into `context.json` or `fastagent.json`.
 
 FastAgent uses MCP **2026-07-28**. An older-only server is refused, not silently downgraded. The first implementation
 supports tools with text/JSON results over stdio and Streamable HTTP. It does not provide resources/prompts, sampling,
@@ -22,17 +25,20 @@ Install the server and its runtime in the agent's environment, then declare its 
 {
   "mcpServers": {
     "project": {
-      "command": "node",
-      "args": ["./node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "./content/project"],
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/srv/project"],
       "env": { "LOG_LEVEL": "info" }
     }
   }
 }
 ```
 
-This example requires the server package and an existing `content/project` directory. FastAgent does not install MCP
-packages automatically. Commands containing a path resolve relative to the agent directory; bare names use the instance's
-PATH. The server runs with the agent directory as cwd, with arguments passed verbatim, without a shell.
+FastAgent does not install MCP packages automatically: `npx -y` fetches the server when it first starts. A command
+containing a path resolves relative to the file that declares it (the program's `context.json` against its package, an
+instance's `fastagent.json` against its own directory); bare names use the instance's PATH. The server runs in the
+instance's working directory, whoever declared it, with arguments passed verbatim (so a path in `args` is relative to that
+directory, and a script is better named absolutely or run by `npx`), without a shell. A program's command that is a path
+must be a file `build` copies (put it under `assets/`): `build` refuses one that `dev` would run and a box would not find.
 
 Only execution necessities (`PATH`, `HOME`, `USERPROFILE`, `SystemRoot`, `SYSTEMROOT`, `TEMP`, `TMP`, `TMPDIR`, `LANG`,
 `LC_ALL`) and the server's declared `env` are forwarded. The SDK may also inherit its small platform-default environment;
@@ -112,8 +118,8 @@ The browser callback binds only `127.0.0.1`. For a remote CLI, run it with a fix
 the browser's machine. An automatic `mcp login --deployment` relay is not provided. A local Kage grant is never copied into
 a deployed instance. Prepare the target's authorization separately, or use its own static credentials.
 
-Default grants live in the selected `.secrets/mcp-auth.json`; instance bindings are under the state root in
-`mcp-bindings.json`. Grant writes are atomic and owner-readable; symlink aliases lock the same backing file. Before a
+The CLI keeps default grants in the selected `.secrets/mcp-auth.json`; `openAgent`, given no `mcp` store, keeps them in
+`mcp-auth.json` in the state directory. Instance bindings are under the state root in `mcp-bindings.json`. Grant writes are atomic and owner-readable; symlink aliases lock the same backing file. Before a
 managed grant write, FastAgent prepares the owned secrets directory's `.gitignore`, using the same rule as value files.
 An unprotected `FASTAGENT_SECRETS_DIR` override produces a warning rather than an ignore file in the operator's directory;
 explicit `mcpGrantFile(path)` stores remain the host's responsibility. Git ignores do not untrack already committed files.
@@ -126,7 +132,7 @@ fastagent mcp disconnect linear --json
 ```
 
 Disconnect removes only this instance's binding. It does not delete or revoke a grant another instance may use. Update
-`.mcp.json` or authorize again before reopening a required server. Remote revocation is an action in the provider's
+the server's declaration or authorize again before reopening a required server. Remote revocation is an action in the provider's
 account settings; local deletion or client close is not evidence of revocation.
 
 ## Embedding in Kage or another app
@@ -150,7 +156,7 @@ const grant = await signInMcp({
   },
 });
 
-// Persist this choice in the host's instance record, not in .mcp.json.
+// Persist this choice in the host's instance record, not in the server's declaration.
 const mcp = { store, bindings: { linear: grant.id } };
 const state = await inspectMcp(agentDir, mcp);
 const agent = await openAgent(definition, { workdir, stateDir: instanceStateDir, mcp });
@@ -194,6 +200,7 @@ messages, paths, arguments, response data and cause objects remain private.
 The SDK probes stdio protocol support in a short-lived sibling process before starting the serving process, so server
 startup can run twice. Do not put irreversible business work in server startup.
 
-`dev` restarts on `.mcp.json` edits after active turns drain. The file travels in the deployment image; a kept Docker
-ignore file that excludes it is refused. MCP credential files remain in `.secrets`, never in the image. Package/runtime
+`dev` restarts on `context.json` and `fastagent.json` edits after active turns drain. The program's servers travel in the
+image with `context.json`; an instance's travel in the configuration `deploy --config` delivers. MCP credential files
+remain in `.secrets`, never in the image. Package/runtime
 dependencies for local servers must be declared in the agent's package/environment for the target machine.

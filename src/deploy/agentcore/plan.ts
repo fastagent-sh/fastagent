@@ -9,6 +9,7 @@ import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
+import { stripEdges } from "../../strip-edges.ts";
 
 export interface AgentcorePlanInput extends ContainerInput {
   /** Base name (dir basename) — shapes the runtime name, stack name, ECR repo, session id. */
@@ -19,8 +20,7 @@ export interface AgentcorePlanInput extends ContainerInput {
    */
   channels: readonly DeclaredChannel[];
   /**
-   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
-   * carries.
+   * The runbook's variable list (`deploymentSecrets`): the declared names, each hinted by the file that declared it.
    */
   secrets?: readonly DeploymentSecret[];
   /**
@@ -71,7 +71,7 @@ export const DEFAULT_IDLE_TIMEOUT_SECONDS = 180;
 /** One session's compute lifetime — AWS's own default. Both lifecycle fields cap at 1209600 (14 d). */
 export const MAX_LIFETIME_SECONDS = 28800;
 
-export const FORWARDER_FILE = "lambda/index.js";
+export const FORWARDER_FILE = "agentcore/forwarder/index.js";
 
 /**
  * Where the forwarder puts the one-shot schedule for a wake-up. The id inside the name is minted in the
@@ -93,24 +93,14 @@ export function recurringSchedulePrefix(name: string): string {
 export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
 }
-/**
- * AgentCore env values max 2048 chars — a value file's variables easily exceed it, so the carrier is CHUNKED across
- * `<NAME>` + `_2`… (collectChunked reassembles at boot).
- */
-export const CARRIER_CHUNK_SIZE = 2000;
-export const CARRIER_MAX_CHUNKS = 4;
-
-/** The template's chunked carrier: CloudFormation parameter prefix → container env-var name. */
-export const CARRIERS = [
-  { param: "FastagentEnv", env: "FASTAGENT_ENV", what: "base64 JSON of the value file's variables" },
-] as const;
-
-/** Chunk `i` (0-based) of a carrier: its parameter and env-var names. */
-export function carrierChunk(carrier: (typeof CARRIERS)[number], i: number): { param: string; env: string } {
-  return i === 0
-    ? { param: carrier.param, env: carrier.env }
-    : { param: `${carrier.param}${i + 1}`, env: `${carrier.env}_${i + 1}` };
+/** The Secrets Manager secret holding a deployment's values: one JSON object of NAME → value (agent-artifact.md §6.2). */
+export function agentcoreSecretName(name: string): string {
+  return `fastagent/${name}`;
 }
+
+/** The environment variable that tells the container which secret to read at its first invocation. */
+export const SECRET_ARN_ENV = "FASTAGENT_SECRET_ARN";
+
 /** The generated template's filename (namespaced under the kit in the agentDir layout). */
 export const TEMPLATE_FILE = "agentcore.template.yaml";
 
@@ -124,17 +114,12 @@ export function isGeneratedAgentcoreTemplate(content: string): boolean {
 
 /** Deployment base name from the agent directory's name — the ONE mapping used to find its stack later. */
 export function agentcoreName(agentDirName: string): string {
-  return (
-    agentDirName
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "agent"
-  );
+  return stripEdges(agentDirName.toLowerCase().replace(/[^a-z0-9-]+/g, "-"), (char) => char === "-") || "agent";
 }
 
 /** Runtime name (`[a-zA-Z][a-zA-Z0-9_]{0,47}`) from a dir basename. */
 export function toRuntimeName(basename: string): string {
-  const slug = basename.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const slug = stripEdges(basename.replace(/[^a-zA-Z0-9]+/g, "_"), (char) => char === "_");
   return (/^[a-zA-Z]/.test(slug) ? slug : `agent_${slug || "fastagent"}`).slice(0, 48);
 }
 
@@ -190,7 +175,7 @@ export function ingressSessionId(name: string): string {
 
 /**
  * The forwarder Lambda source — `forwarder.js` beside this file, the ONE text both the deployment package and the
- * readable `lambda/index.js` artifact are generated from.
+ * readable `agentcore/forwarder/index.js` artifact are generated from.
  */
 export function forwarderSource(): string {
   return readFileSync(new URL("./forwarder.js", import.meta.url), "utf8");
@@ -202,13 +187,15 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
   const idleTimeout = input.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
 
-  // Secret env vars ride CFN NoEcho parameters.
   const params: string[] = [
     `  ImageUri:`,
     `    Type: String`,
     `    Description: ECR image URI (linux/arm64) — <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>`,
   ];
   params.push(
+    `  SecretArn:`,
+    `    Type: String`,
+    `    Description: ARN of the Secrets Manager secret holding the deployment's values (created outside this stack by \`fastagent secrets\`; the runtime reads it on its first invocation)`,
     `  ForwarderBucket:`,
     `    Type: String`,
     `    Description: S3 bucket holding the forwarder deployment package (created outside this stack)`,
@@ -219,26 +206,11 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
   const envLines: string[] = [
     `        PORT: "8080"`, // the Runtime service contract's fixed port (config.http.port does not apply here)
     `        FASTAGENT_AGENTCORE: "1"`, // serve mounts /invocations + /ping, arms no resident cron
-    `        FASTAGENT_STORAGE_DIR: ${MOUNT}`,
+    `        FASTAGENT_ROOT: ${MOUNT}`,
     `        FASTAGENT_STATE_DIR: ${MOUNT}/.state`,
     `        FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`,
+    `        ${SECRET_ARN_ENV}: !Ref SecretArn`,
   ];
-  // The carrier is chunked (env values max 2048 chars — see CARRIER_CHUNK_SIZE): N parameters, each riding its
-  // own env var; `start` reassembles them. ONE parameter set for every variable, so the template does not change
-  // when the value file gains a name.
-  for (const carrier of CARRIERS) {
-    for (let i = 0; i < CARRIER_MAX_CHUNKS; i++) {
-      const { param, env } = carrierChunk(carrier, i);
-      params.push(
-        `  ${param}:`,
-        `    Type: String`,
-        `    Default: ""`,
-        `    NoEcho: true`,
-        `    Description: ${carrier.what} carried by --run, chunk ${i + 1}/${CARRIER_MAX_CHUNKS} (env values cap at 2048 chars); empty = unused`,
-      );
-      envLines.push(`        ${env}: !Ref ${param}`);
-    }
-  }
   // IAM invocation permission does not prove forwarder origin. Internal envelopes need a secret.
   params.push(
     `  FastagentIngressSecret:`,
@@ -296,6 +268,9 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `              - Effect: Allow # AgentCore workload identity (the platform mints one per runtime)`,
     `                Action: [bedrock-agentcore:GetWorkloadAccessToken]`,
     `                Resource: "*"`,
+    `              - Effect: Allow # the deployment's values: this one secret, read on the first invocation`,
+    `                Action: [secretsmanager:GetSecretValue]`,
+    `                Resource: !Ref SecretArn`,
     ``,
     `  Runtime:`,
     `    Type: AWS::BedrockAgentCore::Runtime`,
@@ -473,7 +448,12 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# Prereqs: AWS CLI v2 with credentials + a region where AgentCore is available, and Docker with buildx`,
     `# (the image MUST be linux/arm64 — the one host whose build runs on YOUR machine, not remotely).`,
     ``,
-    `# 1. ECR repository + the forwarder artifact bucket (one-time; skip what exists).`,
+    `# 0. First use of AgentCore in this account only: the runtime needs its service-linked role, and without it`,
+    `#    CloudFormation fails at the runtime, after the build, with a bare AccessDenied. Skip if \`aws iam get-role`,
+    `#    --role-name AWSServiceRoleForBedrockAgentCoreRuntimeIdentity\` finds it.`,
+    `aws iam create-service-linked-role --aws-service-name runtime-identity.bedrock-agentcore.amazonaws.com`,
+    ``,
+    `# 1. ECR repository, the forwarder artifact bucket and the deployment's values secret (one-time; skip what exists).`,
     `aws ecr create-repository --repository-name ${repo}`,
     `aws s3api create-bucket --bucket ${bucketHint} --region us-east-1   # us-east-1 ONLY`,
     `aws s3api create-bucket --bucket ${bucketHint} --region <region> \\   # every OTHER region`,
@@ -481,10 +461,16 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws s3api put-public-access-block --bucket ${bucketHint} \\`,
     `  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true`,
     ``,
+    `aws secretsmanager create-secret --name ${agentcoreSecretName(name)} --secret-string '{}'`,
+    ...(secrets.length > 0
+      ? [`#    Its values, one command each (or \`fastagent secrets push agentcore\` for a file or the environment):`]
+      : []),
+    ...secrets.map((s) => `#      fastagent secrets set agentcore ${s.name}   # ${s.hint}`),
+    ``,
     `# 1b. Package the forwarder and upload it. Name the object by its CONTENT (a hash/date):`,
     `#     CloudFormation rolls the function only when the ForwarderS3Key VALUE changes.`,
-    `(cd lambda && zip -q forwarder.zip index.js)`,
-    `aws s3 cp lambda/forwarder.zip s3://${bucketHint}/forwarder/<hash>.zip`,
+    `(cd agentcore/forwarder && zip -q forwarder.zip index.js)`,
+    `aws s3 cp agentcore/forwarder/forwarder.zip s3://${bucketHint}/forwarder/<hash>.zip`,
     ``,
     `# 2. Build (linux/arm64) + push. Use a UNIQUE tag per deploy (a git sha / date): CloudFormation only`,
     `#    rolls the runtime when the ImageUri VALUE changes — re-pushing the same tag deploys nothing.`,
@@ -493,13 +479,9 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     ``,
     `# 3. Deploy the stack (runtime + ingress in one template).`,
   ];
-  if (secrets.length > 0) {
-    runbook.push(
-      `#    Variables ride ONE NoEcho parameter, FastagentEnv: base64 of a JSON object {"NAME": "value", …},`,
-      `#    split every ${CARRIER_CHUNK_SIZE} chars across FastagentEnv, FastagentEnv2 … (\`--run\` builds it):`,
-      ...secrets.map((s) => `#      ${s.name}: ${s.hint}`),
-    );
-  }
+  runbook.push(
+    `#    SecretArn: the ARN of the secret made in step 1 (aws secretsmanager describe-secret --secret-id ${agentcoreSecretName(name)} --query ARN)`,
+  );
   const wakeSecretHint = " FastagentWakeSecret=<any random string> FastagentIngressSecret=<another random string>";
   runbook.push(`#      FastagentWakeSecret: the wake-alarm shared secret — any random string (\`--run\` mints one)`);
   runbook.push(
@@ -508,9 +490,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   runbook.push(
     `aws cloudformation deploy --stack-name ${stack} --template-file ${TEMPLATE_FILE} \\`,
     `  --capabilities CAPABILITY_IAM \\`,
-    `  --parameter-overrides ImageUri=${image} ForwarderBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip${
-      secrets.length > 0 ? " FastagentEnv=<base64 JSON>" : ""
-    }${wakeSecretHint}`,
+    `  --parameter-overrides ImageUri=${image} SecretArn=<arn> ForwarderBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip${wakeSecretHint}`,
     ``,
     `# 4. Read the outputs (the runtime ARN + callback URL; it serves webhooks only when configured):`,
     `aws cloudformation describe-stacks --stack-name ${stack} --query "Stacks[0].Outputs"`,
@@ -534,14 +514,18 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     runbook.push(
       ``,
       `# Model auth: after EVERY deploy and after 14 idle days (each storage reset wipes the last login),`,
-      `# log the runtime in to ${input.boxLogin} from the agent directory — before pointing any webhook at it:`,
+      `# log the runtime in to ${input.boxLogin} from the agent directory, once the probe below has opened it (a message`,
+      `# that reaches the runtime before the login fails):`,
       `${deploymentLoginCommand("agentcore", input.boxLogin)}`,
     );
   }
 
-  // Post-deploy webhook registration — the shared channel-ingress steps, pointed at the forwarder's Function URL
-  // (read from the stack outputs).
-  const post = webhookRunbook(`<ForwarderUrl>`, channels);
+  // The runtime points the channels its own credentials can at the forwarder's Function URL as the probe below wakes
+  // it; only Slack's URL, and Lark's where its config API answers 404, is a person's step.
+  const post = webhookRunbook(
+    `<ForwarderUrl>`,
+    channels.filter((channel) => channel.name === "slack"),
+  );
   // AgentCore asides the shared steps cannot carry: nothing else routes through a forwarder, and nothing else has a
   // compute ceiling.
   if (webhookKinds(channels).some((kind) => kind === "feishu" || kind === "lark")) {
@@ -551,6 +535,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     );
   }
   if (post.length > 0) runbook.push(``, ...post);
+  const own = webhookKinds(channels).filter((kind) => kind !== "slack");
 
   runbook.push(
     ``,
@@ -562,6 +547,13 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `#   invoke-agent-runtime call does not (that door is IAM's, and does not carry it). \`--run\` does this with its`,
     `#   probe. After a manual deploy, do it once, or no schedule fires until a webhook arrives:`,
     `curl -fsS -X POST "<ForwarderUrl>/__fastagent/probe" -d '{"auth":"<FastagentIngressSecret>"}'`,
+    ...(own.length > 0
+      ? [
+          `# The same envelope makes the runtime point ${own.join(", ")} at <ForwarderUrl> (or the configuration's`,
+          `# http.publicUrl) itself, on every start; the answer's "webhooks" says how each one went, "pending" until it ends`,
+          `# (a step only a person can take is in the runtime's log). Repeat the call to read it again.`,
+        ]
+      : []),
   );
 
   runbook.push(
@@ -584,7 +576,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# and .secrets/ across compute stop/resume — an idle-reclaimed agent resumes with its memory. AWS`,
     `# RESETS it on every runtime version update (i.e. every deploy) and after 14 idle days, so a deploy`,
     `# replaces the state along with the image: sessions, channel state and pending wake-ups start blank.`,
-    `# A provider API key in the value file travels with every deploy; a login on the runtime survives neither reset.`,
+    `# A provider API key in the deployment's secret survives every deploy; a login on the runtime survives neither reset.`,
     `# Cross-deploy memory needs EFS or S3 Files, which are VPC-only (a NAT gateway for model/channel`,
     `# egress, ~$33/mo standing): use \`deploy fly\` or \`deploy railway\` for a real volume instead.`,
     `# Keep one runtime writer per agent; use the fixed runtime session id printed above for every entry point.`,

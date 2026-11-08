@@ -24,7 +24,7 @@ beforeEach(async () => {
   store = mcpGrantFile(file);
   remote = mcpFixture();
   await writeFile(
-    join(dir, ".mcp.json"),
+    join(dir, "context.json"),
     JSON.stringify({ mcpServers: { linear: { type: "http", url: remote.url } } }),
   );
 });
@@ -531,4 +531,43 @@ it("cancels while waiting for the browser without storing a credential", async (
     }),
   ).rejects.toMatchObject({ code: "canceled" });
   expect(await store.list()).toEqual([]);
+});
+it("signs in to a server the instance adds, from its configuration, and refuses to read it as the program's", async () => {
+  const dir2 = await mkdtemp(join(tmpdir(), "mcp-auth-instance-"));
+  try {
+    await writeFile(join(dir2, "context.json"), "{}");
+    const config = { mcpServers: { linear: { type: "http", url: remote.url } } };
+    expect(await inspectMcp(dir2)).toEqual([]);
+    expect(await inspectMcp(dir2, { config })).toMatchObject([
+      { name: "linear", transport: "http", authorization: "not_bound" },
+    ]);
+    const callbacks: Promise<Response>[] = [];
+    const grant = await signInMcp({
+      agentDir: dir2,
+      server: "linear",
+      config,
+      store,
+      fetch: remote.fetch,
+      scopes: ["read"],
+      interaction: {
+        confirmAuthorization: async () => true,
+        notify: (event) => {
+          if (event.type === "auth_url") callbacks.push(remote.approve(event.url));
+        },
+      },
+    });
+    await Promise.all(callbacks);
+    expect(grant.serverUrl).toBe(remote.url);
+    await expect(
+      signInMcp({
+        agentDir: dir2,
+        server: "linear",
+        store,
+        fetch: remote.fetch,
+        interaction: { confirmAuthorization: async () => true, notify: () => {} },
+      }),
+    ).rejects.toThrow(/OAuth needs a declared HTTP MCP server/);
+  } finally {
+    await rm(dir2, { recursive: true, force: true });
+  }
 });

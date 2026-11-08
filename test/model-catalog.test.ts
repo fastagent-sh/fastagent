@@ -7,11 +7,12 @@ import { type AnyModel, InMemoryCredentialStore, createProvider } from "@earendi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runModels } from "../src/cli/commands/models.ts";
 import { catalogsIn } from "../src/harnesses/models/catalog.ts";
-import { listModels, modelsOver } from "../src/harnesses/models/models.ts";
+import { listModels, modelHint, modelsOver } from "../src/harnesses/models/models.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { PI_AI_VERSION, keepCatalog } from "./kept-catalog.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 
@@ -289,6 +290,8 @@ describe("model catalogs", () => {
     const serving = await openServing(await loadSourceDefinition(agent), {
       secrets: {},
       env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
       credentialStore: new InMemoryCredentialStore(),
     });
@@ -312,6 +315,8 @@ describe("model catalogs", () => {
       openServing(await loadSourceDefinition(agent), {
         secrets: {},
         env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
         storage: "memory",
         credentialStore: new InMemoryCredentialStore(),
       }),
@@ -360,3 +365,25 @@ function agentKeeping(model: AnyModel): string {
 function never(): never {
   throw new Error("this test sends no message");
 }
+
+describe("modelHint: what to say when a model name matches nothing", () => {
+  const specs = [
+    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-v4-pro",
+    "groq/llama-3.3-70b-versatile",
+    "groq/gpt-oss",
+  ];
+
+  it("offers the provider's models that read most like the name, and the command that lists them all", () => {
+    expect(modelHint(specs, "deepseek/deepseek-chat")).toBe(
+      "deepseek's models include deepseek/deepseek-v4-flash, deepseek/deepseek-v4-pro (`fastagent models deepseek` lists all 2)",
+    );
+    expect(modelHint(specs, "groq/llama-70b")).toMatch(/^groq's models include groq\/llama-3\.3-70b-versatile, /);
+  });
+
+  it("names the providers when the provider is what is unknown", () => {
+    expect(modelHint(specs, "deepseeek/x")).toBe(
+      'there is no provider "deepseeek"; the providers are deepseek, groq (`fastagent models` lists their models)',
+    );
+  });
+});

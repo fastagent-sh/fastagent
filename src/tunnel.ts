@@ -7,14 +7,12 @@ import { type ChildProcess, spawn } from "node:child_process";
 import type { RegistrationOutcome } from "./channels/registration.ts";
 import type { DeclaredChannel } from "./channels/discover.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
-import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { pointChannelsAt } from "./deploy/channel-ingress.ts";
 import { webhookKinds } from "./channels/webhooks.ts";
 import { loadDotEnv } from "./env.ts";
 import { dotEnvPath } from "./value-file.ts";
 import { installProxyFetch } from "./proxy.ts";
-import { AGENT_ENVIRONMENT_ENV, resolveStateRoot } from "./paths.ts";
 import { log } from "./log.ts";
 
 export interface Tunnel {
@@ -164,7 +162,6 @@ export async function announceWebhooks(
   channels: readonly DeclaredChannel[],
   opts: {
     openUrl?: (url: string) => void;
-    stateRoot?: string;
     env?: NodeJS.ProcessEnv;
     /** {@link Registrars.leave}. */
     leave?: (step: string) => void;
@@ -198,12 +195,6 @@ export async function announceWebhooks(
     registrars: {
       ...(opts.leave === undefined ? {} : { leave: opts.leave }),
       telegram: (url) => registerTelegramWebhook(url, { env: opts.env }),
-      slack: (url) =>
-        registerSlackWebhook(url, {
-          stateRoot: opts.stateRoot ?? resolveStateRoot(dir),
-          environment: process.env[AGENT_ENVIRONMENT_ENV] === "production" ? "production" : "dev",
-          log: (message) => log.info(message),
-        }),
       feishu: (url, kind) => registerFeishuWebhook(url, kind, feishuOptions),
     },
   });

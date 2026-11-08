@@ -23,11 +23,14 @@ import { awsCli, awsJson } from "../../../deploy/agentcore/aws-cli.ts";
 import { agentcoreShell } from "../../../deploy/agentcore/shell.ts";
 import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
-import { assembleSecrets } from "../../../deploy/secrets.ts";
+import { deploySecrets } from "./secrets-step.ts";
 import { failStartup } from "../../fail.ts";
 import { shellArg } from "../../shared.ts";
-import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
+import { ownPublicUrl } from "../../../deploy/container.ts";
+import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorder } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
+import type { DeploymentApi } from "../../../deploy/api.ts";
+import type { ModelKey } from "../../../deploy/secrets.ts";
 
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
@@ -74,7 +77,7 @@ export const agentcoreHost: HostDeploy = {
         `[fastagent] note: AgentCore resets the runtime's storage on every deploy AND after 14 idle days, and the ` +
           `${boxLogin} login with it: every deploy of this agent ends with a login on the runtime, and after an idle ` +
           `reset every turn fails until \`fastagent login ${boxLogin} --deployment agentcore\` (the runtime's log says ` +
-          `so). For an agent that must keep answering unattended, set ${boxLogin}'s API key in ${valueFile}.`,
+          `so). For an agent that must keep answering unattended, set ${boxLogin}'s API key with \`fastagent secrets set agentcore <its variable>\`.`,
       );
     }
     // Schedules and wake-ups need nothing from the template beyond the forwarder every stack has: the container
@@ -120,9 +123,13 @@ export const agentcoreHost: HostDeploy = {
         rerun: ctx.rerun,
         channels,
         declaredSecrets,
+        modelKey: pre.modelKey,
+        api: ctx.api,
         values,
         valueFile,
         topology: plan.topology,
+        publicUrl: ownPublicUrl(container.config),
+        config: opts.config,
       });
       return undefined;
     }
@@ -144,33 +151,36 @@ async function runDeployAgentcore(params: {
   rerun: string;
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
+  modelKey: ModelKey;
+  api: DeploymentApi;
   values: ReadonlyMap<string, string>;
   valueFile: string;
   topology: AgentcoreTopology;
+  /** The `http.publicUrl` the configuration names, where the platforms reach the runtime instead of the forwarder. */
+  publicUrl: string | undefined;
+  /** The `--config` file, where a URL a person set is recorded once the runtime confirms it. */
+  config: string | undefined;
 }): Promise<void> {
   const { agentDir, name, channels, topology } = params;
-  // Decided before the first side effect: the deploy resets the runtime's storage and the login with it, so with nobody
-  // to log it in again it would end at "not logged in" AFTER replacing a runtime that was serving, with the webhooks
-  // a previous deploy registered still pointing at it. A coding agent's ticket has someone: its user.
-  if (params.boxLogin && params.answerer.kind === "nobody") {
-    failStartup(
-      new Error(
-        `deploy stopped: every AgentCore deploy wipes the runtime's ${params.boxLogin} login, and without a terminal ` +
-          `nobody can log it in again — run this deploy in a terminal; from a coding agent, run ` +
-          `\`${params.rerun} --json\`, which hands the login to its user; or set ` +
-          `${params.boxLogin}'s API key in ${params.valueFile}`,
-      ),
-    );
-  }
-  const { secrets, missingSecrets } = assembleSecrets({
+  const secretsStep = deploySecrets({
+    host: "agentcore",
+    label: "AWS Secrets Manager",
+    agentDir,
+    opts: { config: params.config },
+    answerer: params.answerer,
+    api: params.api,
     modelAuth: params.modelAuth,
-    declared: params.declaredSecrets,
+    modelKey: params.modelKey,
+    declaredSecrets: params.declaredSecrets,
+    valueFile: params.valueFile,
     values: params.values,
   });
-  // The wake-alarm shared secret (container ↔ forwarder).
-  secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
-  // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM principal's.
-  secrets.FASTAGENT_INGRESS_SECRET = crypto.randomUUID();
+  // The model's key on the target is a credential like a key in the value file: the runtime has it from its first
+  // invocation, so there is no login to run on the box. Only the target can say, hence after the secrets step.
+  let keyOnTarget = false;
+  const login = boxLoginStep("agentcore", params, (runtimeArn: string) =>
+    agentcoreShell(runtimeArn, ingressSessionId(name), awsRunner(agentDir)),
+  ).boxLogin;
   // The params temp dir holds the ONE file carrying secret values (file:// parameter-overrides — never argv);
   // 0700/0600 and removed after the run, success or gate.
   const paramsDir = await mkdtemp(join(tmpdir(), "fastagent-agentcore-"));
@@ -185,14 +195,41 @@ async function runDeployAgentcore(params: {
           .replace(/[-:.TZ]/g, "")
           .slice(0, 14),
         region: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION,
-        secrets,
-        missingSecrets,
-        valueFile: params.valueFile,
+        provideSecrets: async (store) => {
+          const gate = await secretsStep(store);
+          if (gate !== undefined) return gate;
+          const held = await store.names();
+          keyOnTarget = params.modelKey.variables.some((variable) => held.has(variable));
+          // Decided before the build and the stack: the deploy resets the runtime's storage and the login with it, so
+          // with nobody to log it in again it would end at "not logged in" AFTER replacing a runtime that was serving,
+          // with the webhooks a previous deploy registered still pointing at it. A coding agent's ticket has someone:
+          // its user.
+          if (params.boxLogin && !keyOnTarget && params.answerer.kind === "nobody") {
+            return (
+              `every AgentCore deploy wipes the runtime's ${params.boxLogin} login, and without a terminal ` +
+              `nobody can log it in again — run this deploy in a terminal; from a coding agent, run ` +
+              `\`${params.rerun} --json\`, which hands the login to its user; or set ` +
+              `${params.boxLogin}'s API key with \`fastagent secrets set agentcore ${params.modelKey.variables[0] ?? "<its variable>"}\``
+            );
+          }
+          return undefined;
+        },
+        // The wake-alarm shared secret (container ↔ forwarder).
+        wakeSecret: crypto.randomUUID(),
+        // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM principal's.
+        ingressSecret: crypto.randomUUID(),
         channels,
         topology,
-        ...boxLoginStep("agentcore", params, (runtimeArn: string) =>
-          agentcoreShell(runtimeArn, ingressSessionId(name), awsRunner(agentDir)),
-        ),
+        ...(params.publicUrl === undefined ? {} : { publicUrl: params.publicUrl }),
+        ...urlRecorder(agentDir, params.config, params.values, params.answerer),
+        ...(login === undefined
+          ? {}
+          : {
+              boxLogin: {
+                ...login,
+                run: async (runtimeArn: string) => (keyOnTarget ? undefined : login.run(runtimeArn)),
+              },
+            }),
       },
       awsRunner(agentDir),
       spawnRunner("docker", agentDir),
@@ -207,7 +244,7 @@ async function runDeployAgentcore(params: {
         await writeFile(path, bytes);
         return path;
       },
-      registrarsFor(agentDir, params.values, params.answerer),
+      registrarsFor(params.values, params.answerer),
     );
     if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
     console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);

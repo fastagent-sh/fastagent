@@ -7,12 +7,12 @@
 import { spawn } from "node:child_process";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { instanceConfigSchema } from "./config.ts";
 import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "./built.ts";
-import { readMcpConfiguration, MCP_FILE } from "../../mcp/config.ts";
-import { AGENT_CONFIG_FILE, exists } from "../../paths.ts";
+import { declareMcp, literalCredentialAdvice, literalCredentials, relativeCommands } from "../../mcp/config.ts";
+import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../../paths.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { HARNESS_PACKAGES } from "../../version.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "./definition.ts";
@@ -36,7 +36,7 @@ export interface BuildOptions {
 export interface BuildResult {
   dist: string;
   definition: AgentDefinition;
-  /** What the build would publish that the author should look at: a literal credential in `.mcp.json`, say. */
+  /** What the build would publish that the author should look at: a literal credential in `mcpServers`, say. */
   warnings: string[];
 }
 
@@ -53,6 +53,7 @@ export async function buildProject(directory: string, options: BuildOptions = {}
     await mkdir(staging, { recursive: true });
     const code = await compile(dir, staging, definition, options.check !== false);
     await copyFiles(dir, staging, await copyPlan(dir, code));
+    requireShippedCommands(dir, staging);
     await writeEntry(staging, definition);
     await writeFile(join(staging, "package.json"), await distPackageJson(dir, definition));
     await writeFile(
@@ -281,22 +282,34 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
 }
 
 /**
- * The header and environment values of `.mcp.json` with no `${VAR}` in them: the format allows a literal credential,
- * and a build publishes the file, so each is said. FastAgent cannot tell a secret from a setting, so it never refuses.
+ * A program's stdio command with a path is relative to its package, which in `dev` is the project and after a build is
+ * `dist/`, holding only what the build copied. One the build did not copy works in `dev` and is not there on a box, so
+ * it is refused here, against what was actually written to `staging`, rather than found when the box starts.
  */
-function literalMcpCredentials(dir: string): string[] {
-  const warnings: string[] = [];
-  for (const [server, config] of Object.entries(readMcpConfiguration(dir).mcpServers)) {
-    const [field, entries]: [string, Readonly<Record<string, string>>] =
-      config.type === "http" ? ["headers", config.headers ?? {}] : ["env", config.env ?? {}];
-    for (const [key, value] of Object.entries(entries)) {
-      if (value !== "" && !value.includes("${")) {
-        warnings.push(
-          `${MCP_FILE} mcpServers.${server}.${field}.${key} is a literal value, and ${DIST_DIR}/ is published: ` +
-            `write \${${key.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}} and give the value as a secret`,
-        );
-      }
-    }
+function requireShippedCommands(dir: string, staging: string): void {
+  for (const { name, file, command } of relativeCommands(declareMcp(dir))) {
+    const inProject = resolve(dir, command);
+    const shipped = join(staging, relative(dir, inProject));
+    if (isUnderDir(inProject, dir) && existsSync(shipped)) continue;
+    const dependency = isUnderDir(inProject, dir) && relative(dir, inProject).split(sep)[0] === "node_modules";
+    throw new Error(
+      `${file} mcpServers.${name}: the command "${command}" ` +
+        (dependency
+          ? `is in node_modules, which the box installs for itself and ${DIST_DIR}/ does not hold: run the package by ` +
+            `name (\`npx <package>\`) or give the absolute path it has there`
+          : existsSync(inProject)
+            ? `is not in ${DIST_DIR}/, which holds only what the build copies (assets/, skills/, prompts/ and the ` +
+              `resources beside code): move it under assets/`
+            : `does not exist in the project`),
+    );
   }
-  return warnings;
+}
+
+/** What a build says of a literal credential in the program's `mcpServers`, which the package publishes. */
+function literalMcpCredentials(dir: string): string[] {
+  return literalCredentials(declareMcp(dir)).map(
+    (literal) =>
+      `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key} is a literal value, and ` +
+      `${DIST_DIR}/ is published: ${literalCredentialAdvice(literal)} and give the value as a secret`,
+  );
 }

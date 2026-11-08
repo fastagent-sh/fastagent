@@ -2,11 +2,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { TicketStep } from "../src/cli/ticket.ts";
 import { registrarsFor } from "../src/cli/commands/deploy/shared.ts";
 import { announceWebhooks } from "../src/tunnel.ts";
-import { registerSlackWebhook } from "../src/channels/slack/register-webhook.ts";
-
-vi.mock("../src/channels/slack/register-webhook.ts", () => ({
-  registerSlackWebhook: vi.fn(async () => "manual"),
-}));
 
 function platformFetch() {
   const requests: { url: string; body: Record<string, unknown> }[] = [];
@@ -37,7 +32,6 @@ it("every cloud registrar uses carried production credentials, even when the she
   vi.stubEnv("LARK_APP_SECRET", "lark_dev_secret");
   const requests = platformFetch();
   const registrars = registrarsFor(
-    "/agent",
     new Map([
       ["FEISHU_APP_ID", "cli_prod"],
       ["FEISHU_APP_SECRET", "prod_secret"],
@@ -63,37 +57,26 @@ it("a deployment with no app credentials never registers the shell's dev app", a
   vi.stubEnv("FEISHU_APP_ID", "cli_dev");
   vi.stubEnv("FEISHU_APP_SECRET", "dev_secret");
   const requests = platformFetch();
-  expect(
-    await registrarsFor("/agent", new Map(), { kind: "nobody" }).feishu?.("https://production.test", "feishu"),
-  ).toBe("manual");
+  expect(await registrarsFor(new Map(), { kind: "nobody" }).feishu?.("https://production.test", "feishu")).toBe(
+    "manual",
+  );
   expect(requests).toEqual([]);
 });
 
-it("deploy and production tunnel registration pass Slack the selected environment and state", async () => {
-  vi.stubEnv("FASTAGENT_ENVIRONMENT", "production");
-  vi.stubEnv("FASTAGENT_STATE_DIR", "");
-  await registrarsFor("/agent", new Map(), { kind: "nobody" }).slack?.("https://production.test");
-  expect(registerSlackWebhook).toHaveBeenLastCalledWith(
+it("Slack's Request URL is a person's step on every path: no registrar sets it, and the announcement says so", async () => {
+  expect(registrarsFor(new Map(), { kind: "nobody" })).not.toHaveProperty("slack");
+  const outcomes = await announceWebhooks(
+    "/agent",
     "https://production.test",
-    expect.objectContaining({
-      stateRoot: "/agent/.fastagent/start/.state",
-      environment: "production",
-    }),
+    [{ name: "slack", ingress: "webhook" }],
+    {
+      env: {},
+    },
   );
-  await announceWebhooks("/agent", "https://production.test", [{ name: "slack", ingress: "webhook" }], {
-    stateRoot: "/custom/state",
-    env: {},
-  });
-  expect(registerSlackWebhook).toHaveBeenLastCalledWith(
-    "https://production.test",
-    expect.objectContaining({
-      stateRoot: "/custom/state",
-      environment: "production",
-    }),
-  );
+  expect(outcomes).toEqual([{ kind: "slack", outcome: "manual" }]);
 });
 
-it("Docker tunnel registration uses its selected production values, not dev's exported bot token", async () => {
+it("a tunnel announcement uses its selected production values, not dev's exported bot token", async () => {
   vi.stubEnv("TELEGRAM_BOT_TOKEN", "DEV_BOT");
   vi.stubEnv("TELEGRAM_SECRET_TOKEN", "dev_secret");
   const requests = platformFetch();
@@ -111,7 +94,7 @@ it("Docker tunnel registration uses its selected production values, not dev's ex
 it("a ticket's registrars leave a manual step to its person; nobody's leave it to the log", () => {
   const afterwards = vi.fn();
   const step = { person: { afterwards } } as unknown as TicketStep;
-  registrarsFor("/agent", new Map(), { kind: "ticket", step }).leave?.("lark: set the event Request URL");
+  registrarsFor(new Map(), { kind: "ticket", step }).leave?.("lark: set the event Request URL");
   expect(afterwards).toHaveBeenCalledWith("lark: set the event Request URL");
-  expect(registrarsFor("/agent", new Map(), { kind: "nobody" }).leave).toBeUndefined();
+  expect(registrarsFor(new Map(), { kind: "nobody" }).leave).toBeUndefined();
 });

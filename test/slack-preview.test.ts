@@ -17,6 +17,7 @@ function fakeApi(): SlackApi {
     recordingSends: vi.fn(function (this: SlackApi) {
       return this;
     }),
+    botAppId: vi.fn(async () => undefined),
     channelHistory: vi.fn(async () => ({ messages: [], hasMore: false })),
     userName: vi.fn(async () => undefined),
     threadReplies: vi.fn(async () => ({ messages: [], hasMore: false })),

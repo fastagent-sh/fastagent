@@ -32,12 +32,15 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
 | `schedules run <name> [agent]` | Fire one schedule now, as its clock would. |
 | `schedules unwake <id> [agent]` | Cancel a pending wake-up, whatever session set it. |
-| `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. With `--no-onboard`, each writes only the channel (if missing) and its tools, which is how an existing agent picks up a new tool. |
+| `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel: the channel file (if missing) and its tools, which is how an existing agent picks up a new tool. It changes the program only; the platform app is `channels setup`'s. |
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
-| `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). `--tunnel --run` also starts a Quick Tunnel and registers webhooks. |
+| `channels setup <name> [agent]` | Set up one instance's platform app (`telegram`, `slack`): guide the person through creating it, check each pasted credential with the platform, and keep it in the instance's value file. `--ingress`, `--config` and `--env-file` say which instance it is and how it receives. |
+| `channels setup <name> --record-url --config <file> [--url <url>]` | Record, in the configuration a deploy delivers, the URL a person saved on a Slack or Lark app's page once the deployment's `/health` reports the channel reached there (`channels.<name>.app.url`; `--url` is where `/health` is read), so later deploys report it registered. |
+| `secrets list\|set\|push <host> [agent]` | A deployment's values on the target that keeps them (`docker`, `fly`, `railway`, `agentcore`): the declared names and which the target holds, one value typed without echo or generated, or every declared value a value file or the environment holds. |
+| `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). |
 | `deploy fly [agent]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
-| `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
-| `deploy agentcore [agent]` | Generate `agentcore.template.yaml`, `lambda/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
+| `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end and continues the project that holds the agent's service; a dir linked to another project needs `--into-linked`. |
+| `deploy agentcore [agent]` | Generate `agentcore.template.yaml`, `agentcore/forwarder/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
 | `deploy <host> --config <file>` | Every host: deliver an instance configuration (a `fastagent.json`) the deployment runs on, carried in the image at `/etc/fastagent/` (`FASTAGENT_CONFIG` names it). Without it, the program's defaults; the project's own `fastagent.json` is never carried. |
 | `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
 | `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
@@ -97,7 +100,7 @@ A `fastagent.config.ts` makes a directory an agent, whatever its name. Its conte
 ## `fastagent info`
 
 ```bash
-fastagent info [agent] [--json] [--model provider/modelId] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+fastagent info [agent] [--json] [--model provider/modelId] [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 ```
 
 Prints what the agent builds into, without serving it:
@@ -131,15 +134,15 @@ Compiles the agent into `dist/`, a package of its own ([agent-artifact.md](desig
   TypeScript (`npm install --save-dev typescript`; `init` adds it). FastAgent sets the compiler's options and does not
   read `tsconfig.json`, which stays the editor's. It needs TypeScript 7 or newer. A type error fails the build (`--no-check` emits anyway), and so does
   syntax `dev` could not run (an `enum`, a parameter property) or an import from outside the project;
-- `SYSTEM.md`, `AGENTS.md`, `context.json`, `.mcp.json`, `README.md`, a license, `skills/`, `prompts/`, `assets/`, and
+- `SYSTEM.md`, `AGENTS.md`, `context.json`, `README.md`, a license, `skills/`, `prompts/`, `assets/`, and
   every other file in a directory the code was compiled into (a module's resource, read by `import.meta.url`); a
   symlink is copied as the file or directory it names, and one that links back into what is being copied is refused;
 - `index.js`, whose default export is the definition, and `package.json`: the project's name, version and own
   dependencies, with FastAgent and the pi packages as peers.
 
 It refuses what `dev` refuses before writing anything, and replaces `dist/` whole. No `.env`, `.secrets/`, state,
-clone or `node_modules` is copied. A header or environment value in `.mcp.json` with no `${VAR}` in it is warned
-about: the package publishes the file. Prints where `dist/` is; `--json` adds the name, version and warnings.
+clone or `node_modules` is copied. A header or environment value in the `mcpServers` of `context.json` with no `${VAR}` in it is warned
+about: the package publishes it. A `.mcp.json` is not read or copied. A program's stdio `command` that is a path (`./assets/server`) must be among the files copied, so `build` refuses one that works in `dev` and would not be in `dist/`. Prints where `dist/` is; `--json` adds the name, version and warnings.
 
 ## `fastagent content`
 
@@ -289,8 +292,7 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
 - `--deployment <host>` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway,
   AgentCore) and the credential stays there. `deploy` never carries `auth.json`. Without a terminal, an account's
   sign-in returns a ticket as a local one does (`deployment` names the host), its process holding the box's shell
-  until the box answers; an API key is named for the person to set in `.secrets/production/.env`, which the next
-  `deploy <host> --run` carries. `login --check` reads that ticket as any other, without `--deployment`. A box whose
+  until the box answers; an API key is named for the person to set on the target with `fastagent secrets set <host> <NAME>`. `login --check` reads that ticket as any other, without `--deployment`. A box whose
   agent installed an older `@fastagent-sh/fastagent` than this CLI fails the login naming the version to align. See
   [Logging a deployment in](deploy.md#logging-a-deployment-in).
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
@@ -333,7 +335,7 @@ global one, then the environment, with a login due a refresh refreshed. `--json`
 
 ```bash
 fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-input]
-               [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+               [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 ```
 
 Serves the agent locally: its channels, schedules and wake-ups. `SYSTEM.md`, `AGENTS.md`, `skills/` and `prompts/` are
@@ -348,6 +350,13 @@ same agent is refused, naming the file.
 With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`, `deploy`) show the model
 catalog and use the pick for this run, printing the line to put in the config.
 
+A first-party channel (`telegram`, `slack`, `feishu`, `lark`) whose credentials `.secrets/.env` lacks is set up the first
+time `dev` runs, with a terminal attached: the same [`channels setup`](#fastagent-channels-setup), in the parent process
+before the worker starts, so it asks once and a restart does not ask again. Without a terminal, or with `--no-input`,
+nothing is asked: `dev` exits 2 naming `fastagent channels setup <name> --json`. Stopping the setup stops `dev`, as the
+missing credentials always did. A channel added while `dev` runs is asked for on the next start. A channel file that
+reads other variables than the setup supplies is left to its author.
+
 `--tunnel` opens a Cloudflare Quick Tunnel (needs `cloudflared`), prints the public URL, and registers webhooks
 where it can; see [Local webhook development](channels.md#local-webhook-development).
 
@@ -355,7 +364,7 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 
 ```bash
 fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--json] [--session <id>]
-                                 [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                                 [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 fastagent invoke <message> [agent] --url <base> [--key <key>] [--model provider/modelId] [--json] [--session <id>]
 ```
 
@@ -388,7 +397,7 @@ given and grows with them; delete it, while no `invoke` runs, to start from none
 ## `fastagent schedules list`
 
 ```bash
-fastagent schedules list [agent] [--json] [--root dir] [--state dir] [--workdir dir]
+fastagent schedules list [agent] [--json] [--name name] [--root dir] [--state dir] [--workdir dir]
 ```
 
 Lists every schedule (`src/schedules/<name>.ts`, see [Schedules](configuration.md#schedules)) with its next cron
@@ -409,7 +418,7 @@ What the agent said is in the schedule's session, in the instance's storage. A f
 
 ```bash
 fastagent schedules run <name> [agent] [--model provider/modelId] [--no-input]
-                       [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                       [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 ```
 
 Fires the schedule `<name>` now, the way its clock would: in the schedule's own session, with its claim and its
@@ -427,7 +436,7 @@ fires a schedule of this machine's instance; a deployed one keeps its own state.
 ## `fastagent schedules unwake`
 
 ```bash
-fastagent schedules unwake <id> [agent] [--root dir] [--state dir] [--workdir dir]
+fastagent schedules unwake <id> [agent] [--name name] [--root dir] [--state dir] [--workdir dir]
 ```
 
 Cancels the pending wake-up `<id>` (`schedules list` shows the ids), whatever session set it. The agent cancels its
@@ -439,77 +448,106 @@ it is refused while `dev` or `start` serves the agent.
 
 ```bash
 fastagent add telegram [agent]
-fastagent add slack [agent]    # create/install an internal app; --no-onboard scaffolds only
-fastagent add feishu [agent]   # 飞书: scan-to-create the app
-fastagent add lark [agent]     # Lark international: console + credential validation
-                             # all channels take --env dev|production (default: dev)
-                             # feishu/lark take --ingress connection|webhook: writes channels.<kind>.ingress to dev's
-                             # fastagent.json, or to --config <file> (required with --env production)
-                             # (unset: dev connects by websocket, start and deployments receive by webhook)
-                             # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding
-                             # --json: the outcome as one JSON object; without a terminal, the person's part
-                             # comes back as need_user_action and a ticket (below)
+fastagent add slack [agent]
+fastagent add feishu [agent]   # 飞书
+fastagent add lark [agent]     # Lark international
+                             # --json: the outcome as one JSON object
 ```
 
 Writes `src/channels/<kind>.ts` (yours after that) and the channel's companion tools (`src/tools/<kind>-send.ts`, and
-`src/tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), appends variables to
-`.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
-`add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
-`--env production` selects `.secrets/production/.env` and `.fastagent/start/.state` without changing dev credentials.
-`deploy --run` creates the separate Feishu/Lark production app automatically, at a terminal or, with `--json`, for a
-coding agent's user (without either it stops, naming the `--json` command); Slack needs `add slack --env production`,
-and Telegram needs a separate BotFather bot.
+`src/tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), and lists the variables they read in
+`.secrets/.env.example`. Re-run `add <kind>` after upgrading the package to refresh the tools.
 
-Slack:
+`add` changes the program only: it asks nothing, creates no app and writes no value, and has none of the setup flags.
+The app, and the values of the instance that runs it, are [`channels setup`](#fastagent-channels-setup)'s.
+`deploy --run` creates the separate Feishu/Lark production app automatically (the same `channels setup`), at a
+terminal or, with `--json`, for a coding agent's user (without either it stops, naming the `--json` command); a Slack
+or Telegram deployment needs its own app, from `channels setup <name> --config <file> --env-file <file>`.
 
-- Onboarding creates the app through `apps.manifest.create`, installs it through OAuth, and writes the bot token
-  and signing secret to `.secrets/.env`. The App Configuration token stays in `<state root>/channels/slack/` on
-  this machine; `dev --tunnel` and `deploy --run` use it to update the Request URL.
-- `--replace-config` replaces that token pair when it has expired or been revoked. Other machines set the Request
-  URL in the Slack console.
+## `fastagent secrets`
 
-Without a terminal, or with `--json` or `--no-input`, the app's setup is driven by a coding agent and finished by its
-user ([Scripts and coding agents](#scripts-and-coding-agents)):
+```bash
+fastagent secrets list <host> [agent] [--config file] [--json]
+fastagent secrets set <host> <NAME> [agent] [--config file] [--generate]
+fastagent secrets push <host> [agent] [--config file] [--env-file file | --from-env]
+```
 
-| Channel | What the person provides first | What the ticket waits on |
+`<host>` is `docker`, `fly`, `railway` or `agentcore`. A deployment's values are the target's state: Fly secrets, the Railway
+service's variables, `.secrets/production/.env` for Docker, one Secrets Manager secret (`fastagent/<name>`) for AgentCore
+(agent-artifact.md §6.2). `deploy` checks which names the target holds
+and never carries a file; these commands are how the values get there, and they create the Fly app, Railway service or AgentCore secret
+when it does not exist yet, so a CI job can push before its first deploy.
+
+- **`list`** prints every name the deployment declares (the model's key, `needs()`, `context.json`'s variables, MCP
+  references, for the channels `--config` chooses) and whether the target holds it. A value is never read back. A
+  target with no app yet shows every name missing and says the first `set`, `push` or `deploy --run` makes it.
+- **`set`** sets one value: typed without echo at a terminal, else read from standard input. It is never an argument.
+  `--generate` sets a random value and prints it once, on stdout alone, for what FastAgent makes itself
+  (`FASTAGENT_API_KEY`). Use `push` for several names: on a running Fly app each `set` restarts its machines, and a `push` restarts them
+  once. Railway redeploys the service on the last value a `set` or `push` writes; Docker's values are a file that a running
+  container reads after `docker compose up -d`, and an AgentCore session reads its secret when it starts, so a running one
+  keeps its values until it ends or the next deploy; the command says both.
+- **`push`** sets, in one batch, every declared name its source holds a value for: `--env-file`, else `--from-env`, else
+  `.secrets/production/.env` (Docker's own store, so for Docker one of the first two is required). `--from-env` takes the declared names from the environment of the command that injected
+  them, which is how a secret manager or CI joins in with no adapter: `op run --env-file=.env.tpl -- fastagent secrets push fly
+  --from-env`, `doppler run -- …`, `infisical run -- …`, `dotenvx run -- …`, or a CI job's secrets. Names the definition does
+  not declare are not pushed, and are said.
+
+Each value reaches the target over standard input (never a command line), and a run says names only. `deploy --run`
+does the same at a terminal for what the target lacks: one question to set the names the production file holds, then each
+missing value typed without echo. In a coding agent's deploy or in CI it stops naming these commands.
+
+## `fastagent channels setup <name>`
+
+```bash
+fastagent channels setup telegram [agent]
+fastagent channels setup feishu [agent]                    # scan-to-create; lark: guided console
+fastagent channels setup slack [agent] [--ingress webhook|connection] [--config <file>] [--env-file <file>]
+fastagent channels setup slack --json                       # a coding agent: the person pastes on a page
+fastagent channels setup slack --record-url --config prod.json [--url <url>]
+```
+
+Sets up the platform app of **one instance** of a channel and keeps its credentials with that instance
+([design](design/channel-setup.md)). It guides the person through the steps only they can take, asks for each value
+they alone can read off the platform's pages (hidden input at a terminal), checks it with the platform, and writes it to the
+instance's value file. An app the platform makes when it is created (Feishu's scan-to-create) is created once: its
+credentials are kept the moment they exist. It is safe to run again: a value already set that the platform still accepts is kept, one it refuses
+is asked for again, and a value the setup makes itself (a webhook's secret token) is made once.
+
+| Channel | By connection (dev's default) | By webhook (every other instance's default) |
 |---|---|---|
-| `feishu` | nothing | confirming the new app (`url`, in a browser or in Feishu) |
-| `lark` | nothing | creating the app and pasting its App ID and App Secret on the page at `url`; if automatic webhook setup is unavailable, pasting its Verification Token on a second page |
-| `slack` | nothing | pasting an App Configuration token pair on the page at `url`, which then takes the browser on to Slack's install page to click Allow |
+| `telegram` | `TELEGRAM_BOT_TOKEN`, checked with `getMe` | the same, and a generated `TELEGRAM_SECRET_TOKEN` |
+| `slack` | the app's manifest link, `SLACK_BOT_TOKEN` (`auth.test`) and `SLACK_APP_TOKEN` (opens a connection) | the manifest link, `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` (shape only) |
+| `feishu` | the app, created by scan-to-create (you confirm it in Feishu): `FEISHU_APP_ID`, `FEISHU_APP_SECRET` | the same, and `FEISHU_VERIFICATION_TOKEN`, captured by a throwaway webhook registration, else pasted |
+| `lark` | the launcher link, then `LARK_APP_ID` and `LARK_APP_SECRET`, checked together | the same, and `LARK_VERIFICATION_TOKEN`, captured when Lark's config API answers, else pasted |
 
-Both pages are the setup's own, at a one-time random address, and look alike. Slack's is served through the temporary
-tunnel `add slack` opens anyway. Lark's binds only `127.0.0.1`, with no public tunnel. It checks each pair against Lark
-and saves accepted credentials to the selected environment's `.env` (`0600`) before starting webhook setup or checking
-permissions. A later failure therefore leaves the pair available for a rerun. A credential refusal stays on the form;
-network, storage and dev/production app-conflict errors stop the ticket with their actual reason.
+What is left to the person, and the check of the app's permissions, come back as the command's next steps: Feishu and
+Lark name any scope the tenant withheld with the console page that requests it, and the publish.
 
-For a remote CLI, forward the page's port to the **same port** on your browser's machine. For SSH, run
-`ssh -N -L PORT:127.0.0.1:PORT user@host`, replacing `PORT` with the port in the ticket's `url`, then open that exact URL.
-Keep the forwarding session open until the page finishes. A later Verification Token page has a new port; forward that
-port too. Containers and remote development environments need an equivalent local TCP port forward, not a public HTTP
-preview URL (the page rejects foreign Host headers). The ticket's instructions include the port-specific SSH command.
-Without a local browser or port forwarding, interactive page setup cannot complete; this is a limitation compared with
-the previous file-entry flow. Existing credentials in the selected environment are still reused. Do not paste secrets
-into a coding-agent conversation or commands it records.
+The way the channel receives is `--ingress`, else what the instance's configuration names (`channels.<name>.ingress`), else
+a connection for the development instance and a webhook for any other. The development instance is the default one: its
+configuration is the project's `fastagent.json` and its values `.secrets/.env`. `--config <file>` and `--env-file <file>`
+name another instance's (a deployment's): `--config` is read for the way it receives and its `http.publicUrl` (Slack's
+manifest names it as the Request URL; without one a placeholder stands, which Slack accepts) and is where `--ingress` is
+written; `--env-file` is where the values go, a file that must exist, like every `--env-file` (without it, `.secrets/production/.env`,
+the file `deploy` reads, created when missing). Naming either makes it another instance than dev. The
+channel file must offer the way chosen (`byIngress`), else the command refuses before anything is asked.
 
-Slack's pair never passes through the agent's conversation or any `.env` file: it manages every Slack app the person
-owns in that workspace, and only this machine's CLI uses it, so it goes into the onboarding state (`0600`) and never
-deploys.
+Without a terminal, or with `--json` or `--no-input`, the values are pasted on a page the setup serves on `127.0.0.1`
+(one use, a random address; from a remote CLI, forward its port: the ticket gives the `ssh -N -L` command) for the person a
+coding agent hands it to, never in the agent's conversation: the command returns a ticket (`need_user_action` with the
+page's `url`, then `done` with the variables it `written` and the `next_steps`). `--check <ticket>` reads where it
+stands, `--timeout <seconds>` sets how long it stays open (default 900).
 
-The setup runs in a process of its own and the command returns its ticket: `need_user_action` while the person has a
-step, `working` while there is nothing for them to do, then `done` with the variables it `written`, the
-`next_steps` and the steps left to the person (`afterwards`, such as publishing a version). `add <kind> --check
-<ticket>` reads where it stands, `--timeout <seconds>` sets how long it stays open (default 900). Running `add` again
-for the same agent, channel and environment replaces a setup waiting on the person, and answers with one at work. A
-Lark Verification Token that could not be captured automatically is collected on a second password-input page and
-saved before setup continues. It is copied from Lark's console, not validated against a read API; the operator must use
-the token from the same app.
+`--record-url` records the URL a person set on a Slack or Lark app's page (§5 of the design), in the configuration a deploy
+delivers, once the deployment confirms the platform reaches it there; the app is named by its bot token (Slack) or
+`LARK_APP_ID` (Lark), in `--env-file` or the instance's values.
 
 See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 
 ## `fastagent mcp`
 
-Read the agent's `.mcp.json`, authorize a remote MCP server, or remove an instance binding:
+Read the agent's declared MCP servers (the program's and the instance's), authorize a remote MCP server, or remove an instance binding:
 
 ```bash
 fastagent mcp list --json
@@ -541,7 +579,7 @@ from the machine's skill directories. `--update` overwrites an existing one.
 
 ```bash
 fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
-                [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
 ```
 
 Serves the project's `dist/`, never its source, without watching: it refuses, naming `fastagent build`, when `dist/`
@@ -567,7 +605,7 @@ content:  <workdir>/content/<name> (clones)
 The same `--root`, `--state` and `--workdir` place the instance for `dev`, `invoke`, `info` and `schedules`
 (`list`, `run`, `unwake`), and `--config` names the configuration for `dev`, `invoke`, `info` and `schedules run`;
 a relative path resolves once, against the directory the command started in (in a generated image, its `WORKDIR`,
-`/app/definition`), and the root and workdir are created when missing, or refused when they cannot be. [Configuration](configuration.md#where-an-instance-lives) says what each holds.
+`/app`), and the root and workdir are created when missing, or refused when they cannot be. [Configuration](configuration.md#where-an-instance-lives) says what each holds.
 
 ## Global options
 
@@ -577,7 +615,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `add slack\|feishu\|lark`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
+| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `channels setup`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
 | `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list`, `login`, `auth check`, `add` | Machine-readable output. |
 
@@ -600,7 +638,7 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
 - **A step only a person can take returns at once**, with what the person does and how to follow it:
   `"status": "need_user_action"`, the address to open, and a `check_command` to run once they have, in a sentence for
   the agent (`agent_next_steps`). An account sign-in (`login`, and `login --deployment` on the box) and an app's setup
-  (`add slack|feishu|lark`) work this way: a process of the CLI's own finishes the step and keeps a ticket that
+  (`channels setup`) work this way: a process of the CLI's own finishes the step and keeps a ticket that
   `--check <ticket>` reads. So does a whole deploy, opted into with `deploy <host> --run --json`: a deploy's exit 0
   says it is deployed, so one paused for a person (exit 0, `need_user_action`) is never what a CI job gets without
   asking for it.

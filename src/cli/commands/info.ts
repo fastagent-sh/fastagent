@@ -5,13 +5,14 @@ import { channelIngress } from "../../channels/discover.ts";
 import { loadContent, loadEnvironment } from "../../content/file.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
+import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { type EffectiveConfig, configValue, resolveConfig } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
-import { readCommands } from "../../harnesses/pi-durable/text.ts";
+import { openText, readCommands } from "../../harnesses/pi-durable/text.ts";
 import { inspectMcp } from "../../mcp/host.ts";
 import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
@@ -36,8 +37,15 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       return failStartup(error);
     }
   })();
+  const name = instanceName(definition.name, enteredInstanceName() ?? config.name);
   const modelSpec = modelSpecFor(config, opts.model);
-  const declared = definitionSecrets(definition, config);
+  const declared = (() => {
+    try {
+      return definitionSecrets(definition, config, instance);
+    } catch (error) {
+      return failStartup(error);
+    }
+  })();
   const unsetSecrets = missingSecrets(declared, process.env);
   // Built only when every required secret has a value: building is what reads them. A module that is not what its
   // directory holds is said as the refusal `dev` and `start` would stop on.
@@ -75,17 +83,20 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     tz: s.tz ?? null,
     next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
   }));
-  const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
+  const text = await Promise.resolve()
+    .then(() => openText(agentDir, instance))
+    .catch(failStartup);
+  const commands = readCommands(text).map(({ name, description }) => ({ name, description: description ?? null }));
   const stateRoot = resolveStateRoot(agentDir);
   const auth = models.auth;
-  const mcp = await inspectMcp(agentDir).catch(failStartup);
+  const mcp = await inspectMcp(agentDir, instance === undefined ? {} : { config: instance.label }).catch(failStartup);
 
   if (opts.json) {
     console.log(
       JSON.stringify(
         {
           agentDir,
-          name: definition.name,
+          name: name,
           content,
           contentError: contentError ?? null,
           environment: environment ?? null,
@@ -115,7 +126,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const line = (label: string, value: string): void => console.log(`${`${label}:`.padEnd(13)} ${value}`);
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
-  line("agent", `${definition.name} — ${agentDir}`);
+  line("agent", `${name} — ${agentDir}`);
   for (const [label, value] of contentLines(content)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");

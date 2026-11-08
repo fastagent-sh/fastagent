@@ -20,7 +20,10 @@ import {
   pendingWebhooks,
   registerOwnWebhooks,
   webhookKinds,
+  webhookPath,
 } from "./channels/webhooks.ts";
+import { addressedTo, onReached, readReached } from "./channels/webhook-evidence.ts";
+import { channelStateDir } from "./channels/context.ts";
 import { portCleanup } from "./effect-port.ts";
 import { API_PREFIX } from "./http/contract.ts";
 import { apiHandler, isApiPath } from "./http/server.ts";
@@ -28,7 +31,7 @@ import { log } from "./log.ts";
 import { once } from "./once.ts";
 import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
 import type { Schedule } from "./schedule/schedule.ts";
-import { servedByDev } from "./serving-command.ts";
+import { stripTrailingSlashes } from "./strip-edges.ts";
 
 export type { WebhookRegistration } from "./channels/webhooks.ts";
 
@@ -194,11 +197,22 @@ export interface WebhookRegistry {
   /** The outcomes, as one array kept current. */
   list(): readonly WebhookRegistration[];
   register(baseUrl?: string): Promise<WebhookRegistration[]>;
+  /** Stop hearing the platforms reach it. */
+  dispose(): void;
 }
 
-/** Nothing to point: a serve with no webhook channel, or one a host points itself (AgentCore's forwarder). */
+/** The channels whose platform lets only a person set the URL (SPEC.md §8): Slack, and Lark without its config API. */
+const PERSON_SET: readonly WebhookKind[] = ["slack", "lark"];
+
+/** Where a channel's URL a person set is confirmed: its state (what reached it), and its binding's recorded `url`. */
+interface Confirmation {
+  stateDir(kind: WebhookKind): string;
+  appUrl(kind: WebhookKind): string | undefined;
+}
+
+/** Nothing to point: a serve with no webhook channel. */
 const NONE: readonly WebhookRegistration[] = Object.freeze([]);
-const NO_WEBHOOKS: WebhookRegistry = { list: () => NONE, register: async () => [] };
+const NO_WEBHOOKS: WebhookRegistry = { list: () => NONE, register: async () => [], dispose: () => {} };
 
 /**
  * The webhook channels among `kinds`, registered with `env`, the instance's own secrets, at `publicUrl` unless a call
@@ -208,31 +222,73 @@ function webhookRegistry(
   kinds: readonly WebhookKind[],
   env: NodeJS.ProcessEnv,
   publicUrl: string | undefined,
+  confirmation: Confirmation,
   options: { attempts?: number; retryMs?: number } = {},
 ): WebhookRegistry {
   // One array, replaced in place: a Service is spread into the objects that extend it, and each keeps reading this.
   const current: WebhookRegistration[] = pendingWebhooks(kinds);
   const replace = (next: readonly WebhookRegistration[]) => current.splice(0, current.length, ...next);
   let previous: Promise<unknown> = Promise.resolve();
+  let base: string | undefined;
+  // A URL only a person sets is confirmed by the platform reaching it: told as it happens, or read from the record.
+  const confirmed = (kind: WebhookKind, address: string | undefined, at: string): boolean => {
+    const path = webhookPath(kind);
+    if (confirmation.appUrl(kind) === `${at}${path}`) return true;
+    if (address === undefined) return false;
+    if (addressedTo(address, at, path)) return true;
+    log.warn(`[fastagent] ${kind}: the platform reached this instance at ${address}, not ${at}${path}`);
+    return false;
+  };
+  const confirm = (registrations: WebhookRegistration[], at: string | undefined) =>
+    registrations.map((entry) => {
+      const kind = entry.channel as WebhookKind;
+      if (at === undefined || entry.outcome !== "manual" || !PERSON_SET.includes(kind)) return entry;
+      if (!confirmed(kind, readReached(confirmation.stateDir(kind)), at)) return entry;
+      return { channel: entry.channel, outcome: "registered" as const, url: `${at}${webhookPath(kind)}` };
+    });
+  const stops = kinds
+    .filter((kind) => PERSON_SET.includes(kind))
+    .map((kind) =>
+      onReached(confirmation.stateDir(kind), (address) => {
+        const index = current.findIndex((entry) => entry.channel === kind);
+        const entry = current[index];
+        if (base === undefined || entry?.outcome !== "manual" || !confirmed(kind, address, base)) return;
+        current[index] = { channel: kind, outcome: "registered", url: `${base}${webhookPath(kind)}` };
+      }),
+    );
   return {
     list: () => current,
     register(baseUrl) {
       if (baseUrl !== undefined && !/^https?:\/\/[^/?#\s]+/.test(baseUrl)) {
         return Promise.reject(new Error(`registerWebhooks: ${JSON.stringify(baseUrl)} is not an absolute http(s) URL`));
       }
-      const base = (baseUrl ?? publicUrl)?.replace(/\/+$/, "");
+      const target = baseUrl ?? publicUrl;
+      const at = target === undefined ? undefined : stripTrailingSlashes(target);
       const run = previous.then(async () => {
+        base = at;
         replace(pendingWebhooks(kinds));
-        if (base === undefined && kinds.length > 0 && !servedByDev()) {
+        if (at === undefined && kinds.length > 0) {
           log.info(`[fastagent] webhooks: no http.publicUrl, so nothing points ${kinds.join(", ")} at this instance`);
         }
-        replace(await registerOwnWebhooks(base, kinds, env, options));
+        replace(confirm(await registerOwnWebhooks(at, kinds, env, options), at));
         return [...current];
       });
       previous = run.catch(() => {});
       return run;
     },
+    dispose: () => {
+      for (const stop of stops) stop();
+    },
   };
+}
+
+/** The webhook channels of an opened agent, to be pointed at `http.publicUrl` or at a URL the host names. */
+export function webhooksOf(opened: ServableAgent): WebhookRegistry {
+  const kinds = webhookKinds([...opened.channels].map(([name, module]) => ({ name, ingress: channelIngress(module) })));
+  return webhookRegistry(kinds, opened.secrets, opened.config.http?.publicUrl, {
+    stateDir: (kind) => channelStateDir(opened.stateRoot, kind),
+    appUrl: (kind) => opened.config.channels?.[kind]?.app?.url,
+  });
 }
 
 /**
@@ -288,7 +344,7 @@ export function serviceOver(
       closing ??= (async () => {
         // The server first, so nothing new reaches what stops after it; each step runs, and every failure is said.
         const failures: unknown[] = [];
-        for (const step of [endStreams, () => listener?.close(), shutdown]) {
+        for (const step of [endStreams, () => listener?.close(), shutdown, webhooks.dispose]) {
           await Promise.resolve()
             .then(step)
             .catch((error: unknown) => failures.push(error));
@@ -317,8 +373,8 @@ export interface ServableAgent {
   agent: Agent;
   /** The instance's secrets: what its webhook channels are pointed with. */
   secrets: Readonly<Record<string, string>>;
-  /** The configuration's part a serve reads: where the platforms reach it. */
-  config: { http?: { publicUrl?: string } };
+  /** The configuration's part a serve reads: where the platforms reach it, and the URLs a person set there. */
+  config: { http?: { publicUrl?: string }; channels?: Readonly<Record<string, { app?: { url?: string } }>> };
   /** The project directory the instance's `.secrets/` belong to. */
   agentDir: string;
   /** Where durable state lives (channel state, schedule fires, wake-ups). */
@@ -331,8 +387,7 @@ export interface ServableAgent {
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
   const { agent, agentDir, stateRoot, schedules } = opened;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
-  const kinds = webhookKinds([...opened.channels].map(([name, module]) => ({ name, ingress: channelIngress(module) })));
-  const webhooks = webhookRegistry(kinds, opened.secrets, opened.config.http?.publicUrl);
+  const webhooks = webhooksOf(opened);
   const routed = routesFor(agent, stateRoot, opened.channels, webhooks.list);
   // Composed BEFORE anything starts.
   const channels = router(routed.routes);

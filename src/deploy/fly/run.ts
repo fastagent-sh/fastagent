@@ -2,6 +2,7 @@
 import type { BoxLoginStep } from "../box-shell.ts";
 import {
   type BoxWebhooksProbe,
+  type UrlRecorder,
   type PublicHealthProbe,
   type Registrars,
   confirmWebhooks,
@@ -10,18 +11,22 @@ import {
 } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
-import { hostSignedOutGate, missingValuesGate } from "../secrets.ts";
+import type { SecretStore } from "../secret-store.ts";
+import { hostSignedOutGate } from "../secrets.ts";
+import { ensureFlyApp, flyStore } from "./store.ts";
 
 export interface FlyRunPlan {
+  /** At a terminal with a `--config` file: record each URL a person set once the box confirms it. */
+  recordUrl?: UrlRecorder;
   /** The `http.publicUrl` the image delivers, where the platforms reach the box; default the app's own URL. */
   publicUrl?: string;
   appName: string;
-  /** `KEY=value` secrets to set on Fly: the value file's variables. */
-  secrets: Record<string, string>;
-  /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
-  missingSecrets: string[];
-  /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
-  valueFile: string;
+  /**
+   * Make sure the app holds a value for every name the deployment needs, through whoever can supply one
+   * (secret-store.ts): resolves a gate line, or undefined. It runs once the app exists, since only then can Fly say
+   * which names it has.
+   */
+  provideSecrets: (store: SecretStore) => Promise<string | undefined>;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
   /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the agent directory). */
@@ -65,31 +70,16 @@ function ingressAddresses(stdout: string): { v4: boolean; v6: boolean } {
   return { v4: has(INGRESS_TYPES.v4), v6: has(INGRESS_TYPES.v6) };
 }
 
-/**
- * Whether `fly apps list --json` lists an app called `name`. flyctl capitalizes the field, and an
- * offline fixture can only repeat what we already believe, so a change in flyctl's output is not caught here.
- */
-function listHasName(stdout: string, name: string): boolean {
-  const entries: unknown = JSON.parse(stdout);
-  if (!Array.isArray(entries)) throw new Error(`expected a JSON array, got ${typeof entries}`);
-  return entries.some((o) => (o as { Name?: string }).Name === name);
-}
-
 export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
   /** Slack's, which this machine still sets (its Request URL no credential on the box can change). */
-  registrars: Pick<Registrars, "slack" | "leave">,
+  registrars: Pick<Registrars, "leave">,
   healthProbe?: PublicHealthProbe,
   boxWebhooks?: { probe: BoxWebhooksProbe; intervalMs?: number },
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
-
-  // 1. Gate missing required secret VALUES before any side effect (no half-created infra), and before asking a
-  // person to sign in for a deploy that would stop here anyway.
-  const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
-  if (missingValues) return gate(missingValues);
 
   // 2.
   if ((await fly(["auth", "whoami"], { capture: true })).code !== 0) {
@@ -100,19 +90,13 @@ export async function deployFlyRun(
   }
 
   // 3.
-  const appExists = await readOutput(fly, "fly", ["apps", "list", "--json"], (out) => listHasName(out, plan.appName));
-  if ("gate" in appExists) return gate(appExists.gate);
-  if (appExists.value) {
-    log(`app ${plan.appName} exists — skipping create`);
-  } else {
-    log(`creating app ${plan.appName}…`);
-    if ((await fly(["apps", "create", plan.appName])).code !== 0) {
-      return gate(
-        `\`fly apps create ${plan.appName}\` failed — Fly app names are globally unique and it may be taken. ` +
-          `Set a unique \`app\` in fly.toml and re-run.`,
-      );
-    }
-  }
+  const appGate = await ensureFlyApp(fly, plan.appName, log);
+  if (appGate !== undefined) return gate(appGate);
+
+  // 3b. Secrets, before anything else is set up for an app that cannot run without them: the names the app holds, the
+  // gaps filled (staged: the deploy below applies them).
+  const secretsGate = await plan.provideSecrets(flyStore(fly, plan.appName, log, { stage: true }));
+  if (secretsGate !== undefined) return gate(secretsGate);
 
   // 4. NO volume step: `fly deploy` creates it from [mounts] on a first deploy, and only it can tell the scheduler
   // which machine (guest size + image) must fit on the host the volume is pinned to. Pre-creating one here placed it
@@ -134,16 +118,6 @@ export async function deployFlyRun(
     log(`allocating a public ${family} address…`);
     if ((await fly([...allocate])).code !== 0) {
       return gate(`\`fly ${allocate.join(" ")}\` failed — see the flyctl output above`);
-    }
-  }
-
-  // 6. Secrets — staged (no deploy yet; we deploy with fly.toml next). Values over stdin, not argv.
-  const keys = Object.keys(plan.secrets);
-  if (keys.length > 0) {
-    log(`setting ${keys.length} secret(s): ${keys.join(", ")}`);
-    const input = `${keys.map((k) => `${k}=${plan.secrets[k]}`).join("\n")}\n`;
-    if ((await fly(["secrets", "import", "--stage", "-a", plan.appName], { input })).code !== 0) {
-      return gate("`fly secrets import` failed — see the flyctl output above");
     }
   }
 
@@ -199,6 +173,7 @@ export async function deployFlyRun(
     channels: plan.channels,
     registrars,
     log,
+    ...(plan.recordUrl === undefined ? {} : { record: plan.recordUrl }),
     retryHint: "re-run to retry registration (steps already done are skipped)",
     ...(boxWebhooks === undefined
       ? {}

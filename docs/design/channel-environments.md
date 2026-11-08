@@ -8,7 +8,7 @@ updated: 2026-10-09
 
 # Channels across environments
 
-**Status: implemented for dev and production.** Its §3 and §4 change per [channel-setup.md](channel-setup.md) (proposed): `add` changes the program, and a
+**Status: implemented for dev and production.** Its §3 and §4 are superseded by [channel-setup.md](channel-setup.md) (implemented): `add` changes the program, and a
 platform app is set up per instance by `channels setup`. An agent directory has one definition and two independent
 runtime environments. Staging and multiple production deployments are not selected by this mechanism.
 
@@ -25,7 +25,8 @@ on one Feishu app split its events; changing its subscription mode affects every
 
 The files are complete environments, not overlays. A missing production file is empty; dev credentials,
 provider keys, proxy settings and other values are never copied or inherited from the dev file. Production keys
-must be supplied explicitly. `deploy --run` carries only production values and never the builder's stored login.
+must be supplied explicitly. `deploy` reads only production values, `fastagent secrets push` takes the production file unless `--env-file` or
+`--from-env` name another source, and a deployment never gets the builder's stored login.
 
 `FASTAGENT_ENVIRONMENT` communicates the command's selection across installed package copies and a dev worker.
 It is command-owned and never carried as an operator-supplied deploy secret. Explicit `FASTAGENT_SECRETS_DIR`,
@@ -53,17 +54,17 @@ One channel file offers both ways, `byIngress({ webhook, connection })`, and eac
 - `deploy` reads the way from the configuration it delivers, as the box will, never from the environment.
 
 A file that names one factory receives that way only: a configuration naming the other way is refused at open, and
-`add --ingress` and production onboarding refuse it before touching the app. Re-scaffold it to offer both.
+`channels setup --ingress` refuses it before touching the app. Re-scaffold it to offer both.
 
 ## 3. Deploy provisions the production app
 
-Interactive `deploy --run` uses the existing onboarding flow when a declared Feishu/Lark channel lacks its
+Interactive `deploy --run` runs `channels setup` for the production instance when a declared Feishu/Lark channel lacks its
 production App ID, Secret, or webhook Verification Token. A complete app is reused without another creation flow.
 This also applies to a production environment explicitly configured for WebSocket.
 
 1. Run preflight and host validation before creating an app. AgentCore rejects long connections and names beyond
    its resource-name limit; Docker refuses a value file that differs from the generated Compose path. Refuse
-   missing values that onboarding cannot supply.
+   missing values that setup cannot supply.
 2. Refuse unattended setup (`--no-input` or no terminal), naming the missing production values and their file.
    CI must write those values beforehand. Generate-only deployment creates no remote app.
 3. **Feishu:** scan-to-create a separate production app. A webhook app requests the agent scopes plus
@@ -76,20 +77,21 @@ This also applies to a production environment explicitly configured for WebSocke
 6. Re-run preflight and host validation, then build and deploy with the values now in that file. Once readiness and model login pass,
    register the deployment's stable Request URL with those same values, never shell-exported dev credentials.
 
-Feishu/Lark production App IDs that match the default dev value file are refused before onboarding or deployment.
-This catches copying a complete dev file into production, which would defeat isolation. Explicit relocated dev
-files are the operator's responsibility.
+Nothing refuses a production App ID that is the dev one: two instances on one app are documented, as for Telegram and
+Slack (an app is one receiver, so copying a complete dev file into production takes dev's events away). `channels setup`
+for another instance creates a new app (Feishu) or asks for another app's credentials (Lark).
 
-Docker's generated Compose reads `.secrets/production/.env`. It needs `--tunnel` for automated webhook setup;
-an operator with their own ingress supplies app values and sets the Request URL themselves. A relocated production
+Docker's generated Compose reads `.secrets/production/.env`. It has no public URL of its own, so a deployment with a
+webhook channel is an operator with their own ingress: they supply app values and name the URL as `http.publicUrl`
+(or set the channel to `connection`). A relocated production
 value file is refused under Docker `--run` because the committed Compose names a fixed path.
 
 ## 4. Other channels
 
-`add slack --env production` runs the existing Slack creation/OAuth flow with separate credentials and separate
-local onboarding state. Its App Configuration token remains on the onboarding machine and is not deployed.
-`add telegram --env production` writes production placeholders and a separate webhook secret; the bot itself
-must be created with BotFather. Neither channel is automatically provisioned by `deploy`.
+A production Slack app or Telegram bot is another instance's: `channels setup <name> --config prod.json --env-file
+.secrets/production/.env` creates it (a Slack app from the manifest link, a bot through BotFather) and keeps its
+credentials in that file, with a webhook's secret made once. Neither channel is automatically provisioned by `deploy`,
+and no credential of the person's own (Slack's configuration token) is kept anywhere.
 
 `dev --tunnel` registers only the dev app, and `deploy --run` registers only the production app. Re-registering
 one app can still move that app between URLs, but it no longer takes messages from the other environment's app.

@@ -88,12 +88,13 @@ describe("deploy/channel-ingress: a login that did not happen", () => {
     expect(logs).toEqual([]);
   });
 
-  it("with one, says logging in registers none, and how this host gets them registered", () => {
+  it("with one, says this deploy and the login confirm none, and what this host does once logged in", () => {
     const logs: string[] = [];
     const gate = loginGate({ notLoggedIn, channels: webhook("telegram"), log: (m) => logs.push(m), afterLogin });
     expect(gate).toBe(
-      `${notLoggedIn}. This deploy registered no webhook, and logging in registers none; any an earlier deploy ` +
-        `registered still points here, and every message it brings fails until the box is logged in. Once it is, ` +
+      `${notLoggedIn}. This deploy confirmed no webhook, and logging in confirms none; any already pointed here, ` +
+        `by the box itself or by an earlier deploy, still delivers, and every message it brings fails until the box ` +
+        `is logged in. Once it is, ` +
         afterLogin,
     );
     expect(logs).toEqual([]); // no URL yet: nothing to point by hand
@@ -193,16 +194,14 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
 
   it("a failed registrar gates, and one failure does not skip the rest", async () => {
     const feishu = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
-    const slack = vi.fn(registered);
     const gate = await registerWebhooks({
       baseUrl: "https://x",
       channels: webhook("telegram", "slack", "feishu", "lark"),
-      registrars: { telegram: async () => "failed", slack, feishu },
+      registrars: { telegram: async () => "failed", feishu },
       log: () => {},
       retryHint: "re-run with --into-linked",
     });
     // Each kind reaches its own seam, with the kind it belongs to.
-    expect(slack).toHaveBeenCalledWith("https://x");
     expect(feishu.mock.calls).toEqual([
       ["https://x", "feishu"],
       ["https://x", "lark"],
@@ -216,13 +215,12 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     await registerWebhooks({
       baseUrl: "https://x",
       channels: webhook("telegram", "slack", "feishu", "lark"),
-      registrars: { telegram: async () => "failed", slack: registered, feishu: registered },
+      registrars: { telegram: async () => "failed", feishu: registered },
       log: (line) => said.push(line),
       retryHint: "re-run",
     });
     const moved = said.filter((line) => line.includes("delivers to this deployment"));
     expect(moved).toEqual([
-      "the selected production slack app now delivers to this deployment",
       "the selected production feishu app delivers to this deployment once its published version is in webhook mode " +
         "(after a first deploy, publish the version it opened)",
       expect.stringContaining("selected production lark app delivers to this deployment"),
@@ -294,20 +292,140 @@ describe("deploy/channel-ingress: what a box that points its own channels made o
     expect(logs.join("\n")).toContain("feishu: the box did not report its registration within the wait");
   });
 
-  it("sets Slack's Request URL from this machine, since no credential on the box can", async () => {
-    const slack = vi.fn(registered);
+  it("at a terminal, records each URL a person set once the box confirms it, and not before", async () => {
+    // Lark without its config API: manual until the person saves the page, then the box reports it registered.
+    const reads = [
+      [{ channel: "lark", outcome: "manual" as const }],
+      [{ channel: "lark", outcome: "manual" as const }],
+      [{ channel: "lark", outcome: "registered" as const }],
+    ];
+    const written: [string, string][] = [];
+    const logs: string[] = [];
+    const gate = await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("lark"),
+      registrars: {},
+      log: (m) => logs.push(m),
+      retryHint: "re-run",
+      probe: async () => reads.shift() ?? [{ channel: "lark", outcome: "registered" }],
+      intervalMs: 0,
+      record: {
+        waitMs: 60_000,
+        write: async (kind, url) => {
+          written.push([kind, url]);
+          return "/work/prod.json";
+        },
+      },
+    });
+    expect(gate).toBeUndefined();
+    expect(written).toEqual([["lark", "https://agent.acme.com/lark"]]);
+    expect(logs.join("\n")).toContain(
+      "lark: the platform reached the box at https://agent.acme.com/lark; recorded it in /work/prod.json",
+    );
+    // A record that cannot be written is said, and the deploy, which is done, ends as it would.
+    const unrecorded: string[] = [];
+    const notWritten = await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("slack", "lark"),
+      registrars: {},
+      log: (m) => unrecorded.push(m),
+      retryHint: "re-run",
+      // Lark manual when the box first reports, then both reached once the person saves the pages.
+      probe: (() => {
+        let reads = 0;
+        return async () =>
+          reads++ === 0
+            ? [{ channel: "lark", outcome: "manual" as const }]
+            : [
+                { channel: "slack", outcome: "registered" as const },
+                { channel: "lark", outcome: "registered" as const },
+              ];
+      })(),
+      intervalMs: 0,
+      record: {
+        waitMs: 60_000,
+        write: async (kind) => {
+          if (kind === "slack") throw new Error("slack: no Slack app onboarded on this machine");
+          return "/work/prod.json";
+        },
+      },
+    });
+    expect(notWritten).toBeUndefined();
+    expect(unrecorded.join("\n")).toContain(
+      "slack: the platform reached the box at https://agent.acme.com/slack, but it was not recorded (slack: no Slack app onboarded on this machine); record it with `fastagent channels setup slack --config <file> --record-url`",
+    );
+    // Both under one deadline, the one wait said once for both.
+    expect(unrecorded.filter((m) => m.startsWith("waiting up to"))).toEqual([
+      expect.stringContaining("https://agent.acme.com/slack and https://agent.acme.com/lark"),
+    ]);
+    expect(unrecorded.join("\n")).toContain(
+      "lark: the platform reached the box at https://agent.acme.com/lark; recorded it in /work/prod.json",
+    );
+    // One deadline for both: Lark, reached at once, is recorded at the first read, not after Slack's wait.
+    let probes = 0;
+    const recordedAt: number[] = [];
+    await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("slack", "lark"),
+      registrars: {},
+      log: () => {},
+      retryHint: "re-run",
+      probe: async () => {
+        probes++;
+        return [
+          { channel: "slack", outcome: "manual" },
+          { channel: "lark", outcome: probes === 1 ? "manual" : "registered" },
+        ];
+      },
+      intervalMs: 1,
+      record: {
+        waitMs: 50,
+        write: async () => {
+          recordedAt.push(probes);
+          return "f";
+        },
+      },
+    });
+    expect(recordedAt).toEqual([2]);
+    // The person never saves it: nothing is recorded, and the step stays theirs.
+    const never: [string, string][] = [];
+    await confirmWebhooks({
+      baseUrl: "https://x",
+      publicUrl: "https://agent.acme.com",
+      channels: webhook("lark"),
+      registrars: {},
+      log: () => {},
+      retryHint: "re-run",
+      probe: async () => [{ channel: "lark", outcome: "manual" }],
+      intervalMs: 0,
+      record: {
+        waitMs: 0,
+        write: async (kind, url) => {
+          never.push([kind, url]);
+          return "f";
+        },
+      },
+    });
+    expect(never).toEqual([]);
+  });
+
+  it("leaves Slack's Request URL to a person: no registrar of the deploy sets it, and the box is not asked", async () => {
+    const said: string[] = [];
     const probe = vi.fn(async () => []);
     const gate = await confirmWebhooks({
       baseUrl: "https://x",
       publicUrl: "https://agent.acme.com",
       channels: webhook("slack"),
-      registrars: { slack },
-      log: () => {},
+      registrars: {},
+      log: (line) => said.push(line),
       retryHint: "re-run",
       probe,
     });
     expect(gate).toBeUndefined();
-    expect(slack).toHaveBeenCalledWith("https://agent.acme.com");
+    expect(said).toContain("slack: set Event Subscriptions → Request URL → https://agent.acme.com/slack");
     // Nothing of the box's to wait for.
     expect(probe).not.toHaveBeenCalled();
   });
@@ -361,13 +479,15 @@ describe("every host's runbook reads the same answer", () => {
     expect(railway(longConnection("telegram"))).not.toContain("railway domain");
   });
 
-  it("agentcore: the same steps at the forwarder URL, and generate-only skips a long-connection one", () => {
+  it("agentcore: the runtime points its own channels at the forwarder URL, so only Slack's is a person's step", () => {
     const out = agentcore(webhook("telegram", "slack"));
-    expect(out).toContain("-d url=<ForwarderUrl>/telegram");
+    expect(out).toContain("makes the runtime point telegram at <ForwarderUrl>");
     expect(out).toContain("Request URL = <ForwarderUrl>/slack");
+    expect(out).not.toContain("-d url=<ForwarderUrl>/telegram");
     // `--run` refuses a long-connection channel, but generate-only only warns and still prints this
     // runbook — so the steps filter on ingress rather than on the CLI having gated.
-    expect(agentcore(longConnection("telegram"))).not.toContain("setWebhook");
+    expect(agentcore(longConnection("telegram"))).not.toContain("makes the runtime point");
+    expect(agentcore(webhook("slack"))).not.toContain("makes the runtime point");
   });
 
   it("agentcore: a feishu step carries the forwarder challenge note the shared wording cannot", () => {

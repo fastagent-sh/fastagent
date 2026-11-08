@@ -8,15 +8,44 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { type Schema, bool, compile, int, map, obj, oneOf, opt, str, union } from "@earendil-works/pi-schema";
+import {
+  type Schema,
+  arr,
+  bool,
+  compile,
+  int,
+  map,
+  obj,
+  oneOf,
+  opt,
+  str,
+  union,
+  unknown,
+} from "@earendil-works/pi-schema";
+import type { ContentEntry } from "../../content/declare.ts";
 import { instanceContent } from "../../content/file.ts";
+import { type McpServerDeclaration, checkInstanceServers } from "../../mcp/config.ts";
+import { checkInstanceName } from "../../instance-name.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { INSTANCE_CONFIG_ENV, INSTANCE_CONFIG_FILE, resolveOverridePath } from "../../paths.ts";
 import type { AgentConfig, AgentDefaults, Ingress } from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
 
-/** What an instance may set over the program's defaults: `fastagent.json`, or the same shape as an object. */
-export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings>;
+/**
+ * What an instance may set over the program's defaults: `fastagent.json`, or the same shape as an object. Beside the
+ * defaults, what only an instance adds: content, and instructions, skills and prompt templates (relative paths are the
+ * file's directory's).
+ */
+export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings> & {
+  /** The instance's name, one path segment. Default: the program's name made one. */
+  name?: string;
+  content?: Record<string, ContentEntry>;
+  /** MCP servers the instance adds to the program's: a name both declare refuses the open. */
+  mcpServers?: Record<string, McpServerDeclaration>;
+  instructions?: string[];
+  skills?: string[];
+  prompts?: string[];
+};
 
 /** An instance configuration and where it is from, said in a refusal and as a value's source. */
 export interface InstanceConfigSource {
@@ -36,9 +65,6 @@ const THINKING_LEVELS = [
   "max",
 ] as const satisfies readonly ModelThinkingLevel[];
 const PROGRAM_DEFAULT = "program default";
-
-/** Keys of SPEC.md §8's `InstanceConfig` that a later release reads: refused by name until then, not as unknown. */
-const NOT_READ_YET = ["instructions", "skills", "prompts"];
 
 const CONSTANTS = ["name", "description", "extensions", "providers"];
 /** Keys that were the program's own before they became defaults. */
@@ -95,6 +121,18 @@ function shape(settings: Schema | undefined) {
     channels: opt(
       map(
         obj({
+          app: opt(
+            obj({
+              id: str({ description: "The platform's app ID" }),
+              team: opt(str({ description: "Slack's workspace (team) ID" })),
+              url: opt(
+                str({
+                  description: "The channel's URL a person set on the platform's app page and the platform verified",
+                  pattern: "^https://[^?#\\s]+$",
+                }),
+              ),
+            }),
+          ),
           ingress: opt(
             oneOf(["webhook", "connection"] as const, {
               description: "How the channel receives: webhook (inbound HTTP) or connection (one it opens and keeps)",
@@ -109,7 +147,24 @@ function shape(settings: Schema | undefined) {
 
 /** The JSON Schema of an instance's `fastagent.json` for a program with `settings`: what `fastagent build` publishes. */
 export function instanceConfigSchema(settings: Schema | undefined): Schema {
-  return obj({ $schema: opt(str()), ...shape(settings), content: opt(map(CONTENT_ENTRY)) });
+  const paths = (description: string) => opt(arr(str({ minLength: 1 }), { description, uniqueItems: true }));
+  return obj({
+    $schema: opt(str()),
+    ...shape(settings),
+    name: opt(str({ description: "The instance's name: one path segment of letters, digits, - and _" })),
+    content: opt(map(CONTENT_ENTRY)),
+    mcpServers: opt(
+      map(unknown(), {
+        description:
+          "MCP servers this instance adds to the program's, by name, in the MCP ecosystem's entry shape (checked when the instance opens)",
+      }),
+    ),
+    instructions: paths("Files of instructions added after the program's AGENTS.md, relative to this file"),
+    skills: paths(
+      "Directories of skills (one SKILL.md per subdirectory) added to the program's, relative to this file",
+    ),
+    prompts: paths("Directories of prompt templates (one .md file each) added to the program's, relative to this file"),
+  });
 }
 
 /** Refuse `value`, naming `where`, when `schema` does not accept it: each failing path, and why. */
@@ -174,10 +229,17 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
 function checkInstanceConfig(source: InstanceConfigSource, settings: Schema | undefined): InstanceConfig {
   const { values, label } = source;
   if (typeof values === "object" && values !== null) {
-    const unread = NOT_READ_YET.filter((key) => key in values);
-    if (unread.length > 0) throw new Error(`${label}: ${unread.join(", ")} is not read by this FastAgent yet`);
     // Its own refusals name the entry and say what is wrong with it, which a schema's cannot.
     instanceContent(source);
+    checkInstanceServers(source);
+    const { name } = values as { name?: unknown };
+    if (typeof name === "string") {
+      try {
+        checkInstanceName(name);
+      } catch (error) {
+        throw new Error(`${label}: ${(error as Error).message}`);
+      }
+    }
   }
   checkValues(values, settings, label, instanceConfigSchema);
   const { $schema: _schema, ...config } = values as Record<string, unknown>;
@@ -207,19 +269,36 @@ export async function namedInstanceConfig(
   return path === undefined ? undefined : readInstanceConfigFile(path);
 }
 
+/** The instance configuration `dev` runs a project with: the one named by `--config` or `FASTAGENT_CONFIG`, else the project's own. */
+export async function devInstanceConfig(dir: string): Promise<InstanceConfigSource | undefined> {
+  return (await namedInstanceConfig()) ?? (await projectInstanceConfig(dir));
+}
+
 /** The `fastagent.json` a development project holds at its root, when it holds one. */
 export async function projectInstanceConfig(dir: string): Promise<InstanceConfigSource | undefined> {
   const path = join(dir, INSTANCE_CONFIG_FILE);
   return existsSync(path) ? readInstanceConfigFile(path) : undefined;
 }
 
+/** A channel's platform app, for one whose URL only a person sets (SPEC.md §8, `channels.<name>.app`). */
+interface ChannelApp {
+  id: string;
+  team?: string;
+  url?: string;
+}
+
+/** The channels whose platform lets only a person set the URL: Slack's always, Lark's where its config API is missing. */
+const PERSON_SET_URL = ["slack", "lark"];
+
 /** What an open reads of the configuration: the program's defaults with an instance's over them. */
 export interface EffectiveConfig {
+  /** The instance's name as its configuration gives it; none when it gives none (`instanceName` defaults it). */
+  name?: string;
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   http?: { port?: number; api?: boolean; publicUrl?: string };
   deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
-  channels?: Readonly<Record<string, { ingress?: Ingress }>>;
+  channels?: Readonly<Record<string, { ingress?: Ingress; app?: ChannelApp }>>;
   settings: Readonly<Record<string, unknown>>;
   /** Where each value is from, by its path (`http.port`, `settings.repo`): "program default", or the instance's label. */
   sources: Readonly<Record<string, string>>;
@@ -270,10 +349,19 @@ export function resolveConfig(definition: AgentDefinition, instance?: InstanceCo
   const values = (merged.settings ?? {}) as Record<string, unknown>;
   check(settings ?? obj({}), values, `the settings of ${definition.name}`);
   const channels = new Set(definition.registry.channels.map(({ name }) => name));
-  for (const name of Object.keys((merged.channels ?? {}) as Record<string, unknown>)) {
+  // The file that named a channel: whichever of its leaves one set.
+  const namedIn = (name: string) =>
+    Object.entries(sources).find(([path]) => path.startsWith(`channels.${name}.`))?.[1] ?? "the configuration";
+  for (const [name, entry] of Object.entries((merged.channels ?? {}) as Record<string, { app?: unknown }>)) {
+    if (entry.app !== undefined && !PERSON_SET_URL.includes(name)) {
+      throw new Error(
+        `${namedIn(name)}: channels.${name}.app is for a channel whose ` +
+          `platform lets only a person set its URL (${PERSON_SET_URL.join(", ")})`,
+      );
+    }
     if (!channels.has(name)) {
       throw new Error(
-        `${sources[`channels.${name}.ingress`] ?? "the configuration"}: channels.${name} names no channel of ` +
+        `${namedIn(name)}: channels.${name} names no channel of ` +
           `${definition.name} (${channels.size === 0 ? "it has none" : `its channels: ${[...channels].join(", ")}`})`,
       );
     }

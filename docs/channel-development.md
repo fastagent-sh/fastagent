@@ -276,7 +276,7 @@ export default needs(["ACME_WEBHOOK_SECRET"], ({ ACME_WEBHOOK_SECRET }) =>
 ```
 
 Take the adapter's credentials as OPTIONS, never from `process.env` inside the package: the agent file declares them
-with `needs`, which is what lets `deploy` carry them and the serve refuse to start without them. Keep agent-specific
+with `needs`, which is what lets `deploy` check that the target holds them and the serve refuse to start without them. Keep agent-specific
 policy in the user's `src/channels/*.ts`; keep transport mechanics in the adapter package.
 
 ## Testing guidance

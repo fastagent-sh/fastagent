@@ -18,7 +18,9 @@ export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "wake-poke", "probe"]
  *
  * WHAT IT ACTUALLY GUARDS, in one line: only the forwarder may tell the container where the forwarder is. That URL
  * (`envelope.wake.url`) is where the container later POSTs its wake alarms, carrying `FASTAGENT_WAKE_SECRET` — so a
- * principal who could set it would redirect that callback and collect the secret along with every pending wake-up.
+ * principal who could set it would redirect that callback and collect the secret along with every pending wake-up. It
+ * is also where the container points its webhook channels (their platform's credentials sent to the platform, and a
+ * URL the platform would then deliver every message to).
  *
  * The other thing it gates — the kinds other than `api` — is DEPTH, not a boundary. Every one of them is weaker than
  * the `api` the same caller may already send: `schedule-fire` runs a prompt the definition wrote down,
@@ -47,6 +49,7 @@ export interface CarriedRequest {
 export type AgentcoreEnvelope = {
   /** Shared secret proving this envelope came from the forwarder (FASTAGENT_INGRESS_SECRET). */
   auth?: string;
+  /** Where the forwarder is: the wake-alarm callback, and where the platforms reach the webhook channels. */
   wake?: { url: string };
 } /** A platform's webhook, verbatim: its headers carry the signature material its channel checks. */ & (
   | ({ kind: "webhook" } & CarriedRequest)
@@ -67,8 +70,10 @@ export type AgentcoreEnvelope = {
   | { kind: "wake-poke" }
   /**
    * The deploy driver's post-deploy verification (relayed by the forwarder's reserved probe path, which answers on
-   * EVERY forwarder topology — schedule-only URLs refuse ordinary public traffic). Also accepted from the IAM door,
-   * where it only opens the deployed definition (`login --deployment` needs one) and does not construct the channels.
+   * EVERY forwarder topology — schedule-only URLs refuse ordinary public traffic). It answers `{ ok, webhooks }`: the
+   * outcome of each webhook channel the container points itself, `pending` until it ends. Also accepted from the IAM
+   * door, where it only opens the deployed definition (`login --deployment` needs one) and does not construct the
+   * channels.
    */
   | { kind: "probe" }
 );

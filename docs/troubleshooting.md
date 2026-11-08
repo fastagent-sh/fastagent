@@ -197,6 +197,13 @@ The `x-telegram-bot-api-secret-token` header must match `TELEGRAM_SECRET_TOKEN`.
 
 If using `fastagent dev --tunnel`, rerun after changing `.env` so the webhook registration uses the new token.
 
+## Telegram polling ends with "another process polls this bot"
+
+Telegram lets one process poll a bot. Another `fastagent dev`, a deployment that polls, or a script calling `getUpdates`
+holds it: stop that one, or give this instance its own bot (a dev bot apart from production's). A bot that receives by
+webhook cannot be polled either, and polling deletes its webhook at start; if a deployment points the bot at its URL
+while a poll runs, the poll ends with "a webhook was set for this bot while it polls".
+
 ## Telegram messages send no final reply
 
 Check:
@@ -219,11 +226,24 @@ matching `message.channels` / `message.groups` / `message.mpim` subscriptions an
 `channels:history` / `groups:history` / `mpim:history` scopes. The Request URL must be the currently
 running `https://…/slack`; Quick Tunnel URLs are ephemeral.
 
-For an app created by `fastagent add slack`, `dev --tunnel` and `deploy --run` update that URL through
-the owner-local App Configuration refresh token in `<state root>/channels/slack/onboarding.json`. If
-rotation/update fails, re-run `fastagent add slack` and choose **Replace App Configuration tokens**; this
-does not replace the installed Bot Token. A scaffold created with `--no-onboard`, or a missing onboarding
-state file, deliberately falls back to printing the manual Slack console URL.
+Slack's Request URL is the app's own page, which no credential FastAgent holds can change: `dev --tunnel` and
+`deploy --run` print the URL to set under Event Subscriptions, and Slack verifies it as you save. Click **Retry** there
+once the instance is serving if the URL was set first. A development instance that receives by Socket Mode has no
+Request URL at all.
+
+## Slack Socket Mode is connected but nothing answers
+
+`long connection ready: slack socket mode` means Slack accepted the app-level token and said hello; it does **not** mean
+events will arrive. Slack answers the connection the same way whether or not Socket Mode is on for the app, and sends
+events only while it is on (with it off, they go to the app's Request URL, which a Socket Mode app does not have). It
+says so only to a connection that was already open when the switch was turned off (`link_disabled`, which ends the
+serve), so a process started afterwards is connected and deaf. The first line of the connection names the app
+(`Socket Mode connected to app A…`): open that app → **Socket Mode** → **Enable Socket Mode**, and check it is the app
+whose tokens are in `.secrets/.env`.
+
+The same line is followed by a warning when other connections are already open for the app: Slack hands each event to
+one of them at random, so a second process with the same app-level token (another `dev`, a colleague's) takes some of
+the messages. Give each instance its own app, or stop the other.
 
 ## Slack file input fails
 
@@ -265,7 +285,7 @@ Check:
   Encrypt Key configured, the channel refuses plaintext events entirely, so a missing or stale key
   value makes every event fail verification.
 
-`fastagent add feishu` writes these values to `.env` automatically; re-check them after rotating
+`fastagent channels setup feishu` keeps these values in the instance's value file; re-check them after rotating
 keys in the developer console.
 
 ## Feishu bot ignores group messages
@@ -274,8 +294,8 @@ With only the `im:message.group_at_msg:readonly` scope, the platform delivers ju
 @mention the bot. Unmentioned group or thread discussion never reaches the channel, so it cannot be
 buffered, and bare continuations inside Agent-created threads are not delivered either.
 
-Re-run `fastagent add feishu` (or `add lark`). It checks the app's permissions, names every scope that is
-missing, and opens the console page that requests them; approve them (a tenant admin, if your tenant
+Re-run `fastagent channels setup feishu` (or `lark`). It checks the app's permissions, names every scope that is
+missing, and links the console page that requests them; approve them (a tenant admin, if your tenant
 requires it) and publish a new app version. A serving process warns
 `im:message.group_msg is not granted — …` until the granted scope is visible. See the
 [Feishu channel](feishu.md) guide.
@@ -304,10 +324,9 @@ redeploy; `deploy` prints the effective model and its source. To switch models, 
 
 ## Webhooks stop working after a tunnel restart
 
-Quick Tunnel URLs are ephemeral. Restarting the tunnel container, the Docker daemon, or
-`fastagent dev --tunnel` mints a new URL, and the old webhook registration points at a dead one.
-Re-run `fastagent dev --tunnel` (or `fastagent deploy docker --tunnel --run`) to register the new
-URL. For a stable endpoint, bring your own named tunnel or reverse proxy.
+Quick Tunnel URLs are ephemeral. Restarting `fastagent dev --tunnel` (or `start --tunnel`) mints a new URL, and the old webhook registration points at a dead one.
+Re-run `fastagent dev --tunnel` to register the new URL. For a stable endpoint, bring your own named tunnel
+or reverse proxy and name its URL as `http.publicUrl`.
 
 ## Proxy / network issues
 
@@ -322,6 +341,26 @@ requests.
 
 Loopback (`localhost`, `127.0.0.1`, `::1`) is always added to `NO_PROXY`. A LAN address is not: after
 `fastagent dev --bind 192.168.1.5`, add that address to `NO_PROXY` yourself.
+
+## A deploy stopped and the message does not say why
+
+A `deploy --run` that fails prints the host CLI's own output above its last line, and the ticket of `deploy <host> --run
+--json` carries the last lines of that output as `log_tail` (the whole log is at `log`). Read it for the cause before
+running the deploy again: the same inputs fail the same way.
+
+- **Fly: `failed to list workers … authentication handshake failed`, or `connecting to Depot builder: timed out`.** flyctl
+  cannot reach its remote builder. Measured on one machine: with a proxy tool's TUN mode (all traffic through a tunnel
+  interface) on, three deploys failed this way and `fly doctor` found no fault, and with TUN off the same build took
+  15 to 25 seconds, with or without `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` set. Unsetting the variables does not leave a
+  tunnel, so turn the TUN or VPN off for the deploy. Where that is not possible, follow the runbook `fastagent deploy fly`
+  prints (without `--run`) and add `--depot=false` to its `fly deploy` line, which builds on Fly's own builder, then set
+  the Agent API key with `fastagent secrets set fly FASTAGENT_API_KEY --generate` and log the box in as the runbook says.
+- **Fly: `WARN FASTAGENT_SECRETS_DIR may be a potentially sensitive environment variable`.** It is a path, not a
+  secret. Ignore it.
+- **`no provider of the deployed agent offers "…"`.** The model name is not one a provider lists. The message names the
+  closest models; `fastagent models <provider>` lists them all.
+- **`auth_required: Provider is not configured` from `invoke --url`.** The deployment has no credential for its model:
+  `fastagent secrets set <host> <the provider's API key variable>`, or `fastagent login <provider> --deployment <host>`.
 
 ## Need a machine-readable report
 

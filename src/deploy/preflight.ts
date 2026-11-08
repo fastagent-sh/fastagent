@@ -11,7 +11,10 @@ import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import {
   environmentAuth,
   interactiveLoginKind,
+  keyVariables,
+  listModels,
   loginProviders,
+  modelHint,
   modelsOver,
   providerOf,
 } from "../harnesses/models/models.ts";
@@ -30,7 +33,15 @@ import { loadContent, loadEnvironment } from "../content/file.ts";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
-import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
+import { type ContainerInput, DELIVERED_CONFIG_DIR, isGeneratedDockerfile } from "./container.ts";
+import { deliveredTextProblem } from "./delivered-text.ts";
+import {
+  type McpDeclaration,
+  declareMcp,
+  literalCredentialAdvice,
+  literalCredentials,
+  relativeCommands,
+} from "../mcp/config.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
@@ -64,14 +75,19 @@ interface DeployFacts {
    */
   modelAuth: string | undefined;
   /**
+   * The variables the model's provider reads its key from, and whether the deployment needs one of them set on its
+   * target: when no key is in the value file and the provider has no login to run on the box, the key is the only way in.
+   */
+  modelKey: { variables: string[]; required: boolean };
+  /**
    * The provider the deployment must log in to itself (`fastagent login --deployment`): the model's credential does
    * not travel, because it is neither a variable in the value file nor resolved by the definition's own provider code.
    * Nothing from this machine's credentials file is ever copied, so a login on the box is its only holder.
    */
   boxLogin: string | undefined;
-  /** Every declaration the definition makes — the names the value file must supply, by declaring file. */
+  /** Every declaration the definition makes — the names the target must hold, by declaring file. */
   declaredSecrets: readonly DeclaredSecret[];
-  /** The runbook's variable list: the declared names, then everything else the value file carries. */
+  /** The runbook's variable list: the declared names, each hinted by the file that declared it. */
   secrets: DeploymentSecret[];
   /** Container facts shared by the plan and the generated Dockerfile — ONE source, so they can't drift. */
   container: ContainerInput;
@@ -89,6 +105,46 @@ export interface DeployReport {
   note(text: string): void;
   warn(text: string): void;
   issue(text: string): void;
+}
+
+/** What a host's clone of a `github` entry reads; optional, since a public repository needs none. */
+const GITHUB_TOKEN_SECRET: DeclaredSecret = {
+  name: "GITHUB_TOKEN",
+  declaredIn: "context.json (a github content entry)",
+  description: "git's credential for a private repository, and for the agent to push",
+  optional: true,
+};
+
+/**
+ * The MCP servers the box will open: the program's, in the image, and the delivered configuration's. A name both
+ * declare, or one that cannot be read, is an issue (the box would refuse to open); a literal credential is a warning,
+ * since it ships in the image and FastAgent cannot tell a secret from a setting; a relative stdio command in the
+ * delivered configuration is an issue, since nothing delivers the script it names. (The program's own is relative to
+ * its package, and `build` refuses one that it does not copy.)
+ * `args` are not checked: FastAgent cannot know which strings are paths. Answers whether the list reads.
+ */
+function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined, report: DeployReport): boolean {
+  let declarations: McpDeclaration[];
+  try {
+    declarations = declareMcp(agentDir, delivered);
+  } catch (error) {
+    report.issue(messageOf(error));
+    return false;
+  }
+  for (const literal of literalCredentials(declarations)) {
+    report.warn(
+      `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key} is a literal value, and this ` +
+        `deploy puts it in the image: ${literalCredentialAdvice(literal)} and set that name with ` +
+        `\`fastagent secrets set <host> <NAME>\``,
+    );
+  }
+  for (const { name, file, command } of relativeCommands(declarations).filter(({ origin }) => origin === "instance")) {
+    report.issue(
+      `${file} mcpServers.${name}: the command "${command}" is a relative path, and a deploy delivers the configuration ` +
+        `but not the script it names: write an absolute path on the box, or a command found on its PATH`,
+    );
+  }
+  return true;
 }
 
 /**
@@ -226,6 +282,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   const content = loadContent(agentDir, delivered?.source);
   checkContent(content, delivered?.source.label, storageResets, report);
+  const textProblem = delivered === undefined ? undefined : deliveredTextProblem(agentDir, delivered.source);
+  if (textProblem !== undefined) report.issue(textProblem);
+  const mcpOpens = checkMcp(agentDir, delivered?.source, report);
   // The project's own, the development instance's: a deploy carries only the configuration it is given.
   const own = await projectInstanceConfig(agentDir);
   if (own !== undefined && own.label !== delivered?.source.label) {
@@ -248,12 +307,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // cannot disagree about it.
   const valueFile = relative(agentDir, dotEnvPath(agentDir));
   const values = loadEnvValues(dotEnvPath(agentDir));
-  // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, which travels like every value.
+  // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, a value of the target like any other.
+  // This reads this machine's file only, so a target that already holds one is told as much.
   if (content.length > 0 && !values.get("GITHUB_TOKEN")) {
     report.note(
-      `no GITHUB_TOKEN in ${valueFile}: the host clones without a credential, which reaches public repositories ` +
-        `only, and the agent cannot push from its clones. Set one there to give it access; it travels with the ` +
-        `other values`,
+      `no GITHUB_TOKEN in ${valueFile}: unless the target holds one, the host clones without a credential, which ` +
+        `reaches public repositories only, and the agent cannot push from its clones. \`fastagent secrets set <host> ` +
+        `GITHUB_TOKEN\` gives it access`,
     );
   }
   const model = resolveDeployModel(config, values, valueFile);
@@ -282,9 +342,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   const modelSpec = model.spec;
 
-  const declaredSecrets = definition
-    ? definitionSecrets(definition, config)
-    : declaredVariables(loadEnvironment(agentDir));
+  const declaredSecrets = [
+    ...(definition
+      ? definitionSecrets(definition, config, mcpOpens ? delivered?.source : undefined)
+      : declaredVariables(loadEnvironment(agentDir))),
+    // The host's clone of a github entry reads it, so `secrets list|push|set` and `deploy` know the name.
+    ...(content.some((entry) => entry.kind === "github") ? [GITHUB_TOKEN_SECRET] : []),
+  ];
   const code = definition ? buildShapes(definition, values, config, report) : undefined;
   const channels = [...(code?.channels ?? [])].map(
     ([name, module]): DeclaredChannel => ({
@@ -294,7 +358,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   );
   for (const { name, ingress } of channels) {
     if ((CHANNEL_KINDS as string[]).includes(name)) continue;
-    const secretsPart = `its variables travel from ${valueFile} like every other`;
+    const secretsPart = `the variables it declares are the target's to hold (\`fastagent secrets\`), like every other`;
     report.note(
       ingress === "long-connection"
         ? `long-connection channel "${name}" is custom — ${secretsPart}; generated deploy plans keep the process running and skip webhook registration`
@@ -335,17 +399,23 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       valueFile,
     });
   }
+  const modelProvider = modelSpec ? loginProviders(providers).find((p) => p.id === providerOf(modelSpec)) : undefined;
+  const modelKey = {
+    variables: modelProvider ? await keyVariables(modelProvider) : [],
+    required: boxLogin !== undefined && !hasLogin(boxLogin, providers),
+  };
   if (boxLogin !== undefined) {
-    if (!hasLogin(boxLogin, providers)) {
-      report.issue(
-        `no credential for ${modelSpec} reaches the deployment, and "${boxLogin}" has no login to run there — set ` +
-          `its API key in ${valueFile}`,
+    if (modelKey.required) {
+      report.note(
+        `${modelSpec}: "${boxLogin}" has no login to run on the box, so its API key (${modelKey.variables.join(" or ")}) ` +
+          `must be set on the target`,
       );
     } else {
       report.note(
         `${modelSpec}: no credential ships with this deploy (this machine's logins and shell stay here) — once the ` +
           `box is up, \`--run\` asks it: it keeps what it already authenticates ${boxLogin} with, else logs in ` +
-          `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key in ${valueFile}`,
+          `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key on the target ` +
+          `(\`fastagent secrets set <host> ${modelKey.variables[0] ?? "<KEY_NAME>"}\`)`,
       );
     }
   }
@@ -442,11 +512,12 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     values,
     valueFile,
     modelAuth,
+    modelKey,
     boxLogin,
     container,
     port,
     declaredSecrets,
-    secrets: deploymentSecrets(modelAuth, declaredSecrets, values, valueFile),
+    secrets: deploymentSecrets(modelAuth, declaredSecrets),
   };
 }
 
@@ -510,8 +581,8 @@ async function checkModelExists(
     return;
   }
   report.issue(
-    `no provider of the deployed agent offers "${spec}" — pi-ai's built-ins, pi's published catalog and the ` +
-      `providers fastagent.config.ts declares are all it has`,
+    `no provider of the deployed agent offers "${spec}": ${modelHint(listModels(models), spec)}. Its providers are ` +
+      `pi-ai's built-ins, pi's published catalog and the ones fastagent.config.ts declares`,
   );
 }
 
@@ -575,7 +646,7 @@ function checkKeptDockerfile(
   deliversConfig: boolean,
   report: DeployReport,
 ): void {
-  // What the image installs: the packages and apt packages. Variables travel with the value file, whatever the image.
+  // What the image installs: the packages and apt packages. Variables are the target's, whatever the image.
   const environment = loadEnvironment(agentDir);
   if (Object.keys(environment?.packages ?? {}).length > 0 || (environment?.aptPackages.length ?? 0) > 0) {
     report.warn(
@@ -610,7 +681,7 @@ function checkKeptDockerfile(
   if (deliversConfig && !/^\s*ENV\s[^\n]*\bFASTAGENT_CONFIG[=\s]/m.test(dockerfileText)) {
     report.issue(
       `your Dockerfile does not set FASTAGENT_CONFIG, and --config delivers the instance configuration in the ` +
-        `image, which \`start\` reads only where that ENV points: copy fastagent.deploy/ into the image and set it ` +
+        `image, which \`start\` reads only where that ENV points: copy ${DELIVERED_CONFIG_DIR}/ into the image and set it ` +
         `(see a generated Dockerfile).`,
     );
   }

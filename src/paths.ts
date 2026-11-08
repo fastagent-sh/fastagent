@@ -147,6 +147,16 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
   return resolve(expanded);
 }
 
+/**
+ * A path as an instance configuration writes it, absolute: `~/` is the home directory, a relative one is `base`'s (the
+ * configuration file's directory). Undefined for a relative one when there is no file to anchor it.
+ */
+export function configurationPath(path: string, base: string | undefined): string | undefined {
+  if (path === "~" || path.startsWith("~/")) return join(homedir(), path.slice(1));
+  if (isAbsolute(path)) return resolve(path);
+  return base === undefined ? undefined : resolve(base, path);
+}
+
 /** Where an instance is, from the environment: the root, or its state and its workspace apart (agent-artifact.md §4.1). */
 export const INSTANCE_ROOT_ENV = "FASTAGENT_ROOT";
 export const INSTANCE_WORKDIR_ENV = "FASTAGENT_WORKDIR";
@@ -200,13 +210,13 @@ export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.
 
 /** Is this process the deployed container the generated artifacts describe? ONE reading of the
  *  environment fact the image states, so a second spelling cannot drift from it. */
-export function isDeployedWorkspace(): boolean {
-  return Boolean(process.env.FASTAGENT_RELEASE_FILE);
+export function isDeployedWorkspace(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.FASTAGENT_RELEASE_FILE);
 }
 
 /** Is this process running inside the AgentCore Runtime? Set by the generated deploy artifacts. */
-export function isAgentcoreRuntime(): boolean {
-  return process.env.FASTAGENT_AGENTCORE === "1";
+export function isAgentcoreRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.FASTAGENT_AGENTCORE === "1";
 }
 
 /**

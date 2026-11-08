@@ -62,9 +62,9 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
     };
   },
 }));
-vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/cli/add-feishu.ts")>()),
-  prepareFeishuApps: async (_dir: string, apps: { kind: string }[], rerun: string, person: unknown) => {
+vi.mock("../src/cli/commands/deploy/channel-apps.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/cli/commands/deploy/channel-apps.ts")>()),
+  prepareChannelApps: async (_dir: string, apps: { kind: string }[], rerun: string, person: unknown) => {
     calls.push(`prepare ${apps.map(({ kind }) => kind).join(",")} rerun=${rerun}`);
     preparedFor = person;
     facts.values.set("FEISHU_APP_ID", "cli_production");
@@ -72,18 +72,20 @@ vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
     facts.values.set("FEISHU_VERIFICATION_TOKEN", "captured");
   },
 }));
-/** Whether each deploy the host received carries the Agent API's key: what it would set on the host. */
-const carriedKey: boolean[] = [];
-const deployed = vi.fn(async (ctx: { pre: { values: Map<string, string> }; answerer: { kind: string } }) => {
-  calls.push(`host token=${ctx.pre.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`);
-  if (throughTicket !== undefined) {
-    const { checkTicket: read } = await import("../src/cli/ticket.ts");
-    finishingAtHost = (await read(throughTicket))?.finishing;
-  }
-  carriedKey.push(ctx.pre.values.has("FASTAGENT_API_KEY"));
-  answeredBy = ctx.answerer.kind;
-  return "https://bot.fly.dev";
-});
+/** What each deploy the host received was told of the Agent API: whether it serves one, so whether the host mints a key. */
+const apiSeen: unknown[] = [];
+const deployed = vi.fn(
+  async (ctx: { pre: { values: Map<string, string> }; answerer: { kind: string }; api: unknown }) => {
+    calls.push(`host token=${ctx.pre.values.get("FEISHU_VERIFICATION_TOKEN") ?? "-"}`);
+    if (throughTicket !== undefined) {
+      const { checkTicket: read } = await import("../src/cli/ticket.ts");
+      finishingAtHost = (await read(throughTicket))?.finishing;
+    }
+    apiSeen.push(ctx.api);
+    answeredBy = ctx.answerer.kind;
+    return "https://bot.fly.dev";
+  },
+);
 const started: Record<string, unknown>[] = [];
 vi.mock("../src/cli/ticket.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/cli/ticket.ts")>()),
@@ -110,7 +112,7 @@ let said: string[];
 const production = () => join(dir, ".secrets", "production", ".env");
 beforeEach(async () => {
   calls.length = 0;
-  carriedKey.length = 0;
+  apiSeen.length = 0;
   started.length = 0;
   preparedFor = undefined;
   throughTicket = undefined;
@@ -153,14 +155,8 @@ it("plans as start, not dev, whatever spawned it", async () => {
   expect(calls).toEqual(["preflight dev=- token=t", "host token=t"]);
 });
 
-it("prepares only once every other value is there, then plans again with what preparing wrote", async () => {
+it("prepares the app without asking the target for other names: the host does that, once its app exists", async () => {
   facts.modelAuth = "OPENAI_API_KEY";
-  await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
-  expect(calls).toEqual(["preflight dev=- token=-"]);
-  expect(said.join("\n")).toContain("no value for: OPENAI_API_KEY");
-
-  calls.length = 0;
-  facts.values.set("OPENAI_API_KEY", "sk");
   await runDeploy("fly", dir, { run: true });
   expect(calls).toEqual([
     "preflight dev=- token=-",
@@ -174,12 +170,8 @@ it("does not prepare an app a deployment cannot point anywhere, and says what it
   await expect(runDeploy("docker", dir, { run: true })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
   expect(said.join("\n")).toMatch(
-    /feishu receive by webhook here, and this Docker deployment has no public URL .*--tunnel.*channels\.feishu\.ingress to "connection" in the configuration --config delivers/,
+    /feishu receive by webhook here, and this Docker deployment has no public URL .*set up your own ingress.*channels\.feishu\.ingress to "connection" in the configuration --config delivers/,
   );
-
-  calls.length = 0;
-  await runDeploy("docker", dir, { run: true, tunnel: true });
-  expect(calls).toContain("prepare feishu rerun=fastagent deploy docker --tunnel --run");
 });
 
 it("prepares only with a person: with nobody, it names the deploy that hands their part to a coding agent's user", async () => {
@@ -212,43 +204,21 @@ it("generating a plan prepares nothing", async () => {
   expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
 });
 
-it("gives a deployment its API key once nothing refuses it, and plans again so that it carries the key", async () => {
+it("tells the host the deployment serves the Agent API, and writes no key itself: the host mints it where it is set", async () => {
   await rm(production());
-  facts.modelAuth = "OPENAI_API_KEY";
-  await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
-  await expect(readFile(production(), "utf8")).rejects.toThrow("ENOENT");
-
-  calls.length = 0;
-  await runDeploy("fly", dir, {});
-  expect(calls).toEqual(["preflight dev=- token=-", "preflight dev=- token=-", "host token=-"]);
-  expect(carriedKey).toEqual([true]);
-  expect(await readFile(production(), "utf8")).toMatch(/^FASTAGENT_API_KEY=[\w-]{43}$/m);
-  expect(said.join("\n")).toContain("Agent API: generated FASTAGENT_API_KEY in .secrets/production/.env");
-
-  // Given once, kept: the next deploy plans once.
-  const given = await readFile(production(), "utf8");
-  calls.length = 0;
   await runDeploy("fly", dir, {});
   expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
-  expect(await readFile(production(), "utf8")).toBe(given);
+  expect(apiSeen).toEqual([{ served: true }]);
+  await expect(readFile(production(), "utf8")).rejects.toThrow("ENOENT");
+  // A generate-only deploy has set nothing: it says how the key gets made, not that there is one.
+  expect(said.join("\n")).toContain("Agent API:");
 });
 
-it("says so when the key went into a secrets directory of the operator's that git may track", async () => {
-  const secrets = await mkdtemp(join(tmpdir(), "fa-deploy-secrets-"));
-  vi.stubEnv("FASTAGENT_SECRETS_DIR", secrets);
-  await runDeploy("fly", dir, {});
-  expect(carriedKey).toEqual([true]);
-  expect(said.join("\n")).toContain(
-    `note: ${secrets} (FASTAGENT_SECRETS_DIR) now holds a secret and has no .gitignore`,
-  );
-  await rm(secrets, { recursive: true, force: true });
-});
-
-it("gives no key to a definition that turns the API off, and says the deployment serves none", async () => {
+it("tells the host a definition that turns the API off serves none, and says so", async () => {
   config = { http: { api: false } };
   await rm(production());
   await runDeploy("fly", dir, {});
-  expect(calls).toEqual(["preflight dev=- token=-", "host token=-"]);
+  expect(apiSeen).toEqual([{ served: false, why: expect.stringContaining("http.api: false") }]);
   await expect(readFile(production(), "utf8")).rejects.toThrow("ENOENT");
   expect(said.join("\n")).toContain("Agent API: not served — the configuration says http.api: false");
 });
@@ -320,7 +290,6 @@ it("the ticket's run is the whole deploy, each person's step its user's, its res
 });
 
 it("a deploy refused inside its ticket fails the ticket with the reason, not just that it stopped", async () => {
-  facts.modelAuth = "OPENAI_API_KEY";
   const { ticket } = createTicket({
     subject: `deploy:fly:${dir}`,
     action: "deploy the agent to fly",
@@ -328,9 +297,9 @@ it("a deploy refused inside its ticket fails the ticket with the reason, not jus
     restart: "fastagent deploy fly --run",
     timeoutSeconds: 60,
   });
-  await expect(runDeploy("fly", dir, { run: true, json: true, ticket })).rejects.toBe(stopped);
+  await expect(runDeploy("docker", dir, { run: true, json: true, ticket })).rejects.toBe(stopped);
   expect(await checkTicket(ticket)).toMatchObject({
     status: "failed",
-    message: expect.stringContaining("no value for: OPENAI_API_KEY"),
+    message: expect.stringContaining("this Docker deployment has no public URL"),
   });
 });

@@ -5,6 +5,8 @@ import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } f
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
+import { RAILWAYIGNORE_FILE, railwayignore } from "./ignore.ts";
+import { stripEdges } from "../../strip-edges.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
   // No `port`: Railway injects PORT and the container CMD never names one (unlike Fly's internal_port) — the server
@@ -23,8 +25,7 @@ export interface RailwayPlanInput extends ContainerInput {
   channels: readonly DeclaredChannel[];
   // Container facts (runtime, hasLockfile, bunVersion, apt) come from ContainerInput.
   /**
-   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
-   * carries.
+   * The runbook's variable list (`deploymentSecrets`): the declared names, each hinted by the file that declared it.
    */
   secrets?: readonly DeploymentSecret[];
   /** `schedules/` declares a schedule — one of the things that forbids App Sleeping (deploy/residency.ts). */
@@ -48,20 +49,20 @@ const MOUNT = "/data";
 
 /** The name this tool gives BOTH the project and the service, derived from the agent directory's name. */
 export function toRailwayName(basename: string): string {
-  return basename.replace(/[^a-zA-Z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
+  return stripEdges(basename.replace(/[^a-zA-Z0-9-]+/g, "-"), (char) => char === "-") || "agent";
 }
 
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, channels } = input;
-  const artifacts: Artifact[] = containerArtifacts(input);
+  const artifacts: Artifact[] = [...containerArtifacts(input), { path: RAILWAYIGNORE_FILE, content: railwayignore() }];
 
   const secrets = input.secrets ?? [];
 
   // Order matters, not cosmetics: `railway init` creates a PROJECT with no service, but the volume and variables are
   // service-scoped and `railway up` deploys THE service.
   const runbook: string[] = [
-    `# Deploy to Railway. Dockerfile(.dockerignore) are generated above.`,
+    `# Deploy to Railway. Dockerfile(.dockerignore, .railwayignore) are generated above.`,
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
     ``,
     `# One-time setup (init → service → volume → variables). Skip it on redeploy: repeating it creates`,
@@ -85,7 +86,8 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
 
   if (secrets.length > 0) {
     runbook.push(
-      `# Secrets:`,
+      `# Secrets the service needs a value for. \`fastagent secrets push railway\` sets the ones a value file holds and`,
+      `# \`fastagent secrets set railway <NAME>\` one typed without echo; or with the railway CLI:`,
       `#   ${secrets.map((s) => `${s.name}: ${s.hint}`).join("\n#   ")}`,
       `railway variables set ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );

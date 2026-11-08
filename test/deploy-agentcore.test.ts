@@ -58,12 +58,11 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.artifacts.map((a) => a.path)).toEqual([
       TEMPLATE_FILE,
       FORWARDER_FILE,
-      "fastagent.release.json",
-      "fastagent.deploy/fastagent.json",
-      "fastagent.packages",
+      ".fastagent/deploy/fastagent.release.json",
+      ".fastagent/deploy/fastagent.json",
+      ".fastagent/deploy/fastagent.packages",
       "Dockerfile",
       ".dockerignore",
-      "Dockerfile.dockerignore",
     ]);
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::BedrockAgentCore::Runtime");
@@ -72,12 +71,17 @@ describe("deploy agentcore: the plan", () => {
     expect(template).not.toContain("EfsAccessPoint");
     expect(template).toContain('FASTAGENT_AGENTCORE: "1"');
     expect(template).toContain('PORT: "8080"');
+    expect(template).toContain(`FASTAGENT_ROOT: ${MOUNT}`);
     expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}/.state`);
     expect(template).toContain(`FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`);
     expect(template).toContain("AWS::Lambda::Function");
     expect(template).not.toContain("AWS::Scheduler::Schedule");
     expect(template).not.toContain("WEBHOOKS_ENABLED"); // no channel: the forwarder relays no webhook
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
+    // A first use of AgentCore in an account needs its role before the stack; the manual path says so as `--run` does.
+    expect(plan.runbook.join("\n")).toContain(
+      "aws iam create-service-linked-role --aws-service-name runtime-identity.bedrock-agentcore.amazonaws.com",
+    );
     // A manual deploy passes the ingress secret, and activates the container THROUGH THE FORWARDER: that is what
     // tells it where to set its alarms (an invoke-agent-runtime call goes through IAM and carries no address).
     expect(plan.runbook.join("\n")).toContain("FastagentIngressSecret=<another random string>");
@@ -116,10 +120,11 @@ describe("deploy agentcore: the plan", () => {
     expect(forwarderSource()).toContain("exports.handler");
     expect(forwarderSource()).not.toMatch(/^import /m);
     expect(template).toContain(`INGRESS_SESSION_ID: ${ingressSessionId("my-agent")}`);
-    // Variables ride the fixed FastagentEnv carrier, never a parameter per name.
-    expect(template).toContain("FASTAGENT_ENV: !Ref FastagentEnv");
+    // Values are read from one Secrets Manager secret, never a parameter per name.
+    expect(template).toContain("FASTAGENT_SECRET_ARN: !Ref SecretArn");
+    expect(template).not.toContain("FastagentEnv");
     expect(template).not.toContain("TelegramBotToken");
-    expect(plan.runbook.join("\n")).toContain("setWebhook");
+    expect(plan.runbook.join("\n")).toContain("makes the runtime point telegram at <ForwarderUrl>");
     // The redeploy-immediacy step is in the manual runbook too (— --run automates it).
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
     expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --source forwarder --follow");
@@ -184,8 +189,8 @@ describe("deploy agentcore: the plan", () => {
   it("ships the forwarder as a REAL Lambda entry (index.js) loaded from S3 by content-hashed key", () => {
     const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
     // The artifact IS the deployment package's entry: zipping it as-is matches `Handler: index.handler`.
-    expect(FORWARDER_FILE).toBe("lambda/index.js");
-    expect(plan.artifacts.map((a) => a.path)).toContain("lambda/index.js");
+    expect(FORWARDER_FILE).toBe("agentcore/forwarder/index.js");
+    expect(plan.artifacts.map((a) => a.path)).toContain("agentcore/forwarder/index.js");
     const template = plan.artifacts[0]!.content;
     expect(template).not.toContain("ZipFile");
     expect(template).toContain("S3Bucket: !Ref ForwarderBucket");
@@ -227,7 +232,7 @@ describe("deploy agentcore: the plan", () => {
     const runbook = planAgentcoreDeploy(baseInput()).runbook.join("\n");
     expect(runbook).toContain("across compute stop/resume");
     expect(runbook).toContain("RESETS it on every runtime version update");
-    expect(runbook).toContain("provider API key in the value file");
+    expect(runbook).toContain("provider API key in the deployment's secret survives every deploy");
     expect(runbook).toContain(ingressSessionId("my-agent"));
   });
 

@@ -13,10 +13,15 @@ import { log } from "../log.ts";
 import { ensureStateHome } from "../state-file.ts";
 import { createTurnQueue } from "./turn-queue.ts";
 
+/** The directory of the channel `name`'s own state under `stateRoot`: its context's `stateDir`. */
+export function channelStateDir(stateRoot: string, name: string): string {
+  return join(stateRoot, "channels", name);
+}
+
 /** The context of the channel `name` (its file's name under `src/channels/`), its state under `stateRoot`. */
 export function channelContext(agent: Agent, stateRoot: string, name: string): ChannelContext {
   if (!isAbsolute(stateRoot)) throw new Error(`a channel's state root must be absolute, got "${stateRoot}"`);
-  const stateDir = join(stateRoot, "channels", name);
+  const stateDir = channelStateDir(stateRoot, name);
   ensureStateHome(stateDir);
   const sessions = conversationSessions(join(stateDir, "sessions.json"));
   const turns = createTurnQueue<{ conversation: string; work: () => Promise<void> }>({

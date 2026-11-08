@@ -138,21 +138,33 @@ describe("the agentcore template (parsed)", () => {
     expect(JSON.stringify(template)).not.toContain("NetworkModeConfig");
   });
 
-  it("carries the variables through FIXED NoEcho parameters, whatever names the value file holds", () => {
-    // The template is committed and gated on drift, so a new name in .env must not change it.
+  it("carries the variables through ONE secret, whatever names the deployment holds", () => {
+    // The template is committed and gated on drift, so a new name in the secret must not change it.
     const plain = parseTemplate(WEBHOOK_CHANNELS);
     const withVars = parseTemplate({
       ...WEBHOOK_CHANNELS,
       secrets: [{ name: "TELEGRAM_BOT_TOKEN", hint: "required by channels/telegram.ts" }],
     });
     expect(withVars).toEqual(plain);
+    // No value is a parameter but the two the forwarder shares with the container.
     const secretParams = Object.entries(plain.Parameters ?? {}).filter(([, p]) => p.NoEcho === true);
-    for (const [, p] of secretParams) expect(p.Type).toBe("String");
+    expect(secretParams.map(([name]) => name).sort()).toEqual(["FastagentIngressSecret", "FastagentWakeSecret"]);
     // Declaring a parameter is half the wiring: unless the runtime READS it, the agent never sees the value.
     const runtime = Object.values(plain.Resources).find((r) => r.Type === "AWS::BedrockAgentCore::Runtime")!;
     const env = (runtime.Properties as { EnvironmentVariables: Record<string, unknown> }).EnvironmentVariables;
-    expect(env.FASTAGENT_ENV).toEqual({ Ref: "FastagentEnv" });
-    expect(env.FASTAGENT_ENV_4).toEqual({ Ref: "FastagentEnv4" });
+    expect(env.FASTAGENT_SECRET_ARN).toEqual({ Ref: "SecretArn" });
     expect(env).not.toHaveProperty("TELEGRAM_BOT_TOKEN");
+    // The execution role may read that secret and no other: no wildcard resource on the read.
+    const role = plain.Resources.ExecutionRole as unknown as {
+      Properties: { Policies: { PolicyDocument: { Statement: unknown[] } }[] };
+    };
+    const statements = role.Properties.Policies[0]!.PolicyDocument.Statement as {
+      Action: string[];
+      Resource: unknown;
+    }[];
+    const read = statements.filter((st) => st.Action.includes("secretsmanager:GetSecretValue"));
+    expect(read).toEqual([
+      { Effect: "Allow", Action: ["secretsmanager:GetSecretValue"], Resource: { Ref: "SecretArn" } },
+    ]);
   });
 });

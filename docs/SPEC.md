@@ -437,15 +437,6 @@ for an end.
 
 ## 8. In process (TypeScript)
 
-This section is the surface of the release that closes [#900](https://github.com/fastagent-sh/fastagent/issues/900).
-Until then `openAgent` takes the definition and the instance location below, plus `config`, `secrets`, `env`, `model`,
-`credentials` and `mcp`, and reads each as described. Not yet read: `mcpServers` and `name`, and the `instructions`,
-`skills` and `prompts` of `config`, which an open refuses by name. Still as before: the model credentials and the MCP
-grants are kept in the instance's `.secrets/` (under `root`, or `workdir`), not in the state directory, and an open reads
-`FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` from the process's environment to place them. FastAgent's own work for
-the instance, installing the declared packages and cloning content, runs in the process's environment plus `secrets`;
-what the agent starts does not (§8, `env`).
-
 The interface is §4's. MCP server configuration and OAuth are [host operations](mcp.md), not changes to sessions,
 messages or their HTTP binding. The package's entry points are one per kind of user:
 
@@ -488,7 +479,7 @@ interface DeclaredSecret {
    * model provider's variable, so it is optional.
    */
   optional: boolean;
-  /** Every place it is declared: a module of `src/`, `mcp.json`, `context.json`, the default model's provider. */
+  /** Every place it is declared: a module of `src/`, `context.json` (its environment, and the references of its `mcpServers`), the default model's provider. */
   declaredIn: string[];
   /**
    * Set when only some channels' ways of receiving read it (`byIngress`): an instance needs it only when one of these
@@ -501,19 +492,20 @@ interface DeclaredSecret {
 type InstanceInputs<Settings = unknown> = {
   /** The instance configuration (`fastagent.json`'s schema), or the absolute path of a `fastagent.json`. */
   config?: InstanceConfig<Settings> | string;
-  /**
-   * MCP servers the instance adds, in `.mcp.json`'s standard shape, or the absolute path of one. Default: the
-   * `.mcp.json` beside a `config` path. A stdio server given as an object carries an absolute `cwd`.
-   */
-  mcpServers?: { mcpServers: Record<string, object> } | string;
   /** Secret values: the declared names, and model providers' variables. No variable of the host's reaches the agent. */
   secrets?: Record<string, string>;
-  /** The base environment of the processes the agent starts. Default: empty. `baseEnv(process.env)` is the app's. */
+  /**
+   * The base environment of the processes the agent starts, and the environment of FastAgent's own installing and
+   * cloning for the instance. Default: empty. `baseEnv(process.env)` is the app's.
+   */
   env?: Record<string, string>;
-  /** The instance's name. Default: the definition's name, as one path segment. */
+  /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
+  offline?: boolean;
+  /** The instance's name, over `config`'s `name`, as `model` is over `config`'s `model`: one path segment. */
   name?: string;
   /** Where the model credentials are kept. Default: `auth.json` in the state directory. */
   credentials?: CredentialStore;
+  /** Where MCP grants are kept (`store` with its `bindings`). Default: `mcp-auth.json` in the state directory. */
   mcp?: McpOptions;
 } & InstanceLocation;
 
@@ -558,8 +550,20 @@ interface InstanceConfig<Settings = unknown> {
     }
   >;
   settings?: Partial<Settings>;
+  /**
+   * The instance's name, one path segment of letters, digits, `-` and `_`, any other value refusing the open. Default: the
+   * definition's name made one (`@scope/pkg` is `scope-pkg`). The CLI's `--name` and `FASTAGENT_NAME`, and `openAgent`'s
+   * `name`, override it. It is the instance's, so the program's `defaults` do not carry it.
+   */
+  name?: string;
   /** Content the instance adds to the program's: a name may not be one the program declares. */
   content?: Record<string, { github: string; ref?: string } | { path: string }>;
+  /**
+   * MCP servers the instance adds, in the shape of the program's `context.json` `mcpServers` map (the MCP ecosystem's entry shape). They add to the program's:
+   * a name both declare refuses the open. A stdio server runs in the instance's workspace, and one given in an object
+   * names a command that is a bare name or an absolute path. `inspectMcp` and `signInMcp` take the same `config`.
+   */
+  mcpServers?: Record<string, object>;
   /** Files added after the program's text; directories of skills and of prompt templates. */
   instructions?: string[];
   skills?: string[];
@@ -636,10 +640,20 @@ addressed elsewhere proves nothing and is warned of in the log, and one whose ad
 Otherwise `manual`, its `step` naming the URL to paste and the page to paste it on.
 
 `openAgent` opens one instance of a built definition, the default export of an agent's package
-(`import support from "@acme/support"`), from its inputs and nothing else. It reads no environment variable, no
-`process.env` value and no file its inputs do not name, and it writes neither `process.env` nor the package: one process
-may open several instances, and two opens share nothing their inputs do not name (two given one `workdir` share
-that workspace, which is the caller's to avoid). Every path it is given is absolute; a
+(`import support from "@acme/support"`), from its inputs and nothing else. Of the process's environment FastAgent
+itself reads `FASTAGENT_LOG_LEVEL` and nothing more: no variable places or configures the instance (`FASTAGENT_ROOT`,
+`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`, `FASTAGENT_CONFIG`, `FASTAGENT_MODEL`,
+`FASTAGENT_NAME`, `FASTAGENT_OFFLINE`), none says how it is served or where it runs, and no `process.env` value reaches
+a process the agent starts. FastAgent reads no file its inputs do not name (the machine's own model credentials
+included), and it writes neither `process.env` nor the package. Its own work for the instance, installing the declared
+packages and cloning content, runs in `env` plus `secrets`, so an app that clones over SSH adds `SSH_AUTH_SOCK` to
+`env`. An instance opened this way is neither `fastagent dev`'s nor a deployment's, whatever variables the process or
+`env` holds: a channel that names no way of receiving receives by webhook, and its prompt says nothing of a
+deployment. Code FastAgent runs for the instance is not held to this: the MCP SDK reads six variables (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`) to build a stdio
+server's default environment, which FastAgent withholds, and a model provider's SDK reads what its own credential
+chain names (a Bedrock request reads `AWS_PROFILE` from the process, whatever `secrets` holds). One process may open several instances, and
+two opens share nothing their inputs do not name (two given one `workdir` share that workspace, which is the caller's to
+avoid). Every path it is given is absolute; a
 relative one is refused rather than resolved against the process's working directory.
 
 - A definition `fastagent build` made for another format refuses, naming the FastAgent version it needs.
@@ -648,27 +662,24 @@ relative one is refused rather than resolved against the process's working direc
 - `settings` is the program's defaults with `config.settings` over them, checked against the definition's `settings`
   schema at open: a required setting no one gave, or a value the schema refuses, refuses the open and names the key.
   The compiler checks the keys and types `config.settings` gives, not that every required one is there.
-- `content`, `instructions`, `skills` and `prompts` add to the program's. A content entry whose name the program
-  declares refuses the open. A program's skills and prompt templates are also named `<program>-<name>`, `<program>`
-  being the definition's name as one segment (`reviewer-review`). An instance entry takes its own name from the
-  program: one named like a program entry's bare name takes that bare name, and the program's entry keeps its full
-  name; one named like a program entry's full name takes that, and the program's entry is not offered under either
-  name. Otherwise a program entry is offered under both. The open reports each overlap, and `info().commands` lists
-  the names a message may start with (§5.1).
+- `content`, `instructions`, `skills` and `prompts` add to the program's. An entry whose name the program declares (a
+  content entry, a skill, a prompt template) refuses the open, naming both. `instructions`, `skills` and `prompts` are
+  read for each message, from only the files and directories `config` names, so an edit inside them takes effect on
+  the next message (a path added to `config` takes a reopen; a declared path that goes missing is reported, not read
+  as empty); `info().commands` lists the names a message may start with (§5.1).
 - `secrets` holds values, `credentials` the model providers' stored sign-ins and keys. A required secret without a
   value refuses the open and names it. The model's auth reads a provider's variable from `secrets`, for whichever
   provider a session's model is; the declared inputs list only the default model's, as optional. A name `secrets`
   holds that nothing declares or reads is ignored.
 - The state is the instance's storage, its channels' and schedules' state, its model lists, its model credentials
-  (when `credentials` is absent) and MCP grants; the workspace is the agent's working directory, where its content is
+  (`auth.json`, when `credentials` is absent) and its MCP grants (`mcp-auth.json`, when `mcp` gives no store); the workspace is the agent's working directory, where its content is
   cloned and what it produces lands.
 - A process the agent starts (a command, a stdio MCP server, a skill's script) gets `env`, with the commands of the
   declared environment ahead on its `PATH`; the values `secrets` holds for the names the definition's code (`needs()`)
   and `context.json`'s environment declare; a stdio MCP server's own `env`; and `GIT_CEILING_DIRECTORIES` at the
   workspace's parent. Nothing else of the host's reaches it. A model provider's
   variable and a value an MCP declaration references in its headers reach no process.
-- `name` names the instance: `info().name` is it, and what FastAgent creates for the instance outside its root is
-  named after it.
+- `name` (of `config`) names the instance: `info().name` is it, and so is what a host reports of it.
 - `http` is how the instance is served: `listen` defaults to `http.port`, and with `http.api: false`, `serve` refuses
   `apiKeys` instead of serving the HTTP API. `deploy` is read by `fastagent deploy` only.
 - The open prepares the declared environment, clones the content and opens the instance's storage, which one process
@@ -768,8 +779,9 @@ function byIngress<T>(ways: { webhook: T | Needs<T>; connection: T | Needs<T> })
 ```
 
 The `webhook` way is a channel of routes, and the `connection` way one that opens and keeps a connection to its platform
-(the first-party ones: Feishu's and Lark's long connection). An instance receives the way `channels.<name>.ingress`
-names, else `dev` by its connection and everything else by webhook, since a host that scales to zero is woken by an
+(the first-party ones: Feishu's and Lark's long connection, Slack's Socket Mode and Telegram's long polling). A
+connection that cannot be kept (a credential the platform refuses, the platform's switch for it turned off) ends the
+serve with its reason, never silently. An instance receives the way `channels.<name>.ingress` names, else `dev` by its connection and everything else by webhook, since a host that scales to zero is woken by an
 inbound request. Each way declares its own secrets, and an instance is asked only for its way's
 (`DeclaredSecret.whenIngress`). A channel that is not `byIngress` receives the one way it is.
 
@@ -853,13 +865,15 @@ streaming).
 
 ### 9.6 Keys and checks, from the CLI
 
-- **`fastagent deploy` gives a deployment a key.** When `.secrets/production/.env` holds no `FASTAGENT_API_KEY`, it
-  writes one, generated there once the pre-flight passes, so that what it deploys can be called; its report
-  names the API's URL and the command that checks it. The key travels to the host with the other values (`deploy`
-  carries the value file), and replacing it is editing that file and deploying again, with both keys listed while the
-  Callers move. A definition that serves no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then
-  writes no key, and no serve answers `/v1`, whatever key its environment holds, one an earlier deploy left on a host
-  included. Not on AgentCore, which serves no API either way (§9.5).
+- **`fastagent deploy --run` gives a deployment a key.** When neither the target nor `.secrets/production/.env` holds a
+  `FASTAGENT_API_KEY`, it makes one, sets it on the target and keeps it in that file, so that what it deploys can be
+  called; a target that lacks the key the file holds (a deployment made again) gets that one. Its report names the
+  API's URL and the command that checks it; without `--run` it writes nothing. Replacing the key is setting
+  `FASTAGENT_API_KEY` again on the target (`fastagent secrets set <host> FASTAGENT_API_KEY`), with the new and the old
+  key separated by commas while the Callers move, and the same in the file for `invoke --url`. A definition that serves
+  no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then makes no key, and no serve answers `/v1`,
+  whatever key its environment holds, one an earlier deploy left on a host included. Not on AgentCore, which serves no
+  API either way (§9.5).
 - **`fastagent invoke --url <base>` checks a deployed agent** the way `invoke` checks a local one: the same message,
   output, `--json`, `--session` and exit code, over `connectAgent`, with `--key` or the first key of
   `FASTAGENT_API_KEY` in `.secrets/production/.env`. `--model` sets the session's model there; without it, the

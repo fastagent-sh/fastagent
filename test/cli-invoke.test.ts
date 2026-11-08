@@ -9,10 +9,14 @@ import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { fauxAgent as agent, killWhileLingering, lingered, runInProcess, whileServed } from "./cli-run.ts";
 
-/** The session id an invoke printed on stderr. */
-function sessionOf(stderr: string): string {
-  const id = /\[fastagent\] session (\S+) \(continue it with --session \1\)/.exec(stderr)?.[1];
-  if (id === undefined) throw new Error(`no session id in: ${stderr}`);
+/** The session id an invoke printed on stderr; a run that printed none says how it ended. */
+function sessionOf(run: { code: number | null; stdout: string; stderr: string }): string {
+  const id = /\[fastagent\] session (\S+) \(continue it with --session \1\)/.exec(run.stderr)?.[1];
+  if (id === undefined) {
+    throw new Error(
+      `no session id: exit ${run.code}, stdout ${JSON.stringify(run.stdout)}, stderr ${JSON.stringify(run.stderr)}`,
+    );
+  }
   return id;
 }
 
@@ -22,13 +26,9 @@ describe("cli: invoke", () => {
     await whileServed(dir, async () => {
       const first = await runInProcess(["invoke", "hello", dir]);
       expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
-      const sessionId = sessionOf(first.stderr);
+      const sessionId = sessionOf(first);
       const second = await runInProcess(["invoke", "--session", sessionId, "again", dir]);
-      expect([second.code, second.stdout.trim(), sessionOf(second.stderr)], second.stderr).toEqual([
-        0,
-        "seen 2",
-        sessionId,
-      ]);
+      expect([second.code, second.stdout.trim(), sessionOf(second)], second.stderr).toEqual([0, "seen 2", sessionId]);
     });
   });
 
@@ -37,14 +37,27 @@ describe("cli: invoke", () => {
     await whileServed(dir, async () => {
       const first = await runInProcess(["invoke", "hello", dir]);
       expect(first.code, first.stderr).toBe(0);
-      const sessionId = sessionOf(first.stderr);
+      const sessionId = sessionOf(first);
       const switched = await runInProcess(["invoke", "--session", sessionId, "--model", "gw/m2", "and", dir]);
-      expect([switched.code, switched.stdout.trim(), sessionOf(switched.stderr)], switched.stderr).toEqual([
+      expect([switched.code, switched.stdout.trim(), sessionOf(switched)], switched.stderr).toEqual([
         0,
         "seen 2 by m2",
         sessionId,
       ]);
     });
+  });
+
+  it("a model with no credential here says to sign in or set its key, not what a deployment needs", async () => {
+    const dir = await agent("fa-invoke-auth-");
+    const result = await runInProcess(["invoke", "--model", "openai/gpt-4o-mini", "hello", dir], undefined, {
+      ...process.env,
+      OPENAI_API_KEY: "",
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("failed: auth_required");
+    expect(result.stderr).toContain(
+      "next: sign in with `fastagent login`, or set the provider's API key in .secrets/.env",
+    );
   });
 
   it("without --session, each run starts a session of its own", async () => {
@@ -54,7 +67,7 @@ describe("cli: invoke", () => {
       const fresh = await runInProcess(["invoke", "hello", dir]);
       expect([first.code, fresh.code], `${first.stderr}\n${fresh.stderr}`).toEqual([0, 0]);
       expect([first.stdout.trim(), fresh.stdout.trim()]).toEqual(["seen 1", "seen 1"]);
-      expect(sessionOf(fresh.stderr)).not.toBe(sessionOf(first.stderr));
+      expect(sessionOf(fresh)).not.toBe(sessionOf(first));
     });
   });
 
@@ -62,7 +75,7 @@ describe("cli: invoke", () => {
     const dir = await agent("fa-invoke-json-");
     const first = await runInProcess(["invoke", "hello", dir]);
     expect(first.code, first.stderr).toBe(0);
-    const sessionId = sessionOf(first.stderr);
+    const sessionId = sessionOf(first);
     const json = await runInProcess(["invoke", "--session", sessionId, "--json", "use a tool", dir]);
     expect(json.code, json.stderr).toBe(0);
     const lines = json.stdout
@@ -147,6 +160,20 @@ registerHooks({
     });
   });
 
+  it("a model the deployment has no credential for says how to give it one, naming the deployment's commands", async () => {
+    await withServedAgent(async (dir, url) => {
+      const env = { ...process.env, OPENAI_API_KEY: "" };
+      const result = await runInProcess(
+        ["invoke", "--url", url, "--key", "the-key", "--model", "openai/gpt-4o-mini", "hello", dir],
+        undefined,
+        env,
+      );
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("failed: auth_required");
+      expect(result.stderr).toContain("next: give the deployment a credential: `fastagent secrets set <host>");
+    });
+  });
+
   it("rejects a malformed --model before trying the connection", async () => {
     const dir = await agent("fa-invoke-url-model-");
     const result = await runInProcess([
@@ -168,7 +195,7 @@ registerHooks({
     await withServedAgent(async (dir, url) => {
       const first = await runInProcess(["invoke", "--url", url, "--key", "the-key", "hello", dir]);
       expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
-      const sessionId = sessionOf(first.stderr);
+      const sessionId = sessionOf(first);
       const switched = await runInProcess([
         "invoke",
         "--url",
@@ -182,7 +209,7 @@ registerHooks({
         "and",
         dir,
       ]);
-      expect([switched.code, switched.stdout.trim(), sessionOf(switched.stderr)], switched.stderr).toEqual([
+      expect([switched.code, switched.stdout.trim(), sessionOf(switched)], switched.stderr).toEqual([
         0,
         "seen 2 by m2",
         sessionId,
@@ -194,7 +221,7 @@ registerHooks({
     await withServedAgent(async (dir, url) => {
       const first = await runInProcess(["invoke", "--url", url, "--key", "the-key", "hello", dir]);
       expect(first.code, first.stderr).toBe(0);
-      const sessionId = sessionOf(first.stderr);
+      const sessionId = sessionOf(first);
       const json = await runInProcess([
         "invoke",
         "--url",

@@ -84,8 +84,8 @@ warning. No directory is ever replaced or deleted, so a running agent's writes, 
 stake. A clone of another repository under the entry's name stops the start, named. `info` and `content list` resolve without cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, or a directory); `authoring.ts` edits the program's file
 and the instance's under one lock, `context.json`'s, since whether a name is taken is asked of both, and writes only the
 files an edit changes, so a refusal leaves both as they were. A deployed host links each release's `content/` to its
-storage's (`workspace.ts`), so a `github` entry is a clone there that outlives releases. The instance's `fastagent.json`
-is not carried by a deploy yet, so what it adds stays on the machine whose it is; the deploy preflight names each such
+storage's (`workspace.ts`), so a `github` entry is a clone there that outlives releases. The development instance's
+`fastagent.json` is not carried by a deploy (`deploy --config <file>` delivers a configuration of its own), so what it adds stays on the machine whose it is; the deploy preflight names each such
 entry, a warning for one the agent works on (agent model §3).
 Every clone of fastagent's names a credential helper in its config that answers with `GITHUB_TOKEN` when git has
 no credential of its own, so the token reaches git, and the agent's push, without being stored.
@@ -107,8 +107,8 @@ for, and no environment variable selects an agent.
 `init <dir>` creates the agent in `dir` itself, which must be new or empty and not inside another agent, and writes
 each `--content` (checked before anything is written) into `context.json` (a repository) or `fastagent.json` (a directory).
 
-The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
-store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a
+The two machinery dirs map onto deploy lifecycles: `.secrets/` values live in the host's own store
+(`fastagent secrets`), `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a
 container).
 
 **Creating an agent makes it a git repository (`init` and `createAgent` alike); after that, git is the author's, with one exception.** An agent
@@ -190,7 +190,7 @@ join-on-interrupt combinator that differed only in the word before `Failure`.
 built `dist/` (`loadProjectBuild`, `built.ts`), with where the Agent keeps its sessions and what becomes of an earlier
 process's messages; an app calls `openAgent(definition, { root })`, which is it with a serve's defaults, and may give
 its own credential store and `{ stateDir, workdir }`. The definition's own directory (`definition.dir`) is only read:
-its text, `context.json`, `.mcp.json` and declared environment. The instance's directory (`workdir`) holds everything
+its text, `context.json` (with its `mcpServers`) and declared environment. The instance's directory (`workdir`) holds everything
 that is written: the agent's working directory, its secrets, its content's clones and, by default, its state. A source
 project is its own instance directory. It works in this order:
 
@@ -466,23 +466,30 @@ downloads are host-restricted, timeout/cap guarded, and translated to vision ima
 paths. Primary files fail visibly; files from the discussion degrade individually. Outbound delivery uses Slack's
 external upload three-step protocol and stays at-least-once across an ambiguous completion response.
 
-Newly onboarded apps use Slack's `agent_view`, `assistant:write`, suggested prompts, Agent
+Apps `channels setup slack` creates use Slack's `agent_view`, `assistant:write`, suggested prompts, Agent
 status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Markdown text events
 append to the stream; each harness-neutral tool start appends a compact factual trace, and a failed tool
 end appends one line naming the call. Raw model thinking and tool output stay private — reading output
 would mean guessing the harness's result shape. The compatibility renderer retains one edited message
 with a strict three-second mutation interval; a custom route reaching a top-level target selects it
 (both ways of getting there are listed on the `rendering` option in `slack.ts`) because native streams
-require a parent user message. HTTP Events API is the production transport; Socket Mode is a separate
-future boundary.
+require a parent user message.
 
-`add slack` owns a single-workspace internal-app control plane outside `ChannelModule`: a temporary
-unguessable challenge/OAuth responder, mode-specific App Manifest creation, OAuth-v2 code exchange, and
-irreversible-boundary recovery state. The long-lived bot token + Signing Secret go to `.env` (bot-token
-rotation is left off: it would ship the refresh token and client secret beside the access token); the
-more powerful App Configuration refresh token stays owner-local and never enters deployment secrets.
-`dev --tunnel` and `deploy --run` rotate it locally and update the Request URL through
-`apps.manifest.update`. This is not Marketplace/multi-workspace installation storage.
+`slack.ts` is one runtime (`createSlackRuntime`: routing, durable turns, history, rendering) with two ways in. The
+HTTP Events API (`slackChannel`) is the transport a host woken by a request needs: the signed route. Socket Mode
+(`slackSocketChannel`, `socket.ts`) is a `LongConnection`: `apps.connections.open` with the app-level token, `hello`,
+each `events_api` envelope acknowledged by its `envelope_id` once `ingest` took it, the next connection opened before
+the old one is let go, pings that drop a connection that stopped answering. Both call the runtime's `ingest`.
+
+The app is not the channel's to create. `channels setup slack` (`cli/channel-setup.ts`, with what Slack's setup asks for in
+`channels/slack/setup.ts`) opens a manifest link (`manifest.ts`: scopes, events, Socket Mode on or a Request URL),
+asks the person for the values only they can read off the app's pages, checks each with Slack, and writes it to the
+instance's value file. The long-lived bot token goes there with the app-level token or the Signing Secret (bot-token
+rotation is left off: it would ship the refresh token and client secret beside the access token). No credential of the
+person's own is kept: the App Configuration token, which could create apps and set a Request URL through
+`apps.manifest.*`, expires every 12 hours and rotates on each use, so the Request URL of a webhook app is a page the
+person sets once and the instance confirms (channel-setup.md §5). This is not Marketplace/multi-workspace installation
+storage.
 
 ### Feishu (canonical) / Lark (compatibility)
 
@@ -497,8 +504,8 @@ level up because theirs are not.
 
 **Feishu is the design center; Lark is a compatibility profile.** The clouds share event/card/crypto
 wire formats, but Lark international trails Feishu in app creation and application-config APIs.
-`src/channels/lark/lark.ts` is a thin branded adapter over the Feishu engine; `lark/onboard.ts` owns
-Lark's degraded guided/manual onboarding; `feishu/cloud.ts` records the capability differences. A kind
+`src/channels/lark/lark.ts` is a thin branded adapter over the Feishu engine; `lark/setup.ts` owns
+Lark's degraded guided/manual setup; `feishu/cloud.ts` records the capability differences. A kind
 still owns its channel identity, env, state, logs, and onboarding: `feishuChannel` returns
 `POST /feishu`, `feishuWebSocketChannel` returns a long-connection module, and the Lark factories mirror
 those boundaries. One agent can run both clouds. Outbound APIs and webhook handling are fetch-based;
@@ -702,17 +709,16 @@ Scaling an instance out needs a router that sends each session's calls to the pr
 
 `fastagent deploy docker|fly|railway|agentcore` generates a Dockerfile, target config,
 persistent-volume wiring, required secret names, and a runbook. Docker adds a user-owned
-`fastagent.compose.yml`; `--tunnel` can add a separate ephemeral cloudflared service, while durable
-ingress stays operator-owned. `--run` alone causes host side effects; for a tunnel topology it also
-reads the Quick Tunnel URL and registers webhooks.
+`fastagent.compose.yml`; ingress stays operator-owned (there is no tunnel service). `--run` alone causes host
+side effects.
 
-The build context is the agent directory, baked at `/app/definition`; the artifacts and the ignore file sit at its root,
+The build context is the agent directory, baked at `/app`; the artifacts and the ignore file sit at its root,
 and preflight checks that a kept ignore file ships `fastagent.config.ts` and excludes credentials. Preflight says what
 each content entry becomes on the host: a `github` one is cloned there (afresh on every deployment on AgentCore, whose
 storage starts over); a `local` one stays on this machine, and preflight says how to ship what the agent only reads (the
 agent directory) or work on it from a host (a repository). Git history ships when the host packer permits it, and the
 image installs Git when the agent directory contains `.git` or a content entry is `github`. The agent's `aptPackages`
-join the image's apt layer. Every deploy writes `fastagent.packages` (build output beside the release manifest,
+join the image's apt layer. Every deploy writes `.fastagent/deploy/fastagent.packages` (build output beside the release manifest,
 `BUILD_OUTPUTS`: rewritten every deploy, never kept or stale, and empty without packages), one package per line as mise
 is given it (`packageSpecs`); with packages declared, the generated Dockerfile copies it and installs what it lists with
 the agent's own mise (`install --system`), between the dependency install and `COPY . .`, so the layer is rebuilt only
@@ -724,7 +730,7 @@ mise packages, the agent's mise is not installed here to check with, a package r
 package's runtime is not declared; it warns a kept hand-written Dockerfile that it installs the environment only if it
 says so.
 
-`deploy/workspace.ts` owns the shared deployed lifecycle. The program is the image's (`/app/definition`, built there),
+`deploy/workspace.ts` owns the shared deployed lifecycle. The program is the image's (`/app`, built there),
 opened where it is; the storage is the instance's root (`FASTAGENT_ROOT`): the agent's cwd, with `.state/`,
 `.secrets/`, `content/` and `.deployment/`. The release manifest names the agent the storage belongs to, and a
 storage another agent started on is refused. A process-lifetime lease is taken first. Nothing on the storage is
@@ -799,7 +805,7 @@ and says up front that an idle reset needs the same login again (nothing on this
 the runtime's own startup report). An unattended agent there takes an API key. The
 shell opens on the fixed ingress session, which is the one that sees the server's `/mnt/data`; it does
 not inherit the runtime's environment, so `boxLoginCommand` names the storage root outright. A provider
-API key in the value file avoids the login.
+API key in the deployment's values (`fastagent secrets set <host> <its variable>`) avoids the login.
 
 Runtime filesystems appear on invocation, so `deferAgentcoreService` exposes `/ping` before any
 persistent definition or credentials are opened. Initialization runs in two stages, split by what a

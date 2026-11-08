@@ -1,3 +1,5 @@
+import { stripEdges } from "../../strip-edges.ts";
+
 // One posture, as on Feishu: the agent hears the channels it is in (participant-model.md §2), so the history scopes
 // and their message events are part of every app. `users:read` names the people in the history a turn reads.
 const SLACK_BOT_SCOPES = [
@@ -43,17 +45,16 @@ export interface SlackAppManifest {
   };
   oauth_config: {
     scopes: { bot: string[] };
-    redirect_urls?: string[];
   };
   settings: {
-    event_subscriptions?: { request_url: string; bot_events: string[] };
+    event_subscriptions: { request_url?: string; bot_events: string[] };
     org_deploy_enabled: boolean;
     socket_mode_enabled: boolean;
     token_rotation_enabled: boolean;
   };
 }
 
-export function slackBotScopes(): string[] {
+function slackBotScopes(): string[] {
   return [...SLACK_BOT_SCOPES].sort();
 }
 
@@ -63,19 +64,22 @@ function slackBotEvents(): string[] {
 
 /** Slack's bot display name is more restrictive than the app name. */
 function slackBotDisplayName(name: string): string {
-  const normalized = name
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "")
-    .slice(0, 80);
+  const normalized = stripEdges(
+    name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-"),
+    (char) => !/[a-z0-9]/.test(char),
+  ).slice(0, 80);
   return normalized || "fastagent";
 }
 
-export function buildSlackManifest(input: {
-  name: string;
-  requestUrl?: string;
-  redirectUrl?: string;
-}): SlackAppManifest {
+/**
+ * What an app is created for: a Socket Mode app receives over a socket it opens and has no Request URL; one that
+ * receives by webhook needs one, because Slack refuses a manifest that subscribes to events without it. Slack creates
+ * the app whether or not that URL answers yet (it shows "Your URL didn't respond" and a Retry), so a placeholder stands
+ * in until a person sets the real one on the Event Subscriptions page.
+ */
+export type SlackManifestWay = { ingress: "connection" } | { ingress: "webhook"; requestUrl: string };
+
+export function buildSlackManifest(input: { name: string } & SlackManifestWay): SlackAppManifest {
   const name = input.name.trim().slice(0, 35) || "FastAgent";
   return {
     display_information: {
@@ -100,22 +104,22 @@ export function buildSlackManifest(input: {
     },
     oauth_config: {
       scopes: { bot: slackBotScopes() },
-      ...(input.redirectUrl ? { redirect_urls: [input.redirectUrl] } : {}),
     },
     settings: {
-      ...(input.requestUrl
-        ? {
-            event_subscriptions: {
-              request_url: input.requestUrl,
-              bot_events: slackBotEvents(),
-            },
-          }
-        : {}),
+      event_subscriptions: {
+        ...(input.ingress === "webhook" ? { request_url: input.requestUrl } : {}),
+        bot_events: slackBotEvents(),
+      },
       org_deploy_enabled: false,
-      socket_mode_enabled: false,
+      socket_mode_enabled: input.ingress === "connection",
       // Off, and Slack makes the alternative permanent: an app with rotation on can never turn it off
       // (`cannot_disable_once_enabled`, verified against the API).
       token_rotation_enabled: false,
     },
   };
+}
+
+/** The page that creates an app from `manifest`, filled in: the person picks a workspace and clicks Create. */
+export function slackManifestLink(manifest: SlackAppManifest): string {
+  return `https://api.slack.com/apps?new_app=1&manifest_json=${encodeURIComponent(JSON.stringify(manifest))}`;
 }

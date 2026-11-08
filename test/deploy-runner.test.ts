@@ -19,7 +19,7 @@ describe("spawnRunner", () => {
   });
 
   it("still reports the exit code when the child exits WITHOUT reading stdin", async () => {
-    // The host-CLI failure shape: `fly secrets import` / `railway variables set` rejects before
+    // The host-CLI failure shape: `fly secrets set` / `railway variables set` rejects before
     // draining stdin, so the write lands on a closed pipe. Unhandled, that EPIPE is an uncaught
     // exception mid-deploy and the gate message the exit code carries is lost.
     const run = spawnRunner("sh", process.cwd());
