@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -423,6 +423,40 @@ describe("a step that outlives the command that starts it", () => {
       message: `it stopped: ${ticketLogPath(ticket)} says why`,
     });
   });
+
+  // Only where /proc says what a process is: a zombie answers signal 0 everywhere, and only Linux keeps one long (a
+  // container whose PID 1 does not reap); macOS's launchd reaps an orphan at once.
+  it.runIf(existsSync("/proc/self/stat"))(
+    "a step whose process has exited, and that nothing has reaped, is taken for stopped",
+    async () => {
+      // `sh` starts a child that exits at once, then becomes a `sleep` that never waits for it: a zombie. The child's
+      // name holds a space and a parenthesis, as a command's may, and /proc puts its name in parentheses before its state.
+      const named = join(mkdtempSync(join(tmpdir(), "fa-zombie-")), "x) S y");
+      symlinkSync(execFileSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).trim(), named);
+      const parent = spawn("sh", ["-c", `'${named}' 0 & echo $!; exec sleep 30`], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      try {
+        const zombie = Number(
+          await new Promise<string>((resolve) => parent.stdout.once("data", (d) => resolve(String(d)))),
+        );
+        await vi.waitFor(() => expect(readFileSync(`/proc/${zombie}/stat`, "utf8")).toMatch(/\) Z/));
+        const { ticket } = createTicket(request());
+        const waiting = {
+          ...JSON.parse(readFileSync(ticketFile(ticket), "utf8")),
+          status: "need_user_action",
+          pid: zombie,
+        };
+        writeFileSync(ticketFile(ticket), JSON.stringify(waiting));
+        expect(await checkTicket(ticket)).toMatchObject({
+          status: "failed",
+          message: `it stopped: ${ticketLogPath(ticket)} says why`,
+        });
+      } finally {
+        parent.kill("SIGKILL");
+      }
+    },
+  );
 
   it("an ended step stays as it ended: a late writer cannot reopen it", async () => {
     const { ticket } = createTicket(request());

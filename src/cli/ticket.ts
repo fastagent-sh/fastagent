@@ -159,15 +159,37 @@ function update(id: string, change: Partial<Ticket>): Ticket {
   return next;
 }
 
-/** Whether the process `pid` still runs: signal 0 delivers nothing and only says whether it could. */
+/**
+ * Whether the process `pid` still runs: signal 0 delivers nothing and only says whether it could. A process that has
+ * exited and that its parent has not reaped answers it too; where /proc says what a process is, one that has exited is
+ * taken for stopped. That is Linux, where a container whose PID 1 does not reap keeps an orphaned step a zombie for
+ * good; macOS's launchd reaps an orphan at once, so it is not asked there.
+ */
 function running(pid: number | undefined): boolean {
   if (pid === undefined) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
+  return !exited(pid);
+}
+
+const PROCFS = existsSync("/proc/self/stat");
+
+/** Whether /proc has `pid` as exited: a zombie (Z) or dead (X), or gone since signal 0 answered. */
+function exited(pid: number): boolean {
+  if (!PROCFS) return false;
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+  // The state follows the command name, which is in parentheses and may hold either.
+  const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
+  return state === "Z" || state === "X";
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
