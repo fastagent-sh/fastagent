@@ -72,10 +72,17 @@ export interface SlackSocketOptions {
   };
 }
 
-/** The runtime's own WebSocket, with the pings undici can send; a runtime that offers neither serves without them. */
+/**
+ * The runtime's own WebSocket, with the pings it can send: undici's, or (Bun before 1.4.4, whose `undici` has no `ping`) the
+ * socket's own `ping()` and `pong` event. A runtime that offers neither serves without them.
+ */
 const openRuntimeSocket: OpenSlackSocket = (url, handlers) => {
   const Socket = undici.WebSocket ?? globalThis.WebSocket;
   const socket = new Socket(url);
+  const undiciPing = undici.WebSocket !== undefined && typeof undici.ping === "function";
+  const native = socket as { ping?: () => void };
+  const nativePing = !undiciPing && typeof native.ping === "function";
+  if (nativePing) socket.addEventListener("pong", () => handlers.pong());
   const pongs = channel("undici:websocket:pong");
   const onPong = (message: unknown): void => {
     if ((message as { websocket?: unknown }).websocket === socket) handlers.pong();
@@ -96,9 +103,8 @@ const openRuntimeSocket: OpenSlackSocket = (url, handlers) => {
   return {
     send: (data) => socket.send(data),
     close: () => socket.close(),
-    ...(undici.WebSocket !== undefined && typeof undici.ping === "function"
-      ? { ping: () => undici.ping(socket as never) }
-      : {}),
+    ...(undiciPing ? { ping: () => undici.ping(socket as never) } : {}),
+    ...(nativePing ? { ping: () => native.ping?.() } : {}),
   };
 };
 
