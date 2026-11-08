@@ -647,9 +647,9 @@ itself reads `FASTAGENT_LOG_LEVEL` and nothing more: no variable places or confi
 a process the agent starts. FastAgent reads no file its inputs do not name (the machine's own model credentials
 included), and it writes neither `process.env` nor the package. Its own work for the instance, installing the declared
 packages and cloning content, runs in `env` plus `secrets`, so an app that clones over SSH adds `SSH_AUTH_SOCK` to
-`env`; the variables the CLI's own processes set to say how the instance is served and where it runs (`FASTAGENT_DEV`,
-`FASTAGENT_RELEASE_FILE`, `FASTAGENT_AGENTCORE`) are read from `env` too. Code FastAgent runs for the instance is not
-held to this: the MCP SDK reads six variables (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`) to build a stdio
+`env`. An instance opened this way is neither `fastagent dev`'s nor a deployment's, whatever variables the process or
+`env` holds: a channel that names no way of receiving receives by webhook, and its prompt says nothing of a
+deployment. Code FastAgent runs for the instance is not held to this: the MCP SDK reads six variables (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`) to build a stdio
 server's default environment, which FastAgent withholds, and a model provider's SDK reads what its own credential
 chain names (a Bedrock request reads `AWS_PROFILE` from the process, whatever `secrets` holds). One process may open several instances, and
 two opens share nothing their inputs do not name (two given one `workdir` share that workspace, which is the caller's to
