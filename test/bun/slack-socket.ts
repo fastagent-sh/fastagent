@@ -5,14 +5,9 @@
  */
 import { connectSlackSocket } from "../../src/channels/slack/socket.ts";
 import { type Peer, frame, slackStandIn } from "../slack-stand-in.ts";
+import { check, finish } from "../bun-check.ts";
 
 if (typeof process.versions.bun !== "string") throw new Error("run this with bun: bun test/bun/slack-socket.ts");
-
-const failures: string[] = [];
-function check(label: string, pass: boolean, detail: string): void {
-  console.log(`${pass ? "ok  " : "FAIL"} ${label}${pass ? "" : `: ${detail}`}`);
-  if (!pass) failures.push(label);
-}
 
 async function until(done: () => boolean, ms = 4000): Promise<boolean> {
   const started = Date.now();
@@ -109,8 +104,4 @@ async function connected(
   slack.stop();
 }
 
-if (failures.length > 0) {
-  console.error(`${failures.length} failed`);
-  process.exit(1);
-}
-process.exit(0);
+finish();

@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { SignatureV4 } from "@smithy/signature-v4";
-import * as undici from "undici";
+import { RuntimeWebSocket, pinger } from "../../runtime-websocket.ts";
 import type { BoxChannel, BoxShell } from "../box-shell.ts";
 import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson } from "./aws-cli.ts";
@@ -33,15 +33,7 @@ const STATUS = 0x03;
 const HEARTBEAT = 0x05;
 /** The service closes a connection whose frame is larger (code 1009). */
 const MAX_PAYLOAD = 64 * 1024 - 1;
-// Namespace import: Bun's `undici` is a shim whose WebSocket is the runtime's own, and which has no `ping` before 1.4.4,
-// where a named import of it fails the whole module's link. That runtime's own socket pings with `.ping()`.
-const Socket = undici.WebSocket ?? globalThis.WebSocket;
 const WS_OPEN = 1;
-
-function pingSocket(socket: InstanceType<typeof Socket>): void {
-  if (typeof undici.ping === "function") undici.ping(socket as never);
-  else (socket as { ping?: () => void }).ping?.();
-}
 
 /** The SDK's interval; a connection with no ping for ~60s is dropped by the service. */
 const KEEPALIVE_MS = 30_000;
@@ -130,7 +122,14 @@ export function shellExit(status: string): string | undefined {
 /** Open `command` in a new shell on `url`: stdin/stdout as streams, the other channels folded in. */
 export function openShellChannel(url: string, command: string): BoxChannel {
   const output = new PassThrough();
-  const ws = new Socket(url);
+  const ws = new RuntimeWebSocket(url);
+  const ping = pinger(ws);
+  if (ping === undefined) {
+    ws.close();
+    throw new Error(
+      "this runtime cannot send WebSocket pings, and the AgentCore service drops a shell connection that has none for about a minute",
+    );
+  }
   ws.binaryType = "arraybuffer";
   const frame = (channel: number, payload: Buffer = Buffer.alloc(0)) =>
     ws.send(Buffer.concat([Buffer.from([channel]), payload]));
@@ -147,7 +146,7 @@ export function openShellChannel(url: string, command: string): BoxChannel {
   ws.addEventListener("open", () => {
     stdin(Buffer.from(`stty raw -echo 2>/dev/null; exec sh -c '${command}'\n`));
     keepalive = setInterval(() => {
-      pingSocket(ws);
+      ping();
       frame(HEARTBEAT);
     }, KEEPALIVE_MS);
   });

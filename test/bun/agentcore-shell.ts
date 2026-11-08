@@ -7,14 +7,9 @@
 import type { AddressInfo } from "node:net";
 import { openShellChannel } from "../../src/deploy/agentcore/shell.ts";
 import { shellService } from "../box-shell-stand-in.ts";
+import { check, finish } from "../bun-check.ts";
 
 if (typeof process.versions.bun !== "string") throw new Error("run this with bun: bun test/bun/agentcore-shell.ts");
-
-const failures: string[] = [];
-function check(label: string, pass: boolean, detail: string): void {
-  console.log(`${pass ? "ok  " : "FAIL"} ${label}${pass ? "" : `: ${detail}`}`);
-  if (!pass) failures.push(label);
-}
 
 type Service = ReturnType<typeof shellService>;
 async function listen(server: Service): Promise<string> {
@@ -94,8 +89,4 @@ const keepalive = (async () => {
 }
 
 await keepalive;
-if (failures.length > 0) {
-  console.error(`${failures.length} failed`);
-  process.exit(1);
-}
-process.exit(0);
+finish();

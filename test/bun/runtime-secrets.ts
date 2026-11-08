@@ -6,14 +6,9 @@
  */
 import { applyRuntimeSecrets } from "../../src/deploy/agentcore/runtime-secrets.ts";
 import { awsStandIn } from "../aws-stand-in.ts";
+import { check, finish } from "../bun-check.ts";
 
 if (typeof process.versions.bun !== "string") throw new Error("run this with bun: bun test/bun/runtime-secrets.ts");
-
-const failures: string[] = [];
-function check(label: string, pass: boolean, detail: string): void {
-  console.log(`${pass ? "ok  " : "FAIL"} ${label}${pass ? "" : `: ${detail}`}`);
-  if (!pass) failures.push(label);
-}
 
 const ARN = "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:fastagent/bot-AbCdEf";
 const realFetch = globalThis.fetch;
@@ -22,11 +17,14 @@ const realFetch = globalThis.fetch;
   const aws = awsStandIn(ARN, '{"MODEL_KEY":"from-secret","OTHER":"from-secret"}');
   globalThis.fetch = aws.fetch;
   const env: NodeJS.ProcessEnv = { FASTAGENT_SECRET_ARN: ARN, OTHER: "platform" };
-  await applyRuntimeSecrets(env);
+  const refused = await applyRuntimeSecrets(env).then(
+    () => undefined,
+    (error: unknown) => String(error),
+  );
   check(
     "a signed GetSecretValue is accepted, and its values reach the environment but for what the platform set",
-    aws.problems.length === 0 && env.MODEL_KEY === "from-secret" && env.OTHER === "platform",
-    `${JSON.stringify(aws.problems)} ${JSON.stringify(env)}`,
+    refused === undefined && aws.problems.length === 0 && env.MODEL_KEY === "from-secret" && env.OTHER === "platform",
+    `${refused ?? ""} ${JSON.stringify(aws.problems)} ${JSON.stringify(env)}`,
   );
   check(
     "the metadata service is asked for a token, a role, its credentials, then Secrets Manager",
@@ -48,8 +46,4 @@ const realFetch = globalThis.fetch;
 }
 globalThis.fetch = realFetch;
 
-if (failures.length > 0) {
-  console.error(`${failures.length} failed`);
-  process.exit(1);
-}
-process.exit(0);
+finish();
