@@ -6,6 +6,7 @@ import { deploymentLoginCommand } from "../box-shell.ts";
 import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 import { RAILWAYIGNORE_FILE, railwayignore } from "./ignore.ts";
+import { stripEdges } from "../../strip-edges.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
   // No `port`: Railway injects PORT and the container CMD never names one (unlike Fly's internal_port) — the server
@@ -48,7 +49,7 @@ const MOUNT = "/data";
 
 /** The name this tool gives BOTH the project and the service, derived from the agent directory's name. */
 export function toRailwayName(basename: string): string {
-  return basename.replace(/[^a-zA-Z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
+  return stripEdges(basename.replace(/[^a-zA-Z0-9-]+/g, "-"), (char) => char === "-") || "agent";
 }
 
 /** Compute the Railway deploy plan from the resolved definition. */

@@ -9,6 +9,7 @@ import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
+import { stripEdges } from "../../strip-edges.ts";
 
 export interface AgentcorePlanInput extends ContainerInput {
   /** Base name (dir basename) — shapes the runtime name, stack name, ECR repo, session id. */
@@ -113,17 +114,12 @@ export function isGeneratedAgentcoreTemplate(content: string): boolean {
 
 /** Deployment base name from the agent directory's name — the ONE mapping used to find its stack later. */
 export function agentcoreName(agentDirName: string): string {
-  return (
-    agentDirName
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "agent"
-  );
+  return stripEdges(agentDirName.toLowerCase().replace(/[^a-z0-9-]+/g, "-"), (char) => char === "-") || "agent";
 }
 
 /** Runtime name (`[a-zA-Z][a-zA-Z0-9_]{0,47}`) from a dir basename. */
 export function toRuntimeName(basename: string): string {
-  const slug = basename.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const slug = stripEdges(basename.replace(/[^a-zA-Z0-9]+/g, "_"), (char) => char === "_");
   return (/^[a-zA-Z]/.test(slug) ? slug : `agent_${slug || "fastagent"}`).slice(0, 48);
 }
 

@@ -32,6 +32,7 @@ import {
   ticketExitCode,
   ticketReport,
 } from "../ticket.ts";
+import { stripTrailingSlashes } from "../../strip-edges.ts";
 
 export interface ChannelsSetupOptions {
   recordUrl: boolean;
@@ -249,10 +250,10 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
   const config = resolve(opts.config);
   const source = await readInstanceConfigFile(config).catch(failStartup);
   const named = (source.values as { http?: { publicUrl?: unknown } }).http?.publicUrl;
-  const configured = typeof named === "string" ? named.replace(/\/+$/, "") : undefined;
+  const configured = typeof named === "string" ? stripTrailingSlashes(named) : undefined;
   // `--url` is where this machine reads the deployment's /health; the URL the box confirms is the configuration's
   // own http.publicUrl when it names one, the one the platforms reach.
-  const reach = opts.url?.replace(/\/+$/, "") ?? configured;
+  const reach = (opts.url === undefined ? undefined : stripTrailingSlashes(opts.url)) ?? configured;
   const base = configured ?? reach;
   if (reach === undefined || base === undefined) {
     failUsage(`${config} names no http.publicUrl: pass --url <the deployment's public URL>`);

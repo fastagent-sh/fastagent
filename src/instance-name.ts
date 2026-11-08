@@ -4,6 +4,8 @@
  * default is the definition's name made into one (`@scope/pkg` is not one), so two instances of one definition on one
  * machine take distinct names only by being given them.
  */
+import { stripEdges } from "./strip-edges.ts";
+
 export const INSTANCE_NAME_ENV = "FASTAGENT_NAME";
 
 const SEGMENT = /^[A-Za-z0-9_-]+$/;
@@ -26,14 +28,5 @@ export function enteredInstanceName(env: NodeJS.ProcessEnv = process.env): strin
 /** The instance's name: `given` when there is one (refused when it is not a segment), else the definition's, as one. */
 export function instanceName(definitionName: string, given?: string): string {
   if (given !== undefined) return checkInstanceName(given);
-  return trimmed(definitionName.replace(/[^A-Za-z0-9_-]/g, "-")) || "agent";
-}
-
-/** `text` without the `-` at either end: by index, since a regex for it backtracks quadratically on a long run. */
-function trimmed(text: string): string {
-  let start = 0;
-  let end = text.length;
-  while (start < end && text[start] === "-") start++;
-  while (end > start && text[end - 1] === "-") end--;
-  return text.slice(start, end);
+  return stripEdges(definitionName.replace(/[^A-Za-z0-9_-]/g, "-"), (char) => char === "-") || "agent";
 }

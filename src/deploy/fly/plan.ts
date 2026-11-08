@@ -6,6 +6,7 @@ import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } f
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
+import { stripEdges } from "../../strip-edges.ts";
 
 export interface FlyPlanInput extends ContainerInput {
   // Container facts (runtime, hasLockfile, bunVersion, apt) come from ContainerInput.
@@ -196,9 +197,6 @@ export function parseFlyMinMachines(toml: string): number | undefined {
 
 /** Sanitize a directory basename into a Fly app name: lowercase, [a-z0-9-], must start with a letter. */
 export function toFlyAppName(basename: string): string {
-  const slug = basename
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const slug = stripEdges(basename.toLowerCase().replace(/[^a-z0-9]+/g, "-"), (char) => char === "-");
   return /^[a-z]/.test(slug) ? slug : `app-${slug || "agent"}`;
 }

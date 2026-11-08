@@ -10,11 +10,12 @@ import { homedir } from "node:os";
 import { readSkills } from "../harnesses/pi-durable/text.ts";
 import { programText } from "../harnesses/pi-durable/text-sources.ts";
 import { assertInsideAgentDir } from "../paths.ts";
+import { stripTrailingSlashes } from "../strip-edges.ts";
 
 /** Derive the destination skill name from a source ref: the last path segment, sans `#ref`. */
 function skillNameFromSource(source: string): string {
   const noRef = source.split("#")[0] ?? source;
-  return basename(noRef.replace(/\/+$/, ""));
+  return basename(stripTrailingSlashes(noRef));
 }
 
 /**

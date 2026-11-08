@@ -6,6 +6,7 @@ import { type Artifact, type ContainerInput, containerArtifacts } from "../conta
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
+import { stripEdges, stripEnd } from "../../strip-edges.ts";
 
 export interface DockerPlanInput extends ContainerInput {
   /** Stable Compose project name, sanitized by {@link toDockerProjectName}. */
@@ -48,12 +49,11 @@ export function isGeneratedCompose(content: string): boolean {
 
 /** Compose project names are lowercase [a-z0-9_-] and must start with an alphanumeric character. */
 export function toDockerProjectName(directoryName: string): string {
-  const slug = directoryName
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "")
-    .slice(0, 54)
-    .replace(/[-_]+$/g, "");
+  const separator = (char: string) => char === "-" || char === "_";
+  const slug = stripEnd(
+    stripEdges(directoryName.toLowerCase().replace(/[^a-z0-9_-]+/g, "-"), separator).slice(0, 54),
+    separator,
+  );
   return `fastagent-${slug || "agent"}`;
 }
 
