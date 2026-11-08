@@ -96,7 +96,10 @@ describe("what places and configures an instance", () => {
   });
 });
 
-/** What an open, a serve and a message may read of the process's environment: the log level, and what is not ours. */
+/**
+ * What an open, a serve and a message may read of the process's environment: the log level, and what is not FastAgent's
+ * own read (SPEC §8). A model provider's SDK reads its own variables, which a faux provider does not exercise.
+ */
 const READ_ALLOWED = new Set([
   "FASTAGENT_LOG_LEVEL",
   // The MCP SDK reads these six to build a stdio server's default environment; FastAgent withholds every one of them.

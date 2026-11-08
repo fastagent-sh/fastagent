@@ -301,8 +301,10 @@ instances.
   embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice). FastAgent's
   own work for the instance (installing packages, cloning content) runs in the `env` option plus `secrets`, and what says
   how the instance is served and where it runs (`FASTAGENT_DEV`, `FASTAGENT_RELEASE_FILE`, `FASTAGENT_AGENTCORE`) is read
-  from `env`; the CLI gives its own process's environment as `env`. The one variable of the process's that an open still
-  reads is `FASTAGENT_LOG_LEVEL`.
+  from `env`; the CLI gives its own process's environment as `env`. The one variable of the process's that FastAgent
+  itself still reads in an open is `FASTAGENT_LOG_LEVEL`. Code it runs is not held to this: a model provider's SDK reads
+  what its own credential chain names (a Bedrock request reads `AWS_PROFILE` from the process whatever `secrets` holds),
+  and the MCP SDK reads six variables to build a stdio server's default environment, which FastAgent withholds.
   `secrets` is distinct from `credentials`, the model providers' credential store (sign-ins and stored API keys),
   which today's `openAgent` already takes. A model provider's environment variable (`ANTHROPIC_API_KEY`, or a name a
   definition's `providers` read) is a secret: the model's auth reads it from the `secrets` input, the CLI's included,
