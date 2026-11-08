@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import {
   checkTicket,
   createTicket,
   endTicket,
+  procfsIsOurs,
   runTicket,
   startTicket,
   stopTicket,
@@ -422,6 +423,48 @@ describe("a step that outlives the command that starts it", () => {
       status: "failed",
       message: `it stopped: ${ticketLogPath(ticket)} says why`,
     });
+  });
+
+  // Only where /proc says what a process is: a zombie answers signal 0 everywhere, and only Linux keeps one long (a
+  // container whose PID 1 does not reap); macOS's launchd reaps an orphan at once.
+  it.runIf(existsSync("/proc/self/stat"))(
+    "a step whose process has exited, and that nothing has reaped, is taken for stopped",
+    async () => {
+      // `sh` starts a child that exits at once, then becomes a `sleep` that never waits for it: a zombie. The child's
+      // name holds a space and a parenthesis, as a command's may, and /proc puts its name in parentheses before its state.
+      const named = join(mkdtempSync(join(tmpdir(), "fa-zombie-")), "x) S y");
+      symlinkSync(execFileSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).trim(), named);
+      const parent = spawn("sh", ["-c", `'${named}' 0 & echo $!; exec sleep 30`], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      try {
+        const zombie = Number(
+          await new Promise<string>((resolve) => parent.stdout.once("data", (d) => resolve(String(d)))),
+        );
+        await vi.waitFor(() => expect(readFileSync(`/proc/${zombie}/stat`, "utf8")).toMatch(/\) Z/));
+        const { ticket } = createTicket(request());
+        const waiting = {
+          ...JSON.parse(readFileSync(ticketFile(ticket), "utf8")),
+          status: "need_user_action",
+          pid: zombie,
+        };
+        writeFileSync(ticketFile(ticket), JSON.stringify(waiting));
+        expect(await checkTicket(ticket)).toMatchObject({
+          status: "failed",
+          message: `it stopped: ${ticketLogPath(ticket)} says why`,
+        });
+      } finally {
+        parent.kill("SIGKILL");
+      }
+    },
+  );
+
+  it("reads /proc only when it is this process's PID namespace's", () => {
+    // In a namespace of its own with the host's /proc, a process is pid 1 and /proc/self says 18, and a live child's
+    // /proc/<pid> is not there: taken for gone, a step that runs would be reported stopped and never stopped.
+    expect(procfsIsOurs("1 (node) S 0 1 1", 1)).toBe(true);
+    expect(procfsIsOurs("18 (node) S 0 18 18", 1)).toBe(false);
+    expect(procfsIsOurs("12 (node) S 1 12 12", 1)).toBe(false);
   });
 
   it("an ended step stays as it ended: a late writer cannot reopen it", async () => {
