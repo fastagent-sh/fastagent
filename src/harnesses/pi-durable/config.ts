@@ -25,6 +25,7 @@ import {
 import type { ContentEntry } from "../../content/declare.ts";
 import { instanceContent } from "../../content/file.ts";
 import { type McpServerDeclaration, checkInstanceServers } from "../../mcp/config.ts";
+import { checkInstanceName } from "../../instance-name.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { INSTANCE_CONFIG_ENV, INSTANCE_CONFIG_FILE, resolveOverridePath } from "../../paths.ts";
 import type { AgentConfig, AgentDefaults, Ingress } from "./define.ts";
@@ -36,6 +37,8 @@ import type { AgentDefinition } from "./definition.ts";
  * file's directory's).
  */
 export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings> & {
+  /** The instance's name, one path segment. Default: the program's name made one. */
+  name?: string;
   content?: Record<string, ContentEntry>;
   /** MCP servers the instance adds to the program's: a name both declare refuses the open. */
   mcpServers?: Record<string, McpServerDeclaration>;
@@ -148,6 +151,7 @@ export function instanceConfigSchema(settings: Schema | undefined): Schema {
   return obj({
     $schema: opt(str()),
     ...shape(settings),
+    name: opt(str({ description: "The instance's name: one path segment of letters, digits, - and _" })),
     content: opt(map(CONTENT_ENTRY)),
     mcpServers: opt(
       map(unknown(), {
@@ -228,6 +232,14 @@ function checkInstanceConfig(source: InstanceConfigSource, settings: Schema | un
     // Its own refusals name the entry and say what is wrong with it, which a schema's cannot.
     instanceContent(source);
     checkInstanceServers(source);
+    const { name } = values as { name?: unknown };
+    if (typeof name === "string") {
+      try {
+        checkInstanceName(name);
+      } catch (error) {
+        throw new Error(`${label}: ${(error as Error).message}`);
+      }
+    }
   }
   checkValues(values, settings, label, instanceConfigSchema);
   const { $schema: _schema, ...config } = values as Record<string, unknown>;
@@ -280,6 +292,8 @@ const PERSON_SET_URL = ["slack", "lark"];
 
 /** What an open reads of the configuration: the program's defaults with an instance's over them. */
 export interface EffectiveConfig {
+  /** The instance's name as its configuration gives it; none when it gives none (`instanceName` defaults it). */
+  name?: string;
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   http?: { port?: number; api?: boolean; publicUrl?: string };

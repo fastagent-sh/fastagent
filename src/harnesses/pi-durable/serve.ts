@@ -38,9 +38,12 @@ import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
 import { type StorageLocking, openLockedStorage } from "./storage.ts";
 import { openText } from "./text.ts";
+import { instanceName } from "../../instance-name.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
   mcp?: McpOptions;
+  /** The instance's name, over the configuration's. Default: the configuration's, else the definition's as one segment. */
+  name?: string;
   /**
    * The values the instance's code, its MCP servers and its model's authentication read by name (`needs`, `${VAR}`,
    * a provider's variable): the one source of them, never this process's environment. A caller that wants its own
@@ -94,6 +97,8 @@ const INSTANCE_HOLDERS =
 export interface OpenedServing {
   agent: DurableAgent;
   definition: AgentDefinition;
+  /** The instance's name: what `info().name` reports. */
+  name: string;
   code: BuiltDefinition;
   /** The configuration this instance opened with: the program's defaults and the instance's over them. */
   config: EffectiveConfig;
@@ -167,6 +172,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
   const config = resolveConfig(definition, options.config);
+  const name = instanceName(definition.name, options.name ?? config.name);
   const text = openText(dir, options.config);
   const mcpServers = declareMcp(dir, options.config);
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
@@ -210,6 +216,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       options.mcp,
     );
     agent = await assembleAgent(definition, {
+      name,
       mcpTools: mcpTools(mcp.tools),
       storage,
       code,
@@ -250,6 +257,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   return {
     agent,
     definition,
+    name,
     code,
     config,
     secrets,
@@ -287,6 +295,8 @@ export type InstanceLocation = { root: string } | { stateDir: string; workdir: s
 export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
   /** The instance configuration, over the program's defaults: an object, or the absolute path of a `fastagent.json`. */
   config?: InstanceConfig<Settings> | string;
+  /** The instance's name, over `config`'s: one path segment. Default: `config`'s, else the definition's as one. */
+  name?: string;
   /**
    * The values the agent's code (`needs`), its MCP servers (`${VAR}`) and its model's authentication read by name. The
    * only source of them: nothing is read from the process's environment or from a file, so pass what the agent needs
@@ -351,6 +361,7 @@ export async function openAgent<Settings = unknown>(
     stateRoot,
     secrets: options.secrets ?? {},
     env: options.env ?? {},
+    ...(options.name === undefined ? {} : { name: options.name }),
     ...(config === undefined ? {} : { config }),
     wakeTicking: () => ticking,
     ...(options.mcp === undefined ? {} : { mcp: options.mcp }),

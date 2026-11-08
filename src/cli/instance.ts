@@ -19,12 +19,14 @@ import {
   resolveStateRoot,
   resolveWorkdir,
 } from "../paths.ts";
+import { INSTANCE_NAME_ENV, checkInstanceName, enteredInstanceName } from "../instance-name.ts";
 import { useValueFile } from "../value-file.ts";
 import { failUsage } from "./fail.ts";
 import type { FlagSpec } from "./kernel.ts";
 
 /** The flags that place an instance, as the commander adapter hands them over. */
 export interface InstanceFlags {
+  name?: string;
   root?: string;
   state?: string;
   workdir?: string;
@@ -39,6 +41,10 @@ const INSTANCE_LOCATION: readonly (readonly [keyof InstanceFlags, string, string
   ["config", "--config", INSTANCE_CONFIG_ENV],
 ];
 
+const NAME_FLAG: FlagSpec = {
+  flags: "--name <name>",
+  description: `the instance's name, one path segment (${INSTANCE_NAME_ENV}; default: the program's name)`,
+};
 const ROOT_FLAG: FlagSpec = {
   flags: "--root <dir>",
   description: `the instance root: its working directory, with its state in <dir>/.state (${INSTANCE_ROOT_ENV})`,
@@ -53,7 +59,7 @@ const WORKDIR_FLAG: FlagSpec = {
 };
 
 /** The flags of a command that opens, or reads the state of, an instance. */
-export const INSTANCE_FLAGS: readonly FlagSpec[] = [ROOT_FLAG, STATE_FLAG, WORKDIR_FLAG];
+export const INSTANCE_FLAGS: readonly FlagSpec[] = [NAME_FLAG, ROOT_FLAG, STATE_FLAG, WORKDIR_FLAG];
 
 /** The flags of a command that reads or edits what an instance works on: where it keeps its clones, and its file. */
 export const CONTENT_FLAGS: readonly FlagSpec[] = [
@@ -73,7 +79,7 @@ export const CONFIG_FLAG: FlagSpec = {
 
 export function instanceFlags(flags: Record<string, unknown>): InstanceFlags {
   const picked: InstanceFlags = {};
-  for (const key of [...INSTANCE_LOCATION.map(([name]) => name), "envFile" as const]) {
+  for (const key of [...INSTANCE_LOCATION.map(([name]) => name), "name" as const, "envFile" as const]) {
     if (typeof flags[key] === "string") picked[key] = flags[key];
   }
   return picked;
@@ -138,6 +144,14 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
     process.env[variable] = path;
     if (key === "root" || key === "workdir") makeDirectory(path, given === undefined ? variable : flag);
   }
+  const name = flags.name ?? enteredInstanceName();
+  if (name === undefined) return;
+  try {
+    checkInstanceName(name);
+  } catch (error) {
+    failUsage(`${flags.name === undefined ? INSTANCE_NAME_ENV : "--name"}: ${(error as Error).message}`);
+  }
+  process.env[INSTANCE_NAME_ENV] = name;
 }
 
 /**
@@ -146,12 +160,13 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
  */
 export function instanceInputs(
   agentDir: string,
-): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env"> {
+): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "name"> {
   const workdir = resolveWorkdir(agentDir);
   // A default one is the project's own `.fastagent/<environment>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");
   return {
     projectDir: agentDir,
+    ...(enteredInstanceName() === undefined ? {} : { name: enteredInstanceName() as string }),
     workdir,
     stateRoot: resolveStateRoot(agentDir),
     secrets: definedValues(process.env),
