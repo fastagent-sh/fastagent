@@ -128,16 +128,16 @@ fastagent add feishu && fastagent channels setup feishu   # 飞书; Lark interna
 Implemented today:
 
 - The Agent API on pi-durable, with one SQLite storage per instance (`.state/agent.sqlite`).
-- Directory assembly from `SYSTEM.md` / `AGENTS.md`, `skills/`, `prompts/`, `src/` and `fastagent.config.ts`, with secrets declared by the code that reads them (`needs`).
+- Program assembly from `SYSTEM.md` / `AGENTS.md`, `skills/`, `prompts/`, `src/`, `fastagent.config.ts` and `context.json`, with secrets declared by the code that reads them (`needs`). `fastagent build` makes the project's `dist/`, which `start`, a deployment and an app open as one immutable definition.
+- An instance of it from explicit inputs: a `fastagent.json` (settings, content, instructions, skills, prompts, MCP servers, name), secrets, state and a workspace. A deployment holds its values on the target (`fastagent secrets`), and `deploy` checks their names.
 - Content: local directories and GitHub repositories (here, a checkout `local` names, used as it is, otherwise a clone; on a host, always a clone; a clone is brought up to date in place at each start).
 - Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Schedules (`src/schedules/`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
 - `dev`, `invoke`, `info`, `schedules`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
-- CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
-- `openAgent` and its `serve()`: an agent directory opened and served inside an app; `createAgent`, model credentials
+- CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`); `login --deployment <host>` logs the deployed box in.
+- `openAgent` and its `serve()`: a built definition opened and served inside an app; `createAgent`, model credentials
   and sign-in for a host that runs agents for a person (a desktop app beside `fastagent dev`).
-
-- MCP stdio/Streamable HTTP tools from `mcpServers`, browser OAuth, and explicit instance bindings ([guide](mcp.md)).
+- MCP stdio/Streamable HTTP tools from `mcpServers` (the program's in `context.json`, an instance's in `fastagent.json`), browser OAuth, and explicit instance bindings ([guide](mcp.md)).
 
 Not implemented yet:
 

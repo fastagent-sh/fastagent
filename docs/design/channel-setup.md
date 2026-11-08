@@ -8,9 +8,9 @@ updated: 2026-11-06
 
 # A channel's platform app, set up per instance
 
-**Status: implemented except `--host` (#900, stage C).** Every step of §10 is built: `channels setup` for all four
+**Status: implemented except `--host` (#900).** Every step of §10 is built: `channels setup` for all four
 channels, `dev` setting up on first run, the ignored `fastagent.json`, the instance registering itself, `connection`
-for Slack and Telegram. Not built: `--host` (it comes with `fastagent secrets`). Where this and the code disagree, the code is current behavior and this is the target. It changes [channel-environments.md](channel-environments.md) §3–§4 and builds on
+for Slack and Telegram. Not built: `--host`, which would reuse `fastagent secrets` (#948). Where this and the code disagree, the code is current behavior and this is the target. It changes [channel-environments.md](channel-environments.md) §3–§4 and builds on
 [agent-artifact.md](agent-artifact.md) §6.2 (a deployment's values are the target's state).
 
 ## 1. The problem

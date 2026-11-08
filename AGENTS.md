@@ -11,9 +11,9 @@ The design center is decided in `docs/design/architecture.md`: an agent is a def
 | Document | Purpose |
 |---|---|
 | `docs/SPEC.md` | The Agent API v2, in process and over HTTP: what `src/agent-api.ts` and `src/http/` implement. Do not change its semantics without an explicit decision. |
-| `docs/design/architecture.md` | The decided architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
-| `docs/design/agent-artifact.md` | The framework target (#900), not current runtime behavior: one immutable built definition assembled deterministically from explicit instance inputs. Program `fastagent.config.ts` (constants, `defaults`, `settings` schema) + `context.json` + `mcp.json`; instance `fastagent.json` + `.mcp.json`, state and workspace; deployment and secret modes. |
-| `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. |
+| `docs/design/architecture.md` | The architecture: what FastAgent is for, one harness (pi-durable), one API, the artifact, context packages, hosts. |
+| `docs/design/agent-artifact.md` | The framework design (#900), built except the move of the model credentials and MCP grants out of `.secrets/`: one immutable built definition assembled deterministically from explicit instance inputs. Program `fastagent.config.ts` (constants, `defaults`, `settings` schema) + `context.json` (its `mcpServers` included); instance `fastagent.json` (its `mcpServers` included), state and workspace; deployment and secrets. |
+| `docs/design/core.md` | The code as it is now: the agent directory, the assembly onto pi-durable, channels, schedules, state, deployment. Where it and the artifact design differ, the code is current. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
 | `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review policy). |
@@ -106,6 +106,10 @@ src/
 │                           # loopback http reaches the opener, because some URLs come from a deployed box
 ├── env.ts                  # ENTERING the selected environment: dev `.secrets/.env` or production
 │                           # `.secrets/production/.env` → process.env, then the egress that follows
+├── child-env.ts            # the environment of the processes an instance starts (shell tool, stdio MCP servers, skill
+│                           # scripts): assembled from inputs, never the host's whole `process.env`
+├── instance-name.ts        # an instance's name: one path segment, defaulting to the definition's made into one
+├── strip-edges.ts          # trim the ends of a name or a URL by index (a regex backtracks on a long run)
 ├── serving-command.ts      # which command serves this process (`dev` marks it): the default a channel's ingress
 │                           # setting falls back to, read through the process environment the CLI and the agent share
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
@@ -184,6 +188,7 @@ src/
 │   │   ├── tasks.ts        # side-task tracking (ACK-independent work); drain is observation only
 │   │   ├── text.ts         # Unicode-safe code-point slicing
 │   │   ├── attachment-path.ts # where an attachment lands (the conversation id encoded into a directory)
+│   │   ├── abortable.ts    # waiting that an abort ends, and a listener on a signal that is removed
 │   │   ├── stop-command.ts # the shared /stop parsing every chat channel accepts, and the abort it dispatches
 │   │   └── thread-fork.ts  # where a new thread forks from: its room at the message its reply chain names (by key)
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
@@ -243,19 +248,22 @@ src/
 │   ├── preflight.ts        # host-neutral pre-flight: the definition builds, its model exists and authenticates
 │   │                       # where it runs, channel discovery, warnings
 │   ├── build-context.ts    # what the build context holds that must not ship, and what a KEPT ignore file lets through
+│   ├── delivered-text.ts   # the instance text a deploy delivers: the paths the configuration names, copied beside it
+│   │                       # into `.fastagent/deploy/` so they resolve the same in the image's `/etc/fastagent/`
 │   ├── container.ts        # portable image + ignore files + release manifest (host-neutral), and the one command
 │   │                       # that runs `login --stdio` inside that image where its server runs
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
-│   │                       # process lease, recoverable definition replacement (definition/ is cwd; .state/
-│   │                       # and .secrets/ stay beside it)
+│   │                       # process lease, the release last started on it (the storage is the instance's root; the
+│   │                       # program is the image's)
 │   ├── secrets.ts          # the NAMES a deployment needs and declares (secretNeeds, declaredNames, ModelKey)
 │   ├── secret-store.ts, file-store.ts # where a deployment's values live and how a deploy fills the gaps; Docker's store
 │   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
 │   ├── box-shell.ts        # a running box's owner-authenticated shell as a byte channel (`login --deployment`)
 │   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + state volume, ingress is the operator's) + the compose driver
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
-│   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
-│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js,
+│   ├── railway/   { plan.ts, run.ts, ignore.ts } # same two roles — NOT a copy of Fly (thin config, minted URL); ignore.ts is
+│   │                       # what `railway up` uploads (`.railwayignore`, since it follows `.gitignore` only inside a repo)
+│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js, slr.ts,
 │                    store.ts, runtime-secrets.ts, sigv4.ts } # ONE stack:
 │                             # runtime + forwarder Lambda (webhooks, and the alarms the container sets). No public
 │                             # URL, no resident process, no volume — the facts every difference follows from.
@@ -298,8 +306,11 @@ src/
     │   ├── built.ts        # what dist/ is: which files go into it, the build record `start` checks the project against,
     │   │                   # and the opener of a built package (`loadProjectBuild`, `loadBuiltDefinition`)
     │   ├── registry.ts     # the modules of src/ by directory, imported in file order
+    │   ├── text-sources.ts # where an instance's text is: the program's own, then what the configuration's
+    │   │                   # `instructions`, `skills` and `prompts` name, resolved once at open
     │   ├── text.ts         # SYSTEM.md, AGENTS.md, skills (loaded as pi loads them) and prompt templates, read per
-    │   │                   # message; the deployed agent's self-change section
+    │   │                   # message from exactly those paths; the deployed agent's self-change section
+    │   ├── execution-env.ts # pi-durable's local execution environment with the environment of every process given outright
     │   ├── agent.ts        # openDurableAgent: a Harness on the instance's storage, and the operations over it
     │   ├── reads.ts        # what the operations and the event streams read: a session's conversation, its published
     │   │                   # entries, a message as it is now, the session

@@ -107,9 +107,14 @@ There is no FastAgent build step: the agent folder is the deployable unit.
 ## Embed in an app
 
 ```ts
-import { openAgent } from "@fastagent-sh/fastagent";
+import { baseEnv, openAgent } from "@fastagent-sh/fastagent";
+import support from "@acme/support-agent"; // the default export of a package `fastagent build` made
 
-const agent = await openAgent("./agent", { model: "openai/gpt-5.5" });
+const agent = await openAgent(support, {
+  root: "/var/lib/myapp/support",
+  env: baseEnv(process.env),
+  model: "openai/gpt-5.5",
+});
 
 const session = await agent.sessions.create();
 for await (const event of agent.messages.stream({ sessionId: session.id, content: "hi" })) {
