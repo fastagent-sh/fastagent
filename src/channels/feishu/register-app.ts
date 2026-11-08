@@ -7,6 +7,7 @@
  */
 
 import { gzipSync } from "node:zlib";
+import { stripEnd } from "../../strip-edges.ts";
 
 /** Feishu accounts endpoint (the flow starts here for every user; a Lark-tenant scan switches over). */
 const FEISHU_ACCOUNTS = "https://accounts.feishu.cn";
@@ -28,11 +29,8 @@ interface FeishuAppAddons {
 
 /** JSON → gzip → base64url — the platform's fixed addons encoding. */
 export function encodeAddons(addons: FeishuAppAddons): string {
-  return gzipSync(Buffer.from(JSON.stringify(addons), "utf8"))
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  const base64 = gzipSync(Buffer.from(JSON.stringify(addons), "utf8")).toString("base64");
+  return stripEnd(base64.replace(/\+/g, "-").replace(/\//g, "_"), (char) => char === "=");
 }
 
 export interface RegisterFeishuAppOptions {

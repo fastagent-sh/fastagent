@@ -32,6 +32,7 @@ import { once } from "./once.ts";
 import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
 import type { Schedule } from "./schedule/schedule.ts";
 import { servedByDev } from "./serving-command.ts";
+import { stripTrailingSlashes } from "./strip-edges.ts";
 
 export type { WebhookRegistration } from "./channels/webhooks.ts";
 
@@ -262,7 +263,8 @@ function webhookRegistry(
       if (baseUrl !== undefined && !/^https?:\/\/[^/?#\s]+/.test(baseUrl)) {
         return Promise.reject(new Error(`registerWebhooks: ${JSON.stringify(baseUrl)} is not an absolute http(s) URL`));
       }
-      const at = (baseUrl ?? publicUrl)?.replace(/\/+$/, "");
+      const target = baseUrl ?? publicUrl;
+      const at = target === undefined ? undefined : stripTrailingSlashes(target);
       const run = previous.then(async () => {
         base = at;
         replace(pendingWebhooks(kinds));

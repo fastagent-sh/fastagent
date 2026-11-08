@@ -1,3 +1,5 @@
+import { stripEdges } from "../../strip-edges.ts";
+
 // One posture, as on Feishu: the agent hears the channels it is in (participant-model.md §2), so the history scopes
 // and their message events are part of every app. `users:read` names the people in the history a turn reads.
 const SLACK_BOT_SCOPES = [
@@ -62,11 +64,10 @@ function slackBotEvents(): string[] {
 
 /** Slack's bot display name is more restrictive than the app name. */
 function slackBotDisplayName(name: string): string {
-  const normalized = name
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "")
-    .slice(0, 80);
+  const normalized = stripEdges(
+    name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-"),
+    (char) => !/[a-z0-9]/.test(char),
+  ).slice(0, 80);
   return normalized || "fastagent";
 }
 
