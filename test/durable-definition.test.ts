@@ -29,7 +29,7 @@ import {
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { openSource } from "./open-source.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
-import { DEV_SERVE_ENV } from "../src/serving-command.ts";
+import { DEV_SERVE_ENV, NOT_HOSTED } from "../src/serving-command.ts";
 import { expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
 
 // Under test/fixtures, so the agent's modules resolve this repository's packages and its src/ by a fixed depth.
@@ -262,7 +262,7 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       const code = buildDefinition(definition, ENV);
       const agent = await assembleAgent(definition, {
         storage: new MemoryStorage(),
-        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
         processEnv: {},
         models: modelsOver(new InMemoryCredentialStore(), code.providers),
         code,
@@ -453,6 +453,7 @@ describe("two agents in one process", () => {
           secrets: values,
           env: {},
           ownEnv: process.env,
+          runsAs: NOT_HOSTED,
           storage: "memory",
           credentialStore: new InMemoryCredentialStore(),
         }),
@@ -503,6 +504,7 @@ describe("the secrets an instance is given name where its state and credentials 
       },
       env: {},
       ownEnv: process.env,
+      runsAs: NOT_HOSTED,
     });
     try {
       expect(opened.stateRoot).toBe(join(elsewhere, "state"));

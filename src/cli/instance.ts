@@ -15,11 +15,14 @@ import {
   INSTANCE_ROOT_ENV,
   INSTANCE_STATE_ENV,
   INSTANCE_WORKDIR_ENV,
+  isAgentcoreRuntime,
+  isDeployedWorkspace,
   resolveOverridePath,
   resolveStateRoot,
   resolveWorkdir,
 } from "../paths.ts";
 import { INSTANCE_NAME_ENV, checkInstanceName, enteredInstanceName } from "../instance-name.ts";
+import { type RunsAs, servedByDev } from "../serving-command.ts";
 import { useValueFile } from "../value-file.ts";
 import { failUsage } from "./fail.ts";
 import type { FlagSpec } from "./kernel.ts";
@@ -154,13 +157,18 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
   process.env[INSTANCE_NAME_ENV] = name;
 }
 
+/** Who runs this process's instance, as its own variables say: the one place the CLI reads them for an open. */
+export function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
+  return { dev: servedByDev(env), deployed: isDeployedWorkspace(env), agentcore: isAgentcoreRuntime(env) };
+}
+
 /**
  * What `openServing` is given for the agent in `agentDir`, as the flags and variables entered above say: where the
  * instance is, and its secrets, which for a command are its environment once the value file is entered.
  */
 export function instanceInputs(
   agentDir: string,
-): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "name"> {
+): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name"> {
   const workdir = resolveWorkdir(agentDir);
   // A default one is the project's own `.fastagent/<environment>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");
@@ -172,5 +180,6 @@ export function instanceInputs(
     secrets: definedValues(process.env),
     env: baseEnv(process.env),
     ownEnv: process.env,
+    runsAs: runsAsIn(process.env),
   };
 }

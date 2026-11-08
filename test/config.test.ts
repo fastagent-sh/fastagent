@@ -16,6 +16,7 @@ import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../s
 import { pickedModelLine } from "../src/cli/shared.ts";
 import { buildable, runInProcess } from "./cli-run.ts";
 import { FIXTURES } from "./probe-package.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const made: string[] = [];
 afterAll(() => {
@@ -263,6 +264,7 @@ export default needs([], (_secrets, settings: { repo: string; digestChannel?: st
       secrets: {},
       env: {},
       ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       ...(instance === undefined ? {} : { config: instance }),
       storage: "memory",
     });

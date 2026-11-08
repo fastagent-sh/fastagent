@@ -33,6 +33,7 @@ import { addContent, removeContent, writeEnvironment } from "../src/authoring.ts
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { log } from "../src/log.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const savedEnv = { ...process.env };
 afterEach(() => {
@@ -438,7 +439,13 @@ describe("environment: prepared by a process that runs the agent", () => {
   it("requires the variables context.json declares before the agent runs, naming the file", async () => {
     const dir = await agentDir({ variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } } });
     const open = async (secrets: Record<string, string>) =>
-      openServing(await loadSourceDefinition(dir), { secrets, env: {}, ownEnv: process.env, storage: "memory" });
+      openServing(await loadSourceDefinition(dir), {
+        secrets,
+        env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
+        storage: "memory",
+      });
     await expect(open({})).rejects.toThrow(/missing required secrets: FA_TEST_HOST \(context\.json\)/);
     // The process's own environment is not where an instance's values come from.
     process.env.FA_TEST_HOST = "github.example.com";
@@ -452,6 +459,7 @@ describe("environment: prepared by a process that runs the agent", () => {
         secrets: {},
         env: {},
         ownEnv: process.env,
+        runsAs: NOT_HOSTED,
         storage: "memory",
       }),
     ).rejects.toThrow(/the agent has no mise installed/);
@@ -460,7 +468,13 @@ describe("environment: prepared by a process that runs the agent", () => {
     vi.spyOn(log, "info").mockImplementation(() => {});
     const secrets = { FAKE_AGENT_VALUE: "from-the-value-file" };
     await (
-      await openServing(await loadSourceDefinition(dir), { secrets, env: {}, ownEnv: process.env, storage: "memory" })
+      await openServing(await loadSourceDefinition(dir), {
+        secrets,
+        env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
+        storage: "memory",
+      })
     ).agent.close();
     // mise reached GitHub, say, with the agent's own token.
     expect((await calls()).map((call) => `${call.args.split(" ")[0]}: ${call.agentValue}`)).toEqual([

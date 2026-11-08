@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runsAsIn } from "../src/cli/instance.ts";
+import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { NOT_HOSTED, type RunsAs } from "../src/serving-command.ts";
+import { serveAgent } from "../src/service.ts";
 import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
 import type { LocalAgent } from "../src/harnesses/pi-durable/serve.ts";
 import { fauxAgent } from "./cli-run.ts";
@@ -127,7 +132,13 @@ export default { defaults: { model: "gw/m1" }, providers: [faux.provider] };
 const BOTH_WAYS = `export default {
   kind: "fastagent.by-ingress",
   webhook: () => ({ "POST /both": () => new Response("webhook") }),
-  connection: { name: "both", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) },
+  connection: {
+    name: "both",
+    connect: (_ctx, signal) => ({
+      ready: Promise.resolve(),
+      closed: new Promise((resolve) => signal.addEventListener("abort", resolve)),
+    }),
+  },
 };
 `;
 
@@ -179,33 +190,64 @@ describe("what an open, a serve and a message read of the process", () => {
     expect([...reads].filter((key) => !READ_ALLOWED.has(key)).sort()).toEqual([]);
   });
 
-  it("does not take from it how a channel that names no way receives", async () => {
+  it("is neither dev's nor a deployment's, whatever the process or `env` holds: a channel that names no way receives by webhook", async () => {
     vi.stubEnv("FASTAGENT_DEV", "1");
     const dir = await fauxAgent("fa-open-inputs-", { "src/channels/both.mjs": BOTH_WAYS });
     const stateDir = join(await directory("fa-open-state-"), "state");
-    const service = await (await open({ dir, stateDir })).serve();
+    const service = await (await open({ dir, stateDir, env: { FASTAGENT_DEV: "1" } })).serve();
     expect((await service.fetch(new Request("http://x/both", { method: "POST" }))).status).toBe(200);
     await service.close();
   });
 
-  it("does not take from it whether the agent is deployed, which its prompt says; `env` does", async () => {
+  it("is told how it is run by the CLI, which reads its own process's variables once", async () => {
+    const dir = await fauxAgent("fa-open-inputs-", { "src/channels/both.mjs": BOTH_WAYS });
+    const served = await serveAs(dir, { dev: true, deployed: false, agentcore: false });
+    expect(served.channels).toEqual({ routes: [], longConnections: ["both"] });
+    await served.close();
+    expect(runsAsIn({})).toEqual(NOT_HOSTED);
+    expect(runsAsIn({ FASTAGENT_DEV: "1", FASTAGENT_RELEASE_FILE: "/etc/x.json", FASTAGENT_AGENTCORE: "1" })).toEqual({
+      dev: true,
+      deployed: true,
+      agentcore: true,
+    });
+  });
+
+  it("does not describe a deployment in the prompt of an instance `openAgent` opens, though `runsAs` does", async () => {
     vi.stubEnv("FASTAGENT_RELEASE_FILE", "/etc/fastagent/fastagent.release.json");
     const dir = await fauxAgent("fa-open-inputs-", { "fastagent.config.ts": RECORDING_CONFIG });
-    const promptOf = async (agent: LocalAgent) => {
+    const promptOf = async (agent: { sessions: LocalAgent["sessions"]; messages: LocalAgent["messages"] }) => {
       const session = await agent.sessions.create();
       await agent.messages.send({ sessionId: session.id, content: "hi" }, { wait: 30 });
       return readFile(join(dir, "prompt.txt"), "utf8");
     };
     const state = async () => join(await directory("fa-open-state-"), "state");
-    expect(await promptOf(await open({ dir, stateDir: await state() }))).not.toContain("survives restarts");
-    const deployed = await open({
+    const app = await open({
       dir,
       stateDir: await state(),
       env: { FASTAGENT_RELEASE_FILE: "/etc/fastagent/fastagent.release.json" },
     });
-    expect(await promptOf(deployed)).toContain("survives restarts");
+    expect(await promptOf(app)).not.toContain("survives restarts");
+    const deployed = await openAs(dir, { dev: false, deployed: true, agentcore: false });
+    expect(await promptOf(deployed.agent)).toContain("survives restarts");
+    await deployed.agent.close();
   });
 });
+
+/** The directory opened as the CLI opens it, in the process's own environment and told who runs it. */
+async function openAs(dir: string, runsAs: RunsAs) {
+  return openServing(await loadSourceDefinition(dir), {
+    secrets: {},
+    env: {},
+    ownEnv: process.env,
+    runsAs,
+    offline: true,
+    storage: "memory",
+  });
+}
+
+async function serveAs(dir: string, runsAs: RunsAs) {
+  return serveAgent(await openAs(dir, runsAs));
+}
 
 describe("whether the model lists are refreshed over the network", () => {
   const asked = async (options: { offline?: boolean; env?: Record<string, string> }) => {

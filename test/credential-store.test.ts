@@ -26,6 +26,7 @@ import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { makeFaux } from "./faux.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 /** pi's in-memory store, with every call recorded. */
 async function recordingStore(
@@ -93,6 +94,7 @@ describe("a caller's credential store replaces the credentials file", () => {
       secrets: {},
       env: {},
       ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       credentialStore: store,
       storage: "memory",
     });
@@ -190,6 +192,7 @@ describe("a caller's credential store replaces the credentials file", () => {
         secrets: {},
         env: {},
         ownEnv: process.env,
+        runsAs: NOT_HOSTED,
         ...both,
         storage: "memory",
       }),

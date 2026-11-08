@@ -18,6 +18,7 @@ import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
 import { log } from "../src/log.ts";
 import { runInProcess } from "./cli-run.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const made: string[] = [];
 afterAll(() => {
@@ -60,7 +61,7 @@ async function openAgentOn(dir: string, instance: InstanceConfigSource | undefin
   const definition = await loadSourceDefinition(dir);
   const agent: DurableAgent = await assembleAgent(definition, {
     storage: new MemoryStorage(),
-    ownEnv: process.env,
+    runsAs: NOT_HOSTED,
     processEnv: {},
     code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
     config: resolveConfig(definition, instance),

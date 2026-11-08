@@ -16,7 +16,7 @@ import type { McpOptions } from "../../mcp-api.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
 import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
 import { mcpAuthorization, mcpAuthorizationInState } from "../../mcp/host.ts";
-import { servedByDev } from "../../serving-command.ts";
+import { NOT_HOSTED, type RunsAs } from "../../serving-command.ts";
 import { mcpTools } from "./mcp.ts";
 import { loadContent } from "../../content/file.ts";
 import { type ResolvedContent, cloneContent, resolveContent } from "../../content/resolve.ts";
@@ -63,6 +63,8 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    * The instance's secrets are added to it.
    */
   ownEnv: Readonly<Record<string, string | undefined>>;
+  /** Who runs the instance: what decides how a channel that names no way receives, and whether its prompt describes a deployment. */
+  runsAs: RunsAs;
   /** Whether the model lists are refreshed without the network. Default: `ownEnv`'s `FASTAGENT_OFFLINE` is `1`. */
   offline?: boolean;
   /** What the instance sets over the program's defaults (`fastagent.json`, or an object); none runs on the defaults. */
@@ -194,7 +196,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values and packages.
   const secrets = definedValues(options.secrets);
-  const code = buildDefinition(definition, secrets, { ...config, dev: servedByDev(options.ownEnv) });
+  const code = buildDefinition(definition, secrets, { ...config, dev: options.runsAs.dev });
   // FastAgent's own work for the instance (installing packages, cloning content, finding its files) runs in this
   // process's environment and the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
   const env = { ...options.ownEnv, ...secrets };
@@ -239,7 +241,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     agent = await assembleAgent(definition, {
       name,
       mcpTools: mcpTools(mcp.tools),
-      ownEnv: options.ownEnv,
+      runsAs: options.runsAs,
       storage,
       code,
       config,
@@ -386,6 +388,7 @@ export async function openAgent<Settings = unknown>(
     secrets: options.secrets ?? {},
     env: options.env ?? {},
     ownEnv: options.env ?? {},
+    runsAs: NOT_HOSTED,
     offline: options.offline === true,
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(config === undefined ? {} : { config }),

@@ -25,6 +25,7 @@ import { readPackageJson } from "../../runtime.ts";
 import { fastagentVersion } from "../../version.ts";
 import { InstanceExecutionEnv } from "./execution-env.ts";
 import { instanceName } from "../../instance-name.ts";
+import type { RunsAs } from "../../serving-command.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
@@ -301,8 +302,8 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
 
 export interface AssembleAgentOptions {
   storage: Storage;
-  /** The environment the process is in, as far as the prompt says where the agent runs (deployed, on AgentCore). */
-  ownEnv: NodeJS.ProcessEnv;
+  /** Who runs the instance, as far as the prompt says where the agent runs (deployed, on AgentCore). */
+  runsAs: RunsAs;
   /** What the agent works on (`context.json`'s content), resolved for this instance. */
   content?: readonly ResolvedContent[];
   /** The instance's name (`instanceName`): what `info().name` reports. Default: the definition's, as one segment. */
@@ -364,7 +365,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
       name: DEFINITION_EXTENSION,
       sections: definitionSections(dir, options.content ?? [], {
         wake: ownWake || options.stateRoot !== undefined,
-        env: options.ownEnv,
+        runsAs: options.runsAs,
         workdir: options.workdir ?? dir,
         text,
       }),

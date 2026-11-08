@@ -31,6 +31,7 @@ import { makeFaux, sentPrompt } from "./faux.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
 
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 const freshDir = () => mkdtemp(join(tmpdir(), "fa-init-"));
 async function exists(p: string): Promise<boolean> {
@@ -153,7 +154,7 @@ describe("init: scaffoldAgent", () => {
     const definition = await loadSourceDefinition(dir);
     const agent = await assembleAgent(definition, {
       storage: new MemoryStorage(),
-      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       processEnv: {},
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
       config: resolveConfig(definition),

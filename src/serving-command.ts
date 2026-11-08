@@ -17,3 +17,15 @@ export function unmarkDevServe(env: NodeJS.ProcessEnv = process.env): void {
 export function servedByDev(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[DEV_SERVE_ENV] === "1";
 }
+
+/**
+ * Who runs an instance, as an open is told: `dev` serves it, a deployed box (the release manifest's variable) runs it,
+ * on AgentCore. The CLI reads its own process's variables for these (`runsAsIn`); an app's instance is none of them.
+ */
+export interface RunsAs {
+  dev: boolean;
+  deployed: boolean;
+  agentcore: boolean;
+}
+
+export const NOT_HOSTED: RunsAs = { dev: false, deployed: false, agentcore: false };

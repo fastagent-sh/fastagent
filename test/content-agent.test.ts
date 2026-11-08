@@ -22,13 +22,14 @@ import {
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 /** Send one message to the agent in `agentDir`, opened on `provider` with `content`. */
 async function askOnce(agentDir: string, provider: Provider, content?: readonly ResolvedContent[]): Promise<void> {
   const definition = await loadSourceDefinition(agentDir);
   const agent = await assembleAgent(definition, {
     storage: new MemoryStorage(),
-    ownEnv: process.env,
+    runsAs: NOT_HOSTED,
     processEnv: {},
     code: { ...buildDefinition(definition, {}), providers: [provider] },
     config: resolveConfig(definition),
@@ -137,6 +138,7 @@ describe("one resolution", () => {
         secrets: {},
         env: {},
         ownEnv: process.env,
+        runsAs: NOT_HOSTED,
         storage: "memory",
         ...(instance === undefined ? {} : { config: instance }),
       });

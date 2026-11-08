@@ -12,6 +12,7 @@ import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { PI_AI_VERSION, keepCatalog } from "./kept-catalog.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 
@@ -290,6 +291,7 @@ describe("model catalogs", () => {
       secrets: {},
       env: {},
       ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       storage: "memory",
       credentialStore: new InMemoryCredentialStore(),
     });
@@ -314,6 +316,7 @@ describe("model catalogs", () => {
         secrets: {},
         env: {},
         ownEnv: process.env,
+        runsAs: NOT_HOSTED,
         storage: "memory",
         credentialStore: new InMemoryCredentialStore(),
       }),

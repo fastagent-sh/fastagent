@@ -299,10 +299,12 @@ instances.
   command's entry, against the directory it was started in.
 - `openAgent` reads only its options, never these environment variables and never `process.env` for secret values: an
   embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice). FastAgent's
-  own work for the instance (installing packages, cloning content) runs in the `env` option plus `secrets`, and what says
-  how the instance is served and where it runs (`FASTAGENT_DEV`, `FASTAGENT_RELEASE_FILE`, `FASTAGENT_AGENTCORE`) is read
-  from `env`; the CLI gives its own process's environment as `env`. The one variable of the process's that FastAgent
-  itself still reads in an open is `FASTAGENT_LOG_LEVEL`. Code it runs is not held to this: a model provider's SDK reads
+  own work for the instance (installing packages, cloning content) runs in the `env` option plus `secrets`. Who runs
+  the instance (`FASTAGENT_DEV`, `FASTAGENT_RELEASE_FILE`, `FASTAGENT_AGENTCORE`: `dev`, a deployed box, AgentCore) is
+  not an input of `openAgent` at all: an app's instance is none of them, so a channel that names no way receives by
+  webhook and its prompt describes no deployment. The CLI reads those variables once, from its own process
+  (`runsAsIn`), and gives the result to the open (`OpenServingOptions.runsAs`). The one variable of the process's that
+  FastAgent itself still reads in an open is `FASTAGENT_LOG_LEVEL`. Code it runs is not held to this: a model provider's SDK reads
   what its own credential chain names (a Bedrock request reads `AWS_PROFILE` from the process whatever `secrets` holds),
   and the MCP SDK reads six variables to build a stdio server's default environment, which FastAgent withholds.
   `secrets` is distinct from `credentials`, the model providers' credential store (sign-ins and stored API keys),

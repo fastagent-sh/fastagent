@@ -33,6 +33,7 @@ async function openedContent(dir: string, secrets: Record<string, string> = {}) 
     secrets,
     env: {},
     ownEnv: process.env,
+    runsAs: NOT_HOSTED,
     storage: "memory",
     ...(instance === undefined ? {} : { config: instance }),
   });
@@ -42,6 +43,7 @@ async function openedContent(dir: string, secrets: Record<string, string> = {}) 
 import { git, githubStandIn } from "./github-standin.ts";
 import { log } from "../src/log.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -393,7 +395,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     const definition = await loadSourceDefinition(agentDir);
     const running = await assembleAgent(definition, {
       storage: new MemoryStorage(),
-      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
       processEnv: {},
       code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
       config: resolveConfig(definition),
