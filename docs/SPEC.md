@@ -494,8 +494,13 @@ type InstanceInputs<Settings = unknown> = {
   config?: InstanceConfig<Settings> | string;
   /** Secret values: the declared names, and model providers' variables. No variable of the host's reaches the agent. */
   secrets?: Record<string, string>;
-  /** The base environment of the processes the agent starts. Default: empty. `baseEnv(process.env)` is the app's. */
+  /**
+   * The base environment of the processes the agent starts, and the environment of FastAgent's own installing and
+   * cloning for the instance. Default: empty. `baseEnv(process.env)` is the app's.
+   */
   env?: Record<string, string>;
+  /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
+  offline?: boolean;
   /** The instance's name, over `config`'s `name`, as `model` is over `config`'s `model`: one path segment. */
   name?: string;
   /** Where the model credentials are kept. Default: `auth.json` in the state directory. */
@@ -635,14 +640,17 @@ addressed elsewhere proves nothing and is warned of in the log, and one whose ad
 Otherwise `manual`, its `step` naming the URL to paste and the page to paste it on.
 
 `openAgent` opens one instance of a built definition, the default export of an agent's package
-(`import support from "@acme/support"`), from its inputs and nothing else. It reads no variable that places or
-configures the instance (`FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`,
-`FASTAGENT_CONFIG`, `FASTAGENT_MODEL`, `FASTAGENT_NAME`), no file its inputs do not name (the machine's own model
-credentials included), and it puts no `process.env` value in front of the agent; it writes neither `process.env` nor
-the package. The process's own settings still apply: `FASTAGENT_LOG_LEVEL` and `FASTAGENT_OFFLINE`, and FastAgent's own
-work for the instance, installing the declared packages and cloning content, runs in the process's environment plus
-`secrets` (what the agent starts does not: `env`). One process may open several instances, and two opens share nothing
-their inputs do not name (two given one `workdir` share that workspace, which is the caller's to avoid). Every path it is given is absolute; a
+(`import support from "@acme/support"`), from its inputs and nothing else. Of the process's environment it reads
+`FASTAGENT_LOG_LEVEL` and nothing more: no variable places or configures the instance (`FASTAGENT_ROOT`,
+`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`, `FASTAGENT_CONFIG`, `FASTAGENT_MODEL`,
+`FASTAGENT_NAME`, `FASTAGENT_OFFLINE`), none says how it is served or where it runs, and no `process.env` value reaches
+the agent. It reads no file its inputs do not name (the machine's own model credentials included), and it writes
+neither `process.env` nor the package. FastAgent's own work for the instance, installing the declared packages and
+cloning content, runs in `env` plus `secrets`, so an app that clones over SSH adds `SSH_AUTH_SOCK` to `env`; the
+variables the CLI's own processes set to say how the instance is served and where it runs (`FASTAGENT_DEV`,
+`FASTAGENT_RELEASE_FILE`, `FASTAGENT_AGENTCORE`) are read from `env` too. One process may open several instances, and
+two opens share nothing their inputs do not name (two given one `workdir` share that workspace, which is the caller's to
+avoid). Every path it is given is absolute; a
 relative one is refused rather than resolved against the process's working directory.
 
 - A definition `fastagent build` made for another format refuses, naming the FastAgent version it needs.
