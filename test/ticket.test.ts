@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,8 +10,10 @@ import {
   type TicketStep,
   checkTicket,
   createTicket,
+  endTicket,
   runTicket,
   startTicket,
+  stopTicket,
   ticketLogPath,
   ticketReport,
 } from "../src/cli/ticket.ts";
@@ -73,7 +75,9 @@ async function waitingStep(
     const ticket = JSON.parse(readFileSync(path, "utf8"));
     ${sidecar === undefined ? "" : `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(stubborn(sidecar))}], { stdio: "ignore" });`}
     ${sidecar === undefined ? "" : `while (!require("node:fs").existsSync(${JSON.stringify(sidecar)})) {}`}
-    writeFileSync(path, JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, ${finishing ? "finishing: true, " : ""}url: "https://auth.example/a", pid: process.pid }));
+    // Whole, as a step's own process writes it: one rewritten in place is read as its old bytes and then its new ones.
+    writeFileSync(path + ".tmp", JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, ${finishing ? "finishing: true, " : ""}url: "https://auth.example/a", pid: process.pid }));
+    require("node:fs").renameSync(path + ".tmp", path);
     writeFileSync(${JSON.stringify(claimed)}, "");
     setInterval(() => {}, 1000);`;
   const started = {
@@ -317,12 +321,13 @@ describe("a step that outlives the command that starts it", () => {
     await vi.waitFor(() => expect(running(started)).toBe(false), { timeout: 10_000 });
   });
 
-  it("a step given up on for giving the person nothing to do is stopped first, so it writes nothing after", async () => {
+  it("a step given up on for giving the person nothing to do is failed and stopped", async () => {
     const sidecar = join(mkdtempSync(join(tmpdir(), "fa-ticket-pid-")), "pid");
     const silent = `
       const { readFileSync, writeFileSync } = require("node:fs");
       const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "tickets", process.argv.at(-1) + ".json");
-      writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), status: "working", pid: process.pid }));
+      writeFileSync(path + ".tmp", JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), status: "working", pid: process.pid }));
+      require("node:fs").renameSync(path + ".tmp", path);
       writeFileSync(${JSON.stringify(sidecar)}, String(process.pid));
       setInterval(() => {}, 1000);`;
     const realNow = Date.now;
@@ -427,11 +432,93 @@ describe("a step that outlives the command that starts it", () => {
     expect(await checkTicket(ticket)).toMatchObject({ status: "failed", message: "replaced" });
   });
 
+  it("a step its own process records as ended after another ended it stays as the other ended it", async () => {
+    // What a step's process does when it read its ticket just before another process ended it: its write lands after.
+    const { ticket } = createTicket(request());
+    const ended = await stopTicket(ticket);
+    expect(ended).toMatchObject({ status: "failed", message: expect.stringMatching(/^stopped on request/) });
+    const owner = {
+      ...JSON.parse(readFileSync(ticketFile(ticket), "utf8")),
+      status: "need_user_action",
+      pid: process.pid,
+    };
+    writeFileSync(`${ticketFile(ticket)}.tmp`, JSON.stringify(owner));
+    renameSync(`${ticketFile(ticket)}.tmp`, ticketFile(ticket));
+    expect(await checkTicket(ticket)).toMatchObject({ status: "failed", message: ended.message });
+  });
+
+  it("is ended once: a second end, written by one that read it running too, leaves the first", async () => {
+    const { ticket } = createTicket(request());
+    expect(endTicket(ticket, { status: "done" })).toMatchObject({ status: "done" });
+    expect(endTicket(ticket, { status: "failed", message: "stopped on request" })).toMatchObject({ status: "done" });
+    expect(await checkTicket(ticket)).toMatchObject({ status: "done" });
+    expect(await checkTicket(ticket)).not.toHaveProperty("message");
+  });
+
   it("names no file outside its directory: a ticket is 16 hex digits or nothing", async () => {
     const outside = join(process.env.HOME as string, ".fastagent", ".state", "outside.json");
     writeFileSync(outside, readFileSync(ticketFile(createTicket(request()).ticket), "utf8"));
     expect(await checkTicket("../outside")).toBeUndefined();
     expect(await checkTicket("0123456789abcdef")).toBeUndefined();
+  });
+});
+
+/**
+ * A step run by the real `runTicket` that, told SIGTERM, records its own failure before it exits: what a step whose
+ * process catches SIGTERM does (`signal-exit`, which `proper-lockfile` loads) when the host CLI it runs dies of the same
+ * signal and the step hears that first.
+ */
+const recordsItsOwnEnd = (waitsOnItsPerson: boolean) => `
+  import { runTicket } from ${JSON.stringify(fileURLToPath(new URL("../src/cli/ticket.ts", import.meta.url)))};
+  await runTicket(process.argv.at(-1), (step) => new Promise((_, reject) => {
+    process.on("SIGTERM", () => reject(new Error("the host CLI it ran did not sign in (exit 1)")));
+    ${waitsOnItsPerson ? 'step.person.waitsOn("https://auth.example/a");' : ""}
+  }));
+  process.exit(0);`;
+const startRecording = (waitsOnItsPerson = true, startTimeoutMs?: number) =>
+  startTicket({
+    ...request(),
+    waitsFirst: true,
+    whenRunning: "replace",
+    ...(startTimeoutMs === undefined ? {} : { startTimeoutMs }),
+    command: {
+      file: process.execPath,
+      args: ["--input-type=module", "-e", recordsItsOwnEnd(waitsOnItsPerson), "--"],
+      cwd: tmpdir(),
+    },
+  });
+
+describe("what ends a step is the first end written, and a stop writes its own before it stops the process", () => {
+  it("a stop on request is the end, though the step records its own failure as it dies", async () => {
+    const started = await startRecording();
+    expect(started.status).toBe("need_user_action");
+    expect(await stopTicket(started.ticket)).toMatchObject({
+      status: "failed",
+      message: expect.stringMatching(/^stopped on request/),
+    });
+    expect(running(started.pid)).toBe(false);
+  });
+
+  it("a start given up on is the end of its step, though the step records its own failure as it dies", async () => {
+    const given = await startRecording(false, 1_500);
+    expect(given).toMatchObject({
+      status: "failed",
+      message: expect.stringMatching(/^it (gave the person nothing to do|did not start) within 1\.5s/),
+    });
+    expect(running(given.pid)).toBe(false);
+  });
+
+  it("a newer attempt is the end of the one it replaces, though that one records its own failure as it dies", async () => {
+    const older = await startRecording();
+    const newer = await startRecording();
+    try {
+      expect(await checkTicket(older.ticket)).toMatchObject({
+        status: "failed",
+        message: "replaced by a newer attempt to sign in to OpenAI",
+      });
+    } finally {
+      if (running(newer.pid)) process.kill(-(newer.pid as number), "SIGKILL");
+    }
   });
 });
 

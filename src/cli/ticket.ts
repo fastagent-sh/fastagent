@@ -6,10 +6,11 @@
  * there is something for the person to do. The command's `--check <ticket>` reads where it stands from any process,
  * and hands the step the address a browser ended on when that browser could not reach this machine.
  *
- * A ticket is a file in the machine's own state, ~/.fastagent/.state/tickets, written whole (`writeFileAtomic`), but by
- * more than one process at once: the starting command until the step starts, then the step, and whoever finds its
- * process gone or replaces it (every `--check`, a newer step for the subject). One that has
- * ended stays as it ended. A newer step for the same subject stops an older one still waiting on its person, whose
+ * A ticket is two files in the machine's own state, ~/.fastagent/.state/tickets. One is the step as its process keeps
+ * it, written by one process at a time: the starting command until the step starts, then the step. The other is its
+ * end, written once, by whoever ends it first: the step itself, or a process that stops it, replaces it or finds it
+ * gone. An end is decided before what it decides is done, so a stop is the end of the step it stops even when the step
+ * hears the consequences of being stopped first, and nothing the step writes after reopens it. A newer step for the same subject stops an older one still waiting on its person, whose
  * process would otherwise hold what it holds (a sign-in's callback port, OpenAI's fixed) until it expires; so does one
  * still getting ready (reaching a box, opening a tunnel), which may hang there. One finishing what its person did (a
  * code exchanged, an app created from a pasted token) is never stopped halfway, and the newer attempt is answered
@@ -22,6 +23,7 @@ import { randomBytes } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -29,6 +31,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
@@ -84,6 +87,7 @@ const ADDRESS_TIMEOUT_MS = 15_000;
 /** How long a stopped step's process has to let go of what it holds before it is killed. */
 const STOP_TIMEOUT_MS = 5_000;
 const POLL_MS = 200;
+const DAY_MS = 24 * 60 * 60 * 1000;
 /** Ticket files are random hex: anything else names no ticket, and no file outside the directory. */
 const TICKET_ID = /^[0-9a-f]{16}$/;
 
@@ -93,35 +97,63 @@ const addressPath = (id: string) => join(ticketsDir(), `${id}.address`);
 /** What the step's process says while it runs: the place to look when it fails. */
 export const ticketLogPath = (id: string) => join(ticketsDir(), `${id}.log`);
 
-function readTicket(id: string): Ticket | undefined {
-  if (!TICKET_ID.test(id)) return undefined;
+const endPath = (id: string) => join(ticketsDir(), `${id}.end.json`);
+
+function readJson<T>(path: string): T | undefined {
   try {
-    return JSON.parse(readFileSync(ticketPath(id), "utf8")) as Ticket;
+    return JSON.parse(readFileSync(path, "utf8")) as T;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
 }
 
-/**
- * A ticket is written by several processes: the command that started the step, the step's own process, and every
- * `--check`. Each writes a temp of its own (`sharedWriters`): the fixed name is for one writer, and two of them rename
- * each other's file away or write one temp at once, which a reader sees as `Unexpected non-whitespace character after JSON`.
- */
-const writeTicket = (ticket: Ticket): void =>
-  writeFileAtomic(ticketPath(ticket.ticket), JSON.stringify(ticket), undefined, true);
+/** The ticket `id`: the step as its process keeps it, with its end over it once it has one. */
+function readTicket(id: string): Ticket | undefined {
+  if (!TICKET_ID.test(id)) return undefined;
+  const kept = readJson<Ticket>(ticketPath(id));
+  if (kept === undefined) return undefined;
+  const end = readJson<Partial<Ticket>>(endPath(id));
+  return end === undefined ? kept : { ...kept, ...end };
+}
+
+/** The step as its process keeps it: one writer at a time, the starting command and then the step. */
+const writeTicket = (ticket: Ticket): void => writeFileAtomic(ticketPath(ticket.ticket), JSON.stringify(ticket));
 
 const waiting = (ticket: Ticket) =>
   ticket.status === "starting" || ticket.status === "need_user_action" || ticket.status === "working";
 
+const ENDS: readonly TicketStatus[] = ["done", "failed", "expired"];
+
 /**
- * Change the ticket `id` while its step still runs; one that has ended is returned as it ended. A writer that read it
- * before it ended (a check that found its process gone the moment it finished) cannot reopen it.
+ * End the ticket `id` with `end`, unless something ended it first: the end is a file created once, by a hard link,
+ * which the kernel lets only one writer make, so two that both read the ticket as running (the step finishing as a
+ * person stops it) end it once. Answers the ticket as whoever ended it ended it. Not public: `update` ends a ticket,
+ * and a test seam.
+ */
+export function endTicket(id: string, end: Partial<Ticket>): Ticket {
+  const draft = `${endPath(id)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(draft, JSON.stringify(end));
+  try {
+    linkSync(draft, endPath(id));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  } finally {
+    rmSync(draft, { force: true });
+  }
+  return readTicket(id) as Ticket;
+}
+
+/**
+ * Change the ticket `id` while its step still runs; one that has ended is returned as it ended. An end is
+ * `endTicket`'s, so the first one written is the one that stays; anything else is the step's own record, which its
+ * process alone writes.
  */
 function update(id: string, change: Partial<Ticket>): Ticket {
   const current = readTicket(id);
   if (current === undefined) throw new Error(`ticket ${id} is gone from ${ticketsDir()}`);
   if (!waiting(current)) return current;
+  if (change.status !== undefined && ENDS.includes(change.status)) return endTicket(id, change);
   const next = { ...current, ...change };
   writeTicket(next);
   return next;
@@ -199,22 +231,22 @@ async function supersede(subject: string, now: number): Promise<Ticket | undefin
   const finishing = runs.find((ticket) => ticket.finishing === true);
   if (finishing !== undefined) return finishing;
   for (const ticket of runs) {
-    if (ticket.pid !== undefined) await stop(ticket.pid);
     update(ticket.ticket, { status: "failed", message: `replaced by a newer attempt to ${ticket.action}` });
+    if (ticket.pid !== undefined) await stop(ticket.pid);
   }
   return undefined;
 }
 
-/** Tickets a day past their end: each one's files go. */
+/** Tickets a day past their end: every file of each one goes. */
 function prune(now: number): void {
   if (!existsSync(ticketsDir())) return;
-  for (const file of readdirSync(ticketsDir())) {
-    const id = file.slice(0, 16);
-    const ticket = TICKET_ID.test(id) ? readTicket(id) : undefined;
-    if (ticket !== undefined && ticket.expiresAt < now - 24 * 60 * 60 * 1000) {
-      for (const path of [ticketPath(id), addressPath(id), ticketLogPath(id)]) rmSync(path, { force: true });
-    }
-  }
+  const files = readdirSync(ticketsDir());
+  const past = new Set(
+    files
+      .map((file) => file.slice(0, 16))
+      .filter((id) => TICKET_ID.test(id) && (readTicket(id)?.expiresAt ?? Number.POSITIVE_INFINITY) < now - DAY_MS),
+  );
+  for (const file of files) if (past.has(file.slice(0, 16))) rmSync(join(ticketsDir(), file), { force: true });
 }
 
 export interface TicketRequest {
@@ -302,12 +334,10 @@ export async function startTicket(
   if (settled(ticket)) return ticket;
   // Claimed and at work: the step writes the ticket now, so this command reports it as it is.
   if (!exited && !input.waitsFirst && ticket.status === "working") return ticket;
-  // Given up on, unclaimed or giving the person nothing: its process goes first, or it would hold its port and write
-  // the ticket after this.
+  // Given up on, unclaimed or giving the person nothing: the end first, then its process, which would hold its port.
   const stoppedItself = exited;
-  if (!stoppedItself && child.pid !== undefined) await stop(child.pid);
   const within = `${startTimeoutMs / 1000}s: ${ticketLogPath(id)} says why`;
-  return update(id, {
+  const ended = update(id, {
     status: "failed",
     message: stoppedItself
       ? `it stopped before it started: ${ticketLogPath(id)} says why`
@@ -315,6 +345,8 @@ export async function startTicket(
         ? `it did not start within ${within}`
         : `it gave the person nothing to do within ${within}`,
   });
+  if (!stoppedItself && child.pid !== undefined) await stop(child.pid);
+  return ended;
 }
 
 /**
@@ -348,11 +380,12 @@ export async function stopTicket(id: string): Promise<Ticket> {
   const ticket = readTicket(id);
   if (ticket === undefined) throw new Error(`ticket ${id} is gone from ${ticketsDir()}`);
   if (!waiting(ticket)) return ticket;
-  if (ticket.pid !== undefined) await stop(ticket.pid);
-  return update(id, {
+  const ended = update(id, {
     status: "failed",
     message: `stopped on request; what it was doing may be left half-done (${ticketLogPath(id)} says where it was)`,
   });
+  if (ticket.pid !== undefined) await stop(ticket.pid);
+  return ended;
 }
 
 /**
