@@ -15,7 +15,7 @@ import type { CredentialStore } from "../../sign-in-api.ts";
 import type { McpOptions } from "../../mcp-api.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
 import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
-import { mcpAuthorization } from "../../mcp/host.ts";
+import { mcpAuthorization, mcpAuthorizationInState } from "../../mcp/host.ts";
 import { mcpTools } from "./mcp.ts";
 import { loadContent } from "../../content/file.ts";
 import { type ResolvedContent, cloneContent, resolveContent } from "../../content/resolve.ts";
@@ -84,6 +84,13 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   projectDir?: string;
   /** The instance's state root, over `FASTAGENT_STATE_DIR` and the project directory's own. */
   stateRoot?: string;
+  /**
+   * Where the instance keeps its model credentials and MCP grants when it is given no store: `"secrets"`, the project's
+   * `.secrets/` over the machine's own credentials and as `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` place them
+   * (the CLI's), or `"state"`, `auth.json` and `mcp-auth.json` in the state root and nothing else (an app's).
+   * Default `"secrets"`.
+   */
+  keeps?: "secrets" | "state";
   /** Whether a clock fires the instance's wake-ups now (`assembleAgent`'s `wakeTicking`). Default always. */
   wakeTicking?: () => boolean;
 }
@@ -195,10 +202,13 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   );
   const content = await contentForThisRun(dir, options.config, workdir, env);
   const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
+  const authPath =
+    options.authPath ??
+    (options.keeps === "state" && options.credentialStore === undefined ? join(stateRoot, "auth.json") : undefined);
   const models = await modelEnvironment(
     projectDir,
     {
-      ...(options.authPath === undefined ? {} : { authPath: options.authPath }),
+      ...(authPath === undefined ? {} : { authPath }),
       ...(options.credentialStore === undefined ? {} : { credentialStore: options.credentialStore }),
     },
     code.providers,
@@ -212,7 +222,9 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     const mcpEnvironment = { ...secrets, ...options.mcp?.variables };
     mcp = await openMcpClients(
       resolveMcpServers(mcpServers, mcpEnvironment, undefined, workdir, processEnv),
-      mcpAuthorization(projectDir, env, stateRoot, options.mcp),
+      options.keeps === "state"
+        ? mcpAuthorizationInState(stateRoot, options.mcp)
+        : mcpAuthorization(projectDir, env, stateRoot, options.mcp),
       options.mcp,
     );
     agent = await assembleAgent(definition, {
@@ -364,6 +376,7 @@ export async function openAgent<Settings = unknown>(
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(config === undefined ? {} : { config }),
     wakeTicking: () => ticking,
+    keeps: "state",
     ...(options.mcp === undefined ? {} : { mcp: options.mcp }),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.credentials === undefined ? {} : { credentialStore: piCredentials(options.credentials) }),

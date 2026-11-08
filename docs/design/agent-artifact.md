@@ -2,16 +2,14 @@
 title: The agent framework's artifact and instance inputs
 description: "FastAgent as an agent framework: one immutable built definition, assembled deterministically from explicit instance inputs (configuration, secrets, state, workspace) on a laptop, inside an app or in the cloud."
 type: design-doc
-status: implemented, except that the model credentials and the MCP grants are still kept in `.secrets/` (§4.1)
+status: implemented
 ---
 
 # The agent framework's artifact and instance inputs
 
-**Status: implemented, except one item.** Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900),
-whose progress comment lists the PRs. The artifact (§3), the instance inputs (§4), the deployment (§6) and the
-instance additions (§7) are built. Not built: moving the model credentials and the MCP grants out of `.secrets/` and
-under `.state/` (§4.1), so `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` still place them. Where this and the code
-disagree, the code is current behavior and this is the target. This revises the first draft merged in
+**Status: implemented.** Tracking: [#900](https://github.com/fastagent-sh/fastagent/issues/900), whose progress
+comment lists the PRs. The artifact (§3), the instance inputs (§4), the deployment (§6) and the instance additions (§7)
+are built. Where this and the code disagree, the code is current behavior and this is the target. This revises the first draft merged in
 [#901](https://github.com/fastagent-sh/fastagent/pull/901). Items marked *implementation research* are decided in
 direction and settled while building.
 
@@ -583,7 +581,7 @@ A container instance:
 environment               secrets injected by the platform, or AgentCore's secret ARN
 ```
 
-This is the layout as built. The target of §4.1 is smaller: `.secrets/` goes, and its two files move under `.state/`.
+A deployed box runs the CLI's instance, so it keeps `.secrets/`; an app's instance (§4.1) has no such directory.
 
 The volume no longer holds a copy of the definition (0.29.0's `/data/definition`): the program lives only in the image,
 and a volume holds only state and work.
@@ -739,8 +737,7 @@ Recorded, not solved here:
 ## 9. Seams that changed, and evidence
 
 The *Before* column is 0.29.0. Every change below is made, except that the runtime prompt's description of the
-definition still speaks of an editable directory (#919), and that the model credentials and the MCP grants are still
-read from `.secrets/` (§4.1).
+definition still speaks of an editable directory (#919).
 
 | Before | Change |
 |---|---|

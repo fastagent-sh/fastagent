@@ -114,8 +114,8 @@ interface WebhookRegistration {
 
 `openAgent` opens one instance of a definition the way `dev` and `start` do: a definition `fastagent build` made for
 another format is refused, naming the FastAgent version that opens it. It builds the code with the secrets it declares (a required one without a value refuses, naming where it is declared), prepares the declared
-environment, clones the content, builds the model environment over the agent's credentials (`.secrets/auth.json` over
-the machine's, or the store `credentials` gives) with its [model lists](configuration.md#model-lists) refreshed (a request to
+environment, clones the content, builds the model environment over the agent's credentials (the store `credentials` gives, else `auth.json` in the state
+root, and never the project's `.secrets/`, the machine's own credentials or `FASTAGENT_AUTH_PATH`) with its [model lists](configuration.md#model-lists) refreshed (a request to
 `https://pi.dev` of at most 5 s, and to a provider that fetches its own list, unless what `<state root>/models/` keeps
 is less than 4 hours old; `FASTAGENT_OFFLINE=1` makes none), and opens the instance's storage,
 `<state root>/agent.sqlite`, which one process holds at a time: a second opener is refused. The state root is

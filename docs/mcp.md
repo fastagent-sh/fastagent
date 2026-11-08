@@ -118,8 +118,8 @@ The browser callback binds only `127.0.0.1`. For a remote CLI, run it with a fix
 the browser's machine. An automatic `mcp login --deployment` relay is not provided. A local Kage grant is never copied into
 a deployed instance. Prepare the target's authorization separately, or use its own static credentials.
 
-Default grants live in the selected `.secrets/mcp-auth.json`; instance bindings are under the state root in
-`mcp-bindings.json`. Grant writes are atomic and owner-readable; symlink aliases lock the same backing file. Before a
+The CLI keeps default grants in the selected `.secrets/mcp-auth.json`; `openAgent`, given no `mcp` store, keeps them in
+`mcp-auth.json` in the state directory. Instance bindings are under the state root in `mcp-bindings.json`. Grant writes are atomic and owner-readable; symlink aliases lock the same backing file. Before a
 managed grant write, FastAgent prepares the owned secrets directory's `.gitignore`, using the same rule as value files.
 An unprotected `FASTAGENT_SECRETS_DIR` override produces a warning rather than an ignore file in the operator's directory;
 explicit `mcpGrantFile(path)` stores remain the host's responsibility. Git ignores do not untrack already committed files.

@@ -16,8 +16,9 @@ both run the **same** agent.
 - **Node ≥ 24.15** (or Bun ≥ 1.4). Ships compiled JS + types; no build step for FastAgent itself.
 - **Install as a dependency** of your app: `npm i @fastagent-sh/fastagent`. The agent directory has its own
   `package.json` too ([init](cli.md#fastagent-init)); keep the versions aligned.
-- **Model credentials**: `fastagent login` in the agent directory (writes its `.secrets/auth.json`) or a provider API
-  key in the environment (e.g. `OPENAI_API_KEY`). See [Auth](#4-auth).
+- **Model credentials**: a provider API key in `secrets` (e.g. `OPENAI_API_KEY`), a `credentials` store of your own, or
+  an `auth.json` in the instance's state directory. `fastagent login` writes the project's `.secrets/auth.json`, which
+  an app's instance does not read. See [Auth](#4-auth).
 
 ## The one mental model
 
@@ -212,11 +213,13 @@ app.register(async (scope) => {
 
 ## 4. Auth
 
-`openAgent` reads the instance's `.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), the provider's variable from
-`secrets`, and then the global `~/.fastagent/.secrets/auth.json` for a provider the agent authenticates no other way
-([order](configuration.md#auth-and-secrets)). `fastagent login` in the agent directory signs a provider in.
+`openAgent` reads the model credentials from `credentials`, else from `auth.json` in the instance's state directory
+(`<root>/.state/auth.json`), and the provider's variable from `secrets`. It reads nothing else: not the project's
+`.secrets/`, not `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR`, not the machine's `~/.fastagent`, so a person's own
+`fastagent login` never becomes an app's credential. MCP grants are kept the same way: the `mcp` store you give, else
+`mcp-auth.json` in the state directory.
 
-`credentials` replaces the files with a `CredentialStore` of your own, refreshes included; the provider variables in `secrets` and a
+`credentials` replaces the file with a `CredentialStore` of your own, refreshes included; the provider variables in `secrets` and a
 provider's own auth still apply. Implement one over an OS keychain or Electron `safeStorage`, or keep FastAgent's file
 somewhere of your choosing with `credentialFile(path)`. To sign a person in from your own UI, list the ways with
 `signInOptions(store)` and run one with `signIn`, which asks and tells through your interaction:

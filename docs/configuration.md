@@ -410,6 +410,9 @@ For one provider, the agent uses the first of:
 2. what the provider resolves itself: its env var, or a provider in code's own `auth`;
 3. the global `~/.fastagent/.secrets/auth.json`.
 
+That is the CLI's order. An app's `openAgent` reads the store `credentials` gives, else `auth.json` in the instance's state
+directory, and the provider's variable from its `secrets` input, and nothing else ([Embedding](embedding.md#4-auth)).
+
 The global file comes last because a deployment never has it: a global login that outranked a key in `.secrets/.env`
 would run one credential locally and another deployed. A refresh is written back to the file the credential was read
 from. Setting `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR` names the one file to use, so the global file is not
