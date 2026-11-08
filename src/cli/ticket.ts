@@ -6,8 +6,9 @@
  * there is something for the person to do. The command's `--check <ticket>` reads where it stands from any process,
  * and hands the step the address a browser ended on when that browser could not reach this machine.
  *
- * A ticket is a file in the machine's own state, ~/.fastagent/.state/tickets, written whole by one process at a time:
- * the starting command until the step starts, then the step alone (or whoever finds its process gone). One that has
+ * A ticket is a file in the machine's own state, ~/.fastagent/.state/tickets, written whole (`writeFileAtomic`), but by
+ * more than one process at once: the starting command until the step starts, then the step, and whoever finds its
+ * process gone or replaces it (every `--check`, a newer step for the subject). One that has
  * ended stays as it ended. A newer step for the same subject stops an older one still waiting on its person, whose
  * process would otherwise hold what it holds (a sign-in's callback port, OpenAI's fixed) until it expires; so does one
  * still getting ready (reaching a box, opening a tunnel), which may hang there. One finishing what its person did (a
@@ -102,7 +103,13 @@ function readTicket(id: string): Ticket | undefined {
   }
 }
 
-const writeTicket = (ticket: Ticket): void => writeFileAtomic(ticketPath(ticket.ticket), JSON.stringify(ticket));
+/**
+ * A ticket is written by several processes: the command that started the step, the step's own process, and every
+ * `--check`. Each writes a temp of its own (`sharedWriters`): the fixed name is for one writer, and two of them rename
+ * each other's file away or write one temp at once, which a reader sees as `Unexpected non-whitespace character after JSON`.
+ */
+const writeTicket = (ticket: Ticket): void =>
+  writeFileAtomic(ticketPath(ticket.ticket), JSON.stringify(ticket), undefined, true);
 
 const waiting = (ticket: Ticket) =>
   ticket.status === "starting" || ticket.status === "need_user_action" || ticket.status === "working";
@@ -318,7 +325,7 @@ export async function checkTicket(id: string, address?: string): Promise<Ticket 
   let ticket = readTicket(id);
   if (ticket === undefined) return undefined;
   if (address !== undefined && ticket.status === "need_user_action") {
-    writeFileAtomic(addressPath(id), address);
+    writeFileAtomic(addressPath(id), address, undefined, true);
     for (const deadline = Date.now() + ADDRESS_TIMEOUT_MS; Date.now() < deadline; ) {
       ticket = readTicket(id) as Ticket;
       if (ticket.status !== "need_user_action" || !running(ticket.pid)) break;
