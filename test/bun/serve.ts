@@ -6,14 +6,9 @@
 import type { Agent } from "../../src/agent-api.ts";
 import { serveHandler } from "../../src/channels/serve.ts";
 import { apiHandler } from "../../src/http/server.ts";
+import { check, finish } from "../bun-check.ts";
 
 if (typeof process.versions.bun !== "string") throw new Error("run this with bun: bun test/bun/serve.ts");
-
-const failures: string[] = [];
-function check(label: string, pass: boolean, detail: string): void {
-  console.log(`${pass ? "ok  " : "FAIL"} ${label}${pass ? "" : `: ${detail}`}`);
-  if (!pass) failures.push(label);
-}
 
 {
   const NativeResponse = globalThis.Response;
@@ -128,8 +123,4 @@ function check(label: string, pass: boolean, detail: string): void {
   await api.dispose();
 }
 
-if (failures.length > 0) {
-  console.error(`${failures.length} of the host contract failed on Bun ${process.versions.bun}`);
-  process.exit(1);
-}
-process.exit(0);
+finish();

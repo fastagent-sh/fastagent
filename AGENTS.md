@@ -99,6 +99,8 @@ src/
 │                           # and status cards, and the headers of a page that takes a secret
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code edits (src/, config, package.json, .env); the
 │                           # prompt files and skills are read per message
+├── runtime-websocket.ts    # the runtime's own WebSocket and the pings it can send (undici's, or Bun's own before
+│                           # 1.4.4): what Slack's Socket Mode and AgentCore's shell hold a connection open with
 ├── proxy.ts                # the process's outbound-fetch policy: the declared proxy, loopback exempt by default
 ├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL); only https or
 │                           # loopback http reaches the opener, because some URLs come from a deployed box

@@ -11,9 +11,8 @@
  * retried with a growing wait; a refused token and Socket Mode turned off for the app (`link_disabled`) end it with their
  * reason, because retrying cannot fix them.
  */
-import { channel } from "node:diagnostics_channel";
-import * as undici from "undici";
 import type { LongConnection } from "../../channel.ts";
+import { RuntimeWebSocket, pinger, watchPongs } from "../../runtime-websocket.ts";
 import { log } from "../../log.ts";
 import { pause, whenAborted } from "../kit/abortable.ts";
 import type { SlackEventEnvelope } from "./parse.ts";
@@ -72,20 +71,16 @@ export interface SlackSocketOptions {
   };
 }
 
-/** The runtime's own WebSocket, with the pings undici can send; a runtime that offers neither serves without them. */
+/** The runtime's own WebSocket, with the pings it can send; a runtime that offers none serves without them. */
 const openRuntimeSocket: OpenSlackSocket = (url, handlers) => {
-  const Socket = undici.WebSocket ?? globalThis.WebSocket;
-  const socket = new Socket(url);
-  const pongs = channel("undici:websocket:pong");
-  const onPong = (message: unknown): void => {
-    if ((message as { websocket?: unknown }).websocket === socket) handlers.pong();
-  };
-  pongs.subscribe(onPong);
+  const socket = new RuntimeWebSocket(url);
+  const stopPongs = watchPongs(socket, () => handlers.pong());
+  const ping = pinger(socket);
   let closed = false;
   const end = (reason: string): void => {
     if (closed) return;
     closed = true;
-    pongs.unsubscribe(onPong);
+    stopPongs();
     handlers.close(reason);
   };
   socket.addEventListener("message", (event) => handlers.message(String(event.data)));
@@ -96,9 +91,7 @@ const openRuntimeSocket: OpenSlackSocket = (url, handlers) => {
   return {
     send: (data) => socket.send(data),
     close: () => socket.close(),
-    ...(undici.WebSocket !== undefined && typeof undici.ping === "function"
-      ? { ping: () => undici.ping(socket as never) }
-      : {}),
+    ...(ping ? { ping } : {}),
   };
 };
 

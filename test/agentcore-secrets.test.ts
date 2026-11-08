@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyRuntimeSecrets, readSecretValues } from "../src/deploy/agentcore/runtime-secrets.ts";
 import { agentcoreSecretStore } from "../src/deploy/agentcore/store.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
+import { awsStandIn } from "./aws-stand-in.ts";
 
 const NAME = "fastagent/bot";
 const quiet = () => {};
@@ -159,6 +160,22 @@ describe("the container's read of its secret", () => {
     // IMDSv2: a token first, then the role, then its credentials.
     expect(requests.slice(0, 3).map((r) => r.method)).toEqual(["PUT", "GET", "GET"]);
     expect(requests[1]?.headers["x-aws-ec2-metadata-token"]).toBe("imds-token");
+  });
+
+  it("signs a request that an independent SigV4 computation accepts, and one it would refuse is refused", async () => {
+    const standIn = awsStandIn(ARN, '{"A":"1"}');
+    vi.stubGlobal("fetch", standIn.fetch);
+    expect(await readSecretValues(ARN)).toEqual({ A: "1" });
+    expect(standIn.problems).toEqual([]);
+    expect(standIn.calls).toEqual([
+      "PUT 169.254.169.254/latest/api/token",
+      "GET 169.254.169.254/latest/meta-data/iam/security-credentials/",
+      "GET 169.254.169.254/latest/meta-data/iam/security-credentials/execution_role",
+      "POST secretsmanager.ap-southeast-1.amazonaws.com/",
+    ]);
+    const wrong = awsStandIn(ARN, '{"A":"1"}', "another-secret-key");
+    vi.stubGlobal("fetch", wrong.fetch);
+    await expect(readSecretValues(ARN)).rejects.toThrow("GetSecretValue answered 403: signature mismatch");
   });
 
   it("puts the values into the environment, except a name the platform already set", async () => {
