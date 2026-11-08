@@ -11,6 +11,7 @@ import {
   checkTicket,
   createTicket,
   endTicket,
+  procfsIsOurs,
   runTicket,
   startTicket,
   stopTicket,
@@ -457,6 +458,14 @@ describe("a step that outlives the command that starts it", () => {
       }
     },
   );
+
+  it("reads /proc only when it is this process's PID namespace's", () => {
+    // In a namespace of its own with the host's /proc, a process is pid 1 and /proc/self says 18, and a live child's
+    // /proc/<pid> is not there: taken for gone, a step that runs would be reported stopped and never stopped.
+    expect(procfsIsOurs("1 (node) S 0 1 1", 1)).toBe(true);
+    expect(procfsIsOurs("18 (node) S 0 18 18", 1)).toBe(false);
+    expect(procfsIsOurs("12 (node) S 1 12 12", 1)).toBe(false);
+  });
 
   it("an ended step stays as it ended: a late writer cannot reopen it", async () => {
     const { ticket } = createTicket(request());

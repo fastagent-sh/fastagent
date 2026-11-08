@@ -175,7 +175,15 @@ function running(pid: number | undefined): boolean {
   return !exited(pid);
 }
 
-const PROCFS = existsSync("/proc/self/stat");
+/**
+ * Whether `/proc/self/stat` (`selfStat`) is the process `pid`'s, so `/proc/<pid>` names the process `kill(pid, 0)` does:
+ * a sandbox may give a process a PID namespace of its own and leave it the host's /proc. Not public: a test seam.
+ */
+export function procfsIsOurs(selfStat: string, pid: number): boolean {
+  return selfStat.startsWith(`${pid} `);
+}
+
+const PROCFS = existsSync("/proc/self/stat") && procfsIsOurs(readFileSync("/proc/self/stat", "utf8"), process.pid);
 
 /** Whether /proc has `pid` as exited: a zombie (Z) or dead (X), or gone since signal 0 answered. */
 function exited(pid: number): boolean {
