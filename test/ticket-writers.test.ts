@@ -3,9 +3,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
- * A ticket is written by several processes at once (the command that started the step, the step's own process, every
- * `--check`), and `writeFileAtomic`'s fixed temp name is for one writer: two of them rename each other's file away or
- * write one temp at once. That race is in atomic-write.test.ts; this holds ticket.ts to the shared-writers form.
+ * The address a `--check --code` hands a step can be written by two checks at once, and `writeFileAtomic`'s fixed temp
+ * name is for one writer: two of them rename each other's file away or write one temp at once. That race is in
+ * atomic-write.test.ts; this holds the address to the shared-writers form. (The ticket's own record has one writer at a
+ * time, and its end is created once: ticket.test.ts.)
  */
 const writes: { path: string; shared: boolean }[] = [];
 vi.mock("../src/atomic-write.ts", async (importOriginal) => {
@@ -25,7 +26,7 @@ afterEach(() => {
 });
 
 describe("a ticket's writers", () => {
-  it("each write the ticket file and the address file through a temp of their own", async () => {
+  it("write the address through a temp of their own", async () => {
     const { checkTicket, createTicket } = await import("../src/cli/ticket.ts");
     const ticket = createTicket({
       subject: "login:openai",
@@ -34,7 +35,6 @@ describe("a ticket's writers", () => {
       restart: "fastagent login openai --method account",
       timeoutSeconds: 60,
     });
-    expect(writes.map(({ path }) => path.replace(/^.*\//, ""))).toEqual([`${ticket.ticket}.json`]);
     // `--check --code` hands the address over only to a step waiting on its person, with a process to take it.
     const file = join(process.env.HOME as string, ".fastagent", ".state", "tickets", `${ticket.ticket}.json`);
     writeFileSync(file, JSON.stringify({ ...ticket, status: "need_user_action", pid: process.pid }));
@@ -43,7 +43,7 @@ describe("a ticket's writers", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     await checking;
     vi.useRealTimers();
-    expect(writes.map(({ path }) => path.replace(/^.*\//, ""))).toContain(`${ticket.ticket}.address`);
-    expect(writes.filter(({ shared }) => !shared)).toEqual([]);
+    const address = writes.filter(({ path }) => path.endsWith(`${ticket.ticket}.address`));
+    expect(address.map(({ shared }) => shared)).toEqual([true]);
   });
 });
