@@ -99,7 +99,7 @@ export async function loadSourceDefinition(directory: string): Promise<AgentDefi
     name: typeof pkg.name === "string" ? pkg.name : basename(dir),
     // A source project need not be published, so it need not have a version.
     version: typeof pkg.version === "string" ? pkg.version : "0.0.0",
-    ...(typeof pkg.description === "string" ? { description: pkg.description } : {}),
+    ...(typeof pkg.description === "string" && pkg.description.trim() !== "" ? { description: pkg.description } : {}),
     dir,
     config,
     registry,

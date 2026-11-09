@@ -375,6 +375,11 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
         description: "Answers order questions.",
         starters: ["Where is my order?"],
       });
+      const blank = await open({
+        ...files,
+        "package.json": '{ "name": "support", "description": "  ", "type": "module" }',
+      });
+      expect((await blank.agent.info()).agent).not.toHaveProperty("description");
       const own = await open(files, { config: { settings: {}, sources: {}, description: "Ours." } });
       expect(await own.agent.info()).toMatchObject({
         name: "acme-support",
