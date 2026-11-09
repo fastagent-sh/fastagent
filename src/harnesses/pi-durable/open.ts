@@ -106,6 +106,7 @@ export async function loadSourceDefinition(directory: string): Promise<AgentDefi
     // A source project need not be published, so it need not have a version.
     version: typeof pkg.version === "string" ? pkg.version : "0.0.0",
     ...(typeof pkg.description === "string" && pkg.description.trim() !== "" ? { description: pkg.description } : {}),
+    source: true,
     dir,
     config,
     registry,
@@ -375,6 +376,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
         runsAs: options.runsAs,
         workdir: options.workdir ?? dir,
         text,
+        source: definition.source === true,
       }),
       tools: [...code.tools, ...(options.mcpTools ?? [])],
     }),

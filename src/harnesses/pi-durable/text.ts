@@ -310,7 +310,7 @@ function instructionsText(sources: readonly TextSource[]): string | undefined {
 export function definitionSections(
   agentDir: string,
   content: readonly ResolvedContent[],
-  options: { wake: boolean; runsAs: RunsAs; workdir?: string; text?: TextSources },
+  options: { wake: boolean; runsAs: RunsAs; workdir?: string; text?: TextSources; source?: boolean },
 ): PromptSection[] {
   const text = options.text ?? programText(agentDir);
   return [
@@ -318,7 +318,9 @@ export function definitionSections(
     section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
     section("instance_context", () => instructionsText(text.instructions)),
     section("skills", () => skillsPrompt(readSkills(text.skills))),
-    section("content", () => contentSection({ agentDir, workdir: options.workdir ?? agentDir, content })),
+    section("content", () =>
+      contentSection({ agentDir, workdir: options.workdir ?? agentDir, source: options.source === true, content }),
+    ),
     section("self_change", () =>
       options.runsAs.deployed ? selfChangeSection(options.wake, options.runsAs.agentcore) : undefined,
     ),
@@ -366,18 +368,26 @@ function contentKind(c: ResolvedContent): string {
 function contentSection({
   agentDir,
   workdir,
+  source,
   content,
 }: {
   agentDir: string;
   workdir: string;
+  source: boolean;
   content: readonly ResolvedContent[];
 }): string {
+  // A source project is the author's working copy, which `dev` exists for the agent to improve; a built package is read-only.
+  const definition = source
+    ? `Your definition is in ${agentDir}, the author's working copy: SYSTEM.md, AGENTS.md, skills/ and prompts/ are ` +
+      `re-read for every message, so an edit to them takes effect on the next one, while src/ and the configuration ` +
+      `are read when you start and need a restart.`
+    : `Your definition is in ${agentDir}, which you read and do not change.`;
   const own =
     workdir === agentDir
       ? `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
         `land there unless you put them elsewhere.`
       : `Your working directory, ${workdir}, is your own directory: files you create land there unless you put them ` +
-        `elsewhere. Your definition is in ${agentDir}, which you read and do not change.`;
+        `elsewhere. ${definition}`;
   if (content.length === 0) return `${own} Nothing else is declared for you: you work only in your own directory.`;
   const line = (c: ResolvedContent) =>
     `- ${c.name}: ${c.location} (${contentKind(c)})${c.description !== undefined ? ` ${c.description}` : ""}`;

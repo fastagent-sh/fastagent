@@ -30,7 +30,7 @@ import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { openSource } from "./open-source.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
 import { DEV_SERVE_ENV, NOT_HOSTED } from "../src/serving-command.ts";
-import { expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
+import { definitionSections, expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
 
 // Under test/fixtures, so the agent's modules resolve this repository's packages and its src/ by a fixed depth.
 const ROOT = join(import.meta.dirname, "fixtures");
@@ -355,6 +355,26 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
         (context) => fauxAssistantMessage(lastToolResult(context)),
       ]);
       expect((await ask(agent, "weather?")).answer?.text).toBe("London: sunny (key k-123, region none)");
+    });
+
+    it("tells an agent in a source project that its definition is the author's to edit, and a built one that it is not", async () => {
+      const workdir = mkdtempSync(join(tmpdir(), "fa-workdir-"));
+      made.push(workdir);
+      const { dir, agent, faux } = await open(FILES, { workdir });
+      let prompt = "";
+      faux.setResponses([
+        (context: TranscriptContext) => {
+          prompt = getCurrentSystemPrompt(context.messages);
+          return fauxAssistantMessage("ok");
+        },
+      ]);
+      await ask(agent, "hi");
+      expect(prompt).toContain(`Your definition is in ${dir}, the author's working copy`);
+      expect(prompt).not.toContain("which you read and do not change");
+      const built = definitionSections(dir, [], { wake: false, runsAs: NOT_HOSTED, workdir })
+        .find(({ key }) => key === "content")
+        ?.render({} as never, {} as never);
+      expect(built).toContain(`Your definition is in ${dir}, which you read and do not change.`);
     });
 
     it("reports the package's name and description apart from the instance's name, and the instance's own over them", async () => {

@@ -126,6 +126,8 @@ describe("fastagent build", () => {
   it("exports the definition from the generated entry, its modules running from dist/", async () => {
     const { dist } = await buildProject(project(FILES));
     const built = (await import(join(dist, "index.js"))).default;
+    // A built package is what an instance reads, never the author's working copy.
+    expect(built).not.toHaveProperty("source");
     expect(built).toMatchObject({
       format: 1,
       builtWith: expect.any(String),
