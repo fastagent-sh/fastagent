@@ -11,6 +11,8 @@ import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
 /** What an instance may set over the program's `defaults`, and what a program's `defaults` are (agent-artifact.md §3.2). */
 export interface AgentDefaults<Settings = unknown> {
+  /** Example first messages a client may offer as drafts, up to six: `info().agent.starters`. */
+  starters?: readonly string[];
   /** `"provider/modelId"`: what a session that names none answers with; a flag or `FASTAGENT_MODEL` may override it. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
@@ -41,10 +43,6 @@ export interface AgentDefaults<Settings = unknown> {
 }
 
 export interface AgentConfig<Settings = unknown> {
-  /** Constant: default `package.json`'s name. */
-  name?: string;
-  /** Constant. */
-  description?: string;
   /** Constant: third-party capabilities, installed after `src/extensions/`. */
   extensions?: readonly (Extension | Needs<Extension>)[];
   /** Constant: model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */

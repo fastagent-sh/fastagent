@@ -207,6 +207,17 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         await expect(send({ sessionId: message.id, content: "hi" })).rejects.toMatchObject({ code: "not_found" });
       });
 
+      it("reports what the agent says of itself apart from the instance's name", async () => {
+        expect(await agent.info()).toMatchObject({
+          name: "subject",
+          agent: {
+            name: "Subject Program",
+            description: "A subject.",
+            starters: ["Say hello", "What can you do?"],
+          },
+        });
+      });
+
       it("expands a command for the model while its user entry holds the text as sent", async () => {
         expect((await agent.info()).commands).toContainEqual({ name: "greet", description: "Greets someone" });
         const sessionId = await newSession(agent);

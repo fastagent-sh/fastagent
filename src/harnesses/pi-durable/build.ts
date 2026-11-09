@@ -229,7 +229,7 @@ export default defineDefinition({
   builtWith: ${JSON.stringify(definition.builtWith)},
   name: ${JSON.stringify(definition.name)},
   version: ${JSON.stringify(definition.version)},
-  dir: dirname(fileURLToPath(import.meta.url)),
+${definition.description === undefined ? "" : `  description: ${JSON.stringify(definition.description)},\n`}  dir: dirname(fileURLToPath(import.meta.url)),
   config: ${hasConfig ? "config ?? {}" : "{}"},
   registry: {
 ${kinds.map((kind) => `  ${kind}`).join("\n")}

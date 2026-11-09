@@ -24,7 +24,7 @@ shape:
 
 ```ts
 interface Agent {
-  info(): Promise<AgentInfo>; // name, description, commands, the tools and models (with their context windows) a session may name
+  info(): Promise<AgentInfo>; // the instance's name, the agent's name, description and starters, commands, the tools and models (with their context windows) a session may name
   usage(): Promise<Usage>; // what the instance has spent
   sessions: {
     create(options?: SessionSettings & { forkFrom?: { sessionId: string; entryId?: string } }): Promise<Session>;

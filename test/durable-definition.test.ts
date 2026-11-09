@@ -247,6 +247,13 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
     await expect(defaults("{ deploy: { fly: {} } }")).rejects.toThrow("/deploy/fly unknown field");
     await expect(defaults("{ http: { api: 'no' } }")).rejects.toThrow("/http/api");
     await expect(defaults("{ model: 'nomodel' }")).rejects.toThrow('/model must be "provider/modelId"');
+    // The package's name and description are `package.json`'s, not the configuration's.
+    await expect(configured("{ name: 'x' }")).rejects.toThrow('unknown key "name"');
+    await expect(configured("{ description: 'x' }")).rejects.toThrow('unknown key "description"');
+    await expect(defaults("{ starters: 'hi' }")).rejects.toThrow("/starters");
+    await expect(defaults("{ starters: Array(7).fill('hi') }")).rejects.toThrow("/starters");
+    await expect(defaults("{ starters: ['ok', ' '] }")).rejects.toThrow("/starters/1");
+    await expect(defaults("{ starters: ['x'.repeat(201)] }")).rejects.toThrow("/starters/0");
   });
 
   describe("opened", () => {
@@ -348,6 +355,31 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
         (context) => fauxAssistantMessage(lastToolResult(context)),
       ]);
       expect((await ask(agent, "weather?")).answer?.text).toBe("London: sunny (key k-123, region none)");
+    });
+
+    it("reports the package's name and description apart from the instance's name, and the instance's own over them", async () => {
+      const bare = await (await open()).agent.info();
+      expect(bare).toMatchObject({ name: "support", agent: { name: "support" } });
+      expect(bare.agent).not.toHaveProperty("description");
+      expect(bare.agent).not.toHaveProperty("starters");
+      const files = {
+        ...FILES,
+        "package.json": '{ "name": "@acme/support", "description": "Answers order questions.", "type": "module" }',
+        "fastagent.config.ts": FILES["fastagent.config.ts"]!.replace(
+          "defaults: {",
+          'defaults: { starters: ["Where is my order?"],',
+        ),
+      };
+      expect((await (await open(files)).agent.info()).agent).toEqual({
+        name: "@acme/support",
+        description: "Answers order questions.",
+        starters: ["Where is my order?"],
+      });
+      const own = await open(files, { config: { settings: {}, sources: {}, description: "Ours." } });
+      expect(await own.agent.info()).toMatchObject({
+        name: "acme-support",
+        agent: { name: "@acme/support", description: "Ours." },
+      });
     });
 
     it("offers its prompt templates and skills as commands, expanded for the model and kept as sent", async () => {

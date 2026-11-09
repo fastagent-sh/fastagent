@@ -81,8 +81,19 @@ epoch.
 
 ```ts
 interface AgentInfo {
+  /** The instance's name (a slug by default). */
   name: string;
-  description?: string;
+  /** How the agent presents itself to a person choosing or starting it. */
+  agent: {
+    /** The program's name; `name` above is this instance's. */
+    name: string;
+    description?: string;
+    /**
+     * Example first messages, at most 6. A client may offer one as an editable draft in its composer; reading them,
+     * or choosing one, does not send anything.
+     */
+    starters?: string[];
+  };
   /** What a message may start with as `/<name>`: the agent's prompt templates, and `skill:<name>` per skill (§5.1). */
   commands: { name: string; description?: string }[];
   /** The tools a session may enable (`tools`, §4). */

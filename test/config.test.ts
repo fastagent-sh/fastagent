@@ -55,6 +55,17 @@ describe("resolveConfig", () => {
     expect(config.sources).toEqual({ model: "program default", "http.port": "program default" });
   });
 
+  it("lets an instance say its own description and starters, starters over the program's, each with its source", () => {
+    const base = program({ defaults: { starters: ["Review this PR"] } });
+    expect(resolveConfig(base)).toMatchObject({ starters: ["Review this PR"] });
+    expect(resolveConfig(base)).not.toHaveProperty("description");
+    const config = resolveConfig(base, instance({ description: "Reviews our monorepo.", starters: ["Review #1"] }));
+    expect(config).toMatchObject({ description: "Reviews our monorepo.", starters: ["Review #1"] });
+    expect(config.sources).toMatchObject({ description: "fastagent.json", starters: "fastagent.json" });
+    expect(() => resolveConfig(base, instance({ starters: Array(7).fill("hi") }))).toThrow("/starters");
+    expect(() => resolveConfig(base, instance({ description: "  " }))).toThrow("/description");
+  });
+
   it("puts an instance over the defaults key by key: objects merge, so a port leaves api alone", () => {
     const config = resolveConfig(
       reviewer,

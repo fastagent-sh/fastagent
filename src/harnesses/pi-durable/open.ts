@@ -92,13 +92,14 @@ export async function loadSourceDefinition(directory: string): Promise<AgentDefi
   const dir = resolve(directory);
   const config = await loadConfig(dir);
   const registry = await importRegistry(dir);
-  const pkg = (await readPackageJson(dir)) as { name?: unknown; version?: unknown };
+  const pkg = (await readPackageJson(dir)) as { name?: unknown; version?: unknown; description?: unknown };
   return defineDefinition({
     format: DEFINITION_FORMAT,
     builtWith: await fastagentVersion(),
-    name: config.name ?? (typeof pkg.name === "string" ? pkg.name : basename(dir)),
+    name: typeof pkg.name === "string" ? pkg.name : basename(dir),
     // A source project need not be published, so it need not have a version.
     version: typeof pkg.version === "string" ? pkg.version : "0.0.0",
+    ...(typeof pkg.description === "string" ? { description: pkg.description } : {}),
     dir,
     config,
     registry,
@@ -379,12 +380,17 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     );
   }
   const thinkingLevel = options.thinkingLevel ?? config.thinkingLevel;
+  const description = config.description ?? definition.description;
   return openDurableAgent({
     storage: options.storage,
     models,
     registry,
     name: options.name ?? instanceName(definition.name),
-    ...(definition.config.description === undefined ? {} : { description: definition.config.description }),
+    agent: {
+      name: definition.name,
+      ...(description === undefined ? {} : { description }),
+      ...(config.starters === undefined ? {} : { starters: config.starters }),
+    },
     ...(model === undefined ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
