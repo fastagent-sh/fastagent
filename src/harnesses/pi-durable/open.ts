@@ -30,7 +30,13 @@ import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isByIngress, isNeeds } from "./define.ts";
-import { type EffectiveConfig, type InstanceConfigSource, checkProgramConfig, devInstanceConfig } from "./config.ts";
+import {
+  type EffectiveConfig,
+  type InstanceConfigSource,
+  agentPresentation,
+  checkProgramConfig,
+  devInstanceConfig,
+} from "./config.ts";
 import {
   type AgentDefinition,
   DEFINITION_FORMAT,
@@ -380,17 +386,12 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     );
   }
   const thinkingLevel = options.thinkingLevel ?? config.thinkingLevel;
-  const description = config.description ?? definition.description;
   return openDurableAgent({
     storage: options.storage,
     models,
     registry,
     name: options.name ?? instanceName(definition.name),
-    agent: {
-      name: definition.name,
-      ...(description === undefined ? {} : { description }),
-      ...(config.starters === undefined ? {} : { starters: config.starters }),
-    },
+    agent: agentPresentation(definition, config),
     ...(model === undefined ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),

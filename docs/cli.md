@@ -105,6 +105,8 @@ fastagent info [agent] [--json] [--model provider/modelId] [--name name] [--root
 
 Prints what the agent builds into, without serving it:
 
+- the agent's own name (`program`, when it differs from the instance's), its description and its starters (`agent` in
+  `--json`: the name, description and starters `info().agent` reports),
 - the agent directory, its content (`works on`, each with its location), its environment (the packages and
   apt packages `context.json` declares), the config path, and the model with its source (`--model`,
   `FASTAGENT_MODEL` or the config) and whether it resolves,

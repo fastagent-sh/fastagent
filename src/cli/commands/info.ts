@@ -9,7 +9,12 @@ import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import { type EffectiveConfig, configValue, resolveConfig } from "../../harnesses/pi-durable/config.ts";
+import {
+  type EffectiveConfig,
+  agentPresentation,
+  configValue,
+  resolveConfig,
+} from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { openText, readCommands } from "../../harnesses/pi-durable/text.ts";
@@ -38,6 +43,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     }
   })();
   const name = instanceName(definition.name, enteredInstanceName() ?? config.name);
+  const agent = agentPresentation(definition, config);
   const modelSpec = modelSpecFor(config, opts.model);
   const declared = (() => {
     try {
@@ -97,6 +103,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
         {
           agentDir,
           name: name,
+          agent: { name: agent.name, description: agent.description ?? null, starters: agent.starters ?? [] },
           content,
           contentError: contentError ?? null,
           environment: environment ?? null,
@@ -127,6 +134,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", `${name} — ${agentDir}`);
+  if (agent.name !== name) line("program", agent.name);
+  if (agent.description !== undefined) line("description", agent.description);
+  if (agent.starters !== undefined)
+    line("starters", agent.starters.map((starter) => JSON.stringify(starter)).join(", "));
   for (const [label, value] of contentLines(content)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");

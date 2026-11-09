@@ -382,6 +382,19 @@ export function resolveConfig(definition: AgentDefinition, instance?: InstanceCo
   return { ...merged, settings: values, sources };
 }
 
+/** What `info().agent` reports: the package's name, and the description and starters the instance resolves. */
+export function agentPresentation(
+  definition: AgentDefinition,
+  config: EffectiveConfig,
+): { name: string; description?: string; starters?: readonly string[] } {
+  const description = config.description ?? definition.description;
+  return {
+    name: definition.name,
+    ...(description === undefined ? {} : { description }),
+    ...(config.starters === undefined ? {} : { starters: config.starters }),
+  };
+}
+
 /** The value at a dotted `path` of `config`. */
 export function configValue(config: EffectiveConfig, path: string): unknown {
   let value: unknown = config;
