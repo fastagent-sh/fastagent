@@ -24,10 +24,30 @@ describe("cli: info", () => {
     expect(code).toBe(0); // an unset model is reported, not fatal
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
+    expect(info.agent).toEqual({ name: expect.any(String), description: null, starters: [] });
     expect(info.tools).toEqual(["lookup"]);
     expect(info.channels).toEqual([{ name: "github", ingress: "webhook" }]);
     expect(info.commands.map((command: { name: string }) => command.name)).toEqual(["skill:greet"]);
     await expect(stat(join(dir, ".state"))).rejects.toThrow(); // read-only: never creates the state root
+  });
+
+  it("info reports the program's name apart from the instance's, and the description and starters it resolves", async () => {
+    const dir = await agentWorkspace("fa-info-agent-", {
+      "package.json": '{ "name": "@acme/reviewer", "description": "Reviews pull requests.", "type": "module" }',
+      "fastagent.config.ts": 'export default { defaults: { starters: ["Review this PR"] } };\n',
+    });
+    const json = await runInProcess(["info", dir, "--json"], undefined, withoutModel());
+    expect(json.code, json.stderr).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      name: "acme-reviewer",
+      agent: { name: "@acme/reviewer", description: "Reviews pull requests.", starters: ["Review this PR"] },
+    });
+    await writeFile(join(dir, "fastagent.json"), '{ "description": "Reviews our monorepo." }\n');
+    const text = await runInProcess(["info", dir], undefined, withoutModel());
+    expect(text.code, text.stderr).toBe(0);
+    expect(text.stdout).toMatch(/^program:\s+@acme\/reviewer$/m);
+    expect(text.stdout).toMatch(/^description:\s+Reviews our monorepo\.$/m);
+    expect(text.stdout).toMatch(/^starters:\s+"Review this PR"$/m);
   });
 
   it("info reports the declared environment without installing it, and says why a refused one stops the agent", async () => {

@@ -30,7 +30,13 @@ import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isByIngress, isNeeds } from "./define.ts";
-import { type EffectiveConfig, type InstanceConfigSource, checkProgramConfig, devInstanceConfig } from "./config.ts";
+import {
+  type EffectiveConfig,
+  type InstanceConfigSource,
+  agentPresentation,
+  checkProgramConfig,
+  devInstanceConfig,
+} from "./config.ts";
 import {
   type AgentDefinition,
   DEFINITION_FORMAT,
@@ -92,13 +98,14 @@ export async function loadSourceDefinition(directory: string): Promise<AgentDefi
   const dir = resolve(directory);
   const config = await loadConfig(dir);
   const registry = await importRegistry(dir);
-  const pkg = (await readPackageJson(dir)) as { name?: unknown; version?: unknown };
+  const pkg = (await readPackageJson(dir)) as { name?: unknown; version?: unknown; description?: unknown };
   return defineDefinition({
     format: DEFINITION_FORMAT,
     builtWith: await fastagentVersion(),
-    name: config.name ?? (typeof pkg.name === "string" ? pkg.name : basename(dir)),
+    name: typeof pkg.name === "string" ? pkg.name : basename(dir),
     // A source project need not be published, so it need not have a version.
     version: typeof pkg.version === "string" ? pkg.version : "0.0.0",
+    ...(typeof pkg.description === "string" && pkg.description.trim() !== "" ? { description: pkg.description } : {}),
     dir,
     config,
     registry,
@@ -384,7 +391,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     models,
     registry,
     name: options.name ?? instanceName(definition.name),
-    ...(definition.config.description === undefined ? {} : { description: definition.config.description }),
+    agent: agentPresentation(definition, config),
     ...(model === undefined ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),

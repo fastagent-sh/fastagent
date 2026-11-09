@@ -41,8 +41,11 @@ export interface AgentDefinition<Settings = unknown> {
   readonly format: number;
   /** The FastAgent version that made it: what a refusal of its format asks the opener to install. */
   readonly builtWith: string;
+  /** The package's name (`package.json`'s, else the directory's): `info().agent.name`. */
   readonly name: string;
   readonly version: string;
+  /** The package's `description`: `info().agent.description` unless an instance gives its own. */
+  readonly description?: string;
   /** Absolute: the program's files, its text, `context.json` and `mcp.json`. */
   readonly dir: string;
   readonly config: AgentConfig;

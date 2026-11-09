@@ -14,7 +14,7 @@
 import type { AgentConfig } from "@fastagent-sh/fastagent";
 
 export default {
-  // Constants (what this agent is; an instance cannot change them): name, description, providers, extensions.
+  // Constants (what this agent is; an instance cannot change them): providers, extensions. Its name and description are package.json's.
 
   // Defaults: what an instance starts with, which its own `fastagent.json` may override.
   defaults: {

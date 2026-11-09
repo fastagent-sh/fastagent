@@ -87,8 +87,10 @@ export interface DurableAgentOptions {
   registry: RegistryReader;
   settings?: HarnessSettings;
   env?: HarnessOptions["env"];
+  /** The instance's name: what `info().name` reports. */
   name: string;
-  description?: string;
+  /** `info().agent`: the program's name (default: the instance's), and what the instance says about itself. */
+  agent?: { name?: string; description?: string; starters?: readonly string[] };
   /** Read for every `info()` and send, so a command the definition gains is offered without a restart. */
   commands?: () => readonly AgentCommand[];
   /** What a conversation answers with when its own settings name none (defaults.ts). */
@@ -283,6 +285,7 @@ function durableAgent(
       });
     });
 
+  const presented = options.agent ?? {};
   const info = (): Promise<AgentInfo> =>
     settle(
       Effect.gen(function* () {
@@ -293,7 +296,11 @@ function durableAgent(
         });
         return {
           name: options.name,
-          ...(options.description === undefined ? {} : { description: options.description }),
+          agent: {
+            name: presented.name ?? options.name,
+            ...(presented.description === undefined ? {} : { description: presented.description }),
+            ...(presented.starters === undefined ? {} : { starters: [...presented.starters] }),
+          },
           commands: commands().map(named),
           tools: [...toolsByName().values()].map(named),
           models: available.map((model) => ({

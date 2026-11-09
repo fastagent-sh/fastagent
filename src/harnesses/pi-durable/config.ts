@@ -65,8 +65,10 @@ const THINKING_LEVELS = [
   "max",
 ] as const satisfies readonly ModelThinkingLevel[];
 const PROGRAM_DEFAULT = "program default";
+const MAX_STARTERS = 6;
+const MAX_STARTER_LENGTH = 200;
 
-const CONSTANTS = ["name", "description", "extensions", "providers"];
+const CONSTANTS = ["extensions", "providers"];
 /** Keys that were the program's own before they became defaults. */
 const FORMER_CONSTANTS = ["model", "thinkingLevel", "http", "deploy"];
 
@@ -95,6 +97,12 @@ function partial(settings: Schema): Schema {
 /** What the program's defaults and an instance's configuration may hold. `settings` is the program's, or none. */
 function shape(settings: Schema | undefined) {
   return {
+    starters: opt(
+      arr(str({ maxLength: MAX_STARTER_LENGTH, pattern: "\\S" }), {
+        description: "Example first messages a client may offer as drafts",
+        maxItems: MAX_STARTERS,
+      }),
+    ),
     model: opt(str({ description: 'The default model, "provider/modelId"', minLength: 3 })),
     thinkingLevel: opt(oneOf(THINKING_LEVELS)),
     http: opt(
@@ -152,6 +160,9 @@ export function instanceConfigSchema(settings: Schema | undefined): Schema {
     $schema: opt(str()),
     ...shape(settings),
     name: opt(str({ description: "The instance's name: one path segment of letters, digits, - and _" })),
+    description: opt(
+      str({ description: "One line about this instance, over the program's package.json description", pattern: "\\S" }),
+    ),
     content: opt(map(CONTENT_ENTRY)),
     mcpServers: opt(
       map(unknown(), {
@@ -294,6 +305,8 @@ const PERSON_SET_URL = ["slack", "lark"];
 export interface EffectiveConfig {
   /** The instance's name as its configuration gives it; none when it gives none (`instanceName` defaults it). */
   name?: string;
+  description?: string;
+  starters?: readonly string[];
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   http?: { port?: number; api?: boolean; publicUrl?: string };
@@ -367,6 +380,19 @@ export function resolveConfig(definition: AgentDefinition, instance?: InstanceCo
     }
   }
   return { ...merged, settings: values, sources };
+}
+
+/** What `info().agent` reports: the package's name, and the description and starters the instance resolves. */
+export function agentPresentation(
+  definition: AgentDefinition,
+  config: EffectiveConfig,
+): { name: string; description?: string; starters?: readonly string[] } {
+  const description = config.description ?? definition.description;
+  return {
+    name: definition.name,
+    ...(description === undefined ? {} : { description }),
+    ...(config.starters === undefined ? {} : { starters: config.starters }),
+  };
 }
 
 /** The value at a dotted `path` of `config`. */

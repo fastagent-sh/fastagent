@@ -228,7 +228,7 @@ export function scriptedAgent(
   };
 
   const agent: ScriptedAgent = {
-    info: async () => ({ name: "scripted", commands: [], tools: [], models: [] }),
+    info: async () => ({ name: "scripted", agent: { name: "scripted" }, commands: [], tools: [], models: [] }),
     usage: async () => ({ models: {}, tools: {} }),
     sessions: {
       async create(createOptions = {}) {

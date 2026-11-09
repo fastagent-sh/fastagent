@@ -34,6 +34,7 @@ function project(files: Record<string, string>): string {
     "package.json": JSON.stringify({
       name: "@acme/support",
       version: "1.2.0",
+      description: "Answers support questions.",
       type: "module",
       dependencies: { "@fastagent-sh/fastagent": "^0.29.0", "@earendil-works/pi-durable": "1.5.0", lodash: "^4" },
     }),
@@ -61,7 +62,7 @@ export default defineTool({
 `;
 
 const FILES: Record<string, string> = {
-  "fastagent.config.ts": 'export default { name: "support", defaults: { model: "openai/gpt-6.1-sol" } };\n',
+  "fastagent.config.ts": 'export default { defaults: { model: "openai/gpt-6.1-sol" } };\n',
   "SYSTEM.md": "You are Support.\n",
   "AGENTS.md": "Be brief.\n",
   LICENSE: "MIT\n",
@@ -111,6 +112,7 @@ describe("fastagent build", () => {
     expect(JSON.parse(readFileSync(join(dist, "package.json"), "utf8"))).toEqual({
       name: "@acme/support",
       version: "1.2.0",
+      description: "Answers support questions.",
       type: "module",
       exports: {
         ".": { types: "./index.d.ts", default: "./index.js" },
@@ -127,8 +129,9 @@ describe("fastagent build", () => {
     expect(built).toMatchObject({
       format: 1,
       builtWith: expect.any(String),
-      name: "support",
+      name: "@acme/support",
       version: "1.2.0",
+      description: "Answers support questions.",
       dir: dist,
     });
     expect(built.inputs.secrets).toEqual([
@@ -336,6 +339,11 @@ describe("fastagent build", () => {
     const dir = project(FILES);
     const { code, stdout, stderr } = await runInProcess(["build", dir, "--json"]);
     expect(code, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ dist: join(dir, "dist"), name: "support", version: "1.2.0", warnings: [] });
+    expect(JSON.parse(stdout)).toEqual({
+      dist: join(dir, "dist"),
+      name: "@acme/support",
+      version: "1.2.0",
+      warnings: [],
+    });
   });
 });

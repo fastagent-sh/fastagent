@@ -501,7 +501,7 @@ An instance's name is a key of its configuration, `name` in `fastagent.json` (§
 `FASTAGENT_NAME`, and `openAgent`'s `name`, override as `--model` and `openAgent`'s `model` override `model`. It is one path segment, refused otherwise, and defaults to the
 definition's name made one (`@scope/pkg` is `scope-pkg`), because a deployment joins it onto storage and resource names;
 two instances of one definition on one machine take distinct names by being given them. It is the instance's, so the
-program's `defaults` do not carry it, and `fastagent.config.ts`'s `name`, the program's, is only its default.
+program's `defaults` do not carry it, and the program's name, `package.json`'s, is only its default.
 `info().name` reports it.
 
 ### 4.6 A workbench app: Kage
