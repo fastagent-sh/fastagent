@@ -1,5 +1,6 @@
 /** The durable-turn LIFECYCLE the stateful chat channels share, over the kit's parts. */
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 import type { Message } from "../../agent-api.ts";
