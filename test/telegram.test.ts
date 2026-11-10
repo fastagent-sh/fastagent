@@ -672,6 +672,44 @@ describe("inputs steered into one run (real Agent)", () => {
     ]);
   });
 
+  it("does not wait out a rate limit for a reaction, so the turn ends as soon as its answer is delivered", async () => {
+    vi.spyOn(log, "warn").mockImplementation(() => {});
+    let reactionCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const method = String(url).split("/").pop();
+        if (method === "setMessageReaction") {
+          reactionCalls++;
+          return new Response(
+            JSON.stringify({ ok: false, description: "Too Many Requests", parameters: { retry_after: 1 } }),
+            { status: 429 },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true, result: method === "sendMessage" ? { message_id: 100 } : {} }), {
+          status: 200,
+        });
+      }),
+    );
+    const state = freshStateDir();
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
+    const upd = (n: number, text: string) => ({
+      update_id: n,
+      message: { message_id: n, text, chat: { id: 7, type: "private" } },
+    });
+    await ch(tgRequest(upd(1, "start the work")));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await ch(tgRequest(upd(2, "and keep the old column")));
+    await vi.waitFor(() => expect(reactionCalls).toBeGreaterThan(0));
+    const released = Date.now();
+    release();
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({}));
+    // One attempt, no retries: a 429 that Telegram answers with "wait 1s" would otherwise cost three waits of 2s each.
+    expect(reactionCalls).toBe(1);
+    expect(Date.now() - released).toBeLessThan(2000);
+  });
+
   it("goes on without a mark when Telegram refuses the reaction", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const fetchMock = vi.fn(async (url: string) => {

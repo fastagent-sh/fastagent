@@ -453,6 +453,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       expect(warn.mock.calls.flat().join(" ")).toContain("could not acknowledge its message");
       expect(calls).toContain("remove b"); // the turn still finished
     });
+  });
+
   it("holds an input back while an earlier turn runs, even when the turn just before it failed at once", async () => {
     const { store, calls } = fakeStore();
     const gate = Promise.withResolvers<void>();

@@ -22,7 +22,7 @@ import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
 import { attachmentPath } from "../kit/attachment-path.ts";
 import { utf8Prefix } from "../kit/text.ts";
-import type { CallOptions } from "../kit/transport.ts";
+import { type CallOptions, DROPPABLE_FRAME } from "../kit/transport.ts";
 
 /** Per-attempt timeout for a JSON API call — small JSON round-trips, so 30s is generous. */
 const API_TIMEOUT_MS = 30_000;
@@ -523,6 +523,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
           "POST",
           `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions`,
           { reaction_type: { emoji_type: emojiType } },
+          DROPPABLE_FRAME, // decoration: never worth waiting out a rate limit, which would hold the turn's end
         );
         return data.data?.reaction_id;
       },
@@ -531,6 +532,8 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
           "deleteReaction",
           "DELETE",
           `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(reactionId)}`,
+          undefined,
+          DROPPABLE_FRAME, // decoration: never worth waiting out a rate limit, which would hold the turn's end
         );
       },
       async getMessage(messageId) {

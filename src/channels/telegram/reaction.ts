@@ -4,6 +4,7 @@
  * Telegram lets a bot react with.
  */
 import { log } from "../../log.ts";
+import { DROPPABLE_FRAME } from "../kit/transport.ts";
 import { NO_ACK, type TurnAck } from "../kit/turn-runner.ts";
 import { callApi } from "./telegram-api.ts";
 
@@ -17,11 +18,18 @@ export interface AskedMessage {
 }
 
 const react = (api: string, botToken: string, ask: AskedMessage, emoji: string | undefined) =>
-  callApi(api, botToken, "setMessageReaction", {
-    chat_id: ask.chatId,
-    message_id: ask.messageId,
-    reaction: emoji === undefined ? [] : [{ type: "emoji", emoji }],
-  });
+  callApi(
+    api,
+    botToken,
+    "setMessageReaction",
+    {
+      chat_id: ask.chatId,
+      message_id: ask.messageId,
+      reaction: emoji === undefined ? [] : [{ type: "emoji", emoji }],
+      // Decoration: never worth waiting out a rate limit, which would hold the turn's end (kit/transport.ts).
+    },
+    DROPPABLE_FRAME,
+  );
 
 /** Mark the asker's message now; every later step is best effort, since an acknowledgement must never fail its turn. */
 export async function acknowledgeTelegramAsk(api: string, botToken: string, ask: AskedMessage): Promise<TurnAck> {

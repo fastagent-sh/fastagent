@@ -2657,6 +2657,30 @@ describe("Feishu inputs steered into one run", () => {
     ]);
   });
 
+  it("does not wait out a rate limit for a reaction, so the turn ends as soon as its answer is delivered", async () => {
+    vi.spyOn(log, "warn").mockImplementation(() => {});
+    let reactionCalls = 0;
+    feishuFetch({
+      "/reactions": () => {
+        reactionCalls++;
+        return Response.json({ code: 99991400, msg: "request trigger frequency limit" });
+      },
+    });
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const { handler, idle, home } = await mountDurable(agent);
+    await handler(feishuRequest(messageEvent({ id: "om_1", text: "start the work" })));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await handler(feishuRequest(messageEvent({ id: "om_2", text: "and keep the old column" })));
+    await vi.waitFor(() => expect(reactionCalls).toBeGreaterThan(0));
+    const released = Date.now();
+    release();
+    await idle();
+    // One attempt, no retries: the platform's rate limit would otherwise cost 1s, 2s and 3s of waiting.
+    expect(reactionCalls).toBe(1);
+    expect(Date.now() - released).toBeLessThan(2000);
+    expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
+  });
+
   it("goes on without a mark when the platform refuses the reaction", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const fx = feishuFetch({
