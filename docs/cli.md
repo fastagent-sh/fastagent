@@ -40,7 +40,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). |
 | `deploy fly [agent]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
 | `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end and continues the project that holds the agent's service; a dir linked to another project needs `--into-linked`. |
-| `deploy agentcore [agent]` | Generate `agentcore.template.yaml`, `agentcore/forwarder/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
+| `deploy agentcore [agent]` | Generate `agentcore.template.yaml`, `agentcore/forwarder/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. `--idle-timeout <seconds>` (60–1209600) sets how long an idle session keeps its microVM, over the program's `defaults.deploy.agentcore.idleTimeoutSeconds`; the other hosts report it as ignored. |
 | `deploy <host> --config <file>` | Every host: deliver an instance configuration (a `fastagent.json`) the deployment runs on, carried in the image at `/etc/fastagent/` (`FASTAGENT_CONFIG` names it). Without it, the program's defaults; the project's own `fastagent.json` is never carried. |
 | `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
 | `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
@@ -100,13 +100,14 @@ A `fastagent.config.ts` makes a directory an agent, whatever its name. Its conte
 ## `fastagent info`
 
 ```bash
-fastagent info [agent] [--json] [--model provider/modelId] [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+fastagent info [agent] [--json] [--model provider/modelId] [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 ```
 
 Prints what the agent builds into, without serving it:
 
-- the agent's own name (`program`, when it differs from the instance's), its description and its starters (`agent` in
-  `--json`: the name, description and starters `info().agent` reports),
+- the program's name and description (`program`, when its name differs from the instance's or it has a description;
+  `agent` in `--json`), the instance's own description, and the starters in effect (`description` and `starters` in
+  `--json`, as `info()` reports them),
 - the agent directory, its content (`works on`, each with its location), its environment (the packages and
   apt packages `context.json` declares), the config path, and the model with its source (`--model`,
   `FASTAGENT_MODEL` or the config) and whether it resolves,
@@ -337,7 +338,7 @@ global one, then the environment, with a login due a refresh refreshed. `--json`
 
 ```bash
 fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-input]
-               [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+               [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 ```
 
 Serves the agent locally: its channels, schedules and wake-ups. `SYSTEM.md`, `AGENTS.md`, `skills/` and `prompts/` are
@@ -366,7 +367,7 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 
 ```bash
 fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--json] [--session <id>]
-                                 [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                                 [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 fastagent invoke <message> [agent] --url <base> [--key <key>] [--model provider/modelId] [--json] [--session <id>]
 ```
 
@@ -420,7 +421,7 @@ What the agent said is in the schedule's session, in the instance's storage. A f
 
 ```bash
 fastagent schedules run <name> [agent] [--model provider/modelId] [--no-input]
-                       [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                       [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 ```
 
 Fires the schedule `<name>` now, the way its clock would: in the schedule's own session, with its claim and its
@@ -581,7 +582,7 @@ from the machine's skill directories. `--update` overwrites an existing one.
 
 ```bash
 fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
-                [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 ```
 
 Serves the project's `dist/`, never its source, without watching: it refuses, naming `fastagent build`, when `dist/`

@@ -36,7 +36,7 @@ import type { AgentDefinition } from "./definition.ts";
  * defaults, what only an instance adds: content, and instructions, skills and prompt templates (relative paths are the
  * file's directory's).
  */
-export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings> & {
+export type InstanceConfig<Settings = unknown> = Omit<AgentDefaults<Settings>, "deploy"> & {
   /** The instance's name, one path segment. Default: the program's name made one. */
   name?: string;
   content?: Record<string, ContentEntry>;
@@ -68,7 +68,7 @@ const PROGRAM_DEFAULT = "program default";
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const CONSTANTS = ["extensions", "providers"];
+const CONSTANTS = ["providers"];
 /** Keys that were the program's own before they became defaults. */
 const FORMER_CONSTANTS = ["model", "thinkingLevel", "http", "deploy"];
 
@@ -85,8 +85,26 @@ const CONTENT_ENTRY = union([
   }),
 ]);
 
+/**
+ * AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is refused by CloudFormation minutes into
+ * `deploy agentcore --run`, after the image build.
+ */
+export const IDLE_TIMEOUT_BOUNDS = { minimum: 60, maximum: 1209600 } as const;
+
 /** An absolute `https://` URL without a trailing slash, query or fragment: what `<publicUrl>/<path>` is built from. */
 const PUBLIC_URL_PATTERN = "^https://[^/?#\\s]+(/[^?#\\s]*[^/?#\\s])?$";
+
+/** The platform app a channel of one instance is bound to (`channels.<name>.app`). */
+const APP_BINDING = obj({
+  id: str({ description: "The platform's app ID" }),
+  team: opt(str({ description: "Slack's workspace (team) ID" })),
+  url: opt(
+    str({
+      description: "The channel's URL a person set on the platform's app page and the platform verified",
+      pattern: "^https://[^?#\\s]+$",
+    }),
+  ),
+});
 
 /** The program's `settings` with no property required: an instance gives some of them, the program's defaults the rest. */
 function partial(settings: Schema): Schema {
@@ -95,7 +113,7 @@ function partial(settings: Schema): Schema {
 }
 
 /** What the program's defaults and an instance's configuration may hold. `settings` is the program's, or none. */
-function shape(settings: Schema | undefined) {
+function shape(settings: Schema | undefined, instance: boolean) {
   return {
     starters: opt(
       arr(str({ maxLength: MAX_STARTER_LENGTH, pattern: "\\S" }), {
@@ -121,26 +139,14 @@ function shape(settings: Schema | undefined) {
     ),
     deploy: opt(
       obj({
-        // AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is refused by CloudFormation minutes
-        // into `deploy agentcore --run`, after the image build.
-        agentcore: opt(obj({ idleTimeoutSeconds: opt(int({ minimum: 60, maximum: 1209600 })) })),
+        agentcore: opt(obj({ idleTimeoutSeconds: opt(int(IDLE_TIMEOUT_BOUNDS)) })),
       }),
     ),
     channels: opt(
       map(
         obj({
-          app: opt(
-            obj({
-              id: str({ description: "The platform's app ID" }),
-              team: opt(str({ description: "Slack's workspace (team) ID" })),
-              url: opt(
-                str({
-                  description: "The channel's URL a person set on the platform's app page and the platform verified",
-                  pattern: "^https://[^?#\\s]+$",
-                }),
-              ),
-            }),
-          ),
+          // The app one instance is bound to: a fact about that instance, which the program's defaults cannot hold.
+          ...(instance ? { app: opt(APP_BINDING) } : {}),
           ingress: opt(
             oneOf(["webhook", "connection"] as const, {
               description: "How the channel receives: webhook (inbound HTTP) or connection (one it opens and keeps)",
@@ -156,13 +162,13 @@ function shape(settings: Schema | undefined) {
 /** The JSON Schema of an instance's `fastagent.json` for a program with `settings`: what `fastagent build` publishes. */
 export function instanceConfigSchema(settings: Schema | undefined): Schema {
   const paths = (description: string) => opt(arr(str({ minLength: 1 }), { description, uniqueItems: true }));
+  // What a deployment is built with is the program's default or a `deploy` flag; the box never reads it.
+  const { deploy: _deploy, ...runtime } = shape(settings, true);
   return obj({
     $schema: opt(str()),
-    ...shape(settings),
+    ...runtime,
     name: opt(str({ description: "The instance's name: one path segment of letters, digits, - and _" })),
-    description: opt(
-      str({ description: "One line about this instance, over the program's package.json description", pattern: "\\S" }),
-    ),
+    description: opt(str({ description: "One line about this instance, apart from the program's", pattern: "\\S" })),
     content: opt(map(CONTENT_ENTRY)),
     mcpServers: opt(
       map(unknown(), {
@@ -209,19 +215,18 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
     throw new Error(`${file} must default-export defineAgent({ ... })`);
   }
-  const { settings, defaults, extensions, providers } = config as AgentConfig;
+  const { settings, defaults, providers } = config as AgentConfig;
   const keys = [...CONSTANTS, "settings", "defaults"];
   for (const key of Object.keys(config)) {
     if (keys.includes(key)) continue;
-    const moved = FORMER_CONSTANTS.includes(key) ? ': it is a default now, under "defaults"' : "";
+    const moved = FORMER_CONSTANTS.includes(key)
+      ? ': it is a default now, under "defaults"'
+      : key === "extensions"
+        ? ": an extension is a module of src/extensions/ that default-exports it, whether written there or imported from a package"
+        : "";
     throw new Error(`${file}: unknown key "${key}"${moved} (keys: ${keys.join(", ")})`);
   }
-  for (const [key, list] of [
-    ["extensions", extensions],
-    ["providers", providers],
-  ] as const) {
-    if (list !== undefined && !Array.isArray(list)) throw new Error(`${file}: "${key}" must be an array`);
-  }
+  if (providers !== undefined && !Array.isArray(providers)) throw new Error(`${file}: "providers" must be an array`);
   if (settings !== undefined) {
     if ((settings as { type?: unknown } | null)?.type !== "object") {
       throw new Error(`${file}: "settings" must be an object schema (obj({ ... }) from @earendil-works/pi-schema)`);
@@ -232,7 +237,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
       throw new Error(`${file}: "settings" is not a JSON Schema: ${(error as Error).message}`, { cause: error });
     }
   }
-  if (defaults !== undefined) checkValues(defaults, settings, `${file} defaults`, (s) => obj(shape(s)));
+  if (defaults !== undefined) checkValues(defaults, settings, `${file} defaults`, (s) => obj(shape(s, false)));
   return config as AgentConfig;
 }
 
@@ -345,19 +350,27 @@ function overlay(
 }
 
 /**
- * The configuration an instance of `definition` opens with: the program's defaults, the instance's over them, the
- * merged settings checked against the program's `settings` schema (a required one no one gave refuses, naming it).
+ * The configuration an instance of `definition` opens with: the program's defaults, the instance's over them, then
+ * `overrides` (the environment's, see `environmentConfig`), the merged settings checked against the program's
+ * `settings` schema (a required one no one gave refuses, naming it).
  */
-export function resolveConfig(definition: AgentDefinition, instance?: InstanceConfigSource): EffectiveConfig {
+export function resolveConfig(
+  definition: AgentDefinition,
+  instance?: InstanceConfigSource,
+  overrides: readonly InstanceConfigSource[] = [],
+): EffectiveConfig {
   const { defaults, settings } = definition.config;
   const merged: Record<string, unknown> = {};
   const sources: Record<string, string> = {};
   if (defaults !== undefined) {
-    checkValues(defaults, settings, `${definition.name} defaults`, (s) => obj(shape(s)));
+    checkValues(defaults, settings, `${definition.name} defaults`, (s) => obj(shape(s, false)));
     overlay(merged, defaults as Record<string, unknown>, PROGRAM_DEFAULT, sources);
   }
   if (instance !== undefined) {
     overlay(merged, checkInstanceConfig(instance, settings) as Record<string, unknown>, instance.label, sources);
+  }
+  for (const layer of overrides) {
+    overlay(merged, checkInstanceConfig(layer, settings) as Record<string, unknown>, layer.label, sources);
   }
   const values = (merged.settings ?? {}) as Record<string, unknown>;
   check(settings ?? obj({}), values, `the settings of ${definition.name}`);
@@ -382,15 +395,24 @@ export function resolveConfig(definition: AgentDefinition, instance?: InstanceCo
   return { ...merged, settings: values, sources };
 }
 
-/** What `info().agent` reports: the package's name, and the description and starters the instance resolves. */
+/**
+ * What `info()` reports of who the agent is: the program's name and description as the package gives them, the
+ * instance's own description (none when it gives none: the program's is not a fallback), and the starters in effect.
+ */
 export function agentPresentation(
   definition: AgentDefinition,
   config: EffectiveConfig,
-): { name: string; description?: string; starters?: readonly string[] } {
-  const description = config.description ?? definition.description;
+): {
+  agent: { name: string; description?: string };
+  description?: string;
+  starters?: readonly string[];
+} {
   return {
-    name: definition.name,
-    ...(description === undefined ? {} : { description }),
+    agent: {
+      name: definition.name,
+      ...(definition.description === undefined ? {} : { description: definition.description }),
+    },
+    ...(config.description === undefined ? {} : { description: config.description }),
     ...(config.starters === undefined ? {} : { starters: config.starters }),
   };
 }

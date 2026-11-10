@@ -70,6 +70,8 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   offline?: boolean;
   /** What the instance sets over the program's defaults (`fastagent.json`, or an object); none runs on the defaults. */
   config?: InstanceConfigSource;
+  /** Layers over `config`, each with its source: the CLI's environment variables (`environmentConfig`). */
+  overrides?: readonly InstanceConfigSource[];
   /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
@@ -190,7 +192,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const { dir } = definition;
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
-  const config = resolveConfig(definition, options.config);
+  const config = resolveConfig(definition, options.config, options.overrides);
   const name = instanceName(definition.name, options.name ?? config.name);
   const text = openText(dir, options.config);
   const mcpServers = declareMcp(dir, options.config);

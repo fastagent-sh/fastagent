@@ -9,12 +9,7 @@ import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import {
-  type EffectiveConfig,
-  agentPresentation,
-  configValue,
-  resolveConfig,
-} from "../../harnesses/pi-durable/config.ts";
+import { type EffectiveConfig, agentPresentation, configValue } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { openText, readCommands } from "../../harnesses/pi-durable/text.ts";
@@ -23,6 +18,7 @@ import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { contentLines } from "../content-view.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
+import { resolveProjectConfig } from "../shared.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -37,13 +33,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const { definition, instance } = await loadDevProject(agentDir).catch(failStartup);
   const config = (() => {
     try {
-      return resolveConfig(definition, instance);
+      return resolveProjectConfig({ definition, ...(instance === undefined ? {} : { instance }) });
     } catch (error) {
       return failStartup(error);
     }
   })();
   const name = instanceName(definition.name, enteredInstanceName() ?? config.name);
-  const agent = agentPresentation(definition, config);
+  const presentation = agentPresentation(definition, config);
+  const program = presentation.agent;
   const modelSpec = modelSpecFor(config, opts.model);
   const declared = (() => {
     try {
@@ -103,7 +100,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
         {
           agentDir,
           name: name,
-          agent: { name: agent.name, description: agent.description ?? null, starters: agent.starters ?? [] },
+          description: presentation.description ?? null,
+          agent: { name: program.name, description: program.description ?? null },
+          starters: presentation.starters ?? [],
           content,
           contentError: contentError ?? null,
           environment: environment ?? null,
@@ -134,10 +133,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", `${name} — ${agentDir}`);
-  if (agent.name !== name) line("program", agent.name);
-  if (agent.description !== undefined) line("description", agent.description);
-  if (agent.starters !== undefined)
-    line("starters", agent.starters.map((starter) => JSON.stringify(starter)).join(", "));
+  if (program.name !== name || program.description !== undefined) {
+    line("program", `${program.name}${program.description === undefined ? "" : ` — ${program.description}`}`);
+  }
+  if (presentation.description !== undefined) line("description", presentation.description);
+  if (presentation.starters !== undefined)
+    line("starters", presentation.starters.map((starter) => JSON.stringify(starter)).join(", "));
   for (const [label, value] of contentLines(content)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");

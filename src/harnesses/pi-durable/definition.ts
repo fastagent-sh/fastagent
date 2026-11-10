@@ -48,7 +48,7 @@ export interface AgentDefinition<Settings = unknown> {
   readonly description?: string;
   /** True for a source project the author works in (`dev`), absent for a built package, which an instance only reads. */
   readonly source?: true;
-  /** Absolute: the program's files, its text, `context.json` and `mcp.json`. */
+  /** Absolute: the program's files, its text and `context.json`. */
   readonly dir: string;
   readonly config: AgentConfig;
   readonly registry: Registry;
@@ -84,7 +84,6 @@ export function defineDefinition(spec: DefinitionSpec): AgentDefinition {
   );
   const config = Object.freeze({
     ...spec.config,
-    ...(spec.config.extensions === undefined ? {} : { extensions: Object.freeze([...spec.config.extensions]) }),
     ...(spec.config.providers === undefined ? {} : { providers: Object.freeze([...spec.config.providers]) }),
     ...(spec.config.settings === undefined ? {} : { settings: deepFreeze(structuredClone(spec.config.settings)) }),
     ...(spec.config.defaults === undefined ? {} : { defaults: deepFreeze(structuredClone(spec.config.defaults)) }),
@@ -193,7 +192,6 @@ function declarers(
   };
   return [
     ...REGISTRY_KINDS.flatMap((kind) => registry[kind].flatMap(ways)),
-    ...(config.extensions ?? []).map((value, i) => ({ declaredIn: `${CONFIG_FILE} extensions[${i}]`, value })),
     ...(config.providers ?? []).map((value, i) => ({ declaredIn: `${CONFIG_FILE} providers[${i}]`, value })),
   ];
 }

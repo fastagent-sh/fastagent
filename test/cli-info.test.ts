@@ -24,11 +24,63 @@ describe("cli: info", () => {
     expect(code).toBe(0); // an unset model is reported, not fatal
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
-    expect(info.agent).toEqual({ name: expect.any(String), description: null, starters: [] });
+    expect(info).toMatchObject({
+      description: null,
+      starters: [],
+      agent: { name: expect.any(String), description: null },
+    });
     expect(info.tools).toEqual(["lookup"]);
     expect(info.channels).toEqual([{ name: "github", ingress: "webhook" }]);
     expect(info.commands.map((command: { name: string }) => command.name)).toEqual(["skill:greet"]);
     await expect(stat(join(dir, ".state"))).rejects.toThrow(); // read-only: never creates the state root
+  });
+
+  it("info reports the configuration a variable sets over the instance's, with its source", async () => {
+    const dir = await agentWorkspace("fa-info-env-", {
+      "fastagent.config.ts": 'export default { defaults: { thinkingLevel: "high" } };\n',
+    });
+    const env = { ...withoutModel(), FASTAGENT_THINKING_LEVEL: "low" };
+    const { code, stdout, stderr } = await runInProcess(["info", dir, "--json"], undefined, env);
+    expect(code, stderr).toBe(0);
+    const info = JSON.parse(stdout);
+    expect(info.thinkingLevel).toBe("low");
+    expect(info.config.thinkingLevel).toMatchObject({ value: "low", source: "FASTAGENT_THINKING_LEVEL" });
+  });
+
+  it("info takes the thinking level and the channels' ingress as flags over the variables, and refuses what names no channel", async () => {
+    const dir = await agentWorkspace("fa-info-flags-", {
+      "fastagent.config.ts": 'export default { defaults: { thinkingLevel: "high" } };\n',
+    });
+    const env = { ...withoutModel(), FASTAGENT_THINKING_LEVEL: "low" };
+    const flagged = await runInProcess(["info", dir, "--json", "--thinking", "minimal"], undefined, env);
+    expect(flagged.code, flagged.stderr).toBe(0);
+    expect(JSON.parse(flagged.stdout).thinkingLevel).toBe("minimal");
+    const refused = await runInProcess(["info", dir, "--ingress", "nope=webhook"], undefined, withoutModel());
+    expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("channels.nope names no channel")]);
+    const malformed = await runInProcess(["info", dir, "--ingress", "nope"], undefined, withoutModel());
+    expect([malformed.code, malformed.stderr]).toEqual([
+      2,
+      expect.stringContaining("FASTAGENT_INGRESS must be channel=webhook|connection"),
+    ]);
+  });
+
+  it("every command that runs an instance refuses a variable the configuration would refuse, in one line and exit 2", async () => {
+    const dir = await agentWorkspace("fa-env-refuse-", {
+      "fastagent.config.ts": 'export default { defaults: { model: "openai/gpt-4o-mini" } };\n',
+    });
+    const env = { ...withoutModel(), FASTAGENT_HTTP_API: "yes", OPENAI_API_KEY: "x" };
+    for (const argv of [
+      ["info", dir],
+      ["invoke", "hi", dir, "--no-input"],
+      ["schedules", "run", "x", dir, "--no-input"],
+    ]) {
+      const result = await runInProcess(argv, undefined, env);
+      expect([argv[0], result.code, result.stderr.trim()]).toEqual([
+        argv[0],
+        2,
+        'Error: FASTAGENT_HTTP_API must be "true" or "false", and is "yes"',
+      ]);
+    }
   });
 
   it("info reports the program's name apart from the instance's, and the description and starters it resolves", async () => {
@@ -40,12 +92,14 @@ describe("cli: info", () => {
     expect(json.code, json.stderr).toBe(0);
     expect(JSON.parse(json.stdout)).toMatchObject({
       name: "acme-reviewer",
-      agent: { name: "@acme/reviewer", description: "Reviews pull requests.", starters: ["Review this PR"] },
+      description: null,
+      agent: { name: "@acme/reviewer", description: "Reviews pull requests." },
+      starters: ["Review this PR"],
     });
     await writeFile(join(dir, "fastagent.json"), '{ "description": "Reviews our monorepo." }\n');
     const text = await runInProcess(["info", dir], undefined, withoutModel());
     expect(text.code, text.stderr).toBe(0);
-    expect(text.stdout).toMatch(/^program:\s+@acme\/reviewer$/m);
+    expect(text.stdout).toMatch(/^program:\s+@acme\/reviewer — Reviews pull requests\.$/m);
     expect(text.stdout).toMatch(/^description:\s+Reviews our monorepo\.$/m);
     expect(text.stdout).toMatch(/^starters:\s+"Review this PR"$/m);
   });

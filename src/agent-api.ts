@@ -33,20 +33,25 @@ export class Usage extends Schema.Opaque<Usage>()(
 
 const Named = Schema.Struct({ name: Schema.String, description: Schema.optionalKey(Schema.String) });
 
-/** How the agent presents itself to a person choosing or starting it. */
-const AgentPresentation = Schema.Struct({
-  /** The program's name. */
+/** The program an instance runs: its own name and introduction, whatever the instance is called. */
+const AgentProgram = Schema.Struct({
   name: Schema.String,
   description: Schema.optionalKey(Schema.String),
-  /** Example first messages: text a Caller may offer to put in a composer, never to send for the person. */
-  starters: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 export class AgentInfo extends Schema.Opaque<AgentInfo>()(
   Schema.Struct({
     /** The instance's name. */
     name: Schema.String,
-    agent: AgentPresentation,
+    /** The instance's own introduction, when it gives one: not the program's, and not a fallback to it. */
+    description: Schema.optionalKey(Schema.String),
+    /** The program the instance runs. */
+    agent: AgentProgram,
+    /**
+     * Example first messages: text a Caller may offer to put in a composer, never to send for the person. The
+     * program's, unless the instance gives its own.
+     */
+    starters: Schema.optionalKey(Schema.Array(Schema.String)),
     /** What a message may start with as `/<name>` (§5.1). */
     commands: Schema.Array(Named),
     /** The tools a session may enable. */

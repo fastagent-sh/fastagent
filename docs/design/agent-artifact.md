@@ -92,7 +92,7 @@ explicit inputs below rather than whatever the process happens to find.
 ```text
 my-agent/
   package.json
-  fastagent.config.ts      constants, defaults, settings schema, providers/extensions
+  fastagent.config.ts      constants, defaults, settings schema, providers
   context.json             content baseline, environment requirements, default MCP servers (published: secrets as ${VAR})
   SYSTEM.md  AGENTS.md
   skills/  prompts/
@@ -117,7 +117,6 @@ export default defineAgent({
   name: "reviewer",
   description: "Reviews pull requests",
   providers: [/* code; endpoints and keys parameterized with needs() */],
-  extensions: [/* code */],
 
   // Settings the author lets each instance choose; non-secret values come from the instance.
   settings: obj({ repo: str(), digestChannel: opt(str()) }),
@@ -338,7 +337,10 @@ Precedence of configuration values, lowest first:
 1. framework defaults;
 2. the program's `defaults`;
 3. the instance configuration;
-4. environment variables: secrets and a few overrides such as `FASTAGENT_MODEL`;
+4. environment variables: secrets, and the overrides `FASTAGENT_MODEL`, `FASTAGENT_THINKING_LEVEL`, `FASTAGENT_HTTP_API`,
+   `FASTAGENT_HTTP_PUBLIC_URL` and `FASTAGENT_INGRESS` (each laid over the configuration as a layer of its own, so its
+   source names it; read by the CLI's commands that run an instance, never by `openAgent` and not by `deploy`, which
+   decides with the program's defaults and the configuration it delivers);
 5. command-line flags and `openAgent` options.
 
 Composition:
@@ -402,7 +404,6 @@ uses static values instead. (Where grants are kept is §4.1's; bindings are in t
   "$schema": "./node_modules/@acme/reviewer/fastagent.schema.json",
   "model": "anthropic/claude-x",
   "http": { "port": 9000 },
-  "deploy": { "agentcore": { "idleTimeoutSeconds": 300 } },
   "settings": { "repo": "acme/api" },
   "name": "reviewer-eu",
   "content": {
@@ -440,6 +441,42 @@ one place, delivered with the configuration.
 
 `fastagent.json` holds no secret values; secrets are referenced by name. Its `mcpServers` follows the rule for MCP
 entries in §4.1.
+
+#### What it holds, by kind
+
+The file holds four kinds of value. They have different writers and different lifetimes, which is what decides where
+each can live; a key is placed by what it is, not by which file it happens to sit in. Every key stays in the file: a
+flag or a variable is a layer over it with higher precedence (the program's defaults, then the file, then variables,
+then flags), never a replacement for it.
+
+| Kind | Keys | Layers over the file (§4.1 precedence) | Written by |
+|---|---|---|---|
+| Identity | `name`, `description` | `name`: `--name`, `FASTAGENT_NAME`, `openAgent`'s `name`. Both are the instance's own and are reported apart from the program's (`info().name`, `info().description` against `info().agent`); the instance's description has no fallback to the program's | a person, a host app |
+| Overrides of the program's defaults, scalar | `model`, `thinkingLevel`, `http.port`, `http.api`, `http.publicUrl`, `channels.<name>.ingress` | variables, and flags where there is one (`--model`, `--thinking`, `--port`, `--ingress`) | a person |
+| Overrides, structured | `starters`, `settings` | none: the file or `openAgent`'s `config` object. `starters` is behavior, as `model` is, so an instance replaces the program's | a person, a host app |
+| Additions to what the program declares | `content`, `mcpServers`, `instructions`, `skills`, `prompts` | none; they name files and directories. They mirror `context.json`'s `content` and `mcpServers`, and the rule is the same: an instance only adds | a person, the CLI (`content add`), a host app, the agent where the file is in its writable root |
+| A record a tool writes | `channels.<name>.app` | none | `deploy` and `channels setup --record-url`, once a person has set a platform's URL |
+
+Not in it: `deploy.*`. Only `deploy` reads it, the box never does, so it is the program's `defaults.deploy` or a flag of
+one deploy (`--idle-timeout`) and an instance's file refuses it (delivering
+what nothing reads only creates drift).
+
+`channels.<name>.app` stays in the configuration a deployment delivers, not in `.state/`. It records a fact about the
+platform's app and the deployment's URL, written on the deployer's side and read by the box, and AgentCore resets every
+deploy's storage, which would lose it.
+
+**Built:** the identity split in `info()`, `deploy.*` out of the instance file, the environment layers of §4.1, and the
+default of `<root>/fastagent.json` for an embedding open with `root` (§4.1).
+
+**Not built.** The layout that replaces the places a deployment's values live, and the order it is built in, is
+[configuration-layout.md](configuration-layout.md): a named instance with one committed configuration file, delivered to
+a host as variables so that one image is every instance's. Two things stay open beyond it: one resolver for "which file
+does this form read" (several places say it today, each its own way), and a deployed box's own writable layer over what
+it was delivered, edited through the host's shell as `login --deployment` is (`src/deploy/box-shell.ts`).
+
+Whether the configuration a deployed agent may write should be able to add an MCP server is a trust question this does
+not decide: the instance is one trust domain ([security-boundary](security-boundary.md)), and a server's `${VAR}` expands
+from every secret the instance was opened with (#997, not fixed).
 
 ### 4.3 Development defaults
 

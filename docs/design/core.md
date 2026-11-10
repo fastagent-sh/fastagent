@@ -271,7 +271,7 @@ against this Agent in process, on memory and SQLite storage.
 
 **The agent's own definition is all it is given.** Its tools are pi-durable's coding tools (`read`, `write`, `edit`,
 `bash`) and the definition's own: the modules of `src/tools/` (pi-durable's `defineTool`, TypeBox parameters), and
-those of its extensions (`src/extensions/` and `defineAgent({ extensions })`). Its skills and prompt templates are its
+those of its extensions (the modules of `src/extensions/`, a third-party one re-exported there). Its skills and prompt templates are its
 `skills/` and `prompts/`; `fastagent add skill` vendors one in. Nothing is taken from the machine's pi setup: not its
 skills, not its prompt, not its extensions. MCP is not served yet ([#678](https://github.com/fastagent-sh/fastagent/issues/678)).
 
