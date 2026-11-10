@@ -39,7 +39,8 @@ The key is a function of what the platform tells us about a message. It never de
 
 | Where the message is | Session | Runs together with |
 |---|---|---|
-| A direct message (a Slack DM thread is its own place) | One per DM | Nothing else in that DM |
+| A direct message (Telegram, Feishu/Lark) | One per DM | Nothing else in that DM |
+| A Slack DM thread | One per thread | Other threads |
 | A group's main timeline (Telegram group, Feishu/Lark ordinary group) | One per place and sender | Other senders' sessions |
 | A thread or topic (Slack thread, Feishu/Lark topic, Telegram forum topic) | One per thread, shared by everyone in it | Other threads and senders |
 
@@ -61,10 +62,13 @@ share context unless the context is read (below), and one person's unrelated sec
 task. Identical metadata can accompany "keep the old column" and "separately, check the weather"; no structural rule
 tells them apart, and no model classifier is added. The executing agent reads the text and can ask.
 
-### Replying to an answer
+### The message table and replying to an answer
 
-The channel keeps a small table from the platform message ids of its own answers and accepted asks to the session that
-produced or took them.
+The channel keeps a table of the platform messages that belong to a session: the asks it accepted for the session, with
+the platform position each carries (Slack `ts`, Feishu `create_time` with the id, Telegram `message_id`), and what the
+agent posted for it (answers and their chunks, stop feedback). Each session keeps the newest few asks, bounded like a
+reply chain. Positions are read at ingress, where the channel already has them, so no key changes and no platform read
+is added.
 
 - A reply to one of those messages belongs to that session, whoever sends it, and is steered into it. Carol replying to
   Bob's answer ("what time?") reaches Bob's session, which holds the answer.
@@ -72,8 +76,9 @@ produced or took them.
   empty and reads the place.
 - An id that is not in the table (another bot's message, or one from before the agent joined) names nothing.
 
-The table is the only added state. It is written when an answer or an accepted ask is recorded, not rebuilt from
-guesses.
+The table is the only added state. An ask is written when it is accepted, before its send, and the agent's posts once
+they are posted. It is a list of candidates and positions: whether an ask reached the session is the Agent's answer (see
+the read below), not the table's.
 
 ## Input reaches a running session by steering
 
@@ -108,21 +113,25 @@ not a security guarantee against hostile content.
 
 ### Where a turn's read starts
 
-A session already holds what an earlier turn of it folded. The read starts there, and the session is the only record of
-it:
+A session already holds what an earlier turn of it folded, and the Agent is the record of it:
 
-1. Read the session's newest page of entries and take its latest user entry that a channel sent.
-2. Its message's `idempotencyKey` is the platform id of the ask it answered. A key that is not a platform id of this
-   channel (a wake-up's, a schedule's) is skipped for the next older one.
-3. Fold the place's messages after that id and up to this turn's own ask. A session with no such entry reads the place's
-   newest messages.
+1. Take this session's newest asks from the table, newest first, and ask the Agent for each by `idempotencyKey`
+   (`messages.get`). The first the Agent has, whatever its status, `queued` and not yet taken included, is the session's
+   latest ask. Its stored position is the start. An ask the Agent does not have (the turn failed before its send) is
+   skipped for the next older one. A session with none reads the place's newest messages.
+2. Fold the place's messages after that position and up to this turn's own ask.
+3. Leave out the messages the table gives to this session: its asks, and what the agent posted for it. They are in the
+   session or its inbox already. A message the table gives to another session stays, as attributed discussion. Another
+   session's ask is background, not an instruction, and another session's answer is the context this read exists for.
 
-This replaces per-place cursors and output exclusions. A failed turn that sent nothing leaves no entry, so nothing
-advances. Nothing is committed after an answer, and a crash cannot leave a cursor ahead of what the session holds. A
-fork inherits its parent's entries, so its first read starts at the parent's last ask; a thread reads its own messages,
-and the earlier room messages are read by the thread tools when needed. Platform ids must order messages within a place
-(Slack `ts`, Feishu `create_time`; Telegram must record the message id its asks carry). The reads happen after the
-ingress acknowledgement.
+This replaces per-place cursors, recorded outputs and `peek/commit`. Whether a turn's ask was sent is read from the
+Agent, so a failed turn that sent nothing advances nothing, and nothing is committed after an answer. The table cannot
+put a start ahead of the session: it only offers keys. The agent's own posts are recorded after they are posted, so a
+crash between the post and the record folds that one message once more; the fold says it is the agent's own.
+
+A fork inherits its parent's entries but not the table, so its first read is the place's newest messages. A thread
+reads its own messages, and the earlier room messages are read by the thread tools when needed. The reads happen after
+the ingress acknowledgement.
 
 The fold's budget (4000 characters) and truncation notice are unchanged. What the budget leaves out is said in the
 text; it does not reach the model, and nothing retries it. The scoped thread tools are the way to read more.
@@ -162,7 +171,7 @@ answer still reach their asker.
 | Session of the input | Recorded before the first send; the idempotency key is stable, so a send of uncertain outcome is repeated, not duplicated |
 | The generated answer, its `entryId` and what remains to deliver | Recorded before delivery; a restart delivers without running the model again |
 | Answers already delivered, by `(session, entryId)` | Persisted, so recovering a second input of a shared answer does not send it again |
-| Message-to-session table | Persisted with the turn that wrote it |
+| Message-to-session table: asks with their positions, the agent's posts | Persisted before the ask's send and after each post |
 
 The Agent's idempotency key is scoped to a session: sending the same platform input into another session repeats its
 side effects. An interrupted unsafe tool is reported `interrupted` and not rerun. Platform delivery may still be
@@ -225,15 +234,16 @@ Feishu measurements are not live Lark validation.
 ## Evidence and its limits
 
 Local experiments on pi-durable with a faux model unless noted, and one real-model run. They test mechanics, not product
-acceptance, and are not a checked-in suite.
+acceptance. The scripts are throwaway and not in the repository; the setups are described in the
+[#989 discussion](https://github.com/fastagent-sh/fastagent/issues/989).
 
 | Experiment | Observation |
 |---|---|
 | Decide to steer from `sessions.get` showing running, then send | Another input had taken the session in between: the decision and the send are not atomic |
 | Six concurrent `whenBusy: "reject"` sends to an idle session, 50 rounds | Exactly one admitted each round, the rest `busy` |
 | `reject` while a message is queued behind a finishing run | Never admitted in the gap between two messages |
-| Six simulated senders, randomized timing, one shared session with steer | 306 of 600 model calls held two senders' input |
-| Same, one session per sender or reused by claim under a lock | 0 of 600+ model calls mixed senders, with wake-ups too |
+| Six simulated exchanges, randomized timing, one shared session with steer | 306 of 600 model calls held input of two exchanges |
+| Same, one session per exchange (never reused), and sessions reused under a lock with `reject` claims | 0 of 600+ model calls mixed exchanges, with wake-ups too. A sender's session behaves like an exchange's here; per-sender keys themselves were not run |
 | Real model (`openai-codex/gpt-5.6-luna`), three inputs of different threads steered into one run, 3 repetitions per mode | The model kept the threads apart. A plain reply to the second input ended the run and the first input shared that answer; without a later restart only 1 or 2 of 5 migration steps ran |
 | Same, with a send tool that answers each thread | No blocking and all five steps ran, but one final status answered all inputs, and the model chose to call the tool in every run of this sample |
 | Supplement taken before versus after the original answer | One versus two distinct answer entry ids |
@@ -270,15 +280,16 @@ APIs; no merge or reset operation is added.
 | Channel adapters | Summon and placement policy, session keys from platform structure, message-to-session table, setup guidance |
 | `conversation-sessions.ts` | Sessions per key; fork from the session a reply chain names |
 | `channels/kit/` turn lifecycle | Admission in arrival order per session, steer, shared-answer delivery, recorded outcomes |
-| History readers and local records | The session-derived start of a read, the fold, scoped lookup tools |
+| History readers and local records | The start of a read from the Agent's latest ask for the session, the fold and what it leaves out, scoped lookup tools |
 
 Acceptance needs real platform payloads and the channel lifecycle for:
 
 - keys for each platform's DM, group timeline and thread, including a reply to an old answer and a new topic;
 - steering at the end of a run: shared and separate answers, every terminal outcome, crash recovery during delivery, a
   refused send reaching the asker;
-- reads for a new session, a fork, a session whose newest entries are a wake-up's or a schedule's, a place longer than
-  the budget, and an unreadable source;
+- reads for a new session, a fork, a session whose newest message is a wake-up's or a schedule's, an ask still queued in
+  the inbox when the next one arrives (including after a restart), the agent's own answers and stop feedback left out, a
+  place longer than the budget, and an unreadable source;
 - scoped DM lookup and Telegram retained-history lookup with concrete retention and persistence limits;
 - Telegram privacy setup, already-added bots, administrator exceptions and unavailable checks;
 - the declared limits on parallel tool side effects.

@@ -298,7 +298,7 @@ back (§7).
 
 ## 9. Rejected designs
 
-> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) revisits the first row: a session per sender is not amnesiac when it reads the place's discussion. The table records the rationale for the current model.
+> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) revisits the "new session per ask" row: a session per sender keeps its own history and reads the place's discussion for the rest. The table records the rationale for the current model.
 
 | Rejected | Why |
 |---|---|
