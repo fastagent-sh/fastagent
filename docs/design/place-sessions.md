@@ -1,458 +1,289 @@
 ---
-title: Channel conversations and shared context
-description: "Places provide shared context, exchanges determine message ownership, and Agent sessions carry execution: routing, concurrency, context reads, delivery and recovery across Telegram, Slack and Feishu/Lark."
+title: Channel sessions and shared context
+description: "A session key follows the platform's structure (a DM, a sender in a group's main timeline, a thread), input is steered into the session that owns it, and sessions read each other's discussion through the place's history: routing, concurrency, context, answer delivery and recovery across Telegram, Slack and Feishu/Lark."
 type: design-doc
 status: proposed
 updated: 2026-11-10
 ---
 
-# Channel conversations and shared context
+# Channel sessions and shared context
 
 **Status: proposed ([#989](https://github.com/fastagent-sh/fastagent/issues/989)). Not implemented.** This document
 proposes replacing [participant-model.md](participant-model.md) Rule 3 and §6, and revising its thread-context and
-platform mappings. The participant axiom and the distinction between hearing and answering remain. Answer placement
-follows the platform defaults below. Current channel code and user guides still describe the shipped behavior.
+platform mappings. The participant axiom and the distinction between hearing and answering remain. Current channel code
+and user guides still describe the shipped behavior.
 
-The hard problem is letting one agent participate in several exchanges at once, use relevant information from the
-others, and receive corrections without mistaking somebody else's discussion for instructions to its current task.
+The hard problem is letting one agent work for several people in one place at once, use what the others said, and take
+a correction without mistaking somebody else's request for part of the current task.
 
-The design separates three responsibilities:
+> **A session key follows the platform's structure. Input goes to the session that owns it. Sessions learn about each
+> other from the place's discussion, not from a shared session.**
 
-> **A place provides shared context. An exchange determines what a message continues. A session carries execution.**
-
-All exchanges use the same agent definition. There is no separate router agent or worker role, no mandatory session
-that absorbs every exchange, and no automatic merge of thread transcripts into a trunk. Existing default sessions,
-forks, steering and history readers remain useful mechanisms.
+All sessions use the same agent definition. There is no router agent, no worker role, no trunk that absorbs the other
+sessions, and no model classifying whether a message continues a task.
 
 ## What people should experience
 
-- One person's long task does not, by itself, hold up an independent question.
-- A correction to ongoing work reaches that work at its next input boundary.
-- Following up on an old answer continues the relevant exchange, not whatever its former session happens to be doing.
-- A question can use relevant discussion from another exchange, including a human decision made after the agent's answer.
-- Every accepted request has an observable outcome, including failures, and keeps its ownership across a restart.
-- Answers stay attached to their questions. Internal execution choices do not move a conversation somewhere unexpected.
+- One person's long task does not hold up another person's question in the same group.
+- A correction sent while the agent works reaches that work at its next step.
+- A thread keeps one conversation, whoever speaks in it.
+- A question can use what others said in the place, including a human decision made after the agent's answer.
+- Every accepted request has an observable outcome, including failures, and survives a restart.
+- Answers stay attached to their questions.
 
-Hearing is not answering. The existing summon policy still decides whether a message starts or joins work. Reading a
-thread's conclusion internally is also distinct from announcing it to the room; the latter remains a separate action.
+Hearing is not answering. The existing summon policy still decides whether a message reaches the agent.
 
-## Places, exchanges and sessions
+## Session keys
 
-| Concept | Responsibility | Example |
+The key is a function of what the platform tells us about a message. It never depends on what the message means.
+
+| Where the message is | Session | Runs together with |
 |---|---|---|
-| Place | The shared background available to conversations here | A Slack channel, a Feishu chat, a Telegram group or forum topic, a DM |
-| Exchange | A request and its associated supplements, answers and follow-ups; it can span several turns | A migration and its corrections; a deployment-date question and later clarification |
-| Session | The Agent's execution history, model context and serial runner | The session executing the migration |
+| A direct message (a Slack DM thread is its own place) | One per DM | Nothing else in that DM |
+| A group's main timeline (Telegram group, Feishu/Lark ordinary group) | One per place and sender | Other senders' sessions |
+| A thread or topic (Slack thread, Feishu/Lark topic, Telegram forum topic) | One per thread, shared by everyone in it | Other threads and senders |
 
-A native thread usually supplies an exchange boundary. An explicit reply supplies a reference within that boundary.
-Neither is a proof of intent: a thread can contain several requests, and a reply can ask about an old answer without
-asking to change current work. Platform message ids, thread ids and Agent session ids remain different identities.
+Slack has no main timeline to key: every top-level ask in a channel opens its own thread, which is its own session, as
+it does today. A Telegram forum topic is a thread: one session for everyone in it.
 
-A FastAgent session is a pi-durable conversation: recorded entries, a bounded model projection over them, one runner,
-and optional fork lineage. A fork inherits a historical prefix; it does not keep receiving the parent's later entries.
-Compaction bounds the projection rather than guaranteeing verbatim recall. A session is not a resource or security
-boundary ([security-boundary.md](security-boundary.md)).
+This follows the common design of group agents. Hermes Agent keys sessions by platform, chat, thread and, in groups,
+participant, with threads shared by default.
 
-An unthreaded timeline may retain a default session for sequential exchanges. That session is an execution convenience,
-not the sole owner of the place's knowledge. An old exchange can remain associated with entries in it even after it
-has started another exchange; following up then may require a fork. A stable logical exchange does not require every
-future request to execute in the same physical session.
+A session is a pi-durable conversation: recorded entries, a bounded model projection over them, one runner, and
+optional fork lineage. A fork inherits a historical prefix; it does not receive the parent's later entries. A session
+is not a resource or security boundary ([security-boundary.md](security-boundary.md)).
 
-```text
-place
-├─ readable shared records: discussion, public answers, references, known work status
-├─ exchange A → session executing its request and supplements
-└─ exchange B → session executing its request and follow-ups
+### What a sender's own session means
 
-Each exchange can obtain relevant shared context without waiting for a special trunk to run.
-```
+A person in a group has one session for the main timeline. Their follow-ups reach it, so a correction needs no
+guessing about which task it belongs to. The cost is deliberate: in a group, Alice's request and Bob's request never
+share context unless the context is read (below), and one person's unrelated second request joins their own running
+task. Identical metadata can accompany "keep the old column" and "separately, check the weather"; no structural rule
+tells them apart, and no model classifier is added. The executing agent reads the text and can ask.
 
-### Why this ownership
+### Replying to an answer
 
-| Approach | Trade-off |
-|---|---|
-| One executing trunk owns shared memory and absorbs all branches | Convenient history inheritance, but gives one runner a second responsibility: maintaining everyone's context |
-| Shared records supply context to each exchange; sessions may be reused or forked | Keeps message ownership and context availability independent of which runner is busy; requires explicit read progress and reliable bindings |
+The channel keeps a small table from the platform message ids of its own answers and accepted asks to the session that
+produced or took them.
 
-The second is the design. It does not require deleting default sessions or creating an empty session for every message.
-Experiments found that a fork with a fresh context read and an independent session with the same read both learned
-sibling results without another trunk turn. That is evidence for separating responsibilities, not for banning trunks.
+- A reply to one of those messages belongs to that session, whoever sends it, and is steered into it. Carol replying to
+  Bob's answer ("what time?") reaches Bob's session, which holds the answer.
+- A new thread or topic forks from the session its reply chain names. When nothing in the table is named, it starts
+  empty and reads the place.
+- An id that is not in the table (another bot's message, or one from before the agent joined) names nothing.
 
-## From an incoming message to execution
+The table is the only added state. It is written when an answer or an accepted ask is recorded, not rebuilt from
+guesses.
 
-```text
-receive → persist accepted intent → determine exchange and answer location
-        → select and record execution binding → prepare context → submit
-        → observe actual outcomes → record answer and delivery state → deliver
-```
+## Input reaches a running session by steering
 
-Unaddressed discussion does not enter this execution path. It remains available as background to the extent the
-platform delivered it or allows it to be read. Slow history reads belong after ingress acknowledgement, not on the
-platform's acknowledgement deadline.
+Every channel send uses `whenBusy: "steer"`. The Agent takes the message at the session's next step, after the current
+tool calls, or at once when the session is idle (SPEC.md §5.3). Ordering and the queue limit belong to the Agent.
 
-### Determine what the message continues
+- A refusal (`queue_full`, capacity) is told to the asker, never dropped.
+- The channel serializes **admission**, not execution: preparing a turn (downloading attachments, resolving the
+  referent) and sending it happen in arrival order per session, so a slow download cannot reorder two sends. The wait
+  for the answer does not hold the next send back.
+- Steering does not undo an action already taken or prove the agent adopted the correction. An acceptance reaction means
+  received, not completed.
 
-These are defaults for the first-party channels, applied after the summon decision:
+Observed limits of steering (spikes below): a plain-text reply that answers an interjected question ends the run, and a
+long task the interjection interrupted continues only if later input restarts it. This applies to one person
+interleaving unrelated work into their own task, and to a reply steered into another sender's session. Both are accepted
+consequences of the keys above.
 
-| Signal | Default interpretation |
-|---|---|
-| A specific reply to a request or progress message being handled | Continue that exchange, regardless of sender |
-| A specific reply to an earlier answer | Continue the referenced exchange, not another exchange running in the same session |
-| An ordinary follow-up in an established native thread | Continue that thread's exchange |
-| A new group-timeline ask with no reply relationship | Start a new exchange, even when the same sender has other work running |
-| An ordinary message in an unthreaded DM | Continue the current conversation |
-| A deliberately opened native conversation or side thread | Establish its exchange boundary, retaining the referenced background |
+## Shared context
 
-Adapters must distinguish a specific quote from an implicit thread root. Slack's `thread_ts` on every reply does not
-mean every message explicitly targets the root's original request. If a thread is the answer location of an exchange,
-its appearance does not create a second exchange for that same request. Membership does not switch merely because a
-run finished before the next message arrived.
-
-When a referent cannot be resolved, include the available reference and disclose the missing context. Do not invent a
-binding to the sender's running task. For an explicitly separate thread, a parent reference supplies background rather
-than silently redirecting its messages into the parent conversation. Platform normalization of these cases is part of
-acceptance testing.
-
-### Ambiguity is an accepted product choice
-
-Identical sender, chat, thread and reply metadata can accompany both "keep the old column" and "separately, check the
-weather." Structural routing cannot distinguish those intentions. The first version uses the defaults above rather
-than a model classifier on every message. The executing agent interprets the text and can seek clarification.
-
-In an unthreaded DM, successive messages therefore remain conversational: "use pnpm" can reach ongoing work, while an
-unrelated question is not guaranteed a parallel run. In groups, sender identity alone never joins a new top-level ask
-to ongoing work. Neither choice claims perfect intent recognition.
-
-### Select execution without changing ownership
-
-- An idle suitable session can execute the request.
-- Input continuing its active exchange may use `whenBusy: "steer"`.
-- An independent exchange gets a separate execution context when the suitable session is busy with other work. Fork
-  related history when useful; otherwise assemble the required background for a new session.
-- Capacity pressure delays the request without changing its exchange, answer location or a recorded execution binding.
-
-For an old-answer follow-up, a fork can start at that answer's entry. For an independent ask, do not inherit an
-unfinished request as another instruction to execute; use an appropriate completed prefix, or an empty session when
-there is none. Known unfinished work can still be included separately as attributed status. A fork's historical
-context is not a claim that no relevant change has happened since.
-
-Selection and admission must prevent an unrelated exchange from taking over a session between the decision to steer
-and the submission. The existing Agent API addresses `steer` to a session, not to an exchange or run id. A separate
-busy-state read followed by a send does not prove this property. The admission protocol, including wake-ups or other
-Callers using the session, must be verified before implementation is accepted; this document does not assume that
-existing primitives already make that sequence atomic.
-
-### Concurrency is not resource isolation
-
-Sessions can run independently while their tools touch the same workspace, database or remote object. Two forked
-sessions both successfully incremented a shared file in the spike, but the final value was one, not two. Resource
-conflicts require a policy in the tools or execution environment; a channel must not promise that arbitrary parallel
-writes are safe.
-
-Keep the Agent's existing capacity protections. Additional scheduling limits, if needed, must count actual running
-work across native threads and other contexts, not just a class named "side branches." No fixed three-branch quota is
-part of this design. Queue feedback must be visible, and capacity exhaustion must never silently drop a request.
-
-## Shared context and its sources
-
-Shared context is assembled from existing records, not from a new complete copy of each platform's history.
+A session does not hold what other sessions did. It reads the place.
 
 | Information | Source |
 |---|---|
-| Slack and Feishu/Lark discussion and public answers | Platform history, subject to access and retention |
-| Telegram discussion the bot received and messages it sent | Locally retained records; no general Bot API history read |
-| Accepted, running, completed, failed or interrupted work | FastAgent's durable execution records |
-| Which exchange, request and answer a platform message refers to | Channel-owned bindings |
+| Slack and Feishu/Lark discussion and the agent's answers | Platform history, subject to access and retention |
+| Telegram discussion the bot received and what it sent | Locally retained records; the Bot API has no history read |
+| A thread's detail | The existing scoped thread tools (`slack-threads`, `feishu-threads`) |
 
-The defaults extend [place-history.md](place-history.md): keep the exchange's execution history, load explicit
-references, add necessary recent local discussion and relevant known work status, and read other threads when the
-question needs their detail. A thread stays focused without being permanently cut off from later information.
+Another session's answer is context, not redundancy: in a group, Alice's answer is exactly what Bob's session lacks.
+Background is rendered into the user entry of the current request, attributed and separated from the instruction. It is
+not a security guarantee against hostile content.
 
-Existing scoped thread tools are the starting point, not proof that every surface is covered. They currently serve
-group turns, not DMs; Telegram has no equivalent platform history reader. Cross-conversation DM continuity requires a
-scoped source for that DM, and Telegram needs a bounded lookup over retained records. Neither may be advertised as
-implemented merely because group thread tools exist. Room-bound lookup remains room-bound; arbitrary chat ids are not
-introduced as a shortcut.
+### Where a turn's read starts
 
-### What "folding" means
+A session already holds what an earlier turn of it folded. The read starts there, and the session is the only record of
+it:
 
-The existing history fold renders selected background into the current request. It is **context preparation**, not
-transcript merging or a guarantee of recall. For example:
+1. Read the session's newest page of entries and take its latest user entry that a channel sent.
+2. Its message's `idempotencyKey` is the platform id of the ask it answered. A key that is not a platform id of this
+   channel (a wake-up's, a schedule's) is skipped for the next older one.
+3. Fold the place's messages after that id and up to this turn's own ask. A session with no such entry reads the place's
+   newest messages.
 
-```text
-Background, not new requests:
-  Migration exchange A: running; no completion has been recorded.
-  Thread T2, 10:01, agent: deployment is scheduled for Thursday.
+This replaces per-place cursors and output exclusions. A failed turn that sent nothing leaves no entry, so nothing
+advances. Nothing is committed after an answer, and a crash cannot leave a cursor ahead of what the session holds. A
+fork inherits its parent's entries, so its first read starts at the parent's last ask; a thread reads its own messages,
+and the earlier room messages are read by the thread tools when needed. Platform ids must order messages within a place
+(Slack `ts`, Feishu `create_time`; Telegram must record the message id its asks carry). The reads happen after the
+ingress acknowledgement.
 
-Current request:
-  Dana: What is the agreed deployment day now?
-```
+The fold's budget (4000 characters) and truncation notice are unchanged. What the budget leaves out is said in the
+text; it does not reach the model, and nothing retries it. The scoped thread tools are the way to read more.
 
-The agent can read T2 and discover that people later changed the date to Friday. If the recent source already contains
-that discussion, it can be included directly. The returned evidence should retain its source, speaker and time; an
-old agent answer is not authoritative over later discussion just because it was produced by the agent.
+### Limits to keep visible
 
-The background lands in the session as part of this request's user entry. There is no separate passive write of a
-user/assistant pair into another session. Attribution separates historical requests from the current instruction;
-it is not a security guarantee against malicious content.
+- Available, discovered and included are different guarantees. A retained record can be unread, a discovered thread can
+  be cut by the budget, included text can later be compacted.
+- Bound a read to a position. A running request does not acquire later messages; a later tool read may, and says so.
+- Group thread tools do not serve DMs, and Telegram has no equivalent. A DM's scoped lookup and a bounded lookup over
+  Telegram's retained records are needed before either is claimed. Room-bound lookup stays room-bound; no tool takes an
+  arbitrary chat id.
+- Telegram's local records are its only copy. Retention bounds, persistence on each host and an observable missing-history
+  result must be specified before long-term retrieval is promised.
 
-The first version does not automatically copy every answered exchange to a trunk, generate per-thread summaries, or
-inject an activity digest for every thread. Reading a relevant thread worked in the small model experiment without
-an extra activity cue. This supports starting with existing readers; it does not prove that models always choose to
-read. Short complete background can also avoid an extra model/tool round.
+## Answers, delivery and restart
 
-### Availability, discovery and inclusion are different guarantees
+### One answer for several inputs
 
-A retained record can be available without being discovered. A discovered thread can be omitted from a bounded request.
-Included text can later be compressed or misunderstood. The product must not collapse these into "the agent knows."
+Inputs steered into a running session can end with one shared answer; inputs taken after the run ended produce their
+own.
 
-Readers must preserve these distinctions:
+| When an input is taken | Observed result | Delivery |
+|---|---|---|
+| While the run is going | Several messages share one `answer.entryId` | One message in the place's answer location |
+| After the run ended | The idle session answers it on its own | Another answer; sending it with `steer` does not suppress it |
 
-- Bound reads to an explicit source position or snapshot. Later tool reads may obtain newer information and should
-  identify it as such; a running model request does not acquire future events automatically.
-- Keep progress per reader and source. B reading a shared source cannot consume unread context for A. A fork may
-  inherit read progress only when the corresponding context is actually within its inherited prefix.
-- Suppress an output only when the receiving context already holds it. Another session's answer is not redundant
-  merely because the same bot posted it. Inputs assigned to other exchanges are attributed background, not new work.
-- Make late results discoverable at their publication position, rather than only at the older ask's position.
-- Disclose truncation, access gaps and failed reads. Advancing a scan cursor past omitted text does not mean that text
-  entered the model's context, and does not promise an automatic retry of the omitted material.
-- Do not claim unbounded recall from bounded history tools. Long-thread listing, pagination and retrieval coverage
-  require acceptance tests, especially for old roots with recent replies.
+Each accepted input is tracked to its terminal result. Delivery is claimed per `(session, entryId)`: the first turn to
+reach the answer delivers it, the others wait for that delivery and finish. Failures and cancellations without an
+answer still reach their asker.
 
-Retained source data and a disposable prompt cache have different lifetimes. Telegram's only local copy cannot be
-silently evicted while promising later retrieval. Retention bounds, persistence on each host and an observable missing
-history result must be specified before that promise ships. No infinite archive is implied.
+### What recovery needs
+
+| State | Property |
+|---|---|
+| Accepted input, platform ids, references, answer location | Persisted before the ingress acknowledgement |
+| Session of the input | Recorded before the first send; the idempotency key is stable, so a send of uncertain outcome is repeated, not duplicated |
+| The generated answer, its `entryId` and what remains to deliver | Recorded before delivery; a restart delivers without running the model again |
+| Answers already delivered, by `(session, entryId)` | Persisted, so recovering a second input of a shared answer does not send it again |
+| Message-to-session table | Persisted with the turn that wrote it |
+
+The Agent's idempotency key is scoped to a session: sending the same platform input into another session repeats its
+side effects. An interrupted unsafe tool is reported `interrupted` and not rerun. Platform delivery may still be
+uncertain after a lost acknowledgement; this design does not claim exactly-once sends.
 
 ## Platform behavior
 
 ### Telegram
 
-A private chat, a group and each forum topic provide separate place scopes. Replies outside those topic boundaries
-remain in the same timeline: the reply relationship can continue an exchange without creating a visible thread.
-Group mentions and replies to this bot retain their existing summon behavior. A new unreferenced group ask is a new
-exchange; an unthreaded private conversation defaults to continuity.
+A private chat, a group and each forum topic are places. A group's main timeline is keyed by sender, a forum topic is
+shared by its participants, and replies to the agent's answers follow the table above. Mentions and replies to the bot keep their summon behavior.
 
-**Disabling privacy mode is a standard group-setup step**, not just a startup warning:
+**Disabling privacy mode is a standard group-setup step**, not only a startup warning:
 
 1. Guide the person through `@BotFather` → `/setprivacy` → select the bot → **Disable**.
 2. For a bot already in a group, tell them to remove and re-add it for the change to take effect.
 3. Check the global setting through `getMe.can_read_all_group_messages`; a failed check is reported as unknown.
-4. Explain that the bot receives ordinary discussion as context but still answers only under the summon policy.
+4. Explain that the bot receives ordinary discussion as context but answers only under the summon policy.
 
-A private-chat-only use is not blocked. Do not ask for administrator privileges merely to receive discussion. An
-administrator bot is an exception to privacy-mode filtering; the global flag alone does not prove what was delivered
-in each group. Missing messages are never represented as heard.
+A private-chat-only use is not blocked, and no administrator privilege is requested for receiving discussion. An
+administrator bot is an exception to privacy filtering; the global flag does not prove what each group delivered.
+Missing messages are never represented as heard.
 
-This distinction is an API capability, not an extra group permission:
-
-- The HTTP Bot API has no general chat-history listing. Disabling privacy filtering changes incoming message coverage,
-  not retrospective access. Undelivered updates are retained for at most 24 hours.
-- MTProto's `messages.getHistory` is user-only. Its `messages.getMessages` and `channels.getMessages` allow bots to
-  request known ids, subject to access conditions. They are not the current FastAgent transport or a general history
-  listing replacement; their use here has not been live-tested.
-
-Sources: [privacy mode](https://core.telegram.org/bots/features#privacy-mode),
+The HTTP Bot API has no history listing, and disabling privacy mode changes incoming coverage, not retrospective access.
+Undelivered updates are kept for at most 24 hours. MTProto's `messages.getMessages` and `channels.getMessages` let a bot
+request known ids; they are not the current transport and have not been live-tested here. Sources:
+[privacy mode](https://core.telegram.org/bots/features#privacy-mode),
 [Bot API updates](https://core.telegram.org/bots/api#getting-updates),
-[getHistory](https://core.telegram.org/method/messages.getHistory),
 [getMessages](https://core.telegram.org/method/messages.getMessages),
 [channel messages](https://core.telegram.org/method/channels.getMessages).
 
 ### Slack
 
-A channel is a shared context scope. A top-level ask and its answer thread are organized as one exchange from the
-start: the first ask does not run in a mandatory channel trunk and then change ownership when someone follows up.
-An existing thread keeps its answer location. Separate exchanges can progress independently, and any of them can read
-relevant channel or thread history without waiting for a trunk turn.
-
-Answering channel asks in their threads is the default, following Slack's
-[agent design guidance](https://docs.slack.dev/concepts/agent-design/#responses). It keeps progress, answers and
-follow-ups attached to the question and limits channel noise. It is not the only technical option:
-[`chat.postMessage`](https://docs.slack.dev/reference/methods/chat.postMessage/) can post at top level or use
-`reply_broadcast` to surface a thread reply. An explicit request to notify the channel may use those mechanisms;
-answer length alone does not choose a different location.
-
-Ordinary DMs default to conversational continuity; the native Agent surface follows the conversations the user opens.
-Channel threading is not a rule that every private message creates a new exchange. Distinct native conversations can
-obtain shared background within that DM through the scoped source described above. Thread placement does not limit
-context to the thread, and cross-conversation context does not import private content into a public channel.
-
-This is an official recommendation plus a proposed product default, not a claim of measured optimal UX.
+Channel asks are answered in their threads, following Slack's
+[agent design guidance](https://docs.slack.dev/concepts/agent-design/#responses). A thread is a session shared by its
+participants. [`chat.postMessage`](https://docs.slack.dev/reference/methods/chat.postMessage/) can post at top level or
+use `reply_broadcast`; an explicit request to notify the channel may use them, and answer length alone does not choose a
+location. Ordinary DMs follow DM continuity; the native Agent surface follows the conversations the user opens.
+Cross-conversation context stays inside the DM and never imports private content into a channel.
 
 ### Feishu and Lark
 
-An ordinary chat's main timeline may retain a default session for sequential exchanges. Independent work need not
-wait behind it. Native topics provide exchange boundaries; answers remain in the chat or topic where asked, using the
-existing quoting and streaming-card behavior.
+An ordinary group's main timeline is keyed by sender; answers use the existing quoting and streaming-card behavior. In a
+topic group, each topic is a session shared by its participants; the room view consists of topics' first posts. A new
+topic forks from the session named by its reply chain. `thread_id` identifies a topic; a changing reply-chain root does
+not. Reading unsummoned discussion depends on platform scopes, and setup reports missing access. Lark shares the engine;
+Feishu measurements are not live Lark validation.
 
-In a topic group, the room-level view consists of topics' first posts; replies belong to their topics. Each topic can
-progress independently and relevant topic history remains readable from the room's context scope. There is no need to
-run a fictional top-level task solely to update shared memory.
+## Why not the alternatives
 
-Adapters distinguish an ordinary quote, an actual topic and a reply to an exchange's progress. `thread_id` identifies
-a topic; a changing reply-chain root is not a substitute. An explicit old-answer reference does not steer unrelated
-work now using its former session. Receiving and reading unsummoned group discussion still depends on the platform's
-scopes; setup reports missing access. Lark shares the engine, but Feishu measurements are not live Lark validation.
-
-## Answers, delivery and restart
-
-### Observe the answer actually produced
-
-`whenBusy: "steer"` delivers new input at the next eligible execution step, after current tool calls. It does not undo
-an action already taken or prove that the agent adopted the requested change. An acceptance reaction or status means
-received, not completed; use each platform's supported feedback rather than assuming all channels already have the
-same reaction implementation.
-
-The end-of-run race changes how many answers exist:
-
-| When a supplement is taken | Observed Agent API result | Delivery obligation |
-|---|---|---|
-| While the original work is running | Both messages can reference the same `answer.entryId` | One shared answer in that exchange's answer location, not one duplicate per input |
-| After the original work ended | The idle session takes an ordinary request and produces another answer | Deliver the additional answer; do not suppress it because the send used `steer` |
-
-Track each accepted input to its actual terminal result. Group shared answers within their exchange and delivery
-destination using answer identity, and retain the association to all covered inputs. Failures and cancellations without
-an answer still need visible outcomes. Do not infer final delivery ownership from a pre-send busy check.
-
-Record the generated answer and what remains to deliver before attempting platform delivery. Recovery must be able to
-resume delivery without invoking the model again. A lost platform acknowledgement can still make delivery uncertain;
-these experiments do not establish exactly-once platform sends.
-
-### Keep decisions that recovery needs
-
-| State | Required property |
+| Alternative | Why not |
 |---|---|
-| Accepted inbound intent, platform identity, references and answer location | Persist before ingress acknowledgement; do not lose an accepted ask |
-| Exchange and execution binding, including the session and idempotency key | Record before the first Agent send; reuse after a send whose outcome is uncertain |
-| Request outcomes, answer associations and pending delivery | Recover without assuming every input has its own answer |
-| Context read progress and output exclusions | Separate readers; losing a cache may cause disclosed rereading, not reroute work |
-| Retained local history where no platform read exists | Explicit retention and host-persistence limits; loss cannot be called a harmless cache miss |
-
-An intent not yet bound can finish its initial selection after restart. Once bound, it must not be reassigned by
-rerunning busy-state routing. Session creation precedes recording its binding, which precedes sending the message;
-an unused empty session is preferable to a sent request with no recoverable binding.
-
-The Agent's idempotency key is scoped to a session. Retrying the same platform input in a new session can repeat its
-side effects. In the crash experiment, stable bindings kept two tool effects at two; changing the binding produced a
-third. Unsafe interrupted tools were reported as `interrupted`, not rerun. A subsequent `completed` message meant the
-model answered about that state, not that the interrupted operation had succeeded.
-
-## A complete example
-
-Alice asks for a migration, Bob asks for the deploy date, and Carol follows up. Assume each group message is addressed
-to the agent as its platform requires.
-
-| Event | Ownership, execution and context |
-|---|---|
-| Alice starts the migration | Exchange A owns the request, progress and answer location |
-| Bob independently asks for the deploy date | Exchange B runs separately while A is busy; A's running status may be background, never a second migration instruction |
-| Alice replies to A's progress: "keep the old column" | Input to A; delivered at the next input boundary, with its actual answer association observed |
-| Carol replies to B's answer: "what time?" | Continues B's context, even though Carol was not its original sender |
-| People later change the deployment from Thursday to Friday without calling the agent | The discussion remains in the available source; it is not an agent answer and cannot be captured by an answers-only log |
-| Dana asks for the agreed deployment date | A new exchange uses available background and can read B's discussion, including the human revision; no special trunk has to run first |
-
-On Slack, A and B are the threads beneath their top-level asks. In an ordinary Telegram or Feishu timeline, their
-answers retain the platform's existing reply placement; a separate execution context need not create a visible topic.
-In a native Feishu/Lark topic, follow-ups remain in that topic. The example establishes ownership and reading behavior,
-not a guarantee that a model will always select the right source.
-
-## Provider caching
-
-Cache reuse follows shared input prefixes and provider behavior, not the social identity of a conversation. Forks can
-reuse full history; independently assembled contexts can also reuse stable prefixes. Choose the context for correctness
-before choosing its physical representation for cost.
-
-pi-durable 1.5.0 gives forks fresh provider identities. The public host callback
-`Harness.open({ conversationCreated })` can assign a fork its parent's `ProviderDoc.sessionId`; the spike verified
-transitive inheritance while unrelated conversations remained distinct. This requires no pi patch. A request-body
-extension hook is insufficient to cover identity used in headers and Codex's cached WebSocket.
-
-Adopting that callback globally would affect every Caller using forks, not just channels. The scope of reuse must be
-explicit. Provider resources sharing an identity must not be closed while another user still needs them; lifetime and
-release ownership remain part of [#896](https://github.com/fastagent-sh/fastagent/issues/896). A finished message is not
-the end of a session's lifetime. This document does not mandate one cache key for every session of a place.
+| One session per place, every input steered | Measured below: the answer to an interjected question ends the run; long work is lost, and one answer is shared by unrelated inputs |
+| One session per place, with the agent answering through a send tool | Removes the blocking, but gives up the channel's delivery, previews and recovery, and depends on the model calling the tool |
+| A table of exchanges that decides what a message continues | Needs an ownership rule that structure cannot supply, and a durable table of exchanges and bindings |
+| A trunk session that absorbs every branch, or a router agent in front | A second job for one runner; the router contradicts one definition for every session |
+| A new session per ask with no read | An agent that cannot use what was just said (participant-model.md §9) |
+| A stored read cursor per reader | The session already records what it has read; a second record can disagree with it |
 
 ## Evidence and its limits
 
-The original [mechanism spike](https://github.com/fastagent-sh/fastagent/issues/989#issuecomment-6739985080),
-[provider measurements](https://github.com/fastagent-sh/fastagent/issues/989#issuecomment-6758665587) and
-[host callback check](https://github.com/fastagent-sh/fastagent/issues/989#issuecomment-6758851480) establish usable
-building blocks. Follow-up local experiments exercised the failures below. These are design evidence, not a checked-in
-channel acceptance suite.
-
-### Mechanisms and fault injection
-
-The follow-up used the real Agent API with controlled faux-model responses, actual SQLite for recovery, and a synthetic
-platform-history source behind the real `createPlaceHistory`. Negative controls ran the unsafe policy and observed the
-corresponding assertion fail. They test routing and state mechanics, not a real model's understanding.
+Local experiments on pi-durable with a faux model unless noted, and one real-model run. They test mechanics, not product
+acceptance, and are not a checked-in suite.
 
 | Experiment | Observation |
 |---|---|
-| Six pairs of messages with identical platform metadata but opposite intended routing | A structure-only rule cannot classify both members of a pair correctly; not a measured population error rate |
-| Old-answer follow-up while the source session runs a migration | Session-only steering contaminated the migration's input and shared its answer; exchange-aware separation did not |
-| Supplement before versus after the original answer | One versus two distinct answer entry ids; fixed suppression lost the late answer, per-input delivery duplicated the shared one |
-| Three threads with no further trunk turn | Both fork-plus-fresh-read and independent-session-plus-read saw sibling results; inheritance alone did not |
-| B commits its read before A, using one place cursor | A missed discussion only B had read; reader-specific progress preserved it |
-| A result published at position 40 for an ask at position 2, after a reader passed 30 | Indexing by ask position hid the late result; publication position made it discoverable |
-| 101 synthetic history messages under the current budget | 13 were included; an older important update was omitted, truncation was disclosed, and the next read did not retry it |
-| Two forked sessions increment the same file | Both tools returned successfully; parallel final value 1, sequential final value 2 |
-| `SIGKILL` after binding but before send, and during two unsafe tools with a pending steer | Stable binding recovered the requests without extra tool effects; rebinding repeated an effect; interrupted tools were reported |
+| Decide to steer from `sessions.get` showing running, then send | Another input had taken the session in between: the decision and the send are not atomic |
+| Six concurrent `whenBusy: "reject"` sends to an idle session, 50 rounds | Exactly one admitted each round, the rest `busy` |
+| `reject` while a message is queued behind a finishing run | Never admitted in the gap between two messages |
+| Six simulated senders, randomized timing, one shared session with steer | 306 of 600 model calls held two senders' input |
+| Same, one session per sender or reused by claim under a lock | 0 of 600+ model calls mixed senders, with wake-ups too |
+| Real model (`openai-codex/gpt-5.6-luna`), three inputs of different threads steered into one run, 3 repetitions per mode | The model kept the threads apart. A plain reply to the second input ended the run and the first input shared that answer; without a later restart only 1 or 2 of 5 migration steps ran |
+| Same, with a send tool that answers each thread | No blocking and all five steps ran, but one final status answered all inputs, and the model chose to call the tool in every run of this sample |
+| Supplement taken before versus after the original answer | One versus two distinct answer entry ids |
+| One place cursor shared by two readers | A reader missed discussion the other had committed |
+| 101 history messages under the fold budget | 13 included; the older update was omitted with a notice and never retried |
+| Three threads read with no further session turn | A fork with a fresh read and an independent session with the same read both learned the sibling results |
+| `SIGKILL` between recording a binding and sending, and during two unsafe tools | A stable session and key recovered without extra tool effects; changing them repeated an effect |
+| Two forked sessions increment one file | Both succeeded; the parallel final value was 1, not 2 |
 
-The first spike's reopen test used an orderly close, while the follow-up actually killed a child process. Neither
-verified the complete channel acknowledgement, delivery and redelivery path. Faux compaction demonstrated inclusion
-of data in a summary request, not semantic summary quality. Real Bedrock acceptance of steering's role sequences is
-still unverified.
+The real-model runs used one model, synthetic tools and local fixtures. They show nothing about other models, long or
+side-effecting tasks, or real Slack, Feishu or Telegram payloads. Real Bedrock acceptance of steering's role sequences is
+unverified.
 
-### Real model context and caching
+The cross-session read was also tried with a real model: with only an old answer (Thursday) and no read tool it answered
+Thursday after the humans had moved the date to Friday; with the thread tool it read the revision and answered Friday.
+That small sample does not establish reliable retrieval or resistance to prompt injection.
 
-The context experiment used `openai-codex/gpt-5.6-luna`: three synthetic scenarios across four input/tool configurations,
-12 answers. Thread tools returned local fixtures, not live Slack or Feishu history. With only an old Thursday answer
-and no read tool, it answered Thursday after the humans had changed the date to Friday. With the tool available it
-read the revision and answered Friday, both with and without an activity cue. Full short history answered Friday
-without a tool call. Other scenarios covered unresolved proposals and historical requests as background; no synthetic
-deployment action was called. This small sample does not establish reliable retrieval or prompt-injection resistance.
+### Provider caching
 
-A separate cache comparison used about 6,700 input tokens, two alternating rounds and two concurrent first requests
-per mode per round. Both modes explicitly reused their own warmed provider identity and stable reference prefix;
-independent sessions do not currently inherit that identity automatically in FastAgent.
-
-| Context construction | Requests with cache reads | Share of input tokens read from cache |
-|---|---:|---:|
-| Fork inherited history | 3/4 | 72.4% |
-| Independent session reconstructed context | 4/4 | 97.0% |
-
-All eight questions were answered correctly. One miss dominates this small comparison: it shows reconstructed context
-can reuse a cache, not that it is superior or preserves all tool-history detail. Earlier Codex tests found substantial
-benefit from sharing fork identity; a DeepSeek Flash sample hit cache with either identity. Anthropic was not measured.
+Cache reuse follows shared input prefixes, not the social identity of a conversation. pi-durable 1.5.0 gives forks fresh
+provider identities; the public host callback `Harness.open({ conversationCreated })` can assign a fork its parent's
+`ProviderDoc.sessionId`, with no pi patch. Adopting it globally affects every Caller using forks, and provider resources
+sharing an identity must not be closed while another user needs them (#896). A small Codex comparison found a fork and
+a reconstructed context both reusing a cache; it does not establish a winner. This design does not mandate one cache key
+per place.
 
 ## Implementation boundary and acceptance
 
-This proposal does not amend [SPEC.md](../SPEC.md). Prefer the existing session, fork, send, steer, read and event APIs.
-No merge or reset operation is introduced. If exchange-safe admission cannot be implemented over them, demonstrate the
-gap and review the smallest contract change rather than silently weakening ownership.
+This proposal does not amend [SPEC.md](../SPEC.md). It uses the existing session, fork, send, steer, read and event
+APIs; no merge or reset operation is added.
 
-| Area | Responsibility in this design |
+| Area | Responsibility |
 |---|---|
-| Channel adapters | Summon and placement policy, normalized thread/quote relationships, platform ids and setup guidance |
-| `conversation-sessions.ts` and channel bindings | Stable exchange references and recorded execution selection; inspect the existing mapping before extending it |
-| `channels/kit/` turn lifecycle and delivery | Admit work without a place-wide execution lock, observe shared answers, retain outcomes and delivery ownership |
-| History readers, local records and scoped lookup tools | Reader-specific progress, attributed context, known work status and discoverable retained sources |
-| Harness integration | Existing execution primitives and an explicitly scoped provider-identity optimization with safe cleanup |
+| Channel adapters | Summon and placement policy, session keys from platform structure, message-to-session table, setup guidance |
+| `conversation-sessions.ts` | Sessions per key; fork from the session a reply chain names |
+| `channels/kit/` turn lifecycle | Admission in arrival order per session, steer, shared-answer delivery, recorded outcomes |
+| History readers and local records | The session-derived start of a read, the fold, scoped lookup tools |
 
-Implementation is accepted only after real platform payloads and the channel lifecycle cover:
+Acceptance needs real platform payloads and the channel lifecycle for:
 
-- specific old replies versus implicit thread roots, native conversation creation and ordinary DM continuation;
-- exchange-safe admission around completion, including other Callers and wake-ups using a session;
-- shared and separate answers at the steer boundary, all terminal outcomes, and crash recovery during delivery;
-- late results, inherited read progress, dropped context, long active threads and explicit unreadable-source behavior;
-- scoped DM lookup and Telegram retained-history lookup, with concrete retention and deployment-persistence limits;
+- keys for each platform's DM, group timeline and thread, including a reply to an old answer and a new topic;
+- steering at the end of a run: shared and separate answers, every terminal outcome, crash recovery during delivery, a
+  refused send reaching the asker;
+- reads for a new session, a fork, a session whose newest entries are a wake-up's or a schedule's, a place longer than
+  the budget, and an unreadable source;
+- scoped DM lookup and Telegram retained-history lookup with concrete retention and persistence limits;
 - Telegram privacy setup, already-added bots, administrator exceptions and unavailable checks;
-- capacity feedback without reassignment, plus the declared limits on parallel tool side effects.
+- the declared limits on parallel tool side effects.
 
-These checks still need end-to-end Telegram, Slack, Feishu and Lark validation. Model intent error rates in real chats,
-long-thread retrieval quality and broader provider caching remain unmeasured. The current group readers and the local
-spikes do not establish those results.
+Model-intent error rates in real chats, long-thread retrieval quality and broader provider caching remain unmeasured.
 
 Access control, personal continuity across places or hosts, proactive work and new chat commands are outside this
-proposal. Existing security checks remain in force. Current scheduling and command behavior must not silently change
-as a side effect of session reuse or splitting; any required integration decision is reviewed separately.
+proposal. Scheduling and command behavior must not change as a side effect.
