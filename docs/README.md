@@ -68,7 +68,8 @@ These are not required to use FastAgent, but they explain public architecture de
 | [Design notes](design/README.md) | What belongs in public design docs |
 | [Architecture](design/architecture.md) | One harness (pi-durable), one API, the definition and its assembly, the artifact, context packages, and hosts |
 | [Core design](design/core.md) | The code as it is now: the agent directory and its content, the assembly onto pi-durable, channels, schedules, state, and deployment |
-| [Configuration and credential ownership](design/configuration.md) | Where each configuration fact lives, deployment environments, and who owns which credential |
+| [Where configuration, secrets and credentials live](design/configuration-layout.md) | **Proposed.** The named instance with one committed configuration file, delivered to a host as variables so one image serves every instance; secrets, local `.env` and credentials |
+| [Deployment and credential ownership](design/configuration.md) | The convention boundary, the order a deployment follows, and why a model credential is created on the deployment |
 | [Distribution and provenance](design/distribution.md) | Why an agent directory has no manifest, and where a vendored skill's origin should be recorded |
 | [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
 | [Place history](design/place-history.md) | In progress: what a chat place said, read from the platform when a turn needs it instead of copied into a buffer |
