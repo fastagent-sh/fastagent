@@ -256,8 +256,7 @@ describe("an agent's own content, from the package entry", () => {
     const { base, notes, app } = await folders();
     const dir = join(base, "agent");
     await createAgent(dir, { content: [bind("app", app)] });
-    const config = join(dir, "fastagent.json");
-    const agent = await openSource(dir, { config });
+    const agent = await openSource(dir);
     try {
       expect(agent.content.map(({ name, kind, location }) => [name, kind, location])).toEqual([
         ["app", "local", realpathSync(app)],
@@ -268,7 +267,7 @@ describe("an agent's own content, from the package entry", () => {
     } finally {
       await agent.close();
     }
-    const reopened = await openSource(dir, { config });
+    const reopened = await openSource(dir);
     try {
       expect(reopened.content.map(({ name }) => name).sort()).toEqual(["app", "notes"]);
     } finally {
