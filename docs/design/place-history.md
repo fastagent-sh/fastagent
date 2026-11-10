@@ -18,6 +18,8 @@ It answers two issues together:
 
 Both are the same gap: the place's history is not where the agent looks.
 
+> **Proposed change:** [place-sessions.md](place-sessions.md) (#989) makes shared records available to independent exchanges without mandatory trunk merges. It requires reader-specific progress and output exclusions, explicit retention where Telegram is the only local source, and scoped lookup beyond the existing group-thread tools. This document describes the shipped readers.
+
 ## 1. The rule
 
 > **The platform is the place's memory. The session is the agent's.**
