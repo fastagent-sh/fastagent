@@ -16,6 +16,7 @@ import {
   resolveConfig,
 } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
+import { environmentConfig } from "../../harnesses/pi-durable/environment-config.ts";
 import { buildDefinition, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { openText, readCommands } from "../../harnesses/pi-durable/text.ts";
 import { inspectMcp } from "../../mcp/host.ts";
@@ -37,13 +38,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const { definition, instance } = await loadDevProject(agentDir).catch(failStartup);
   const config = (() => {
     try {
-      return resolveConfig(definition, instance);
+      return resolveConfig(definition, instance, environmentConfig(process.env));
     } catch (error) {
       return failStartup(error);
     }
   })();
   const name = instanceName(definition.name, enteredInstanceName() ?? config.name);
-  const agent = agentPresentation(definition, config);
+  const presentation = agentPresentation(definition, config);
+  const program = presentation.agent;
   const modelSpec = modelSpecFor(config, opts.model);
   const declared = (() => {
     try {
@@ -103,7 +105,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
         {
           agentDir,
           name: name,
-          agent: { name: agent.name, description: agent.description ?? null, starters: agent.starters ?? [] },
+          description: presentation.description ?? null,
+          agent: { name: program.name, description: program.description ?? null },
+          starters: presentation.starters ?? [],
           content,
           contentError: contentError ?? null,
           environment: environment ?? null,
@@ -134,10 +138,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", `${name} — ${agentDir}`);
-  if (agent.name !== name) line("program", agent.name);
-  if (agent.description !== undefined) line("description", agent.description);
-  if (agent.starters !== undefined)
-    line("starters", agent.starters.map((starter) => JSON.stringify(starter)).join(", "));
+  if (program.name !== name || program.description !== undefined) {
+    line("program", `${program.name}${program.description === undefined ? "" : ` — ${program.description}`}`);
+  }
+  if (presentation.description !== undefined) line("description", presentation.description);
+  if (presentation.starters !== undefined)
+    line("starters", presentation.starters.map((starter) => JSON.stringify(starter)).join(", "));
   for (const [label, value] of contentLines(content)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");

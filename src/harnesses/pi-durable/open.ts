@@ -393,7 +393,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     models,
     registry,
     name: options.name ?? instanceName(definition.name),
-    agent: agentPresentation(definition, config),
+    ...agentPresentation(definition, config),
     ...(model === undefined ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),

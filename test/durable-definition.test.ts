@@ -377,11 +377,12 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       expect(built).toContain(`Your definition is in ${dir}, which you read and do not change.`);
     });
 
-    it("reports the package's name and description apart from the instance's name, and the instance's own over them", async () => {
+    it("reports the program's name and description apart from the instance's, which does not fall back to the program's", async () => {
       const bare = await (await open()).agent.info();
       expect(bare).toMatchObject({ name: "support", agent: { name: "support" } });
       expect(bare.agent).not.toHaveProperty("description");
-      expect(bare.agent).not.toHaveProperty("starters");
+      expect(bare).not.toHaveProperty("description");
+      expect(bare).not.toHaveProperty("starters");
       const files = {
         ...FILES,
         "package.json": '{ "name": "@acme/support", "description": "Answers order questions.", "type": "module" }',
@@ -390,11 +391,10 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
           'defaults: { starters: ["Where is my order?"],',
         ),
       };
-      expect((await (await open(files)).agent.info()).agent).toEqual({
-        name: "@acme/support",
-        description: "Answers order questions.",
-        starters: ["Where is my order?"],
-      });
+      const described = await (await open(files)).agent.info();
+      expect(described.agent).toEqual({ name: "@acme/support", description: "Answers order questions." });
+      expect(described.starters).toEqual(["Where is my order?"]);
+      expect(described).not.toHaveProperty("description");
       const blank = await open({
         ...files,
         "package.json": '{ "name": "support", "description": "  ", "type": "module" }',
@@ -403,7 +403,8 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       const own = await open(files, { config: { settings: {}, sources: {}, description: "Ours." } });
       expect(await own.agent.info()).toMatchObject({
         name: "acme-support",
-        agent: { name: "@acme/support", description: "Ours." },
+        description: "Ours.",
+        agent: { name: "@acme/support", description: "Answers order questions." },
       });
     });
 

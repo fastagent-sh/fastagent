@@ -338,7 +338,10 @@ Precedence of configuration values, lowest first:
 1. framework defaults;
 2. the program's `defaults`;
 3. the instance configuration;
-4. environment variables: secrets and a few overrides such as `FASTAGENT_MODEL`;
+4. environment variables: secrets, and the overrides `FASTAGENT_MODEL`, `FASTAGENT_THINKING_LEVEL`, `FASTAGENT_HTTP_API`
+   and `FASTAGENT_HTTP_PUBLIC_URL` (each laid over the configuration as a layer of its own, so its source names it;
+   read by the CLI's commands that run an instance, never by `openAgent`, and not by `deploy`, which decides with the
+   configuration it delivers);
 5. command-line flags and `openAgent` options.
 
 Composition:
@@ -402,7 +405,6 @@ uses static values instead. (Where grants are kept is §4.1's; bindings are in t
   "$schema": "./node_modules/@acme/reviewer/fastagent.schema.json",
   "model": "anthropic/claude-x",
   "http": { "port": 9000 },
-  "deploy": { "agentcore": { "idleTimeoutSeconds": 300 } },
   "settings": { "repo": "acme/api" },
   "name": "reviewer-eu",
   "content": {
@@ -440,6 +442,49 @@ one place, delivered with the configuration.
 
 `fastagent.json` holds no secret values; secrets are referenced by name. Its `mcpServers` follows the rule for MCP
 entries in §4.1.
+
+#### What it holds, by kind
+
+The file holds four kinds of value. They have different writers and different lifetimes, which is what decides where
+each can live; a key is placed by what it is, not by which file it happens to sit in.
+
+| Kind | Keys | Other ways to give it | Written by |
+|---|---|---|---|
+| Identity | `name`, `description` | `name`: `--name`, `FASTAGENT_NAME`, `openAgent`'s `name`. Both are the instance's own and are reported apart from the program's (`info().name`, `info().description` against `info().agent`); the instance's description has no fallback to the program's | a person, a host app |
+| Overrides of the program's defaults, scalar | `model`, `thinkingLevel`, `http.port`, `http.api`, `http.publicUrl`, `channels.<name>.ingress` | flags and environment variables (§4.1 precedence); `channels.<name>.ingress` has `--ingress` on `channels` only | a person |
+| Overrides, structured | `starters`, `settings` | none: the file or `openAgent`'s `config` object. `starters` is behavior, as `model` is, so an instance replaces the program's | a person, a host app |
+| Additions to what the program declares | `content`, `mcpServers`, `instructions`, `skills`, `prompts` | none; they name files and directories. They mirror `context.json`'s `content` and `mcpServers`, and the rule is the same: an instance only adds | a person, the CLI (`content add`), a host app, the agent where the file is in its writable root |
+| A record a tool writes | `channels.<name>.app` | none | `deploy` and `channels setup --record-url`, once a person has set a platform's URL |
+
+Not in it: `deploy.*`. Only `deploy` reads it, the box never does, so it is the program's `defaults.deploy` or a flag of
+one deploy (`--idle-timeout`) and an instance's file refuses it (`docs/design/configuration.md`'s class A: delivering
+what nothing reads only creates drift).
+
+`channels.<name>.app` stays in the configuration a deployment delivers, not in `.state/`. It records a fact about the
+platform's app and the deployment's URL, written on the deployer's side and read by the box, and AgentCore resets every
+deploy's storage, which would lose it.
+
+**Built:** the identity split in `info()`, `deploy.*` out of the instance file, the environment layers of §4.1, and the
+default of `<root>/fastagent.json` for an embedding open with `root` (§4.1).
+
+**Not built, in this order:**
+
+1. One resolver for "which file does this form read", called by `dev`, `start`, `openAgent`, `inspectMcp` and the
+   commands that read a configuration (several places say it today, each its own way).
+2. A deployed box that layers a writable file over what it was delivered: the delivered configuration stays the
+   deployment's and immutable, and `<root>/fastagent.json` (the instance root is `/data`) holds what tools and the
+   agent add at run time, additions only, which is the rule `content` and `mcpServers` already follow. An edit on a
+   box reaches it through the host's own shell, as `login --deployment` does (`src/deploy/box-shell.ts`).
+3. Delivering the configuration to the box as a release input of its own instead of a layer of the image, so a change
+   of configuration is not a new image and one image is the same artifact in every environment (twelve-factor's
+   build, release, run). AgentCore has no file mount and 4 KB of environment variables in all (its quotas), and Railway's
+   documented route for a file is a Dockerfile that copies it in, so the path every host shares is the one the
+   deployment's values already take, and a configuration over a host's limit is refused by the pre-flight, naming the
+   limit. Each host's limits are to be verified before this is built.
+
+Whether the configuration a deployed agent may write should be able to add an MCP server is a trust question this does
+not decide: the instance is one trust domain ([security-boundary](security-boundary.md)), and a server's `${VAR}` expands
+from every secret the instance was opened with (#997, not fixed).
 
 ### 4.3 Development defaults
 

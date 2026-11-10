@@ -36,7 +36,7 @@ import type { AgentDefinition } from "./definition.ts";
  * defaults, what only an instance adds: content, and instructions, skills and prompt templates (relative paths are the
  * file's directory's).
  */
-export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings> & {
+export type InstanceConfig<Settings = unknown> = Omit<AgentDefaults<Settings>, "deploy"> & {
   /** The instance's name, one path segment. Default: the program's name made one. */
   name?: string;
   content?: Record<string, ContentEntry>;
@@ -85,6 +85,12 @@ const CONTENT_ENTRY = union([
   }),
 ]);
 
+/**
+ * AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is refused by CloudFormation minutes into
+ * `deploy agentcore --run`, after the image build.
+ */
+export const IDLE_TIMEOUT_BOUNDS = { minimum: 60, maximum: 1209600 } as const;
+
 /** An absolute `https://` URL without a trailing slash, query or fragment: what `<publicUrl>/<path>` is built from. */
 const PUBLIC_URL_PATTERN = "^https://[^/?#\\s]+(/[^?#\\s]*[^/?#\\s])?$";
 
@@ -121,9 +127,7 @@ function shape(settings: Schema | undefined) {
     ),
     deploy: opt(
       obj({
-        // AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is refused by CloudFormation minutes
-        // into `deploy agentcore --run`, after the image build.
-        agentcore: opt(obj({ idleTimeoutSeconds: opt(int({ minimum: 60, maximum: 1209600 })) })),
+        agentcore: opt(obj({ idleTimeoutSeconds: opt(int(IDLE_TIMEOUT_BOUNDS)) })),
       }),
     ),
     channels: opt(
@@ -156,13 +160,13 @@ function shape(settings: Schema | undefined) {
 /** The JSON Schema of an instance's `fastagent.json` for a program with `settings`: what `fastagent build` publishes. */
 export function instanceConfigSchema(settings: Schema | undefined): Schema {
   const paths = (description: string) => opt(arr(str({ minLength: 1 }), { description, uniqueItems: true }));
+  // What a deployment is built with is the program's default or a `deploy` flag; the box never reads it.
+  const { deploy: _deploy, ...runtime } = shape(settings);
   return obj({
     $schema: opt(str()),
-    ...shape(settings),
+    ...runtime,
     name: opt(str({ description: "The instance's name: one path segment of letters, digits, - and _" })),
-    description: opt(
-      str({ description: "One line about this instance, over the program's package.json description", pattern: "\\S" }),
-    ),
+    description: opt(str({ description: "One line about this instance, apart from the program's", pattern: "\\S" })),
     content: opt(map(CONTENT_ENTRY)),
     mcpServers: opt(
       map(unknown(), {
@@ -345,10 +349,15 @@ function overlay(
 }
 
 /**
- * The configuration an instance of `definition` opens with: the program's defaults, the instance's over them, the
- * merged settings checked against the program's `settings` schema (a required one no one gave refuses, naming it).
+ * The configuration an instance of `definition` opens with: the program's defaults, the instance's over them, then
+ * `overrides` (the environment's, see `environmentConfig`), the merged settings checked against the program's
+ * `settings` schema (a required one no one gave refuses, naming it).
  */
-export function resolveConfig(definition: AgentDefinition, instance?: InstanceConfigSource): EffectiveConfig {
+export function resolveConfig(
+  definition: AgentDefinition,
+  instance?: InstanceConfigSource,
+  overrides: readonly InstanceConfigSource[] = [],
+): EffectiveConfig {
   const { defaults, settings } = definition.config;
   const merged: Record<string, unknown> = {};
   const sources: Record<string, string> = {};
@@ -358,6 +367,9 @@ export function resolveConfig(definition: AgentDefinition, instance?: InstanceCo
   }
   if (instance !== undefined) {
     overlay(merged, checkInstanceConfig(instance, settings) as Record<string, unknown>, instance.label, sources);
+  }
+  for (const layer of overrides) {
+    overlay(merged, checkInstanceConfig(layer, settings) as Record<string, unknown>, layer.label, sources);
   }
   const values = (merged.settings ?? {}) as Record<string, unknown>;
   check(settings ?? obj({}), values, `the settings of ${definition.name}`);
@@ -382,15 +394,24 @@ export function resolveConfig(definition: AgentDefinition, instance?: InstanceCo
   return { ...merged, settings: values, sources };
 }
 
-/** What `info().agent` reports: the package's name, and the description and starters the instance resolves. */
+/**
+ * What `info()` reports of who the agent is: the program's name and description as the package gives them, the
+ * instance's own description (none when it gives none: the program's is not a fallback), and the starters in effect.
+ */
 export function agentPresentation(
   definition: AgentDefinition,
   config: EffectiveConfig,
-): { name: string; description?: string; starters?: readonly string[] } {
-  const description = config.description ?? definition.description;
+): {
+  agent: { name: string; description?: string };
+  description?: string;
+  starters?: readonly string[];
+} {
   return {
-    name: definition.name,
-    ...(description === undefined ? {} : { description }),
+    agent: {
+      name: definition.name,
+      ...(definition.description === undefined ? {} : { description: definition.description }),
+    },
+    ...(config.description === undefined ? {} : { description: config.description }),
     ...(config.starters === undefined ? {} : { starters: config.starters }),
   };
 }

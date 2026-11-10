@@ -21,7 +21,7 @@ An agent's program has one configuration file, `fastagent.config.ts`; an instanc
 |---|---|---|
 | Belongs to | The program: the agent's author | An instance: whoever runs this agent |
 | Written by | The author, published with the agent | The person or machine running one instance |
-| Holds | Constants (`providers`, `extensions`), the `settings` schema, and `defaults`: what an instance starts with | Overrides of `defaults` (`starters`, `model`, `http`, `deploy`, `channels`), values for `settings`, and what only an instance has: `name`, `description`, `content`, `instructions`, `skills`, `prompts` |
+| Holds | Constants (`providers`, `extensions`), the `settings` schema, and `defaults`: what an instance starts with | Overrides of `defaults` (`starters`, `model`, `thinkingLevel`, `http`, `channels`), values for `settings`, and what only an instance has: `name`, `description`, `content`, `instructions`, `skills`, `prompts` |
 | Format | TypeScript: it can import, and `defineAgent` types it | JSON, with a `$schema` that checks its shape; no code |
 | Read by | Every command: `dev` as source, `build` into `dist/` | `--config` (or `FASTAGENT_CONFIG`) names the file for every command; without it `dev` reads the one at the project root, and `start` and `deploy` read none. An app: the `config` it passes `openAgent` |
 | In git | Committed | The development one is ignored by the scaffold's `.gitignore` (it is one person's); a deployment's is delivered by `deploy --config` |
@@ -64,12 +64,14 @@ what an instance starts with, which its own configuration may override ([instanc
 | `defaults.http.api` | `true` | Whether a serve answers the [Agent API](#the-agent-api-over-http) under `/v1` with a key: `dev`, `start` and every deployment, which `deploy` gives a key. `false` keeps them to their channels and schedules, whatever key their environment holds, a host's from an earlier deploy included. Not served on AgentCore either way. |
 | `defaults.channels.<name>.ingress` | `dev`: `connection`; otherwise `webhook` | How a channel that offers both ways (`byIngress`) receives: `webhook` (inbound HTTP, what a host that scales to zero is woken by) or `connection` (a connection the process opens and keeps, such as Feishu's long connection, for one that stays up without a public URL). `<name>` is the channel file's name. |
 | `defaults.channels.<name>.app` | none | `slack` and `lark` only: `{ id, team?, url? }`, the app this instance is bound to and the channel URL a person saved on its page and the platform verified. A serve reports that channel `registered` when `url` is the one it needs; `deploy --run --config` at a terminal writes it once the box confirms it, and `fastagent channels setup <name> --record-url` writes it afterwards. |
-| `defaults.deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM (60–1209600 s). Memory bills for the idle tail; a session past it cold-starts. Changing it changes the template, so a kept `agentcore.template.yaml` needs `--force`. |
+| `defaults.deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM (60–1209600 s). Memory bills for the idle tail; a session past it cold-starts. Changing it changes the template, so a kept `agentcore.template.yaml` needs `--force`. Only the program sets it as a default; one deploy sets it with `--idle-timeout <seconds>`. An instance's `fastagent.json` has no `deploy`: the box never reads it. |
 
 The program's name and description are its `package.json`'s (the directory's name when there is none), not keys here:
-`info().agent.name` and `info().agent.description` report them. An instance's `description` in `fastagent.json`
-replaces the description for that instance; its `name` is the instance's own (`info().name`), which defaults to the
-program's name made one path segment.
+`info().agent.name` and `info().agent.description` report them, and always the program's. An instance's own
+`description` in `fastagent.json` is `info().description`: it is the instance's introduction, with no fallback to the
+program's, so a client shows whichever it means. Its `name` is the instance's own (`info().name`), which defaults to
+the program's name made one path segment. `starters` are not identity but behavior, as `model` is: the program's
+`defaults.starters`, over which the instance's own replace them, as `info().starters` reports.
 
 A provider or extension that reads a secret is wrapped in [`needs`](#secrets-in-code), like any module.
 
@@ -81,7 +83,7 @@ A command that only reads the shape of the definition (`models`, `login`) builds
 
 ### Instance configuration
 
-An instance sets its own values over the defaults in a `fastagent.json`: `starters`, `model`, `thinkingLevel`, `http`, `deploy`,
+An instance sets its own values over the defaults in a `fastagent.json`: `starters`, `model`, `thinkingLevel`, `http`,
 `channels` and `settings` (the program's `settings`, partly: the defaults give the rest). Objects merge key by key and arrays
 replace. `fastagent dev` reads the `fastagent.json` at the project root when there is one; `fastagent start` and
 `fastagent deploy` read only the one `--config` names, and otherwise run on the defaults; an app gives `openAgent` a `config` object, or the absolute path of such a file. An
@@ -115,7 +117,26 @@ it: `start --config <file>`, `deploy --config <file>`.
 `fastagent build` writes the JSON Schema of this file, with the program's `settings` in it, as `fastagent.schema.json`
 beside the package. Point an editor at it with `"$schema": "./node_modules/<package>/fastagent.schema.json"`.
 `fastagent info --json` reports the resolved values, each with its source: the program's defaults, the instance's file,
-or `--model` / `FASTAGENT_MODEL`.
+a variable, or `--model` / `FASTAGENT_MODEL`.
+
+### Environment variables over the configuration
+
+A command that runs an instance (`dev`, `start`, `invoke`, `schedules run`) and `info` lay these over the program's
+defaults and the instance's file, so a value that differs per deployment is set where the deployment's environment is,
+and a `fastagent.json` need not be rebuilt into an image for it. An empty variable is unset; a value the configuration
+would refuse refuses the start, naming the variable (`FASTAGENT_THINKING_LEVEL: /thinkingLevel expected one of …`).
+
+| Variable | Sets | Value |
+|---|---|---|
+| `FASTAGENT_MODEL` | `model` | `provider/modelId` ([model selection](#model-selection)) |
+| `FASTAGENT_THINKING_LEVEL` | `thinkingLevel` | `off` … `max` |
+| `FASTAGENT_HTTP_API` | `http.api` | `true` or `false` |
+| `FASTAGENT_HTTP_PUBLIC_URL` | `http.publicUrl` | an absolute `https://` URL |
+| `PORT`, `--port` | `http.port` | a port |
+
+`openAgent` reads none of them: an app passes its own `config`. `deploy` reads none either: it decides with the program's
+defaults and the configuration `--config` delivers, so a value only a variable sets is invisible to it (its webhook steps
+name the delivered `http.publicUrl`, not the variable's).
 
 ## Model selection
 

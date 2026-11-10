@@ -9,6 +9,7 @@ import { baseEnv } from "../child-env.ts";
 import { definedValues } from "../declared-secrets.ts";
 import { enterAgentEnv } from "../env.ts";
 import type { ContentInstance } from "../authoring.ts";
+import { environmentConfig } from "../harnesses/pi-durable/environment-config.ts";
 import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
 import {
   INSTANCE_CONFIG_ENV,
@@ -168,7 +169,10 @@ export function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
  */
 export function instanceInputs(
   agentDir: string,
-): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name"> {
+): Pick<
+  OpenServingOptions,
+  "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name" | "overrides"
+> {
   const workdir = resolveWorkdir(agentDir);
   // A default one is the project's own `.fastagent/<environment>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");
@@ -181,5 +185,6 @@ export function instanceInputs(
     env: baseEnv(process.env),
     ownEnv: process.env,
     runsAs: runsAsIn(process.env),
+    overrides: environmentConfig(process.env),
   };
 }

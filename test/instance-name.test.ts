@@ -140,6 +140,12 @@ describe("the commands", () => {
     expect(ran.code, ran.stderr).toBe(0);
   });
 
+  it("reaches what a command opens: the environment's configuration is the open's `overrides`", async () => {
+    const dir = await agentWorkspace("fa-env-inputs-");
+    vi.stubEnv("FASTAGENT_THINKING_LEVEL", "low");
+    expect(instanceInputs(dir).overrides?.map(({ label }) => label)).toEqual(["FASTAGENT_THINKING_LEVEL"]);
+  });
+
   it("reaches what a command opens: the flag or the variable, entered once, is the open's `name`", async () => {
     const dir = await agentWorkspace("fa-name-inputs-");
     vi.stubEnv("FASTAGENT_NAME", undefined);

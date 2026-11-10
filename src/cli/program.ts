@@ -401,6 +401,12 @@ const deploy: CommandSpec = {
         "(could be unrelated/production)",
     },
     {
+      flags: "--idle-timeout <seconds>",
+      description:
+        "(agentcore) how long an idle session keeps its microVM, 60 to 1209600 (default: defaults.deploy.agentcore." +
+        "idleTimeoutSeconds in fastagent.config.ts, else 180)",
+    },
+    {
       flags: "--json",
       description:
         "with --run, for a coding agent: the deploy runs in a process of its own and the command returns its " +
@@ -432,6 +438,7 @@ const deploy: CommandSpec = {
       run: f.run === true,
       force: f.force === true,
       intoLinked: f.intoLinked === true,
+      ...(typeof f.idleTimeout === "string" ? { idleTimeout: f.idleTimeout } : {}),
       ...(typeof f.config === "string" ? { config: f.config } : {}),
       input: f.input !== false,
       json: f.json === true,

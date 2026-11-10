@@ -429,7 +429,7 @@ role neither created it nor called for it) and stays as the one a VPC mode would
 
 What to know:
 
-- **Idle cost.** A session keeps its microVM for `deploy.agentcore.idleTimeoutSeconds` (default 180) after it goes  idle, and memory bills for that time; after it, the next message cold-starts. `/ping` reports `HealthyBusy`
+- **Idle cost.** A session keeps its microVM for `--idle-timeout` seconds (else the program's `defaults.deploy.agentcore.idleTimeoutSeconds`, else 180) after it goes idle, and memory bills for that time; after it, the next message cold-starts. `/ping` reports `HealthyBusy`
   while any message is not yet settled, so work is not cut short.
 - **Every deploy resets the state.** Managed SessionStorage survives compute stop/resume but is wiped on every
   runtime update (every deploy) and after 14 idle days: sessions, channel state and pending wake-ups start blank.

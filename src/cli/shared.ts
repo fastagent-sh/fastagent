@@ -13,6 +13,7 @@ import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/env
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
 import { resolveConfig } from "../harnesses/pi-durable/config.ts";
+import { environmentConfig } from "../harnesses/pi-durable/environment-config.ts";
 import {
   type Project,
   buildDefinitionShape,
@@ -168,7 +169,7 @@ async function resolveFirstRunModel(
 ): Promise<string | undefined> {
   const configured = async () => {
     const project = await (load ?? loadDevProject)(agentDir);
-    return { project, config: resolveConfig(project.definition, project.instance) };
+    return { project, config: resolveConfig(project.definition, project.instance, environmentConfig(process.env)) };
   };
   // A custom loader's refusal is the caller's to report: AgentCore runs this inside a request, where an exit kills the container.
   const { project, config } = await (load === undefined ? configured().catch(failStartup) : configured());
