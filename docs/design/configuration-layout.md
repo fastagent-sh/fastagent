@@ -1,143 +1,169 @@
 ---
 title: Where configuration, secrets and credentials live
-description: "Why an instance has so many places for values today, and the layout that replaces them: configuration by what a value is, secrets in the platform's store, one `.env` for local work, credentials in the instance's state."
+description: "The layout that replaces today's many places for values: a named instance with one committed configuration file, delivered to a host as its own variables so one image serves every instance; secrets in the platform's store; one `.env` for local work; credentials in one user-level layer."
 type: design-doc
 status: proposed
 ---
 
 # Where configuration, secrets and credentials live
 
-**Status: proposed.** Nothing here is built. It replaces [configuration.md](configuration.md) §3 to §6 and §9, and the
-value-file parts of [agent-artifact.md](agent-artifact.md) §4.1 and §6.2, once accepted. The code is `src/`.
+**Status: proposed.** Nothing here is built. Once accepted it replaces the value-file and `.secrets/` parts of
+[agent-artifact.md](agent-artifact.md) §4.1 and §6, which are rewritten with the code, not before. The code is `src/`.
 
 ## 1. The problem
 
-The same kind of value lives in several places, each with its own directory, variable or flag (the table counts them).
-This is not one decision; it is the sum of cases each solved by adding a place, with none retired.
+The same kind of value lives in several places, each with its own directory, variable or flag. It is not one decision:
+each case (a project, an app, a container volume, a second environment) added a place and none was retired.
 
 | What | Places today |
 |---|---|
-| Values that become the environment | `<agent>/.secrets/.env` (dev), `<agent>/.secrets/production/.env`, `--env-file`, `FASTAGENT_SECRETS_DIR/.env`, the process environment, and a bare `<agent>/.env` that is not read but is warned about |
-| Model credentials (`auth.json`, `device.json`) | `<agent>/.secrets/`, `~/.fastagent/.secrets/auth.json` (`login -g`), `FASTAGENT_AUTH_PATH`, `FASTAGENT_SECRETS_DIR`, and `<root>/.state/` for an app |
+| Values that become the environment | `<agent>/.secrets/.env`, `<agent>/.secrets/production/.env`, `--env-file`, `FASTAGENT_SECRETS_DIR/.env`, the process environment, and a bare `<agent>/.env` that is not read but warned about |
+| Model credentials (`auth.json`, `device.json`) | `<agent>/.secrets/`, `~/.fastagent/.secrets/auth.json`, `FASTAGENT_AUTH_PATH`, `FASTAGENT_SECRETS_DIR`, `<root>/.state/` for an app |
 | MCP grants (`mcp-auth.json`) | `<agent>/.secrets/` for the CLI, `<root>/.state/` for an app (`keeps: "secrets" \| "state"` in `openServing`) |
 | Instance state and working directory | `.fastagent/dev/`, `.fastagent/start/`, `--root`, `--state`, `--workdir`, `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_WORKDIR`, `/data`, `/mnt/data` |
-| Instance configuration | the project's `fastagent.json` (dev), `--config`, `FASTAGENT_CONFIG`, `/etc/fastagent/fastagent.json` (image), `<root>/fastagent.json` (an app) |
+| Instance configuration | the project's `fastagent.json`, `--config`, `FASTAGENT_CONFIG`, `/etc/fastagent/fastagent.json` baked into the image, `<root>/fastagent.json` for an app |
 
-Why it grew, from the history and the docs:
+Three causes, each visible in the code and `git log`:
 
-- **The CLI is anchored to the project, an app to the instance.** `.secrets/` is a directory of the project; an app has
-  no such directory, so `openServing` grew `keeps` and a second set of paths. Two anchors, two layouts.
-- **Each target added a way to move a directory.** A container needs its volume (`FASTAGENT_STATE_DIR`,
-  `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`, #280, #306, #496); a second environment added `.secrets/production/`
-  (#769). Each is a path override for the same file.
-- **The documentation says so itself.** configuration.md: "What stays in the project for now: `.secrets/`. They move
-  into the instance with the deploy layout in a later release."
-- **One directory holds three things with different conventions.** `.secrets/` has environment files (the convention is
-  a `.env` at the project root, ignored by git; Next.js now generates a project that ignores every `.env*`), credential
-  state that a tool rewrites (the convention is the tool's own directory), and a template that is committed.
-- **Non-secret deployment values sit in a file named for secrets.** `deploy` reads `FASTAGENT_MODEL` and `GITHUB_TOKEN`
-  from `.secrets/production/.env`. A CI job has no such file, and the convention it follows (Fly's `fly.toml [env]`,
-  Wrangler's `vars`, twelve-factor) is that non-secret configuration is committed and secrets are injected from the CI's
-  store into the target. The design said "a deployment's values are the target's state" (agent-artifact.md §6.2), and
-  the code did not follow it.
+- **The CLI is anchored to a project, an app to an instance.** `.secrets/` belongs to a project; an app has none, so
+  `openServing` grew `keeps` and a second layout.
+- **Each target added a way to move a directory** (`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`,
+  `FASTAGENT_AUTH_PATH`; #280, #306, #496), and a second environment added `.secrets/production/` (#769).
+- **Two things were put where they do not belong.** Non-secret deployment values (`FASTAGENT_MODEL`) are read by
+  `deploy` from a file named for secrets, which a CI job does not have. And the instance's configuration is copied into
+  the image, so each instance is its own image.
 
-## 2. The rule
+## 2. What comparable tools do
 
-A value is placed by what it is, not by which environment it is for.
+| Tool | One program, many instances |
+|---|---|
+| Pulumi | one program, a stack per environment, each with a committed `Pulumi.<stack>.yaml`; secrets encrypted in it |
+| Wrangler | one code base, `[env.<name>]` with its own `vars` and bindings (not inherited), each environment a Worker of its own; `wrangler secret put --env` |
+| Serverless Framework | `stages:` with `params` per stage; a secret is `${env:PROD_KEY}`, taken from the CI's environment |
+| SST | `--stage` names the instance and prefixes its resources; secrets per stage; `.env` files discouraged |
+| Helm | one chart, one values file per release (`-f environments/prod/payments.yaml`); CI names the release and the file |
+| AWS silo, Azure deployment stamps | one code base, one instance per customer, a per-customer configuration file kept outside the application artifact and deployed by automation |
+
+What they share:
+
+1. The instance is **named**, and the name prefixes what the host creates. It is any string: a stage, a customer.
+2. Its non-secret configuration is **one committed file**, read by the deploy tool when it deploys.
+3. The deploy tool **renders that file into the platform's own mechanism** (Wrangler's vars, a function's environment, a
+   ConfigMap); the code artifact does not change between instances.
+4. Secrets are separate, held per instance by the platform, and a CI job injects them from its own store.
+5. A `.env` file is for local work.
+
+## 3. The rule
+
+A value is placed by what it is.
 
 | Kind | Example | Lives in | Committed |
 |---|---|---|---|
-| The program | prompt, skills, code, defaults, `context.json` | the definition | yes |
-| A deployment's non-secret configuration | `model`, `thinkingLevel`, `http.*`, `channels.<name>.ingress`, `settings`, content, MCP servers | a configuration file given to `deploy --config`, one per environment (`prod.json`, `staging.json`) | yes |
-| A secret | provider key, channel token, `GITHUB_TOKEN` | the target's own secret store, set by `fastagent secrets` or by the CI's secret step | never |
-| A value for local work | the same secrets, on one machine | `<agent>/.env` | never |
-| Credential state a tool writes and refreshes | `auth.json`, `device.json`, MCP grants | the instance's `.state/`, or the user's `~/.fastagent/` | never |
+| The program | prompt, skills, code, `defaults`, `context.json` | the definition | yes |
+| An instance's non-secret configuration | `name`, `model`, `thinkingLevel`, `http.*`, `channels.<name>.ingress`, `settings`, `content`, `mcpServers` | a configuration file, one per instance, given to `deploy --config` | yes |
+| A secret | provider key, channel token, `GITHUB_TOKEN` | the target's own secret store, set by `fastagent secrets` or by the CI | never |
+| A value for local work | the same secrets on one machine | `<agent>/.env` | never |
+| A credential a tool writes and refreshes | `auth.json`, `device.json`, MCP grants | one user-level layer, `~/.fastagent/` (an app keeps its own in its state) | never |
 | Per-instance state | sessions, channel state, clones | the instance root | never |
 
-Consequences:
+## 4. The instance
 
-1. **`deploy` reads no value file.** It decides with the program's defaults and the configuration it is given. A CI job
-   writes the configuration into the repository, or passes `--config`, and sets secrets with `secrets push --from-env`
-   (already built), which reads the CI's environment. The model, the Agent API switch and the public URL are
-   configuration, so they are written there; the four `FASTAGENT_*` variables of the previous change affect only what a
-   command runs locally.
-2. **There is no production environment file.** A person who keeps one names it as they like (`.env.production`,
-   `.production.env`), ignores it, and gives it to the command that needs it: `secrets push --env-file`, or
-   `start --env-file`. FastAgent never looks for it. `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go.
-3. **`dev` and the commands that run the agent in the project read `<agent>/.env`.** It is the file habit puts there, the
-   scaffold's ignore rules already cover it, and the warning that it is not read goes away. `start` and a deployed box
-   read the process environment and `--env-file` only.
-4. **Credential state moves out of `.secrets/`.** It is state a tool rewrites, so it is the instance's: `.state/auth.json`,
-   `.state/mcp-auth.json` (an app already keeps both there). One layer above it stays, the user's `~/.fastagent/auth.json`
-   (`login -g`). `keeps` in `openServing` and the project-level `auth.json` layer go; `FASTAGENT_SECRETS_DIR` goes.
-   `AgentCore` already puts its secrets inside the state root (#306), so it loses a special case.
-5. **`.secrets/` disappears.** The scaffold writes no `.secrets/`, and the committed template becomes `.env.example` at the
-   root.
+An instance is a **named deployment of a program with one configuration file**.
 
-## 3. What each place becomes
+- Its name is the file's `name`, else the program's name as one segment (what `info().name` already says). There is no
+  `--stage` and no `--name` for a deploy: another customer is another file with another `name`.
+- The name is what a host's resources are called: Fly's app, Railway's service, AgentCore's runtime and stack, Compose's
+  project. Today they come from the agent directory's name, so two instances of one directory collide.
+- A host manifest FastAgent generates for an instance carries the name (`fly.<name>.toml`,
+  `fastagent.<name>.compose.yml`, `agentcore.<name>.template.yaml`) and is committed and hand-adjustable as today. The
+  `Dockerfile` and `.dockerignore` are the program's and are shared, since they hold nothing of an instance.
+- The storage a deployment starts on belongs to one instance name; a deploy that finds another's refuses, as it does now.
+
+## 5. Delivery
+
+**The image holds the program and nothing of an instance**, so one build is every instance's image. Nothing is copied to
+`/etc/fastagent/`, and the release manifest no longer carries a model; what varied per deployment goes to the host as
+variables the deploy sets.
+
+The configuration file is delivered as one variable holding its JSON, `FASTAGENT_CONFIG_JSON`, rendered by the host's own
+mechanism for non-secret values:
+
+| Host | Rendered into | Note |
+|---|---|---|
+| Docker | the instance's Compose file, `environment:` | a `$` in the text (an MCP server's `${VAR}`) is written `$$`, or Compose would expand it |
+| Fly | the instance's `fly.toml`, `[env]` | Fly documents `[env]` for non-sensitive values |
+| Railway | the service's variables in that environment, set with `railway variable set` | variables are not part of Railway's config file |
+| AgentCore | the template's `EnvironmentVariables` | AWS's quota is 4 KB in all with 50 entries, and the CloudFormation page lists a maximum of 2048 with no unit; see §7 |
+
+The box reads, in order: a flag, the individual variables (`FASTAGENT_MODEL`, `FASTAGENT_THINKING_LEVEL`,
+`FASTAGENT_HTTP_API`, `FASTAGENT_HTTP_PUBLIC_URL`, `FASTAGENT_INGRESS`), `FASTAGENT_CONFIG_JSON`, the program's
+`defaults`. A variable the platform holds therefore changes one value without redeploying.
+
+`deploy` reads the file itself, so it plans with the model, the Agent API switch and the public URL that the box will
+run with: the pre-flight checks the model's credential route against the file's `model`, and a CI job with a different
+model per instance has a file per instance.
+
+A configuration that cannot be a variable is refused by the pre-flight, naming the host and its limit:
+a `content` entry that is a directory of this machine, an `mcpServers` command that is a relative path, a file over the
+host's limit, and `instructions`, `skills` or `prompts`, which name files that a variable cannot carry (§7).
+
+## 6. What each place becomes
 
 | Today | After |
 |---|---|
-| `<agent>/.secrets/.env` | `<agent>/.env` |
+| `<agent>/.secrets/.env` | `<agent>/.env`, read by `dev` and `start`; `start` also takes `--env-file` |
 | `<agent>/.secrets/production/.env`, `FASTAGENT_ENVIRONMENT` | removed; any file through `--env-file` |
 | `FASTAGENT_SECRETS_DIR` | removed |
-| `<agent>/.secrets/auth.json`, `device.json`, `mcp-auth.json` | `<root>/.state/` |
-| `~/.fastagent/.secrets/auth.json` | `~/.fastagent/auth.json` (the name `.secrets` goes with the directory) |
-| `FASTAGENT_AUTH_PATH` | kept, for a credential file kept elsewhere (a mounted secret) |
-| `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_WORKDIR`, `--root`, `--state`, `--workdir` | unchanged: where an instance is |
-| `FASTAGENT_CONFIG`, `--config`, `fastagent.json` | unchanged for a local instance; a deployment's file is the one given to `deploy --config` |
-| `deploy` reading `FASTAGENT_MODEL`, `GITHUB_TOKEN`, `FASTAGENT_API_KEY` from a value file | `model` in the delivered configuration; `GITHUB_TOKEN` and the API key are secrets, held by the target |
-| Docker's `env_file:` pointing at `.secrets/production/.env` | the target store for Docker, see §5 |
+| `<agent>/.secrets/auth.json`, `device.json` | `~/.fastagent/` (one layer; `FASTAGENT_AUTH_PATH` places it elsewhere) |
+| `<agent>/.secrets/mcp-auth.json` | `<root>/.state/` |
+| `.secrets/` and its ignore file | removed; the committed template is `<agent>/.env.example` |
+| `/etc/fastagent/fastagent.json`, `FASTAGENT_CONFIG` on a box | `FASTAGENT_CONFIG_JSON` |
+| `fastagent.release.json` carrying `model`, `FASTAGENT_RELEASE_FILE` | the release id and instance name as variables; `model` in the configuration |
+| `deploy` reading `FASTAGENT_MODEL`, `GITHUB_TOKEN`, `FASTAGENT_API_KEY` from a value file | the file's `model`; the others are secrets the target holds |
+| `fastagent secrets set docker`, Compose `env_file:` | Compose's top-level `secrets:`, from the shell running Compose or a file the person names; `secrets set docker` is removed |
+| `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_WORKDIR`, `FASTAGENT_CONFIG` and the flags | unchanged for a local instance |
 
-## 4. How a deployment gets what it needs
+Decided:
 
-| Step | Who | Where |
-|---|---|---|
-| Write non-secret configuration | the author | a file in the repository, `deploy --config <file>` |
-| Set secrets | the author, or the CI | `fastagent secrets set\|push <host>`; in CI `secrets push <host> --from-env` |
-| Deploy | the author, or the CI | `fastagent deploy <host> --config <file> --run` |
-| Model sign-in that is not a key | the author, once, on the box | `fastagent login --deployment <host>`, written to the box's `.state/` |
+- **One credential layer, the user's.** `gh`, Claude Code and Codex keep credentials per user (`GH_CONFIG_DIR`,
+  `CLAUDE_CONFIG_DIR`, `CODEX_HOME` place them), not per project, and a local credential never reaches a deployment (the
+  box logs in itself). So `dev` and `start` share one login; the project layer and `keeps` go.
+- **`dev` and `start` both read `<agent>/.env`**, as `next start` does. A deployed box reads only its environment.
+- **Docker takes secrets as Compose's own `secrets:`**, mounted under `/run/secrets`; the box reads them from there.
+  Compose documents this as the way to avoid secrets in environment variables.
 
-`deploy` checks that every declared secret name is held by the target and stops before building when one is not
-(already built). Nothing it reads is a secret value, so nothing in its process, output or image is.
+## 7. Open
 
-## 5. Open questions
+These are decided by measuring or building, not by argument.
 
-These decide the migration and are not decided here.
+1. **AgentCore's limit.** The API quota says 4 KB of environment variables in all, the CloudFormation page says
+   `Maximum: 2048` without a unit. The pre-flight needs the measured number for the whole set, not only the
+   configuration.
+2. **Railway's limits** for a variable's size, and whether `railway variable set` takes JSON with quotes as is. Its
+   config file does not carry variables; one search summary says config-as-code is deprecated for new services, which is
+   not verified.
+3. **Per-instance text** (`instructions`, `skills`, `prompts`). A variable cannot carry files, and Railway and AgentCore
+   have no file mount. The universal channel that already exists is a repository cloned at start (`content`); how an
+   instance's configuration names a file inside one is not designed. Until it is, a deployment's text is the program's,
+   and a configuration that names these is refused.
+4. **How the box reads Docker secrets**, and whether Compose's `environment:` or `file:` source is used: the first is
+   reported to land in the container's writable layer, the second to be a bind mount. To be tried on a real Compose.
+5. **Where the release facts live** once there is no manifest in the image: the lease and the storage claim need the
+   instance name and a release id at run time.
 
-1. **Docker's store.** Compose reads `env_file:`, and `secrets set docker` needs a file the author does not edit. The
-   candidate is a file under `.fastagent/deploy/` (FastAgent's own directory, ignored by git, already left out of every
-   image), mode 0600. The alternative is no file: `secrets set docker` is refused and Docker takes secrets from the
-   shell running Compose, which is Compose's own convention.
-2. **A project-level credential layer.** Today a `login` in a project is shared by `dev` and `start` through
-   `<agent>/.secrets/auth.json`. With credentials in the instance's `.state/`, `dev` (`.fastagent/dev/.state`) and
-   `start` (`.fastagent/start/.state`) each log in separately, or `login -g` is used. If sharing matters, the layer
-   stays, in a directory of its own that is not named for secrets.
-3. **Should `start` read `<agent>/.env`?** It is the trial of the production build on a machine; reading the development
-   file would make a trial depend on development values, which is why `start` reads none. A person who wants values runs
-   `start --env-file <file>`.
-4. **`FASTAGENT_MODEL` in CI.** With `model` in the delivered configuration the problem the pre-flight's note describes
-   disappears for a deploy. A box that must change its model without a redeploy sets the variable on the platform, which
-   outranks the configuration (unchanged).
+## 8. Migration
 
-## 6. Migration
+One PR each, in this order; each leaves the product working. No compatibility layer, per the maintenance policy.
 
-One PR each, in this order; each leaves the product working.
+1. **Name.** The instance name from the configuration; host resources, generated manifests and the storage claim use it.
+2. **Delivery.** The image holds the program only; `FASTAGENT_CONFIG_JSON` rendered per host; `delivered-text`, the
+   `/etc/fastagent/` layer and the model in the release manifest go; the pre-flight refuses what cannot be a variable.
+3. **Secrets.** `deploy` reads no value file; Docker's `secrets:`; `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go.
+4. **Local values.** `<agent>/.env` for `dev` and `start`; the scaffold, ignore rules and `.env.example` follow.
+5. **Credentials.** The user-level layer; `.secrets/`, `keeps` and `FASTAGENT_SECRETS_DIR` go.
+6. The user documents and agent-artifact.md §4.1 and §6 are rewritten for the new layout.
 
-1. `deploy` reads no value file: `model` and the rest come from the program and `--config`. The previous change's
-   production-file reading of the four variables is already withdrawn.
-2. `<agent>/.env` for local commands; the scaffold, ignore rules, the stray-file warning and `.env.example` follow.
-3. Credential state into `<root>/.state/`; `keeps`, the project layer (per open question 2) and `FASTAGENT_SECRETS_DIR`
-   go; the deploy plans (`/data/.secrets`, the AgentCore secrets path) lose their special cases.
-4. `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go; Docker's store per open question 1.
-5. The two documents this supersedes are rewritten, not patched.
+## 9. Not decided here
 
-No compatibility layer, per the maintenance policy; the scaffold's next version writes the new layout, and an agent
-that has the old one is told where each file moved when it starts.
-
-## 7. Not decided here
-
-- The configuration the deployed box layers over what it was delivered, how a box's configuration is edited at run time,
-  and delivering configuration as a release input of its own instead of an image layer: [agent-artifact.md](agent-artifact.md)
-  §4.2 records them, and they need each host's limits first (AgentCore allows 4 KB of environment variables in all).
+- A box's own writable configuration layer and editing it at run time ([agent-artifact.md](agent-artifact.md) §4.2).
 - Whether an instance's MCP servers may expand every secret it was opened with (#997).

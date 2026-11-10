@@ -458,7 +458,7 @@ then flags), never a replacement for it.
 | A record a tool writes | `channels.<name>.app` | none | `deploy` and `channels setup --record-url`, once a person has set a platform's URL |
 
 Not in it: `deploy.*`. Only `deploy` reads it, the box never does, so it is the program's `defaults.deploy` or a flag of
-one deploy (`--idle-timeout`) and an instance's file refuses it (`docs/design/configuration.md`'s class A: delivering
+one deploy (`--idle-timeout`) and an instance's file refuses it (delivering
 what nothing reads only creates drift).
 
 `channels.<name>.app` stays in the configuration a deployment delivers, not in `.state/`. It records a fact about the
@@ -468,20 +468,11 @@ deploy's storage, which would lose it.
 **Built:** the identity split in `info()`, `deploy.*` out of the instance file, the environment layers of §4.1, and the
 default of `<root>/fastagent.json` for an embedding open with `root` (§4.1).
 
-**Not built, in this order:**
-
-1. One resolver for "which file does this form read", called by `dev`, `start`, `openAgent`, `inspectMcp` and the
-   commands that read a configuration (several places say it today, each its own way).
-2. A deployed box that layers a writable file over what it was delivered: the delivered configuration stays the
-   deployment's and immutable, and `<root>/fastagent.json` (the instance root is `/data`) holds what tools and the
-   agent add at run time, additions only, which is the rule `content` and `mcpServers` already follow. An edit on a
-   box reaches it through the host's own shell, as `login --deployment` does (`src/deploy/box-shell.ts`).
-3. Delivering the configuration to the box as a release input of its own instead of a layer of the image, so a change
-   of configuration is not a new image and one image is the same artifact in every environment (twelve-factor's
-   build, release, run). AgentCore has no file mount and 4 KB of environment variables in all (its quotas), and Railway's
-   documented route for a file is a Dockerfile that copies it in, so the path every host shares is the one the
-   deployment's values already take, and a configuration over a host's limit is refused by the pre-flight, naming the
-   limit. Each host's limits are to be verified before this is built.
+**Not built.** The layout that replaces the places a deployment's values live, and the order it is built in, is
+[configuration-layout.md](configuration-layout.md): a named instance with one committed configuration file, delivered to
+a host as variables so that one image is every instance's. Two things stay open beyond it: one resolver for "which file
+does this form read" (several places say it today, each its own way), and a deployed box's own writable layer over what
+it was delivered, edited through the host's shell as `login --deployment` is (`src/deploy/box-shell.ts`).
 
 Whether the configuration a deployed agent may write should be able to add an MCP server is a trust question this does
 not decide: the instance is one trust domain ([security-boundary](security-boundary.md)), and a server's `${VAR}` expands

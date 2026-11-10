@@ -26,7 +26,7 @@ export interface DeploymentRelease {
    * The model this release resolved, when the deployed environment's value file named it (`config.model` needs
    * nothing here — the config ships in the image too). NON-CREDENTIAL configuration only: the manifest travels
    * inside the image, which is readable by anyone who can pull it, and it is rebuilt on every deploy — both are the
-   * opposite of what a credential needs (see docs/design/configuration.md §8).
+   * opposite of what a credential needs (see docs/design/configuration.md §3).
    */
   model?: string;
 }
