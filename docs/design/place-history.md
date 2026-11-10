@@ -18,6 +18,8 @@ It answers two issues together:
 
 Both are the same gap: the place's history is not where the agent looks.
 
+> **Proposed change:** [place-sessions.md](place-sessions.md) (#989) adds an exchange log as a second source of the fold, so a place's main session learns what its branches answered, and keeps a fold cursor per session instead of per place.
+
 ## 1. The rule
 
 > **The platform is the place's memory. The session is the agent's.**
