@@ -8,10 +8,14 @@ updated: 2026-11-10
 
 # Channel sessions and shared context
 
-**Status: proposed ([#989](https://github.com/fastagent-sh/fastagent/issues/989)). Not implemented.** This document
-proposes replacing [participant-model.md](participant-model.md) Rule 3 and §6, and revising its thread-context and
-platform mappings. The participant axiom and the distinction between hearing and answering remain. Current channel code
-and user guides still describe the shipped behavior.
+**Status: proposed ([#989](https://github.com/fastagent-sh/fastagent/issues/989)), implemented in part.** Every channel
+send is steered and a shared answer is delivered once ("Input reaches a running session by steering", "Answers,
+delivery and restart"), and a turn's read starts after the ask its session was last sent ("Where a turn's read starts",
+by `kit/ask-log.ts`; the table there holds asks, and the agent's own posts are still excluded per place). Session keys by
+sender, the reply-to-answer table and thread forks from the session a reply names are not built: current channel code
+and user guides describe them as shipped. This document proposes replacing [participant-model.md](participant-model.md)
+Rule 3 and §6, and revising its thread-context and platform mappings. The participant axiom and the distinction between
+hearing and answering remain.
 
 The hard problem is letting one agent work for several people in one place at once, use what the others said, and take
 a correction without mistaking somebody else's request for part of the current task.

@@ -33,6 +33,7 @@ import { attachmentsDir } from "../kit/attachment-path.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { type Target, callApi, sendMessage } from "./telegram-api.ts";
+import { createAskLog, readStart } from "../kit/ask-log.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { NO_ACK, createTurnRunner } from "../kit/turn-runner.ts";
 import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
@@ -127,6 +128,14 @@ function createTelegramRuntime(
     route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
 
   const buffer = createContextBuffer(join(stateHome, "buffers.json"));
+  // Where each conversation's session read to: a turn folds the buffer from the ask its session was last sent.
+  const asks = createAskLog<number>({
+    label: "[telegram]",
+    path: join(stateHome, "asks.json"),
+    messages: agent.messages,
+    isPosition: (value): value is number => typeof value === "number",
+    compare: (a, b) => a - b,
+  });
   // The send tool rides this channel's token, and what it sends lands in this buffer (shared-api.ts says why).
   registerTelegramTransport({
     apiBaseUrl,
@@ -151,11 +160,16 @@ function createTelegramRuntime(
   const runner = createTurnRunner<PendingTurn, StoredTurn, BufferEntry>({
     label: "[telegram]",
     store,
-    discussion: buffer,
+    discussion: async (rec) => {
+      const until = rec.askedIn?.messageId;
+      if (until === undefined) return { text: "", folded: [] };
+      const start = await readStart(asks, "[telegram]", rec.conversation, recordedSession(rec.conversation), until);
+      const fold = buffer.fold(rec.placeKey, { ...(start.after === undefined ? {} : { after: start.after }), until });
+      return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
+    },
     delivered: createSeenRing(join(stateHome, "delivered.json"), "[telegram]"),
     toStored: (intent) => ({ ...intent, attempts: 0 }),
     fromStored: ({ attempts: _a, ...intent }) => intent,
-    discussionKey: (rec) => rec.placeKey,
     where: (rec) => `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`,
     notifyDropped,
     acknowledgeHeld: async (rec) =>
@@ -179,7 +193,7 @@ function createTelegramRuntime(
           { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: attachmentsDir(stateHome) },
           {
             primary: { imageFileIds: rec.imageFileIds, fileIds: rec.fileIds },
-            buffered: collectAttachments(discussion.consumed, {
+            buffered: collectAttachments(discussion.folded, {
               files: new Set(rec.fileIds),
               images: new Set(rec.imageFileIds),
             }),
@@ -243,6 +257,7 @@ function createTelegramRuntime(
     const imageFileIds = extractImages(m);
     const fileIds = extractFiles(m);
     if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
+      asks.record(conversation, { key: `${update.update_id}`, at: m.message_id });
       // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
       runner.submit(
         {

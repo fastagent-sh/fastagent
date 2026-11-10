@@ -49,6 +49,8 @@ export function registerTelegramTransport(mounted: Required<Mounted>): void {
   byToken.set(mounted.botToken, mounted);
 }
 
+const NO_MESSAGE_ID = "Telegram gave the sent message no id, so the chat's next turn will not see it";
+
 const NOT_MOUNTED = "no telegram channel is mounted in this process, so the chat's next turn will not see it";
 
 /**
@@ -93,7 +95,11 @@ export function telegramTransport(botToken: string): TelegramTransport {
         if (sent.message_id !== undefined) messageIds.push(sent.message_id);
         place = landedPlace(sent, target);
       }
-      return { messageIds, notRecorded: remember(place, ownPostEntry(text, messageIds[0])) };
+      const first = messageIds[0];
+      return {
+        messageIds,
+        notRecorded: first === undefined ? NO_MESSAGE_ID : remember(place, ownPostEntry(text, first)),
+      };
     },
     async sendFile(target, file) {
       const form = new FormData();
@@ -105,10 +111,13 @@ export function telegramTransport(botToken: string): TelegramTransport {
       const label = file.asPhoto ? "[photo]" : `[document: ${name}]`;
       return {
         messageIds: sent.message_id !== undefined ? [sent.message_id] : [],
-        notRecorded: remember(
-          landedPlace(sent, target),
-          ownPostEntry(file.caption ? `${label} ${file.caption}` : label, sent.message_id),
-        ),
+        notRecorded:
+          sent.message_id === undefined
+            ? NO_MESSAGE_ID
+            : remember(
+                landedPlace(sent, target),
+                ownPostEntry(file.caption ? `${label} ${file.caption}` : label, sent.message_id),
+              ),
       };
     },
   };

@@ -389,9 +389,9 @@ it, so waiting out a 429 for one parks the answer and every turn queued behind i
 exists only in that call — Telegram's placeholder send, Slack's ordered stream appends, every terminal
 write — keep the default budget. How a platform signals a limit stays in each `*-api.ts`.
 
-`runQueuedTurn` separates business settlement from resource cleanup. The `completed` callback removes
-intent before committing the exact discussion snapshot consumed (a buffer's entries, or a history read's
-cursor); later discussion waits for the next answered turn. Effect
+`runQueuedTurn` separates business settlement from resource cleanup. It reads a turn's discussion through the channel's
+`discussion(rec)` and commits nothing of it: the session holds what the turn folded, and the next turn reads after the
+ask its session was last sent (`kit/ask-log.ts`). Effect
 interruption and process termination preserve unfinished intent for recovery.
 
 A turn is one message (`invoke-turn-kit.ts` `turnStream`, over `messages.stream`): `whenBusy: "steer"`, so it is taken at the
@@ -466,10 +466,11 @@ does not identify that shared message. Conversations follow the place, not the a
 thread on the ask and that thread *is* the conversation, with a session of its own, so there are no session modes. `context` group mode
 subscribes to channel/private-channel/MPIM message streams, admits a bare human reply where the
 participation rule allows it (see [participant-model.md](participant-model.md) §3), and folds other
-discussion with the same peek→completed→commit invariant as Telegram/Feishu. That discussion is read
+discussion the way Telegram and Feishu do. That discussion is read
 from Slack when the turn runs (`history.ts`: `conversations.history` for a channel's top level,
-`conversations.replies` for a thread), up to the turn's own ask, the commit being a per-place cursor in
-`history.json` ([place-history.md](place-history.md)). An answer is recorded in the place it lands in
+`conversations.replies` for a thread), after the ask the conversation's session was last sent and up to the turn's own
+ask ([place-history.md](place-history.md)); `asks.json` keeps the candidates and the Agent says which one the session
+holds. An answer is recorded in the place it lands in
 (`SlackApi.recordingSends`; an answer to a top-level ask lands in the thread it opens), so that place's
 next read leaves it out, while what `slack-send` posts stays discussion. A DM reads its history too (what a
 send tool posted there); a custom-`route` turn reads none.
@@ -576,12 +577,12 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   one shared text budget, a visible truncation line when the walk ends short of the root — see
   participant-model.md §8).
 - **The platform is the place's memory; the channel stores none of it** (design:
-  [place-history.md](place-history.md)). A turn reads its place's messages (a group, a thread, a DM) since the agent last
-  answered there (`history.ts` over `GET /im/v1/messages`) and folds them into the prompt under the same
-  peek→commit-on-`completed` invariant, the commit being a per-place cursor in `history.json`. The read
+  [place-history.md](place-history.md)). A turn reads its place's messages (a group, a thread, a DM) since the ask its
+  session was last sent (`history.ts` over `GET /im/v1/messages`; `asks.json` and the Agent say which) and folds them
+  into the prompt. The read
   ends at the turn's own ask, so a queued ask is never folded into an earlier turn, whatever state survived;
   within it, it leaves out what the session holds: the ids a turn
-  posted into the place, which the place keeps beside its cursor until a read passes them (recorded by a
+  posted into the place, which the place keeps in `history.json` (recorded by a
   per-place client from `FeishuApi.recordingSends`, so a busy deployment cannot evict a quiet place's
   last answer). The send tool shares the plain client, so what the agent posts itself stays in the
   discussion — the gap a buffer could never fill, since a bot never receives its own messages. A failed
@@ -682,7 +683,7 @@ is due when a request next wakes it.
 ├── agent.sqlite            # the instance's storage: sessions, messages, entries (pi-durable)
 ├── invoke.sqlite           # `fastagent invoke`'s sessions, apart from the instance's
 ├── models/                 # the model lists fetched (§3): published.json, providers/<id>.json
-├── channels/<name>/        # one per channel file: sessions.json, turns, history cursors, dedup; files/ holds inbound attachments
+├── channels/<name>/        # one per channel file: sessions.json, turns, asks, history (the agent's own posts), dedup; files/ holds inbound attachments
 └── schedule/               # sessions.json, claims/, wakeups.json
 ```
 

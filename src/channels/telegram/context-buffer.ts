@@ -6,12 +6,12 @@ import {
   createContextBuffer as createGenericContextBuffer,
 } from "../kit/context-buffer.ts";
 
-/** One buffered un-summoned message (object identity is the commit key). */
+/** One buffered un-summoned message, or one the agent sent itself. */
 export interface BufferEntry {
   sender: string;
   body: string;
-  /** The message's id — rendered into the fold so the model can correlate replies. */
-  messageId?: number;
+  /** The message's id: where it stands in its chat, and rendered into the fold so the model can correlate replies. */
+  messageId: number;
   /** The message_id this one replied to, when it was a reply. */
   replyTo?: number;
   /** file_ids of document/voice/video/audio attachments (downloadable on a later summon). */
@@ -31,10 +31,7 @@ export interface BufferedRef {
 }
 
 function bufferLine(e: BufferEntry): string {
-  const meta = [
-    e.messageId !== undefined ? `msg ${e.messageId}` : undefined,
-    e.replyTo !== undefined ? `reply to msg ${e.replyTo}` : undefined,
-  ]
+  const meta = [`msg ${e.messageId}`, e.replyTo !== undefined ? `reply to msg ${e.replyTo}` : undefined]
     .filter(Boolean)
     .join(", ");
   return `${e.sender}${meta ? ` (${meta})` : ""}: ${e.body}`;
@@ -42,13 +39,13 @@ function bufferLine(e: BufferEntry): string {
 
 /** The buffered attachment references a summoned turn pulls in with the fold. */
 export function collectAttachments(
-  consumed: BufferEntry[],
+  folded: BufferEntry[],
   primary: { files: Set<string>; images: Set<string> },
 ): { files: BufferedRef[]; images: BufferedRef[]; skipped: number } {
   const refs = (pick: (e: BufferEntry) => string[] | undefined, exclude: Set<string>): BufferedRef[] => {
     const seen = new Set<string>();
     const out: BufferedRef[] = [];
-    for (const e of consumed) {
+    for (const e of folded) {
       for (const id of pick(e) ?? []) {
         if (exclude.has(id) || seen.has(id)) continue;
         seen.add(id);
@@ -74,7 +71,7 @@ const OWN_POST_MAX_CHARS = 2000;
  * its own messages as updates (and the Bot API has no history read), so this is the only way the chat's next turn
  * knows it was said. The label says only what the transport knows — the agent sent it — not which tool did.
  */
-export function ownPostEntry(body: string, messageId: number | undefined): BufferEntry {
+export function ownPostEntry(body: string, messageId: number): BufferEntry {
   return {
     sender: "you (sent by the agent)",
     body: truncateCodePointPrefix(body.replace(/\s+/g, " ").trim(), OWN_POST_MAX_CHARS, " … (truncated)"),
@@ -91,7 +88,7 @@ function isBufferEntry(e: unknown): e is BufferEntry {
   return (
     typeof t?.sender === "string" &&
     typeof t.body === "string" &&
-    (t.messageId === undefined || typeof t.messageId === "number") &&
+    typeof t.messageId === "number" &&
     (t.replyTo === undefined || typeof t.replyTo === "number") &&
     strings(t.fileIds) &&
     strings(t.imageIds)
@@ -99,5 +96,11 @@ function isBufferEntry(e: unknown): e is BufferEntry {
 }
 
 export function createContextBuffer(path: string): ContextBuffer {
-  return createGenericContextBuffer({ path, label: "[telegram]", isEntry: isBufferEntry, line: bufferLine });
+  return createGenericContextBuffer({
+    path,
+    label: "[telegram]",
+    isEntry: isBufferEntry,
+    line: bufferLine,
+    position: (entry) => entry.messageId,
+  });
 }

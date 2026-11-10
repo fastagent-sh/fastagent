@@ -175,13 +175,15 @@ src/
 │   │   ├── event-stream.ts # typed, demand-driven Agent iterator acquisition and scoped cleanup
 │   │   ├── invoke-turn-kit.ts # prepare inputs → one keyed, queued message; the prompt manifest wording
 │   │   ├── transport.ts    # whether a call is worth waiting out a rate limit for (DROPPABLE_FRAME, CONTEXT_READ)
-│   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + discussion source
+│   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store; steering and the shared answer
+│   │   ├── turn-gate.ts    # whether a steered turn renders live or waits for the answer an earlier turn delivers
 │   │   ├── turn-store.ts   # generic durable turn intent + the answer owed to it (record shape/validator/order injected)
 │   │   ├── room-threads.ts # what a thread-reading tool may read: its turn's room (registered by the turn runner),
 │   │   │                   # never one it is told; the thread list's format and bound
-│   │   ├── place-history.ts # the DiscussionSource a turn folds + the place-history fold (budget, labels) + what a
-│   │   │                   # place remembers between platform reads (cursor, the turns' own outputs)
-│   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer (peek→completed→commit)
+│   │   ├── place-history.ts # the Discussion a turn folds + the place-history fold (budget, labels) + the messages
+│   │   │                   # turns posted into a place, which a read leaves out
+│   │   ├── ask-log.ts      # where a conversation's session read to: its recent asks, the Agent saying which it holds
+│   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer, folded by message-id range, never cleared
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
 │   │   ├── seen.ts         # bounded durable delivery dedup
 │   │   ├── signature.ts    # replay window for a signed webhook ingress

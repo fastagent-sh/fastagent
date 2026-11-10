@@ -265,9 +265,9 @@ posted itself) or it is still queued. A chat message the channel posted for an a
 is bounded the way any session's is, by the harness's compaction.
 
 **The two rungs carry different halves.** The fork carries what the room's SESSION knew; a room's
-session only advances when the agent is summoned, so discussion since its last answered turn is
-absorbed by nothing. The thread's FIRST turn folds that discussion into its prompt, read-only — the
-room's own next answered turn still reads it, so each place sees the discussion exactly once in its
+session only advances when the agent is summoned, so discussion since the ask it was last sent is
+absorbed by nothing. The thread's FIRST turn folds that discussion into its prompt, and nothing is consumed by it — the
+room's own next turn still reads it, so each place sees the discussion exactly once in its
 own memory, and the fold's attachments cross as real attachments on the background tier rather than
 as marker lines.
 

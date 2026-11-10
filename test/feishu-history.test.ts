@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FeishuApi, FeishuListedMessage } from "../src/channels/feishu/feishu-api.ts";
-import { type FeishuPlaceRead, createFeishuPlaceHistory, feishuHistoryKey } from "../src/channels/feishu/history.ts";
+import { type FeishuPosition, createFeishuPlaceHistory, feishuHistoryKey } from "../src/channels/feishu/history.ts";
+import type { PlaceRead } from "../src/channels/kit/place-history.ts";
 import { CONTEXT_READ } from "../src/channels/kit/transport.ts";
 import { log } from "../src/log.ts";
 
@@ -60,13 +61,22 @@ function setup(opts: { turnInputs?: string[]; names?: MemberNames; path?: string
       isTurnInput: (id) => opts.turnInputs?.includes(id) ?? false,
     });
   let asks = 0;
+  /** The ask each place's session was last sent: where its next read starts (the Agent's answer, in the channel). */
+  const sent = new Map<string, FeishuPosition>();
   return {
     messages,
-    /** A person asks the agent here: the turn's read ends at this message. */
-    ask(key = "oc_1"): FeishuPlaceRead {
+    /**
+     * A person asks the agent here: the turn's read starts after the ask its session was last sent and ends at this
+     * message. An ask that is `lost` never reached the session (it failed before it was sent), so the next read still
+     * starts before it.
+     */
+    ask(key = "oc_1", { lost = false } = {}): PlaceRead<FeishuPosition> & { until: FeishuPosition } {
       const ask = msg(`om_ask_${++asks}`, "@bot ?");
       messages.push(ask);
-      return { key, until: { at: Number(ask.create_time), id: ask.message_id as string } };
+      const until = { at: Number(ask.create_time), id: ask.message_id as string };
+      const after = sent.get(key);
+      if (!lost) sent.set(key, until);
+      return { key, ...(after === undefined ? {} : { after }), until };
     },
     listMessages,
     chatMemberNames,
@@ -79,16 +89,13 @@ function setup(opts: { turnInputs?: string[]; names?: MemberNames; path?: string
   };
 }
 
-/** Someone asks here, and the turn reads, answers and commits. */
+/** Someone asks here, and the turn reads and sends its ask. */
 async function answeredTurn(place: ReturnType<typeof setup>, key = "oc_1", history = place.history): Promise<string> {
-  const read = place.ask(key);
-  const peeked = await history.peek(read);
-  history.commit(read, peeked.consumed);
-  return peeked.text;
+  return (await history.fold(place.ask(key))).text;
 }
 
 describe("Feishu place history", () => {
-  it("reads what was said since the last answered turn, and nothing that turn already folded", async () => {
+  it("reads what was said since the ask its session was last sent, and nothing that ask already folded", async () => {
     const place = setup();
     place.messages.push(msg("om_1", "deploy failed"), msg("om_2", "on staging"));
     expect(await answeredTurn(place)).toBe("Alice (msg om_1): deploy failed\nAlice (msg om_2): on staging");
@@ -98,19 +105,20 @@ describe("Feishu place history", () => {
     expect(await answeredTurn(place)).toBe("");
   });
 
-  it("a turn that fails before its answer leaves the discussion to be read again", async () => {
+  it("an ask that never reached the session leaves the discussion to be read again", async () => {
     const place = setup();
     place.messages.push(msg("om_1", "deploy failed"));
-    await place.history.peek(place.ask()); // no commit: the turn failed
+    await place.history.fold(place.ask("oc_1", { lost: true })); // it failed before it was sent
     expect(await answeredTurn(place)).toContain("deploy failed");
   });
 
-  it("the cursor survives a restart", async () => {
+  it("reads the same range the same way again: nothing a read does is remembered", async () => {
     const place = setup();
-    place.messages.push(msg("om_1", "before"));
-    await answeredTurn(place);
-    place.messages.push(msg("om_2", "after"));
-    expect(await answeredTurn(place, "oc_1", place.open())).toBe("Alice (msg om_2): after");
+    place.messages.push(msg("om_1", "deploy failed"));
+    const read = place.ask();
+    const first = await place.history.fold(read);
+    place.messages.push(msg("om_2", "said after"));
+    expect((await place.history.fold(read)).text).toBe(first.text); // a replayed turn reads what it read before
   });
 
   it("leaves out what the session holds — turn asks and turn answers — and keeps the agent's own posts", async () => {
@@ -142,11 +150,10 @@ describe("Feishu place history", () => {
     const first = place.ask();
     place.messages.push(msg("om_after", "it was the cache"));
     const second = place.ask(); // queued behind the first, in the same session
-    const firstRead = await place.history.peek(first);
-    place.history.commit(first, firstRead.consumed);
+    const firstRead = await place.history.fold(first);
     expect(firstRead.text).toBe("Alice (msg om_before): the build is red");
 
-    const secondRead = await place.history.peek(second);
+    const secondRead = await place.history.fold(second);
     expect(secondRead.text).toBe("Alice (msg om_after): it was the cache"); // neither ask: each is its own turn
     // The read is bounded where the platform can bound it, too.
     expect(place.listMessages).toHaveBeenLastCalledWith(
@@ -157,41 +164,21 @@ describe("Feishu place history", () => {
     );
   });
 
-  it("a turn that finishes out of ask order does not pull the cursor back", async () => {
-    const place = setup();
-    const early = place.ask();
-    place.messages.push(msg("om_between", "said between the asks"));
-    const late = place.ask();
-    // The later ask runs and commits first (the earlier one was redelivered late, or deferred).
-    const lateRead = await place.history.peek(late);
-    place.history.commit(late, lateRead.consumed);
-    expect(lateRead.text).toContain("said between the asks");
-    const earlyRead = await place.history.peek(early);
-    place.history.commit(early, earlyRead.consumed);
-
-    place.messages.push(msg("om_next", "next"));
-    expect(await answeredTurn(place)).toBe("Alice (msg om_next): next"); // nothing the later turn already folded
-  });
-
   it("a turn's answer, posted after its read, is left out of the next read — however long the place is quiet", async () => {
     const place = setup();
     const self = { sender: { id: "cli_self", sender_type: "app" } };
-    const first = place.ask();
-    const read = await place.history.peek(first);
+    await place.history.fold(place.ask());
     // The answer lands after the read, through the place's recording client.
     place.messages.push(msg("om_answer1", "first answer", self));
     place.history.recordOutput("oc_1", "om_answer1");
-    place.history.commit(first, read.consumed);
 
     // Other places' traffic does not touch this place's record, and a restart keeps it.
     const reopened = place.open();
     for (let i = 0; i < 1500; i++) reopened.recordOutput(`oc_busy_${i % 3}`, `om_busy_${i}`);
     place.messages.push(msg("om_aside", "days later"));
     expect(await answeredTurn(place, "oc_1", reopened)).toBe("Alice (msg om_aside): days later");
-
-    // Passed by a read, the answer no longer needs remembering.
-    const saved = JSON.parse(readFileSync(place.path, "utf8")) as Record<string, { outputs: string[] }>;
-    expect(saved.oc_1?.outputs).toEqual([]);
+    const saved = JSON.parse(readFileSync(place.path, "utf8")) as Record<string, string[]>;
+    expect(saved.oc_1).toEqual(["om_answer1"]);
   });
 
   it("an output that cannot be persisted is still left out, and the failure is said", async () => {
@@ -213,7 +200,7 @@ describe("Feishu place history", () => {
     expect(text).not.toContain("(msg om_5)");
   });
 
-  it("a place busier than one page since its last answer says so", async () => {
+  it("a place busier than one page since its session last read says so", async () => {
     const place = setup();
     place.messages.push(msg("om_0", "answered"));
     await answeredTurn(place);
@@ -261,19 +248,21 @@ describe("Feishu place history", () => {
       }),
       msg("om_img", "", { msg_type: "image", body: { content: JSON.stringify({ image_key: "img_1" }) } }),
     );
-    const read = await place.history.peek(place.ask());
+    const read = await place.history.fold(place.ask());
     expect(read.text).toContain("(msg om_card): **3 PRs**");
-    expect(read.consumed[0]?.folded.at(-1)?.images).toEqual([{ key: "img_1" }]);
+    expect(read.folded.at(-1)?.images).toEqual([{ key: "img_1" }]);
   });
 
-  it("an unreadable history is said in the prompt, and the turn after reads it again", async () => {
+  it("an unreadable history is said in the prompt and flagged, so its ask can be forgotten and the next turn reads it again", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const place = setup();
     place.messages.push(msg("om_1", "deploy failed"));
     place.failWith(new Error("feishu listMessages failed: 99991672 Access denied"));
-    expect(await answeredTurn(place)).toBe(
+    const failed = await place.history.fold(place.ask("oc_1", { lost: true })); // the channel forgets this ask
+    expect(failed.text).toBe(
       "(could not read the recent discussion here: Error: feishu listMessages failed: 99991672 Access denied)",
     );
+    expect(failed.unread).toBe(true);
     expect(warn.mock.calls.join("\n")).toContain("could not read the history of place oc_1");
 
     place.failWith(undefined);
@@ -317,24 +306,26 @@ describe("Feishu place history", () => {
     expect(place.chatMemberNames).toHaveBeenCalledTimes(1);
   });
 
-  it("a thread's room is read without moving the room's own cursor", async () => {
+  it("a thread's room is read from where the room's own session read to", async () => {
     const place = setup();
     place.messages.push(msg("om_1", "room talk"));
-    expect((await place.history.room("oc_1")).text).toContain("room talk");
-    expect(await answeredTurn(place)).toContain("room talk");
+    const asked = place.ask(); // the room's session was last sent this ask
+    place.messages.push(msg("om_2", "said since"));
+    const room = await place.history.fold({ key: "oc_1", after: asked.until });
+    expect(room.text).toBe("Alice (msg om_2): said since");
+    expect((await place.history.fold({ key: "oc_1" })).text).toContain("room talk"); // a room nothing was asked in
   });
 
-  it("a cursor file of the wrong shape is reported, and every place reads afresh", async () => {
+  it("an outputs file of the wrong shape is reported, and every place reads afresh", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const root = mkdtempSync(join(tmpdir(), "feishu-history-bad-"));
     roots.push(root);
     const path = join(root, "history.json");
-    writeFileSync(path, JSON.stringify({ oc_1: "not a cursor" }));
+    writeFileSync(path, JSON.stringify({ oc_1: "not a list of ids" }));
     const place = setup({ path });
     place.messages.push(msg("om_1", "still read"));
     expect(await answeredTurn(place)).toContain("still read");
     expect(warn.mock.calls.join("\n")).toContain("unexpected shape");
-    expect(JSON.parse(readFileSync(path, "utf8")).oc_1.cursor.id).toBe("om_ask_1"); // a valid file again
   });
 
   it("a thread named for another chat is refused, never read into this one", async () => {
@@ -342,9 +333,9 @@ describe("Feishu place history", () => {
     place.messages.push(msg("om_secret", "the other group's plan", { chat_id: "oc_2", thread_id: "omt_9" }));
     const key = feishuHistoryKey({ chatId: "oc_1", threadId: "omt_9" });
     await expect(place.history.snapshot(key)).rejects.toThrow("thread omt_9 is not in chat oc_1");
-    const peeked = await place.history.peek({ key, until: { at: Date.now(), id: "om_ask" } });
-    expect(peeked.text).toContain("could not read the recent discussion here");
-    expect(peeked.text).not.toContain("plan");
+    const folded = await place.history.fold({ key, until: { at: Date.now(), id: "om_ask" } });
+    expect(folded.text).toContain("could not read the recent discussion here");
+    expect(folded.text).not.toContain("plan");
   });
 
   it("lists the chat's threads newest first, each by its earliest message seen, and reads one whole", async () => {

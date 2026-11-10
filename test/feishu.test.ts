@@ -12,7 +12,7 @@ import {
   withStop,
 } from "./scripted-agent.ts";
 import { holdingAgent } from "./holding-agent.ts";
-import { ev } from "./scripted-run.ts";
+import { ev, refused, scriptedRun } from "./scripted-run.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1236,7 +1236,7 @@ describe("turn flow", () => {
     expect(errors.some((message) => message.includes("model exploded"))).toBe(true);
   });
 
-  it("keeps folded context after a failed thread turn and re-folds it into the retry", async () => {
+  it("a failed thread turn's message was sent, so its session holds the context it folded: the retry does not fold it again", async () => {
     feishuFetch();
     const prompts: Prompt[] = [];
     let invocation = 0;
@@ -1271,12 +1271,47 @@ describe("turn flow", () => {
     await idle();
     expect(prompts[1]?.text).toContain("unrelated aside");
 
-    // The failed turn did not consume the context: the next turn still sees it.
     await handler(
       feishuRequest(messageEvent({ id: "om_retry", chatType: "group", threadId: "omt_retry", text: "second try" })),
     );
     await idle();
-    expect(prompts[2]?.text).toContain("unrelated aside");
+    expect(prompts[2]?.text).not.toContain("unrelated aside"); // the failed turn's message carried it into the session
+    expect(prompts[2]?.text).toContain("second try");
+  });
+
+  it("a thread turn whose message the Agent refused leaves the context for the next turn", async () => {
+    feishuFetch();
+    const prompts: Prompt[] = [];
+    let invocation = 0;
+    injectedAgent = scriptedAgent((request) => {
+      prompts.push(promptOf(request));
+      // The second message (the thread's first ask is the first) is refused: it never reaches the session.
+      return scriptedRun(request, ++invocation === 2 ? refused("unavailable", "not taking messages") : { text: "ok" });
+    });
+    const { handler, idle } = buildChannel();
+    await flush();
+    await joinThread(handler, idle, "omt_refused");
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_aside",
+          chatType: "group",
+          threadId: "omt_refused",
+          content: JSON.stringify({ text: "@_bob unrelated aside" }),
+          mentions: [{ key: "@_bob", name: "Bob", id: { open_id: "ou_bob" } }],
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(messageEvent({ id: "om_refused", chatType: "group", threadId: "omt_refused", text: "first try" })),
+    );
+    await idle();
+    await handler(
+      feishuRequest(messageEvent({ id: "om_retry", chatType: "group", threadId: "omt_refused", text: "second try" })),
+    );
+    await idle();
+    expect(prompts[2]?.text).toContain("unrelated aside"); // never read by a session, so it is folded now
     expect(prompts[2]?.text).toContain("second try");
   });
 
@@ -1806,6 +1841,33 @@ describe("turn flow", () => {
     expect(calls[0]).toMatchObject({ idempotencyKey: "om_plain", whenBusy: "steer" });
     expect(conversationOf(home, calls[0]?.sessionId)).toBe("feishu:oc_1");
     expect(protocol.forks).toEqual([{}]); // a new session, forked from nothing
+  });
+
+  it("says a place it could not read, and forgets that ask so the next turn reads what it missed", async () => {
+    vi.spyOn(log, "warn").mockImplementation(() => {});
+    feishuFetch();
+    const platformFetch = globalThis.fetch;
+    let failHistory = true;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      failHistory && /\/im\/v1\/messages\?/.test(String(url))
+        ? Promise.resolve(Response.json({ code: 99991672, msg: "no permission" }))
+        : platformFetch(url, init),
+    );
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    const ask = (id: string, text: string) =>
+      messageEvent({ id, chatType: "group", content: JSON.stringify({ text: `@_bot ${text}` }), mentions: mention });
+    await handler(feishuRequest(messageEvent({ id: "om_chatter", chatType: "group", text: "the deploy is broken" })));
+    await handler(feishuRequest(ask("om_ask1", "what broke?")));
+    await idle();
+    expect(calls[0]?.prompt.text).toContain("could not read the recent discussion here");
+
+    failHistory = false;
+    await handler(feishuRequest(ask("om_ask2", "and now?")));
+    await idle();
+    expect(calls[1]?.prompt.text).toContain("the deploy is broken"); // the first ask forgot nothing it never read
+    expect(calls[1]?.prompt.text).not.toContain("could not read");
   });
 
   it("a thread's FIRST turn folds the room's un-answered discussion — read-only, and once", async () => {

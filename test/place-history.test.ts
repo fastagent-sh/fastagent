@@ -3,65 +3,82 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPlaceHistory } from "../src/channels/kit/place-history.ts";
+import { log } from "../src/log.ts";
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 /** A place history over a platform with nothing to say: what each read is handed shows what the place remembers. */
-function setup() {
+function setup(path?: string) {
   const root = mkdtempSync(join(tmpdir(), "place-history-"));
   roots.push(root);
-  const read = vi.fn(async (_key: string, _from: { cursor?: number; drop(id: string): boolean }) => ({
-    covered: [],
+  const read = vi.fn(async (_key: string, _from: { after?: number; drop(id: string): boolean }, _until?: number) => ({
     messages: [],
     earlier: false,
   }));
-  const history = createPlaceHistory<number>({
-    label: "[test]",
-    path: join(root, "history.json"),
-    isCursor: (value): value is number => typeof value === "number",
-    compare: (a, b) => a - b,
-    isTurnInput: () => false,
-    read,
-  });
-  const answered = async (key: string, until: number) => {
-    const peeked = await history.peek({ key, until });
-    history.commit({ key, until }, peeked.consumed);
-  };
-  const cursorOf = async (key: string): Promise<number | undefined> => {
-    await history.peek({ key, until: Number.MAX_SAFE_INTEGER });
-    return read.mock.lastCall?.[1].cursor;
-  };
+  const open = (file = path ?? join(root, "history.json")) =>
+    createPlaceHistory<number>({ label: "[test]", path: file, isTurnInput: () => false, read });
+  const history = open();
   /** Whether a read of `key` would leave `id` out: a recorded output the place still holds. */
-  const drops = async (key: string, id: string): Promise<boolean> => {
-    await history.peek({ key, until: Number.MAX_SAFE_INTEGER });
+  const drops = async (key: string, id: string, reader = history): Promise<boolean> => {
+    await reader.fold({ key, until: Number.MAX_SAFE_INTEGER });
     return read.mock.lastCall?.[1].drop(id) ?? false;
   };
-  return { history, answered, cursorOf, drops };
+  return { history, read, drops, open, root };
 }
 
-describe("place history state", () => {
-  it("places no read has reached have their own bound, so they cannot push out a quiet place's cursor", async () => {
-    const { history, answered, cursorOf, drops } = setup();
-    await answered("quiet", 7);
-    // A busy deployment's answers, each in a thread nobody asks in again (500 is their bound).
-    for (let i = 0; i < 2000; i++) history.recordOutput(`thread-${i}`, `answer-${i}`);
-    expect(await cursorOf("quiet")).toBe(7);
-    expect(await drops("thread-1999", "answer-1999")).toBe(true);
-    expect(await drops("thread-1500", "answer-1500")).toBe(true);
-    expect(await drops("thread-1499", "answer-1499")).toBe(false);
+describe("place history", () => {
+  it("hands a read the range it was asked for, and records nothing of it", async () => {
+    const { history, read } = setup();
+    await history.fold({ key: "p", after: 5, until: 9 });
+    expect(read.mock.lastCall?.[0]).toBe("p");
+    expect(read.mock.lastCall?.[1].after).toBe(5);
+    expect(read.mock.lastCall?.[2]).toBe(9);
+    await history.fold({ key: "p", until: 12 });
+    expect(read.mock.lastCall?.[1].after).toBeUndefined(); // the place keeps no cursor: a read starts where it is told to
   });
 
-  it("an answer just recorded outlives the next one, though every other place has a cursor", async () => {
-    const { history, answered, cursorOf, drops } = setup();
-    for (let i = 0; i < 1999; i++) await answered(`place-${i}`, i + 1);
-    history.recordOutput("thread-a", "answer-a");
-    history.recordOutput("thread-b", "answer-b");
-    // Its follow-up still leaves the answer out; the least recently used place paid instead.
-    expect(await drops("thread-a", "answer-a")).toBe(true);
-    expect(await cursorOf("place-0")).toBeUndefined();
-    expect(await cursorOf("place-1")).toBe(2);
+  it("leaves out what a turn posted into the place, until the place is forgotten", async () => {
+    const { history, drops } = setup();
+    history.recordOutput("p", "answer-1");
+    expect(await drops("p", "answer-1")).toBe(true);
+    expect(await drops("p", "someone-else")).toBe(false);
+    expect(await drops("other", "answer-1")).toBe(false); // an output belongs to its place
+  });
+
+  it("keeps outputs across a restart", async () => {
+    const { history, drops, open } = setup();
+    history.recordOutput("p", "answer-1");
+    expect(await drops("p", "answer-1", open())).toBe(true);
+  });
+
+  it("keeps a place's newest outputs only", async () => {
+    const { history, drops } = setup();
+    for (let i = 0; i < 250; i++) history.recordOutput("p", `answer-${i}`);
+    expect(await drops("p", "answer-249")).toBe(true);
+    expect(await drops("p", "answer-50")).toBe(true);
+    expect(await drops("p", "answer-49")).toBe(false);
+  });
+
+  it("forgets the least recently used place when there are too many, but not the one just recorded", async () => {
+    const { history, drops } = setup();
+    for (let i = 0; i < 2000; i++) history.recordOutput(`place-${i}`, `answer-${i}`);
+    history.recordOutput("busy", "answer-busy");
+    expect(await drops("busy", "answer-busy")).toBe(true);
+    expect(await drops("place-0", "answer-0")).toBe(false); // the oldest paid for it
+    expect(await drops("place-1", "answer-1")).toBe(true);
+  });
+
+  it("says an unreadable place in the turn's text and lets the turn go on", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const { history, read } = setup();
+    read.mockRejectedValueOnce(new Error("platform down"));
+    const folded = await history.fold({ key: "p", until: 1 });
+    expect(folded.text).toContain("could not read the recent discussion here: Error: platform down");
+    expect(folded.folded).toEqual([]);
+    expect(warn.mock.calls.flat().join(" ")).toContain("platform down");
   });
 });

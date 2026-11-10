@@ -21,14 +21,16 @@ import { attachmentsDir } from "../kit/attachment-path.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
+import { createAskLog, readStart } from "../kit/ask-log.ts";
+import type { PlaceMessage } from "../kit/place-history.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import {
-  type SlackDiscussion,
-  type SlackPlaceRead,
   collectFoldedFiles,
+  compareSlackTs,
   createSlackPlaceHistory,
+  isSlackTs,
   slackHistoryKey,
   slackPlaceOf,
 } from "./history.ts";
@@ -310,6 +312,14 @@ function createSlackRuntime(
   const welcomed = createWelcomedUsers(join(stateHome, "welcomed.json"), label);
   // Every message this channel took as input (a turn, a /stop) is in `seen`. A history read also leaves these out,
   // to shape the prompt only — what keeps a queued ask out of an earlier turn is the read's bound, not this ring.
+  // Where each conversation's session read to: a turn folds its place from the ask its session was last sent.
+  const asks = createAskLog<string>({
+    label,
+    path: join(stateHome, "asks.json"),
+    messages: agent.messages,
+    isPosition: isSlackTs,
+    compare: compareSlackTs,
+  });
   const history = createSlackPlaceHistory({
     api,
     self: () => ({ userId: auth.botUserId(), botId: auth.botId() }),
@@ -374,19 +384,27 @@ function createSlackRuntime(
     ).catch((error) => log.warn(`${label} could not notify a dropped turn: ${String(error)}`));
   };
 
-  const runner = createTurnRunner<PendingSlackTurn, StoredSlackTurn, SlackDiscussion, SlackPlaceRead>({
+  const runner = createTurnRunner<PendingSlackTurn, StoredSlackTurn, PlaceMessage>({
     label,
     store,
-    discussion: history,
+    // The read ends at the ask (`messageRefOf`: the ts of the message that asked) and starts after the ask its session
+    // was last sent.
+    discussion: async (turn) => {
+      const ask = messageRefOf(turn.id);
+      if (turn.historyKey === undefined || ask === undefined) return { text: "", folded: [] };
+      const start = await readStart(asks, label, turn.conversation, recordedSession(turn.conversation), ask.ts);
+      const fold = await history.fold({
+        key: turn.historyKey,
+        ...(start.after === undefined ? {} : { after: start.after }),
+        until: ask.ts,
+      });
+      if (fold.unread) asks.forget(turn.conversation, turn.id);
+      return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
+    },
     seen,
     delivered: createSeenRing(join(stateHome, "delivered.json"), label),
     toStored: (intent) => ({ ...intent, attempts: 0 }),
     fromStored: ({ attempts: _attempts, ...intent }) => intent,
-    // The read ends at the ask (`messageRefOf`: the ts of the message that asked).
-    discussionKey: (turn) => {
-      const ask = messageRefOf(turn.id);
-      return turn.historyKey === undefined || ask === undefined ? undefined : { key: turn.historyKey, until: ask.ts };
-    },
     where: (turn) => `channel=${turn.channelId}`,
     // Leave the intent untouched when Slack auth failed.
     beforeRun: async (turn) => {
@@ -444,10 +462,7 @@ function createSlackRuntime(
                 { api, channelId: turn.channelId, filesDir: attachmentsDir(stateHome), label },
                 {
                   primaryFileIds: turn.fileIds,
-                  buffered: collectFoldedFiles(
-                    discussion.consumed.flatMap((read) => read.folded),
-                    new Set(turn.fileIds),
-                  ),
+                  buffered: collectFoldedFiles(discussion.folded, new Set(turn.fileIds)),
                 },
               ),
               (events) =>
@@ -565,11 +580,13 @@ function createSlackRuntime(
         ? codePointPrefix(stripSlackMentions(slackMessageText(event), "").replace(/\s+/g, " ").trim(), 80)
         : undefined;
 
+    const conversation = routed.conversation ?? defaultConversation;
+    if (historyKey !== undefined) asks.record(conversation, { key: logicalId, at: event.ts });
     runner.submit(
       {
         id: logicalId,
         seq: ++seq,
-        conversation: routed.conversation ?? defaultConversation,
+        conversation,
         baseText,
         ...(historyKey !== undefined ? { historyKey } : {}),
         group,

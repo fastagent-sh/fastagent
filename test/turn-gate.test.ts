@@ -3,7 +3,7 @@ import * as Stream from "effect/Stream";
 import { describe, expect, it } from "vitest";
 import type { Message } from "../src/agent-api.ts";
 import type { TurnEvent } from "../src/channels/kit/invoke-turn-kit.ts";
-import { answerKeyOf, gatedReply } from "../src/channels/kit/turn-gate.ts";
+import { gatedReply } from "../src/channels/kit/turn-gate.ts";
 
 const own = (status: Message["status"], answer?: string): Message => ({
   id: "m2",
@@ -22,12 +22,24 @@ const events = (answer: string | undefined = "e7"): Stream.Stream<TurnEvent> =>
 function run(opts: { held: boolean; delivered?: string[]; earlier?: Effect.Effect<void> }) {
   const rendered: string[] = [];
   const skipped: string[] = [];
+  // What the runner learns from the turn's own stream, as `turnStream` tells it: the answer its message ended with.
+  let key: string | undefined;
+  const watched = events().pipe(
+    Stream.tap((event) =>
+      Effect.sync(() => {
+        if (event.type === "done" && event.message.answer !== undefined) {
+          key = `${event.message.sessionId}:${event.message.answer.entryId}`;
+        }
+      }),
+    ),
+  );
   const done = Effect.runPromise(
     Effect.scoped(
       gatedReply({
-        events: events() as never,
+        events: watched as never,
         held: opts.held,
         awaitEarlier: opts.earlier ?? Effect.void,
+        answerKey: () => key,
         delivered: (key) => (opts.delivered ?? []).includes(key),
         skipped: (key) => Effect.sync(() => void skipped.push(key)),
         render: (stream) => Stream.runForEach(stream, (event) => Effect.sync(() => void rendered.push(event.type))),
@@ -65,10 +77,5 @@ describe("a steered turn's reply", () => {
     await done;
     expect(rendered).toEqual([]);
     expect(skipped).toEqual(["s:e7"]);
-  });
-
-  it("names an answer by its session and entry", () => {
-    expect(answerKeyOf(own("completed", "e7"))).toBe("s:e7");
-    expect(answerKeyOf(own("failed"))).toBeUndefined();
   });
 });
