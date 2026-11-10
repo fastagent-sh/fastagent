@@ -501,7 +501,10 @@ interface DeclaredSecret {
 }
 
 type InstanceInputs<Settings = unknown> = {
-  /** The instance configuration (`fastagent.json`'s schema), or the absolute path of a `fastagent.json`. */
+  /**
+   * The instance configuration (`fastagent.json`'s schema), or the absolute path of a `fastagent.json`. Given `root`
+   * and no `config`, the `fastagent.json` in `root` when it holds one; nothing is read for `stateDir` and `workdir`.
+   */
   config?: InstanceConfig<Settings> | string;
   /** Secret values: the declared names, and model providers' variables. No variable of the host's reaches the agent. */
   secrets?: Record<string, string>;
@@ -572,7 +575,7 @@ interface InstanceConfig<Settings = unknown> {
   /**
    * MCP servers the instance adds, in the shape of the program's `context.json` `mcpServers` map (the MCP ecosystem's entry shape). They add to the program's:
    * a name both declare refuses the open. A stdio server runs in the instance's workspace, and one given in an object
-   * names a command that is a bare name or an absolute path. `inspectMcp` and `signInMcp` take the same `config`.
+   * names a command that is a bare name or an absolute path. `inspectMcp` and `signInMcp` take the same `config`, or the same `root`.
    */
   mcpServers?: Record<string, object>;
   /** Files added after the program's text; directories of skills and of prompt templates. */
@@ -669,7 +672,10 @@ relative one is refused rather than resolved against the process's working direc
 
 - A definition `fastagent build` made for another format refuses, naming the FastAgent version it needs.
 - `config` overrides the program's defaults by key (objects merge, arrays replace). The relative paths of a `config`
-  file resolve against that file's directory. Without `config`, the instance runs on the program's defaults.
+  file resolve against that file's directory. Without `config`, an instance opened with `root` reads the
+  `fastagent.json` there when it holds one, and otherwise runs on the program's defaults; nothing is created, and an
+  instance opened with `stateDir` and `workdir` reads no file, since a workdir may hold another instance's (the
+  development one's).
 - `settings` is the program's defaults with `config.settings` over them, checked against the definition's `settings`
   schema at open: a required setting no one gave, or a value the schema refuses, refuses the open and names the key.
   The compiler checks the keys and types `config.settings` gives, not that every required one is there.

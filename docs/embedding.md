@@ -83,7 +83,7 @@ A definition is made from a project directory: the prompt is its `SYSTEM.md`, an
 
 ### MCP servers
 
-The agent's `mcpServers` (its `context.json`, and `config.mcpServers` for an instance) add stdio or Streamable HTTP tools. Use `inspectMcp` and `signInMcp`, giving them the same `config`, to drive browser OAuth in
+The agent's `mcpServers` (its `context.json`, and `config.mcpServers` for an instance) add stdio or Streamable HTTP tools. Use `inspectMcp` and `signInMcp`, giving them the same `config` (or the same `root`), to drive browser OAuth in
 the host before opening an agent, then pass `mcp: { store, bindings }` to `openAgent`. Each open owns its clients;
 sharing a grant is explicit and closing an agent does not sign the user out. See [MCP servers](mcp.md) for the host
 interaction/store contract, instance variables, proxy policy and supported protocol subset.
@@ -267,6 +267,12 @@ repositories it works on. `addContent` and `removeContent` edit those declaratio
   them serves the definition's channels and schedules (two would fire every schedule twice and compete for the
   channels' messages); an app beside `dev` does not call `serve()`. An instance nothing serves has no clock, so the
   agent's `wake` tool refuses a wake-up there instead of keeping one nothing would fire.
+- **The instance configuration.** Opened with `root` and no `config`, an instance reads `<root>/fastagent.json` when
+  it holds one, which is where `createAgent` and `addContent` write by default. The root is the agent's workspace, so
+  the agent can write that file too, and what it writes takes effect at the next open: its `mcpServers` can name a
+  server, with `${VAR}` headers that expand to any secret the app opened it with. An app that does not want its agent
+  to hold its configuration passes `config` (an object, `{}` included) or keeps the file outside the root and passes
+  its path.
 - **Models.** `agent.info().models` are the models a session may name, each with its `contextWindow` and the
   `thinkingLevels` it supports; a provider signed in to while the agent is open is in the next answer. The lists are
   refreshed when the agent opens, at most every 4 hours.

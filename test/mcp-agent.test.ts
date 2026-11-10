@@ -125,6 +125,20 @@ it("a stdio server gets the base, the declared secrets and its own env, and noth
   expect(who.ceiling).toBe(dirname(dir));
 });
 
+it("inspectMcp reads the fastagent.json in a root as openAgent does, unless a config is given", async () => {
+  const dir = await directory({ mcpServers: { constructor: { command: process.execPath, args: [FIXTURE] } } });
+  const root = await mkdtemp(join(tmpdir(), "mcp-root-"));
+  roots.push(root);
+  expect(await inspectMcp(dir, { root })).toMatchObject([{ name: "constructor" }]);
+  await writeFile(
+    join(root, "fastagent.json"),
+    JSON.stringify({ mcpServers: { extra: { command: process.execPath, args: [FIXTURE] } } }),
+  );
+  expect(await inspectMcp(dir, { root })).toMatchObject([{ name: "constructor" }, { name: "extra" }]);
+  expect(await inspectMcp(dir, { root, config: {} })).toMatchObject([{ name: "constructor" }]);
+  await expect(inspectMcp(dir, { root: "relative" })).rejects.toThrow("root must be an absolute path");
+});
+
 it("an instance adds servers through its configuration, beside the program's, and a name in both refuses the open", async () => {
   vi.stubEnv("FASTAGENT_OFFLINE", "1");
   const dir = await directory({ mcpServers: { constructor: { command: process.execPath, args: [FIXTURE] } } });

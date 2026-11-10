@@ -64,5 +64,11 @@ credential. So a check on session ids does not keep users apart, and FastAgent d
   storage nor its files, and it must check every session id a request names: the one a message is sent to, and the
   source of a fork (`sessions.create({ forkFrom })`), which is how a user would read a session that is not theirs.
 
+- **An instance's configuration is an input the agent may write.** An embedding app that opens an instance with `root`
+  and no `config` reads `<root>/fastagent.json`, in the agent's own workspace: whatever the agent writes there is the
+  configuration at the next open, `mcpServers` included, whose `${VAR}` references expand to any secret the instance
+  was opened with, not only the ones the agent's own processes are given. An app that must not have this passes
+  `config`, or keeps the file outside the root ([embedding](../embedding.md)).
+
 Nothing in the process is a sandbox: the coding tools act with the process's authority
 ([core design](core.md#5-tools-skills-and-execution-environment)).
