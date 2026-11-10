@@ -15,9 +15,9 @@ import { portError } from "../effect-port.ts";
 export interface TurnSlot {
   /** Let the next turn of the conversation start. Idempotent; the end of the turn releases it anyway. */
   release(): void;
-  /** Whether an earlier turn of the conversation is still running. */
+  /** Whether any earlier turn of the conversation is still running, not only the one just before this one. */
   earlierRunning(): boolean;
-  /** Resolves once the turn before this one has ended. */
+  /** Resolves once every earlier turn of the conversation has ended. */
   awaitEarlier: Effect.Effect<void>;
 }
 
@@ -45,16 +45,21 @@ export function createTurnQueue<T extends { conversation: string }>(opts: {
   run: (rec: T, slot: TurnSlot) => Effect.Effect<void, unknown, Scope.Scope>;
 }): TurnQueue<T> {
   const { label, run } = opts;
-  const tails = new Map<string, Tail>();
+  /**
+   * Each conversation's turns that have not ended, oldest first. A turn can end without waiting for the ones before it (its
+   * message was refused, or it was dropped), so what runs before a new turn is every one of these, not just the last.
+   */
+  const running = new Map<string, Tail[]>();
   return {
     accept(rec) {
-      const prev = tails.get(rec.conversation);
+      const earlier = [...(running.get(rec.conversation) ?? [])];
+      const prev = earlier.at(-1);
       const released = Deferred.makeUnsafe<void>();
       const release = () => void Deferred.doneUnsafe(released, Effect.void);
       const slot: TurnSlot = {
         release,
-        earlierRunning: () => prev !== undefined && !prev.ended,
-        awaitEarlier: prev === undefined ? Effect.void : Fiber.await(prev.fiber).pipe(Effect.asVoid),
+        earlierRunning: () => earlier.some((tail) => !tail.ended),
+        awaitEarlier: Fiber.awaitAll(earlier.map((tail) => tail.fiber)).pipe(Effect.asVoid),
       };
       // Admission counts immediately, including while waiting behind another turn.
       const workDone = beginWork();
@@ -79,19 +84,23 @@ export function createTurnQueue<T extends { conversation: string }>(opts: {
               tail.ended = true;
               release();
               workDone();
-              if (tails.get(rec.conversation) === tail) tails.delete(rec.conversation);
+              const left = (running.get(rec.conversation) ?? []).filter((other) => other !== tail);
+              if (left.length > 0) running.set(rec.conversation, left);
+              else running.delete(rec.conversation);
             }),
           ),
         ),
       );
       const tail: Tail = { fiber, released, ended: false };
-      tails.set(rec.conversation, tail);
+      running.set(rec.conversation, [...(running.get(rec.conversation) ?? []), tail]);
     },
     idle: () =>
       Effect.runPromise(
         Effect.gen(function* () {
           // A finishing turn may enqueue more work.
-          while (tails.size > 0) yield* Fiber.awaitAll([...tails.values()].map((tail) => tail.fiber));
+          while (running.size > 0) {
+            yield* Fiber.awaitAll([...running.values()].flatMap((turns) => turns.map((tail) => tail.fiber)));
+          }
         }),
       ),
   };
