@@ -60,6 +60,11 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   beforeRun?(rec: R): Promise<boolean>;
   /** The turn started the ceiling's worth of times without finishing: tell the asker. */
   notifyDropped(rec: R): void;
+  /**
+   * The turn's input was answered together with an earlier one, so it sends nothing of its own: tell the asker where the
+   * answer is, when it is not under their message (a group's answer quotes the first asker). Absent: say nothing.
+   */
+  notifyShared?(rec: R): Promise<void>;
   execute(
     rec: R,
     discussion: { text: string; consumed: E[] },
@@ -92,12 +97,27 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
   slot: TurnSlot = unqueuedSlot,
   /** The turn was left by an earlier process, so its message may have been sent and answered already. */
   afterRestart = false,
+  /** The conversations with a turn that folded discussion and has not ended (see the fold below), and how many. */
+  folding: Map<string, number> = new Map(),
 ): Effect.Effect<void, PortFailure> {
   return Effect.gen(function* () {
     const { label, store, discussion: source, beforeRun } = options;
     let ended: Message | undefined;
     const answerKey = (): string | undefined => answerKeyOf(ended) ?? rec.answerKey;
     const wasDelivered = (key: string): boolean => options.delivered.has(key);
+    const sharedAnswer = (key: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        log.info(`${label} turn ${rec.id}: its answer was delivered with an earlier input's (${key})`);
+        if (options.notifyShared === undefined) return;
+        const notify = options.notifyShared;
+        yield* portJoin(() => notify(rec)).pipe(
+          Effect.catchTag("PortFailure", (error) =>
+            Effect.sync(() =>
+              log.warn(`${label} turn ${rec.id}: could not say where its shared answer is: ${String(error.cause)}`),
+            ),
+          ),
+        );
+      });
     const hooks: TurnHooks = {
       admitted: slot.release,
       observe: (message) => {
@@ -110,15 +130,14 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
           awaitEarlier: slot.awaitEarlier,
           delivered: wasDelivered,
           render,
-          skipped: (key) =>
-            log.info(`${label} turn ${rec.id}: its answer was delivered with an earlier input's (${key})`),
+          skipped: sharedAnswer,
         }),
       deliverOnce: (deliver) =>
         Effect.gen(function* () {
           yield* slot.awaitEarlier;
           const key = answerKey();
           if (key !== undefined && wasDelivered(key)) {
-            log.info(`${label} turn ${rec.id}: its answer was delivered with an earlier input's (${key})`);
+            yield* sharedAnswer(key);
             return;
           }
           yield* deliver;
@@ -174,15 +193,27 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
       `${label} turn start: turn=${rec.id} conversation=${rec.conversation} ${options.where(rec)}` +
         `${recovered === undefined ? "" : " mode=re-delivery (answer recovered from a prior run)"}`,
     );
+    let folded = false;
     const work =
       recovered !== undefined
         ? Effect.suspend(() => hooks.deliverOnce(options.deliverAnswer(rec, recovered)))
         : Effect.suspend(() => {
             const key = options.discussionKey(rec);
+            // An earlier turn of this conversation has read the discussion and not answered yet, so its fold is not
+            // committed and a read now would be the same text again, in this input's message of the same run. This
+            // turn leaves it: what arrived since stays uncommitted and is read by a later turn.
+            const earlierFold = (folding.get(rec.conversation) ?? 0) > 0;
             // `peek` never rejects (DiscussionSource): a source that cannot read says so in the text.
             return Effect.promise(async () =>
-              key === undefined ? { text: "", consumed: [] as E[] } : source.peek(key),
+              key === undefined || earlierFold ? { text: "", consumed: [] as E[] } : source.peek(key),
             ).pipe(
+              Effect.tap((discussion) =>
+                Effect.sync(() => {
+                  if (discussion.text === "") return;
+                  folded = true;
+                  folding.set(rec.conversation, (folding.get(rec.conversation) ?? 0) + 1);
+                }),
+              ),
               Effect.flatMap((discussion) =>
                 options.execute(
                   rec,
@@ -207,6 +238,14 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
             );
           });
     const delivered = yield* Effect.scoped(work).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (!folded) return;
+          const left = (folding.get(rec.conversation) ?? 1) - 1;
+          if (left > 0) folding.set(rec.conversation, left);
+          else folding.delete(rec.conversation);
+        }),
+      ),
       Effect.matchEffect({
         onSuccess: () =>
           Effect.sync(() => {
@@ -250,9 +289,10 @@ export function createTurnRunner<
   const { label, store, seen } = options;
   const queue = createTurnQueue<R>({
     label,
-    run: (rec, slot) => runQueuedTurn(options, rec, slot, recoveredIds.has(rec.id)),
+    run: (rec, slot) => runQueuedTurn(options, rec, slot, recoveredIds.delete(rec.id), folding),
   });
   const recoveredIds = new Set<string>();
+  const folding = new Map<string, number>();
   const submit = (rec: R, persist: boolean): void => {
     if (persist) {
       store.add(options.toStored(rec)); // pre-ACK: a failed write throws → 500 → redelivery

@@ -405,8 +405,13 @@ detaches, so the work goes on.
 Inputs steered into one run end with one shared answer. The runner delivers it once per `<session>:<entry>`
 (`delivered.json`, recorded before the intent is dropped): a turn that began while an earlier one was running, or that
 runs again after a restart, is held back (`turn-gate.ts`) until its own message ends and renders nothing when its answer
-was delivered already. A turn that was not held renders live. A turn skipped that way does not commit the discussion it
-read, so it is read again by the next turn.
+was delivered already, saying so under its own message when the answer quotes another's (`notifyShared`; Slack's threads
+need no pointer). A turn that was not held renders live.
+
+The discussion fold is committed when its turn answers, so a steered turn starting before that would read the same text
+again, in the same run. While a turn of a conversation holds an uncommitted fold, later turns of it read none; what
+arrived since stays uncommitted for the next turn after the first answers. Reading from where the session itself left off
+(`docs/design/place-sessions.md`) replaces this.
 
 `delivery.ts` owns coalescing preview fibers and ordered native append/status queues. A preview starts
 its first write synchronously, cancels pending pacing at finish, and joins an issued write before the

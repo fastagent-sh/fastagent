@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { channelStateDir } from "../src/channels/context.ts";
 import { readReached } from "../src/channels/webhook-evidence.ts";
 import { type Asked, type Prompt, asked, promptOf, scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
+import { holdingAgent } from "./holding-agent.ts";
 import { ev } from "./scripted-run.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -257,6 +258,42 @@ describe("Slack turn", () => {
     await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
     await settle();
     expect(calls.map((c) => [c.idempotencyKey, c.whenBusy])).toEqual([["T1:D1:1.0", "steer"]]);
+  });
+});
+
+describe("Slack inputs steered into one run", () => {
+  it("delivers the answer two inputs of one thread share once", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const { handler, stateRoot } = mount(agent, { rendering: "classic" });
+    const posted = () => slackBodies(fetchMock, "chat.postMessage").length;
+
+    await handler(signedRequest(message("1.0", { channel: "C1", text: "<@UBOT> start the work" })));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await handler(
+      signedRequest(message("2.0", { channel: "C1", thread_ts: "1.0", text: "<@UBOT> and the old column" })),
+    );
+    await vi.waitFor(async () => {
+      const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+      expect((await agent.messages.get({ sessionId, idempotencyKey: "T1:C1:2.0" })).status).toBe("queued");
+    });
+    release();
+    await vi.waitFor(async () => {
+      const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+      expect((await agent.messages.get({ sessionId, idempotencyKey: "T1:C1:2.0" })).status).toBe("completed");
+    });
+    await settle();
+
+    const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+    const first = await agent.messages.get({ sessionId, idempotencyKey: "T1:C1:1.0" });
+    const second = await agent.messages.get({ sessionId, idempotencyKey: "T1:C1:2.0" });
+    expect(second.answer?.entryId).toBe(first.answer?.entryId); // the premise: one run, one answer
+    // One message in the thread. A thread's answer is under its own asker's message, so no pointer is posted.
+    expect(posted()).toBe(1);
+    await vi.waitFor(() =>
+      expect(JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8"))).toEqual({}),
+    );
   });
 });
 

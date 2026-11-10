@@ -29,7 +29,7 @@ function run(opts: { held: boolean; delivered?: string[]; earlier?: Effect.Effec
         held: opts.held,
         awaitEarlier: opts.earlier ?? Effect.void,
         delivered: (key) => (opts.delivered ?? []).includes(key),
-        skipped: (key) => skipped.push(key),
+        skipped: (key) => Effect.sync(() => void skipped.push(key)),
         render: (stream) => Stream.runForEach(stream, (event) => Effect.sync(() => void rendered.push(event.type))),
       }),
     ),

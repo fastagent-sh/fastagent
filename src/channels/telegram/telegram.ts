@@ -35,6 +35,7 @@ import { createTaskTracker } from "../kit/tasks.ts";
 import { type Target, callApi, sendMessage } from "./telegram-api.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
+import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { portJoin } from "../../effect-port.ts";
 import { pollTelegramUpdates } from "./polling.ts";
@@ -156,6 +157,11 @@ function createTelegramRuntime(
     discussionKey: (rec) => rec.placeKey,
     where: (rec) => `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`,
     notifyDropped,
+    // A group's answer quotes the first asker's message, so a later asker is told where theirs is.
+    notifyShared: async (rec) => {
+      if (rec.replyTo === undefined) return;
+      await sendMessage(apiBaseUrl, botToken, targetOf(rec), SHARED_ANSWER_NOTICE, { html: false });
+    },
     deliverAnswer: (rec, answer) => portJoin(() => deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer)),
     execute: (rec, discussion, onAnswered, turn) =>
       turn.reply(

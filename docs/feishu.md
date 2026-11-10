@@ -387,7 +387,7 @@ An unreadable referent degrades to a marker instead of failing the turn.
 A message is sent to its conversation's session at once, in arrival order, with `whenBusy: "steer"`: the agent takes it at its
 next step, after its current tool calls. Since the conversation is the place, **a whole group room is one session**: a second
 person's `@Agent` in a busy room is steered into the running work, so their question can end that run and share its answer
-(delivered once) instead of getting one of its own. Different places run concurrently, which is why a thread is the way to
+(delivered once) instead of getting one of its own; their message gets a short "Answered together with an earlier message above" reply under it, since the answer quotes the first asker's. Different places run concurrently, which is why a thread is the way to
 start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer.
 
 ## Streaming behavior

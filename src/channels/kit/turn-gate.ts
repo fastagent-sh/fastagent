@@ -15,6 +15,9 @@ import type { Message } from "../../agent-api.ts";
 import type { PortFailure } from "../../effect-port.ts";
 import type { TurnEvent } from "./invoke-turn-kit.ts";
 
+/** What an asker is told, under their own message, when their input was answered together with an earlier one. */
+export const SHARED_ANSWER_NOTICE = "↑ Answered together with an earlier message above.";
+
 /** `<session>:<entry>`: the Agent's answer a message ended with, the unit a delivery is recorded by. */
 export function answerKeyOf(message: Message | undefined): string | undefined {
   return message?.answer === undefined ? undefined : `${message.sessionId}:${message.answer.entryId}`;
@@ -30,8 +33,8 @@ export function gatedReply(opts: {
   delivered: (answerKey: string) => boolean;
   /** Runs for a turn that is not skipped. */
   render: (events: Stream.Stream<TurnEvent, PortFailure>) => Effect.Effect<void, PortFailure, Scope.Scope>;
-  /** For the log, when a turn is skipped. */
-  skipped: (answerKey: string) => void;
+  /** Runs when the turn is skipped: it says why, and tells the asker where the answer is. */
+  skipped: (answerKey: string) => Effect.Effect<void>;
 }): Effect.Effect<void, PortFailure, Scope.Scope> {
   if (!opts.held) return opts.render(opts.events);
   return Effect.gen(function* () {
@@ -61,7 +64,7 @@ export function gatedReply(opts: {
     yield* opts.awaitEarlier;
     const key = answerKeyOf(ended);
     if (key !== undefined && opts.delivered(key)) {
-      opts.skipped(key);
+      yield* opts.skipped(key);
       return;
     }
     yield* opts.render(Stream.fromQueue(queue));

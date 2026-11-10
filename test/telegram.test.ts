@@ -16,11 +16,9 @@ import {
 import { type Agent, type ErrorCode, agentError } from "../src/agent-api.ts";
 import { registerTelegramTransport } from "../src/channels/telegram/shared-api.ts";
 import { log } from "../src/log.ts";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { MemoryStorage, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { obj } from "@earendil-works/pi-schema";
-import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
-import { fauxDurableAgent, makeFaux } from "./faux.ts";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxDurableAgent } from "./faux.ts";
+import { holdingAgent } from "./holding-agent.ts";
 
 /** A faux Agent that records each invocation's prompt and replies with `reply`. */
 function replyingAgent(reply = "") {
@@ -528,50 +526,11 @@ describe("durable turn intent (crash recovery)", () => {
 });
 
 describe("inputs steered into one run (real Agent)", () => {
-  /** A durable Agent whose `work` tool holds the run open until `release()`, answering `shared` when it ends. */
-  async function holdingAgent(answers: { shared: string; first: string }) {
-    let release = (): void => {};
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const { faux, models } = makeFaux();
-    const model = faux.getModel();
-    faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("work", {})], { stopReason: "toolUse" }),
-      fauxAssistantMessage(answers.shared), // the run ends with this after the steered input was taken
-    ]);
-    const registry = createRegistry();
-    registry.install(
-      defineExtension({
-        name: "hold",
-        tools: [
-          defineTool({
-            name: "work",
-            description: "waits",
-            parameters: obj({}),
-            execute: async () => {
-              await held;
-              return { output: [{ type: "text", text: "worked" }] };
-            },
-          }),
-        ],
-      }),
-    );
-    const agent = await openDurableAgent({
-      storage: new MemoryStorage(),
-      models,
-      registry,
-      name: "faux",
-      model: { provider: model.provider, modelId: model.id },
-    });
-    return { agent, release };
-  }
-
   it("delivers the answer two inputs share once, also when a restart replays the second one", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const state = freshStateDir();
-    const { agent, release } = await holdingAgent({ shared: "the shared answer", first: "" });
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
     const upd = (n: number, text: string) => ({
       update_id: n,
@@ -625,6 +584,67 @@ describe("inputs steered into one run (real Agent)", () => {
     telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
     await vi.waitFor(() => expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({}));
     expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1);
+  });
+
+  it("tells a group asker, under their own message, that their input was answered with an earlier one", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}) });
+    const group = { id: -100, type: "supergroup" };
+    const upd = (n: number, text: string, from: string) => ({
+      update_id: n,
+      message: { message_id: n, text, chat: group, from: { id: n, username: from } },
+    });
+
+    await ch(tgRequest(upd(1, "start the work", "alice")));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await ch(tgRequest(upd(2, "what about the date?", "bob")));
+    await vi.waitFor(async () => {
+      const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+      expect((await agent.messages.get({ sessionId, idempotencyKey: "2" })).status).toBe("queued");
+    });
+    release();
+    await vi.waitFor(() => expect(callsTo(fetchMock, "sendMessage")).toHaveLength(2));
+
+    const [preview, notice] = callsTo(fetchMock, "sendMessage").map((c) => bodyOf(c));
+    expect(preview?.reply_parameters).toMatchObject({ message_id: 1 }); // the answer quotes alice's ask
+    expect(notice?.text).toContain("Answered together with an earlier message");
+    expect(notice?.reply_parameters).toMatchObject({ message_id: 2 }); // and bob is pointed to it under his own
+  });
+
+  it("does not fold the same un-summoned discussion into both inputs of one run", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const texts: string[] = [];
+    const agent = scriptedAgent(async function* (request) {
+      yield ev.message();
+      texts.push(promptOf(request).text);
+      if (texts.length === 1) await gate;
+      yield ev.text("ok");
+      yield ev.ended();
+    });
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "1:A",
+      route: (u) => ((u.message as { text?: string } | undefined)?.text?.startsWith("@bot") ? {} : null),
+    });
+    const group = { id: -100, type: "supergroup" };
+    const upd = (n: number, text: string, from: string) => ({
+      update_id: n,
+      message: { message_id: n, text, chat: group, from: { id: n, username: from } },
+    });
+
+    await ch(tgRequest(upd(1, "chatter the room had", "dana")));
+    await ch(tgRequest(upd(2, "@bot start", "alice")));
+    await vi.waitFor(() => expect(texts).toHaveLength(1));
+    await ch(tgRequest(upd(3, "@bot second", "bob")));
+    await vi.waitFor(() => expect(texts).toHaveLength(2));
+    expect(texts.map((text) => text.includes("chatter the room had"))).toEqual([true, false]);
+    release();
   });
 });
 

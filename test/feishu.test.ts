@@ -11,6 +11,7 @@ import {
   stoppedRun,
   withStop,
 } from "./scripted-agent.ts";
+import { holdingAgent } from "./holding-agent.ts";
 import { ev } from "./scripted-run.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2580,6 +2581,78 @@ describe("turn flow", () => {
     const queueCards = fx.calls("/cardkit/v1/cards", "POST").filter((c) => String(c.body?.data).includes("Queued"));
     expect(queueCards).toHaveLength(0); // nothing says "Queued": the Agent takes each input when it can
     expect(fx.calls("/im/v1/messages/", "DELETE")).toHaveLength(0);
+  });
+});
+
+describe("Feishu inputs steered into one run", () => {
+  async function mountDurable(agent: Awaited<ReturnType<typeof holdingAgent>>["agent"]) {
+    const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
+    tempRoots.push(root);
+    const routes = buildFeishuChannel({
+      appId: "app",
+      appSecret: "secret",
+      verificationToken: TOKEN,
+      apiBaseUrl: BASE,
+    })(channelContext(agent, root, "feishu"));
+    const handler = routes["POST /feishu"];
+    if (!handler) throw new Error("expected POST /feishu");
+    const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
+    channelIdles.add(idle);
+    return { handler, idle, home: join(root, "channels", "feishu") };
+  }
+
+  it("delivers the answer two inputs of one chat share once", async () => {
+    const fx = feishuFetch();
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const { handler, idle, home } = await mountDurable(agent);
+
+    await handler(feishuRequest(messageEvent({ id: "om_1", text: "start the work" })));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await handler(feishuRequest(messageEvent({ id: "om_2", text: "and keep the old column" })));
+    await vi.waitFor(async () => {
+      const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+      expect((await agent.messages.get({ sessionId, idempotencyKey: "om_2" })).status).toBe("queued");
+    });
+    release();
+    await vi.waitFor(async () => {
+      const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+      expect((await agent.messages.get({ sessionId, idempotencyKey: "om_2" })).status).toBe("completed");
+    });
+    await idle();
+
+    const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+    const first = await agent.messages.get({ sessionId, idempotencyKey: "om_1" });
+    const second = await agent.messages.get({ sessionId, idempotencyKey: "om_2" });
+    expect(second.answer?.entryId).toBe(first.answer?.entryId); // the premise: one run, one answer
+    // One card: the first turn's. The second turn mounted none and, in a direct chat, posted no pointer.
+    expect(fx.calls("/cardkit/v1/cards", "POST")).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
+  });
+
+  it("points a group asker, under their own message, to the answer they share", async () => {
+    const fx = feishuFetch();
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const { handler, idle } = await mountDurable(agent);
+    await flush(); // the bot's own identity resolves before a mention can summon it
+    const bot = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+    const ask = (id: string, text: string, sender: string) =>
+      messageEvent({ id, chatType: "group", text: `@_user_1 ${text}`, mentions: bot, senderId: sender });
+
+    await handler(feishuRequest(ask("om_1", "start the work", "ou_alice")));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await handler(feishuRequest(ask("om_2", "what about the date?", "ou_bob")));
+    await vi.waitFor(async () => {
+      const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+      expect((await agent.messages.get({ sessionId, idempotencyKey: "om_2" })).status).toBe("queued");
+    });
+    release();
+    await idle();
+
+    const pointer = fx
+      .calls("/im/v1/messages/om_2/reply", "POST")
+      .find((c) => String(c.body?.content).includes("Answered together"));
+    expect(pointer).toBeDefined();
+    expect(fx.calls("/cardkit/v1/cards", "POST")).toHaveLength(1); // still one answer card, alice's
   });
 });
 

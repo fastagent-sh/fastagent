@@ -333,6 +333,47 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     await r.idle();
   });
 
+  it("an input steered while an earlier turn's fold is uncommitted does not read the discussion again", async () => {
+    const { store, calls } = fakeStore();
+    const gate = Promise.withResolvers<void>();
+    const r = runner(store, calls, {
+      execute: (rec, discussion, onAnswered, turn) =>
+        portJoin(async () => {
+          calls.push(`execute ${rec.id} text=${discussion.text}`);
+          turn.admitted();
+          if (rec.id === "a") await gate.promise;
+          onAnswered("the answer");
+        }),
+    });
+    r.submit({ id: "a", conversation: "s", text: "" }, false);
+    r.submit({ id: "b", conversation: "s", text: "" }, false);
+    await vi.waitFor(() => expect(calls).toContain("execute b text="));
+    expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s"]); // a read; b left it to a
+    gate.resolve();
+    await r.idle();
+    r.submit({ id: "c", conversation: "s", text: "" }, false);
+    await r.idle();
+    // Once a has answered, its fold is committed and the next turn reads again.
+    expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s", "peek place:s"]);
+    expect(calls).toContain("execute c text=earlier");
+  });
+
+  it("an earlier turn that fails frees its fold for the next one", async () => {
+    const { store, calls } = fakeStore();
+    const r = runner(store, calls, {
+      execute: (rec) =>
+        portJoin(async () => {
+          calls.push(`execute ${rec.id}`);
+          if (rec.id === "a") throw new Error("transport down");
+        }),
+    });
+    r.submit({ id: "a", conversation: "s", text: "" }, false);
+    await r.idle();
+    r.submit({ id: "b", conversation: "s", text: "" }, false);
+    await r.idle();
+    expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s", "peek place:s"]);
+  });
+
   it("a recovered answer another turn already delivered is dropped, not sent twice", async () => {
     const { store, calls, recovered } = fakeStore();
     recovered.push({ id: "r", conversation: "s", text: "", attempts: 1, answer: "shared", answerKey: "s1:e9" });

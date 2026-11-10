@@ -19,6 +19,7 @@ import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
 import { threadForkSource } from "../kit/thread-fork.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
+import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
 import { portJoin } from "../../effect-port.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -328,6 +329,11 @@ function createFeishuRuntimeFactory(
         rec.historyKey === undefined ? undefined : { key: rec.historyKey, until: { at: rec.askAt, id: rec.id } },
       where: (rec) => `chat=${rec.chatId}`,
       notifyDropped,
+      // A group's answer quotes the first asker's message, so a later asker is told where theirs is.
+      notifyShared: (rec) =>
+        rec.replyTo === undefined
+          ? Promise.resolve()
+          : settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), undefined, SHARED_ANSWER_NOTICE),
       deliverAnswer: (rec, answer) =>
         portJoin(() => settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), undefined, answer)),
       execute: (rec, discussion, onAnswered, hooks) =>
