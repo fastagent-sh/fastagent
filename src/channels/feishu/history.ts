@@ -93,7 +93,7 @@ export function createFeishuPlaceHistory(deps: {
   /** THIS app's id: a message whose sender is this app is the agent's own. */
   appId: string;
   label: string;
-  /** Where each place's cursor and outputs persist. */
+  /** Where each place's outputs persist. */
   path: string;
   isTurnInput(messageId: string): boolean;
 }): FeishuPlaceHistory {

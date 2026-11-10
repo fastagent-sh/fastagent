@@ -192,7 +192,7 @@ export function createSlackPlaceHistory(deps: {
   /** THIS app's bot user and bot ids, once `auth.test` answered: a message from either is the agent's own. */
   self(): { userId?: string; botId?: string };
   label: string;
-  /** Where each place's cursor and outputs persist. */
+  /** Where each place's outputs persist. */
   path: string;
   isTurnInput(key: string, ts: string): boolean;
 }): SlackPlaceHistory {

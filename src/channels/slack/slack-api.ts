@@ -117,7 +117,7 @@ export interface SlackListedMessage {
 /**
  * The newest `limit` messages before `latest` (exclusive). There is deliberately no `oldest`: with it, both reads
  * return the OLDEST `limit` after it instead, and `conversations.replies` then pages on to nothing (measured), so a
- * reader cuts at its own cursor.
+ * reader cuts where its session last read to.
  */
 interface SlackRange {
   latest?: string;
