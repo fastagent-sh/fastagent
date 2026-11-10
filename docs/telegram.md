@@ -102,8 +102,7 @@ A slash command does **not** summon in a group (bare or directed like `/cmd@botn
 
 A group is one shared conversation (`<chat>`, or `<chat>:<thread>` in a topic), with one session: everyone talks to the same agent with one history. To keep it coherent:
 
-- **Serialized turns.** Concurrent summons in the same conversation run one at a time (FIFO) — the right UX when several people talk in one group. Different conversations still run in parallel.
-- **Queue feedback.** A summon that lands while the session is busy gets an immediate "⏳ Queued" notice (reply-quoted to the asker, so a group sees whose ask is waiting); when its turn starts, the live preview edits that same message in place — the notice morphs into the answer, no orphan messages. Not group-specific: any busy conversation answers this way, including a private chat with two quick asks.
+- **Steered turns.** A summon that lands while the session is busy is sent at once, in arrival order, with `whenBusy: "steer"`: the agent takes it at its next step, after its current tool calls. If it takes it before the run ends, the two messages end with one shared answer, which is delivered once; a message taken after the run ended gets its own answer. Different conversations run in parallel.
 - **Sender attribution.** Each message is prefixed with its sender, and a group is flagged in the prompt, so the model can tell participants apart and answer "summarize the discussion".
 - **Context buffer.** The channel keeps a small per-chat buffer of recent **un-summoned** messages (bounded by a character budget; the oldest are dropped) and folds it into the next answered turn — annotated with message ids and reply relations, so "the one Alex replied to" resolves. Attachments posted without summoning ride along too: the next summon downloads the most recent few files (readable by the agent's tools) and includes recent photos as vision inputs (photos ride along without per-photo attribution — the fold marks every attachment line with `[photo]`/`[document: …]` next to its sender, caption or not), so "summarize the file from earlier" actually works; a stale or cap-skipped earlier attachment is counted in a visible note instead of silently missing or failing the ask. The buffer is durable: persisted before the update is acknowledged (a webhook's 200, or the next `getUpdates` offset) and reloaded on start, so a restart keeps the discussion; folded discussion lives in the session, in the instance's storage.
 
@@ -167,7 +166,7 @@ Each conversation has its own session, which the channel creates the first time 
 
 Replies are sent back to the same thread unless `route` overrides `threadId`.
 
-Telegram serializes updates per conversation in FIFO order, so two messages for the same chat wait for each other. Different conversations still run concurrently; work the channel did not start in that session, such as a self-scheduled wake-up, is waited for: the message queues behind it.
+Messages for one chat are sent to its session in arrival order and steered into whatever is running there, including work the channel did not start, such as a self-scheduled wake-up. A refusal (the session already holds 20 queued messages) is told to the asker. Different conversations run concurrently.
 
 ## Streaming behavior
 
@@ -190,7 +189,7 @@ For development bots, surfacing `failed.details` is useful. For public bots, pre
 
 ## Stopping a running turn
 
-A `/stop` **addressed to this bot** aborts the chat's active turn (queued asks are independent and keep
+A `/stop` **addressed to this bot** aborts the chat's active turn (asks not yet taken are independent and keep
 running — send `/stop` again when one starts). No configuration is needed: stopping the running turn is
 part of serving.
 
@@ -234,8 +233,7 @@ The channel persists its state under `<state root>/channels/telegram/`:
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run.
 - `files/c-<chat>/` — downloaded inbound files, one directory per chat. Kept across restarts, and never pruned by FastAgent (see above).
 
-Turns queue in memory, one at a time per conversation, and each accepted turn is also recorded in `turns.json` before
-the webhook ACK:
+Each accepted turn is recorded in `turns.json` before the webhook ACK, and the answers already delivered in `delivered.json`:
 
 - A crash or rolling deploy mid-turn replays the turn on the next start. Its message was sent with the update's id as
   its key, so the replay finds the message already sent and reads its end rather than sending it again; the agent

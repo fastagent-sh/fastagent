@@ -22,6 +22,7 @@ import {
   type Agent,
   AgentError,
   type AgentErrorData,
+  type Message,
   type MessageStreamEvent,
   type SendRequest,
 } from "../../agent-api.ts";
@@ -34,6 +35,17 @@ import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
  * its session that belong to it through its `done` (SPEC.md §6.2).
  */
 export type TurnEvent = { type: "rejected"; error: AgentErrorData } | MessageStreamEvent;
+
+/**
+ * A turn that steers its message into a running session (SPEC.md §5.3) instead of queueing it behind the turn before,
+ * and what it tells the runner about that message.
+ */
+export interface SteeredTurn {
+  /** The message is recorded: the conversation's next input may be prepared and sent. */
+  admitted(): void;
+  /** The turn's own message ended. */
+  observe(message: Message): void;
+}
 
 /** An image a channel read from its platform, as a message carries it. */
 export interface ImageAttachment {
@@ -79,6 +91,7 @@ export function turnStream<R>(opts: {
    *  platform question — Slack reads its API error's status, and a transport that cannot tell says
    *  yes, since a retried download is cheap next to an unanswered ask. */
   retryableLoadFailure: (cause: unknown) => boolean;
+  steer: SteeredTurn;
 }): Stream.Stream<TurnEvent, PortFailure> {
   const rejected = (error: AgentErrorData) => Stream.succeed<TurnEvent>({ type: "rejected", error });
   return Stream.unwrap(
@@ -104,9 +117,17 @@ export function turnStream<R>(opts: {
           (leave) => Effect.sync(leave),
         );
       const { content, idempotencyKey } = opts.turn(resolved);
-      const request = { sessionId, content, idempotencyKey, whenBusy: "queue" } as const;
+      const request = { sessionId, content, idempotencyKey, whenBusy: "steer" } as const;
+      let messageId: string | undefined;
+      const watched = (event: TurnEvent): void => {
+        if (event.type === "message") {
+          messageId = event.message.id;
+          opts.steer.admitted();
+        } else if (event.type === "done" && event.message.id === messageId) opts.steer.observe(event.message);
+      };
       // A send the agent refused rejects the stream's first read: the turn's `rejected`, not a failure of its stream.
       return eventStream(() => opts.agent.messages.stream(request), `${opts.label} (session=${sessionId})`).pipe(
+        Stream.tap((event) => Effect.sync(() => watched(event))),
         Stream.scoped,
         Stream.catchCause((cause) => {
           const error = portError(cause);

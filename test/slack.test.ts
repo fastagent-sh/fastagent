@@ -250,13 +250,13 @@ afterEach(async () => {
 });
 
 describe("Slack turn", () => {
-  it("asks under the message's own key, queued, as the slack channel", async () => {
+  it("asks under the message's own key, steered, as the slack channel", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent("hello back");
     const { handler } = mount(agent);
     await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
     await settle();
-    expect(calls.map((c) => [c.idempotencyKey, c.whenBusy])).toEqual([["T1:D1:1.0", "queue"]]);
+    expect(calls.map((c) => [c.idempotencyKey, c.whenBusy])).toEqual([["T1:D1:1.0", "steer"]]);
   });
 });
 
@@ -935,16 +935,11 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8"))).toEqual({});
   });
 
-  it("re-delivers a recovered ANSWER without the agent, clearing the queued Agent status it waited under", async () => {
+  it("re-delivers a recovered ANSWER without the agent, and settles the ack the dead run left", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const stateRoot = root();
-    // Same session, DM thread (where the queue notice is an Agent status rather than a message): `first` runs and
-    // is gated, so `second` — which only owes a delivery — waits behind it and is given that status.
     writeTurns(stateRoot, {
-      // `first` has no thread, so it renders classically and never touches the Agent status — every status call
-      // below therefore belongs to `second`.
-      first: storedTurn("first", 1, { baseText: "run me", channelId: "D1", threadTs: undefined }),
       // A real logical id, so the ack on the asker's message (👀, added by the run that produced the answer) is
       // reachable from this record.
       "T1:D1:2.0": storedTurn("T1:D1:2.0", 2, {
@@ -953,35 +948,16 @@ describe("Slack sessions, context, and thread participation", () => {
         answer: "the answer nobody received",
       }),
     });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    const calls: Prompt[] = [];
-    const agent = scriptedAgent(async function* (request) {
-      yield ev.message();
-      calls.push(promptOf(request));
-      await gate;
-      yield ev.ended();
-    });
+    const { agent, calls } = replyingAgent("never asked");
     const { turnsIdle } = mount(agent, { aiDisclaimer: false }, stateRoot);
-
-    await vi.waitFor(() =>
-      expect(
-        slackBodies(fetchMock, "assistant.threads.setStatus").some((body) =>
-          String(body.status).includes("queued behind an earlier request"),
-        ),
-      ).toBe(true),
-    );
-    release();
     await turnsIdle();
 
-    expect(calls).toHaveLength(1); // only `first` asked the agent
+    expect(calls).toHaveLength(0); // the answer exists: delivering it costs a message, not a model call
     const delivered = [...slackBodies(fetchMock, "chat.postMessage"), ...slackBodies(fetchMock, "chat.update")].map(
       (body) => String(body.markdown_text ?? body.text),
     );
     expect(delivered).toContain("the answer nobody received");
-    // The status it waited under is this process's, so this process clears it.
-    expect(slackBodies(fetchMock, "assistant.threads.setStatus").map((body) => String(body.status))).toContain("");
-    // And the ack the dead run left on the asker's message becomes ✅ instead of staying 👀 forever.
+    // The ack the dead run left on the asker's message becomes ✅ instead of staying 👀 forever.
     expect(reactionCalls(fetchMock)).toEqual([
       { method: "reactions.remove", name: "eyes", channel: "D1", timestamp: "2.0" },
       { method: "reactions.add", name: "white_check_mark", channel: "D1", timestamp: "2.0" },
@@ -989,7 +965,7 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8"))).toEqual({});
   });
 
-  it("defers recovered turns when the attempt bump cannot persist and settles an existing queue preview", async () => {
+  it("defers recovered turns when the attempt bump cannot persist, keeping them whole and saying nothing", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1010,17 +986,8 @@ describe("Slack sessions, context, and thread participation", () => {
     >;
     expect(Object.keys(onDisk)).toEqual(["first", "second"]);
     expect(Object.values(onDisk).map((turn) => turn.attempts)).toEqual([0, 0]);
-    await vi.waitFor(() => {
-      expect(
-        slackBodies(fetchMock, "chat.update").some((body) =>
-          String(body.text).includes("Delayed by a temporary system issue"),
-        ),
-      ).toBe(true);
-    });
-    const customerText = [...slackBodies(fetchMock, "chat.postMessage"), ...slackBodies(fetchMock, "chat.update")]
-      .map((body) => String(body.text))
-      .join("\n");
-    expect(customerText).not.toContain("complete an earlier request");
+    const said = [...slackBodies(fetchMock, "chat.postMessage"), ...slackBodies(fetchMock, "chat.update")];
+    expect(said).toHaveLength(0);
   });
 });
 
@@ -1133,8 +1100,8 @@ describe("Slack Socket Mode channel", () => {
     await slack.say(delivery("E1", message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
     await vi.waitFor(() => expect(slack.sent).toEqual([{ envelope_id: "E1" }]));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    // The same turn as a signed delivery: asked under the message's own key, queued.
-    expect(calls.map((c) => [c.idempotencyKey, c.whenBusy])).toEqual([["T1:D1:1.0", "queue"]]);
+    // The same turn as a signed delivery: asked under the message's own key, steered.
+    expect(calls.map((c) => [c.idempotencyKey, c.whenBusy])).toEqual([["T1:D1:1.0", "steer"]]);
     // …and the answer goes back through the Web API, as it does for a signed one.
     await vi.waitFor(() =>
       expect(slack.fetchMock.mock.calls.some(([input]) => /\/chat\.[a-zA-Z]+$/.test(String(input)))).toBe(true),

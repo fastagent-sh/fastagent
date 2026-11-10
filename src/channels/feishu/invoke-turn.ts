@@ -23,6 +23,7 @@ import {
   backgroundImagesManifest,
   loadBackground,
   missingAttachmentsNote,
+  type SteeredTurn,
   turnStream,
   type TurnEvent,
   promptContent,
@@ -339,6 +340,7 @@ export function feishuTurnStream(
     enter?: (sessionId: string) => () => void;
     key: string;
     text: string;
+    steer: SteeredTurn;
   },
   transport: FeishuTurnTransport,
   attachments: FeishuTurnAttachments,
@@ -355,5 +357,6 @@ export function feishuTurnStream(
     }),
     // A resource fetch that failed may simply succeed on the redelivery.
     retryableLoadFailure: () => true,
+    steer: turn.steer,
   });
 }

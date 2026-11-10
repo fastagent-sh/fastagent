@@ -16,8 +16,11 @@ import {
 import { type Agent, type ErrorCode, agentError } from "../src/agent-api.ts";
 import { registerTelegramTransport } from "../src/channels/telegram/shared-api.ts";
 import { log } from "../src/log.ts";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { fauxDurableAgent } from "./faux.ts";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { MemoryStorage, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { obj } from "@earendil-works/pi-schema";
+import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
+import { fauxDurableAgent, makeFaux } from "./faux.ts";
 
 /** A faux Agent that records each invocation's prompt and replies with `reply`. */
 function replyingAgent(reply = "") {
@@ -313,8 +316,7 @@ describe("durable turn intent (crash recovery)", () => {
     );
     const { agent, calls } = replyingAgent("done");
     telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state }); // construction replays
-    await flush();
-    expect(String(calls[0]?.text)).toContain("recover me"); // ran with no new update
+    await vi.waitFor(() => expect(String(calls[0]?.text)).toContain("recover me")); // ran with no new update
     const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
     expect(Object.keys(after)).toHaveLength(0); // removed on completion
   });
@@ -348,11 +350,12 @@ describe("durable turn intent (crash recovery)", () => {
       }),
     );
     telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
-    await flush();
-    expect(requests.map((r) => [r.idempotencyKey, r.whenBusy])).toEqual([
-      ["5", "queue"],
-      ["9", "queue"],
-    ]);
+    await vi.waitFor(() =>
+      expect(requests.map((r) => [r.idempotencyKey, r.whenBusy])).toEqual([
+        ["5", "steer"],
+        ["9", "steer"],
+      ]),
+    );
   });
 
   it("re-delivers a recovered ANSWER as a fresh message, without asking the agent again", async () => {
@@ -454,8 +457,8 @@ describe("durable turn intent (crash recovery)", () => {
     expect(existsSync(join(state, "turns.json"))).toBe(false); // rolled back — no phantom intent on disk
   });
 
-  it("a DEFERRED turn deletes its ⏳ notice — it no longer reads as queued, and nothing else is said", async () => {
-    // The store's defer rule is turn-store's; what is telegram's is what happens to the notice.
+  it("a DEFERRED turn runs nothing, says nothing, and keeps its record for the next start", async () => {
+    // The store's defer rule is turn-store's; what is telegram's is that a deferral is silent and loses nothing.
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const state = freshStateDir();
@@ -469,7 +472,6 @@ describe("durable turn intent (crash recovery)", () => {
       fileIds: [],
       attempts: 0,
     });
-    // Two recovered turns on one session: the second is queued behind the first, so it holds a ⏳.
     writeFileSync(join(state, "turns.json"), JSON.stringify({ "8": record("8", "run me"), "9": record("9", "later") }));
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { agent, calls } = replyingAgent("done");
@@ -477,99 +479,152 @@ describe("durable turn intent (crash recovery)", () => {
     mkdirSync(join(state, "turns.json.tmp")); // every dequeue-time bump write now fails (EISDIR)
     await flush();
     expect(calls).toHaveLength(0); // both deferred — neither ran
-    const notices = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map((c) =>
-      bodyOf(c),
-    );
-    expect(notices.some((b) => String(b.text).includes("complete an earlier request"))).toBe(false); // not dropped
-    expect(callsTo(fetchMock, "deleteMessage")).toHaveLength(1); // the stale ⏳ is removed
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(0); // not dropped, not announced
     const onDisk = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
     expect(Object.keys(onDisk).sort()).toEqual(["8", "9"]); // retained intact for the next start
   });
 
-  it("a recovered ANSWER queued behind a sibling takes over its ⏳ notice too", async () => {
+  it("a recovered ANSWER on a session with another recovered turn is delivered once, as a fresh message", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const state = freshStateDir();
-    // Same session: 8 runs, so 9 — which only owes a delivery — waits behind it and is given a ⏳ notice by THIS
-    // process. Its own preview died with the run that produced the answer; this one did not.
+    const base = { conversation: "s", placeKey: "s", chatId: 42, imageFileIds: [], fileIds: [], attempts: 0 };
     writeFileSync(
       join(state, "turns.json"),
       JSON.stringify({
-        "8": {
-          id: "8",
-          conversation: "s",
-          placeKey: "s",
-          baseText: "run me",
-          chatId: 42,
-          imageFileIds: [],
-          fileIds: [],
-          attempts: 0,
-        },
-        "9": {
-          id: "9",
-          conversation: "s",
-          placeKey: "s",
-          baseText: "answered already",
-          chatId: 42,
-          imageFileIds: [],
-          fileIds: [],
-          attempts: 0,
-          answer: "the answer nobody received",
-        },
+        "8": { ...base, id: "8", baseText: "run me" },
+        "9": { ...base, id: "9", baseText: "answered already", answer: "the answer nobody received" },
       }),
     );
     const { agent, calls } = replyingAgent("done");
     telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
-    await flush();
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({}));
     expect(calls).toHaveLength(1); // only 8 asked the agent; 9 owed a delivery, not a turn
-    const edits = callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c));
-    expect(edits.some((b) => String(b.text) === "the answer nobody received")).toBe(true); // took over ⏳
-    // 8's preview placeholder and 9's ⏳ — no third message left the recovered answer beside an orphan notice.
-    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(2);
-    expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({});
+    const texts = callsTo(fetchMock, "sendMessage").map((c) => String(bodyOf(c).text));
+    expect(texts.filter((text) => text === "the answer nobody received")).toHaveLength(1);
   });
 
-  it("a poison turn queued behind a sibling takes over its ⏳ notice (no orphan, no double-post)", async () => {
+  it("a poison turn is dropped and told, while its sibling on the session still runs", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const state = freshStateDir();
-    // Same session: update 8 completes, update 9 is over the ceiling. Written out of order (9 first) so
-    // recovery's numeric-id sort — not on-disk order — decides FIFO: 8 runs, 9 is "queued behind" it and
-    // gets a ⏳ notice; when 9 is dropped it must edit that notice, not orphan it + double-post.
+    // Written out of order (9 first): recovery's numeric-id sort decides which is first, not on-disk order.
+    const base = { conversation: "s", placeKey: "s", chatId: 42, imageFileIds: [], fileIds: [] };
     writeFileSync(
       join(state, "turns.json"),
       JSON.stringify({
-        "9": {
-          id: "9",
-          conversation: "s",
-          placeKey: "s",
-          baseText: "poison",
-          chatId: 42,
-          imageFileIds: [],
-          fileIds: [],
-          attempts: 3,
-        },
-        "8": {
-          id: "8",
-          conversation: "s",
-          placeKey: "s",
-          baseText: "run me",
-          chatId: 42,
-          imageFileIds: [],
-          fileIds: [],
-          attempts: 0,
-        },
+        "9": { ...base, id: "9", baseText: "poison", attempts: 3 },
+        "8": { ...base, id: "8", baseText: "run me", attempts: 0 },
       }),
     );
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { agent, calls } = replyingAgent("done");
     telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
-    await flush();
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({}));
     expect(calls).toHaveLength(1); // only update 8 ran; 9 was dropped before running
-    const edits = callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c));
-    expect(edits.some((b) => String(b.text).includes("complete an earlier request"))).toBe(true); // took over ⏳
-    const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
-    expect(Object.keys(after)).toHaveLength(0); // 8 completed, 9 dropped
+    const texts = callsTo(fetchMock, "sendMessage").map((c) => String(bodyOf(c).text));
+    expect(texts.filter((text) => text.includes("complete an earlier request"))).toHaveLength(1);
+  });
+});
+
+describe("inputs steered into one run (real Agent)", () => {
+  /** A durable Agent whose `work` tool holds the run open until `release()`, answering `shared` when it ends. */
+  async function holdingAgent(answers: { shared: string; first: string }) {
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { faux, models } = makeFaux();
+    const model = faux.getModel();
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("work", {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage(answers.shared), // the run ends with this after the steered input was taken
+    ]);
+    const registry = createRegistry();
+    registry.install(
+      defineExtension({
+        name: "hold",
+        tools: [
+          defineTool({
+            name: "work",
+            description: "waits",
+            parameters: obj({}),
+            execute: async () => {
+              await held;
+              return { output: [{ type: "text", text: "worked" }] };
+            },
+          }),
+        ],
+      }),
+    );
+    const agent = await openDurableAgent({
+      storage: new MemoryStorage(),
+      models,
+      registry,
+      name: "faux",
+      model: { provider: model.provider, modelId: model.id },
+    });
+    return { agent, release };
+  }
+
+  it("delivers the answer two inputs share once, also when a restart replays the second one", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const state = freshStateDir();
+    const { agent, release } = await holdingAgent({ shared: "the shared answer", first: "" });
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
+    const upd = (n: number, text: string) => ({
+      update_id: n,
+      message: { message_id: n, text, chat: { id: 7, type: "private" } },
+    });
+
+    await ch(tgRequest(upd(1, "start the work")));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await ch(tgRequest(upd(2, "and keep the old column")));
+    await vi.waitFor(async () => {
+      const second = await agent.messages.get({
+        sessionId: (await agent.sessions.list()).data[0]?.id ?? "",
+        idempotencyKey: "2",
+      });
+      expect(second.status).toBe("queued");
+    });
+    release();
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({}));
+
+    const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+    const first = await agent.messages.get({ sessionId, idempotencyKey: "1" });
+    const second = await agent.messages.get({ sessionId, idempotencyKey: "2" });
+    // The premise: the Agent took the second input into the first one's run, so both ended with one answer.
+    expect(second.answer?.entryId).toBeDefined();
+    expect(second.answer?.entryId).toBe(first.answer?.entryId);
+
+    // One message in the chat: the first turn's preview. The second turn sent no placeholder and no answer of its own.
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1);
+    const edits = callsTo(fetchMock, "editMessageText").map((c) => String(bodyOf(c).text));
+    expect(edits.at(-1)).toContain("the shared answer");
+    const delivered = JSON.parse(readFileSync(join(state, "delivered.json"), "utf8")) as string[];
+    expect(delivered).toEqual([`${sessionId}:${first.answer?.entryId}`]);
+
+    // A crash left the second input's record behind after the first one delivered. The restart sends it again under
+    // its key, which finds the message the Agent already ended with that answer: nothing is sent twice.
+    writeFileSync(
+      join(state, "turns.json"),
+      JSON.stringify({
+        "2": {
+          id: "2",
+          conversation: "7",
+          placeKey: "7",
+          baseText: "and keep the old column",
+          chatId: 7,
+          imageFileIds: [],
+          fileIds: [],
+          attempts: 1,
+        },
+      }),
+    );
+    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({}));
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1);
   });
 });
 
@@ -810,63 +865,31 @@ describe("queue feedback (⏳ while a session is busy)", () => {
     message: { message_id: id, text, chat: { id: 5, type: "private" } },
   });
 
-  it("a second ask in a busy session gets an immediate ⏳ notice, which its turn then takes over", async () => {
-    const { sends, edits } = recordingFetch();
+  it("a second ask in a busy session is sent at once, steered, with no queue notice", async () => {
+    const { sends } = recordingFetch();
     let release!: () => void;
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    let call = 0;
-    const agent = scriptedAgent(async function* (_request) {
+    const requests: Asked[] = [];
+    const agent = scriptedAgent(async function* (request) {
+      requests.push(asked(request));
       yield ev.message();
-      if (++call === 1) {
-        await gate;
-        yield ev.ended();
-        return;
-      }
-      yield ev.text("answer two");
+      if (requests.length === 1) await gate;
+      yield ev.text(`answer ${requests.length}`);
       yield ev.ended();
     });
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}) });
     await ch(tgRequest(msg(1, "first")));
     await flush(); // turn 1 is mid-flight, parked on the gate
     await ch(tgRequest(msg(2, "second")));
-    await flush();
-    const notice = sends.find((s) => s.text.includes("⏳"));
-    expect(notice).toBeDefined(); // the asker heard back WHILE turn 1 was still running
-    release();
-    await flush();
-    // turn 2's live preview + final answer took over the SAME message — the notice morphs, no orphan ⏳
-    expect(edits.some((e) => e.message_id === notice?.id && e.text.includes("answer two"))).toBe(true);
-    // and turn 2 never sent a second placeholder of its own
-    expect(sends.filter((s) => s.text.includes("💭")).length).toBeLessThanOrEqual(1); // only turn 1's
-  });
-
-  it("in a group, the ⏳ notice reply-quotes the QUEUED asker — whose ask is waiting is visible", async () => {
-    const { sends } = recordingFetch();
-    let release!: () => void;
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
-    let call = 0;
-    const agent = scriptedAgent(async function* (_request) {
-      yield ev.message();
-      if (++call === 1) {
-        await gate;
-      }
-      yield ev.ended();
-    });
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}) });
-    const g = (id: number, text: string, from: string) => ({
-      update_id: id,
-      message: { message_id: id, text, chat: { id: -100, type: "supergroup" }, from: { id, username: from } },
-    });
-    await ch(tgRequest(g(11, "first ask", "alice")));
-    await flush();
-    await ch(tgRequest(g(22, "second ask", "bob")));
-    await flush();
-    const notice = sends.find((s) => s.text.includes("⏳"));
-    expect(notice?.replyTo).toBe(22); // quoted to BOB's message — not alice's, not unquoted
+    await vi.waitFor(() =>
+      expect(requests.map((r) => [r.idempotencyKey, r.whenBusy])).toEqual([
+        ["1", "steer"],
+        ["2", "steer"],
+      ]),
+    );
+    expect(sends.some((s) => s.text.includes("⏳"))).toBe(false);
     release();
   });
 
@@ -1308,24 +1331,17 @@ describe("telegram channel", () => {
     expect(sent.reply_parameters).toBeUndefined(); // redirected → no quote (avoids a wrong-target reply)
   });
 
-  it("serializes same-session turns (FIFO) instead of dropping the second as 'busy'", async () => {
-    let started = 0;
-    let inFlight = 0;
-    let maxInFlight = 0;
-    const order: number[] = [];
+  it("sends a same-session input steered, in arrival order, without waiting for the earlier answer", async () => {
     let release1 = (): void => {};
     const gate1 = new Promise<void>((r) => {
       release1 = r;
     });
-    const agent = scriptedAgent(async function* (_request) {
+    const requests: Asked[] = [];
+    const agent = scriptedAgent(async function* (request) {
+      requests.push(asked(request));
       yield ev.message();
-      const id = ++started;
-      inFlight++;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      if (id === 1) await gate1; // hold the first turn open while the second arrives
-      inFlight--;
-      order.push(id);
-      yield ev.text(`r${id}`);
+      if (requests.length === 1) await gate1; // hold the first answer open while the second arrives
+      yield ev.text(`r${requests.length}`);
       yield ev.ended();
     });
     vi.stubGlobal(
@@ -1337,20 +1353,17 @@ describe("telegram channel", () => {
       update_id: n,
       message: { message_id: n, text: "yo", chat: { id: 7, type: "private" } },
     });
-    const settle = async (): Promise<void> => {
-      for (let k = 0; k < 6; k++) await new Promise((r) => setImmediate(r));
-    };
 
-    await ch(tgRequest(upd(1))); // session "7"
-    await ch(tgRequest(upd(2))); // session "7" — queued behind #1, not run concurrently, not dropped
-    await settle();
-    expect(started).toBe(1); // only turn 1 has invoked; turn 2 waits its turn
-    expect(maxInFlight).toBe(1);
-
+    await ch(tgRequest(upd(1)));
+    await ch(tgRequest(upd(2)));
+    // The second is sent while the first is still held open: the Agent, not the channel, orders what runs.
+    await vi.waitFor(() =>
+      expect(requests.map((r) => [r.idempotencyKey, r.whenBusy])).toEqual([
+        ["1", "steer"],
+        ["2", "steer"],
+      ]),
+    );
     release1();
-    await settle();
-    expect(order).toEqual([1, 2]); // FIFO
-    expect(maxInFlight).toBe(1); // never two at once for the same session
   });
 
   it("runs different sessions concurrently (no cross-session blocking)", async () => {

@@ -48,14 +48,7 @@ import {
   placeKey,
   senderId,
 } from "./parse.ts";
-import {
-  type FeishuFailure,
-  type MountedFeishuPreview,
-  defaultErrorMessage,
-  mountFeishuPreview,
-  settleFeishuPreview,
-  feishuReply,
-} from "./preview.ts";
+import { type FeishuFailure, defaultErrorMessage, settleFeishuPreview, feishuReply } from "./preview.ts";
 import { connectFeishuWs } from "./ws-ingress.ts";
 import { registerFeishuApi } from "./shared-api.ts";
 
@@ -72,15 +65,6 @@ const MAX_EVENT_BYTES = 1 << 20;
  */
 const MAX_SIGNATURE_AGE_S = 7 * 60 * 60;
 
-/**
- * Queue feedback is immediate by default: it is the user's acknowledgement that this exact ask was accepted behind
- * another turn.
- */
-const QUEUE_NOTICE_DELAY_MS = 0;
-
-const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task finishes.";
-const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
-
 /** The persisted turn intent (what the runner needs to re-execute it). */
 interface StoredFeishuTurn extends TurnRecordBase {
   // `id` is the message_id (the platform delivery identity); `seq` carries arrival order.
@@ -95,7 +79,6 @@ interface StoredFeishuTurn extends TurnRecordBase {
   chatId: string;
   replyTo?: string;
   /** Source message to quote when queue feedback mounts. */
-  queueReplyTo?: string;
   replyInThread?: boolean;
   parentId?: string;
   /** The conversation of the room this thread branched from (§5 lineage): a new thread's session forks the room's. */
@@ -124,7 +107,6 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     typeof r.askAt === "number" &&
     typeof r.chatId === "string" &&
     (r.replyTo === undefined || typeof r.replyTo === "string") &&
-    (r.queueReplyTo === undefined || typeof r.queueReplyTo === "string") &&
     (r.replyInThread === undefined || typeof r.replyInThread === "boolean") &&
     (r.parentId === undefined || typeof r.parentId === "string") &&
     (r.parentConversation === undefined || typeof r.parentConversation === "string") &&
@@ -135,11 +117,8 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
   );
 }
 
-/** One accepted turn: the persisted intent plus live-only fields. */
-interface PendingFeishuTurn extends Omit<StoredFeishuTurn, "attempts"> {
-  /** The queue-status card/text, when its delayed mount fired. */
-  preview?: MountedFeishuPreview;
-}
+/** One accepted turn: the persisted intent. */
+type PendingFeishuTurn = Omit<StoredFeishuTurn, "attempts">;
 
 interface FeishuChannelBaseOptions {
   /** App ID (developer console → Credentials & Basic Info). */
@@ -152,8 +131,6 @@ interface FeishuChannelBaseOptions {
   onError?: (failed: FeishuFailure) => string | undefined;
   /** API origin override (tests / self-hosted gateways). */
   apiBaseUrl?: string;
-  /** How long (ms) a turn waits before its reply-quoted "⏳ Queued" card mounts. */
-  queueNoticeDelayMs?: number;
 }
 
 export interface FeishuChannelOptions extends FeishuChannelBaseOptions {
@@ -257,7 +234,7 @@ function createFeishuRuntimeFactory(
   opts: FeishuChannelBaseOptions,
   factoryName: string,
 ): (ctx: ChannelContext) => FeishuRuntime {
-  const { appId, appSecret, route, onError, queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS } = opts;
+  const { appId, appSecret, route, onError } = opts;
   const baseUrl = opts.apiBaseUrl ?? profile.apiBase;
   const { kind } = profile;
   const label = `[${kind}]`;
@@ -329,17 +306,12 @@ function createFeishuRuntimeFactory(
       replyTo: r.replyTo,
       replyInThread: r.replyInThread,
     });
-    const queueTargetOf = (r: PendingFeishuTurn): FeishuTarget => ({
-      chatId: r.chatId,
-      replyTo: r.queueReplyTo,
-      replyInThread: r.replyInThread,
-    });
 
     // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
     // operator log line.
     const notifyDropped = (r: PendingFeishuTurn): void => {
       const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-      void settleFeishuPreview(placeApi(r.historyKey), targetOf(r), r.preview, body).catch((e) =>
+      void settleFeishuPreview(placeApi(r.historyKey), targetOf(r), undefined, body).catch((e) =>
         log.warn(`${label} could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
       );
     };
@@ -349,56 +321,16 @@ function createFeishuRuntimeFactory(
       store,
       discussion: history,
       seen,
-      toStored: ({ preview: _live, ...intent }) => ({ ...intent, attempts: 0 }),
-      fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, preview: undefined }),
+      delivered: createSeenRing(join(stateHome, "delivered.json"), label),
+      toStored: (intent) => ({ ...intent, attempts: 0 }),
+      fromStored: ({ attempts: _a, ...intent }) => intent,
       discussionKey: (rec) =>
         rec.historyKey === undefined ? undefined : { key: rec.historyKey, until: { at: rec.askAt, id: rec.id } },
       where: (rec) => `chat=${rec.chatId}`,
-      // Queue feedback: mount that turn's preview early with a queue status.
-      onQueuedBehind: (rec) => {
-        let fired = false;
-        let settle: () => void = () => {};
-        const done = new Promise<void>((resolve) => {
-          settle = resolve;
-        });
-        const mount = (): void => {
-          fired = true;
-          mountFeishuPreview(placeApi(rec.historyKey), queueTargetOf(rec), QUEUED_PLACEHOLDER, label)
-            .then(
-              (preview) => {
-                rec.preview = preview;
-              },
-              (e) => log.warn(`${label} queue preview failed (the turn still runs): ${String(e)}`),
-            )
-            .finally(settle);
-        };
-        const timer = queueNoticeDelayMs > 0 ? setTimeout(mount, queueNoticeDelayMs) : undefined;
-        if (timer === undefined) mount();
-        return {
-          done,
-          // A no-op once mounting started — the send is in flight and `done` settles with it.
-          cancel: () => {
-            if (!fired) {
-              if (timer !== undefined) clearTimeout(timer);
-              settle();
-            }
-          },
-        };
-      },
-      // Do not recall an existing queue preview (the client exposes a confusing tombstone): settle it in place to an
-      // honest delayed status.
-      onDeferred: (rec) => {
-        if (rec.preview !== undefined) {
-          void settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), rec.preview, DEFERRED_PLACEHOLDER).catch(
-            (e) => log.warn(`${label} could not update a deferred turn's queue preview: ${String(e)}`),
-          );
-        }
-      },
       notifyDropped,
-      // `rec.preview`: the queue card THIS process mounted if the record waited behind another turn.
       deliverAnswer: (rec, answer) =>
-        portJoin(() => settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), rec.preview, answer)),
-      execute: (rec, discussion, onAnswered) =>
+        portJoin(() => settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), undefined, answer)),
+      execute: (rec, discussion, onAnswered, hooks) =>
         Effect.promise(async () =>
           // Read-only: the room's own next answered turn still reads it into the room's memory (§8).
           rec.roomKey !== undefined ? history.room(rec.roomKey) : undefined,
@@ -424,7 +356,7 @@ function createFeishuRuntimeFactory(
             const threadsRoom =
               rec.group && rec.historyKey !== undefined ? feishuPlaceOf(rec.historyKey).chatId : undefined;
             const turnApi = placeApi(rec.historyKey);
-            return feishuReply(
+            return hooks.reply(
               feishuTurnStream(
                 agent,
                 {
@@ -441,6 +373,7 @@ function createFeishuRuntimeFactory(
                     : { enter: (sessionId: string) => rooms.enter(sessionId, threadsRoom) }),
                   key: rec.id,
                   text: prompt,
+                  steer: hooks,
                 },
                 {
                   api: turnApi,
@@ -451,12 +384,7 @@ function createFeishuRuntimeFactory(
                 },
                 { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
               ),
-              turnApi,
-              targetOf(rec),
-              formatError,
-              rec.preview,
-              label,
-              onAnswered,
+              (events) => feishuReply(events, turnApi, targetOf(rec), formatError, label, onAnswered),
             );
           }),
         ),
@@ -545,7 +473,6 @@ function createFeishuRuntimeFactory(
       // thread is a place too, and relocating out of it is the silent move the model refuses.
       const replyTo = sameTarget && (m.chat_type === "group" || m.thread_id !== undefined) ? m.message_id : undefined;
       const replyInThread = replyTo !== undefined && m.thread_id !== undefined ? true : undefined;
-      const queueReplyTo = sameTarget ? m.message_id : undefined;
       // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
       if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
         seen.add(m.message_id);
@@ -581,7 +508,6 @@ function createFeishuRuntimeFactory(
           askAt,
           chatId,
           replyTo,
-          queueReplyTo,
           replyInThread,
           // A quote is the user explicitly pointing at something that may predate this session (§8 rung 2), so it is
           // always loaded.

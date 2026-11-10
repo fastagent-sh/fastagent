@@ -171,7 +171,6 @@ function streamClassicSlackReply(
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
-  initialPreviewTs: string | undefined,
   disclaimer: string | false | undefined,
   label: string,
   onAnswered?: (answer: string) => void,
@@ -183,9 +182,9 @@ function streamClassicSlackReply(
     // sanitizing and delivery. Reasoning stays a static "Thinking…" here: raw chain-of-thought is not
     // customer-facing on Slack, so the reducer accumulates it but this view never reads it.
     const turn = createTurnView();
-    let previewTs = initialPreviewTs;
-    let previewAttempted = previewTs !== undefined;
-    let lastMutationAt = previewTs ? now() : 0;
+    let previewTs: string | undefined;
+    let previewAttempted = false;
+    let lastMutationAt = 0;
     let lastSent = "";
 
     const view = (): string =>
@@ -262,7 +261,6 @@ function streamNativeSlackReply(
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
-  initialPreviewTs: string | undefined,
   threadTitle: string | undefined,
   disclaimer: string | false | undefined,
   label: string,
@@ -438,15 +436,6 @@ function streamNativeSlackReply(
       }),
     );
     yield* portJoin(async () => {
-      if (initialPreviewTs) {
-        await api
-          .deleteMessage(target.channelId, initialPreviewTs)
-          .catch((error) =>
-            log.warn(
-              `${label} could not remove the compatibility queue notice before native streaming: ${String(error)}`,
-            ),
-          );
-      }
       if (target.channelId.startsWith("D")) {
         await Promise.all([
           api
@@ -559,7 +548,6 @@ export function slackReply(
   formatError: (failure: SlackFailure) => string | undefined,
   options: {
     rendering?: SlackRendering;
-    initialPreviewTs?: string;
     threadTitle?: string;
     disclaimer?: string | false;
     label?: string;
@@ -567,23 +555,13 @@ export function slackReply(
   } = {},
 ) {
   return Effect.suspend(() => {
-    const { rendering = "native", initialPreviewTs, threadTitle, disclaimer, label = "[slack]", onAnswered } = options;
+    const { rendering = "native", threadTitle, disclaimer, label = "[slack]", onAnswered } = options;
     if (rendering === "native" && target.threadTs) {
-      return streamNativeSlackReply(
-        events,
-        api,
-        target,
-        formatError,
-        initialPreviewTs,
-        threadTitle,
-        disclaimer,
-        label,
-        onAnswered,
-      );
+      return streamNativeSlackReply(events, api, target, formatError, threadTitle, disclaimer, label, onAnswered);
     }
     if (rendering === "native") {
       log.info(`${label} native streaming needs a thread target — using the classic renderer for this turn`);
     }
-    return streamClassicSlackReply(events, api, target, formatError, initialPreviewTs, disclaimer, label, onAnswered);
+    return streamClassicSlackReply(events, api, target, formatError, disclaimer, label, onAnswered);
   });
 }

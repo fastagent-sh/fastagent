@@ -318,8 +318,7 @@ longer holds (it was reset, or restored from an older copy) is replaced, and the
 
 A message that arrives while its session is busy queues behind the ones before it by default, is handed to the running
 work with `whenBusy: "steer"`, or is refused `busy` with `whenBusy: "reject"`, which is how a schedule's occurrence is
-skipped. Telegram, Slack and Feishu/Lark also serialize their own turns per conversation (§7), because each turn reads
-its discussion when it starts.
+skipped. Telegram, Slack and Feishu/Lark steer every turn and send a conversation's turns in arrival order (§7).
 
 ## 7. Channels and hosting
 
@@ -395,12 +394,19 @@ intent before committing the exact discussion snapshot consumed (a buffer's entr
 cursor); later discussion waits for the next answered turn. Effect
 interruption and process termination preserve unfinished intent for recovery.
 
-A turn is one message (`invoke-turn-kit.ts` `turnStream`, over `messages.stream`): `whenBusy: "queue"`, so a collision with
-work the channel did not start (a wake-up, a schedule) waits behind it, and `idempotencyKey` set to the turn's platform
-message id, so a turn the store replays after a restart is the message it already sent: one that ended is read back,
-answer included. The channel's own queue still serializes its turns, because
-a turn's discussion and attachments are read when it starts, not when it arrives. The stream pulls only on downstream
-demand; a reader that leaves only detaches, so the work goes on.
+A turn is one message (`invoke-turn-kit.ts` `turnStream`, over `messages.stream`): `whenBusy: "steer"`, so it is taken at the
+running work's next step, and `idempotencyKey` set to the turn's platform message id, so a turn the store replays after a
+restart is the message it already sent: one that ended is read back, answer included. The channel's queue
+(`turn-queue.ts`) orders a conversation's turns up to the point their message is recorded with the Agent, not through
+its answer: a turn's discussion and attachments are read when it starts, and the next turn starts once the earlier one
+has admitted its message (`TurnHooks.admitted`). The stream pulls only on downstream demand; a reader that leaves only
+detaches, so the work goes on.
+
+Inputs steered into one run end with one shared answer. The runner delivers it once per `<session>:<entry>`
+(`delivered.json`, recorded before the intent is dropped): a turn that began while an earlier one was running, or that
+runs again after a restart, is held back (`turn-gate.ts`) until its own message ends and renders nothing when its answer
+was delivered already. A turn that was not held renders live. A turn skipped that way does not commit the discussion it
+read, so it is read again by the next turn.
 
 `delivery.ts` owns coalescing preview fibers and ordered native append/status queues. A preview starts
 its first write synchronously, cancels pending pacing at finish, and joins an issued write before the
@@ -431,8 +437,7 @@ A record's `answer` separates the two events the intent used to conflate. It is 
 text is known and about to be sent (the renderer's `onAnswered`, before the terminal write), and the
 intent is dropped only once that write settles. So a record recovered on the next start is one of two
 things: without `answer`, a turn to run; with it, an answer to deliver — no model, no tools, and no
-preview of its own to resume (a queue notice THIS process put up is still taken over, as any turn
-would). A caught delivery failure keeps the record for the same reason. The
+preview of its own to resume. A caught delivery failure keeps the record for the same reason. The
 policy where the platform cannot prove whether a send landed is **a duplicate over a loss**.
 `MAX_TURN_ATTEMPTS` bounds it, but it is a ceiling on EXECUTION: the attempt that hits it sends a
 recorded answer one last time instead of running the turn, since a send costs no model call and cannot
@@ -515,9 +520,8 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
 
 - **The live preview is a streaming card, not an edited text message.** The platform caps text edits at
   20 per message and sends at 5 QPS per chat; cardkit streaming (50 QPS per app / 10 per card, strictly
-  increasing `sequence`) is its designed AI-output channel. A queued turn mounts that same card early
-  with a reply-quoted `⏳ Queued` state; execution takes the entity over in place and the card settles
-  into the final Markdown answer, so there is no recall tombstone or ambiguous second reply. Degrade
+  increasing `sequence`) is its designed AI-output channel. A turn mounts that card on its first write and
+  the card settles into the final Markdown answer, so there is no recall tombstone or ambiguous second reply. Degrade
   tiers: card fails → static text placeholder; streaming closed mid-turn → frozen preview, the settle
   still lands.
 - **Verification is modal and fail-closed.** With an Encrypt Key, ordinary events require a signature
@@ -536,8 +540,8 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   map; a new thread's session forks its room's at the message its reply chain names. A room keeps one
   memory everyone in it shares; a side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the
   platform's `root_id` tracks the reply chain and can differ between messages of one thread, which
-  would split a side conversation across conversations and history reads. One place stays FIFO while
-  different places run concurrently — the concurrency unit is the place because the causal unit is.
+  would split a side conversation across conversations and history reads. A place's turns are sent in arrival order and steered
+  into its session while different places run concurrently — the concurrency unit is the place because the causal unit is.
   The rules are derived in [participant-model.md](participant-model.md); there is no session-mode
   option.
 - **Speaking is gated by who is in the place, listening is not.** Direct messages always answer; a

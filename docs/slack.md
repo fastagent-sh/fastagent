@@ -192,7 +192,7 @@ additionally requires a thread, but the shape does not depend on the renderer: `
 answer the same way.
 
 Follow-ups therefore live in the thread, which is also where Slack's own conventions put them. Two
-different threads run concurrently; turns within one are FIFO.
+different threads run concurrently. A message in a thread whose agent is busy is sent at once and steered into the running work; if the agent takes it before the run ends, both messages share one answer, which is delivered once.
 
 Override `route(envelope)` for custom policy. It returns `null` to ignore or a `SlackRoute` with optional
 `conversation`, `channelId`, `threadTs`, and `text`. `threadTs: null` explicitly sends at channel top level.
@@ -226,7 +226,7 @@ messages from Slack (`conversations.history` for the top level, `conversations.r
 was said since the Agent last answered there into the prompt, as `[recent discussion here: …]`. The first turn in a
 place reads its newest 20 messages. The read ends at the turn's own ask: an ask queued behind it, and anything said
 after it, are read by their own turn. Within that, the read leaves out what the session already holds: every message
-the channel posted as a turn's output (answers, queue notices, stop feedback), and the messages it took as input. An
+the channel posted as a turn's output (answers, stop feedback), and the messages it took as input. An
 answer is left out of the place it lands in: the Agent answers a top-level ask in a thread under it, so the answer
 belongs to that thread. What the Agent posted itself, with `slack-send` from a schedule for example, stays, labelled
 `you`, so a later "what did point 3 mean?" has it.
@@ -369,7 +369,7 @@ duplicate. The tool does not hide that uncertainty with an automatic final-step 
 ## Stopping a running turn
 
 A DM or @mention whose whole message is "stop" or "cancel" aborts that conversation's active turn
-instead of becoming a turn. Queued asks are independent and keep running — stop the next one when it
+instead of becoming a turn. Asks not yet taken are independent and keep running — stop the next one when it
 starts. No configuration is needed: stopping the running turn is part of serving.
 
 ## Durability and state

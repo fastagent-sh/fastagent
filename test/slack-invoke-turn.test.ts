@@ -69,7 +69,7 @@ describe("Slack turn attachment resolution", () => {
       Stream.runDrain(
         slackTurnStream(
           agent,
-          { session: async () => "s", key: "k", text: "read it" },
+          { session: async () => "s", key: "k", text: "read it", steer: { admitted: () => {}, observe: () => {} } },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           { primaryFileIds: ["F1"], buffered: { files: [], skipped: 0 } },
         ),
@@ -103,7 +103,7 @@ describe("Slack turn attachment resolution", () => {
       Stream.runCollect(
         slackTurnStream(
           agent,
-          { session: async () => "s1", key: "k", text: "read these" },
+          { session: async () => "s1", key: "k", text: "read these", steer: { admitted: () => {}, observe: () => {} } },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           { primaryFileIds: ["IMG", "DOC"], buffered: { files: [], skipped: 0 } },
         ),
@@ -123,7 +123,7 @@ describe("Slack turn attachment resolution", () => {
       Stream.runCollect(
         slackTurnStream(
           agent,
-          { session: async () => "s1", key: "k", text: "read it" },
+          { session: async () => "s1", key: "k", text: "read it", steer: { admitted: () => {}, observe: () => {} } },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           { primaryFileIds: ["F1"], buffered: { files: [], skipped: 0 } },
         ),
@@ -150,7 +150,7 @@ describe("Slack turn attachment resolution", () => {
       Stream.runCollect(
         slackTurnStream(
           scriptedAgent((request) => scriptedRun(request)),
-          { session: async () => "s1", key: "k", text: "read it" },
+          { session: async () => "s1", key: "k", text: "read it", steer: { admitted: () => {}, observe: () => {} } },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           { primaryFileIds: ["F1"], buffered: { files: [], skipped: 0 } },
         ),
@@ -175,7 +175,7 @@ describe("Slack turn attachment resolution", () => {
       Stream.runDrain(
         slackTurnStream(
           agent,
-          { session: async () => "s1", key: "k", text: "answer" },
+          { session: async () => "s1", key: "k", text: "answer", steer: { admitted: () => {}, observe: () => {} } },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           {
             primaryFileIds: [],

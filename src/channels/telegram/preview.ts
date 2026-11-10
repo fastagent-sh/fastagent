@@ -82,19 +82,9 @@ async function finalize(
   await sendMessage(api, botToken, target, text, { html });
 }
 
-/**
- * Deliver a reply this process did not generate: a recovered answer. The run that produced it is gone with its
- * preview, but a "⏳ Queued" notice THIS process put up while the record waited its turn is still there — so the
- * same terminal-write policy applies, taking that message over rather than leaving it pinned above the answer.
- */
-export function deliverTelegramAnswer(
-  api: string,
-  botToken: string,
-  target: Target,
-  text: string,
-  previewId?: number,
-): Promise<void> {
-  return finalize(api, botToken, target, previewId, text);
+/** Deliver a reply this process did not generate: a recovered answer. The run that produced it is gone with its preview. */
+export function deliverTelegramAnswer(api: string, botToken: string, target: Target, text: string): Promise<void> {
+  return finalize(api, botToken, target, undefined, text);
 }
 
 /**
@@ -108,7 +98,6 @@ export function telegramReply(
   botToken: string,
   target: Target,
   formatError: (failed: TelegramFailure) => string | undefined,
-  previewId?: number,
   onAnswered?: (answer: string) => void,
 ) {
   return Effect.gen(function* () {
@@ -130,10 +119,8 @@ export function telegramReply(
 
     // The live preview is ONE real message: sent once (capturing its id + threading under the asker),
     // then edited in place. messageId/lastSent are shared with the final write on completion.
-    // `previewId`: an already-sent message to take over as the preview (the "⏳ queued" notice) — the
-    // pump edits it in place, so the queue notice morphs into the live view instead of leaving an orphan.
-    let messageId: number | undefined = previewId;
-    let previewSent = messageId !== undefined; // a placeholder send was attempted — guards against re-sending when no id came back
+    let messageId: number | undefined;
+    let previewSent = false; // a placeholder send was attempted — guards against re-sending when no id came back
     let lastSent = "";
     const flushPreview = async (): Promise<void> => {
       const text = view();

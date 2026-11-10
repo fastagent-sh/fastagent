@@ -305,7 +305,7 @@ A place is a chat (a group or a DM) or a thread in one. When a turn runs, the ch
 the platform (`GET /im/v1/messages`) and folds what was said since the Agent last answered there into the prompt, as
 `[recent discussion here: …]`. The first turn in a place reads its newest 20 messages. The read ends at the turn's
 own ask: an ask queued behind it, and anything said after it, are read by their own turn. Within that, the read leaves
-out what the session already holds: every message the channel posted as a turn's output (answers, queue notices, stop
+out what the session already holds: every message the channel posted as a turn's output (answers, stop
 feedback), and the messages it took as input (`/stop`). What the Agent posted itself, with `feishu-send` from a
 schedule for example, stays, labelled `you`, so a later "what did point 3 mean?" has it.
 
@@ -384,20 +384,17 @@ nor the context bucket. A message that quotes another always loads it as referen
 inside a thread or out of it — a quote is the user pointing at something that may predate the session.
 An unreadable referent degrades to a marker instead of failing the turn.
 
-Turns are serialized per conversation (FIFO). Since the conversation is
-the place, **a whole group room is one queue**: a second person's `@Agent` in a busy room waits behind
-an unrelated multi-minute turn (they see the "⏳ Queued" card). Different places
-run concurrently, which is why a thread is the way to start work that should not queue behind the
-room. Any turn queued behind another one immediately gets a
-reply-quoted "⏳ Queued" card (configure `queueNoticeDelayMs` only if an intentional delay is desired).
-The running turn takes over its queue card and settles the final answer in place: no second reply and no
-visible "recalled a message" tombstone.
+A message is sent to its conversation's session at once, in arrival order, with `whenBusy: "steer"`: the agent takes it at its
+next step, after its current tool calls. Since the conversation is the place, **a whole group room is one session**: a second
+person's `@Agent` in a busy room is steered into the running work, so their question can end that run and share its answer
+(delivered once) instead of getting one of its own. Different places run concurrently, which is why a thread is the way to
+start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer.
 
 ## Streaming behavior
 
 Every answered turn uses ONE **streaming card** (a card entity in streaming mode):
 
-- an immediate "💭 Thinking…" card, reply-quoted under the asker in groups; or, for a queued turn, the already-mounted reply-quoted "⏳ Queued" card updated in place,
+- an immediate "💭 Thinking…" card, reply-quoted under the asker in groups,
 - tool-call previews + partial answer text, pushed as full-text snapshots (the client renders the typewriter effect),
 - on completion, the same card settles into the final answer as Markdown (streaming off).
 

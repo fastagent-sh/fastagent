@@ -196,7 +196,6 @@ export function feishuReply(
   api: FeishuApi,
   target: FeishuTarget,
   formatError: (failed: FeishuFailure) => string | undefined,
-  initialPreview?: MountedFeishuPreview,
   label = "[feishu]",
   onAnswered?: (answer: string) => void,
 ) {
@@ -218,10 +217,9 @@ export function feishuReply(
     };
     const answerView = (): string => capBytes(revealedAnswer(turn, STREAM_THROTTLE_MS, now()), CARD_MARKDOWN_MAX_BYTES);
 
-    // The live preview is ONE message: either the queue card/text handed in by the wiring, or a preview mounted
-    // lazily on this turn's first flush.
-    let preview: Preview = initialPreview ?? { kind: "none" };
-    let setupAttempted = initialPreview !== undefined;
+    // The live preview is ONE message, mounted lazily on this turn's first flush.
+    let preview: Preview = { kind: "none" };
+    let setupAttempted = false;
     let sequence = 0;
     const nextSeq = (): number => ++sequence;
     let streamDead = false; // the platform closed streaming (idle timeout) — freeze the live view

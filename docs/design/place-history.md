@@ -121,7 +121,7 @@ derivation that must not drift. The seam is where the platforms actually differ.
    needs no record of which messages were asks, so a cold instance or a lost state file cannot break it.
    - Feishu: `end_time` server-side (seconds, inclusive), then `(create_time, message_id)`.
    - Slack: `latest` = the ask's `ts`, exclusive, and no `oldest` (§2): the newest page, cut at the cursor.
-2. **Drop what the session holds**, by message id: every message a turn posted into the place (answers, queue notices,
+2. **Drop what the session holds**, by message id: every message a turn posted into the place (answers,
    stop feedback) and, as prompt shaping only, what the channel took as input (`seen.json`: a `/stop`). The first is recorded per place, beside its cursor in `history.json`, by a client the turn posts
    through (`FeishuApi.recordingSends`, `SlackApi.recordingSends`), and forgotten once a read has passed it: a shared
    bounded ring would let a busy deployment evict a quiet place's last answer. Slack records an output in the place it
