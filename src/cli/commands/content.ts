@@ -7,7 +7,7 @@ import { ContentNameError, addContent, listContent, removeContent } from "../../
 import { type SourceOptions, readContentSource } from "../../content/source.ts";
 import { contentLines } from "../content-view.ts";
 import { failStartup, failUsage } from "../fail.ts";
-import { type InstanceFlags, enterContentScope } from "../instance.ts";
+import { type InstanceFlags, contentInstanceOf } from "../instance.ts";
 
 /** A name refusal is the caller's to fix by naming another (exit 2); anything else is a startup failure (exit 1). */
 export function failEdit(hint: string) {
@@ -19,7 +19,7 @@ export function failEdit(hint: string) {
 
 export async function runContentList(dirArg: string, json: boolean, flags?: InstanceFlags): Promise<void> {
   const dir = resolve(dirArg);
-  const { content } = await listContent(dir, enterContentScope(dir, flags)).catch(failStartup);
+  const { content } = await listContent(dir, contentInstanceOf(dir, flags)).catch(failStartup);
   if (json) {
     console.log(JSON.stringify({ content }, null, 2));
     return;
@@ -38,12 +38,13 @@ export async function runContentAdd(
     .then(() => readContentSource(source, process.cwd(), options))
     .catch(failStartup);
   for (const note of notes) console.error(`[fastagent] ${note}`);
-  const scope = enterContentScope(dir, instance);
   const {
     name,
     content,
     notes: left,
-  } = await addContent(dir, { ...addition, ...(program ? { program } : {}) }, scope).catch(failEdit(" — pass --name"));
+  } = await addContent(dir, { ...addition, ...(program ? { program } : {}) }, contentInstanceOf(dir, instance)).catch(
+    failEdit(" — pass --name"),
+  );
   const added = content.filter((entry) => entry.name === name);
   for (const [label, value] of contentLines(added)) console.error(`[fastagent] ${label} ${value}`);
   for (const note of left) console.error(`[fastagent] ${note}`);
@@ -51,7 +52,7 @@ export async function runContentAdd(
 
 export async function runContentRemove(name: string, dirArg: string, flags?: InstanceFlags): Promise<void> {
   const dir = resolve(dirArg);
-  const removed = await removeContent(dir, name, enterContentScope(dir, flags)).catch(failEdit(""));
+  const removed = await removeContent(dir, name, contentInstanceOf(dir, flags)).catch(failEdit(""));
   console.error(`[fastagent] removed content ${removed.name}`);
   for (const note of removed.notes) console.error(`[fastagent] ${note}`);
 }

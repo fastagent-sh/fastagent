@@ -19,10 +19,11 @@ import {
   isContentName,
   joinContent,
 } from "./content/declare.ts";
-import { contextFileText, loadContent, parseContextFile } from "./content/file.ts";
+import { contextFileText, loadContent, parseContextFile, readContextFile } from "./content/file.ts";
 import type { DeclaredEnvironment } from "./environment/declare.ts";
 import { type ResolvedContent, checkDirectory, resolveContent } from "./content/resolve.ts";
 import type { ContentAddition } from "./content/source.ts";
+import type { AgentDefinition } from "./harnesses/pi-durable/definition.ts";
 import { type LockResult, withLockedFile } from "./locked-file.ts";
 
 /** `context.json` and `fastagent.json` are part of an agent's text: read by whoever reads the agent. */
@@ -60,8 +61,12 @@ export interface CreatedAgent {
   repository: string;
 }
 
-/** Where an agent's content is declared and kept: which instance configuration is edited, and where clones go. */
-export interface ContentScope {
+/**
+ * Where an agent's content is declared and kept: which instance configuration is edited, and where clones go. For a
+ * built definition, which has no instance of its own, `config` is required and `workdir` defaults to the directory
+ * of `config`, the instance root (agent-artifact.md §4.6).
+ */
+export interface ContentInstance {
   /** The instance configuration to edit, absolute. Default: `fastagent.json` in the agent directory. */
   config?: string;
   /** The instance's working directory, where a clone is made. Default: the agent directory. */
@@ -76,21 +81,36 @@ interface ContentMaps {
 
 /** Where an agent's content is, settled: every path absolute. */
 interface Places {
+  /** The program's directory: where its `context.json` is. */
   dir: string;
   workdir: string;
   config: string;
+  /** The program is a built definition, which is read and never written. */
+  built: boolean;
 }
 
-const placesOf = (dir: string, scope: ContentScope = {}): Places => {
-  const config = scope.config ?? join(dir, INSTANCE_CONFIG_FILE);
+const placesOf = (dir: string, instance: ContentInstance = {}): Places => {
+  const config = instance.config ?? join(dir, INSTANCE_CONFIG_FILE);
   for (const [name, path] of [
-    ["config", scope.config],
-    ["workdir", scope.workdir],
+    ["config", instance.config],
+    ["workdir", instance.workdir],
   ] as const) {
     if (path !== undefined && !isAbsolute(path)) throw new Error(`${name} must be an absolute path, and is "${path}"`);
   }
-  return { dir, workdir: scope.workdir ?? dir, config };
+  return { dir, workdir: instance.workdir ?? dir, config, built: false };
 };
+
+/** The places of an agent named by its source directory, or by the built definition a host opens. */
+function placesFor(agent: string | AgentDefinition, instance: ContentInstance = {}): Places {
+  if (typeof agent === "string") return placesOf(resolveAgentDir(agent), instance);
+  if (instance.config === undefined) {
+    throw new Error(
+      `${agent.name} is a built definition with no instance configuration of its own: pass instance.config`,
+    );
+  }
+  const places = placesOf(agent.dir, { ...instance, workdir: instance.workdir ?? dirname(instance.config) });
+  return { ...places, built: true };
+}
 
 /**
  * Create an agent in `dir` as `fastagent init` does, which must be new or empty: the whole scaffold, and a git
@@ -148,8 +168,11 @@ export async function initAgent(
  * The on-disk declaration resolved for this machine, not an open agent's startup snapshot. An entry that cannot be
  * resolved (a directory that is gone) refuses, naming it.
  */
-export async function listContent(agentDir: string, scope?: ContentScope): Promise<{ content: ResolvedContent[] }> {
-  const places = placesOf(resolveAgentDir(agentDir), scope);
+export async function listContent(
+  agent: string | AgentDefinition,
+  instance?: ContentInstance,
+): Promise<{ content: ResolvedContent[] }> {
+  const places = placesFor(agent, instance);
   return { content: resolveContent(loadContent(places.dir, instanceSourceOf(places)), places) };
 }
 
@@ -163,16 +186,17 @@ export interface ContentEdit {
 }
 
 /**
- * Add a content entry to the agent in `agentDir`: to the instance configuration (`fastagent.json`, or the file
- * `scope.config` names), or with `program` to the program's `context.json`. A name that cannot be one, or that the
- * agent already has in either (ignoring case), is a {@link ContentNameError}.
+ * Add a content entry to `agent`, a source directory or a built definition: to the instance configuration
+ * (`fastagent.json`, or the file `instance.config` names), or with `program` to the program's `context.json`, which a
+ * built definition does not allow. A name that cannot be one, or that the agent already has in either (ignoring
+ * case), is a {@link ContentNameError}.
  */
 export async function addContent(
-  agentDir: string,
+  agent: string | AgentDefinition,
   addition: ContentAddition,
-  scope?: ContentScope,
+  instance?: ContentInstance,
 ): Promise<ContentEdit> {
-  const places = placesOf(resolveAgentDir(agentDir), scope);
+  const places = placesFor(agent, instance);
   const declaration = await editContent(places, (maps) => {
     const next = withAddition(places, maps, addition).maps;
     return { result: declarationOf(places, next), next };
@@ -183,10 +207,15 @@ export async function addContent(
 /**
  * Remove the agent's content entry named `name` (ignoring case), from whichever of `context.json` and the instance
  * configuration holds it. A clone at `content/<name>` is left as it is, and said: it may hold the agent's work, and
- * fastagent never deletes a directory in `content/`. A name the agent does not have is a {@link ContentNameError}.
+ * fastagent never deletes a directory in `content/`. A name the agent does not have is a {@link ContentNameError}. An
+ * entry a built definition's `context.json` declares is refused: the program is read, never edited.
  */
-export async function removeContent(agentDir: string, name: string, scope?: ContentScope): Promise<ContentEdit> {
-  const places = placesOf(resolveAgentDir(agentDir), scope);
+export async function removeContent(
+  agent: string | AgentDefinition,
+  name: string,
+  instance?: ContentInstance,
+): Promise<ContentEdit> {
+  const places = placesFor(agent, instance);
   const { removed, wasClone, declaration } = await editContent(places, (maps) => {
     const found = entryNamed(maps, name);
     const next = {
@@ -224,6 +253,9 @@ function withAddition(places: Places, maps: ContentMaps, addition: ContentAdditi
     (key) => key.toLowerCase() === name.toLowerCase(),
   );
   if (taken) throw new ContentNameError(`this agent already has content named "${taken}"`);
+  if (program === true && places.built) {
+    throw new Error(`content "${name}": ${CONTEXT_FILE} belongs to a built definition, which is read and never edited`);
+  }
   if (program === true && !("github" in entry)) {
     throw new Error(
       `content "${name}": ${CONTEXT_FILE} is shared, so it declares only repositories every instance reaches`,
@@ -295,18 +327,24 @@ function instanceFileText(file: Record<string, unknown>, content: Record<string,
  * Run `edit` over both files that hold content under ONE lock, `context.json`'s, which env edits take too: whether a
  * name is taken is asked of both, so two edits that write different files must still queue behind each other. The lock
  * creates neither file; what `edit` returns is written under it, the instance configuration first. A file that holds
- * the same content as before is not rewritten.
+ * the same content as before is not rewritten. A built definition's `context.json` is only read, in a place that may
+ * not be writable, so the lock is the instance configuration's and an edit that would change the program's entries is
+ * refused.
  */
 async function editContent<T>(
   places: Places,
   edit: (maps: ContentMaps) => { result: T; next: ContentMaps },
 ): Promise<T> {
   const programPath = join(places.dir, CONTEXT_FILE);
+  const lockPath = places.built ? places.config : programPath;
   return withLockedFile(
-    programPath,
-    async (programText): Promise<LockResult<T>> => {
-      const program =
-        programText === undefined ? { content: {}, declared: [] } : parseContextFile(programText, programPath);
+    lockPath,
+    async (lockedText): Promise<LockResult<T>> => {
+      const program = places.built
+        ? readContextFile(places.dir)
+        : lockedText === undefined
+          ? { content: {}, declared: [] }
+          : parseContextFile(lockedText, programPath);
       const instanceText = textIfExists(places.config);
       const instance = instanceText === undefined ? {} : parseInstanceFile(instanceText, places.config);
       const maps: ContentMaps = {
@@ -314,17 +352,19 @@ async function editContent<T>(
         instance: (instance.content ?? {}) as Record<string, ContentEntry>,
       };
       const out = edit(maps);
+      const programChanged = !sameEntries(out.next.program, maps.program);
+      if (places.built && programChanged) {
+        throw new Error(`${programPath} belongs to a built definition, which is read and never edited`);
+      }
       if (!sameEntries(out.next.instance, maps.instance)) {
         writeFileAtomic(places.config, instanceFileText(instance, out.next.instance), fileMode(places.config));
       }
       return {
         result: out.result,
-        ...(sameEntries(out.next.program, maps.program)
-          ? {}
-          : { next: contextFileText({ ...program, content: out.next.program }) }),
+        ...(programChanged ? { next: contextFileText({ ...program, content: out.next.program }) } : {}),
       };
     },
-    { mode: fileMode(programPath), create: false },
+    { mode: fileMode(lockPath), create: false },
   );
 }
 
@@ -337,16 +377,16 @@ function textIfExists(path: string): string | undefined {
 
 /**
  * Set what the instance configuration says of the channel `channel` (`channels.<channel>` in `fastagent.json` in
- * `agentDir`, or the file `scope.config` names): `entry` over what it holds, the rest of the file kept as it is. Under
+ * `agentDir`, or the file `instance.config` names): `entry` over what it holds, the rest of the file kept as it is. Under
  * the lock content edits take, since they write the same file.
  */
 export async function setChannelConfig(
   agentDir: string,
   channel: string,
   entry: { ingress?: "webhook" | "connection"; app?: { id: string; team?: string; url?: string } },
-  scope?: Pick<ContentScope, "config">,
+  instance?: Pick<ContentInstance, "config">,
 ): Promise<void> {
-  const places = placesOf(resolveAgentDir(agentDir), scope);
+  const places = placesOf(resolveAgentDir(agentDir), instance);
   const programPath = join(places.dir, CONTEXT_FILE);
   await withLockedFile(
     programPath,

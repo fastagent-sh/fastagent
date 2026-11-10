@@ -259,7 +259,8 @@ Its `auth.apiKey.resolve()` runs per request, which is where a token you mint or
 
 An app that runs agents for a person on their machine (a desktop client, an editor) opens each with `openAgent` and
 calls the Agent API; `createAgent(dir, { content })` makes a new one, as `fastagent init` does, with the folders and
-repositories it works on. `addContent` and `removeContent` edit those declarations later; `listContent` reads them.
+repositories it works on. `addContent` and `removeContent` edit those declarations later; `listContent` reads them. An
+app that opens a built definition passes it (not a source directory) with `{ config }`, the instance's `fastagent.json`.
 
 - **Its own instance.** `openAgent(definition, { credentials, workdir, stateDir })` with a `stateDir` of the app's
   (one per agent, under its data directory) is an instance of the agent separate from the one `fastagent dev` opens in
@@ -273,7 +274,8 @@ repositories it works on. `addContent` and `removeContent` edit those declaratio
 - **Content changes.** `openAgent` resolves the content declarations once and prepares GitHub clones at startup.
   Adding or removing entries, or changing their paths or descriptions, takes effect at the next open, not in a new
   session of the already-open agent. `addContent`, `removeContent` and `listContent` return the current on-disk
-  declaration resolved for this machine, not the running agent's snapshot. There is no hot reload: a desktop host
+  declaration resolved for this machine, not the running agent's snapshot; `agent.content` is that snapshot, so a host
+  that compares the two knows a reopen is due. There is no hot reload: a desktop host
   can wait for current work to finish, then `close()` and reopen with the same `root` or `stateDir`. Cancel first only if it
   intends to stop that work. Files inside an already-bound directory are different: their changes are visible when
   a tool next reads them, without reopening.

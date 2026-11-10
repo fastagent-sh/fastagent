@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, statSync } from "node:fs";
 import { baseEnv } from "../child-env.ts";
 import { definedValues } from "../declared-secrets.ts";
 import { enterAgentEnv } from "../env.ts";
-import type { ContentScope } from "../authoring.ts";
+import type { ContentInstance } from "../authoring.ts";
 import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
 import {
   INSTANCE_CONFIG_ENV,
@@ -128,7 +128,7 @@ export function enterInstance(agentDir: string, flags: InstanceFlags = {}): void
 }
 
 /** Where a content command reads and edits an agent's content, as its flags and variables say. */
-export function enterContentScope(agentDir: string, flags: InstanceFlags = {}): ContentScope {
+export function contentInstanceOf(agentDir: string, flags: InstanceFlags = {}): ContentInstance {
   enterInstanceLocation(flags);
   const config = process.env[INSTANCE_CONFIG_ENV];
   return { workdir: resolveWorkdir(agentDir), ...(config === undefined ? {} : { config }) };

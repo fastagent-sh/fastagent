@@ -92,6 +92,7 @@ type InstanceLocation = { root: string } | { stateDir: string; workdir: string }
 
 interface LocalAgent extends Agent {
   serve(options?: { apiKeys?: string[] }): Promise<Service>; // channels, schedules, wake-ups, /health, and /v1 with a key
+  readonly content: readonly ResolvedContent[]; // what the agent works on as it opened, which `listContent` (the declaration on disk) differs from once an edit is waiting for a reopen
   readonly harness: Harness; // pi-durable's own API, for operating the agent
   close(): Promise<void>; // closes what `serve` started, then releases the storage; a running message is interrupted and answered at the next open, unless cancelled first
 }
@@ -175,14 +176,16 @@ interface ContentAddition {
   program?: boolean; // a repository for every instance, in context.json; otherwise in the instance's fastagent.json
 }
 // Where an edit reads and writes: the instance configuration (default: fastagent.json in the agent directory) and the
-// working directory its clones are made in (default: the agent directory). Both absolute.
-interface ContentScope {
+// working directory its clones are made in (default: the agent directory). Both absolute. For a built definition,
+// `config` is required and `workdir` defaults to the directory of `config`.
+interface ContentInstance {
   config?: string;
   workdir?: string;
 }
-function listContent(agentDir: string, scope?: ContentScope): Promise<{ content: ResolvedContent[] }>;
-function addContent(agentDir: string, addition: ContentAddition, scope?: ContentScope): Promise<ContentEdit>;
-function removeContent(agentDir: string, name: string, scope?: ContentScope): Promise<ContentEdit>;
+// `agent` is the agent's source directory, or the built definition an app opens (its `context.json` is read, never written).
+function listContent(agent: string | AgentDefinition, instance?: ContentInstance): Promise<{ content: ResolvedContent[] }>;
+function addContent(agent: string | AgentDefinition, addition: ContentAddition, instance?: ContentInstance): Promise<ContentEdit>;
+function removeContent(agent: string | AgentDefinition, name: string, instance?: ContentInstance): Promise<ContentEdit>;
 function readContentSource(source: string, cwd: string, options?: SourceOptions): { addition: ContentAddition; notes: string[] };
 // What an edit leaves, and what the agent has on this instance.
 interface ContentEdit {
@@ -237,8 +240,10 @@ function providerAuth(
   name refusal as `ContentNameError`. An entry that does not resolve (a directory that is gone) refuses `listContent` and
   every edit, naming it, until it is removed. `readContentSource` reads a path or `github:owner/repo` as the CLI's `<source>` is read, and
   names it for the directory or repository. A removed repository's clone in `content/` is left as it is. Two entries
-  may be the same directory, or one inside the other, and the agent reaches it by both names; a directory may not
-  contain the agent's own, nor lie inside it. These functions read or edit the declaration on disk; their results
+  may be the same directory, or one inside the other, and the agent reaches it by both names; a directory may contain
+  the agent's own or lie inside it. Given a built definition, they read its `context.json` as the program's
+  declaration and edit only the instance configuration `instance.config` names, under a lock beside it; an edit that
+  would change the program's entries (`program`, or removing one of them) is refused. These functions read or edit the declaration on disk; their results
   are not the open agent's snapshot. Changes to entries, paths or descriptions take effect at the next `openAgent`,
   which also prepares GitHub clones. They do not update an already-open agent, even for a new session. File changes
   inside an already-bound directory need no reopen: a tool sees them when it next reads the files.

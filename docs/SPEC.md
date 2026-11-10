@@ -584,6 +584,11 @@ interface InstanceConfig<Settings = unknown> {
 interface LocalAgent extends Agent {
   /** Channels, schedules and wake-ups, `/health`, and the HTTP API (§9) when a key is configured. */
   serve(options?: { apiKeys?: string[] }): Promise<Service>;
+  /**
+   * What the agent works on, as it opened (a directory of this machine, or a repository's clone): the snapshot that
+   * runs, not the declaration on disk. Not part of the Agent API: it is not served over HTTP.
+   */
+  readonly content: readonly ResolvedContent[];
   /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
   /**

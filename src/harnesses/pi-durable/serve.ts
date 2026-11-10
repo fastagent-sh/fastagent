@@ -302,6 +302,11 @@ export interface LocalAgent extends Agent {
    * handler, or a server of its own (`listen`).
    */
   serve(options?: ServeAgentOptions): Promise<Service>;
+  /**
+   * What the agent works on, as it opened: the snapshot that runs. `listContent` reads the declaration on disk, which
+   * an edit changes before the next open, so a difference between the two says a reopen is due.
+   */
+  readonly content: readonly ResolvedContent[];
   /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
   /** Close what `serve` started, then release the instance's storage. */
@@ -406,6 +411,7 @@ export async function openAgent<Settings = unknown>(
     usage: agent.usage,
     sessions: agent.sessions,
     messages: agent.messages,
+    content: opened.content,
     harness: agent.harness,
     serve(serveOptions = {}) {
       // Its storage is let go, or about to be: a service now would run channels and schedules nobody closes.

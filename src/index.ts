@@ -49,7 +49,7 @@ export {
   listContent,
   removeContent,
   type ContentEdit,
-  type ContentScope,
+  type ContentInstance,
   type CreatedAgent,
 } from "./authoring.ts";
 export type { ContentAddition, SourceOptions } from "./content/source.ts";
