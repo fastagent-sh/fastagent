@@ -54,7 +54,7 @@ what an instance starts with, which its own configuration may override ([instanc
 |---|---|---|
 | `providers` | `[]` | Model providers beyond pi-ai's built-ins: a self-hosted endpoint, a gateway ([custom models](#custom-models)). A provider with a built-in's id replaces it. |
 | `settings` | none | The values each instance may choose, as an object schema built with `@earendil-works/pi-schema` (`obj({ repo: str() })`). No secrets: those are `needs`. |
-| `defaults.starters` | none | Example first messages for a client to offer, as `info().agent.starters` reports them: at most 6 non-blank strings of at most 200 characters each. A client puts one in the composer as a draft; choosing one sends nothing. |
+| `defaults.starters` | none | Example first messages for a client to offer, as `info().starters` reports them: at most 6 non-blank strings of at most 200 characters each. A client puts one in the composer as a draft; choosing one sends nothing. |
 | `defaults.model` | none | Default model spec, `provider/modelId` ([model selection](#model-selection)). |
 | `defaults.thinkingLevel` | the harness's | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. |
 | `defaults.settings` | none | Values of `settings`, for the keys an instance need not give. |

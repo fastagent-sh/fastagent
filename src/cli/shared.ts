@@ -12,7 +12,8 @@ import { SignInCancelled } from "../sign-in-api.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
-import { resolveConfig } from "../harnesses/pi-durable/config.ts";
+import { type EffectiveConfig, resolveConfig } from "../harnesses/pi-durable/config.ts";
+import { environmentConfig } from "../harnesses/pi-durable/environment-config.ts";
 import {
   type Project,
   buildDefinitionShape,
@@ -29,6 +30,15 @@ import { dotEnvPath } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
+
+/**
+ * The configuration a command that runs the project resolves: the program's defaults, the instance's file, then the
+ * variables a flag was entered into. The one place the layers are put together, so a command that asks how the
+ * instance runs (a channel's ingress, a thinking level) agrees with the open that runs it.
+ */
+export function resolveProjectConfig(project: Project, env: NodeJS.ProcessEnv = process.env): EffectiveConfig {
+  return resolveConfig(project.definition, project.instance, environmentConfig(env));
+}
 
 /** The project a command runs, when it is not the development one (`start` runs the build). */
 type LoadProject = (agentDir: string) => Promise<Project>;

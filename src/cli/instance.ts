@@ -147,6 +147,13 @@ export function enterInstance(agentDir: string, flags: InstanceFlags = {}): void
   enterEnvFile(flags.envFile);
   enterAgentEnv(agentDir);
   enterInstanceLocation(flags);
+  // The variables that lay over the configuration are settled here, once, with the flags entered into them, so a value
+  // the configuration would refuse stops every command the same way and not as a stack trace from whichever opens it.
+  try {
+    environmentConfig(process.env);
+  } catch (error) {
+    failUsage((error as Error).message);
+  }
 }
 
 /** Where a content command reads and edits an agent's content, as its flags and variables say. */
