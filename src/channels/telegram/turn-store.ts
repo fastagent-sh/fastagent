@@ -17,6 +17,8 @@ export interface StoredTurn extends TurnRecordBase {
   chatId: number | string;
   threadId?: number;
   replyTo?: number;
+  /** Where the asker's message is, for the reaction that acknowledges it (absent in a record an older run wrote). */
+  askedIn?: { chatId: number | string; messageId: number };
   imageFileIds: string[];
   fileIds: string[];
 }
@@ -36,6 +38,9 @@ function isStoredTurn(t: unknown): t is StoredTurn {
     (typeof r.chatId === "string" || typeof r.chatId === "number") &&
     (r.threadId === undefined || typeof r.threadId === "number") &&
     (r.replyTo === undefined || typeof r.replyTo === "number") &&
+    (r.askedIn === undefined ||
+      (typeof r.askedIn?.messageId === "number" &&
+        (typeof r.askedIn.chatId === "string" || typeof r.askedIn.chatId === "number"))) &&
     strings(r.imageFileIds) &&
     strings(r.fileIds) &&
     typeof r.attempts === "number"

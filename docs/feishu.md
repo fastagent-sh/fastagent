@@ -51,6 +51,7 @@ then checks what the app actually holds and names any scope your tenant withheld
 |---|---|
 | `im:message.group_msg` (sensitive) | only @mentions arrive: no bare replies in the Agent's threads, no group discussion as context |
 | `im:message:readonly` (or `im:message`) | the discussion before an ask cannot be read (the prompt says so), and a quoted message degrades to a marker |
+| `im:message.reactions:write_only` (or `im:message`) | a message waiting behind a running task gets no 👀 while it waits |
 | `im:chat.members:read` | people in the discussion the Agent reads are shown by open_id, not by name |
 
 What a scope is for is the Agent's, not only the channel's: the Agent can call the Open API with the app's
@@ -388,7 +389,9 @@ A message is sent to its conversation's session at once, in arrival order, with 
 next step, after its current tool calls. Since the conversation is the place, **a whole group room is one session**: a second
 person's `@Agent` in a busy room is steered into the running work, so their question can end that run and share its answer
 (delivered once) instead of getting one of its own; their message gets a short "Answered together with an earlier message above" reply under it, since the answer quotes the first asker's. Different places run concurrently, which is why a thread is the way to
-start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer.
+start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer. While a
+message waits for that answer, the Agent marks it with an `OnIt` reaction and swaps it for `DONE` when it is answered
+(a failed turn just takes the mark off); the first message of a run shows its own card instead.
 
 ## Streaming behavior
 

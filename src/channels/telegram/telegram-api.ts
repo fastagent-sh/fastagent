@@ -76,6 +76,7 @@ interface Api {
   sendPhoto: SentMessage;
   editMessageText: unknown;
   deleteMessage: unknown;
+  setMessageReaction: unknown;
   getMe: { username?: string; can_read_all_group_messages?: boolean };
   getFile: { file_path?: string; file_size?: number };
   setWebhook: unknown;

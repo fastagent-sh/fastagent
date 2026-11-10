@@ -193,6 +193,10 @@ export interface FeishuApi {
   editTextMessage(messageId: string, text: string): Promise<void>;
   /** Recall (delete) a message the bot sent. */
   deleteMessage(messageId: string): Promise<void>;
+  /** React to any message in a chat the bot is in; returns the reaction's id, which removing it needs. */
+  addReaction(messageId: string, emojiType: string): Promise<string | undefined>;
+  /** Take back a reaction this app added. */
+  deleteReaction(messageId: string, reactionId: string): Promise<void>;
   /**
    * A place's messages, NEWEST first: a chat's (an ordinary group lists a thread's root only; a topic group lists
    * every message) or a thread's. Cards come back as sent, and senders as open_ids.
@@ -512,6 +516,22 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
       },
       async deleteMessage(messageId) {
         await call("deleteMessage", "DELETE", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`);
+      },
+      async addReaction(messageId, emojiType) {
+        const data = await call<ApiBody & { data?: { reaction_id?: string } }>(
+          "addReaction",
+          "POST",
+          `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions`,
+          { reaction_type: { emoji_type: emojiType } },
+        );
+        return data.data?.reaction_id;
+      },
+      async deleteReaction(messageId, reactionId) {
+        await call(
+          "deleteReaction",
+          "DELETE",
+          `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(reactionId)}`,
+        );
       },
       async getMessage(messageId) {
         const data = await call<ApiBody & { data?: { items?: unknown[] } }>(

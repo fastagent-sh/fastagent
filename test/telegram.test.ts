@@ -646,6 +646,57 @@ describe("inputs steered into one run (real Agent)", () => {
     expect(texts.map((text) => text.includes("chatter the room had"))).toEqual([true, false]);
     release();
   });
+
+  it("marks the message of an input steered into a running turn, and settles the mark when it is answered", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}) });
+    const upd = (n: number, text: string) => ({
+      update_id: n,
+      message: { message_id: n * 10, text, chat: { id: 7, type: "private" } },
+    });
+
+    await ch(tgRequest(upd(1, "start the work")));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    expect(callsTo(fetchMock, "setMessageReaction")).toHaveLength(0); // the first turn shows its own preview
+    await ch(tgRequest(upd(2, "and keep the old column")));
+    await vi.waitFor(() => expect(callsTo(fetchMock, "setMessageReaction")).toHaveLength(1));
+    release();
+    await vi.waitFor(() => expect(callsTo(fetchMock, "setMessageReaction")).toHaveLength(2));
+
+    const reactions = callsTo(fetchMock, "setMessageReaction").map((c) => bodyOf(c));
+    expect(reactions).toMatchObject([
+      { chat_id: 7, message_id: 20, reaction: [{ type: "emoji", emoji: "👀" }] },
+      { chat_id: 7, message_id: 20, reaction: [{ type: "emoji", emoji: "👌" }] }, // replaces the 👀: one reaction per message
+    ]);
+  });
+
+  it("goes on without a mark when Telegram refuses the reaction", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const fetchMock = vi.fn(async (url: string) => {
+      const method = String(url).split("/").pop();
+      if (method === "setMessageReaction")
+        return new Response(JSON.stringify({ ok: false, description: "REACTION_INVALID" }), { status: 400 });
+      return new Response(JSON.stringify({ ok: true, result: method === "sendMessage" ? { message_id: 100 } : {} }), {
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const state = freshStateDir();
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
+    const upd = (n: number, text: string) => ({
+      update_id: n,
+      message: { message_id: n, text, chat: { id: 7, type: "private" } },
+    });
+    await ch(tgRequest(upd(1, "start the work")));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await ch(tgRequest(upd(2, "and keep the old column")));
+    await vi.waitFor(() => expect(warn.mock.calls.flat().join(" ")).toContain("could not mark message 2"));
+    release();
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({}));
+  });
 });
 
 describe("buffered attachments (files/photos from un-summoned discussion)", () => {
