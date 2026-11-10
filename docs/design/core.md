@@ -99,9 +99,10 @@ for, and no environment variable selects an agent.
   from every non-agent. `SYSTEM.md`, `skills/` and `src/` are each optional and generic
   enough that scanning for them would read half the world's repositories as agents. `export default {}` is a
   signature — the same job `package.json`, `Cargo.toml` and `pyproject.toml` do.
-- **Content and the agent directory are kept apart.** A definition is released to every instance; writable
-  content must keep what an instance wrote. One directory cannot be both, so a directory around the agent or the
-  working directory, or inside either, is refused, asked of the real paths. `content/` itself only holds the clones: git and the image
+- **A definition is released, content is kept.** A definition is replaced as a whole for every instance; content keeps
+  what an instance wrote. They meet only through content the instance names, and a bound directory may contain the agent
+  directory or sit inside it: the check asks that it exists and is a directory, and nothing limits the agent's writes
+  (a sandbox, file permissions or a read-only mount do). `content/` itself only holds the clones: git and the image
   leave it out.
 
 `init <dir>` creates the agent in `dir` itself, which must be new or empty and not inside another agent, and writes

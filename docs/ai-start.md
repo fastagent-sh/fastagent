@@ -59,7 +59,7 @@ through its channels, and each channel verifies the platform calling it.
 
 An agent is a directory of its own. It holds `fastagent.config.ts`, the definition, and the local instance's
 `.secrets/`, and its local instances' `.fastagent/` (their state, and the clones of its content), but it is not the agent's working directory: that is `.fastagent/dev/` for `dev`. What the agent works on (a project, a folder) is
-declared as its **content**; the agent never sits inside it, and a project never sits inside the agent.
+declared as its **content**; keep the agent in a directory of its own, apart from the project, so a new version of the definition never overwrites what the project holds.
 
 | Situation | Do |
 |---|---|

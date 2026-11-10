@@ -149,7 +149,7 @@ async function contentForThisRun(
   env: NodeJS.ProcessEnv,
 ): Promise<ResolvedContent[]> {
   const declared = loadContent(dir, instance);
-  const places = { dir, workdir };
+  const places = { workdir };
   for (const entry of resolveContent(declared, places)) {
     if (entry.kind !== "github") continue;
     const done = await cloneContent(entry, env);

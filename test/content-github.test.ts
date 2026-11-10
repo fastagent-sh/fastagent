@@ -58,7 +58,7 @@ async function agent(): Promise<{ root: string; agentDir: string }> {
 function resolveOne(agentDir: string, { name, ...entry }: { github: string; ref?: string; name?: string }) {
   const key = name ?? (entry.github.split("/")[1] as string);
   const declared = declareContent({ [key]: entry }, { origin: "program", file: "context.json" });
-  const [resolved] = resolveContent(declared, { dir: agentDir, workdir: agentDir });
+  const [resolved] = resolveContent(declared, { workdir: agentDir });
   if (resolved?.kind !== "github") throw new Error("not github content");
   return resolved;
 }
@@ -404,7 +404,7 @@ describe("github content: what runs the agent clones, what reports on it does no
         ),
         ...declareContent({ docs: { path: docs } }, { origin: "instance", file: "fastagent.json", base: root }),
       ],
-      { dir: agentDir, workdir: agentDir },
+      { workdir: agentDir },
     );
     const { faux } = makeFaux();
     let prompt = "";

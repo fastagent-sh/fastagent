@@ -17,7 +17,7 @@ import {
   readContextFile,
 } from "../src/content/file.ts";
 import { readContentSource } from "../src/content/source.ts";
-import { checkDirectory, resolveContent } from "../src/content/resolve.ts";
+import { resolveContent } from "../src/content/resolve.ts";
 
 const PROGRAM = { origin: "program", file: "context.json" } as const;
 const INSTANCE = { origin: "instance", file: "fastagent.json", base: "/agents/me" } as const;
@@ -203,7 +203,7 @@ describe("content: resolved for this instance", () => {
     const dir = join(root, "agent");
     await mkdir(join(dir, "content"), { recursive: true });
     await mkdir(join(root, "notes"));
-    return { root, dir, places: { dir, workdir: dir } };
+    return { root, dir, places: { workdir: dir } };
   }
   const local = (base: string, entries: Record<string, unknown>): DeclaredContent[] =>
     declareContent(entries, { origin: "instance", file: "fastagent.json", base });
@@ -219,10 +219,10 @@ describe("content: resolved for this instance", () => {
   });
 
   it("a repository is a clone fastagent makes at content/<name> in the working directory", async () => {
-    const { root, dir } = await layout();
+    const { root } = await layout();
     const declared = declareContent({ app: { github: "acme/app" } }, PROGRAM);
     const workdir = join(root, "instance");
-    expect(resolveContent(declared, { dir, workdir })).toEqual([
+    expect(resolveContent(declared, { workdir })).toEqual([
       expect.objectContaining({
         kind: "github",
         location: join(workdir, "content", "app"),
@@ -247,42 +247,11 @@ describe("content: resolved for this instance", () => {
     );
   });
 
-  it("refuses a directory around the agent or inside it, asked of the real paths", async () => {
+  it("a directory may contain the agent's directory or sit inside it", async () => {
     const { root, dir, places } = await layout();
-    // As written, `link` is beside the agent; really, it is the directory around it.
-    await symlink(root, `${root}-link`);
-    expect(() => resolveContent(local(dir, { around: { path: `${root}-link` } }), places)).toThrow(
-      /content "around" .* contains the agent directory/,
-    );
     await mkdir(join(dir, "notes"));
-    expect(() => resolveContent(local(dir, { inside: { path: "notes" } }), places)).toThrow(
-      /content "inside" .* is inside the agent directory/,
-    );
-  });
-
-  it("asks it of the definition's directory only: the instance's working directory may hold content", async () => {
-    const { root, dir } = await layout();
-    const workdir = join(root, "instance");
-    await mkdir(join(workdir, "data"), { recursive: true });
-    const places = { dir, workdir };
-    // The working directory is the instance's own writable place, which a definition's directory is not.
-    expect(resolveContent(local(workdir, { data: { path: "data" } }), places)).toEqual([
-      expect.objectContaining({ name: "data", location: join(workdir, "data") }),
-    ]);
-    expect(() => checkDirectory(places, "data", join(workdir, "data"))).not.toThrow();
-    expect(() => checkDirectory(places, "root", root)).toThrow(/content "root" .* contains the agent directory/);
-    expect(() => checkDirectory(places, "notes", join(root, "notes"))).not.toThrow();
-  });
-
-  it("asks it of an agent directory that does not exist yet, through a symlinked ancestor", async () => {
-    // What `init <link>/agent --content <real>` checks before it creates anything: the agent will really be inside
-    // the content, though neither path says so as written.
-    const { root } = await layout();
-    await mkdir(join(root, "real"));
-    await symlink(join(root, "real"), join(root, "link"));
-    const dir = join(root, "link", "agent", "deeper");
-    expect(() => checkDirectory({ dir }, "real", join(root, "real"))).toThrow(
-      /content "real" .* contains the agent directory/,
-    );
+    expect(
+      resolveContent(local(dir, { around: { path: root }, inside: { path: "notes" } }), places).map((c) => c.location),
+    ).toEqual([root, join(dir, "notes")]);
   });
 });

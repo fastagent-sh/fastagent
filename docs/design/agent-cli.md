@@ -118,7 +118,7 @@ fastagent content remove <name> [agent] [--config <file>]
 ```
 
 - `<source>` is read as in `init`: a directory, or `github:owner/repo`.
-- `add` refuses a directory that contains the agent directory or sits inside it, and asks for `--name` when the
+- `add` refuses a directory that does not exist, and asks for `--name` when the
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
 - `remove` drops the entry from whichever file holds it. A clone at `content/<name>` is left, and said to be: it may hold the
   agent's work.
@@ -147,7 +147,6 @@ What is said rather than handled quietly:
 | A `github` entry has no checkout bound here | `github acme/app: cloned in …/content/app`, or `already up to date`; a warning when the clone has the agent's changes or GitHub cannot be reached |
 | A binding points to a file, or (for a `github` entry) to anything but the root of a checkout of that repository; a link sits where a clone belongs | Refused, naming the entry and what it points to |
 | A bound directory is gone | Said; a `local` entry is left out and the agent is not told of it, a `github` entry uses its clone |
-| A bound directory contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two entries' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
 | A bound checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
 | A changed definition does not load when `dev` restarts on an edit | The worker exits with the reason, and the next save retries |

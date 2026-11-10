@@ -79,7 +79,7 @@ describe("an agent with content", () => {
         { app: { path: app }, handbook: { path: handbook, description: "The team's style rules." } },
         { origin: "instance", file: "fastagent.json", base: agentDir },
       ),
-      { dir: agentDir, workdir: agentDir },
+      { workdir: agentDir },
     );
     const { faux } = makeFaux();
     let prompt = "";
@@ -183,7 +183,7 @@ describe("one resolution", () => {
     ]);
   });
 
-  it("`content add` asks for a name it cannot take, and refuses content around the agent", async () => {
+  it("`content add` asks for a name it cannot take, and takes content around the agent", async () => {
     const { root, agentDir, app } = await layout();
     await writeFile(join(agentDir, "fastagent.config.ts"), `export default {};\n`);
     await bind(agentDir, { app: { path: app } });
@@ -195,8 +195,6 @@ describe("one resolution", () => {
       2,
       expect.stringMatching(/already has content named "app" — pass --name/),
     ]);
-    const around = await cli(["content", "add", root, agentDir], root);
-    expect([around.code, around.stderr]).toEqual([1, expect.stringMatching(/contains the agent directory/)]);
     expect(await readFile(join(agentDir, "fastagent.json"), "utf8")).toBe(before);
     const missing = await cli(["content", "remove", "nope", agentDir], root);
     expect([missing.code, missing.stderr]).toEqual([
@@ -211,5 +209,7 @@ describe("one resolution", () => {
       app: { path: app },
       app2: { path: other },
     });
+    const around = await cli(["content", "add", root, agentDir, "--name", "around"], root);
+    expect(around.code, around.stderr).toBe(0);
   });
 });

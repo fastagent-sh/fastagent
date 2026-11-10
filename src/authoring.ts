@@ -238,7 +238,7 @@ function withAddition(places: Places, maps: ContentMaps, addition: ContentAdditi
       throw new Error(`content/${name} already exists in ${places.workdir}: move it away first`);
     }
   } else {
-    checkDirectory(places, name, declared.path);
+    checkDirectory(name, declared.path);
   }
   resolveContent(declaration, places);
   return { maps: next };
