@@ -48,7 +48,7 @@ export interface AgentDefinition<Settings = unknown> {
   readonly description?: string;
   /** True for a source project the author works in (`dev`), absent for a built package, which an instance only reads. */
   readonly source?: true;
-  /** Absolute: the program's files, its text, `context.json` and `mcp.json`. */
+  /** Absolute: the program's files, its text and `context.json`. */
   readonly dir: string;
   readonly config: AgentConfig;
   readonly registry: Registry;

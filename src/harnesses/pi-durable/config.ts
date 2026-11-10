@@ -94,6 +94,18 @@ export const IDLE_TIMEOUT_BOUNDS = { minimum: 60, maximum: 1209600 } as const;
 /** An absolute `https://` URL without a trailing slash, query or fragment: what `<publicUrl>/<path>` is built from. */
 const PUBLIC_URL_PATTERN = "^https://[^/?#\\s]+(/[^?#\\s]*[^/?#\\s])?$";
 
+/** The platform app a channel of one instance is bound to (`channels.<name>.app`). */
+const APP_BINDING = obj({
+  id: str({ description: "The platform's app ID" }),
+  team: opt(str({ description: "Slack's workspace (team) ID" })),
+  url: opt(
+    str({
+      description: "The channel's URL a person set on the platform's app page and the platform verified",
+      pattern: "^https://[^?#\\s]+$",
+    }),
+  ),
+});
+
 /** The program's `settings` with no property required: an instance gives some of them, the program's defaults the rest. */
 function partial(settings: Schema): Schema {
   const { required: _required, ...rest } = settings as Record<string, unknown>;
@@ -101,7 +113,7 @@ function partial(settings: Schema): Schema {
 }
 
 /** What the program's defaults and an instance's configuration may hold. `settings` is the program's, or none. */
-function shape(settings: Schema | undefined) {
+function shape(settings: Schema | undefined, instance: boolean) {
   return {
     starters: opt(
       arr(str({ maxLength: MAX_STARTER_LENGTH, pattern: "\\S" }), {
@@ -133,18 +145,8 @@ function shape(settings: Schema | undefined) {
     channels: opt(
       map(
         obj({
-          app: opt(
-            obj({
-              id: str({ description: "The platform's app ID" }),
-              team: opt(str({ description: "Slack's workspace (team) ID" })),
-              url: opt(
-                str({
-                  description: "The channel's URL a person set on the platform's app page and the platform verified",
-                  pattern: "^https://[^?#\\s]+$",
-                }),
-              ),
-            }),
-          ),
+          // The app one instance is bound to: a fact about that instance, which the program's defaults cannot hold.
+          ...(instance ? { app: opt(APP_BINDING) } : {}),
           ingress: opt(
             oneOf(["webhook", "connection"] as const, {
               description: "How the channel receives: webhook (inbound HTTP) or connection (one it opens and keeps)",
@@ -161,7 +163,7 @@ function shape(settings: Schema | undefined) {
 export function instanceConfigSchema(settings: Schema | undefined): Schema {
   const paths = (description: string) => opt(arr(str({ minLength: 1 }), { description, uniqueItems: true }));
   // What a deployment is built with is the program's default or a `deploy` flag; the box never reads it.
-  const { deploy: _deploy, ...runtime } = shape(settings);
+  const { deploy: _deploy, ...runtime } = shape(settings, true);
   return obj({
     $schema: opt(str()),
     ...runtime,
@@ -236,7 +238,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
       throw new Error(`${file}: "settings" is not a JSON Schema: ${(error as Error).message}`, { cause: error });
     }
   }
-  if (defaults !== undefined) checkValues(defaults, settings, `${file} defaults`, (s) => obj(shape(s)));
+  if (defaults !== undefined) checkValues(defaults, settings, `${file} defaults`, (s) => obj(shape(s, false)));
   return config as AgentConfig;
 }
 
@@ -362,7 +364,7 @@ export function resolveConfig(
   const merged: Record<string, unknown> = {};
   const sources: Record<string, string> = {};
   if (defaults !== undefined) {
-    checkValues(defaults, settings, `${definition.name} defaults`, (s) => obj(shape(s)));
+    checkValues(defaults, settings, `${definition.name} defaults`, (s) => obj(shape(s, false)));
     overlay(merged, defaults as Record<string, unknown>, PROGRAM_DEFAULT, sources);
   }
   if (instance !== undefined) {

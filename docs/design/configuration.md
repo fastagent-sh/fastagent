@@ -90,7 +90,7 @@ SYSTEM.md  AGENTS.md  skills/  prompts/  src/  context.json
 
 | Subject | Chain |
 |---|---|
-| Model | `--model` (local runs only) > the selected value file's `FASTAGENT_MODEL` > `config.model`. The operator's shell variable is not a source: the chain reads the value file, never `process.env` |
+| Model | `--model` > `FASTAGENT_MODEL` > the instance's `model` > `config.model`. The commands that run an agent (`dev`, `start`, `invoke`) read the process environment, which holds this shell's variables and the entered value file's, a real variable winning over the file. `deploy` is the exception: it reads only the production value file's `FASTAGENT_MODEL` and never the shell's, because a deployment's result must not depend on who ran it or where (a CI that wants one sets it in that file or in the delivered configuration). |
 | Values | `--env` given → **only** `.secrets/<env>/.env`; omitted → `.secrets/.env`. No fallback between them |
 | Credentials | `FASTAGENT_AUTH_PATH` > `.secrets/auth.json` > `~/.fastagent/.secrets/auth.json`, **per provider** — and only when the project path is the default one |
 

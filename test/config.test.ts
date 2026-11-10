@@ -133,6 +133,31 @@ describe("resolveConfig", () => {
     expect(config.sources).toEqual({ model: "program default", "http.port": "program default" });
   });
 
+  it("keeps a channel's app binding to the instance: the program's defaults refuse it", () => {
+    const withChannel = (defaults: object) =>
+      defineDefinition({
+        format: 1,
+        builtWith: "0.0.0",
+        name: "reviewer",
+        version: "1.0.0",
+        dir: "/program",
+        config: { defaults },
+        registry: {
+          tools: [],
+          extensions: [],
+          channels: [{ name: "slack", file: "slack.ts", value: {} as never }],
+          schedules: [],
+        },
+      } as never);
+    expect(() => resolveConfig(withChannel({ channels: { slack: { app: { id: "A1" } } } }))).toThrow(
+      "/channels/slack/app unknown field",
+    );
+    const bound = instance({ channels: { slack: { app: { id: "A1", url: "https://x.example.com/slack" } } } });
+    expect(resolveConfig(withChannel({ channels: { slack: { ingress: "webhook" } } }), bound).channels).toEqual({
+      slack: { ingress: "webhook", app: { id: "A1", url: "https://x.example.com/slack" } },
+    });
+  });
+
   it("lets an instance say its own description and starters, starters over the program's, each with its source", () => {
     const base = program({ defaults: { starters: ["Review this PR"] } });
     expect(resolveConfig(base)).toMatchObject({ starters: ["Review this PR"] });

@@ -179,7 +179,15 @@ describe("environment: what context.json may declare", () => {
     );
     expect(refused({ variables: { "MY KEY": { description: "x" } } })).toThrow(`is not an environment variable name`);
     // The deployment sets these itself, and never carries a value file's copy: a declaration could never be met.
-    for (const name of ["PORT", "FASTAGENT_MODEL", "FASTAGENT_STATE_DIR"]) {
+    for (const name of [
+      "PORT",
+      "FASTAGENT_MODEL",
+      "FASTAGENT_STATE_DIR",
+      "FASTAGENT_THINKING_LEVEL",
+      "FASTAGENT_HTTP_API",
+      "FASTAGENT_HTTP_PUBLIC_URL",
+      "FASTAGENT_INGRESS",
+    ]) {
       expect(refused({ variables: { [name]: { description: "x" } } })).toThrow(`is set by the deployment itself`);
     }
     expect(refused({ packages: { "cargo:ripgrep": "14" } })).toThrow(

@@ -131,7 +131,7 @@ an empty variable is unset, and a value the configuration would refuse refuses t
 |---|---|---|---|
 | `model` | `FASTAGENT_MODEL` | `--model` | `provider/modelId` ([model selection](#model-selection)) |
 | `thinkingLevel` | `FASTAGENT_THINKING_LEVEL` | `--thinking` | `off` … `max` |
-| `http.port` | `PORT` | `--port` | a port |
+| `http.port` | `PORT` (`start` only; `dev` ignores it) | `--port` | a port |
 | `http.api` | `FASTAGENT_HTTP_API` | | `true` or `false` |
 | `http.publicUrl` | `FASTAGENT_HTTP_PUBLIC_URL` | | an absolute `https://` URL |
 | `channels.<name>.ingress` | `FASTAGENT_INGRESS` | `--ingress` | `channel=webhook\|connection`, comma-separated (`slack=webhook,feishu=connection`) |
