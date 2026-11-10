@@ -62,7 +62,7 @@ const init: CommandSpec = {
   ],
   notes:
     "An agent is a directory holding a fastagent.config.ts, and it is also the agent's working directory. " +
-    "It lives in a directory of its own, never inside a project or another agent: what it works on is declared " +
+    "It lives in a directory of its own, beside what it works on and never inside another agent: what it works on is declared " +
     "as its content. Add a directory later with `fastagent content add <dir>`.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
@@ -549,8 +549,8 @@ const content: CommandSpec = {
         "Without --program the entry is written to the instance's fastagent.json (the project's, or the file " +
         "--config or FASTAGENT_CONFIG names); a deploy does not carry it yet. github:owner/repo is cloned into " +
         "content/<name> when the agent starts, and brought up to date in place at each start where git can do so " +
-        "without touching the agent's work. A directory is used as it is, and may not contain the agent directory " +
-        "nor sit inside it.",
+        "without touching the agent's work. A directory is used as it is: it must exist, and it may " +
+        "hold the agent directory or sit inside it.",
       run: async (args, f) =>
         (await import("./commands/content.ts")).runContentAdd(args[0] as string, args[1] as string, {
           ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
