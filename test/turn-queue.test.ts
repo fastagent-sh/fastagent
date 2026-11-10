@@ -166,6 +166,38 @@ describe("turn-queue", () => {
     expect(order.at(-1)).toBe("end 1");
   });
 
+  it("a turn sees every earlier turn still running, even when the one just before it ended at once", async () => {
+    const gate = Promise.withResolvers<void>();
+    const seen: Record<string, boolean> = {};
+    const waited: string[] = [];
+    const queue = createTurnQueue<Rec>({
+      label: "[test]",
+      run: (r, slot) =>
+        Effect.gen(function* () {
+          seen[r.id] = slot.earlierRunning();
+          slot.release();
+          if (r.id === "a") yield* Effect.promise(() => gate.promise); // a's run goes on
+          if (r.id === "c") {
+            yield* slot.awaitEarlier;
+            waited.push("c waited");
+          }
+          // b ends at once, without waiting for a (its message was refused)
+        }),
+    });
+    queue.accept(rec("a"));
+    queue.accept(rec("b"));
+    await until(() => "b" in seen);
+    await new Promise((r) => setTimeout(r, 20)); // b has ended; a has not
+    queue.accept(rec("c"));
+    await until(() => "c" in seen);
+    expect(seen).toEqual({ a: false, b: true, c: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(waited).toEqual([]); // c is still waiting for a
+    gate.resolve();
+    await queue.idle();
+    expect(waited).toEqual(["c waited"]);
+  });
+
   it("a turn that never releases still frees its successor when it ends", async () => {
     const order: string[] = [];
     const queue = createTurnQueue<Rec>({

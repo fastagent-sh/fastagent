@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import * as Fiber from "effect/Fiber";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ContextBuffer, createContextBuffer } from "../src/channels/kit/context-buffer.ts";
@@ -11,7 +12,8 @@ import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/
 import type { SeenRing } from "../src/channels/kit/seen.ts";
 import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
 import { createTurnQueue } from "../src/channels/turn-queue.ts";
-import { portJoin } from "../src/effect-port.ts";
+import { PortFailure, portJoin } from "../src/effect-port.ts";
+import type { TurnEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { activeWork } from "../src/channels/busy.ts";
 import * as atomic from "../src/atomic-write.ts";
 import { log } from "../src/log.ts";
@@ -372,6 +374,56 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     r.submit({ id: "b", conversation: "s", text: "" }, false);
     await r.idle();
     expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s", "peek place:s"]);
+  });
+
+  it("holds an input back while an earlier turn runs, even when the turn just before it failed at once", async () => {
+    const { store, calls } = fakeStore();
+    const gate = Promise.withResolvers<void>();
+    const answered = (): Stream.Stream<TurnEvent, PortFailure> =>
+      Stream.fromIterable<TurnEvent>([
+        { type: "message", message: { id: "m3", sessionId: "s", status: "queued" } },
+        {
+          type: "done",
+          message: { id: "m3", sessionId: "s", status: "completed", answer: { entryId: "e1", text: "x" } },
+        },
+      ]);
+    const running = Stream.concat(
+      Stream.fromIterable<TurnEvent>([{ type: "message", message: { id: "m1", sessionId: "s", status: "running" } }]),
+      Stream.fromEffect(
+        Effect.promise(() => gate.promise).pipe(
+          Effect.as<TurnEvent>({
+            type: "done",
+            message: { id: "m1", sessionId: "s", status: "completed", answer: { entryId: "e1", text: "x" } },
+          }),
+        ),
+      ),
+    );
+    const r = runner(store, calls, {
+      execute: (rec, _discussion, _onAnswered, turn) => {
+        if (rec.id === "b") return Effect.fail(new PortFailure(new Error("its message was refused"))); // ends at once
+        turn.admitted();
+        const events = (rec.id === "a" ? running : answered()).pipe(
+          // What the turn's stream tells the runner, as `turnStream` does: the message's end.
+          Stream.tap((event) => Effect.sync(() => (event.type === "done" ? turn.observe(event.message) : undefined))),
+        );
+        return turn.reply(events, (stream) =>
+          Stream.runDrain(stream).pipe(Effect.tap(() => Effect.sync(() => void calls.push(`rendered ${rec.id}`)))),
+        );
+      },
+    });
+    vi.spyOn(log, "error").mockImplementation(() => {});
+    r.submit({ id: "a", conversation: "s", text: "" }, false);
+    r.submit({ id: "b", conversation: "s", text: "" }, false);
+    await vi.waitFor(() => expect(calls).toContain("remove b")); // b ended; a is still running
+    r.submit({ id: "c", conversation: "s", text: "" }, false);
+    await vi.waitFor(() => expect(calls).toContain("attempt c"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // c's input was steered into a's run and shares its answer, so it renders nothing until a has delivered it.
+    expect(calls).not.toContain("rendered c");
+    gate.resolve();
+    await r.idle();
+    expect(calls).toContain("rendered a");
+    expect(calls).not.toContain("rendered c"); // a delivered the shared answer, so c's turn is skipped
   });
 
   it("a recovered answer another turn already delivered is dropped, not sent twice", async () => {
