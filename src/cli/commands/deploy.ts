@@ -2,7 +2,7 @@
  * `fastagent deploy <host> [agent]`: generate host artifacts from the resolved definition and print an ordered deploy
  * runbook.
  */
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { DeployHost } from "../../deploy/hosts.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
@@ -15,7 +15,6 @@ import { preflightDeploy } from "../../deploy/preflight.ts";
 import { apiReport, deploymentApi } from "../../deploy/api.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
 import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
-import { environmentConfig } from "../../harnesses/pi-durable/environment-config.ts";
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive, shellArg } from "../shared.ts";
@@ -149,18 +148,8 @@ async function deploy(
     ...(delivered === undefined ? {} : { instance: delivered.source }),
   });
   const { agentDir } = await enterAgentDirectory(dirArg, opts, undefined, deployed).catch(failStartup);
-  // What the production value file says of the configuration is part of what the box runs on, so the deploy decides with
-  // it and delivers it: that file only, as for the model, and never the shell running the deploy.
-  const layers = await Promise.resolve()
-    .then(() =>
-      environmentConfig(
-        Object.fromEntries(loadEnvValues(dotEnvPath(agentDir))),
-        relative(agentDir, dotEnvPath(agentDir)),
-      ),
-    )
-    .catch(failStartup);
   const config = await deployed(agentDir)
-    .then(({ definition }) => resolveConfig(definition, delivered?.source, layers))
+    .then(({ definition }) => resolveConfig(definition, delivered?.source))
     .catch(failStartup);
   // Never `dev`, whatever spawned this: a channel's way of receiving is chosen as the box will choose it.
   unmarkDevServe();
@@ -171,7 +160,6 @@ async function deploy(
       agentDir,
       config,
       ...(delivered === undefined ? {} : { delivered }),
-      layers,
       run: !!opts.run,
       force: !!opts.force,
       noResidentProcess: host === "agentcore", // alarms and webhooks wake the container there — no machine to keep up

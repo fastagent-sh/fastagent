@@ -10,7 +10,7 @@ import { compile, int, map, obj, opt, str, unknown } from "@earendil-works/pi-sc
 import { afterAll, describe, expect, it } from "vitest";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { instanceConfigSchema, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
-import { environmentConfig, foldLayers } from "../src/harnesses/pi-durable/environment-config.ts";
+import { environmentConfig } from "../src/harnesses/pi-durable/environment-config.ts";
 import { type AgentDefinition, defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
@@ -75,15 +75,11 @@ describe("environmentConfig", () => {
     });
   });
 
-  it("reads which channel receives which way, and says where a value file's variable is from", () => {
-    const layers = environmentConfig(
-      { FASTAGENT_INGRESS: "slack=webhook, feishu=connection" },
-      ".secrets/production/.env",
-    );
-    expect(layers).toEqual([
+  it("reads which channel receives which way, from one variable", () => {
+    expect(environmentConfig({ FASTAGENT_INGRESS: "slack=webhook, feishu=connection" })).toEqual([
       {
         values: { channels: { slack: { ingress: "webhook" }, feishu: { ingress: "connection" } } },
-        label: "FASTAGENT_INGRESS in .secrets/production/.env",
+        label: "FASTAGENT_INGRESS",
       },
     ]);
     for (const bad of ["slack", "slack=", "=webhook", "slack=webhook=x"]) {
@@ -91,19 +87,6 @@ describe("environmentConfig", () => {
         "FASTAGENT_INGRESS must be channel=webhook|connection",
       );
     }
-  });
-
-  it("folds layers into the configuration a deploy delivers, and leaves it alone with none", () => {
-    const layers = environmentConfig({ FASTAGENT_HTTP_API: "false", FASTAGENT_THINKING_LEVEL: "low" });
-    const text = JSON.stringify({ http: { port: 9000, api: true }, settings: { repo: "a/b" } });
-    expect(JSON.parse(foldLayers(text, layers) as string)).toEqual({
-      http: { port: 9000, api: false },
-      thinkingLevel: "low",
-      settings: { repo: "a/b" },
-    });
-    expect(JSON.parse(foldLayers(undefined, layers) as string)).toEqual({ http: { api: false }, thinkingLevel: "low" });
-    expect(foldLayers(text, [])).toBe(text);
-    expect(foldLayers(undefined, [])).toBeUndefined();
   });
 
   it("reads an empty variable as unset, so the configuration decides", () => {

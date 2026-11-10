@@ -138,11 +138,10 @@ an empty variable is unset, and a value the configuration would refuse refuses t
 A flag is entered into its variable at the command's start, as `--name` and `--root` are, so a flag beats the variable
 and the source `info` reports names the variable.
 
-`openAgent` reads none of them: an app passes its own `config`. `deploy` reads them from the production value file
-(`.secrets/production/.env`) only, as it reads `FASTAGENT_MODEL`, and never from the shell it runs in: it decides with
-them (whether the Agent API is served, which URL it registers webhooks at) and folds them into the configuration it
-delivers, so the box runs what the deploy planned. A variable the platform holds on the box still outranks the delivered
-configuration.
+`openAgent` reads none of them: an app passes its own `config`. `deploy` reads none of them either: it decides with the
+program's defaults and the configuration `--config` delivers, so a deployment's non-secret values are written in that
+file (which can be committed, one per environment), not set as variables. A variable the platform holds on the box
+still outranks the delivered configuration.
 
 ## Model selection
 

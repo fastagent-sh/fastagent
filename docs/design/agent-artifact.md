@@ -339,8 +339,8 @@ Precedence of configuration values, lowest first:
 3. the instance configuration;
 4. environment variables: secrets, and the overrides `FASTAGENT_MODEL`, `FASTAGENT_THINKING_LEVEL`, `FASTAGENT_HTTP_API`,
    `FASTAGENT_HTTP_PUBLIC_URL` and `FASTAGENT_INGRESS` (each laid over the configuration as a layer of its own, so its
-   source names it; read by the CLI's commands that run an instance, never by `openAgent`; `deploy` reads them from the
-   production value file only and folds them into the configuration it delivers);
+   source names it; read by the CLI's commands that run an instance, never by `openAgent` and not by `deploy`, which
+   decides with the program's defaults and the configuration it delivers);
 5. command-line flags and `openAgent` options.
 
 Composition:

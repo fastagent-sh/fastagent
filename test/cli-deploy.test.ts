@@ -17,26 +17,10 @@ function isRunning(pid: number): boolean {
 }
 
 describe("cli: deploy and the variables that set the configuration", () => {
-  const agent = () =>
-    agentWorkspace("fa-deploy-vars-", {
+  it("does not read them: a deployment's configuration is the program's defaults and what --config delivers", async () => {
+    const dir = await agentWorkspace("fa-deploy-vars-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
       ".secrets/production/.env": "FASTAGENT_HTTP_API=false\nFASTAGENT_THINKING_LEVEL=low\n",
-    });
-  const delivered = async (dir: string) =>
-    JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"));
-
-  it("decides with what the production value file says and delivers it, so the box runs what the deploy planned", async () => {
-    const dir = await agent();
-    const result = await runInProcess(["deploy", "fly", dir]);
-    expect(result.code, result.stderr).toBe(0);
-    expect(result.stderr).toMatch(/Agent API: not served/);
-    // Fly adds the URL it mints beside them.
-    expect(await delivered(dir)).toMatchObject({ http: { api: false }, thinkingLevel: "low" });
-  });
-
-  it("reads the value file only: this shell's variable is not a source, as for the model", async () => {
-    const dir = await agentWorkspace("fa-deploy-vars-shell-", {
-      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
     const result = await runInProcess(["deploy", "fly", dir], undefined, {
       ...process.env,
@@ -44,20 +28,9 @@ describe("cli: deploy and the variables that set the configuration", () => {
     });
     expect(result.code, result.stderr).toBe(0);
     expect(result.stderr).not.toMatch(/Agent API: not served/);
-    expect(await delivered(dir)).not.toHaveProperty("http.api");
-    expect(await delivered(dir)).not.toHaveProperty("thinkingLevel");
-  });
-
-  it("refuses a value the configuration would refuse, naming the variable and the file", async () => {
-    const dir = await agentWorkspace("fa-deploy-vars-bad-", {
-      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
-      ".secrets/production/.env": "FASTAGENT_THINKING_LEVEL=loud\n",
-    });
-    const result = await runInProcess(["deploy", "fly", dir]);
-    expect([result.code, result.stderr]).toEqual([
-      1,
-      expect.stringContaining("FASTAGENT_THINKING_LEVEL in .secrets/production/.env: /thinkingLevel"),
-    ]);
+    const delivered = JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"));
+    expect(delivered).not.toHaveProperty("http.api");
+    expect(delivered).not.toHaveProperty("thinkingLevel");
   });
 });
 
