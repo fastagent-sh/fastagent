@@ -446,9 +446,11 @@ entries in §4.1.
 #### What it holds, by kind
 
 The file holds four kinds of value. They have different writers and different lifetimes, which is what decides where
-each can live; a key is placed by what it is, not by which file it happens to sit in.
+each can live; a key is placed by what it is, not by which file it happens to sit in. Every key stays in the file: a
+flag or a variable is a layer over it with higher precedence (the program's defaults, then the file, then variables,
+then flags), never a replacement for it.
 
-| Kind | Keys | Other ways to give it | Written by |
+| Kind | Keys | Layers over the file (§4.1 precedence) | Written by |
 |---|---|---|---|
 | Identity | `name`, `description` | `name`: `--name`, `FASTAGENT_NAME`, `openAgent`'s `name`. Both are the instance's own and are reported apart from the program's (`info().name`, `info().description` against `info().agent`); the instance's description has no fallback to the program's | a person, a host app |
 | Overrides of the program's defaults, scalar | `model`, `thinkingLevel`, `http.port`, `http.api`, `http.publicUrl`, `channels.<name>.ingress` | flags and environment variables (§4.1 precedence); `channels.<name>.ingress` has `--ingress` on `channels` only | a person |
