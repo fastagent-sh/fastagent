@@ -6,6 +6,9 @@ status: partially implemented
 
 # Configuration, deployment environments, and credential ownership
 
+> **Superseded in part by [configuration-layout.md](configuration-layout.md)** (proposed): §3 to §6 and §9, where the
+> value files and `.secrets/` live, are being replaced.
+
 **Status: partially implemented.** This is the design conclusion for [#482](https://github.com/fastagent-sh/fastagent/issues/482). It replaces that RFC's file layout and command surface with a smaller one; §11 lists what was dropped and why. The code truth is `src/`; §12 is what the unbuilt env addition would take.
 
 **The day-one tier is built and complete (steps 1–3). The env dimension (§2's day two, step 4) is not, and is deliberately not scheduled** — it is a pure addition with no demand behind it yet, so every `--env` sentence below describes a design that is ready rather than code that exists.
