@@ -38,7 +38,7 @@ function renderer(
       return Response.json({ ok: true, result: { message_id: 17 } });
     });
     return (events: Stream.Stream<InvokeEvent, PortFailure>) =>
-      telegramReply(events, "https://api.telegram.org", "token", { chatId: 1 }, neutral, undefined, onAnswered);
+      telegramReply(events, "https://api.telegram.org", "token", { chatId: 1 }, neutral, onAnswered);
   }
   if (platform === "feishu") {
     const api = {
@@ -53,7 +53,7 @@ function renderer(
       updateCardElement: async () => {},
     } as unknown as FeishuApi;
     return (events: Stream.Stream<InvokeEvent, PortFailure>) =>
-      feishuReply(events, api, { chatId: "chat-1" }, neutral, undefined, undefined, onAnswered);
+      feishuReply(events, api, { chatId: "chat-1" }, neutral, undefined, onAnswered);
   }
   const api = {
     postMarkdown: async () => {
@@ -184,6 +184,7 @@ it.each(platforms)(
           Effect.scoped(
             render(
               turnStream({
+                steer: { admitted: () => {}, observe: () => {} },
                 agent,
                 label: "[test]",
                 session: async () => "s",

@@ -1,11 +1,15 @@
 /** The durable-turn LIFECYCLE the stateful chat channels share, over the kit's parts. */
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
+import type * as Stream from "effect/Stream";
+import type { Message } from "../../agent-api.ts";
 import { log } from "../../log.ts";
-import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
+import { type PortFailure, portJoin } from "../../effect-port.ts";
+import type { TurnEvent } from "./invoke-turn-kit.ts";
 import type { DiscussionSource } from "./place-history.ts";
-import { createTurnQueue } from "../turn-queue.ts";
+import type { SeenRing } from "./seen.ts";
+import { answerKeyOf, gatedReply } from "./turn-gate.ts";
+import { type TurnSlot, createTurnQueue, unqueuedSlot } from "../turn-queue.ts";
 import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-store.ts";
 
 /**
@@ -14,6 +18,24 @@ import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-
  */
 export type PendingBase<S extends TurnRecordBase> = Omit<S, "attempts">;
 
+/** What the runner gives a turn beyond its inputs: how its message is sent, and how its reply and answer are delivered. */
+interface TurnHooks {
+  /** The turn's message is recorded with the Agent (or was refused): the next input may be prepared and sent. */
+  admitted(): void;
+  /** The turn's own message ended, as the Agent reports it. */
+  observe(message: Message): void;
+  /**
+   * Render the turn's reply from its message's events. An input steered into a run that was still going shares that
+   * run's answer, which the earlier turn delivers: such a turn renders nothing when that is done.
+   */
+  reply(
+    events: Stream.Stream<TurnEvent, PortFailure>,
+    render: (events: Stream.Stream<TurnEvent, PortFailure>) => Effect.Effect<void, PortFailure, Scope.Scope>,
+  ): Effect.Effect<void, PortFailure, Scope.Scope>;
+  /** Run `deliver` for a recovered answer, unless an earlier turn delivered it already. */
+  deliverOnce(deliver: Effect.Effect<void, PortFailure, Scope.Scope>): Effect.Effect<void, PortFailure, Scope.Scope>;
+}
+
 export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecordBase, E, P = string> {
   label: string;
   store: TurnStore<S>;
@@ -21,6 +43,11 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   discussion: DiscussionSource<E, P>;
   /** Delivery dedup by platform id, recorded post-persist (Slack, Feishu). */
   seen?: { add(id: string): void };
+  /**
+   * The answers already delivered (`<session>:<entry>`): inputs steered into one run share its answer, and an input is
+   * skipped when its answer is in here.
+   */
+  delivered: SeenRing;
   /** The persisted intent for a pending turn — drops the live-only fields. */
   toStored(rec: R): S;
   /** A recovered intent as a pending turn — live-only fields start absent. */
@@ -29,30 +56,25 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   discussionKey(rec: R): P | undefined;
   /** The place, for the lifecycle log line (`chat=… thread=…`). */
   where(rec: R): string;
-  /** Queue feedback when a turn is scheduled BEHIND an active one. */
-  onQueuedBehind?(rec: R): { done: Promise<void>; cancel?: () => void };
   /** Runs before the attempt is counted. */
   beforeRun?(rec: R): Promise<boolean>;
-  /**
-   * The attempt could not be recorded (disk failure): a restart replays the turn, so say so on any notice it holds
-   * rather than leaving it pinned at "Queued".
-   */
-  onDeferred(rec: R): void;
   /** The turn started the ceiling's worth of times without finishing: tell the asker. */
   notifyDropped(rec: R): void;
+  /**
+   * The turn's input was answered together with an earlier one, so it sends nothing of its own: tell the asker where the
+   * answer is, when it is not under their message (a group's answer quotes the first asker). Absent: say nothing.
+   */
+  notifyShared?(rec: R): Promise<void>;
   execute(
     rec: R,
     discussion: { text: string; consumed: E[] },
     /** Called with the finished reply just before it is delivered — the point the answer becomes recoverable. */
     onAnswered: (answer: string) => void,
+    turn: TurnHooks,
   ): Effect.Effect<void, PortFailure, Scope.Scope>;
   /**
    * Deliver an answer a previous run generated but never confirmed delivering: no model, no tools, and no live
    * preview — the one the answer was written for died with its process.
-   *
-   * A notice THIS process put up is a different thing and must still be settled: a record recovered behind another
-   * turn in the same conversation goes through `onQueuedBehind` like any other, so it can hold a fresh "queued" message
-   * or status that only this call can take over or clear.
    */
   deliverAnswer(rec: R, answer: string): Effect.Effect<void, PortFailure, Scope.Scope>;
 }
@@ -72,9 +94,55 @@ export interface TurnRunner<R, S> {
 export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, E, P = string>(
   options: TurnRunnerOptions<R, S, E, P>,
   rec: R,
+  slot: TurnSlot = unqueuedSlot,
+  /** The turn was left by an earlier process, so its message may have been sent and answered already. */
+  afterRestart = false,
+  /** The conversations with a turn that folded discussion and has not ended (see the fold below), and how many. */
+  folding: Map<string, number> = new Map(),
 ): Effect.Effect<void, PortFailure> {
   return Effect.gen(function* () {
     const { label, store, discussion: source, beforeRun } = options;
+    let ended: Message | undefined;
+    const answerKey = (): string | undefined => answerKeyOf(ended) ?? rec.answerKey;
+    const wasDelivered = (key: string): boolean => options.delivered.has(key);
+    const sharedAnswer = (key: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        log.info(`${label} turn ${rec.id}: its answer was delivered with an earlier input's (${key})`);
+        if (options.notifyShared === undefined) return;
+        const notify = options.notifyShared;
+        yield* portJoin(() => notify(rec)).pipe(
+          Effect.catchTag("PortFailure", (error) =>
+            Effect.sync(() =>
+              log.warn(`${label} turn ${rec.id}: could not say where its shared answer is: ${String(error.cause)}`),
+            ),
+          ),
+        );
+      });
+    const hooks: TurnHooks = {
+      admitted: slot.release,
+      observe: (message) => {
+        ended = message;
+      },
+      reply: (events, render) =>
+        gatedReply({
+          events,
+          held: afterRestart || slot.earlierRunning(),
+          awaitEarlier: slot.awaitEarlier,
+          delivered: wasDelivered,
+          render,
+          skipped: sharedAnswer,
+        }),
+      deliverOnce: (deliver) =>
+        Effect.gen(function* () {
+          yield* slot.awaitEarlier;
+          const key = answerKey();
+          if (key !== undefined && wasDelivered(key)) {
+            yield* sharedAnswer(key);
+            return;
+          }
+          yield* deliver;
+        }),
+    };
     if (beforeRun && !(yield* portJoin(() => beforeRun(rec)))) return;
     const decision = store.startAttempt(rec.id);
     if (decision === "exceeded") {
@@ -86,7 +154,7 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
       // The ceiling is about EXECUTION — a turn that may be crashing the process must stop being run. Delivering a
       // recorded answer costs one message and no model call, so the record the store just dropped gets one last
       // send instead of "please ask again" over an answer that exists.
-      return yield* Effect.scoped(options.deliverAnswer(rec, stranded)).pipe(
+      return yield* Effect.scoped(hooks.deliverOnce(options.deliverAnswer(rec, stranded))).pipe(
         Effect.matchEffect({
           // The store has already said, at error level, that this turn will not be run again. Silence after that
           // reads as "nothing happened"; this line is what distinguishes it from a delivered answer.
@@ -110,42 +178,74 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
         }),
       );
     }
-    if (decision === "defer") {
-      options.onDeferred(rec);
-      return;
-    }
+    // The store has logged that the attempt could not be recorded; a restart replays the turn.
+    if (decision === "defer") return;
     const startedAt = Date.now();
     // A recovered answer skips the buffer entirely: its discussion was committed when the answer was recorded, and
     // peeking again would consume entries this turn never folded in.
     const recovered = rec.answer;
     let answered = recovered !== undefined;
+    // A recovered answer is not sent to the Agent: there is nothing to prepare, and nothing for the next input to wait for.
+    if (recovered !== undefined) slot.release();
     // One stable prefix, so every `turn done:`/`turn failed:` has a `turn start:` to grep back to; what kind of work
     // it is rides along as a field.
     log.info(
       `${label} turn start: turn=${rec.id} conversation=${rec.conversation} ${options.where(rec)}` +
         `${recovered === undefined ? "" : " mode=re-delivery (answer recovered from a prior run)"}`,
     );
+    let folded = false;
     const work =
       recovered !== undefined
-        ? Effect.suspend(() => options.deliverAnswer(rec, recovered))
+        ? Effect.suspend(() => hooks.deliverOnce(options.deliverAnswer(rec, recovered)))
         : Effect.suspend(() => {
             const key = options.discussionKey(rec);
+            // An earlier turn of this conversation has read the discussion and not answered yet, so its fold is not
+            // committed and a read now would be the same text again, in this input's message of the same run. This
+            // turn leaves it: what arrived since stays uncommitted and is read by a later turn.
+            const earlierFold = (folding.get(rec.conversation) ?? 0) > 0;
             // `peek` never rejects (DiscussionSource): a source that cannot read says so in the text.
             return Effect.promise(async () =>
-              key === undefined ? { text: "", consumed: [] as E[] } : source.peek(key),
+              key === undefined || earlierFold ? { text: "", consumed: [] as E[] } : source.peek(key),
             ).pipe(
-              Effect.flatMap((discussion) =>
-                options.execute(rec, discussion, (answer) => {
-                  // Only a recorded answer is recoverable — an untracked run has no record to keep it in.
-                  answered =
-                    key === undefined
-                      ? store.answered(rec.id, answer)
-                      : commitAnsweredTurn(store, source, { id: rec.id, key, consumed: discussion.consumed, answer });
+              Effect.tap((discussion) =>
+                Effect.sync(() => {
+                  if (discussion.text === "") return;
+                  folded = true;
+                  folding.set(rec.conversation, (folding.get(rec.conversation) ?? 0) + 1);
                 }),
+              ),
+              Effect.flatMap((discussion) =>
+                options.execute(
+                  rec,
+                  discussion,
+                  (answer) => {
+                    // Only a recorded answer is recoverable — an untracked run has no record to keep it in.
+                    const answerKeyNow = answerKey();
+                    answered =
+                      key === undefined
+                        ? store.answered(rec.id, answer, answerKeyNow)
+                        : commitAnsweredTurn(store, source, {
+                            id: rec.id,
+                            key,
+                            consumed: discussion.consumed,
+                            answer,
+                            ...(answerKeyNow === undefined ? {} : { answerKey: answerKeyNow }),
+                          });
+                  },
+                  hooks,
+                ),
               ),
             );
           });
     const delivered = yield* Effect.scoped(work).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (!folded) return;
+          const left = (folding.get(rec.conversation) ?? 1) - 1;
+          if (left > 0) folding.set(rec.conversation, left);
+          else folding.delete(rec.conversation);
+        }),
+      ),
       Effect.matchEffect({
         onSuccess: () =>
           Effect.sync(() => {
@@ -167,6 +267,9 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
     // one message and no model call, and `startAttempt` bounds how often that is tried. Everything else — delivered,
     // or failed before there was an answer — is done here. Interruption never reaches this removal.
     if (delivered || !answered) {
+      // Before the record goes: a crash between the two leaves a record whose answer is skipped, not delivered twice.
+      const key = answerKey();
+      if (delivered && key !== undefined) options.delivered.add(key);
       store.remove(rec.id);
       return;
     }
@@ -183,41 +286,13 @@ export function createTurnRunner<
   E,
   P = string,
 >(options: TurnRunnerOptions<R, S, E, P>): TurnRunner<R, S> {
-  const { label, store, seen, onQueuedBehind } = options;
-  const notices = new Map<string, { done: Fiber.Fiber<void>; cancel?: () => void }>();
+  const { label, store, seen } = options;
   const queue = createTurnQueue<R>({
     label,
-    onQueuedBehind:
-      onQueuedBehind &&
-      ((rec) => {
-        const notice = onQueuedBehind(rec);
-        // Observe rejection at acceptance, even if dequeue is minutes away.
-        const done = Effect.runFork(
-          portJoin(() => notice.done).pipe(
-            Effect.catchCause((cause) =>
-              Effect.sync(() =>
-                log.warn(
-                  `${label} queue notice failed: turn=${rec.id} conversation=${rec.conversation}: ${String(portError(cause))}`,
-                ),
-              ),
-            ),
-          ),
-        );
-        notices.set(rec.id, { done, cancel: notice.cancel });
-      }),
-    run: (rec) =>
-      Effect.gen(function* () {
-        const notice = notices.get(rec.id);
-        notices.delete(rec.id);
-        if (notice) {
-          // A broken cancel hook must still join any post already in flight.
-          yield* Effect.addFinalizer(() => Fiber.await(notice.done));
-          notice.cancel?.();
-          yield* Fiber.await(notice.done);
-        }
-        yield* runQueuedTurn(options, rec);
-      }),
+    run: (rec, slot) => runQueuedTurn(options, rec, slot, recoveredIds.delete(rec.id), folding),
   });
+  const recoveredIds = new Set<string>();
+  const folding = new Map<string, number>();
   const submit = (rec: R, persist: boolean): void => {
     if (persist) {
       store.add(options.toStored(rec)); // pre-ACK: a failed write throws → 500 → redelivery
@@ -230,7 +305,10 @@ export function createTurnRunner<
     recover() {
       const recovered = store.recover();
       if (recovered.length > 0) log.info(`${label} recovering ${recovered.length} unfinished turn(s) from a prior run`);
-      for (const stored of recovered) submit(options.fromStored(stored), false);
+      for (const stored of recovered) {
+        recoveredIds.add(stored.id);
+        submit(options.fromStored(stored), false);
+      }
       return recovered;
     },
     idle: () => queue.idle(),

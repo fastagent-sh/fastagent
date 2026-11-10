@@ -78,6 +78,7 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
       expect(pkgs.filter((p) => p.startsWith("effect/")).sort(), entry).toEqual([
         "effect/Cause",
         "effect/Clock",
+        "effect/Deferred",
         "effect/Effect",
         "effect/Exit",
         "effect/Fiber",

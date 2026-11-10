@@ -9,6 +9,7 @@ import {
   backgroundImagesManifest,
   loadBackground,
   missingAttachmentsNote,
+  type SteeredTurn,
   turnStream,
   type TurnEvent,
   promptContent,
@@ -96,6 +97,7 @@ export function slackTurnStream(
     enter?: (sessionId: string) => () => void;
     key: string;
     text: string;
+    steer: SteeredTurn;
   },
   transport: SlackTurnTransport,
   attachments: SlackTurnAttachments,
@@ -114,5 +116,6 @@ export function slackTurnStream(
     // fail the same way on redelivery.
     retryableLoadFailure: (cause) =>
       cause instanceof SlackApiError && (cause.status === 0 || cause.status === 429 || cause.status >= 500),
+    steer: turn.steer,
   });
 }

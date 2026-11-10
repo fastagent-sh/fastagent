@@ -20,8 +20,8 @@ const until = async (cond: () => boolean): Promise<void> => {
   for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
 };
 
-const makeQueue = (run: (r: Rec) => Promise<void>, onQueuedBehind?: (r: Rec) => void): TurnQueue<Rec> =>
-  createTurnQueue<Rec>({ label: "[test]", run: (rec) => portJoin(() => run(rec)), onQueuedBehind });
+const makeQueue = (run: (r: Rec) => Promise<void>): TurnQueue<Rec> =>
+  createTurnQueue<Rec>({ label: "[test]", run: (rec) => portJoin(() => run(rec)) });
 
 describe("turn-queue", () => {
   it("owns cleanup before the successor runs, counts queued work, and isolates sessions", async () => {
@@ -142,26 +142,72 @@ describe("turn-queue", () => {
     expect(order).toEqual(["3", "1", "2"]); // A's turns in arrival order
   });
 
-  it("onQueuedBehind fires only when the session is already busy", async () => {
-    const queuedBehind: string[] = [];
-    let release!: () => void;
-    const gate = new Promise<void>((r) => {
-      release = r;
+  it("a turn that releases its slot lets the next one of the session start while it is still running", async () => {
+    const order: string[] = [];
+    const gate = Promise.withResolvers<void>();
+    const queue = createTurnQueue<Rec>({
+      label: "[test]",
+      run: (r, slot) =>
+        Effect.gen(function* () {
+          order.push(`start ${r.id} earlierRunning=${slot.earlierRunning()}`);
+          if (r.id === "1") {
+            slot.release();
+            yield* Effect.promise(() => gate.promise);
+            order.push("end 1");
+          }
+        }),
     });
-    const done: string[] = [];
-    const queue = makeQueue(
-      async (r) => {
-        if (r.id === "1") await gate;
-        done.push(r.id);
-      },
-      (r) => queuedBehind.push(r.id),
-    );
     queue.accept(rec("1"));
-    expect(queuedBehind).toEqual([]); // idle session — no hook
     queue.accept(rec("2"));
-    expect(queuedBehind).toEqual(["2"]); // busy — hook fired synchronously at accept
-    release();
-    await until(() => done.length === 2);
+    await until(() => order.length >= 2);
+    expect(order).toEqual(["start 1 earlierRunning=false", "start 2 earlierRunning=true"]); // 1 is still running
+    gate.resolve();
+    await queue.idle();
+    expect(order.at(-1)).toBe("end 1");
+  });
+
+  it("a turn sees every earlier turn still running, even when the one just before it ended at once", async () => {
+    const gate = Promise.withResolvers<void>();
+    const seen: Record<string, boolean> = {};
+    const waited: string[] = [];
+    const queue = createTurnQueue<Rec>({
+      label: "[test]",
+      run: (r, slot) =>
+        Effect.gen(function* () {
+          seen[r.id] = slot.earlierRunning();
+          slot.release();
+          if (r.id === "a") yield* Effect.promise(() => gate.promise); // a's run goes on
+          if (r.id === "c") {
+            yield* slot.awaitEarlier;
+            waited.push("c waited");
+          }
+          // b ends at once, without waiting for a (its message was refused)
+        }),
+    });
+    queue.accept(rec("a"));
+    queue.accept(rec("b"));
+    await until(() => "b" in seen);
+    await new Promise((r) => setTimeout(r, 20)); // b has ended; a has not
+    queue.accept(rec("c"));
+    await until(() => "c" in seen);
+    expect(seen).toEqual({ a: false, b: true, c: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(waited).toEqual([]); // c is still waiting for a
+    gate.resolve();
+    await queue.idle();
+    expect(waited).toEqual(["c waited"]);
+  });
+
+  it("a turn that never releases still frees its successor when it ends", async () => {
+    const order: string[] = [];
+    const queue = createTurnQueue<Rec>({
+      label: "[test]",
+      run: (r) => Effect.sync(() => void order.push(r.id)),
+    });
+    queue.accept(rec("1"));
+    queue.accept(rec("2"));
+    await queue.idle();
+    expect(order).toEqual(["1", "2"]);
   });
 
   it("a runner rejection is logged, never an unhandled rejection — and the chain continues", async () => {

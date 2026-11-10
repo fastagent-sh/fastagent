@@ -13,6 +13,7 @@ import {
   attributedFileName,
   loadBackground,
   missingAttachmentsNote,
+  type SteeredTurn,
   turnStream,
   type TurnEvent,
   promptContent,
@@ -98,7 +99,7 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
  */
 export function telegramTurnStream(
   agent: Agent,
-  turn: { session: () => Promise<string>; key: string; text: string },
+  turn: { session: () => Promise<string>; key: string; text: string; steer: SteeredTurn },
   transport: TurnTransport,
   attachments: TurnAttachments,
 ): Stream.Stream<TurnEvent, PortFailure> {
@@ -113,5 +114,6 @@ export function telegramTurnStream(
     }),
     // A Bot API download that failed may simply succeed on the redelivery.
     retryableLoadFailure: () => true,
+    steer: turn.steer,
   });
 }

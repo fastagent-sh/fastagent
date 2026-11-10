@@ -25,6 +25,11 @@ export interface TurnRecordBase {
    * is owed. A restart therefore re-delivers an answer instead of paying for it again.
    */
   answer?: string;
+  /**
+   * Which answer of the Agent `answer` is (`<session>:<entry>`): inputs steered into one run share an answer, and a
+   * delivered one is skipped by its key.
+   */
+  answerKey?: string;
 }
 
 export interface TurnStore<T extends TurnRecordBase> {
@@ -34,7 +39,7 @@ export interface TurnStore<T extends TurnRecordBase> {
    * Record the completed reply so a restart can deliver it without running the turn again. `false` = there was no
    * record to write it to (an untracked run), so this answer has no recovery copy.
    */
-  answered(id: string, answer: string): boolean;
+  answered(id: string, answer: string, answerKey?: string): boolean;
   remove(id: string): void;
   /**
    * Every persisted turn a crash left behind, in ARRIVAL order (the channel's `order`), to re-enqueue on the next
@@ -70,9 +75,9 @@ export interface TurnStoreOptions<T extends TurnRecordBase> {
 export function commitAnsweredTurn<T extends TurnRecordBase, E, P>(
   store: TurnStore<T>,
   discussion: Pick<DiscussionSource<E, P>, "commit">,
-  turn: { id: string; key: P; consumed: E[]; answer: string },
+  turn: { id: string; key: P; consumed: E[]; answer: string; answerKey?: string },
 ): boolean {
-  const recorded = store.answered(turn.id, turn.answer);
+  const recorded = store.answered(turn.id, turn.answer, turn.answerKey);
   discussion.commit(turn.key, turn.consumed);
   return recorded;
 }
@@ -82,9 +87,11 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
   const load = (): Map<string, T> => {
     const raw = loadStateFile(path);
     if (raw === undefined) return new Map();
-    // `answer` belongs to the generic record, so its shape is checked here rather than in each channel's validator.
+    // `answer` and `answerKey` belong to the generic record, so their shapes are checked here rather than in each
+    // channel's validator.
+    const optionalString = (value: unknown): boolean => value === undefined || typeof value === "string";
     const valid = (t: unknown): boolean =>
-      isRecord(t) && ((t as TurnRecordBase).answer === undefined || typeof (t as TurnRecordBase).answer === "string");
+      isRecord(t) && optionalString((t as TurnRecordBase).answer) && optionalString((t as TurnRecordBase).answerKey);
     if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.values(raw).every(valid)) {
       return new Map(Object.entries(raw as Record<string, T>));
     }
@@ -120,7 +127,7 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
         throw e;
       }
     },
-    answered(id, answer) {
+    answered(id, answer, answerKey) {
       const rec = turns.get(id);
       if (!rec) {
         // An untracked run (see startAttempt): there is no record to write the answer to, so a delivery that fails
@@ -128,7 +135,7 @@ export function createTurnStore<T extends TurnRecordBase>(path: string, opts: Tu
         log.warn(`${label} turn ${id} answered with no record on disk (untracked run) — its answer is not recoverable`);
         return false;
       }
-      turns.set(id, { ...rec, answer });
+      turns.set(id, { ...rec, answer, ...(answerKey === undefined ? {} : { answerKey }) });
       // Post-ACK, so it cannot throw: a failed write costs the recovery copy, not the delivery about to happen. It
       // does decide the answer of this function — an answer only in memory survives nothing.
       return persistBestEffort("answer (a crash before delivery would lose the answer)");

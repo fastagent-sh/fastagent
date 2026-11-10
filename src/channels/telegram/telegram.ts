@@ -32,8 +32,10 @@ import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, teleg
 import { attachmentsDir } from "../kit/attachment-path.ts";
 import { dispatchStop } from "../kit/stop-command.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
-import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
+import { type Target, callApi, sendMessage } from "./telegram-api.ts";
+import { createSeenRing } from "../kit/seen.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
+import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { portJoin } from "../../effect-port.ts";
 import { pollTelegramUpdates } from "./polling.ts";
@@ -49,10 +51,7 @@ const TELEGRAM_API = "https://api.telegram.org";
 const MAX_UPDATE_BYTES = 1 << 20;
 
 /** One accepted turn: everything the runner needs to execute it. */
-interface PendingTurn extends Omit<StoredTurn, "attempts"> {
-  /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over. */
-  previewId?: number;
-}
+type PendingTurn = Omit<StoredTurn, "attempts">;
 
 export interface TelegramChannelOptions {
   /** Webhook secret token (the `secret_token` you set via setWebhook); verifies inbound updates. */
@@ -143,11 +142,7 @@ function createTelegramRuntime(
   // operator log line.
   const notifyDropped = (r: PendingTurn): void => {
     const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-    const sent =
-      r.previewId !== undefined
-        ? editMessageText(apiBaseUrl, botToken, targetOf(r), r.previewId, body, { html: false })
-        : sendMessage(apiBaseUrl, botToken, targetOf(r), body, { html: false }).then(() => {});
-    void sent.catch((e) =>
+    void sendMessage(apiBaseUrl, botToken, targetOf(r), body, { html: false }).catch((e) =>
       log.warn(`[telegram] could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
     );
   };
@@ -156,43 +151,27 @@ function createTelegramRuntime(
     label: "[telegram]",
     store,
     discussion: buffer,
-    toStored: ({ previewId: _live, ...intent }) => ({ ...intent, attempts: 0 }),
-    fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, previewId: undefined }),
+    delivered: createSeenRing(join(stateHome, "delivered.json"), "[telegram]"),
+    toStored: (intent) => ({ ...intent, attempts: 0 }),
+    fromStored: ({ attempts: _a, ...intent }) => intent,
     discussionKey: (rec) => rec.placeKey,
     where: (rec) => `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`,
-    // Queue feedback: when this session already has a turn running/queued, a silent wait reads as "the bot ignored
-    // me" once the current turn runs long.
-    onQueuedBehind: (rec) => ({
-      done: sendMessage(apiBaseUrl, botToken, targetOf(rec), "⏳ Queued — I’ll start once the current task finishes.", {
-        html: false,
-      }).then(
-        (id) => {
-          if (id !== undefined) rec.previewId = id;
-        },
-        (e) => log.warn(`[telegram] queue notice failed (the turn still runs): ${String(e)}`),
-      ),
-    }),
-    // Its ⏳ notice (if any) now falsely reads "Queued": delete it best-effort.
-    onDeferred: (rec) => {
-      if (rec.previewId !== undefined) {
-        void callApi(apiBaseUrl, botToken, "deleteMessage", {
-          chat_id: rec.chatId,
-          message_id: rec.previewId,
-        }).catch(() => {});
-      }
-    },
     notifyDropped,
-    // `rec.previewId`: the ⏳ notice THIS process put up if the record waited behind another turn.
-    deliverAnswer: (rec, answer) =>
-      portJoin(() => deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer, rec.previewId)),
-    execute: (rec, discussion, onAnswered) =>
-      telegramReply(
+    // A group's answer quotes the first asker's message, so a later asker is told where theirs is.
+    notifyShared: async (rec) => {
+      if (rec.replyTo === undefined) return;
+      await sendMessage(apiBaseUrl, botToken, targetOf(rec), SHARED_ANSWER_NOTICE, { html: false });
+    },
+    deliverAnswer: (rec, answer) => portJoin(() => deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer)),
+    execute: (rec, discussion, onAnswered, turn) =>
+      turn.reply(
         telegramTurnStream(
           agent,
           {
             session: () => sessionFor(rec.conversation),
             key: rec.id,
             text: `${discussionBlock(discussion.text)}${rec.baseText}`,
+            steer: turn,
           },
           { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: attachmentsDir(stateHome) },
           {
@@ -203,14 +182,10 @@ function createTelegramRuntime(
             }),
           },
         ),
-        apiBaseUrl,
-        botToken,
-        targetOf(rec),
-        formatError,
-        rec.previewId,
-        onAnswered,
+        (events) => telegramReply(events, apiBaseUrl, botToken, targetOf(rec), formatError, onAnswered),
       ),
   });
+
   runner.recover();
 
   const accept = (update: TelegramUpdate): void => {

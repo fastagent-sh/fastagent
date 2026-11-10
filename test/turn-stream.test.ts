@@ -15,8 +15,11 @@ afterEach(() => vi.restoreAllMocks());
 
 const ok: TurnEvent[] = [ev.message(), ev.text("answer"), ev.ended()];
 
+const steer = { admitted: () => {}, observe: () => {} };
+
 const turn = (agent: Agent, resolve = async () => {}, session = async () => "s") =>
   turnStream({
+    steer,
     agent,
     label: "[test]",
     session,
@@ -46,13 +49,13 @@ const recorded = ev.message() as MessageStreamEvent;
 const agentOver = (source: AsyncIterator<MessageStreamEvent>) =>
   ({ messages: { stream: () => ({ [Symbol.asyncIterator]: () => source }) } }) as unknown as Agent;
 
-it("asks once, queued behind whatever runs in the session, under the turn's key", async () => {
+it("asks once, steered into whatever runs in the session, under the turn's key", async () => {
   const agent = scriptedAgent(() => ok);
   const events = await read(turn(agent));
   expect(events.map((event) => event.type)).toEqual(["message", "entry", "delta", "entry", "done"]);
   expect(events[0]).toMatchObject(ok[0] as object);
   expect(agent.sent).toEqual([
-    { sessionId: "s", idempotencyKey: "msg-1", content: [{ type: "text", text: "hi" }], whenBusy: "queue" },
+    { sessionId: "s", idempotencyKey: "msg-1", content: [{ type: "text", text: "hi" }], whenBusy: "steer" },
   ]);
 });
 
@@ -113,6 +116,7 @@ it("enters its session while the turn runs and leaves it after, whether the turn
   const left: string[] = [];
   const turnIn = (agent: Agent) =>
     turnStream({
+      steer,
       agent,
       label: "[test]",
       session: async () => "s",

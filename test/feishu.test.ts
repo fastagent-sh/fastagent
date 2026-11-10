@@ -11,6 +11,7 @@ import {
   stoppedRun,
   withStop,
 } from "./scripted-agent.ts";
+import { holdingAgent } from "./holding-agent.ts";
 import { ev } from "./scripted-run.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -691,13 +692,13 @@ describe("turn flow", () => {
     expect(reply?.body?.reply_in_thread).toBe(true);
   });
 
-  it("different places run concurrently while one place stays FIFO", async () => {
+  it("sends a same-place input at once, steered, and a different place too", async () => {
     feishuFetch();
     let releaseFirst: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
-    const starts: { session: string; ask: string }[] = [];
+    const starts: { session: string; ask: string; whenBusy?: string }[] = [];
     injectedAgent = scriptedAgent(async function* (request) {
       yield ev.message();
       const ask = promptOf(request).text.includes("first")
@@ -705,7 +706,7 @@ describe("turn flow", () => {
         : promptOf(request).text.includes("second")
           ? "second"
           : "other-chat";
-      starts.push({ session: request.sessionId ?? "", ask });
+      starts.push({ session: request.sessionId ?? "", ask, whenBusy: request.whenBusy });
       if (ask === "first") await gate;
       yield ev.text(`answer ${ask}`);
       yield ev.ended();
@@ -714,18 +715,24 @@ describe("turn flow", () => {
 
     await handler(feishuRequest(messageEvent({ id: "om_1", text: "first" })));
     await vi.waitFor(() => expect(starts.map((entry) => entry.ask)).toEqual(["first"]));
-    // Same chat = same place = same session, so this queues behind the running turn.
+    // Same chat = same place = same session: sent steered while the first is still held open, in arrival order.
     await handler(feishuRequest(messageEvent({ id: "om_2", text: "second" })));
-    // A different chat is a different place, so it runs immediately.
     await handler(feishuRequest(messageEvent({ id: "om_3", chatId: "oc_other", text: "other-chat" })));
 
-    await vi.waitFor(() => expect(starts.map((entry) => entry.ask)).toEqual(["first", "other-chat"]));
-    expect(starts.map((entry) => conversationOf(home, entry.session))).toEqual(["feishu:oc_1", "feishu:oc_other"]);
+    // The other chat is another place's session, free to go before the second input of the first one is prepared.
+    await vi.waitFor(() => expect(starts.map((entry) => entry.ask).sort()).toEqual(["first", "other-chat", "second"]));
+    expect(starts.map((entry) => entry.ask).indexOf("first")).toBeLessThan(
+      starts.map((entry) => entry.ask).indexOf("second"),
+    );
+    expect(starts.map((entry) => entry.whenBusy)).toEqual(["steer", "steer", "steer"]);
+    expect(starts.map((entry) => conversationOf(home, entry.session)).sort()).toEqual([
+      "feishu:oc_1",
+      "feishu:oc_1",
+      "feishu:oc_other",
+    ]);
 
     releaseFirst();
     await idle();
-    expect(starts.map((entry) => entry.ask)).toEqual(["first", "other-chat", "second"]);
-    expect(conversationOf(home, starts[2]?.session)).toBe("feishu:oc_1");
   });
 
   it("a mount rejected with 'cardid is invalid' (cardkit→IM propagation) is retried, not degraded", async () => {
@@ -1168,7 +1175,7 @@ describe("turn flow", () => {
     expect(calls[1]?.prompt.text).toContain("what do you both think?");
   });
 
-  it("a thread continuation gets normal queue feedback while its session is busy", async () => {
+  it("a thread continuation while its session is busy is sent at once, steered, with no queue card", async () => {
     const fx = feishuFetch();
     let releaseFirst: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -1192,17 +1199,12 @@ describe("turn flow", () => {
     await handler(
       feishuRequest(messageEvent({ id: "om_queued", chatType: "group", threadId: "omt_queue", text: "queued ask" })),
     );
-    await flush();
-
-    const queuedReplies = fx.calls("/im/v1/messages/om_queued/reply", "POST");
-    expect(queuedReplies).toHaveLength(1);
-    expect(queuedReplies[0]?.body?.reply_in_thread).toBe(true);
-    expect(String(fx.calls("/cardkit/v1/cards", "POST").at(-1)?.body?.data)).toContain("Queued");
+    await vi.waitFor(() => expect(invocation).toBe(3));
+    const queueCards = fx.calls("/cardkit/v1/cards", "POST").filter((c) => String(c.body?.data).includes("Queued"));
+    expect(queueCards).toHaveLength(0);
 
     releaseFirst();
     await idle();
-    expect(invocation).toBe(3);
-    expect(fx.calls("/im/v1/messages/om_queued/reply", "POST")).toHaveLength(1);
   });
 
   it("a thread continuation failure uses the same user-facing error path as an @mention", async () => {
@@ -1801,7 +1803,7 @@ describe("turn flow", () => {
     const { handler, home, protocol, calls, idle } = buildChannel();
     await handler(feishuRequest(messageEvent({ id: "om_plain", text: "hello" })));
     await idle();
-    expect(calls[0]).toMatchObject({ idempotencyKey: "om_plain", whenBusy: "queue" });
+    expect(calls[0]).toMatchObject({ idempotencyKey: "om_plain", whenBusy: "steer" });
     expect(conversationOf(home, calls[0]?.sessionId)).toBe("feishu:oc_1");
     expect(protocol.forks).toEqual([{}]); // a new session, forked from nothing
   });
@@ -2550,7 +2552,7 @@ describe("turn flow", () => {
     expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
   });
 
-  it("keeps queued asks FIFO and takes over each ask's reply-quoted queue card in place", async () => {
+  it("sends asks to a busy session in arrival order, with no queue card", async () => {
     const fx = feishuFetch();
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => {
@@ -2571,66 +2573,86 @@ describe("turn flow", () => {
     await flush(); // first turn parks on the gate with its preview mounted
     await handler(feishuRequest(messageEvent({ id: "om_q2", text: "second" })));
     await handler(feishuRequest(messageEvent({ id: "om_q3", text: "third" })));
-
-    // Each queued turn mounts ONE queue-status card as a reply to ITS source message — even in p2p,
-    // where an ordinary immediate answer is intentionally unquoted. The two mounts may finish in either
-    // visual order; the quote is the stable attribution.
-    const queueCardFor = (messageId: string): string | undefined => {
-      const mount = fx
-        .calls(`/im/v1/messages/${messageId}/reply`, "POST")
-        .find((c) => c.body?.msg_type === "interactive");
-      const content = JSON.parse(String(mount?.body?.content)) as { data?: { card_id?: string } };
-      return content.data?.card_id;
-    };
-    await vi.waitFor(() => {
-      expect(queueCardFor("om_q2")).toBeDefined();
-      expect(queueCardFor("om_q3")).toBeDefined();
-    });
-    const secondCard = queueCardFor("om_q2") as string;
-    const thirdCard = queueCardFor("om_q3") as string;
-    expect(secondCard).not.toBe(thirdCard);
-    const queueCreates = fx.calls("/cardkit/v1/cards", "POST").filter((c) => {
-      const card = JSON.parse(String(c.body?.data)) as { body?: { elements?: { content?: string }[] } };
-      return card.body?.elements?.[0]?.content?.includes("⏳ Queued");
-    });
-    expect(queueCreates).toHaveLength(2);
+    await vi.waitFor(() => expect(order).toEqual(["first", "second", "third"]));
 
     release();
     await idle();
 
-    // The per-session queue is FIFO, and each final answer settles the SAME card entity that carried
-    // that ask's queue status: no new preview, no recalled-message tombstone.
-    expect(order).toEqual(["first", "second", "third"]);
-    expect(fx.calls("/cardkit/v1/cards", "POST")).toHaveLength(3); // one entity per turn, not queue+answer
-    for (const [cardId, answer] of [
-      [secondCard, "answer second"],
-      [thirdCard, "answer third"],
-    ] as const) {
-      const settle = fx
-        .calls(`/cardkit/v1/cards/${cardId}`, "PUT")
-        .find((c) => c.url.endsWith(`/cardkit/v1/cards/${cardId}`));
-      const card = JSON.parse(String((settle?.body?.card as Record<string, unknown> | undefined)?.data));
-      expect(card.body.elements[0].content).toBe(answer);
-    }
+    const queueCards = fx.calls("/cardkit/v1/cards", "POST").filter((c) => String(c.body?.data).includes("Queued"));
+    expect(queueCards).toHaveLength(0); // nothing says "Queued": the Agent takes each input when it can
     expect(fx.calls("/im/v1/messages/", "DELETE")).toHaveLength(0);
   });
+});
 
-  it("an explicitly delayed queue frame may be skipped on FAST turnover without a recall tombstone", async () => {
-    // Immediate is the default; an author may opt into a delay to suppress Queue on very short waits.
-    // If the wait ends inside that configured delay, no status card was mounted and nothing is recalled.
+describe("Feishu inputs steered into one run", () => {
+  async function mountDurable(agent: Awaited<ReturnType<typeof holdingAgent>>["agent"]) {
+    const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
+    tempRoots.push(root);
+    const routes = buildFeishuChannel({
+      appId: "app",
+      appSecret: "secret",
+      verificationToken: TOKEN,
+      apiBaseUrl: BASE,
+    })(channelContext(agent, root, "feishu"));
+    const handler = routes["POST /feishu"];
+    if (!handler) throw new Error("expected POST /feishu");
+    const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
+    channelIdles.add(idle);
+    return { handler, idle, home: join(root, "channels", "feishu") };
+  }
+
+  it("delivers the answer two inputs of one chat share once", async () => {
     const fx = feishuFetch();
-    const { handler, idle } = buildChannel({
-      queueNoticeDelayMs: 5_000,
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const { handler, idle, home } = await mountDurable(agent);
+
+    await handler(feishuRequest(messageEvent({ id: "om_1", text: "start the work" })));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await handler(feishuRequest(messageEvent({ id: "om_2", text: "and keep the old column" })));
+    await vi.waitFor(async () => {
+      const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+      expect((await agent.messages.get({ sessionId, idempotencyKey: "om_2" })).status).toBe("queued");
     });
-    await handler(feishuRequest(messageEvent({ id: "om_f1", text: "first" })));
-    await handler(feishuRequest(messageEvent({ id: "om_f2", text: "second" }))); // queues behind, arms the mount
-    await idle(); // both turns complete well inside the queue-status delay
-    const queueCreates = fx.calls("/cardkit/v1/cards", "POST").filter((c) => {
-      const card = JSON.parse(String(c.body?.data)) as { body?: { elements?: { content?: string }[] } };
-      return card.body?.elements?.[0]?.content?.includes("⏳ Queued");
+    release();
+    await vi.waitFor(async () => {
+      const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+      expect((await agent.messages.get({ sessionId, idempotencyKey: "om_2" })).status).toBe("completed");
     });
-    expect(queueCreates).toHaveLength(0);
-    expect(fx.calls("/im/v1/messages/", "DELETE")).toHaveLength(0);
+    await idle();
+
+    const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+    const first = await agent.messages.get({ sessionId, idempotencyKey: "om_1" });
+    const second = await agent.messages.get({ sessionId, idempotencyKey: "om_2" });
+    expect(second.answer?.entryId).toBe(first.answer?.entryId); // the premise: one run, one answer
+    // One card: the first turn's. The second turn mounted none and, in a direct chat, posted no pointer.
+    expect(fx.calls("/cardkit/v1/cards", "POST")).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
+  });
+
+  it("points a group asker, under their own message, to the answer they share", async () => {
+    const fx = feishuFetch();
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const { handler, idle } = await mountDurable(agent);
+    await flush(); // the bot's own identity resolves before a mention can summon it
+    const bot = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+    const ask = (id: string, text: string, sender: string) =>
+      messageEvent({ id, chatType: "group", text: `@_user_1 ${text}`, mentions: bot, senderId: sender });
+
+    await handler(feishuRequest(ask("om_1", "start the work", "ou_alice")));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await handler(feishuRequest(ask("om_2", "what about the date?", "ou_bob")));
+    await vi.waitFor(async () => {
+      const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
+      expect((await agent.messages.get({ sessionId, idempotencyKey: "om_2" })).status).toBe("queued");
+    });
+    release();
+    await idle();
+
+    const pointer = fx
+      .calls("/im/v1/messages/om_2/reply", "POST")
+      .find((c) => String(c.body?.content).includes("Answered together"));
+    expect(pointer).toBeDefined();
+    expect(fx.calls("/cardkit/v1/cards", "POST")).toHaveLength(1); // still one answer card, alice's
   });
 });
 

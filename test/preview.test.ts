@@ -242,22 +242,6 @@ describe("telegramReply terminal writes (direct)", () => {
     ).rejects.toThrow(/stream ended without a terminal event/);
     expect([...sends, ...edits]).toContain("⚠️ neutral"); // not silence, not a silent delete of partial work
   });
-
-  it("takes over a pre-sent message id (the ⏳ notice) instead of sending its own placeholder", async () => {
-    const { sends, edits } = recordingFetch();
-    await run(
-      telegramReply(
-        stream(events(ev.text("answer"), ev.ended())),
-        API,
-        "BOT",
-        { chatId: 1 },
-        neutral,
-        77, // an existing message to morph
-      ),
-    );
-    expect(sends.length).toBe(0); // no second placeholder
-    expect(edits.at(-1)).toBe("answer"); // the notice morphed into the answer
-  });
 });
 
 describe("telegramReply preview frames are droppable (direct)", () => {

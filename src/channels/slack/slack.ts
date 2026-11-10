@@ -81,8 +81,6 @@ const MAX_EVENT_BYTES = 1 << 20;
  * Slack's own documented window — it re-signs every redelivery with a current timestamp, so a tight one costs nothing.
  */
 const MAX_SIGNATURE_AGE_S = 5 * 60;
-const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task finishes.";
-const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
 const DEFAULT_WELCOME = "👋 Hi! I'm an AI agent here to help. Ask a question or describe a task and I'll get to work.";
 
 /** What `slackSocketChannel` is given: the policy of `slackChannel`, and the app-level token in place of its secret. */
@@ -127,10 +125,7 @@ function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
   );
 }
 
-interface PendingSlackTurn extends Omit<StoredSlackTurn, "attempts"> {
-  previewTs?: string;
-  nativeQueueStatus?: boolean;
-}
+type PendingSlackTurn = Omit<StoredSlackTurn, "attempts">;
 
 export interface SlackChannelOptions {
   /** Bot User OAuth Token (`xoxb-…`) used for replies and files. */
@@ -371,12 +366,10 @@ function createSlackRuntime(
   });
 
   const notifyDropped = (turn: PendingSlackTurn): void => {
-    const target = targetOf(turn);
-    if (turn.nativeQueueStatus) void api.setThreadStatus(target, "").catch(() => {});
     void settleSlackPreview(
       placeApi(turn),
-      target,
-      turn.previewTs,
+      targetOf(turn),
+      undefined,
       "⚠️ I couldn’t complete an earlier request — please ask again.",
     ).catch((error) => log.warn(`${label} could not notify a dropped turn: ${String(error)}`));
   };
@@ -386,31 +379,15 @@ function createSlackRuntime(
     store,
     discussion: history,
     seen,
-    toStored: ({ previewTs: _preview, nativeQueueStatus: _status, ...intent }) => ({ ...intent, attempts: 0 }),
-    fromStored: ({ attempts: _attempts, ...intent }) => ({ ...intent }),
+    delivered: createSeenRing(join(stateHome, "delivered.json"), label),
+    toStored: (intent) => ({ ...intent, attempts: 0 }),
+    fromStored: ({ attempts: _attempts, ...intent }) => intent,
     // The read ends at the ask (`messageRefOf`: the ts of the message that asked).
     discussionKey: (turn) => {
       const ask = messageRefOf(turn.id);
       return turn.historyKey === undefined || ask === undefined ? undefined : { key: turn.historyKey, until: ask.ts };
     },
     where: (turn) => `channel=${turn.channelId}`,
-    onQueuedBehind(turn) {
-      const nativeDmStatus = rendering === "native" && turn.threadTs && turn.channelId.startsWith("D");
-      if (nativeDmStatus) turn.nativeQueueStatus = true;
-      return {
-        done: auth.settled
-          .then(() =>
-            nativeDmStatus
-              ? api.setThreadStatus(targetOf(turn), "is queued behind an earlier request…")
-              : placeApi(turn)
-                  .postMessage(targetOf(turn), QUEUED_PLACEHOLDER)
-                  .then((ts) => {
-                    turn.previewTs = ts;
-                  }),
-          )
-          .catch((error) => log.warn(`${label} queue preview failed (the turn stays durable): ${String(error)}`)),
-      };
-    },
     // Leave the intent untouched when Slack auth failed.
     beforeRun: async (turn) => {
       try {
@@ -421,28 +398,10 @@ function createSlackRuntime(
         return false;
       }
     },
-    onDeferred: (turn) => {
-      if (turn.nativeQueueStatus) {
-        void api
-          .setThreadStatus(targetOf(turn), "is delayed by a temporary system issue and will retry after restart…")
-          .catch((error) => log.warn(`${label} could not update a deferred Agent status: ${String(error)}`));
-      } else if (turn.previewTs) {
-        void settleSlackPreview(placeApi(turn), targetOf(turn), turn.previewTs, DEFERRED_PLACEHOLDER).catch((error) =>
-          log.warn(`${label} could not update a deferred queue preview: ${String(error)}`),
-        );
-      }
-    },
     notifyDropped,
     deliverAnswer: (turn, answer) =>
       portJoin(async () => {
-        // A queue notice THIS process put up outlives the run the answer came from, so it is settled here as it
-        // would be by a turn that ran: the status line cleared, the compatibility message taken over.
-        if (turn.nativeQueueStatus) {
-          await api
-            .setThreadStatus(targetOf(turn), "")
-            .catch((error) => log.warn(`${label} could not clear a queued Agent status: ${String(error)}`));
-        }
-        await deliverSlackAnswer(placeApi(turn), targetOf(turn), answer, turn.previewTs);
+        await deliverSlackAnswer(placeApi(turn), targetOf(turn), answer);
         // The 👀 on the asker's message was added by the run that produced this answer, and `execute`'s
         // acquire/release — the only thing that turns it into ✅ — is not on this path.
         const messageRef = messageRefOf(turn.id);
@@ -456,7 +415,7 @@ function createSlackRuntime(
           });
         }
       }),
-    execute: (turn, discussion, onAnswered) => {
+    execute: (turn, discussion, onAnswered, hooks) => {
       const messageRef = messageRefOf(turn.id);
       return Effect.acquireUseRelease(
         portJoin(async () =>
@@ -472,7 +431,7 @@ function createSlackRuntime(
         ),
         () =>
           Effect.scoped(
-            slackReply(
+            hooks.reply(
               slackTurnStream(
                 agent,
                 {
@@ -480,6 +439,7 @@ function createSlackRuntime(
                   ...enterRoom(turn),
                   key: turn.id,
                   text: `${discussionBlock(discussion.text)}${turn.baseText}`,
+                  steer: hooks,
                 },
                 { api, channelId: turn.channelId, filesDir: attachmentsDir(stateHome), label },
                 {
@@ -490,17 +450,14 @@ function createSlackRuntime(
                   ),
                 },
               ),
-              placeApi(turn),
-              targetOf(turn),
-              formatError,
-              {
-                rendering,
-                initialPreviewTs: turn.previewTs,
-                threadTitle: turn.threadTitle,
-                disclaimer: aiDisclaimer,
-                label,
-                onAnswered,
-              },
+              (events) =>
+                slackReply(events, placeApi(turn), targetOf(turn), formatError, {
+                  rendering,
+                  threadTitle: turn.threadTitle,
+                  disclaimer: aiDisclaimer,
+                  label,
+                  onAnswered,
+                }),
             ),
           ),
         (reaction, exit) =>

@@ -4,13 +4,16 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import * as Fiber from "effect/Fiber";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ContextBuffer, createContextBuffer } from "../src/channels/kit/context-buffer.ts";
 import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/channels/kit/turn-runner.ts";
+import type { SeenRing } from "../src/channels/kit/seen.ts";
 import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
 import { createTurnQueue } from "../src/channels/turn-queue.ts";
-import { portJoin } from "../src/effect-port.ts";
+import { PortFailure, portJoin } from "../src/effect-port.ts";
+import type { TurnEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { activeWork } from "../src/channels/busy.ts";
 import * as atomic from "../src/atomic-write.ts";
 import { log } from "../src/log.ts";
@@ -59,6 +62,12 @@ function fakeBuffer(calls: string[]): ContextBuffer<string> {
   };
 }
 
+/** The answers delivered so far, in memory. */
+function deliveredRing(): SeenRing {
+  const ids = new Set<string>();
+  return { has: (id) => ids.has(id), add: (id) => void ids.add(id) };
+}
+
 function runnerOptions(
   store: TurnStore<Stored>,
   calls: string[],
@@ -73,7 +82,7 @@ function runnerOptions(
     fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, notice: undefined }),
     discussionKey: (rec) => `place:${rec.conversation}`,
     where: (rec) => `conversation=${rec.conversation}`,
-    onDeferred: (rec) => calls.push(`deferred ${rec.id}`),
+    delivered: deliveredRing(),
     notifyDropped: (rec) => calls.push(`dropped ${rec.id}`),
     deliverAnswer: (rec, answer) =>
       portJoin(async () => {
@@ -193,66 +202,6 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     }
   });
 
-  it("observes a rejected queue notice while its predecessor is still running", async () => {
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const head = Promise.withResolvers<void>();
-    const entered = Promise.withResolvers<void>();
-    const { store, calls } = fakeStore();
-    const r = runner(store, calls, {
-      onQueuedBehind: () => ({ done: Promise.reject(new Error("notice rejected before dequeue")) }),
-      execute: (rec) =>
-        portJoin(async () => {
-          if (rec.id === "a") {
-            entered.resolve();
-            await head.promise;
-          }
-        }),
-    });
-    r.submit({ id: "a", conversation: "s", text: "" }, true);
-    r.submit({ id: "b", conversation: "s", text: "" }, true);
-    try {
-      await entered.promise;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(warn.mock.calls.flat().join(" ")).toContain("notice rejected before dequeue");
-      expect(calls).not.toContain("attempt b");
-    } finally {
-      head.resolve();
-      await r.idle();
-    }
-    expect(calls).toContain("attempt b");
-  });
-
-  it("joins the notice even when its cancel hook throws, leaving the turn for recovery", async () => {
-    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
-    const posted = Promise.withResolvers<void>();
-    const cancelled = Promise.withResolvers<void>();
-    const base = activeWork();
-    const { store, calls } = fakeStore();
-    const r = runner(store, calls, {
-      onQueuedBehind: () => ({
-        done: posted.promise,
-        cancel: () => {
-          cancelled.resolve();
-          throw new Error("cancel broke");
-        },
-      }),
-    });
-    r.submit({ id: "a", conversation: "s", text: "" }, true);
-    r.submit({ id: "b", conversation: "s", text: "" }, true);
-    try {
-      await cancelled.promise;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(activeWork()).toBe(base + 1);
-      expect(calls).not.toContain("attempt b");
-    } finally {
-      posted.resolve();
-      await r.idle();
-    }
-    expect(calls).not.toContain("remove b");
-    expect(errors.mock.calls.flat().join(" ")).toContain("cancel broke");
-    expect(activeWork()).toBe(base);
-  });
-
   it("interruption joins work and preserves the actual commit decision, answered or not", async () => {
     for (const completed of [false, true]) {
       const { store, buffer, openStore, openBuffer } = durable();
@@ -335,30 +284,22 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       return original(path, ...args);
     });
     await r.idle();
-    expect(calls).toEqual(["seen a", "deferred a"]);
+    expect(calls).toEqual(["seen a"]);
     expect(openStore().recover()).toMatchObject([{ id: "a", attempts: 0 }]);
     expect(activeWork()).toBe(base);
   });
 
-  it("accepts, settles the queue notice, counts the attempt, folds, executes, records the answer, delivers, drops", async () => {
+  it("accepts, counts the attempt, folds, executes, records the answer, delivers, drops", async () => {
     const { store, calls } = fakeStore();
-    const r = runner(store, calls, {
-      onQueuedBehind: (rec) => ({
-        done: Promise.resolve().then(() => {
-          rec.notice = "n1";
-          calls.push(`notice ${rec.id}`);
-        }),
-      }),
-    });
+    const r = runner(store, calls);
     r.submit({ id: "a", conversation: "s", text: "one" }, true);
-    r.submit({ id: "b", conversation: "s", text: "two" }, true); // queued behind a → gets the notice
+    r.submit({ id: "b", conversation: "s", text: "two" }, true);
     await r.idle();
     expect(calls).toEqual([
       "add a",
       "seen a",
       "add b",
       "seen b",
-      "notice b", // fired on acceptance, settled BEFORE b's attempt is counted — b holds its preview handle
       "attempt a",
       "peek place:s",
       "execute a notice=- text=earlier",
@@ -367,11 +308,147 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       "remove a", // only now — delivery settled
       "attempt b",
       "peek place:s",
-      "execute b notice=n1 text=earlier",
+      "execute b notice=- text=earlier",
       "answered b the answer",
       "commit place:s e1",
       "remove b",
     ]);
+  });
+
+  it("starts the next input of a conversation once the earlier turn admits its message, not when it ends", async () => {
+    const { store, calls } = fakeStore();
+    const gate = Promise.withResolvers<void>();
+    const r = runner(store, calls, {
+      execute: (rec, _discussion, _onAnswered, turn) =>
+        portJoin(async () => {
+          calls.push(`execute ${rec.id}`);
+          turn.admitted();
+          if (rec.id === "a") await gate.promise;
+          calls.push(`ended ${rec.id}`);
+        }),
+    });
+    r.submit({ id: "a", conversation: "s", text: "one" }, false);
+    r.submit({ id: "b", conversation: "s", text: "two" }, false);
+    await vi.waitFor(() => expect(calls).toContain("execute b"));
+    expect(calls).not.toContain("ended a"); // b was sent while a is still waiting for its answer
+    gate.resolve();
+    await r.idle();
+  });
+
+  it("an input steered while an earlier turn's fold is uncommitted does not read the discussion again", async () => {
+    const { store, calls } = fakeStore();
+    const gate = Promise.withResolvers<void>();
+    const r = runner(store, calls, {
+      execute: (rec, discussion, onAnswered, turn) =>
+        portJoin(async () => {
+          calls.push(`execute ${rec.id} text=${discussion.text}`);
+          turn.admitted();
+          if (rec.id === "a") await gate.promise;
+          onAnswered("the answer");
+        }),
+    });
+    r.submit({ id: "a", conversation: "s", text: "" }, false);
+    r.submit({ id: "b", conversation: "s", text: "" }, false);
+    await vi.waitFor(() => expect(calls).toContain("execute b text="));
+    expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s"]); // a read; b left it to a
+    gate.resolve();
+    await r.idle();
+    r.submit({ id: "c", conversation: "s", text: "" }, false);
+    await r.idle();
+    // Once a has answered, its fold is committed and the next turn reads again.
+    expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s", "peek place:s"]);
+    expect(calls).toContain("execute c text=earlier");
+  });
+
+  it("an earlier turn that fails frees its fold for the next one", async () => {
+    const { store, calls } = fakeStore();
+    const r = runner(store, calls, {
+      execute: (rec) =>
+        portJoin(async () => {
+          calls.push(`execute ${rec.id}`);
+          if (rec.id === "a") throw new Error("transport down");
+        }),
+    });
+    r.submit({ id: "a", conversation: "s", text: "" }, false);
+    await r.idle();
+    r.submit({ id: "b", conversation: "s", text: "" }, false);
+    await r.idle();
+    expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s", "peek place:s"]);
+  });
+
+  it("holds an input back while an earlier turn runs, even when the turn just before it failed at once", async () => {
+    const { store, calls } = fakeStore();
+    const gate = Promise.withResolvers<void>();
+    const answered = (): Stream.Stream<TurnEvent, PortFailure> =>
+      Stream.fromIterable<TurnEvent>([
+        { type: "message", message: { id: "m3", sessionId: "s", status: "queued" } },
+        {
+          type: "done",
+          message: { id: "m3", sessionId: "s", status: "completed", answer: { entryId: "e1", text: "x" } },
+        },
+      ]);
+    const running = Stream.concat(
+      Stream.fromIterable<TurnEvent>([{ type: "message", message: { id: "m1", sessionId: "s", status: "running" } }]),
+      Stream.fromEffect(
+        Effect.promise(() => gate.promise).pipe(
+          Effect.as<TurnEvent>({
+            type: "done",
+            message: { id: "m1", sessionId: "s", status: "completed", answer: { entryId: "e1", text: "x" } },
+          }),
+        ),
+      ),
+    );
+    const r = runner(store, calls, {
+      execute: (rec, _discussion, _onAnswered, turn) => {
+        if (rec.id === "b") return Effect.fail(new PortFailure(new Error("its message was refused"))); // ends at once
+        turn.admitted();
+        const events = (rec.id === "a" ? running : answered()).pipe(
+          // What the turn's stream tells the runner, as `turnStream` does: the message's end.
+          Stream.tap((event) => Effect.sync(() => (event.type === "done" ? turn.observe(event.message) : undefined))),
+        );
+        return turn.reply(events, (stream) =>
+          Stream.runDrain(stream).pipe(Effect.tap(() => Effect.sync(() => void calls.push(`rendered ${rec.id}`)))),
+        );
+      },
+    });
+    vi.spyOn(log, "error").mockImplementation(() => {});
+    r.submit({ id: "a", conversation: "s", text: "" }, false);
+    r.submit({ id: "b", conversation: "s", text: "" }, false);
+    await vi.waitFor(() => expect(calls).toContain("remove b")); // b ended; a is still running
+    r.submit({ id: "c", conversation: "s", text: "" }, false);
+    await vi.waitFor(() => expect(calls).toContain("attempt c"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // c's input was steered into a's run and shares its answer, so it renders nothing until a has delivered it.
+    expect(calls).not.toContain("rendered c");
+    gate.resolve();
+    await r.idle();
+    expect(calls).toContain("rendered a");
+    expect(calls).not.toContain("rendered c"); // a delivered the shared answer, so c's turn is skipped
+  });
+
+  it("a recovered answer another turn already delivered is dropped, not sent twice", async () => {
+    const { store, calls, recovered } = fakeStore();
+    recovered.push({ id: "r", conversation: "s", text: "", attempts: 1, answer: "shared", answerKey: "s1:e9" });
+    const ring = deliveredRing();
+    ring.add("s1:e9");
+    const r = runner(store, calls, { delivered: ring });
+    r.recover();
+    await r.idle();
+    expect(calls.filter((c) => c.startsWith("deliver"))).toEqual([]);
+    expect(calls).toContain("remove r");
+  });
+
+  it("a recovered answer is delivered once and remembered by its key", async () => {
+    const { store, calls, recovered } = fakeStore();
+    recovered.push({ id: "r1", conversation: "s", text: "", attempts: 1, answer: "shared", answerKey: "s1:e9" });
+    recovered.push({ id: "r2", conversation: "s", text: "", attempts: 1, answer: "shared", answerKey: "s1:e9" });
+    const ring = deliveredRing();
+    const r = runner(store, calls, { delivered: ring });
+    r.recover();
+    await r.idle();
+    expect(calls.filter((c) => c.startsWith("deliver"))).toEqual(["deliver r1 answer=shared"]);
+    expect(ring.has("s1:e9")).toBe(true);
+    expect(calls.filter((c) => c.startsWith("remove")).sort()).toEqual(["remove r1", "remove r2"]);
   });
 
   it("a turn at the ceiling is dropped and told; a deferred one is left for the next start", async () => {
@@ -380,7 +457,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     r.submit({ id: "x", conversation: "s1", text: "" }, false);
     r.submit({ id: "d", conversation: "s2", text: "" }, false);
     await r.idle();
-    expect(calls.filter((c) => !c.startsWith("attempt"))).toEqual(["dropped x", "deferred d"]);
+    expect(calls.filter((c) => !c.startsWith("attempt"))).toEqual(["dropped x"]);
   });
 
   it("a turn at the ceiling that already has its answer is delivered, not dropped with an apology", async () => {
@@ -416,27 +493,6 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     r.submit({ id: "a", conversation: "s", text: "" }, false);
     await r.idle();
     expect(calls).toEqual([]);
-  });
-
-  it("a rejected queue notice does not abort the turn, so the intent is still counted, run and dropped", async () => {
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      const { store, calls } = fakeStore();
-      const r = runner(store, calls, { onQueuedBehind: () => ({ done: Promise.reject(new Error("post failed")) }) });
-      r.submit({ id: "a", conversation: "s", text: "one" }, false);
-      r.submit({ id: "b", conversation: "s", text: "two" }, false); // queued behind a → gets the failing notice
-      await r.idle();
-      expect(calls.filter((c) => c.endsWith(" b") || c.startsWith("execute b"))).toEqual([
-        "attempt b",
-        "execute b notice=- text=earlier",
-        "remove b",
-      ]);
-      // Swallowing it is the point, so the swallow owes a signal: without this the catch could go
-      // silent and every assertion above would still pass.
-      expect(warn.mock.calls.flat().join(" ")).toContain("turn=b");
-    } finally {
-      warn.mockRestore();
-    }
   });
 
   it("a failed execute still drops the intent, and a recovered turn is re-enqueued without re-persisting", async () => {
