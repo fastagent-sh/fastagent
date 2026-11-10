@@ -47,6 +47,23 @@ describe("cli: info", () => {
     expect(info.config.thinkingLevel).toMatchObject({ value: "low", source: "FASTAGENT_THINKING_LEVEL" });
   });
 
+  it("info takes the thinking level and the channels' ingress as flags over the variables, and refuses what names no channel", async () => {
+    const dir = await agentWorkspace("fa-info-flags-", {
+      "fastagent.config.ts": 'export default { defaults: { thinkingLevel: "high" } };\n',
+    });
+    const env = { ...withoutModel(), FASTAGENT_THINKING_LEVEL: "low" };
+    const flagged = await runInProcess(["info", dir, "--json", "--thinking", "minimal"], undefined, env);
+    expect(flagged.code, flagged.stderr).toBe(0);
+    expect(JSON.parse(flagged.stdout).thinkingLevel).toBe("minimal");
+    const refused = await runInProcess(["info", dir, "--ingress", "nope=webhook"], undefined, withoutModel());
+    expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("channels.nope names no channel")]);
+    const malformed = await runInProcess(["info", dir, "--ingress", "nope"], undefined, withoutModel());
+    expect([malformed.code, malformed.stderr]).toEqual([
+      1,
+      expect.stringContaining("FASTAGENT_INGRESS must be channel=webhook|connection"),
+    ]);
+  });
+
   it("info reports the program's name apart from the instance's, and the description and starters it resolves", async () => {
     const dir = await agentWorkspace("fa-info-agent-", {
       "package.json": '{ "name": "@acme/reviewer", "description": "Reviews pull requests.", "type": "module" }',

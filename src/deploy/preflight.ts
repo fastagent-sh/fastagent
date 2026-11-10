@@ -31,6 +31,7 @@ import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { type ContainerInput, DELIVERED_CONFIG_DIR, isGeneratedDockerfile } from "./container.ts";
 import { deliveredTextProblem } from "./delivered-text.ts";
+import { foldLayers } from "../harnesses/pi-durable/environment-config.ts";
 import {
   type McpDeclaration,
   declareMcp,
@@ -219,6 +220,8 @@ interface PreflightInput {
   config: EffectiveConfig;
   /** The instance configuration this deployment delivers (`--config`): as read, and its file's text. */
   delivered?: { source: InstanceConfigSource; text: string };
+  /** What the value file says of the configuration (`environmentConfig`), delivered with it: `config` was resolved with them. */
+  layers?: readonly InstanceConfigSource[];
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
   /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
@@ -258,6 +261,7 @@ export async function preflightDeploy(input: PreflightInput): Promise<DeployPref
 
 async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
   const { agentDir, config, delivered, force, noResidentProcess, storageResets = false, servesApi = false } = input;
+  const configText = foldLayers(delivered?.text, input.layers ?? []);
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
   if (!isReleaseAgentName(basename(agentDir))) {
@@ -495,12 +499,12 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     apt,
     ...(installsPackages ? { packages: packageSpecs(packages) } : {}),
     ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
-    ...(delivered !== undefined ? { config: delivered.text } : {}),
+    ...(configText !== undefined ? { config: configText } : {}),
     shipsGit,
   };
   const port = config.http?.port ?? DEFAULT_HTTP_PORT;
   if (kept !== undefined)
-    checkKeptDockerfile(kept, agentDir, model.envValue, valueFile, delivered !== undefined, report);
+    checkKeptDockerfile(kept, agentDir, model.envValue, valueFile, configText !== undefined, report);
 
   return {
     channels,

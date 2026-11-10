@@ -119,24 +119,31 @@ beside the package. Point an editor at it with `"$schema": "./node_modules/<pack
 `fastagent info --json` reports the resolved values, each with its source: the program's defaults, the instance's file,
 a variable, or `--model` / `FASTAGENT_MODEL`.
 
-### Environment variables over the configuration
+### Environment variables and flags over the configuration
 
-A command that runs an instance (`dev`, `start`, `invoke`, `schedules run`) and `info` lay these over the program's
-defaults and the instance's file, so a value that differs per deployment is set where the deployment's environment is,
-and a `fastagent.json` need not be rebuilt into an image for it. An empty variable is unset; a value the configuration
-would refuse refuses the start, naming the variable (`FASTAGENT_THINKING_LEVEL: /thinkingLevel expected one of …`).
+Every one of these values stays in the configuration. A variable or a flag is a layer over it, so a value that differs
+per deployment is set where the deployment's environment is. The order is: the program's defaults, the instance's file,
+the variable, the flag. `dev`, `start`, `invoke`, `schedules run` and `info` lay them over what they run or report;
+an empty variable is unset, and a value the configuration would refuse refuses the start, naming the variable
+(`FASTAGENT_THINKING_LEVEL: /thinkingLevel expected one of …`). `fastagent info --json` gives each value's source.
 
-| Variable | Sets | Value |
-|---|---|---|
-| `FASTAGENT_MODEL` | `model` | `provider/modelId` ([model selection](#model-selection)) |
-| `FASTAGENT_THINKING_LEVEL` | `thinkingLevel` | `off` … `max` |
-| `FASTAGENT_HTTP_API` | `http.api` | `true` or `false` |
-| `FASTAGENT_HTTP_PUBLIC_URL` | `http.publicUrl` | an absolute `https://` URL |
-| `PORT`, `--port` | `http.port` | a port |
+| Sets | Variable | Flag | Value |
+|---|---|---|---|
+| `model` | `FASTAGENT_MODEL` | `--model` | `provider/modelId` ([model selection](#model-selection)) |
+| `thinkingLevel` | `FASTAGENT_THINKING_LEVEL` | `--thinking` | `off` … `max` |
+| `http.port` | `PORT` | `--port` | a port |
+| `http.api` | `FASTAGENT_HTTP_API` | | `true` or `false` |
+| `http.publicUrl` | `FASTAGENT_HTTP_PUBLIC_URL` | | an absolute `https://` URL |
+| `channels.<name>.ingress` | `FASTAGENT_INGRESS` | `--ingress` | `channel=webhook\|connection`, comma-separated (`slack=webhook,feishu=connection`) |
 
-`openAgent` reads none of them: an app passes its own `config`. `deploy` reads none either: it decides with the program's
-defaults and the configuration `--config` delivers, so a value only a variable sets is invisible to it (its webhook steps
-name the delivered `http.publicUrl`, not the variable's).
+A flag is entered into its variable at the command's start, as `--name` and `--root` are, so a flag beats the variable
+and the source `info` reports names the variable.
+
+`openAgent` reads none of them: an app passes its own `config`. `deploy` reads them from the production value file
+(`.secrets/production/.env`) only, as it reads `FASTAGENT_MODEL`, and never from the shell it runs in: it decides with
+them (whether the Agent API is served, which URL it registers webhooks at) and folds them into the configuration it
+delivers, so the box runs what the deploy planned. A variable the platform holds on the box still outranks the delivered
+configuration.
 
 ## Model selection
 

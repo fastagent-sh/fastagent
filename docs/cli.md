@@ -100,7 +100,7 @@ A `fastagent.config.ts` makes a directory an agent, whatever its name. Its conte
 ## `fastagent info`
 
 ```bash
-fastagent info [agent] [--json] [--model provider/modelId] [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+fastagent info [agent] [--json] [--model provider/modelId] [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 ```
 
 Prints what the agent builds into, without serving it:
@@ -338,7 +338,7 @@ global one, then the environment, with a login due a refresh refreshed. `--json`
 
 ```bash
 fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-input]
-               [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+               [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 ```
 
 Serves the agent locally: its channels, schedules and wake-ups. `SYSTEM.md`, `AGENTS.md`, `skills/` and `prompts/` are
@@ -367,7 +367,7 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 
 ```bash
 fastagent invoke <message> [agent] [--model provider/modelId] [--no-input] [--json] [--session <id>]
-                                 [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                                 [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 fastagent invoke <message> [agent] --url <base> [--key <key>] [--model provider/modelId] [--json] [--session <id>]
 ```
 
@@ -421,7 +421,7 @@ What the agent said is in the schedule's session, in the instance's storage. A f
 
 ```bash
 fastagent schedules run <name> [agent] [--model provider/modelId] [--no-input]
-                       [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                       [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 ```
 
 Fires the schedule `<name>` now, the way its clock would: in the schedule's own session, with its claim and its
@@ -582,7 +582,7 @@ from the machine's skill directories. `--update` overwrites an existing one.
 
 ```bash
 fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-input]
-                [--name name] [--root dir] [--state dir] [--workdir dir] [--config file] [--env-file file]
+                [--name name] [--root dir] [--state dir] [--workdir dir] [--thinking level] [--ingress channel=way] [--config file] [--env-file file]
 ```
 
 Serves the project's `dist/`, never its source, without watching: it refuses, naming `fastagent build`, when `dist/`

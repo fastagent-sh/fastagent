@@ -338,10 +338,10 @@ Precedence of configuration values, lowest first:
 1. framework defaults;
 2. the program's `defaults`;
 3. the instance configuration;
-4. environment variables: secrets, and the overrides `FASTAGENT_MODEL`, `FASTAGENT_THINKING_LEVEL`, `FASTAGENT_HTTP_API`
-   and `FASTAGENT_HTTP_PUBLIC_URL` (each laid over the configuration as a layer of its own, so its source names it;
-   read by the CLI's commands that run an instance, never by `openAgent`, and not by `deploy`, which decides with the
-   configuration it delivers);
+4. environment variables: secrets, and the overrides `FASTAGENT_MODEL`, `FASTAGENT_THINKING_LEVEL`, `FASTAGENT_HTTP_API`,
+   `FASTAGENT_HTTP_PUBLIC_URL` and `FASTAGENT_INGRESS` (each laid over the configuration as a layer of its own, so its
+   source names it; read by the CLI's commands that run an instance, never by `openAgent`; `deploy` reads them from the
+   production value file only and folds them into the configuration it delivers);
 5. command-line flags and `openAgent` options.
 
 Composition:
@@ -453,7 +453,7 @@ then flags), never a replacement for it.
 | Kind | Keys | Layers over the file (§4.1 precedence) | Written by |
 |---|---|---|---|
 | Identity | `name`, `description` | `name`: `--name`, `FASTAGENT_NAME`, `openAgent`'s `name`. Both are the instance's own and are reported apart from the program's (`info().name`, `info().description` against `info().agent`); the instance's description has no fallback to the program's | a person, a host app |
-| Overrides of the program's defaults, scalar | `model`, `thinkingLevel`, `http.port`, `http.api`, `http.publicUrl`, `channels.<name>.ingress` | flags and environment variables (§4.1 precedence); `channels.<name>.ingress` has `--ingress` on `channels` only | a person |
+| Overrides of the program's defaults, scalar | `model`, `thinkingLevel`, `http.port`, `http.api`, `http.publicUrl`, `channels.<name>.ingress` | variables, and flags where there is one (`--model`, `--thinking`, `--port`, `--ingress`) | a person |
 | Overrides, structured | `starters`, `settings` | none: the file or `openAgent`'s `config` object. `starters` is behavior, as `model` is, so an instance replaces the program's | a person, a host app |
 | Additions to what the program declares | `content`, `mcpServers`, `instructions`, `skills`, `prompts` | none; they name files and directories. They mirror `context.json`'s `content` and `mcpServers`, and the rule is the same: an instance only adds | a person, the CLI (`content add`), a host app, the agent where the file is in its writable root |
 | A record a tool writes | `channels.<name>.app` | none | `deploy` and `channels setup --record-url`, once a person has set a platform's URL |
