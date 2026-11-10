@@ -83,9 +83,10 @@ An instance is a **named deployment of a program with one configuration file**.
 
 **The image holds the program and nothing of an instance**, so one build is every instance's image. Nothing is copied to
 `/etc/fastagent/`, and there is no release manifest; what varied per deployment goes to the host as variables the deploy
-sets: the configuration (below), `FASTAGENT_INSTANCE` (the instance's name, which the storage claim and the lease use,
-and whose presence says "this is a deployed box") and `FASTAGENT_RELEASE_ID` (for the log and the record of the release
-last started on the storage).
+sets: the configuration (below), `FASTAGENT_NAME` (the instance's name, the variable that already carries it; the
+storage claim and the lease use it) and `FASTAGENT_RELEASE_ID` (for the log and the record of the release last started
+on the storage). `FASTAGENT_NAME` is also set on local instances, so it cannot say "this is a deployed box"; the
+presence of `FASTAGENT_RELEASE_ID` does.
 
 The configuration file is delivered as one variable holding its JSON, `FASTAGENT_CONFIG_JSON`, rendered by the host's own
 mechanism for non-secret values:
@@ -105,6 +106,13 @@ The box reads, in order: a flag, the individual variables (`FASTAGENT_MODEL`, `F
 run with: the pre-flight checks the model's credential route against the file's `model`, and a CI job with a different
 model per instance has a file per instance.
 
+The rendered text lands in files meant to be committed (`fly.<name>.toml`, the Compose file, the AgentCore template) and,
+on AgentCore and Fly, in what the platform shows (`describe-stacks`, the app's configuration); Fly documents `[env]` for
+non-sensitive values only. So a literal credential in the configuration (a header or `env` value of an `mcpServers`
+entry that is not a `${VAR}` reference) stops being a warning and is refused by the pre-flight, which says to write
+`${VAR}` and set the value as a secret. Today the configuration is in a git-ignored directory and an image layer, and
+the same finding only warns.
+
 A configuration that cannot be a variable is refused by the pre-flight, naming the host and its limit:
 a `content` entry that is a directory of this machine, an `mcpServers` command that is a relative path, a file over the
 host's limit, and `instructions`, `skills` or `prompts`: a deployment's text is the program's, and an instance does not
@@ -121,7 +129,7 @@ add to it on a host.
 | `<agent>/.secrets/mcp-auth.json` | `<root>/.state/` |
 | `.secrets/` and its ignore file | removed; the committed template is `<agent>/.env.example` |
 | `/etc/fastagent/fastagent.json`, `FASTAGENT_CONFIG` on a box | `FASTAGENT_CONFIG_JSON` |
-| `fastagent.release.json`, `FASTAGENT_RELEASE_FILE` | removed; `FASTAGENT_INSTANCE` and `FASTAGENT_RELEASE_ID`; `model` is in the configuration |
+| `fastagent.release.json`, `FASTAGENT_RELEASE_FILE` | removed; `FASTAGENT_NAME` and `FASTAGENT_RELEASE_ID` (its presence marks a deployed box); `model` is in the configuration |
 | `deploy` reading `FASTAGENT_MODEL`, `GITHUB_TOKEN`, `FASTAGENT_API_KEY` from a value file | the file's `model`; the others are secrets the target holds |
 | `fastagent secrets set docker`, Compose `env_file:` | Compose's `environment:` with names only (`- OPENAI_API_KEY`), which Compose fills from the shell running it, so a CI job's variables reach the box; `secrets set docker` is removed |
 | `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_WORKDIR`, `FASTAGENT_CONFIG` and the flags | unchanged for a local instance |
@@ -158,7 +166,7 @@ These are decided by measuring or building, not by argument.
 One PR each, in this order; each leaves the product working. No compatibility layer, per the maintenance policy.
 
 1. **Name.** The instance name from the configuration; host resources, generated manifests and the storage claim use it.
-2. **Delivery.** The image holds the program only; `FASTAGENT_CONFIG_JSON`, `FASTAGENT_INSTANCE` and
+2. **Delivery.** The image holds the program only; `FASTAGENT_CONFIG_JSON`, `FASTAGENT_NAME` and
    `FASTAGENT_RELEASE_ID` rendered per host; `delivered-text`, the `/etc/fastagent/` layer and the release manifest go;
    the pre-flight refuses what cannot be a variable.
 3. **Secrets.** `deploy` reads no value file; Docker's Compose file names the declared secrets and takes their values from the shell; `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go.
