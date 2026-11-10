@@ -532,6 +532,38 @@ it("cancels while waiting for the browser without storing a credential", async (
   ).rejects.toMatchObject({ code: "canceled" });
   expect(await store.list()).toEqual([]);
 });
+it("signs in to a server the instance adds in the fastagent.json of its root, as openAgent reads it", async () => {
+  const program = await mkdtemp(join(tmpdir(), "mcp-auth-program-"));
+  const root = await mkdtemp(join(tmpdir(), "mcp-auth-root-"));
+  try {
+    await writeFile(join(program, "context.json"), "{}");
+    await writeFile(
+      join(root, "fastagent.json"),
+      JSON.stringify({ mcpServers: { linear: { type: "http", url: remote.url } } }),
+    );
+    const callbacks: Promise<Response>[] = [];
+    const grant = await signInMcp({
+      agentDir: program,
+      server: "linear",
+      root,
+      store,
+      fetch: remote.fetch,
+      scopes: ["read"],
+      interaction: {
+        confirmAuthorization: async () => true,
+        notify: (event) => {
+          if (event.type === "auth_url") callbacks.push(remote.approve(event.url));
+        },
+      },
+    });
+    await Promise.all(callbacks);
+    expect(grant.serverUrl).toBe(remote.url);
+  } finally {
+    await rm(program, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("signs in to a server the instance adds, from its configuration, and refuses to read it as the program's", async () => {
   const dir2 = await mkdtemp(join(tmpdir(), "mcp-auth-instance-"));
   try {

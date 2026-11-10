@@ -328,6 +328,12 @@ export default needs([], (_secrets, settings: { repo: string; digestChannel?: st
     // No file is the program's defaults, and opening makes none.
     await expect(openAgent(definition, { root, offline: true })).rejects.toThrow("/repo missing");
     expect(existsSync(file)).toBe(false);
+    // An open that succeeds without a file makes none either: a program that needs no settings.
+    const plain = project({ "fastagent.config.ts": "export default {};\n" });
+    await buildable(plain);
+    const plainDefinition = await loadBuiltDefinition((await buildProject(plain)).dist);
+    await (await openAgent(plainDefinition, { root, offline: true })).close();
+    expect(existsSync(file)).toBe(false);
     writeFileSync(file, JSON.stringify({ settings: { repo: "acme/api" } }));
     await (await openAgent(definition, { root, offline: true })).close();
     // A config that is given is used as it is, and the file is not read.
