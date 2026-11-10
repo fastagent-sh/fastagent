@@ -68,7 +68,7 @@ const PROGRAM_DEFAULT = "program default";
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const CONSTANTS = ["extensions", "providers"];
+const CONSTANTS = ["providers"];
 /** Keys that were the program's own before they became defaults. */
 const FORMER_CONSTANTS = ["model", "thinkingLevel", "http", "deploy"];
 
@@ -215,19 +215,18 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
     throw new Error(`${file} must default-export defineAgent({ ... })`);
   }
-  const { settings, defaults, extensions, providers } = config as AgentConfig;
+  const { settings, defaults, providers } = config as AgentConfig;
   const keys = [...CONSTANTS, "settings", "defaults"];
   for (const key of Object.keys(config)) {
     if (keys.includes(key)) continue;
-    const moved = FORMER_CONSTANTS.includes(key) ? ': it is a default now, under "defaults"' : "";
+    const moved = FORMER_CONSTANTS.includes(key)
+      ? ': it is a default now, under "defaults"'
+      : key === "extensions"
+        ? ": an extension is a module of src/extensions/ that default-exports it, whether written there or imported from a package"
+        : "";
     throw new Error(`${file}: unknown key "${key}"${moved} (keys: ${keys.join(", ")})`);
   }
-  for (const [key, list] of [
-    ["extensions", extensions],
-    ["providers", providers],
-  ] as const) {
-    if (list !== undefined && !Array.isArray(list)) throw new Error(`${file}: "${key}" must be an array`);
-  }
+  if (providers !== undefined && !Array.isArray(providers)) throw new Error(`${file}: "providers" must be an array`);
   if (settings !== undefined) {
     if ((settings as { type?: unknown } | null)?.type !== "object") {
       throw new Error(`${file}: "settings" must be an object schema (obj({ ... }) from @earendil-works/pi-schema)`);

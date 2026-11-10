@@ -129,7 +129,6 @@ export default defineAgent({
   name: "support",                       // default: package.json's name
   model: "anthropic/claude-sonnet-4-5",  // a default; a deployment or a session may change it
   thinkingLevel: "medium",
-  extensions: [stripe()],                // third-party capabilities
   providers: [gateway],                  // model providers beyond pi-ai's built-ins
   deploy: { agentcore: { idleTimeoutSeconds: 900 } },
 });

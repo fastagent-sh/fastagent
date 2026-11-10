@@ -101,6 +101,21 @@ export default defineSchedule({ cron: "0 9 * * *", tz: "Europe/London", prompt: 
 const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };
 
 describe("an agent definition on pi-durable", () => {
+  it("takes a third-party extension from a package as a module of src/extensions/ that re-exports it", async () => {
+    const dir = agentPackage({
+      ...FILES,
+      "vendor/pack/package.json": '{ "name": "pack", "type": "module", "exports": "./index.js" }',
+      "vendor/pack/index.js": `import { defineExtension, section } from "@earendil-works/pi-durable";
+export default defineExtension({ name: "vendored", sections: [section("vendored", () => "From a package.")] });
+`,
+      "src/extensions/vendored.ts": 'export { default } from "../../vendor/pack/index.js";\n',
+    });
+    const { registry } = await loadSourceDefinition(dir);
+    expect(registry.extensions.map(({ file }) => file)).toContain("src/extensions/vendored.ts");
+    const built = buildDefinition(await loadSourceDefinition(dir), ENV);
+    expect(built.extensions.map(({ name }) => name)).toContain("vendored");
+  });
+
   it("registers each module of src/ by its default export, tests left out, in file order, writing nothing", async () => {
     const dir = agentPackage(FILES);
     const before = readdirSync(dir, { recursive: true }).sort();
@@ -233,6 +248,10 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
     const configured = (config: string) =>
       loadSourceDefinition(agentPackage({ "fastagent.config.ts": `export default ${config};\n` }));
     await expect(configured("{ modle: 'a/b' }")).rejects.toThrow('unknown key "modle"');
+    // An extension is a module of src/extensions/, whether written there or imported from a package.
+    await expect(configured("{ extensions: [] }")).rejects.toThrow(
+      'unknown key "extensions": an extension is a module of src/extensions/',
+    );
     // A default the program used to declare as a constant says where it went.
     await expect(configured("{ model: 'a/b' }")).rejects.toThrow(
       'unknown key "model": it is a default now, under "defaults"',

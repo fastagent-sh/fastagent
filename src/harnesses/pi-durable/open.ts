@@ -225,10 +225,6 @@ export function buildDefinition(
       source: file,
       ...named(built<Extension>(file, value, values(value), settings, extensionProblem)),
     })),
-    ...(config.extensions ?? []).map((value, i) => {
-      const source = `${CONFIG_FILE} extensions[${i}]`;
-      return { source, ...named(built<Extension>(source, value, values(value), settings, extensionProblem)) };
-    }),
   ];
   const channels = registry.channels.map(({ file, name, value }) => ({
     source: file,

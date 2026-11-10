@@ -92,7 +92,7 @@ explicit inputs below rather than whatever the process happens to find.
 ```text
 my-agent/
   package.json
-  fastagent.config.ts      constants, defaults, settings schema, providers/extensions
+  fastagent.config.ts      constants, defaults, settings schema, providers
   context.json             content baseline, environment requirements, default MCP servers (published: secrets as ${VAR})
   SYSTEM.md  AGENTS.md
   skills/  prompts/
@@ -117,7 +117,6 @@ export default defineAgent({
   name: "reviewer",
   description: "Reviews pull requests",
   providers: [/* code; endpoints and keys parameterized with needs() */],
-  extensions: [/* code */],
 
   // Settings the author lets each instance choose; non-secret values come from the instance.
   settings: obj({ repo: str(), digestChannel: opt(str()) }),

@@ -21,7 +21,7 @@ An agent's program has one configuration file, `fastagent.config.ts`; an instanc
 |---|---|---|
 | Belongs to | The program: the agent's author | An instance: whoever runs this agent |
 | Written by | The author, published with the agent | The person or machine running one instance |
-| Holds | Constants (`providers`, `extensions`), the `settings` schema, and `defaults`: what an instance starts with | Overrides of `defaults` (`starters`, `model`, `thinkingLevel`, `http`, `channels`), values for `settings`, and what only an instance has: `name`, `description`, `content`, `instructions`, `skills`, `prompts` |
+| Holds | Constants (`providers`), the `settings` schema, and `defaults`: what an instance starts with | Overrides of `defaults` (`starters`, `model`, `thinkingLevel`, `http`, `channels`), values for `settings`, and what only an instance has: `name`, `description`, `content`, `instructions`, `skills`, `prompts` |
 | Format | TypeScript: it can import, and `defineAgent` types it | JSON, with a `$schema` that checks its shape; no code |
 | Read by | Every command: `dev` as source, `build` into `dist/` | `--config` (or `FASTAGENT_CONFIG`) names the file for every command; without it `dev` reads the one at the project root, and `start` and `deploy` read none. An app: the `config` it passes `openAgent` |
 | In git | Committed | The development one is ignored by the scaffold's `.gitignore` (it is one person's); a deployment's is delivered by `deploy --config` |
@@ -53,7 +53,6 @@ what an instance starts with, which its own configuration may override ([instanc
 | Key | Default | Meaning |
 |---|---|---|
 | `providers` | `[]` | Model providers beyond pi-ai's built-ins: a self-hosted endpoint, a gateway ([custom models](#custom-models)). A provider with a built-in's id replaces it. |
-| `extensions` | `[]` | Third-party pi-durable extensions, installed after `src/extensions/` ([extensions](#extensions)). |
 | `settings` | none | The values each instance may choose, as an object schema built with `@earendil-works/pi-schema` (`obj({ repo: str() })`). No secrets: those are `needs`. |
 | `defaults.starters` | none | Example first messages for a client to offer, as `info().agent.starters` reports them: at most 6 non-blank strings of at most 200 characters each. A client puts one in the composer as a draft; choosing one sends nothing. |
 | `defaults.model` | none | Default model spec, `provider/modelId` ([model selection](#model-selection)). |
@@ -632,9 +631,10 @@ A tool that needs to know which session it runs in asks `await sessionIdOf(api, 
 ## Extensions
 
 An extension is pi-durable's named bundle of tools, prompt sections and hooks. The agent's own are the modules of
-`src/extensions/`, default-exporting `defineExtension({ name, … })`; a third-party one is listed in
-`defineAgent({ extensions: [...] })`, after the agent's own. Its name may not be one FastAgent installs (the coding
-tools', the definition's, `wake`'s). An extension's code is the definition's code: a change takes effect at the next
+`src/extensions/`, default-exporting `defineExtension({ name, … })`. A third-party one is a module there too, one line
+that re-exports it (`export { default } from "some-extension-package"`, or `export default createX({ … })` for a
+factory), installed as an ordinary dependency of the agent's `package.json`; `fastagent.config.ts` has no `extensions`
+key. Its name may not be one FastAgent installs (the coding tools', the definition's, `wake`'s). An extension's code is the definition's code: a change takes effect at the next
 start.
 
 ### More than one agent

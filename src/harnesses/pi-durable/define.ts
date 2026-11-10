@@ -4,7 +4,6 @@
  * assembly (open.ts) reads them back.
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
-import type { Extension } from "@earendil-works/pi-durable";
 import type { Schema } from "@earendil-works/pi-schema";
 import { isEnvName } from "../../declared-secrets.ts";
 import type { ScheduleConfig } from "../../schedule/schedule.ts";
@@ -43,8 +42,6 @@ export interface AgentDefaults<Settings = unknown> {
 }
 
 export interface AgentConfig<Settings = unknown> {
-  /** Constant: third-party capabilities, installed after `src/extensions/`. */
-  extensions?: readonly (Extension | Needs<Extension>)[];
   /** Constant: model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
   providers?: readonly (Provider | Needs<Provider>)[];
   /** What each instance may choose, as an object schema (`obj({ ... })` from `@earendil-works/pi-schema`); no secrets. */
