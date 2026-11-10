@@ -11,13 +11,15 @@ import { displayPath, selectAgentEnvironment } from "../../paths.ts";
 import { buildProject } from "../../harnesses/pi-durable/build.ts";
 import { DELIVERED_CONFIG_DIR } from "../../deploy/container.ts";
 import { deliverText } from "../../deploy/delivered-text.ts";
+import { deploymentName } from "../../deploy/deployment-name.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { apiReport, deploymentApi } from "../../deploy/api.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
 import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
-import { enterAgentDirectory, isInteractive, shellArg } from "../shared.ts";
+import { shellArg } from "../../shell-arg.ts";
+import { enterAgentDirectory, isInteractive } from "../shared.ts";
 import {
   type Ticket,
   type TicketStep,
@@ -148,6 +150,7 @@ async function deploy(
     ...(delivered === undefined ? {} : { instance: delivered.source }),
   });
   const { agentDir } = await enterAgentDirectory(dirArg, opts, undefined, deployed).catch(failStartup);
+  const name = await deploymentName(agentDir, opts.config).catch(failStartup);
   const config = await deployed(agentDir)
     .then(({ definition }) => resolveConfig(definition, delivered?.source))
     .catch(failStartup);
@@ -158,6 +161,7 @@ async function deploy(
   const preflight = async () => {
     const facts = await preflightDeploy({
       agentDir,
+      name,
       config,
       ...(delivered === undefined ? {} : { delivered }),
       run: !!opts.run,
@@ -168,7 +172,7 @@ async function deploy(
       servesApi: api.served,
     }).catch(failStartup);
     if (!facts.ok) failStartup(new Error(`deploy stopped: ${facts.gate}`));
-    target.validate?.({ opts, agentDir, pre: facts });
+    target.validate?.({ opts, agentDir, name, pre: facts });
     return facts;
   };
   let pre = await preflight();
@@ -262,6 +266,7 @@ async function deploy(
       answerer,
       rerun,
       agentDir,
+      name,
       config,
       pre,
       api,

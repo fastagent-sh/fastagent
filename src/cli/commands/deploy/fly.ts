@@ -1,7 +1,9 @@
 /** `deploy fly`: fly.toml + a state volume. */
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import {
+  flyTomlFile,
+  isFlyTomlPath,
   isGeneratedFlyToml,
   parseFlyAppName,
   parseFlyMinMachines,
@@ -23,25 +25,26 @@ import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorde
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const flyHost: HostDeploy = {
-  isOurs: (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content),
-  async shell(agentDir) {
-    const flyToml = await readTextIfExists(join(agentDir, "fly.toml"));
-    return flyShell((flyToml && parseFlyAppName(flyToml)) ?? toFlyAppName(basename(agentDir)), agentDir);
+  isOurs: (path, content) => isFlyTomlPath(path) && isGeneratedFlyToml(content),
+  async shell(agentDir, name) {
+    const flyToml = await readTextIfExists(join(agentDir, flyTomlFile(name)));
+    return flyShell((flyToml && parseFlyAppName(flyToml)) ?? toFlyAppName(name), agentDir);
   },
   async deploy(ctx) {
-    const { opts, agentDir, channels, pre, write } = ctx;
+    const { opts, agentDir, name, channels, pre, write } = ctx;
     const { hasCron, modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
     // Two consistent modes.
-    const flyTomlPath = join(agentDir, "fly.toml");
+    const flyTomlFileName = flyTomlFile(name);
+    const flyTomlPath = join(agentDir, flyTomlFileName);
     const flyToml = await readTextIfExists(flyTomlPath).catch(failStartup);
     // Every decision below turns on ONE question — will `writeArtifacts` keep this file?
     const flyTomlKept = flyToml !== undefined && (!opts.force || !isGeneratedFlyToml(flyToml));
     const keptApp = flyTomlKept ? parseFlyAppName(flyToml as string) : undefined;
-    const appName = keptApp ?? toFlyAppName(basename(agentDir));
-    if (keptApp) console.error(`[fastagent] app: ${keptApp} (from fly.toml)`);
+    const appName = keptApp ?? toFlyAppName(name);
+    if (keptApp) console.error(`[fastagent] app: ${keptApp} (from ${flyTomlFileName})`);
     if (flyToml !== undefined && !flyTomlKept) {
       console.error(
-        `[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`,
+        `[fastagent] warn: --force resets ${flyTomlFileName} to defaults (app, region, vm) — re-apply any hand edits`,
       );
     }
     // KEEP mode: the kept fly.toml may still scale to zero — which would sleep through the very thing the
@@ -54,7 +57,7 @@ export const flyHost: HostDeploy = {
         // undefined = the line is absent — Fly's platform default for min_machines_running is 0, so a hand-written
         // fly.toml without the line scales to zero exactly like an explicit 0.
         const msg =
-          `your kept fly.toml scales to zero (min_machines_running = ${min ?? "absent → platform default 0"}), but ` +
+          `your kept ${flyTomlFileName} scales to zero (min_machines_running = ${min ?? "absent → platform default 0"}), but ` +
           `${residency.why}. Set min_machines_running = 1, or pass --force to regenerate.`;
         if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
         console.error(`[fastagent] warn: ${msg}`);
@@ -79,6 +82,7 @@ export const flyHost: HostDeploy = {
       await runDeployFly({
         agentDir,
         appName,
+        flyConfig: flyTomlFileName,
         modelAuth,
         modelKey: pre.modelKey,
         boxLogin,
@@ -103,6 +107,8 @@ export const flyHost: HostDeploy = {
 async function runDeployFly(params: {
   agentDir: string;
   appName: string;
+  /** The instance's manifest, in the agent directory. */
+  flyConfig: string;
   modelAuth: string | undefined;
   modelKey: ModelKey;
   /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
@@ -145,7 +151,7 @@ async function runDeployFly(params: {
         values: params.values,
       }),
       channels,
-      flyConfig: "fly.toml",
+      flyConfig: params.flyConfig,
       dockerfile: "Dockerfile",
       ...boxLoginStep("fly", params, () => flyShell(appName, agentDir)),
       ...hostLogin(FLY_LOGIN, params.answerer, agentDir),

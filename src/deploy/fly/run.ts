@@ -29,7 +29,7 @@ export interface FlyRunPlan {
   provideSecrets: (store: SecretStore) => Promise<string | undefined>;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
-  /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the agent directory). */
+  /** The instance's fly manifest, passed to `fly deploy -c` (relative to the run cwd = the agent directory). */
   flyConfig: string;
   /** Dockerfile path passed explicitly, relative to the run cwd (the build context). */
   dockerfile: string;

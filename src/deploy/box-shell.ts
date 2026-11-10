@@ -4,6 +4,7 @@
  * WebSocket (`agentcore/shell.ts`). Whoever opens one only writes bytes in and reads bytes out.
  */
 import { spawn } from "node:child_process";
+import { shellArg } from "../shell-arg.ts";
 import type { Readable, Writable } from "node:stream";
 
 /** One open session on the box, running one command. */
@@ -61,8 +62,10 @@ export const BOX_CLI_PREDATES =
  * The command that logs a deployment in, as every message and runbook names it: with the provider when it is known,
  * because the model needs THAT one, and a menu invites another.
  */
-export function deploymentLoginCommand(host: string, provider?: string): string {
-  return `fastagent login ${provider ? `${provider} ` : ""}--deployment ${host}`;
+export function deploymentLoginCommand(host: string, provider?: string, configFile?: string): string {
+  return `fastagent login ${provider ? `${provider} ` : ""}--deployment ${host}${
+    configFile === undefined ? "" : ` --config ${shellArg(configFile)}`
+  }`;
 }
 
 /**

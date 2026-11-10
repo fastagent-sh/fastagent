@@ -4,7 +4,7 @@
  * it, are `channels setup`'s.
  */
 import { join, relative, resolve } from "node:path";
-import { shellArg } from "../shared.ts";
+import { shellArg } from "../../shell-arg.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { SECRETS_DIRNAME, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";

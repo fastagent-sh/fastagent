@@ -16,7 +16,7 @@ import { type ModelKey, declaredNames, secretNeeds } from "../../../deploy/secre
 import { API_KEY_VARIABLE } from "../../../http/server.ts";
 import { unprotectedSecretsNote, writeValues } from "../../../value-file.ts";
 import { displayPath } from "../../../paths.ts";
-import { shellArg } from "../../shared.ts";
+import { shellArg } from "../../../shell-arg.ts";
 import type { Answerer, DeployOptions } from "./shared.ts";
 
 /** The questions of a person at this terminal; a cancel stops the deploy. */

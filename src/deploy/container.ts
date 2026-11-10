@@ -153,8 +153,10 @@ export interface ContainerInput {
    * {@link IMAGE_CONFIG_DIR}, and `start` reads it through `FASTAGENT_CONFIG`. Without one, `{}`: the program's defaults.
    */
   config?: string;
-  /** The agent's name, recorded in the release manifest: the agent directory's own name. */
+  /** The instance's name, recorded in the release manifest as the agent the storage belongs to. */
   agent: string;
+  /** The `--config` file that names the instance, in the commands a runbook prints. */
+  configFile?: string;
   /** Agent-dir-relative machinery paths the NAME-based excludes below would miss. */
   machineryPaths?: string[];
   /** Whether the agent directory ships a `.git` (preflight fact). */

@@ -9,7 +9,7 @@ import { declaredChannels } from "../src/channels/discover.ts";
 import { webhookPaths } from "../src/deploy/channel-ingress.ts";
 
 const compose = (plan: ReturnType<typeof planDockerDeploy>) =>
-  plan.artifacts.find((artifact) => artifact.path.endsWith("fastagent.compose.yml"))!.content;
+  plan.artifacts.find((artifact) => artifact.path.endsWith("fastagent.bot.compose.yml"))!.content;
 const runbook = (plan: ReturnType<typeof planDockerDeploy>) => plan.runbook.join("\n");
 
 const base = {
@@ -31,7 +31,7 @@ describe("deploy/docker: planDockerDeploy", () => {
   it("generates only the app topology: loopback port + persistent state, no ingress coupling", () => {
     const plan = planDockerDeploy({ ...base, channels: declaredChannels(["telegram"]) });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
-      "fastagent.compose.yml",
+      "fastagent.bot.compose.yml",
       ".fastagent/deploy/fastagent.release.json",
       ".fastagent/deploy/fastagent.json",
       ".fastagent/deploy/fastagent.packages",
@@ -120,7 +120,7 @@ describe("deploy/docker: planDockerDeploy", () => {
 
   it("puts the Compose file beside the Dockerfile and builds the agent directory itself", () => {
     const plan = planDockerDeploy({ ...base, channels: [] });
-    expect(plan.composePath).toBe("fastagent.compose.yml");
+    expect(plan.composePath).toBe("fastagent.bot.compose.yml");
     expect(compose(plan)).toContain("context: .\n");
     expect(compose(plan)).toContain("dockerfile: Dockerfile\n");
     expect(runbook(plan)).toContain("Run from the agent directory");
@@ -131,7 +131,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
     // One spelling everywhere: the generated file names the value file itself, so no command needs a flag.
     for (const cmd of ["build --pull", "up -d", "logs -f agent", "ps", "down"]) {
-      expect(out).toContain(`docker compose -f fastagent.compose.yml ${cmd}`);
+      expect(out).toContain(`docker compose -f fastagent.bot.compose.yml ${cmd}`);
     }
     expect(out).toContain("down        # stops containers; keeps the state volume");
     expect(out).toContain("down -v   # DESTRUCTIVE");

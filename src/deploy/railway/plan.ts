@@ -47,7 +47,7 @@ export interface RailwayPlan {
 /** State root = the volume mount path, kept in lockstep. */
 const MOUNT = "/data";
 
-/** The name this tool gives BOTH the project and the service, derived from the agent directory's name. */
+/** The name this tool gives BOTH the project and the service, derived from the instance's name. */
 export function toRailwayName(basename: string): string {
   return stripEdges(basename.replace(/[^a-zA-Z0-9-]+/g, "-"), (char) => char === "-") || "agent";
 }
@@ -106,7 +106,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     runbook.push(
       ``,
       `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from the agent directory):`,
-      `${deploymentLoginCommand("railway", input.boxLogin)}`,
+      `${deploymentLoginCommand("railway", input.boxLogin, input.configFile)}`,
     );
   }
   runbook.push(

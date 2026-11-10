@@ -52,6 +52,7 @@ const empty = resolveConfig(
 const call = (target: string, config: FastagentConfig, over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
   preflightDeploy({
     agentDir: target,
+    name: "agent",
     config: { ...empty, ...config },
     run: false,
     force: false,
@@ -60,20 +61,6 @@ const call = (target: string, config: FastagentConfig, over: Partial<Parameters<
 
 describe("deploy/preflight: the host-neutral pre-flight", () => {
   afterEach(() => vi.unstubAllEnvs());
-
-  it("gates a placement the release manifest could not carry, naming the directory", async () => {
-    // `init --agent-dir` accepts any single path segment; the manifest joins this name onto the
-    // storage root inside the container and accepts fewer. Without this gate the refusal surfaced
-    // from artifact generation as "invalid deployment release manifest" — a file nobody wrote.
-    const host = await mkdtemp(join(tmpdir(), "fa-preflight-"));
-    const dir = join(host, "my.agent");
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
-    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(pre.ok).toBe(false);
-    if (!pre.ok) expect(pre.gate).toContain('"my.agent"');
-    await rm(host, { recursive: true, force: true });
-  });
 
   it("gates an agent with no package.json, which cannot be built, before it writes or builds anything", async () => {
     const dir = await agent();
@@ -494,6 +481,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const call2 = (over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
       preflightDeploy({
         agentDir,
+        name: "agent",
         config: { ...empty, model: "openai/gpt-4o-mini" },
         run: false,
         force: false,

@@ -9,7 +9,8 @@ import { McpError } from "../../mcp-api.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { openExternalUrl } from "../../open-url.ts";
-import { isInteractive, shellArg } from "../shared.ts";
+import { shellArg } from "../../shell-arg.ts";
+import { isInteractive } from "../shared.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import {
   checkTicket,

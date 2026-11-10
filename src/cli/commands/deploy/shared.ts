@@ -66,6 +66,8 @@ interface DeployContext {
   /** The command that runs this deploy again, from where it ran: its agent directory and flags. */
   rerun: string;
   agentDir: string;
+  /** The instance's name (`deploymentName`): what the host's resources and the generated manifests are called. */
+  name: string;
   config: EffectiveConfig;
   pre: Extract<DeployPreflight, { ok: true }>;
   /** Whether the deployment serves the Agent API, so whether the deploy mints its key. */
@@ -83,9 +85,9 @@ interface DeployContext {
 export interface HostDeploy {
   /** Did this host generate the file at `path`? */
   isOurs(path: string, content: string): boolean;
-  /** The shell into this agent's running box (`fastagent login --deployment`). */
-  shell(agentDir: string): Promise<BoxShell>;
-  validate?(ctx: Pick<DeployContext, "opts" | "agentDir" | "pre">): void;
+  /** The shell into the running box of the instance `name` (`fastagent login --deployment`). */
+  shell(agentDir: string, name: string): Promise<BoxShell>;
+  validate?(ctx: Pick<DeployContext, "opts" | "agentDir" | "name" | "pre">): void;
   /**
    * Plan the artifacts from the pre-flight facts and what is on disk, write them, then either drive the host CLI
    * (`--run`) or print the runbook. Answers the URL the deployment is reached at, when this host knows it.
@@ -140,19 +142,25 @@ export function registrarsFor(values: ReadonlyMap<string, string>, answerer: Ans
  */
 export function boxLoginStep<Args extends unknown[]>(
   host: DeployHost,
-  params: { agentDir: string; boxLogin: string | undefined; answerer: Answerer },
+  params: { agentDir: string; boxLogin: string | undefined; answerer: Answerer; config?: string | undefined },
   /** The shell, from whatever the driver learns only after deploying (AgentCore's runtime ARN). */
   shell: (...args: Args) => BoxShell,
 ): { boxLogin?: BoxLoginStep<Args> } {
   const provider = params.boxLogin;
   if (provider === undefined) return {};
-  const command = deploymentLoginCommand(host, provider);
+  const command = deploymentLoginCommand(host, provider, params.config);
   const { answerer } = params;
   return {
     boxLogin: {
       command,
       run: async (...args) => {
-        const request = { host, shell: shell(...args), provider, ifMissing: true };
+        const request = {
+          host,
+          shell: shell(...args),
+          provider,
+          ifMissing: true,
+          ...(params.config === undefined ? {} : { configFile: params.config }),
+        };
         if (answerer.kind !== "ticket") return loginOnBox({ ...request, input: answerer.kind === "terminal" });
         // An account sign-in: a key cannot be typed into a ticket.
         const io = ticketLoginIO(answerer.step, command);
