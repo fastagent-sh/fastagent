@@ -56,7 +56,7 @@ goal needs.
 | **Agent behavior defaults in `fastagent.config.ts`, with `defineAgent()`; every field optional** | It is the `defineConfig` pattern of Vite and its peers: typed, and read by the build. The model, thinking level and tools it names are defaults: a deployment overrides them with a flag or an environment variable, and a session with pi-durable's own API |
 | **Code is registered by where it is**: `src/tools/`, `src/extensions/`, `src/channels/`, `src/schedules/` | `build` generates the built definition's entry as plain imports of every module, as TanStack Router's route tree and Next.js's route manifest are generated: nothing to import by hand, full types, and a bundler can follow it. A source project, which only `dev` opens, has its modules imported where they are, so opening it writes nothing into it ([agent-artifact.md](agent-artifact.md) §2). Not `import.meta.glob`, which only Vite understands while `dev` runs on Node |
 | **The code is pi-durable's**: tools are its `defineTool` (TypeBox), extensions its `defineExtension` | With one harness, a portable layer over its tool and extension APIs would be a second API to learn for nothing |
-| **Third-party capabilities are pi-durable extensions**, listed in `defineAgent({ extensions })` | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. MCP servers are declared separately, as the `mcpServers` of `context.json` ([MCP](mcp.md)). Context packages (§4.2) are later work, not an MCP prerequisite |
+| **Third-party capabilities are pi-durable extensions**, each a module of `src/extensions/` that re-exports the package's | An extension is already a named bundle of tools, prompt sections and hooks, so it is the plugin; nothing new is invented. MCP servers are declared separately, as the `mcpServers` of `context.json` ([MCP](mcp.md)). Context packages (§4.2) are later work, not an MCP prerequisite |
 | **Schedules are TypeScript**: `defineSchedule({ cron, tz, prompt })`, the prompt a text or a function | A schedule is behaviour, like a tool: a prompt that depends on the time it fires, secrets it may need, and a cron the build checks, including the dialect an external clock accepts |
 | **`SYSTEM.md` is the whole prompt the author writes; `APPEND_SYSTEM.md` goes** | It added to pi-coding-agent's default prompt, which pi-durable does not have |
 | **Secrets are declared by whoever reads them**, and `deploy` checks them as one list | Code declares the names it reads in its own module, `needs(["X_API_KEY"], ({ X_API_KEY }) => defineTool(...))`, and receives exactly those values, typed, so a declaration cannot drift from its read. The commands the agent runs read theirs from the environment, declared in `context.json`'s `environment.variables`; MCP server configuration names its required values in `mcpServers` ([MCP design](mcp.md)). A declaration may say what the secret is for and that the code runs without it (`{ name, description, optional }`). A missing required one fails the start, naming where it was declared. Whoever deploys or runs the agent reads none of that code: the definition lists every declaration among its inputs (what each is for, whether it is optional, where it is declared), which `info`, runbooks, an `.env.example` and the deploy check are made from |
@@ -126,11 +126,12 @@ at run time by its path: a skill's `SKILL.md` names the files and scripts beside
 import { defineAgent } from "@fastagent-sh/fastagent";
 
 export default defineAgent({
-  name: "support",                       // default: package.json's name
-  model: "anthropic/claude-sonnet-4-5",  // a default; a deployment or a session may change it
-  thinkingLevel: "medium",
-  providers: [gateway],                  // model providers beyond pi-ai's built-ins
-  deploy: { agentcore: { idleTimeoutSeconds: 900 } },
+  providers: [gateway],                    // model providers beyond pi-ai's built-ins; the name is package.json's
+  defaults: {
+    model: "anthropic/claude-sonnet-4-5",  // a default; an instance, a deployment or a session may change it
+    thinkingLevel: "medium",
+    deploy: { agentcore: { idleTimeoutSeconds: 900 } },
+  },
 });
 ```
 

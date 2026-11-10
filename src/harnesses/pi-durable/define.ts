@@ -10,7 +10,7 @@ import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
 /** What an instance may set over the program's `defaults`, and what a program's `defaults` are (agent-artifact.md §3.2). */
 export interface AgentDefaults<Settings = unknown> {
-  /** Example first messages a client may offer as drafts, up to six: `info().agent.starters`. */
+  /** Example first messages a client may offer as drafts, up to six: `info().starters`. */
   starters?: readonly string[];
   /** `"provider/modelId"`: what a session that names none answers with; a flag or `FASTAGENT_MODEL` may override it. */
   model?: string;

@@ -59,9 +59,28 @@ describe("cli: info", () => {
     expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("channels.nope names no channel")]);
     const malformed = await runInProcess(["info", dir, "--ingress", "nope"], undefined, withoutModel());
     expect([malformed.code, malformed.stderr]).toEqual([
-      1,
+      2,
       expect.stringContaining("FASTAGENT_INGRESS must be channel=webhook|connection"),
     ]);
+  });
+
+  it("every command that runs an instance refuses a variable the configuration would refuse, in one line and exit 2", async () => {
+    const dir = await agentWorkspace("fa-env-refuse-", {
+      "fastagent.config.ts": 'export default { defaults: { model: "openai/gpt-4o-mini" } };\n',
+    });
+    const env = { ...withoutModel(), FASTAGENT_HTTP_API: "yes", OPENAI_API_KEY: "x" };
+    for (const argv of [
+      ["info", dir],
+      ["invoke", "hi", dir, "--no-input"],
+      ["schedules", "run", "x", dir, "--no-input"],
+    ]) {
+      const result = await runInProcess(argv, undefined, env);
+      expect([argv[0], result.code, result.stderr.trim()]).toEqual([
+        argv[0],
+        2,
+        'Error: FASTAGENT_HTTP_API must be "true" or "false", and is "yes"',
+      ]);
+    }
   });
 
   it("info reports the program's name apart from the instance's, and the description and starters it resolves", async () => {

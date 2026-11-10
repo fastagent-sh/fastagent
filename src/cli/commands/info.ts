@@ -9,14 +9,8 @@ import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import {
-  type EffectiveConfig,
-  agentPresentation,
-  configValue,
-  resolveConfig,
-} from "../../harnesses/pi-durable/config.ts";
+import { type EffectiveConfig, agentPresentation, configValue } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
-import { environmentConfig } from "../../harnesses/pi-durable/environment-config.ts";
 import { buildDefinition, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { openText, readCommands } from "../../harnesses/pi-durable/text.ts";
 import { inspectMcp } from "../../mcp/host.ts";
@@ -24,6 +18,7 @@ import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { contentLines } from "../content-view.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
+import { resolveProjectConfig } from "../shared.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -38,7 +33,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const { definition, instance } = await loadDevProject(agentDir).catch(failStartup);
   const config = (() => {
     try {
-      return resolveConfig(definition, instance, environmentConfig(process.env));
+      return resolveProjectConfig({ definition, ...(instance === undefined ? {} : { instance }) });
     } catch (error) {
       return failStartup(error);
     }
