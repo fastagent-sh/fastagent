@@ -4,7 +4,7 @@
  * of its own beside `fastagent dev`'s. The sign-in and credential rules are tested where they live (login.test.ts,
  * credential-store.test.ts); this file owns the translation and the wiring.
  */
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -250,6 +250,29 @@ describe("an agent's own content, from the package entry", () => {
     const removed = await removeContent(dir, "NOTES");
     expect(removed.name).toBe("notes");
     expect((await listContent(dir)).content.map(({ name }) => name).sort()).toEqual(["app", "handbook"]);
+  });
+
+  it("an opened agent reports the content it opened with, which an edit does not change until a reopen", async () => {
+    const { base, notes, app } = await folders();
+    const dir = join(base, "agent");
+    await createAgent(dir, { content: [bind("app", app)] });
+    const agent = await openSource(dir);
+    try {
+      expect(agent.content.map(({ name, kind, location }) => [name, kind, location])).toEqual([
+        ["app", "local", realpathSync(app)],
+      ]);
+      await addContent(dir, bind("notes", notes));
+      expect(agent.content.map(({ name }) => name)).toEqual(["app"]);
+      expect((await listContent(dir)).content.map(({ name }) => name).sort()).toEqual(["app", "notes"]);
+    } finally {
+      await agent.close();
+    }
+    const reopened = await openSource(dir);
+    try {
+      expect(reopened.content.map(({ name }) => name).sort()).toEqual(["app", "notes"]);
+    } finally {
+      await reopened.close();
+    }
   });
 
   it("refuses a name the agent has, and a created agent with one bad entry leaves no directory", async () => {

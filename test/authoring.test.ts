@@ -5,7 +5,7 @@
  * each where it belongs, and its refusals are thrown, a name problem as its own class.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useGitIdentity, withGitIdentity } from "./git-env.ts";
 import { ContentNameError, addContent, createAgent, initAgent, listContent, removeContent } from "../src/authoring.ts";
 import { type SourceOptions, readContentSource } from "../src/content/source.ts";
+import { defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 
 /** What `content add <dir>` adds. */
 const directory = (dir: string, options: SourceOptions = {}) => readContentSource(dir, "/", options).addition;
@@ -265,6 +266,58 @@ describe("authoring API", () => {
     await expect(addContent(agentDir, directory(join(base, "missing")))).rejects.toThrow(/does not exist/);
     for (const file of ["context.json", "fastagent.json"]) {
       await expect(access(join(agentDir, file))).rejects.toThrow(/ENOENT/);
+    }
+  });
+
+  it("a built definition is the agent: its program is read from a directory that may be read-only, the instance is edited", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-built-")));
+    const dist = join(base, "program", "dist");
+    await mkdir(dist, { recursive: true });
+    await writeFile(join(dist, "context.json"), JSON.stringify({ content: { docs: { github: "acme/docs" } } }));
+    await chmod(dist, 0o555);
+    const definition = defineDefinition({
+      format: 1,
+      builtWith: "0.0.0",
+      name: "built",
+      version: "0.0.0",
+      dir: dist,
+      config: {},
+      registry: { tools: [], extensions: [], channels: [], schedules: [] },
+    });
+    const instance = join(base, "Agents", "reviewer");
+    const config = join(instance, "fastagent.json");
+    await mkdir(join(base, "notes"));
+    try {
+      await expect(addContent(definition, directory(join(base, "notes")))).rejects.toThrow(
+        "is a built definition with no instance configuration of its own: pass instance.config",
+      );
+      const added = await addContent(definition, directory(join(base, "notes")), { config });
+      expect(added.content.map((c) => [c.name, c.location])).toEqual([
+        ["docs", join(instance, "content", "docs")],
+        ["notes", join(base, "notes")],
+      ]);
+      expect(JSON.parse(await readFile(config, "utf8"))).toEqual({ content: { notes: { path: join(base, "notes") } } });
+      // The program's baseline still counts: its name is taken, and nothing is written next to it.
+      await expect(
+        addContent(definition, readContentSource("github:other/docs", base).addition, { config }),
+      ).rejects.toThrow(ContentNameError);
+      expect(await readdir(dist)).toEqual(["context.json"]);
+      // The program is read, never edited: not by `program`, not by removing one of its entries.
+      await expect(
+        addContent(definition, { ...readContentSource("github:acme/more", base).addition, program: true }, { config }),
+      ).rejects.toThrow(/belongs to a built definition, which is read and never edited/);
+      await expect(removeContent(definition, "docs", { config })).rejects.toThrow(
+        /belongs to a built definition, which is read and never edited/,
+      );
+      expect(JSON.parse(await readFile(join(dist, "context.json"), "utf8"))).toEqual({
+        content: { docs: { github: "acme/docs" } },
+      });
+      expect((await listContent(definition, { config })).content.map((c) => c.name)).toEqual(["docs", "notes"]);
+      const removed = await removeContent(definition, "notes", { config });
+      expect(removed.content.map((c) => c.name)).toEqual(["docs"]);
+      expect(await readdir(dist)).toEqual(["context.json"]);
+    } finally {
+      await chmod(dist, 0o755);
     }
   });
 
