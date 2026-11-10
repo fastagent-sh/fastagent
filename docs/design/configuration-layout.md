@@ -82,8 +82,10 @@ An instance is a **named deployment of a program with one configuration file**.
 ## 5. Delivery
 
 **The image holds the program and nothing of an instance**, so one build is every instance's image. Nothing is copied to
-`/etc/fastagent/`, and the release manifest no longer carries a model; what varied per deployment goes to the host as
-variables the deploy sets.
+`/etc/fastagent/`, and there is no release manifest; what varied per deployment goes to the host as variables the deploy
+sets: the configuration (below), `FASTAGENT_INSTANCE` (the instance's name, which the storage claim and the lease use,
+and whose presence says "this is a deployed box") and `FASTAGENT_RELEASE_ID` (for the log and the record of the release
+last started on the storage).
 
 The configuration file is delivered as one variable holding its JSON, `FASTAGENT_CONFIG_JSON`, rendered by the host's own
 mechanism for non-secret values:
@@ -93,7 +95,7 @@ mechanism for non-secret values:
 | Docker | the instance's Compose file, `environment:` | a `$` in the text (an MCP server's `${VAR}`) is written `$$`, or Compose would expand it |
 | Fly | the instance's `fly.toml`, `[env]` | Fly documents `[env]` for non-sensitive values |
 | Railway | the service's variables in that environment, set with `railway variable set` | variables are not part of Railway's config file |
-| AgentCore | the template's `EnvironmentVariables` | AWS's quota is 4 KB in all with 50 entries, and the CloudFormation page lists a maximum of 2048 with no unit; see §7 |
+| AgentCore | the template's `EnvironmentVariables` | AWS's quota is 4 KB in all with 50 entries, and the CloudFormation page lists a maximum of 2048 with no unit; to be measured (§7) |
 
 The box reads, in order: a flag, the individual variables (`FASTAGENT_MODEL`, `FASTAGENT_THINKING_LEVEL`,
 `FASTAGENT_HTTP_API`, `FASTAGENT_HTTP_PUBLIC_URL`, `FASTAGENT_INGRESS`), `FASTAGENT_CONFIG_JSON`, the program's
@@ -105,7 +107,8 @@ model per instance has a file per instance.
 
 A configuration that cannot be a variable is refused by the pre-flight, naming the host and its limit:
 a `content` entry that is a directory of this machine, an `mcpServers` command that is a relative path, a file over the
-host's limit, and `instructions`, `skills` or `prompts`, which name files that a variable cannot carry (§7).
+host's limit, and `instructions`, `skills` or `prompts`: a deployment's text is the program's, and an instance does not
+add to it on a host.
 
 ## 6. What each place becomes
 
@@ -118,7 +121,7 @@ host's limit, and `instructions`, `skills` or `prompts`, which name files that a
 | `<agent>/.secrets/mcp-auth.json` | `<root>/.state/` |
 | `.secrets/` and its ignore file | removed; the committed template is `<agent>/.env.example` |
 | `/etc/fastagent/fastagent.json`, `FASTAGENT_CONFIG` on a box | `FASTAGENT_CONFIG_JSON` |
-| `fastagent.release.json` carrying `model`, `FASTAGENT_RELEASE_FILE` | the release id and instance name as variables; `model` in the configuration |
+| `fastagent.release.json`, `FASTAGENT_RELEASE_FILE` | removed; `FASTAGENT_INSTANCE` and `FASTAGENT_RELEASE_ID`; `model` is in the configuration |
 | `deploy` reading `FASTAGENT_MODEL`, `GITHUB_TOKEN`, `FASTAGENT_API_KEY` from a value file | the file's `model`; the others are secrets the target holds |
 | `fastagent secrets set docker`, Compose `env_file:` | Compose's top-level `secrets:`, from the shell running Compose or a file the person names; `secrets set docker` is removed |
 | `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_WORKDIR`, `FASTAGENT_CONFIG` and the flags | unchanged for a local instance |
@@ -129,8 +132,12 @@ Decided:
   `CLAUDE_CONFIG_DIR`, `CODEX_HOME` place them), not per project, and a local credential never reaches a deployment (the
   box logs in itself). So `dev` and `start` share one login; the project layer and `keeps` go.
 - **`dev` and `start` both read `<agent>/.env`**, as `next start` does. A deployed box reads only its environment.
-- **Docker takes secrets as Compose's own `secrets:`**, mounted under `/run/secrets`; the box reads them from there.
-  Compose documents this as the way to avoid secrets in environment variables.
+- **Docker takes secrets as Compose's own `secrets:`**, mounted under `/run/secrets`; the box reads them from there
+  into its secrets input at start (today it reads the environment only). Compose documents this as the way to avoid
+  secrets in environment variables.
+- **A deployment's text is the program's.** An instance on a host adds no `instructions`, `skills` or `prompts`.
+- **The release facts are variables**, not a file in the image (§5), because the manifest's random id would make every
+  deploy, and every instance, a different image.
 
 ## 7. Open
 
@@ -142,23 +149,19 @@ These are decided by measuring or building, not by argument.
 2. **Railway's limits** for a variable's size, and whether `railway variable set` takes JSON with quotes as is. Its
    config file does not carry variables; one search summary says config-as-code is deprecated for new services, which is
    not verified.
-3. **Per-instance text** (`instructions`, `skills`, `prompts`). A variable cannot carry files, and Railway and AgentCore
-   have no file mount. The universal channel that already exists is a repository cloned at start (`content`); how an
-   instance's configuration names a file inside one is not designed. Until it is, a deployment's text is the program's,
-   and a configuration that names these is refused.
-4. **How the box reads Docker secrets**, and whether Compose's `environment:` or `file:` source is used: the first is
-   reported to land in the container's writable layer, the second to be a bind mount. To be tried on a real Compose.
-5. **Where the release facts live** once there is no manifest in the image: the lease and the storage claim need the
-   instance name and a release id at run time.
+3. **Compose's source for a secret**, `environment:` (from the shell running Compose, which a CI job fills) or `file:`:
+   the first is reported to land in the container's writable layer, the second to be a bind mount. The default is
+   `environment:`; to be tried on a real Compose.
 
 ## 8. Migration
 
 One PR each, in this order; each leaves the product working. No compatibility layer, per the maintenance policy.
 
 1. **Name.** The instance name from the configuration; host resources, generated manifests and the storage claim use it.
-2. **Delivery.** The image holds the program only; `FASTAGENT_CONFIG_JSON` rendered per host; `delivered-text`, the
-   `/etc/fastagent/` layer and the model in the release manifest go; the pre-flight refuses what cannot be a variable.
-3. **Secrets.** `deploy` reads no value file; Docker's `secrets:`; `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go.
+2. **Delivery.** The image holds the program only; `FASTAGENT_CONFIG_JSON`, `FASTAGENT_INSTANCE` and
+   `FASTAGENT_RELEASE_ID` rendered per host; `delivered-text`, the `/etc/fastagent/` layer and the release manifest go;
+   the pre-flight refuses what cannot be a variable.
+3. **Secrets.** `deploy` reads no value file; Docker's `secrets:` and the box reading `/run/secrets`; `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go.
 4. **Local values.** `<agent>/.env` for `dev` and `start`; the scaffold, ignore rules and `.env.example` follow.
 5. **Credentials.** The user-level layer; `.secrets/`, `keeps` and `FASTAGENT_SECRETS_DIR` go.
 6. The user documents and agent-artifact.md §4.1 and §6 are rewritten for the new layout.
