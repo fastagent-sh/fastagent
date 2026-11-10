@@ -281,7 +281,7 @@ Default locations:
 | The package's `bin` (`npx @acme/reviewer`) | Only what `--config` or `FASTAGENT_CONFIG` names; otherwise the program's defaults | None: `--root` or `FASTAGENT_ROOT` is required |
 | Docker, Fly, Railway | `/etc/fastagent/`, what `deploy --config` delivers in the image; otherwise the program's defaults | `/data/`, the volume |
 | AgentCore | `/etc/fastagent/`, what `deploy --config` delivers in the image; otherwise the program's defaults | `/mnt/data/`, SessionStorage, reset on every deploy |
-| Embedding | The `config` object; otherwise the program's defaults | None: `root`, or `stateDir` and `workdir`, are required |
+| Embedding | The `config` object or path; given `root` and no `config`, `<root>/fastagent.json` when there is one; otherwise the program's defaults | None: `root`, or `stateDir` and `workdir`, are required |
 
 `<name>` is the instance name (§4.5). A host's instance root is `/data` (AgentCore's SessionStorage must mount at
 exactly `/mnt/<one level>`, so there it is `/mnt/data`), named to the runtime through `FASTAGENT_ROOT`; §6.1 says why
@@ -491,7 +491,7 @@ const agent = await openAgent(reviewer, {
 ```
 
 The app needs no files: configuration is the same schema as an object, read by the same resolver the CLI uses for
-`fastagent.json`; an app that keeps its instances as folders passes the file's path instead (§4.6). Two opens share nothing their inputs do not name: no cwd, relative output, binding or default (two given one
+`fastagent.json`; an app that keeps its instances as folders passes the file's path instead (§4.6). Two opens share nothing their inputs do not name: no cwd, relative output, binding or default; the one file read without being named is `<root>/fastagent.json` of the `root` an open is given, which names it (two given one
 `workdir` share that workspace, which is the caller's to avoid). `inspectMcp` and `signInMcp` take the same `config`, so a
 host sees and authorizes exactly the servers the instance opens, the program's and its own.
 

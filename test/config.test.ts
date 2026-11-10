@@ -3,7 +3,7 @@
  * them, the settings checked against the program's schema, each value with its source. What a reader of the resolved
  * configuration does with it is that reader's test.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compile, int, map, obj, opt, str, unknown } from "@earendil-works/pi-schema";
@@ -314,6 +314,36 @@ export default needs([], (_secrets, settings: { repo: string; digestChannel?: st
     await expect(openAgent(definition, { root, config: join(root, "missing.json") })).rejects.toThrow(
       "cannot read the instance configuration",
     );
+  });
+
+  it("`openAgent` given a root and no config reads the fastagent.json there, and nothing else is read or made", async () => {
+    const dir = project({ "fastagent.config.ts": CONFIG });
+    await buildable(dir);
+    const { dist } = await buildProject(dir);
+    const { loadBuiltDefinition } = await import("../src/harnesses/pi-durable/built.ts");
+    const definition = await loadBuiltDefinition(dist);
+    const root = mkdtempSync(join(tmpdir(), "fa-config-root-"));
+    made.push(root);
+    const file = join(root, "fastagent.json");
+    // No file is the program's defaults, and opening makes none.
+    await expect(openAgent(definition, { root, offline: true })).rejects.toThrow("/repo missing");
+    expect(existsSync(file)).toBe(false);
+    // An open that succeeds without a file makes none either: a program that needs no settings.
+    const plain = project({ "fastagent.config.ts": "export default {};\n" });
+    await buildable(plain);
+    const plainDefinition = await loadBuiltDefinition((await buildProject(plain)).dist);
+    await (await openAgent(plainDefinition, { root, offline: true })).close();
+    expect(existsSync(file)).toBe(false);
+    writeFileSync(file, JSON.stringify({ settings: { repo: "acme/api" } }));
+    await (await openAgent(definition, { root, offline: true })).close();
+    // A config that is given is used as it is, and the file is not read.
+    writeFileSync(file, "{ not json");
+    await (await openAgent(definition, { root, config: { settings: { repo: "acme/web" } }, offline: true })).close();
+    await expect(openAgent(definition, { root, offline: true })).rejects.toThrow(`${file} is not JSON`);
+    // Only the root form: a workdir's fastagent.json is another instance's (the development one).
+    writeFileSync(file, JSON.stringify({ settings: { repo: "acme/api" } }));
+    const stateDir = join(root, "state");
+    await expect(openAgent(definition, { workdir: root, stateDir, offline: true })).rejects.toThrow("/repo missing");
   });
 
   it("publishes the JSON Schema of an instance's file beside the package, settings included", async () => {

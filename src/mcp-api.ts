@@ -82,9 +82,15 @@ export interface McpOptions {
  */
 export type McpConfigInput = { mcpServers?: Readonly<Record<string, unknown>>; [key: string]: unknown } | string;
 
-/** What `inspectMcp` is given beside the grants: the instance configuration whose servers it reads with the program's. */
+/**
+ * What `inspectMcp` is given beside the grants: the instance configuration whose servers it reads with the program's,
+ * as `config`, or, with no `config`, the `fastagent.json` in the instance's `root` when it holds one (as `openAgent`
+ * reads it).
+ */
 export interface McpInspectOptions extends McpOptions {
   config?: McpConfigInput;
+  /** The instance root, absolute. */
+  root?: string;
 }
 
 export interface McpServerSummary {
@@ -127,4 +133,6 @@ export interface McpSignInRequest {
   fetch?: McpOptions["fetch"];
   /** The instance configuration whose servers are read with the program's. */
   config?: McpConfigInput;
+  /** With no `config`, the `fastagent.json` in this instance root, absolute, when it holds one (as `openAgent` reads it). */
+  root?: string;
 }

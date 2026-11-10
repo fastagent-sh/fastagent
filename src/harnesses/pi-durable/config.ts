@@ -282,11 +282,11 @@ export async function namedInstanceConfig(
 
 /** The instance configuration `dev` runs a project with: the one named by `--config` or `FASTAGENT_CONFIG`, else the project's own. */
 export async function devInstanceConfig(dir: string): Promise<InstanceConfigSource | undefined> {
-  return (await namedInstanceConfig()) ?? (await projectInstanceConfig(dir));
+  return (await namedInstanceConfig()) ?? (await instanceConfigIn(dir));
 }
 
-/** The `fastagent.json` a development project holds at its root, when it holds one. */
-export async function projectInstanceConfig(dir: string): Promise<InstanceConfigSource | undefined> {
+/** The `fastagent.json` a directory holds, when it holds one: a development project's root, or an instance root. */
+export async function instanceConfigIn(dir: string): Promise<InstanceConfigSource | undefined> {
   const path = join(dir, INSTANCE_CONFIG_FILE);
   return existsSync(path) ? readInstanceConfigFile(path) : undefined;
 }
