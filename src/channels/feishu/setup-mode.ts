@@ -47,6 +47,11 @@ export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
       "the discussion before an ask cannot be read (the prompt says so), and a quoted message degrades to a marker",
   },
   {
+    request: "im:message.reactions:write_only",
+    supersets: ["im:message"], // the read/write superset
+    withoutIt: "a message waiting behind a running task gets no 👀 while it waits",
+  },
+  {
     request: "im:chat.members:read",
     withoutIt: "people in the discussion the agent reads are shown by open_id, not by name",
   },

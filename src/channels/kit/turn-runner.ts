@@ -1,5 +1,6 @@
 /** The durable-turn LIFECYCLE the stateful chat channels share, over the kit's parts. */
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 import type { Message } from "../../agent-api.ts";
@@ -17,6 +18,17 @@ import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-
  * message id).
  */
 export type PendingBase<S extends TurnRecordBase> = Omit<S, "attempts">;
+
+/** A light acknowledgement on the asker's message (a reaction) while its turn waits, settled when the turn ends. */
+export interface TurnAck {
+  /** The turn ended with an answer (its own, or the earlier input's it shared). */
+  complete(): Promise<void>;
+  /** The turn ended without one. */
+  remove(): Promise<void>;
+}
+
+/** An acknowledgement that does nothing: where none could be made. */
+export const NO_ACK: TurnAck = { complete: async () => undefined, remove: async () => undefined };
 
 /** What the runner gives a turn beyond its inputs: how its message is sent, and how its reply and answer are delivered. */
 interface TurnHooks {
@@ -65,6 +77,12 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
    * answer is, when it is not under their message (a group's answer quotes the first asker). Absent: say nothing.
    */
   notifyShared?(rec: R): Promise<void>;
+  /**
+   * The turn's input was steered into a run that is still going (or the turn restarted), so nothing of its own shows
+   * until that run ends: mark the asker's message. Best effort: an acknowledgement is decoration and must not fail the
+   * turn, so a rejection is logged and the turn goes on without one.
+   */
+  acknowledgeHeld?(rec: R): Promise<TurnAck>;
   execute(
     rec: R,
     discussion: { text: string; consumed: E[] },
@@ -118,20 +136,55 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
           ),
         );
       });
+    /**
+     * Mark the asker's message while `reply` runs, then settle the mark by how it ended. Started beside the reply so the
+     * mark's round trip does not hold back sending the message; settled in a finalizer, which logs and never fails.
+     */
+    const acknowledged = (
+      ack: () => Promise<TurnAck>,
+      reply: Effect.Effect<void, PortFailure, Scope.Scope>,
+    ): Effect.Effect<void, PortFailure, Scope.Scope> =>
+      Effect.gen(function* () {
+        const started = yield* Effect.forkScoped(
+          portJoin(ack).pipe(
+            Effect.catchTag("PortFailure", (error) =>
+              Effect.sync(() => {
+                log.warn(`${label} turn ${rec.id}: could not acknowledge its message: ${String(error.cause)}`);
+                return NO_ACK;
+              }),
+            ),
+          ),
+        );
+        yield* Effect.addFinalizer((exit) =>
+          Fiber.join(started).pipe(
+            Effect.flatMap((mark) => portJoin(() => (exit._tag === "Success" ? mark.complete() : mark.remove()))),
+            Effect.catchCause((cause) =>
+              Effect.sync(() =>
+                log.warn(`${label} turn ${rec.id}: could not settle its acknowledgement: ${String(cause)}`),
+              ),
+            ),
+          ),
+        );
+        yield* reply;
+      });
     const hooks: TurnHooks = {
       admitted: slot.release,
       observe: (message) => {
         ended = message;
       },
-      reply: (events, render) =>
-        gatedReply({
+      reply: (events, render) => {
+        const held = afterRestart || slot.earlierRunning();
+        const reply = gatedReply({
           events,
-          held: afterRestart || slot.earlierRunning(),
+          held,
           awaitEarlier: slot.awaitEarlier,
           delivered: wasDelivered,
           render,
           skipped: sharedAnswer,
-        }),
+        });
+        const acknowledge = options.acknowledgeHeld;
+        return held && acknowledge !== undefined ? acknowledged(() => acknowledge(rec), reply) : reply;
+      },
       deliverOnce: (deliver) =>
         Effect.gen(function* () {
           yield* slot.awaitEarlier;

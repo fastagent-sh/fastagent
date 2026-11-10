@@ -2629,6 +2629,75 @@ describe("Feishu inputs steered into one run", () => {
     expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
   });
 
+  it("marks the message of an input steered into a running turn, and swaps the mark when it is answered", async () => {
+    let added = 0;
+    const fx = feishuFetch({
+      "/reactions": (_url, init) =>
+        init.method === "POST"
+          ? Response.json({ code: 0, data: { reaction_id: `rx${++added}` } })
+          : Response.json({ code: 0, data: {} }),
+    });
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const { handler, idle } = await mountDurable(agent);
+
+    await handler(feishuRequest(messageEvent({ id: "om_1", text: "start the work" })));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    expect(fx.calls("/reactions")).toHaveLength(0); // the first turn shows its own card
+    await handler(feishuRequest(messageEvent({ id: "om_2", text: "and keep the old column" })));
+    await vi.waitFor(() => expect(fx.calls("/im/v1/messages/om_2/reactions", "POST")).toHaveLength(1));
+    release();
+    await idle();
+
+    expect(
+      fx.calls("/reactions").map((c) => [c.method, c.url.split("/im/v1/messages/")[1], c.body?.reaction_type]),
+    ).toEqual([
+      ["POST", "om_2/reactions", { emoji_type: "OnIt" }],
+      ["DELETE", "om_2/reactions/rx1", undefined],
+      ["POST", "om_2/reactions", { emoji_type: "DONE" }],
+    ]);
+  });
+
+  it("does not wait out a rate limit for a reaction, so the turn ends as soon as its answer is delivered", async () => {
+    vi.spyOn(log, "warn").mockImplementation(() => {});
+    let reactionCalls = 0;
+    feishuFetch({
+      "/reactions": () => {
+        reactionCalls++;
+        return Response.json({ code: 99991400, msg: "request trigger frequency limit" });
+      },
+    });
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const { handler, idle, home } = await mountDurable(agent);
+    await handler(feishuRequest(messageEvent({ id: "om_1", text: "start the work" })));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await handler(feishuRequest(messageEvent({ id: "om_2", text: "and keep the old column" })));
+    await vi.waitFor(() => expect(reactionCalls).toBeGreaterThan(0));
+    const released = Date.now();
+    release();
+    await idle();
+    // One attempt, no retries: the platform's rate limit would otherwise cost 1s, 2s and 3s of waiting.
+    expect(reactionCalls).toBe(1);
+    expect(Date.now() - released).toBeLessThan(2000);
+    expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
+  });
+
+  it("goes on without a mark when the platform refuses the reaction", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const fx = feishuFetch({
+      "/reactions": () => Response.json({ code: 99991672, msg: "no permission im:message.reactions:write_only" }),
+    });
+    const { agent, release } = await holdingAgent({ shared: "the shared answer" });
+    const { handler, idle, home } = await mountDurable(agent);
+    await handler(feishuRequest(messageEvent({ id: "om_1", text: "start the work" })));
+    await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+    await handler(feishuRequest(messageEvent({ id: "om_2", text: "and keep the old column" })));
+    await vi.waitFor(() => expect(warn.mock.calls.flat().join(" ")).toContain("could not mark message om_2"));
+    release();
+    await idle();
+    expect(fx.calls("/reactions", "DELETE")).toHaveLength(0); // nothing was added, so nothing is taken back
+    expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
+  });
+
   it("points a group asker, under their own message, to the answer they share", async () => {
     const fx = feishuFetch();
     const { agent, release } = await holdingAgent({ shared: "the shared answer" });

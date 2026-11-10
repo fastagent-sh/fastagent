@@ -22,7 +22,7 @@ import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
 import { attachmentPath } from "../kit/attachment-path.ts";
 import { utf8Prefix } from "../kit/text.ts";
-import type { CallOptions } from "../kit/transport.ts";
+import { type CallOptions, DROPPABLE_FRAME } from "../kit/transport.ts";
 
 /** Per-attempt timeout for a JSON API call — small JSON round-trips, so 30s is generous. */
 const API_TIMEOUT_MS = 30_000;
@@ -193,6 +193,10 @@ export interface FeishuApi {
   editTextMessage(messageId: string, text: string): Promise<void>;
   /** Recall (delete) a message the bot sent. */
   deleteMessage(messageId: string): Promise<void>;
+  /** React to any message in a chat the bot is in; returns the reaction's id, which removing it needs. */
+  addReaction(messageId: string, emojiType: string): Promise<string | undefined>;
+  /** Take back a reaction this app added. */
+  deleteReaction(messageId: string, reactionId: string): Promise<void>;
   /**
    * A place's messages, NEWEST first: a chat's (an ordinary group lists a thread's root only; a topic group lists
    * every message) or a thread's. Cards come back as sent, and senders as open_ids.
@@ -512,6 +516,25 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
       },
       async deleteMessage(messageId) {
         await call("deleteMessage", "DELETE", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`);
+      },
+      async addReaction(messageId, emojiType) {
+        const data = await call<ApiBody & { data?: { reaction_id?: string } }>(
+          "addReaction",
+          "POST",
+          `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions`,
+          { reaction_type: { emoji_type: emojiType } },
+          DROPPABLE_FRAME, // decoration: never worth waiting out a rate limit, which would hold the turn's end
+        );
+        return data.data?.reaction_id;
+      },
+      async deleteReaction(messageId, reactionId) {
+        await call(
+          "deleteReaction",
+          "DELETE",
+          `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(reactionId)}`,
+          undefined,
+          DROPPABLE_FRAME, // decoration: never worth waiting out a rate limit, which would hold the turn's end
+        );
       },
       async getMessage(messageId) {
         const data = await call<ApiBody & { data?: { items?: unknown[] } }>(

@@ -20,6 +20,7 @@ import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
 import { threadForkSource } from "../kit/thread-fork.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
+import { acknowledgeFeishuAsk } from "./reaction.ts";
 import { portJoin } from "../../effect-port.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -329,6 +330,7 @@ function createFeishuRuntimeFactory(
         rec.historyKey === undefined ? undefined : { key: rec.historyKey, until: { at: rec.askAt, id: rec.id } },
       where: (rec) => `chat=${rec.chatId}`,
       notifyDropped,
+      acknowledgeHeld: (rec) => acknowledgeFeishuAsk(placeApi(rec.historyKey), rec.id, label),
       // A group's answer quotes the first asker's message, so a later asker is told where theirs is.
       notifyShared: (rec) =>
         rec.replyTo === undefined

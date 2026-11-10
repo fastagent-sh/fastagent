@@ -376,6 +376,85 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s", "peek place:s"]);
   });
 
+  describe("acknowledging a turn that waits", () => {
+    const events = (): Stream.Stream<TurnEvent, PortFailure> =>
+      Stream.fromIterable<TurnEvent>([
+        { type: "message", message: { id: "m", sessionId: "s", status: "queued" } },
+        { type: "done", message: { id: "m", sessionId: "s", status: "completed" } },
+      ]);
+
+    /** Two turns of one conversation: `a` is held open until released, `b` is steered in behind it and replies. */
+    const doneEvent: TurnEvent = { type: "done", message: { id: "m", sessionId: "s", status: "completed" } };
+    /** A message that stays running until `gate` opens. */
+    const running = (gate: PromiseWithResolvers<void>): Stream.Stream<TurnEvent, PortFailure> =>
+      Stream.concat(
+        Stream.fromIterable<TurnEvent>([{ type: "message", message: { id: "m", sessionId: "s", status: "running" } }]),
+        Stream.fromEffect(Effect.promise(() => gate.promise).pipe(Effect.as(doneEvent))),
+      );
+
+    async function steered(
+      acknowledgeHeld: TurnRunnerOptions<Pending, Stored, string>["acknowledgeHeld"],
+      fail = false,
+    ) {
+      const { store, calls } = fakeStore();
+      const gate = Promise.withResolvers<void>();
+      const r = runner(store, calls, {
+        acknowledgeHeld,
+        execute: (rec, _discussion, _onAnswered, turn) =>
+          Effect.suspend(() => {
+            if (rec.id === "a") turn.admitted(); // sent; its answer is still to come, so `b` goes on behind it
+            return turn.reply(rec.id === "a" ? running(gate) : events(), (stream) =>
+              Stream.runDrain(stream).pipe(
+                Effect.flatMap(() =>
+                  fail && rec.id === "b" ? Effect.fail(new PortFailure(new Error("delivery failed"))) : Effect.void,
+                ),
+              ),
+            );
+          }),
+      });
+      r.submit({ id: "a", conversation: "s", text: "" }, false);
+      r.submit({ id: "b", conversation: "s", text: "" }, false);
+      await vi.waitFor(() => expect(calls).toContain("attempt b"));
+      gate.resolve();
+      await r.idle();
+      return calls;
+    }
+
+    it("marks the message of a turn that was steered behind a running one, and settles it when the turn ends", async () => {
+      const marks: string[] = [];
+      await steered(async (rec) => {
+        marks.push(`mark ${rec.id}`);
+        return {
+          complete: async () => void marks.push(`complete ${rec.id}`),
+          remove: async () => void marks.push(`remove ${rec.id}`),
+        };
+      });
+      expect(marks).toEqual(["mark b", "complete b"]); // `a` ran with nothing before it: it shows its own preview
+    });
+
+    it("takes the mark off when the held turn ends without an answer", async () => {
+      vi.spyOn(log, "error").mockImplementation(() => {});
+      const marks: string[] = [];
+      await steered(
+        async (rec) => ({
+          complete: async () => void marks.push(`complete ${rec.id}`),
+          remove: async () => void marks.push(`remove ${rec.id}`),
+        }),
+        true,
+      );
+      expect(marks).toEqual(["remove b"]);
+    });
+
+    it("a mark that cannot be made is logged and the turn goes on without one", async () => {
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      const calls = await steered(async () => {
+        throw new Error("reactions are off in this chat");
+      });
+      expect(warn.mock.calls.flat().join(" ")).toContain("could not acknowledge its message");
+      expect(calls).toContain("remove b"); // the turn still finished
+    });
+  });
+
   it("holds an input back while an earlier turn runs, even when the turn just before it failed at once", async () => {
     const { store, calls } = fakeStore();
     const gate = Promise.withResolvers<void>();
