@@ -271,7 +271,7 @@ missing credential fails the start instead of waiting.
 
 `fastagent init <dir> --content <source>` and `fastagent content add/remove` edit both files
 ([CLI](cli.md#fastagent-content)); they can be edited by hand too. The entries' order means nothing. A directory may
-not contain the agent directory, nor sit inside it: an agent lives beside the projects it works on, never in one.
+contain the agent directory or sit inside it; keeping the agent beside the projects it works on keeps a project's files out of the definition's releases.
 
 What each entry gives the agent:
 

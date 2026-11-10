@@ -50,8 +50,8 @@ are processes serving the same instance. Its state is kept beside the definition
 Runtime state is not part of the definition ([agent model](agent-model.md) §5). That says what it belongs to, not
 which directory holds it. Keeping it beside the definition means moving the directory moves its conversations,
 an agent needs no name on its own machine, and there is nothing to list or clean up but the directory itself.
-Terraform keeps its local state in `.terraform/` beside the configuration for the same reasons. Since an agent
-directory is never inside its content, this state never sits in a project's tree.
+Terraform keeps its local state in `.terraform/` beside the configuration for the same reasons. Keeping the agent
+directory beside its content keeps this state out of a project's tree.
 
 What this asks of others: both directories stay out of version control (the ignore files `init` writes keep them out), and a tool that copies an
 Agent to give it to someone leaves them out. duang's design already excludes `.secrets`, `.env` and session state
@@ -83,8 +83,10 @@ fastagent init <dir> [--content <source>]...
   meaning the same directory when the agent directory moves.
 - **A directory is never widened to its repository.** A checkout is used as the directory it is, so an agent kept in
   that checkout can still work on one directory of it; the note says how to declare the repository for a clone.
-- **Content may not contain the agent, or sit inside it.** `init ~/code/app/agent --content ~/code/app` is
-  refused, with the way out: put the agent beside the project, `init ~/agents/reviewer --content ~/code/app`.
+- **Content may contain the agent or sit inside it.** `init ~/code/app/agent --content ~/code/app` is allowed; the
+  agent's definition, `.secrets/` and `.state/` are then inside what it works on
+  ([agent model](agent-model.md) §2). Beside the project, `init ~/agents/reviewer --content ~/code/app`, is the layout
+  that keeps them apart.
 - **Run in a project, `init` says where to go.** `fastagent init .` in a directory that is not empty is refused
   with the command that creates the agent elsewhere and attaches this directory.
 - **The agent is a git repository from the start.** `init` runs `git init` and commits the scaffold, so a change the
@@ -118,7 +120,7 @@ fastagent content remove <name> [agent] [--config <file>]
 ```
 
 - `<source>` is read as in `init`: a directory, or `github:owner/repo`.
-- `add` refuses a directory that contains the agent directory or sits inside it, and asks for `--name` when the
+- `add` refuses a directory that does not exist, and asks for `--name` when the
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
 - `remove` drops the entry from whichever file holds it. A clone at `content/<name>` is left, and said to be: it may hold the
   agent's work.
@@ -147,7 +149,6 @@ What is said rather than handled quietly:
 | A `github` entry has no checkout bound here | `github acme/app: cloned in …/content/app`, or `already up to date`; a warning when the clone has the agent's changes or GitHub cannot be reached |
 | A binding points to a file, or (for a `github` entry) to anything but the root of a checkout of that repository; a link sits where a clone belongs | Refused, naming the entry and what it points to |
 | A bound directory is gone | Said; a `local` entry is left out and the agent is not told of it, a `github` entry uses its clone |
-| A bound directory contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two entries' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
 | A bound checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
 | A changed definition does not load when `dev` restarts on an edit | The worker exits with the reason, and the next save retries |

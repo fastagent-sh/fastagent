@@ -136,10 +136,9 @@ message (above). So it holds what both need, how this agent is built and how to 
 too now that the agent changes itself. What only the development session should read goes where the coding agent looks
 and FastAgent does not: an `AGENTS.md` in a directory above the agent's, or the coding agent's own configuration.
 
-### They are kept apart
+### A definition is released, content is kept
 
-**Content never contains the agent directory, and never sits inside it.** A definition and content ask for
-opposite things when a new version arrives:
+A definition and content ask for opposite things when a new version arrives:
 
 | | Definition | Writable content |
 |---|---|---|
@@ -156,13 +155,16 @@ only by content the instance names (§3). An agent's directory is its own, and o
 ~/code/app/                   content: the project, which holds no agent
 ```
 
-The check runs when an agent is loaded, and content in a nested layout is refused with the way out: move the agent
-directory out, or bind other content. The clones an instance makes for itself are its own, kept at
-`content/<name>` (§3), beside its runtime state (§5) and not inside it; they are not part of the definition.
+FastAgent does not refuse a bound directory that contains the agent directory or sits inside it. The separation
+is how a definition and its data are kept, not a limit on where the agent may write: its tools act with the
+process's authority (agent-artifact.md, "Nothing here is a sandbox"), so the agent reaches the definition's
+directory whether or not it is declared. A host that bundles a program (a built definition replaced as a whole, read
+only) may therefore sit under a folder an instance works on. Keeping a definition from being written is a separate
+control: file permissions, a read-only mount or image, a sandbox. Content that holds the agent directory holds its
+`.secrets/` and `.state/` too, and the agent is told it works on all of it.
 
-A git repository can merge both sides, so an agent committed inside the repository it works on is coherent in
-principle: one repository, one clone per instance, the definition running from it. It is not supported yet. Starting
-strict leaves that option open; allowing it first and taking it back would break the people relying on it.
+The clones an instance makes for itself are its own, kept at `content/<name>` (§3), beside its runtime state (§5) and
+not inside it; they are not part of the definition.
 
 ## 3. Content
 

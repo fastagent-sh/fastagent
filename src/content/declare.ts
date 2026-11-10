@@ -5,8 +5,7 @@
  * program declares is not one it may take. Pure: what is on the disk is resolve.ts's question.
  * docs/design/agent-artifact.md §3.3 and §4.2 are the rule.
  */
-import { isAbsolute } from "node:path";
-import { CONTEXT_FILE, configurationPath, isUnderDir } from "../paths.ts";
+import { CONTEXT_FILE, configurationPath } from "../paths.ts";
 
 /** One content entry as a file holds it, under its name: a repository, or a directory of this machine. */
 export type ContentEntry =
@@ -193,26 +192,4 @@ function declareOne(name: string, entry: unknown, from: ContentSource): Declared
   // git reads a leading "-" as an option, and no branch, tag or commit name has one.
   if (ref?.startsWith("-")) throw new Error(`${at}: "ref" must name a branch, tag or commit, got "${ref}"`);
   return { ...base, kind: "github", repo, ...(ref !== undefined ? { ref } : {}) };
-}
-
-/**
- * A directory the agent is bound to and the agent directory are kept apart (agent-model.md §2): a definition is
- * released, content is kept, and one directory cannot be both. The ONE statement of the rule; resolve.ts asks
- * it of the real paths.
- */
-export function nestingError(agentDir: string, location: string, name: string): string | undefined {
-  if (!isAbsolute(location)) throw new Error(`nestingError: "${location}" is not absolute`);
-  if (isUnderDir(agentDir, location)) {
-    return (
-      `content "${name}" (${location}) contains the agent directory ${agentDir} — an agent lives in a directory of ` +
-      `its own: move it out of ${location}, or bind other content`
-    );
-  }
-  if (isUnderDir(location, agentDir)) {
-    return (
-      `content "${name}" (${location}) is inside the agent directory ${agentDir} — content is a directory of its ` +
-      `own: move it out, or bind other content`
-    );
-  }
-  return undefined;
 }

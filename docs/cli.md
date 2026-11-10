@@ -88,7 +88,7 @@ way `content add` reads it:
 
 The entry is named after the repository or the directory. A directory stays on this machine: a deployed instance works
 without it, and `deploy` says so. A repository is cloned on a host. Every entry is checked before anything is written:
-a directory must exist, and none may contain the agent directory or sit inside it. Without `--content` the agent has
+a directory must exist. Without `--content` the agent has
 none and works only in its own directory.
 
 `init` refuses a directory that is not empty, inside a project as anywhere else, and names the command that creates

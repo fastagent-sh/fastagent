@@ -65,7 +65,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   let content: ResolvedContent[] = [];
   let contentError: string | undefined;
   try {
-    content = resolveContent(loadContent(agentDir, instance), { dir: agentDir, workdir });
+    content = resolveContent(loadContent(agentDir, instance), { workdir });
   } catch (error) {
     contentError = (error as Error).message;
   }

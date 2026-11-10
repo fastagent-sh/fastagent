@@ -18,7 +18,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { InMemoryCredentialStore, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { modelsOver } from "../src/harnesses/models/models.ts";
@@ -259,18 +259,9 @@ describe("init: scaffoldAgent", () => {
     );
     expect(await exists(join(base, "nothing"))).toBe(false);
 
-    // An agent inside what it works on: refused with the way out, and nothing created.
-    const nested = await cliInit(["init", join(app, "agent"), "--content", app, "--no-install"], base);
-    expect(nested).toMatch(/content "app" .* contains the agent directory .* move it out/);
-    expect(await exists(join(app, "agent"))).toBe(false);
-    // A symlinked ancestor does not hide the nesting: refused before the scaffold, not after it.
-    await symlink(base, join(base, "..", `${basename(base)}-link`));
-    const viaLink = await cliInit(
-      ["init", join(`${base}-link`, "app", "agent2"), "--content", app, "--no-install"],
-      base,
-    );
-    expect(viaLink).toMatch(/contains the agent directory/);
-    expect(await exists(join(app, "agent2"))).toBe(false);
+    // An agent inside what it works on is allowed: the content is the directory around it.
+    await cliInit(["init", join(app, "agent"), "--content", app, "--no-install"], base);
+    expect(await exists(join(app, "agent", "fastagent.config.ts"))).toBe(true);
     // Run in a project, init says how to have an agent work on it.
     await writeFile(join(app, "README.md"), "the project\n");
     expect(await cliInit(["init", ".", "--no-install"], app)).toMatch(/fastagent init <new directory> --content \./);

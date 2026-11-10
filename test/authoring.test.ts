@@ -120,10 +120,15 @@ describe("authoring API", () => {
     await expect(removeContent(agentDir, "nope")).rejects.toThrow(ContentNameError);
     // Not a name problem: a plain Error, as the CLI reports it. Nothing is written.
     const before = await bindings();
-    const around: unknown = await addContent(agentDir, directory(base, { name: "around" })).catch((e: unknown) => e);
-    expect(around).not.toBeInstanceOf(ContentNameError);
-    expect((around as Error).message).toMatch(/contains the agent directory/);
+    const gone: unknown = await addContent(agentDir, directory(join(base, "gone"), { name: "gone" })).catch(
+      (e: unknown) => e,
+    );
+    expect(gone).not.toBeInstanceOf(ContentNameError);
+    expect((gone as Error).message).toMatch(/does not exist/);
     expect(await bindings()).toBe(before);
+    // A directory around the agent is content like any other.
+    expect((await addContent(agentDir, directory(base, { name: "around" }))).name).toBe("around");
+    await removeContent(agentDir, "around");
 
     // Concurrent edits apply one after the other: neither is lost, neither is refused.
     const [x, y] = [join(base, "x"), join(base, "y")];

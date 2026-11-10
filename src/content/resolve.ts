@@ -6,9 +6,9 @@
  * asks for it.
  */
 import { lstatSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { contentEntryPath } from "../paths.ts";
-import { type DeclaredContent, nestingError } from "./declare.ts";
+import type { DeclaredContent } from "./declare.ts";
 import { type CloneOutcome, refreshClone } from "./git.ts";
 import { ensureContentDir } from "./mount.ts";
 
@@ -36,19 +36,15 @@ export type ResolvedContent = {
     }
 );
 
-/** The directories an instance's content is kept apart from. */
+/** Where an instance's content is resolved. */
 export interface ContentPlaces {
-  /** The definition's own directory, which is released and read as it is. */
-  dir: string;
   /** The instance's working directory, where clones are made. */
   workdir: string;
 }
 
 /** Resolve the agent's content for this instance. Refuses, naming the entry, what cannot be. */
 export function resolveContent(declared: readonly DeclaredContent[], places: ContentPlaces): ResolvedContent[] {
-  return declared.map((entry) =>
-    entry.kind === "github" ? resolveRepository(places, entry) : resolveLocal(places, entry),
-  );
+  return declared.map((entry) => (entry.kind === "github" ? resolveRepository(places, entry) : resolveLocal(entry)));
 }
 
 function resolveRepository(
@@ -76,9 +72,9 @@ function resolveRepository(
   };
 }
 
-function resolveLocal(places: ContentPlaces, entry: Extract<DeclaredContent, { kind: "local" }>): ResolvedContent {
+function resolveLocal(entry: Extract<DeclaredContent, { kind: "local" }>): ResolvedContent {
   const { name, description } = entry;
-  checkDirectory(places, name, entry.path);
+  checkDirectory(name, entry.path);
   return {
     name,
     ...(description !== undefined ? { description } : {}),
@@ -88,20 +84,11 @@ function resolveLocal(places: ContentPlaces, entry: Extract<DeclaredContent, { k
   };
 }
 
-/**
- * Whether the content `name` can be the directory `target` of this machine: one that exists, and is apart from the
- * definition's directory, since a definition is released, content is kept, and one directory cannot be both. The
- * working directory is the instance's own writable place, so a directory inside it is only a directory the agent
- * already reaches. Refuses, naming the entry, what cannot be.
- */
-export function checkDirectory({ dir }: Pick<ContentPlaces, "dir">, name: string, target: string): void {
+/** Whether the content `name` can be the directory `target` of this machine: one that exists. Refuses, naming the entry, what cannot be. */
+export function checkDirectory(name: string, target: string): void {
   const stat = statOrMissing(target);
   if (!stat) throw new Error(`content "${name}": ${target} does not exist`);
   if (!stat.isDirectory()) throw new Error(`content "${name}": ${target} is not a directory`);
-  // A symlink can still put one inside the other, so ask of the real paths — including for an agent directory `init`
-  // is about to create, which a symlinked ancestor still places.
-  const nested = nestingError(realPathOf(dir), realpathSync(target), name);
-  if (nested) throw new Error(nested);
 }
 
 /**
@@ -117,22 +104,6 @@ export async function cloneContent(
   return refreshClone(entry.repo, entry.ref, entry.location, env).catch((error: unknown) => {
     throw new Error(`content "${entry.name}": ${(error as Error).message}`);
   });
-}
-
-/**
- * Where `path` really is, whether or not it exists yet: its nearest existing ancestor resolved, and the segments below
- * it appended as written. A directory that does not exist yet links nowhere itself, but an ancestor can.
- */
-function realPathOf(path: string): string {
-  const below: string[] = [];
-  for (let current = path; ; current = dirname(current)) {
-    try {
-      return join(realpathSync(current), ...below.reverse());
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || dirname(current) === current) throw error;
-      below.push(basename(current));
-    }
-  }
 }
 
 function lstatOrMissing(path: string) {
