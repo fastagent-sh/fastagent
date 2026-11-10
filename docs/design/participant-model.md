@@ -161,7 +161,7 @@ take a while" signal.
 
 ## 5. Rule 3 — what to remember
 
-> **Proposed replacement:** [place-sessions.md](place-sessions.md) (#989) separates shared place context, exchange ownership and session execution. A default session may remain, but no session must absorb every exchange. This section describes current behavior until that proposal is implemented.
+> **Proposed replacement:** [place-sessions.md](place-sessions.md) (#989) keys sessions by platform structure (a group's main timeline by sender, a thread shared) and lets each session read the place's discussion instead of sharing one memory. This section describes current behavior until that proposal is implemented.
 
 > **Memory follows the place. A room has one memory. A thread starts from what the room knew and
 > keeps its own history. A room can see its threads and read them when a question needs one.**
@@ -181,7 +181,7 @@ answers from everyone but the asker.
 
 ## 6. Concurrency follows the same rule
 
-> **Proposed replacement:** [place-sessions.md](place-sessions.md) (#989) schedules independent exchanges separately and steers continuations only into their own work. It also covers shared-answer delivery and stable recovery bindings. This section describes current behavior until implementation.
+> **Proposed replacement:** [place-sessions.md](place-sessions.md) (#989) runs different senders' sessions in parallel and steers every input into the session that owns it, with one delivery per shared answer. This section describes current behavior until implementation.
 
 The unit of concurrency is the session, and the session is the place:
 
@@ -199,7 +199,7 @@ content. The user already tells us which asks are independent: by opening a thre
 
 ## 7. What a thread does not tell the room
 
-> **Proposed extension:** [place-sessions.md](place-sessions.md) (#989) retains on-demand thread reading and separates available records from context actually included in a request. It proposes neither mandatory trunk merges nor automatic room announcements.
+> **Proposed extension:** [place-sessions.md](place-sessions.md) (#989) keeps on-demand thread reading and separates available records from context actually included in a request. It proposes neither trunk merges nor automatic room announcements.
 
 *Non-goal, deliberately deferred:* folding a thread's conclusion back into the room. Two different
 things are lost when a side conversation ends — the room's session does not hold what was decided
@@ -211,7 +211,7 @@ visible. The people half stays the agent's to say, with a send tool, when asked 
 
 ## 8. Thread context: the inheritance ladder
 
-> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) chooses a fork source from the referenced exchange, which need not be the room's default session, and keeps read progress separate for each receiving context. The inheritance ladder below describes the current implementation.
+> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) forks a new thread from the session its reply chain names, which need not be a room session, and starts each read from what the session itself last answered. The inheritance ladder below describes the current implementation.
 
 A thread must start from something. Four rungs, increasing in cost:
 
@@ -298,7 +298,7 @@ back (§7).
 
 ## 9. Rejected designs
 
-> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) evaluates context retrieval separately from session creation: an independent session need not be amnesiac when it reads relevant shared records. The table records the rationale for the current model.
+> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) revisits the "new session per ask" row: a session per sender keeps its own history and reads the place's discussion for the rest. The table records the rationale for the current model.
 
 | Rejected | Why |
 |---|---|
@@ -322,7 +322,7 @@ back (§7).
 
 ## 11. Per-platform reach
 
-> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) keeps Slack channel replies in threads, associates the initial ask and follow-ups with the same exchange, and separates context access from answer placement. It also specifies Telegram privacy-mode onboarding. This section describes the current mappings, not the proposed behavior.
+> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) keeps Slack channel replies in threads, keys Feishu/Lark and Telegram group timelines by sender, and specifies Telegram privacy-mode onboarding. This section describes the current mappings, not the proposed behavior.
 
 The rules converge; the mappings do not, because the primitives differ.
 
