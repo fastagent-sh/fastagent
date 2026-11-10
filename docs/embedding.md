@@ -83,7 +83,7 @@ A definition is made from a project directory: the prompt is its `SYSTEM.md`, an
 
 ### MCP servers
 
-The agent's `mcpServers` (its `context.json`, and `config.mcpServers` for an instance) add stdio or Streamable HTTP tools. Use `inspectMcp` and `signInMcp`, giving them the same `config`, to drive browser OAuth in
+The agent's `mcpServers` (its `context.json`, and `config.mcpServers` for an instance) add stdio or Streamable HTTP tools. Use `inspectMcp` and `signInMcp`, giving them the same `config` (or the same `root`), to drive browser OAuth in
 the host before opening an agent, then pass `mcp: { store, bindings }` to `openAgent`. Each open owns its clients;
 sharing a grant is explicit and closing an agent does not sign the user out. See [MCP servers](mcp.md) for the host
 interaction/store contract, instance variables, proxy policy and supported protocol subset.

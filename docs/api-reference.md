@@ -80,7 +80,7 @@ function openAgent(
     secrets?: Record<string, string | undefined>;
     env?: Record<string, string>; // the base environment of the processes the agent starts, and of FastAgent's own installing and cloning; `baseEnv(process.env)` is an app's own
     offline?: boolean; // refresh the model lists without the network; default false
-    config?: InstanceConfig | string;
+    config?: InstanceConfig | string; // an object, or a fastagent.json's absolute path; given `root` and no `config`, `<root>/fastagent.json` when there is one
     model?: string;
     credentials?: CredentialStore;
     mcp?: McpOptions;

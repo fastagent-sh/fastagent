@@ -3,14 +3,14 @@
  * `context.json`, and what the instance adds, the `mcpServers` map of its `fastagent.json`. One list, read once, that
  * every reader (the open, `inspectMcp`, sign-in, the secrets list, the build's warning) is given.
  */
-import { readFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import { readProgramMcpServers } from "../content/file.ts";
 import { type DeclaredSecret, isEnvName } from "../declared-secrets.ts";
 import { type McpConfigInput, McpError } from "../mcp-api.ts";
-import { CONTEXT_FILE } from "../paths.ts";
+import { CONTEXT_FILE, INSTANCE_CONFIG_FILE } from "../paths.ts";
 
 const Strings = Schema.Record(Schema.String, Schema.String);
 const Stdio = Schema.Struct({
@@ -143,6 +143,22 @@ export function mcpInstance(config: McpConfigInput | undefined): McpInstance | u
   } catch (error) {
     throw new McpError("configuration", `${config} is not JSON: ${(error as Error).message}`);
   }
+}
+
+/** The instance configuration `inspectMcp` and `signInMcp` read: `config`, else the one an instance root holds, as `openAgent` does. */
+export function mcpInstanceOf({
+  config,
+  root,
+}: {
+  config?: McpConfigInput | undefined;
+  root?: string | undefined;
+}): McpInstance | undefined {
+  if (config !== undefined || root === undefined) return mcpInstance(config);
+  if (!isAbsolute(root)) {
+    throw new McpError("configuration", `root must be an absolute path, and is ${JSON.stringify(root)}`);
+  }
+  const path = join(root, INSTANCE_CONFIG_FILE);
+  return existsSync(path) ? mcpInstance(path) : undefined;
 }
 
 function configStrings(server: McpServerDeclaration): string[] {

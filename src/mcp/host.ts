@@ -14,7 +14,7 @@ import { agentValues, prepareSecretsDirectory, unprotectedSecretsNote } from "..
 import { log } from "../log.ts";
 import { withLockedFile } from "../locked-file.ts";
 import { checkedGrant, mcpGrantFile } from "./grants.ts";
-import { type McpServer, checkMcpUrl, declareMcp, mcpInstance } from "./config.ts";
+import { type McpServer, checkMcpUrl, declareMcp, mcpInstanceOf } from "./config.ts";
 
 const Bindings = Schema.Record(Schema.String, Schema.String);
 function decodeBindings(raw: string | undefined): Record<string, string> {
@@ -125,7 +125,7 @@ export function httpServer(servers: readonly McpServer[], name: string): Extract
 export async function inspectMcp(dir: string, options: McpInspectOptions = {}): Promise<McpServerSummary[]> {
   const { agentDir, auth } = mcpContext(dir, options);
   return Promise.all(
-    declareMcp(agentDir, mcpInstance(options.config)).map(async ({ name, server: declaration }) => {
+    declareMcp(agentDir, mcpInstanceOf(options)).map(async ({ name, server: declaration }) => {
       const server = { ...declaration, name, type: declaration.type ?? "stdio" };
       const id = Object.hasOwn(auth.bindings, server.name) ? auth.bindings[server.name] : undefined;
       const raw = id === undefined ? undefined : await auth.store.read(id);

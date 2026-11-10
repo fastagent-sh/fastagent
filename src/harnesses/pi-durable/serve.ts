@@ -32,6 +32,7 @@ import {
   type EffectiveConfig,
   type InstanceConfig,
   type InstanceConfigSource,
+  instanceConfigIn,
   readInstanceConfigFile,
   resolveConfig,
 } from "./config.ts";
@@ -317,7 +318,11 @@ export interface ServeAgentOptions {
 export type InstanceLocation = { root: string } | { stateDir: string; workdir: string };
 
 export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
-  /** The instance configuration, over the program's defaults: an object, or the absolute path of a `fastagent.json`. */
+  /**
+   * The instance configuration, over the program's defaults: an object, or the absolute path of a `fastagent.json`.
+   * Given `root` and no `config`, `<root>/fastagent.json` when there is one; nothing is read for `stateDir` and
+   * `workdir`, and nothing is created.
+   */
   config?: InstanceConfig<Settings> | string;
   /** The instance's name, over `config`'s: one path segment. Default: `config`'s, else the definition's as one. */
   name?: string;
@@ -379,7 +384,10 @@ export async function openAgent<Settings = unknown>(
   options: OpenAgentOptions<Settings>,
 ): Promise<LocalAgent> {
   const { workdir, stateRoot } = locationOf(options);
-  const config = await configOf(options.config);
+  const config =
+    options.config === undefined && "root" in options
+      ? await instanceConfigIn(options.root)
+      : await configOf(options.config);
   // An app may never serve the agent, and then no clock fires a wake-up: `wake` is refused until it does.
   let ticking = false;
   const opened = await openServing(assertDefinition(definition), {

@@ -19,11 +19,7 @@ import {
   providerOf,
 } from "../harnesses/models/models.ts";
 import { modelEnvironment } from "../harnesses/models/environment.ts";
-import {
-  type EffectiveConfig,
-  type InstanceConfigSource,
-  projectInstanceConfig,
-} from "../harnesses/pi-durable/config.ts";
+import { type EffectiveConfig, type InstanceConfigSource, instanceConfigIn } from "../harnesses/pi-durable/config.ts";
 import { type AgentDefinition, definitionSecrets } from "../harnesses/pi-durable/definition.ts";
 import { type BuiltDefinition, buildDefinitionShape, loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { INSTANCE_CONFIG_FILE, exists } from "../paths.ts";
@@ -286,7 +282,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   if (textProblem !== undefined) report.issue(textProblem);
   const mcpOpens = checkMcp(agentDir, delivered?.source, report);
   // The project's own, the development instance's: a deploy carries only the configuration it is given.
-  const own = await projectInstanceConfig(agentDir);
+  const own = await instanceConfigIn(agentDir);
   if (own !== undefined && own.label !== delivered?.source.label) {
     report.note(
       `${INSTANCE_CONFIG_FILE} is the development instance's configuration and a deploy does not carry it` +
