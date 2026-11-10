@@ -123,7 +123,7 @@ add to it on a host.
 | `/etc/fastagent/fastagent.json`, `FASTAGENT_CONFIG` on a box | `FASTAGENT_CONFIG_JSON` |
 | `fastagent.release.json`, `FASTAGENT_RELEASE_FILE` | removed; `FASTAGENT_INSTANCE` and `FASTAGENT_RELEASE_ID`; `model` is in the configuration |
 | `deploy` reading `FASTAGENT_MODEL`, `GITHUB_TOKEN`, `FASTAGENT_API_KEY` from a value file | the file's `model`; the others are secrets the target holds |
-| `fastagent secrets set docker`, Compose `env_file:` | Compose's top-level `secrets:`, from the shell running Compose or a file the person names; `secrets set docker` is removed |
+| `fastagent secrets set docker`, Compose `env_file:` | Compose's `environment:` with names only (`- OPENAI_API_KEY`), which Compose fills from the shell running it, so a CI job's variables reach the box; `secrets set docker` is removed |
 | `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_WORKDIR`, `FASTAGENT_CONFIG` and the flags | unchanged for a local instance |
 
 Decided:
@@ -132,9 +132,12 @@ Decided:
   `CLAUDE_CONFIG_DIR`, `CODEX_HOME` place them), not per project, and a local credential never reaches a deployment (the
   box logs in itself). So `dev` and `start` share one login; the project layer and `keeps` go.
 - **`dev` and `start` both read `<agent>/.env`**, as `next start` does. A deployed box reads only its environment.
-- **Docker takes secrets as Compose's own `secrets:`**, mounted under `/run/secrets`; the box reads them from there
-  into its secrets input at start (today it reads the environment only). Compose documents this as the way to avoid
-  secrets in environment variables.
+- **Docker takes secrets as environment variables, like every other host.** The Compose file names each declared secret
+  (`environment: [OPENAI_API_KEY]`) and Compose fills it from the shell that runs it, so one mechanism serves all four
+  hosts and the box reads nothing new. Compose issues no warning for a name the shell does not set, so the pre-flight
+  checks that each declared name is set in the environment that will run Compose, reading no value, and stops when one is
+  not. Compose's own `secrets:` (files under `/run/secrets`) keeps values out of
+  `docker inspect`, but it is one host's mechanism and would need a second read path in the box; not taken.
 - **A deployment's text is the program's.** An instance on a host adds no `instructions`, `skills` or `prompts`.
 - **The release facts are variables**, not a file in the image (§5), because the manifest's random id would make every
   deploy, and every instance, a different image.
@@ -149,9 +152,6 @@ These are decided by measuring or building, not by argument.
 2. **Railway's limits** for a variable's size, and whether `railway variable set` takes JSON with quotes as is. Its
    config file does not carry variables; one search summary says config-as-code is deprecated for new services, which is
    not verified.
-3. **Compose's source for a secret**, `environment:` (from the shell running Compose, which a CI job fills) or `file:`:
-   the first is reported to land in the container's writable layer, the second to be a bind mount. The default is
-   `environment:`; to be tried on a real Compose.
 
 ## 8. Migration
 
@@ -161,7 +161,7 @@ One PR each, in this order; each leaves the product working. No compatibility la
 2. **Delivery.** The image holds the program only; `FASTAGENT_CONFIG_JSON`, `FASTAGENT_INSTANCE` and
    `FASTAGENT_RELEASE_ID` rendered per host; `delivered-text`, the `/etc/fastagent/` layer and the release manifest go;
    the pre-flight refuses what cannot be a variable.
-3. **Secrets.** `deploy` reads no value file; Docker's `secrets:` and the box reading `/run/secrets`; `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go.
+3. **Secrets.** `deploy` reads no value file; Docker's Compose file names the declared secrets and takes their values from the shell; `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go.
 4. **Local values.** `<agent>/.env` for `dev` and `start`; the scaffold, ignore rules and `.env.example` follow.
 5. **Credentials.** The user-level layer; `.secrets/`, `keeps` and `FASTAGENT_SECRETS_DIR` go.
 6. The user documents and agent-artifact.md §4.1 and §6 are rewritten for the new layout.
