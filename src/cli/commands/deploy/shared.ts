@@ -29,6 +29,8 @@ export interface DeployOptions {
   run?: boolean;
   force?: boolean;
   intoLinked?: boolean;
+  /** `--idle-timeout <seconds>` (agentcore): how long an idle session keeps its microVM, over the program's default. */
+  idleTimeout?: string;
   /** `--config <file>`: the instance configuration the deployment delivers. */
   config?: string;
   /** false ⇔ `--no-input`. */

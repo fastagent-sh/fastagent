@@ -9,6 +9,7 @@ import { baseEnv } from "../child-env.ts";
 import { definedValues } from "../declared-secrets.ts";
 import { enterAgentEnv } from "../env.ts";
 import type { ContentInstance } from "../authoring.ts";
+import { environmentConfig } from "../harnesses/pi-durable/environment-config.ts";
 import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
 import {
   INSTANCE_CONFIG_ENV,
@@ -35,6 +36,8 @@ export interface InstanceFlags {
   workdir?: string;
   config?: string;
   envFile?: string;
+  thinking?: string;
+  ingress?: string;
 }
 
 const INSTANCE_LOCATION: readonly (readonly [keyof InstanceFlags, string, string])[] = [
@@ -61,8 +64,21 @@ const WORKDIR_FLAG: FlagSpec = {
   description: `the agent's working directory, apart from the root (${INSTANCE_WORKDIR_ENV})`,
 };
 
+const THINKING_FLAG: FlagSpec = {
+  flags: "--thinking <level>",
+  description:
+    "the reasoning effort, over the configuration's (FASTAGENT_THINKING_LEVEL): off, minimal, low, medium, high, xhigh, max",
+};
+const INGRESS_FLAG: FlagSpec = {
+  flags: "--ingress <channel=way,…>",
+  description: "how each named channel receives, webhook or connection, over the configuration's (FASTAGENT_INGRESS)",
+};
+
 /** The flags of a command that opens, or reads the state of, an instance. */
 export const INSTANCE_FLAGS: readonly FlagSpec[] = [NAME_FLAG, ROOT_FLAG, STATE_FLAG, WORKDIR_FLAG];
+
+/** The flags of a command that runs an instance, or reports how it would run: layers over its configuration. */
+export const LAYER_FLAGS: readonly FlagSpec[] = [THINKING_FLAG, INGRESS_FLAG];
 
 /** The flags of a command that reads or edits what an instance works on: where it keeps its clones, and its file. */
 export const CONTENT_FLAGS: readonly FlagSpec[] = [
@@ -82,7 +98,13 @@ export const CONFIG_FLAG: FlagSpec = {
 
 export function instanceFlags(flags: Record<string, unknown>): InstanceFlags {
   const picked: InstanceFlags = {};
-  for (const key of [...INSTANCE_LOCATION.map(([name]) => name), "name" as const, "envFile" as const]) {
+  for (const key of [
+    ...INSTANCE_LOCATION.map(([name]) => name),
+    "name" as const,
+    "envFile" as const,
+    "thinking" as const,
+    "ingress" as const,
+  ]) {
     if (typeof flags[key] === "string") picked[key] = flags[key];
   }
   return picked;
@@ -125,6 +147,13 @@ export function enterInstance(agentDir: string, flags: InstanceFlags = {}): void
   enterEnvFile(flags.envFile);
   enterAgentEnv(agentDir);
   enterInstanceLocation(flags);
+  // The variables that lay over the configuration are settled here, once, with the flags entered into them, so a value
+  // the configuration would refuse stops every command the same way and not as a stack trace from whichever opens it.
+  try {
+    environmentConfig(process.env);
+  } catch (error) {
+    failUsage((error as Error).message);
+  }
 }
 
 /** Where a content command reads and edits an agent's content, as its flags and variables say. */
@@ -147,6 +176,14 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
     process.env[variable] = path;
     if (key === "root" || key === "workdir") makeDirectory(path, given === undefined ? variable : flag);
   }
+  for (const [given, flag, variable] of [
+    [flags.thinking, "--thinking", "FASTAGENT_THINKING_LEVEL"],
+    [flags.ingress, "--ingress", "FASTAGENT_INGRESS"],
+  ] as const) {
+    if (given === undefined) continue;
+    if (given.trim() === "") failUsage(`${flag} needs a value`);
+    process.env[variable] = given;
+  }
   const name = flags.name ?? enteredInstanceName();
   if (name === undefined) return;
   try {
@@ -168,7 +205,10 @@ export function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
  */
 export function instanceInputs(
   agentDir: string,
-): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name"> {
+): Pick<
+  OpenServingOptions,
+  "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name" | "overrides"
+> {
   const workdir = resolveWorkdir(agentDir);
   // A default one is the project's own `.fastagent/<environment>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");
@@ -181,5 +221,6 @@ export function instanceInputs(
     env: baseEnv(process.env),
     ownEnv: process.env,
     runsAs: runsAsIn(process.env),
+    overrides: environmentConfig(process.env),
   };
 }

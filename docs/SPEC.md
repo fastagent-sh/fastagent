@@ -83,17 +83,20 @@ epoch.
 interface AgentInfo {
   /** The instance's name (a slug by default). */
   name: string;
-  /** How the agent presents itself to a person choosing or starting it. */
+  /** The instance's own introduction, when it gives one (`fastagent.json`'s `description`). Not the program's: there is no fallback. */
+  description?: string;
+  /** The program the instance runs, as its package gives it, whatever the instance is called. */
   agent: {
     /** The program's name; `name` above is this instance's. */
     name: string;
+    /** The package's `description`. */
     description?: string;
-    /**
-     * Example first messages, at most 6. A client may offer one as an editable draft in its composer; reading them,
-     * or choosing one, does not send anything.
-     */
-    starters?: string[];
   };
+  /**
+   * Example first messages, at most 6: the program's `defaults.starters`, or the instance's own over them. A client
+   * may offer one as an editable draft in its composer; reading them, or choosing one, does not send anything.
+   */
+  starters?: string[];
   /** What a message may start with as `/<name>`: the agent's prompt templates, and `skill:<name>` per skill (§5.1). */
   commands: { name: string; description?: string }[];
   /** The tools a session may enable (`tools`, §4). */
@@ -544,7 +547,6 @@ interface InstanceConfig<Settings = unknown> {
      */
     publicUrl?: string;
   };
-  deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
   /**
    * How each channel that offers both ways (`byIngress`) receives, by its file's name. Unset, `dev` receives by a
    * connection it opens and everything else by webhook. A name the agent has no channel by, or a way its channel

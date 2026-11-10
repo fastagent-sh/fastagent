@@ -24,7 +24,8 @@ import { agentcoreShell } from "../../../deploy/agentcore/shell.ts";
 import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
 import { deploySecrets } from "./secrets-step.ts";
-import { failStartup } from "../../fail.ts";
+import { IDLE_TIMEOUT_BOUNDS } from "../../../harnesses/pi-durable/config.ts";
+import { failStartup, failUsage } from "../../fail.ts";
 import { shellArg } from "../../shared.ts";
 import { ownPublicUrl } from "../../../deploy/container.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorder } from "./shared.ts";
@@ -49,6 +50,7 @@ export const agentcoreHost: HostDeploy = {
     return agentcoreShell(runtimeArn, ingressSessionId(name), aws);
   },
   validate({ opts, agentDir, pre }) {
+    idleTimeoutOf(opts);
     const longConnectionChannels = pre.channels.filter((channel) => channel.ingress === "long-connection");
     if (longConnectionChannels.length > 0) {
       const msg =
@@ -89,7 +91,7 @@ export const agentcoreHost: HostDeploy = {
       boxLogin,
       channels,
       secrets: pre.secrets,
-      idleTimeoutSeconds: config.deploy?.agentcore?.idleTimeoutSeconds,
+      idleTimeoutSeconds: idleTimeoutOf(opts) ?? config.deploy?.agentcore?.idleTimeoutSeconds,
       ...container,
     });
     // The template IS the topology (forwarder, alarm wiring, secrets).
@@ -272,4 +274,15 @@ async function runDeployAgentcore(params: {
   } finally {
     await rm(paramsDir, { recursive: true, force: true });
   }
+}
+
+/** `--idle-timeout`, whole seconds within AWS's bounds; refused otherwise, before anything is built. */
+function idleTimeoutOf({ idleTimeout }: { idleTimeout?: string }): number | undefined {
+  if (idleTimeout === undefined) return undefined;
+  const seconds = Number(idleTimeout);
+  const { minimum, maximum } = IDLE_TIMEOUT_BOUNDS;
+  if (!/^\d+$/.test(idleTimeout) || seconds < minimum || seconds > maximum) {
+    failUsage(`--idle-timeout must be a whole number of seconds from ${minimum} to ${maximum}, got "${idleTimeout}"`);
+  }
+  return seconds;
 }

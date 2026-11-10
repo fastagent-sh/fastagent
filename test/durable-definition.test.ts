@@ -101,6 +101,21 @@ export default defineSchedule({ cron: "0 9 * * *", tz: "Europe/London", prompt: 
 const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };
 
 describe("an agent definition on pi-durable", () => {
+  it("takes a third-party extension from a package as a module of src/extensions/ that re-exports it", async () => {
+    const dir = agentPackage({
+      ...FILES,
+      "vendor/pack/package.json": '{ "name": "pack", "type": "module", "exports": "./index.js" }',
+      "vendor/pack/index.js": `import { defineExtension, section } from "@earendil-works/pi-durable";
+export default defineExtension({ name: "vendored", sections: [section("vendored", () => "From a package.")] });
+`,
+      "src/extensions/vendored.ts": 'export { default } from "../../vendor/pack/index.js";\n',
+    });
+    const { registry } = await loadSourceDefinition(dir);
+    expect(registry.extensions.map(({ file }) => file)).toContain("src/extensions/vendored.ts");
+    const built = buildDefinition(await loadSourceDefinition(dir), ENV);
+    expect(built.extensions.map(({ name }) => name)).toContain("vendored");
+  });
+
   it("registers each module of src/ by its default export, tests left out, in file order, writing nothing", async () => {
     const dir = agentPackage(FILES);
     const before = readdirSync(dir, { recursive: true }).sort();
@@ -233,6 +248,10 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
     const configured = (config: string) =>
       loadSourceDefinition(agentPackage({ "fastagent.config.ts": `export default ${config};\n` }));
     await expect(configured("{ modle: 'a/b' }")).rejects.toThrow('unknown key "modle"');
+    // An extension is a module of src/extensions/, whether written there or imported from a package.
+    await expect(configured("{ extensions: [] }")).rejects.toThrow(
+      'unknown key "extensions": an extension is a module of src/extensions/',
+    );
     // A default the program used to declare as a constant says where it went.
     await expect(configured("{ model: 'a/b' }")).rejects.toThrow(
       'unknown key "model": it is a default now, under "defaults"',
@@ -377,11 +396,12 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       expect(built).toContain(`Your definition is in ${dir}, which you read and do not change.`);
     });
 
-    it("reports the package's name and description apart from the instance's name, and the instance's own over them", async () => {
+    it("reports the program's name and description apart from the instance's, which does not fall back to the program's", async () => {
       const bare = await (await open()).agent.info();
       expect(bare).toMatchObject({ name: "support", agent: { name: "support" } });
       expect(bare.agent).not.toHaveProperty("description");
-      expect(bare.agent).not.toHaveProperty("starters");
+      expect(bare).not.toHaveProperty("description");
+      expect(bare).not.toHaveProperty("starters");
       const files = {
         ...FILES,
         "package.json": '{ "name": "@acme/support", "description": "Answers order questions.", "type": "module" }',
@@ -390,11 +410,10 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
           'defaults: { starters: ["Where is my order?"],',
         ),
       };
-      expect((await (await open(files)).agent.info()).agent).toEqual({
-        name: "@acme/support",
-        description: "Answers order questions.",
-        starters: ["Where is my order?"],
-      });
+      const described = await (await open(files)).agent.info();
+      expect(described.agent).toEqual({ name: "@acme/support", description: "Answers order questions." });
+      expect(described.starters).toEqual(["Where is my order?"]);
+      expect(described).not.toHaveProperty("description");
       const blank = await open({
         ...files,
         "package.json": '{ "name": "support", "description": "  ", "type": "module" }',
@@ -403,7 +422,8 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       const own = await open(files, { config: { settings: {}, sources: {}, description: "Ours." } });
       expect(await own.agent.info()).toMatchObject({
         name: "acme-support",
-        agent: { name: "@acme/support", description: "Ours." },
+        description: "Ours.",
+        agent: { name: "@acme/support", description: "Answers order questions." },
       });
     });
 

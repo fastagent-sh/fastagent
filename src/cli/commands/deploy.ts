@@ -75,6 +75,16 @@ export const HOST_ONLY_FLAGS = [
       fly: "fly --run is idempotent — it reuses an existing app/volume",
     },
   }),
+  hostOnlyFlag({
+    flag: "--idle-timeout",
+    owner: "agentcore",
+    passed: (opts: DeployOptions) => opts.idleTimeout !== undefined,
+    instead: {
+      docker: "ignored for local Docker: the container runs until it is stopped",
+      fly: "ignored for Fly: a machine's idle behaviour is fly.toml's auto_stop_machines",
+      railway: "ignored for Railway: a service runs until it is stopped",
+    },
+  }),
 ];
 
 /**
@@ -165,7 +175,7 @@ async function deploy(
   const agentArg = displayPath(process.cwd(), agentDir);
   const rerun =
     `fastagent deploy ${host}${agentArg === undefined ? "" : ` ${shellArg(agentArg)}`}` +
-    `${opts.intoLinked ? " --into-linked" : ""} --run`;
+    `${opts.intoLinked ? " --into-linked" : ""}${opts.idleTimeout === undefined ? "" : ` --idle-timeout ${opts.idleTimeout}`} --run`;
   const unprepared = opts.run ? unpreparedChannelApps(pre.channels, pre.values) : [];
 
   if (opts.json && step === undefined) {
@@ -193,6 +203,7 @@ async function deploy(
           ...(opts.force ? ["--force"] : []),
           ...(delivered === undefined ? [] : ["--config", delivered.source.label]),
           ...(opts.intoLinked ? ["--into-linked"] : []),
+          ...(opts.idleTimeout === undefined ? [] : ["--idle-timeout", opts.idleTimeout]),
           "--run",
           "--json",
         ],

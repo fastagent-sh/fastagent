@@ -10,6 +10,7 @@ import { compile, int, map, obj, opt, str, unknown } from "@earendil-works/pi-sc
 import { afterAll, describe, expect, it } from "vitest";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { instanceConfigSchema, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
+import { environmentConfig } from "../src/harnesses/pi-durable/environment-config.ts";
 import { type AgentDefinition, defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
@@ -48,11 +49,96 @@ const reviewer = program({
 
 const instance = (values: unknown) => ({ values, label: "fastagent.json" });
 
+describe("environmentConfig", () => {
+  const base = program({ defaults: { thinkingLevel: "high", http: { api: true } } });
+
+  it("lays each variable over the instance's configuration, a value's source naming the variable", () => {
+    const env = {
+      FASTAGENT_THINKING_LEVEL: "low",
+      FASTAGENT_HTTP_API: "false",
+      FASTAGENT_HTTP_PUBLIC_URL: "https://a.example.com",
+    };
+    const config = resolveConfig(
+      base,
+      instance({ thinkingLevel: "medium", http: { port: 9000 } }),
+      environmentConfig(env),
+    );
+    expect(config).toMatchObject({
+      thinkingLevel: "low",
+      http: { port: 9000, api: false, publicUrl: "https://a.example.com" },
+    });
+    expect(config.sources).toMatchObject({
+      thinkingLevel: "FASTAGENT_THINKING_LEVEL",
+      "http.api": "FASTAGENT_HTTP_API",
+      "http.publicUrl": "FASTAGENT_HTTP_PUBLIC_URL",
+      "http.port": "fastagent.json",
+    });
+  });
+
+  it("reads which channel receives which way, from one variable", () => {
+    expect(environmentConfig({ FASTAGENT_INGRESS: "slack=webhook, feishu=connection" })).toEqual([
+      {
+        values: { channels: { slack: { ingress: "webhook" }, feishu: { ingress: "connection" } } },
+        label: "FASTAGENT_INGRESS",
+      },
+    ]);
+    for (const bad of ["slack", "slack=", "=webhook", "slack=webhook=x"]) {
+      expect(() => environmentConfig({ FASTAGENT_INGRESS: bad })).toThrow(
+        "FASTAGENT_INGRESS must be channel=webhook|connection",
+      );
+    }
+  });
+
+  it("reads an empty variable as unset, so the configuration decides", () => {
+    expect(environmentConfig({ FASTAGENT_THINKING_LEVEL: "", FASTAGENT_HTTP_API: undefined })).toEqual([]);
+    expect(resolveConfig(base, undefined, environmentConfig({ FASTAGENT_THINKING_LEVEL: "" }))).toMatchObject({
+      thinkingLevel: "high",
+    });
+  });
+
+  it("refuses a value the configuration would refuse, naming the variable", () => {
+    expect(() => resolveConfig(base, undefined, environmentConfig({ FASTAGENT_THINKING_LEVEL: "loud" }))).toThrow(
+      "FASTAGENT_THINKING_LEVEL: /thinkingLevel",
+    );
+    expect(() =>
+      resolveConfig(base, undefined, environmentConfig({ FASTAGENT_HTTP_PUBLIC_URL: "a.example.com" })),
+    ).toThrow("FASTAGENT_HTTP_PUBLIC_URL: /http/publicUrl");
+    expect(() => environmentConfig({ FASTAGENT_HTTP_API: "yes" })).toThrow(
+      'FASTAGENT_HTTP_API must be "true" or "false", and is "yes"',
+    );
+  });
+});
+
 describe("resolveConfig", () => {
   it("is the program's defaults, each from the program, when no instance gives any", () => {
     const config = resolveConfig(program({ defaults: { model: "a/b", http: { port: 9000 } } }));
     expect(config).toMatchObject({ model: "a/b", http: { port: 9000 }, settings: {} });
     expect(config.sources).toEqual({ model: "program default", "http.port": "program default" });
+  });
+
+  it("keeps a channel's app binding to the instance: the program's defaults refuse it", () => {
+    const withChannel = (defaults: object) =>
+      defineDefinition({
+        format: 1,
+        builtWith: "0.0.0",
+        name: "reviewer",
+        version: "1.0.0",
+        dir: "/program",
+        config: { defaults },
+        registry: {
+          tools: [],
+          extensions: [],
+          channels: [{ name: "slack", file: "slack.ts", value: {} as never }],
+          schedules: [],
+        },
+      } as never);
+    expect(() => resolveConfig(withChannel({ channels: { slack: { app: { id: "A1" } } } }))).toThrow(
+      "/channels/slack/app unknown field",
+    );
+    const bound = instance({ channels: { slack: { app: { id: "A1", url: "https://x.example.com/slack" } } } });
+    expect(resolveConfig(withChannel({ channels: { slack: { ingress: "webhook" } } }), bound).channels).toEqual({
+      slack: { ingress: "webhook", app: { id: "A1", url: "https://x.example.com/slack" } },
+    });
   });
 
   it("lets an instance say its own description and starters, starters over the program's, each with its source", () => {
@@ -64,6 +150,10 @@ describe("resolveConfig", () => {
     expect(config.sources).toMatchObject({ description: "fastagent.json", starters: "fastagent.json" });
     expect(() => resolveConfig(base, instance({ starters: Array(7).fill("hi") }))).toThrow("/starters");
     expect(() => resolveConfig(base, instance({ description: "  " }))).toThrow("/description");
+    // What a deployment is built with is the program's default or a `deploy` flag: the instance's file is the box's.
+    expect(() => resolveConfig(base, instance({ deploy: { agentcore: { idleTimeoutSeconds: 900 } } }))).toThrow(
+      "/deploy unknown field",
+    );
   });
 
   it("puts an instance over the defaults key by key: objects merge, so a port leaves api alone", () => {
@@ -286,6 +376,22 @@ export default needs([], (_secrets, settings: { repo: string; digestChannel?: st
       ]);
     } finally {
       await opened.agent.close();
+    }
+    // The CLI's environment layers are over it, and the open's configuration is the one they make.
+    const layered = await openServing(definition, {
+      secrets: {},
+      env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
+      ...(instance === undefined ? {} : { config: instance }),
+      overrides: environmentConfig({ FASTAGENT_THINKING_LEVEL: "low" }),
+      storage: "memory",
+    });
+    try {
+      expect(layered.config).toMatchObject({ thinkingLevel: "low" });
+      expect(layered.config.sources.thinkingLevel).toBe("FASTAGENT_THINKING_LEVEL");
+    } finally {
+      await layered.agent.close();
     }
     // A build that only reads the shape (`models`, `login`) has the program's default settings, and no more.
     const shaped = buildDefinitionShape(definition, {});

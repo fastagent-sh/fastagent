@@ -103,6 +103,20 @@ describe("dev sets up the channels the development instance lacks", () => {
     expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
   });
 
+  it("asks for what the channel needs the way the run will receive, which a variable or a flag may change", async () => {
+    const dir = await telegramAgent();
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", GOOD_BOT);
+    // Long polling needs the bot token only, which the environment holds: nothing to ask.
+    await setUpMissingChannels(dir);
+    expect(prompts.asked).toEqual([]);
+    // By webhook it also needs the secret token, so the channel is lacking, with no one to ask.
+    vi.stubEnv("FASTAGENT_INGRESS", "telegram=webhook");
+    interactive = false;
+    const error = await outcome(setUpMissingChannels(dir));
+    expect(error).toBeInstanceOf(Exit);
+    expect(said.join("\n")).toContain("telegram has no credentials");
+  });
+
   it("leaves a channel file of the same name that reads other variables to its author", async () => {
     const dir = await telegramAgent();
     await writeFile(

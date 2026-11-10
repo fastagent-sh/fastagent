@@ -16,6 +16,55 @@ function isRunning(pid: number): boolean {
   }
 }
 
+describe("cli: deploy and the variables that set the configuration", () => {
+  it("does not read them: a deployment's configuration is the program's defaults and what --config delivers", async () => {
+    const dir = await agentWorkspace("fa-deploy-vars-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      ".secrets/production/.env": "FASTAGENT_HTTP_API=false\nFASTAGENT_THINKING_LEVEL=low\n",
+    });
+    const result = await runInProcess(["deploy", "fly", dir], undefined, {
+      ...process.env,
+      FASTAGENT_HTTP_API: "false",
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stderr).not.toMatch(/Agent API: not served/);
+    const delivered = JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"));
+    expect(delivered).not.toHaveProperty("http.api");
+    expect(delivered).not.toHaveProperty("thinkingLevel");
+  });
+});
+
+describe("cli: deploy --idle-timeout", () => {
+  const agent = () =>
+    agentWorkspace("fa-deploy-idle-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini", deploy: { agentcore: { idleTimeoutSeconds: 600 } } } };\n`,
+    });
+  const template = async (dir: string) => readFile(join(dir, "agentcore.template.yaml"), "utf8");
+
+  it("sets AgentCore's idle timeout over the program's default, which is what an unflagged deploy uses", async () => {
+    const dir = await agent();
+    expect((await runInProcess(["deploy", "agentcore", dir])).code).toBe(0);
+    expect(await template(dir)).toContain("IdleRuntimeSessionTimeout: 600");
+    const flagged = await runInProcess(["deploy", "agentcore", dir, "--idle-timeout", "900", "--force"]);
+    expect(flagged.code, flagged.stderr).toBe(0);
+    expect(await template(dir)).toContain("IdleRuntimeSessionTimeout: 900");
+  });
+
+  it("refuses a value AWS would refuse, writing no artifact, and is reported by the hosts that have no idle timeout", async () => {
+    const dir = await agent();
+    for (const value of ["30", "1209601", "abc", "90.5"]) {
+      const result = await runInProcess(["deploy", "agentcore", dir, "--idle-timeout", value]);
+      expect([result.code, result.stderr]).toEqual([
+        2,
+        expect.stringContaining("--idle-timeout must be a whole number of seconds from 60 to 1209600"),
+      ]);
+      await expect(stat(join(dir, "agentcore.template.yaml"))).rejects.toThrow();
+    }
+    const fly = await runInProcess(["deploy", "fly", dir, "--idle-timeout", "900"]);
+    expect(fly.stderr).toContain("--idle-timeout: agentcore-only");
+  });
+});
+
 describe("cli: deploy", () => {
   it("selects the production value file and Docker env_file without reading dev values", async () => {
     const dir = await agentWorkspace("fa-deploy-env-", {

@@ -7,7 +7,7 @@ import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } fr
 import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
 import { unsupportedRuntime } from "../runtime.ts";
 import { failStartup } from "./fail.ts";
-import { CONFIG_FLAG, CONTENT_FLAGS, ENV_FILE_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
+import { CONFIG_FLAG, CONTENT_FLAGS, ENV_FILE_FLAG, INSTANCE_FLAGS, LAYER_FLAGS, instanceFlags } from "./instance.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 const AGENT_ARG = {
@@ -88,6 +88,7 @@ const dev: CommandSpec = {
     TUNNEL,
     NO_INPUT,
     ...INSTANCE_FLAGS,
+    ...LAYER_FLAGS,
     CONFIG_FLAG,
     ENV_FILE_FLAG,
   ],
@@ -115,7 +116,7 @@ const info: CommandSpec = {
     "secrets, content — WITHOUT opening or serving it. An unset model or secret is reported, not fatal. " +
     "Run it first when something looks off.",
   args: [AGENT_ARG],
-  flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, CONFIG_FLAG, ENV_FILE_FLAG],
+  flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, ...LAYER_FLAGS, CONFIG_FLAG, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (args, f) =>
     (await import("./commands/info.ts")).runInfo(args[0] as string, {
@@ -165,6 +166,7 @@ const invoke: CommandSpec = {
     { flags: "--url <base>", description: "send to the agent served at <base>, over its Agent API" },
     { flags: "--key <key>", description: "the API key for --url (default: the agent's production one)" },
     ...INSTANCE_FLAGS,
+    ...LAYER_FLAGS,
     CONFIG_FLAG,
     ENV_FILE_FLAG,
   ],
@@ -229,6 +231,7 @@ const start: CommandSpec = {
     TUNNEL,
     NO_INPUT,
     ...INSTANCE_FLAGS,
+    ...LAYER_FLAGS,
     {
       ...CONFIG_FLAG,
       description: "the instance configuration, a fastagent.json (FASTAGENT_CONFIG); start never reads the project's",
@@ -401,6 +404,12 @@ const deploy: CommandSpec = {
         "(could be unrelated/production)",
     },
     {
+      flags: "--idle-timeout <seconds>",
+      description:
+        "(agentcore) how long an idle session keeps its microVM, 60 to 1209600 (default: defaults.deploy.agentcore." +
+        "idleTimeoutSeconds in fastagent.config.ts, else 180)",
+    },
+    {
       flags: "--json",
       description:
         "with --run, for a coding agent: the deploy runs in a process of its own and the command returns its " +
@@ -432,6 +441,7 @@ const deploy: CommandSpec = {
       run: f.run === true,
       force: f.force === true,
       intoLinked: f.intoLinked === true,
+      ...(typeof f.idleTimeout === "string" ? { idleTimeout: f.idleTimeout } : {}),
       ...(typeof f.config === "string" ? { config: f.config } : {}),
       input: f.input !== false,
       json: f.json === true,
@@ -617,6 +627,7 @@ const schedules: CommandSpec = {
         },
         NO_INPUT,
         ...INSTANCE_FLAGS,
+        ...LAYER_FLAGS,
         CONFIG_FLAG,
         ENV_FILE_FLAG,
       ],

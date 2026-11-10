@@ -3,7 +3,6 @@
  * §2), the way the first run picks a model: in the parent process, at a terminal, once per project. Without a terminal
  * nothing is asked and nothing waits: the command that does it for a coding agent is named.
  */
-import { resolveConfig } from "../harnesses/pi-durable/config.ts";
 import { codeSecrets } from "../harnesses/pi-durable/definition.ts";
 import { chosenIngress } from "../harnesses/pi-durable/definition.ts";
 import { loadDevProject } from "../harnesses/pi-durable/open.ts";
@@ -11,12 +10,12 @@ import { missingSecrets } from "../declared-secrets.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
 import { isSetupKind, setUpChannel, setupNames } from "./channel-setup.ts";
 import { failStartup, failUsage } from "./fail.ts";
-import { isInteractive } from "./shared.ts";
+import { isInteractive, resolveProjectConfig } from "./shared.ts";
 
 /** The first-party channels the agent mounts whose credentials this process's environment lacks, and the configuration. */
 async function lackingChannels(agentDir: string) {
   const project = await loadDevProject(agentDir).catch(failStartup);
-  const config = resolveConfig(project.definition, project.instance);
+  const config = resolveProjectConfig(project);
   const missing = missingSecrets(codeSecrets(project.definition, config), process.env);
   const kinds = project.definition.registry.channels.flatMap(({ file, name }) => {
     if (!isSetupKind(name)) return [];

@@ -18,6 +18,10 @@ export function isEnvKey(source: string | undefined): source is string {
 const DEPLOY_OWNED = new Set([
   "PORT",
   "FASTAGENT_MODEL",
+  "FASTAGENT_THINKING_LEVEL",
+  "FASTAGENT_HTTP_API",
+  "FASTAGENT_HTTP_PUBLIC_URL",
+  "FASTAGENT_INGRESS",
   "FASTAGENT_CONFIG",
   "FASTAGENT_ROOT",
   "FASTAGENT_WORKDIR",
