@@ -31,7 +31,7 @@ export interface TurnAck {
 export const NO_ACK: TurnAck = { complete: async () => undefined, remove: async () => undefined };
 
 /** What the runner gives a turn beyond its inputs: how its message is sent, and how its reply and answer are delivered. */
-export interface TurnHooks {
+interface TurnHooks {
   /** The turn's message is recorded with the Agent (or was refused): the next input may be prepared and sent. */
   admitted(): void;
   /** The turn's own message ended, as the Agent reports it. */

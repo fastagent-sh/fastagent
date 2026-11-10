@@ -130,7 +130,7 @@ async function finalize(
  * Mount one preview message: preferably a streaming card entity (`initial` seeds the process element; the answer
  * element starts empty), with a static text message as the visible fallback.
  */
-export async function mountFeishuPreview(
+async function mountFeishuPreview(
   api: FeishuApi,
   target: FeishuTarget,
   initial: string,
