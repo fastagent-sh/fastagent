@@ -1,5 +1,13 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
-import { CONTENT_DIRNAME, INSTANCE_CONFIG_FILE, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { shellArg } from "../shell-arg.ts";
+import {
+  CONTENT_DIRNAME,
+  DEPLOYED_ENV,
+  INSTANCE_CONFIG_FILE,
+  INSTANCES_DIRNAME,
+  SECRETS_DIRNAME,
+  STATE_DIRNAME,
+} from "../paths.ts";
 import { RUNTIME_FLOOR } from "../runtime.ts";
 import { MISE_ENVIRONMENT } from "../environment/mise.ts";
 import { BOX_CLI_PREDATES } from "./box-shell.ts";
@@ -186,7 +194,7 @@ function dockerfile(input: ContainerInput): string {
   // slim image lacks.
   const apt = aptLayer(input.apt);
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
-  const deployment = `ENV FASTAGENT_ROOT=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
+  const deployment = `ENV ${DEPLOYED_ENV}=1\nENV FASTAGENT_ROOT=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
   const environment = input.packages && input.packages.length > 0 ? environmentLayer(dir) : "";
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : NODE_IMAGE;
@@ -257,6 +265,16 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 # when this directory ships a .git; otherwise run "fastagent env add apt:git"). For a smaller image with no
 # git needs, add a ".git" line here.
 `;
+
+/**
+ * The command that generates an instance's manifest again, as a runbook says it after a change to the configuration:
+ * `deploy <host>` with the `--config` that names the instance (without it, the program's own), and `--force` where the
+ * manifest is the author's once written and would otherwise be kept as it is.
+ */
+export function redeployCommand(host: string, input: Pick<ContainerInput, "configFile">, force: boolean): string {
+  const config = input.configFile === undefined ? "" : ` --config ${shellArg(input.configFile)}`;
+  return `fastagent deploy ${host}${config}${force ? " --force" : ""}`;
+}
 
 /** The Dockerfile + ignore artifacts — spread into any host's artifact list. */
 export function containerArtifacts(input: ContainerInput): Artifact[] {

@@ -180,13 +180,25 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     });
   });
 
-  it("asks nothing of a kept Dockerfile about the instance: its configuration and name are variables on the host", async () => {
-    const dir = await agent({ Dockerfile: "FROM node:22-slim\n" });
-    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+  it("asks a kept Dockerfile for the deployed mark, and nothing about the instance: its configuration and name are variables on the host", async () => {
+    // Without the mark `start` takes no storage: a box that lost it runs as a local instance on a disk that is gone at
+    // the next restart. The INSTRUCTION is the question, not who wrote the file, and `--force` does not rescue it.
+    const unmarked = await agent({ Dockerfile: "FROM node:22-slim\n" });
+    await writeFile(join(unmarked, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
     const delivered = { source: { values: { thinkingLevel: "high" }, label: "/elsewhere/fastagent.json" } };
-    const pre = await call(dir, {}, { run: true, delivered });
-    expect(pre.ok).toBe(true);
-    if (pre.ok) expect(JSON.stringify(pre.messages)).not.toMatch(/FASTAGENT_CONFIG|FASTAGENT_RELEASE/);
+    const gated = await call(unmarked, {}, { run: true, delivered });
+    expect(gated).toMatchObject({ ok: false, gate: expect.stringMatching(/does not set FASTAGENT_DEPLOYED/) });
+    expect((await call(unmarked, {}, { run: true, force: true })).ok).toBe(false);
+    const planned = await call(unmarked, {});
+    expect(planned.ok && planned.messages.some((m) => /does not set FASTAGENT_DEPLOYED/.test(m.text))).toBe(true);
+    // The ordinary multi-variable spelling is fine: reading only the first name after `ENV` would false-gate it.
+    for (const env of ["ENV FASTAGENT_DEPLOYED=1", "ENV FASTAGENT_ROOT=/data FASTAGENT_DEPLOYED=1"]) {
+      const own = await agent({ Dockerfile: `FROM node:22-slim\n${env}\n` });
+      await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+      const pre = await call(own, {}, { run: true, delivered });
+      expect(pre.ok).toBe(true);
+      if (pre.ok) expect(JSON.stringify(pre.messages)).not.toMatch(/FASTAGENT_CONFIG|FASTAGENT_RELEASE/);
+    }
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when it ships .git", async () => {
@@ -957,7 +969,7 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     expect(current.ok && current.messages.some((m) => /node:sqlite/.test(m.text))).toBe(false);
     // A hand-written Dockerfile names its own base, so the pin says nothing about the image.
     const ownImage = await pinned("1.3.13");
-    await writeFile(join(ownImage, "Dockerfile"), "FROM oven/bun:1.4\n\n");
+    await writeFile(join(ownImage, "Dockerfile"), "FROM oven/bun:1.4\nENV FASTAGENT_DEPLOYED=1\n");
     const kept = await call(ownImage, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(kept.ok ? kept.messages.filter((m) => /node:sqlite/.test(m.text)) : kept.gate).toEqual([]);
   });

@@ -120,6 +120,7 @@ export default defineTool({
     }
     Object.assign(env, {
       // What a deploy sets on the box: the image holds none of it.
+      FASTAGENT_DEPLOYED: "1",
       FASTAGENT_RELEASE_ID: "one",
       FASTAGENT_NAME: "reviewer",
       FASTAGENT_CONFIG_JSON: JSON.stringify({ thinkingLevel: "high" }),

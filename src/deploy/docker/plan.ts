@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { manualWebhookStep, webhookKinds } from "../../channels/webhooks.ts";
-import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, redeployCommand } from "../container.ts";
 import { deliveredVariables } from "../delivery.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
@@ -173,7 +173,8 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
 
   runbook.push(
     ``,
-    `# After a change to the configuration, run \`fastagent deploy docker\` again: ${composePath} carries it.`,
+    `# After a change to the configuration, run \`${redeployCommand("docker", input, true)}\`: ${composePath} carries it, and`,
+    `# --force resets it to the generated file (re-apply hand edits).`,
     `# The Compose volume at ${MOUNT} is the agent's working directory, and retains its state and credentials.`,
     `# --pull: the base image is a floating tag, and a copy cached here may be older than the runtime floor.`,
     `${compose} build --pull`,

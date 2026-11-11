@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds } from "../../channels/webhooks.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit, redeployCommand } from "../container.ts";
 import { deliveredVariables } from "../delivery.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
@@ -152,7 +152,8 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   runbook.push(
     ``,
     `# The build context is the agent directory, baked as the definition.`,
-    `# After a change to the configuration, run \`fastagent deploy fly\` again: ${flyTomlPath} carries it.`,
+    `# After a change to the configuration, run \`${redeployCommand("fly", input, true)}\`: ${flyTomlPath} carries it, and`,
+    `# --force resets it to the generated file (re-apply hand edits).`,
     `# Run this from the agent directory:`,
     deployCmd,
   );

@@ -299,7 +299,7 @@ instances.
 - `openAgent` reads only its options, never these environment variables and never `process.env` for secret values: an
   embedding app that wants them reads and passes them itself (`secrets: process.env` is an explicit choice). FastAgent's
   own work for the instance (installing packages, cloning content) runs in the `env` option plus `secrets`. Who runs
-  the instance (`FASTAGENT_DEV`, `FASTAGENT_RELEASE_ID`, `FASTAGENT_AGENTCORE`: `dev`, a deployed box, AgentCore) is
+  the instance (`FASTAGENT_DEV`, `FASTAGENT_DEPLOYED`, `FASTAGENT_AGENTCORE`: `dev`, a deployed box, AgentCore) is
   not an input of `openAgent` at all: an app's instance is none of them, so a channel that names no way receives by
   webhook and its prompt describes no deployment. The CLI reads those variables once, from its own process
   (`runsAsIn`), and gives the result to the open (`OpenServingOptions.runsAs`). The one variable of the process's that
@@ -639,8 +639,10 @@ The configuration is set on the host, not baked into the image, so one build is 
 (configuration-layout.md §5). `deploy --config <file>` reads the file and renders its JSON, on one line, as the variable
 `FASTAGENT_CONFIG_JSON` by each host's mechanism for non-secret values (`environment:` of the instance's Compose file,
 `[env]` of its `fly.<name>.toml`, `EnvironmentVariables` of its AgentCore template, Railway's service variables), beside
-`FASTAGENT_NAME` (the instance's name: the agent the storage belongs to) and `FASTAGENT_RELEASE_ID` (a digest of the two,
-which a deploy sets and nothing else does: its presence marks a deployed box). Without `--config` the variable is `{}`:
+`FASTAGENT_NAME` (the instance's name: the agent the storage belongs to) and `FASTAGENT_RELEASE_ID` (a digest of the two).
+The mark of a deployed box is the image's, `FASTAGENT_DEPLOYED=1` in the generated Dockerfile, so a platform variable that is
+edited or deleted cannot make the box skip the storage's mount check: a deployed box without the name or the release id
+refuses to start. Without `--config` the variable is `{}`:
 the program's defaults. The box reads the variable as the instance configuration; `FASTAGENT_CONFIG` (a file) and
 `FASTAGENT_CONFIG_JSON` together are refused. A platform variable under the same name as another source outranks it
 (the layers of §4.2). What cannot be a variable is refused by `deploy`: a `content` directory of this machine, a

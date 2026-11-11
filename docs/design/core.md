@@ -746,7 +746,7 @@ says so.
 `deploy/workspace.ts` owns the shared deployed lifecycle. The program is the image's (`/app`, built there),
 opened where it is; the storage is the instance's root (`FASTAGENT_ROOT`): the agent's cwd, with `.state/`,
 `.secrets/`, `content/` and `.deployment/`. The variables a deploy sets name the agent the storage belongs to (`FASTAGENT_NAME`) and the release started on it
-(`FASTAGENT_RELEASE_ID`, present only on a deployed box), and a storage another agent started on is refused. A process-lifetime lease is taken first. Nothing on the storage is
+(`FASTAGENT_RELEASE_ID`; the image's `FASTAGENT_DEPLOYED` is what makes a box take the storage), and a storage another agent started on is refused. A process-lifetime lease is taken first. Nothing on the storage is
 replaced by a release. Nothing is mounted or unmounted by fastagent: the host's volume is the only storage.
 
 No credentials file travels. A model whose key is not in the value file logs in on the box: `fastagent

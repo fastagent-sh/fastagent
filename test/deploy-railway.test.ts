@@ -15,6 +15,12 @@ const base = {
 } as const;
 
 describe("deploy/railway: planRailwayDeploy", () => {
+  it("says how to regenerate after a change: this instance's --config, and no --force: Railway has no manifest to keep", () => {
+    const out = runbook(planRailwayDeploy({ ...base, channels: [], configFile: "acme.json" }));
+    expect(out).toContain("run `fastagent deploy railway --config acme.json` again");
+    expect(out).not.toContain("--force");
+  });
+
   it("prints the variables that vary per instance, quoted for a shell, before the upload that builds on them", () => {
     const config = JSON.stringify({ description: "it's $" + "{X}" });
     const out = runbook(planRailwayDeploy({ ...base, config, channels: [] }));

@@ -600,7 +600,7 @@ state:    --state > FASTAGENT_STATE_DIR > <root>/.state > <agent dir>/.fastagent
           (agent.sqlite, channel and schedule state)
 workdir:  --workdir > FASTAGENT_WORKDIR > <root> > <agent dir>/.fastagent/start   (the agent's cwd)
 root:     --root > FASTAGENT_ROOT
-config:   --config > FASTAGENT_CONFIG > FASTAGENT_CONFIG_JSON (the JSON itself) > none: start never reads the project's fastagent.json
+config:   --config > FASTAGENT_CONFIG or FASTAGENT_CONFIG_JSON (the JSON itself; not both) > none: start never reads the project's fastagent.json
 secrets:  --env-file > FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production   (still the project's, whatever the root)
 content:  <workdir>/content/<name> (clones)
 ```

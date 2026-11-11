@@ -476,6 +476,26 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(cmds().some((c) => c.startsWith("up "))).toBe(false);
   });
 
+  it("gate: a configuration the public URL tips over the variable limit stops before the variables are set", async () => {
+    const { railway, cmds } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const out = await run(
+      plan({ delivery: (url) => ({ variables: { FASTAGENT_CONFIG_JSON: "x".repeat(32769) }, publicUrl: url }) }),
+      railway,
+    );
+    expect(out).toEqual({
+      ok: false,
+      gate: expect.stringMatching(
+        /FASTAGENT_CONFIG_JSON is 32769 characters with the public URL .* a Railway variable holds at most 32768/,
+      ),
+    });
+    expect(cmds().some((c) => c.startsWith("variables set FASTAGENT_CONFIG_JSON"))).toBe(false);
+    expect(cmds().some((c) => c.startsWith("up "))).toBe(false);
+  });
+
   it("gate: `railway add --service` failure gives PRECISE recovery (project made, service not)", async () => {
     // init OK (dir now linked) → add fails. A re-run finds the project and adds the service again, but the cause may
     // not be transient, so the gate names the exact manual step and the way to start over.

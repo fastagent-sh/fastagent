@@ -21,6 +21,12 @@ const base = {
 } as const;
 
 describe("deploy/fly: planFlyDeploy", () => {
+  it("says how to regenerate the manifest after a change: this instance's --config, and --force for a file that is kept", () => {
+    expect(runbook(planFlyDeploy({ ...base, channels: [], configFile: "acme.json" }))).toContain(
+      "run `fastagent deploy fly --config acme.json --force`",
+    );
+  });
+
   it("sets the instance's name, release and configuration in [env], as TOML strings the box reads back whole", () => {
     const config = JSON.stringify({ description: 'says "hi" \\ and $' + "{X}", settings: { repo: "acme/api" } });
     const toml = flyToml(planFlyDeploy({ ...base, config, channels: [] }));

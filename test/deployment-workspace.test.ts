@@ -156,3 +156,26 @@ describe("releaseFromEnv: what a deploy set on the box", () => {
     ).toThrow("invalid deployment release record");
   });
 });
+
+describe("start on a deployed box that lost the variables a deploy sets", () => {
+  it("refuses to start, and a local start takes no storage", async () => {
+    const { prepareStartWorkspace } = await import("../src/cli/commands/start.ts");
+    const { root } = await fixture();
+    vi.stubEnv("FASTAGENT_ROOT", root);
+    try {
+      // The image says it is a deployment; the platform's variables are gone. Running on regardless would start a
+      // local-looking instance on a disk with no mount check, no lease and no owner.
+      vi.stubEnv("FASTAGENT_DEPLOYED", "1");
+      vi.stubEnv("FASTAGENT_RELEASE_ID", "");
+      vi.stubEnv("FASTAGENT_NAME", "");
+      await expect(prepareStartWorkspace("/app")).rejects.toThrow("FASTAGENT_RELEASE_ID is required for a deployment");
+      vi.stubEnv("FASTAGENT_RELEASE_ID", "abc123");
+      await expect(prepareStartWorkspace("/app")).rejects.toThrow("FASTAGENT_NAME is required for a deployment");
+      // Not deployed: nothing is taken, nothing is required.
+      vi.stubEnv("FASTAGENT_DEPLOYED", "");
+      await expect(prepareStartWorkspace("/app")).resolves.toBe("/app");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});

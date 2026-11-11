@@ -21,7 +21,7 @@ import { modelEnvironment } from "../harnesses/models/environment.ts";
 import { type EffectiveConfig, type InstanceConfigSource, instanceConfigIn } from "../harnesses/pi-durable/config.ts";
 import { type AgentDefinition, definitionSecrets } from "../harnesses/pi-durable/definition.ts";
 import { type BuiltDefinition, buildDefinitionShape, loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
-import { INSTANCE_CONFIG_FILE, exists } from "../paths.ts";
+import { DEPLOYED_ENV, INSTANCE_CONFIG_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, channelIngress } from "../channels/discover.ts";
 import type { DeclaredContent } from "../content/declare.ts";
 import { loadContent, loadEnvironment } from "../content/file.ts";
@@ -620,8 +620,9 @@ async function keptDockerfile(agentDir: string): Promise<string | undefined> {
 }
 
 /**
- * What a KEPT hand-written Dockerfile drops: the environment (context.json's) that the generated one installs, and the
- * build `start` opens. (The instance's configuration and name are variables on the host, not part of any image.)
+ * What a KEPT hand-written Dockerfile drops: the environment (context.json's) that the generated one installs, the
+ * build `start` opens, and the marker that makes the box a deployed one. (The instance's configuration and name are
+ * variables on the host, not part of any image.)
  */
 function checkKeptDockerfile(dockerfileText: string, agentDir: string, report: DeployReport): void {
   // What the image installs: the packages and apt packages. Variables are the target's, whatever the image.
@@ -631,6 +632,15 @@ function checkKeptDockerfile(dockerfileText: string, agentDir: string, report: D
       `kept your hand-written Dockerfile — it installs the environment context.json declares only if it says so: ` +
         `a generated Dockerfile shows the layers (the apt packages, then \`mise install --system\` of the packages ` +
         `context.json declares).`,
+    );
+  }
+  // The INSTRUCTION is the question, not the file's authorship: without the marker `start` takes no storage (no mount
+  // check, no lease, no owner), so a box that lost it runs as a local instance on a disk that is gone at the next
+  // restart. Anywhere in an `ENV` instruction, not just first.
+  if (!new RegExp(`^\\s*ENV\\s[^\\n]*\\b${DEPLOYED_ENV}[=\\s]`, "m").test(dockerfileText)) {
+    report.issue(
+      `your Dockerfile does not set ${DEPLOYED_ENV}, and without it the container starts as a local instance: no ` +
+        `mount check, no lease, no storage owner. Add \`ENV ${DEPLOYED_ENV}=1\` (see a generated Dockerfile).`,
     );
   }
   // `start` opens dist/. Docker and Fly upload the directory as it is, but `railway up` follows .gitignore, which the

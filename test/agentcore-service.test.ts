@@ -376,7 +376,7 @@ describe("a deployed box's build", () => {
     await buildProject(dir);
     await writeFile(join(dir, "SYSTEM.md"), "The agent rewrote its own prompt.\n");
     await expect(openPreparedStartService(dir, { input: false })).rejects.toThrow(/built from other sources/);
-    vi.stubEnv("FASTAGENT_RELEASE_ID", "one");
+    vi.stubEnv("FASTAGENT_DEPLOYED", "1");
     vi.stubEnv("FASTAGENT_STATE_DIR", join(dir, ".state"));
     const service = await openPreparedStartService(dir, { input: false });
     await service.close();

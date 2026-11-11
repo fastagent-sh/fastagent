@@ -210,13 +210,20 @@ export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.
   return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? environmentPath(dir, SECRETS_DIRNAME, env);
 }
 
-/** Set by a deploy on the box it makes, and by nothing else: what tells `start` to take the deployment's storage. */
+/** The release a deploy started on the box: set on the host with the instance's name, read when the storage is taken. */
 export const RELEASE_ID_ENV = "FASTAGENT_RELEASE_ID";
 
+/**
+ * Set by the generated image itself, so a platform variable that is edited or deleted cannot turn a deployed box into
+ * a local-looking one that skips the storage's mount check. Its presence is what tells `start` to take the deployment's
+ * storage, and the variables that name the release are then required.
+ */
+export const DEPLOYED_ENV = "FASTAGENT_DEPLOYED";
+
 /** Is this process the deployed container the generated artifacts describe? ONE reading of the
- *  environment fact a deploy states, so a second spelling cannot drift from it. */
+ *  environment fact the image states, so a second spelling cannot drift from it. */
 export function isDeployedWorkspace(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env[RELEASE_ID_ENV]);
+  return Boolean(env[DEPLOYED_ENV]);
 }
 
 /** Is this process running inside the AgentCore Runtime? Set by the generated deploy artifacts. */

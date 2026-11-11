@@ -13,6 +13,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
 import type { SecretStore } from "../secret-store.ts";
 import { hostSignedOutGate } from "../secrets.ts";
+import { RAILWAY_VARIABLE_LIMIT } from "./plan.ts";
 import { ensureRailwayService, railwayStore } from "./store.ts";
 
 export interface RailwayRunPlan {
@@ -194,6 +195,14 @@ export async function deployRailwayRun(
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
   }
   const { variables, publicUrl } = plan.delivery(url);
+  // The pre-flight counted the configuration before the domain was known; the URL it now names can tip it over.
+  const tooLong = Object.entries(variables).find(([, value]) => value.length > RAILWAY_VARIABLE_LIMIT);
+  if (tooLong !== undefined) {
+    return gate(
+      `${tooLong[0]} is ${tooLong[1].length} characters with the public URL ${publicUrl} in it, and a Railway ` +
+        `variable holds at most ${RAILWAY_VARIABLE_LIMIT}: shorten the configuration`,
+    );
+  }
   log(`setting ${Object.keys(variables).join("/")}…`);
   // `railway up` follows, so a deploy of the variables alone would only be a second one.
   const delivered = Object.entries(variables).map(([name, value]) => `${name}=${value}`);

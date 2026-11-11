@@ -131,6 +131,8 @@ describe("deploy/container: shared Docker context", () => {
       expect(content).not.toContain("FASTAGENT_AGENT");
       // The root is one variable on the box, as everywhere else an instance is placed.
       expect(content).toMatch(/^ENV FASTAGENT_ROOT=\/data$/m);
+      // The mark of a deployed box is the image's: a platform variable that is deleted cannot turn the box local.
+      expect(content).toMatch(/^ENV FASTAGENT_DEPLOYED=1$/m);
       expect(content).not.toContain("STORAGE_DIR");
     }
     const note = (runsAs: RunsAs, wake = false) => {

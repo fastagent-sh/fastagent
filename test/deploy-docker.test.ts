@@ -24,6 +24,12 @@ const base = {
 } as const;
 
 describe("deploy/docker: planDockerDeploy", () => {
+  it("says how to regenerate the manifest after a change: this instance's --config, and --force for a file that is kept", () => {
+    const out = runbook(planDockerDeploy({ ...base, channels: [], configFile: "/etc/acme prod.json" }));
+    expect(out).toContain("run `fastagent deploy docker --config '/etc/acme prod.json' --force`");
+    expect(runbook(planDockerDeploy({ ...base, channels: [] }))).toContain("run `fastagent deploy docker --force`");
+  });
+
   it("renders the instance's name, release and configuration into the Compose file, with `$` doubled for Compose", () => {
     const config = JSON.stringify({
       mcpServers: { n: { url: "https://e.com", headers: { A: `Bearer $` + "{TOKEN}" } } },

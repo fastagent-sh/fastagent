@@ -300,6 +300,15 @@ describe("the configuration a command is given", () => {
     expect(both.code).not.toBe(0);
     expect(both.stderr).toContain("FASTAGENT_CONFIG and FASTAGENT_CONFIG_JSON are both set");
 
+    // The flag beats every variable: the file it names is the configuration, and the JSON is not consulted.
+    const flagged = await runInProcess(
+      ["info", dir, "--json", "--config", named],
+      undefined,
+      env({ FASTAGENT_CONFIG_JSON: "{nope" }),
+    );
+    expect(flagged.code, flagged.stderr).toBe(0);
+    expect(JSON.parse(flagged.stdout).config.thinkingLevel).toEqual({ value: "low", source: named });
+
     const broken = await runInProcess(["info", dir, "--json"], undefined, env({ FASTAGENT_CONFIG_JSON: "{nope" }));
     expect(broken.code).not.toBe(0);
     expect(broken.stderr).toContain("FASTAGENT_CONFIG_JSON is not JSON");

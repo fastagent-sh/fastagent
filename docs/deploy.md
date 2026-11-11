@@ -63,9 +63,11 @@ A deployment runs on the program's defaults, and `--config <file>` gives it an i
 `fastagent.json`: model, settings, `http`, `deploy`, repositories it works on). The deploy decides with it (its model,
 whether it serves the Agent API, AgentCore's idle timeout), and delivers it to the host as one variable,
 `FASTAGENT_CONFIG_JSON`, holding its JSON (`{}` without `--config`). It is set beside `FASTAGENT_NAME`, the instance's
-name, and `FASTAGENT_RELEASE_ID`, which a deploy sets on a box and nothing else does: its presence is what makes `start`
-take the deployment's storage. The id is a digest of the name and the configuration, so a manifest that holds it changes
-only when the configuration does. The host renders them by its own mechanism for values that are not secret:
+name, and `FASTAGENT_RELEASE_ID`, the release started on the storage (a digest of the name and the configuration, so a
+manifest that holds it changes only when the configuration does). What makes `start` take the deployment's storage (the
+mount check, the lease, the owner) is `FASTAGENT_DEPLOYED=1`, which the generated Dockerfile sets in the image so a
+platform variable that is deleted cannot turn the box into a local-looking one; a `start` with it and without the two
+variables refuses. A hand-written Dockerfile sets it too, or `--run` stops. The host renders them by its own mechanism for values that are not secret:
 
 | Host | Where the variables are set | After a change to the configuration |
 |---|---|---|

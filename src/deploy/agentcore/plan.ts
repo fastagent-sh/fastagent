@@ -7,7 +7,7 @@ import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds } from "../../channels/webhooks.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, redeployCommand } from "../container.ts";
 import { deliveredVariables } from "../delivery.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
@@ -132,6 +132,11 @@ const PARAMETER_VARIABLES = [
   { env: "FASTAGENT_WAKE_SECRET", parameter: "FastagentWakeSecret", reserve: 64 },
 ] as const;
 
+/** The most a parameter's value may hold, which the template enforces (`MaxLength`) so the size counted for it is true. */
+function reserveOf(parameter: (typeof PARAMETER_VARIABLES)[number]["parameter"]): number {
+  return (PARAMETER_VARIABLES.find((variable) => variable.parameter === parameter) as { reserve: number }).reserve;
+}
+
 /** What the runtime's variables add up to for this deployment, parameters at their most: compare with the limit. */
 export function agentcoreVariablesSize(input: Pick<ContainerInput, "agent" | "config">): number {
   const literal = Object.entries(literalVariables(input)).reduce(
@@ -239,6 +244,7 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
   params.push(
     `  SecretArn:`,
     `    Type: String`,
+    `    MaxLength: ${reserveOf("SecretArn")}`,
     `    Description: ARN of the Secrets Manager secret holding the deployment's values (created outside this stack by \`fastagent secrets\`; the runtime reads it on its first invocation)`,
     `  ForwarderBucket:`,
     `    Type: String`,
@@ -251,15 +257,17 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
   params.push(
     `  FastagentIngressSecret:`,
     `    Type: String`,
+    `    MaxLength: ${reserveOf("FastagentIngressSecret")}`,
     `    NoEcho: true`,
-    `    Description: shared secret authenticating forwarder→runtime envelopes (any random string; --run mints one)`,
+    `    Description: shared secret authenticating forwarder→runtime envelopes (any random string of up to ${reserveOf("FastagentIngressSecret")} characters; --run mints one)`,
   );
   // The wake-alarm shared secret: the container authenticates its alarm callbacks to the forwarder with it.
   params.push(
     `  FastagentWakeSecret:`,
     `    Type: String`,
+    `    MaxLength: ${reserveOf("FastagentWakeSecret")}`,
     `    NoEcho: true`,
-    `    Description: shared secret between the container and the forwarder's wake-alarm callback (any random string; --run mints one)`,
+    `    Description: shared secret between the container and the forwarder's wake-alarm callback (any random string of up to ${reserveOf("FastagentWakeSecret")} characters; --run mints one)`,
   );
   const envLines = [
     ...Object.entries(literalVariables(input)).map(([name, value]) => `        ${name}: ${JSON.stringify(value)}`),
@@ -608,7 +616,8 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws bedrock-agentcore stop-runtime-session --agent-runtime-arn <RuntimeArn> \\`,
     `  --runtime-session-id "${ingressSessionId(name)}"`,
     ``,
-    `# Redeploy = \`fastagent deploy agentcore\` (a changed configuration is rendered into the template) + step 1b`,
+    `# Redeploy = \`${redeployCommand("agentcore", input, true)}\` (the template carries the configuration; --force resets it to`,
+    `# the generated one) + step 1b`,
     `# (new forwarder key, if its code changed) + step 2 with a NEW tag + step 3.`,
     `# STATE: ${MOUNT} is managed SessionStorage, the agent's working directory. It keeps what the agent wrote there, .state/`,
     `# and .secrets/ across compute stop/resume — an idle-reclaimed agent resumes with its memory. AWS`,

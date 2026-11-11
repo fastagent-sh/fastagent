@@ -1,7 +1,7 @@
 /** `fastagent deploy railway` — the Railway deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit, redeployCommand } from "../container.ts";
 import { deliveredVariables } from "../delivery.ts";
 import { shellArg } from "../../shell-arg.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
@@ -105,7 +105,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
 
   runbook.push(
     ``,
-    `# After a change to the definition or the configuration, run \`fastagent deploy railway\` again.`,
+    `# After a change to the definition or the configuration, run \`${redeployCommand("railway", input, false)}\` again.`,
     `# Upload the agent directory and build on Railway (no local Docker needed): Railway builds the`,
     `# Dockerfile at its root. It marks the deploy live once the container starts, without waiting for`,
     `# /health: \`railway logs\` shows a box that crashes on boot.`,
@@ -138,7 +138,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
       `# the printed https URL and use it as <your-domain> in the webhook step(s) below:`,
       `railway domain`,
       `# Or, before \`railway up\`, set it as http.publicUrl in the configuration \`deploy --config\` delivers, and`,
-      `# re-run \`fastagent deploy railway\` and its \`variables set\` above: the box then points Telegram, Feishu and`,
+      `# re-run \`${redeployCommand("railway", input, false)}\` and its \`variables set\` above: the box then points Telegram, Feishu and`,
       `# Lark there itself.`,
       ...steps,
     );

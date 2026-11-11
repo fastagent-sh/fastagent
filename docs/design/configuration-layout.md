@@ -86,7 +86,7 @@ An instance is a **named deployment of a program with one configuration file**.
 sets: the configuration (below), `FASTAGENT_NAME` (the instance's name, the variable that already carries it; the
 storage claim and the lease use it) and `FASTAGENT_RELEASE_ID` (for the log and the record of the release last started
 on the storage). `FASTAGENT_NAME` is also set on local instances, so it cannot say "this is a deployed box"; the
-presence of `FASTAGENT_RELEASE_ID` does.
+image's `FASTAGENT_DEPLOYED` does (§6: a mark held in a platform variable that is edited or deleted would turn a deployed box into a local-looking one that skips the storage's mount check).
 
 The configuration file is delivered as one variable holding its JSON, `FASTAGENT_CONFIG_JSON`, rendered by the host's own
 mechanism for non-secret values:
@@ -129,7 +129,7 @@ add to it on a host.
 | `<agent>/.secrets/mcp-auth.json` | `<root>/.state/` |
 | `.secrets/` and its ignore file | removed; the committed template is `<agent>/.env.example` |
 | `/etc/fastagent/fastagent.json`, `FASTAGENT_CONFIG` on a box | `FASTAGENT_CONFIG_JSON` |
-| `fastagent.release.json`, `FASTAGENT_RELEASE_FILE` | removed; `FASTAGENT_NAME` and `FASTAGENT_RELEASE_ID` (its presence marks a deployed box); the value file's `FASTAGENT_MODEL` is laid over the delivered configuration's `model` |
+| `fastagent.release.json`, `FASTAGENT_RELEASE_FILE` | removed; `FASTAGENT_NAME` and `FASTAGENT_RELEASE_ID`, and the image's `FASTAGENT_DEPLOYED` marks a deployed box; the value file's `FASTAGENT_MODEL` is laid over the delivered configuration's `model` |
 | `deploy` reading `FASTAGENT_MODEL`, `GITHUB_TOKEN`, `FASTAGENT_API_KEY` from a value file | the file's `model`; the others are secrets the target holds |
 | `fastagent secrets set docker`, Compose `env_file:` | Compose's `environment:` with names only (`- OPENAI_API_KEY`), which Compose fills from the shell running it, so a CI job's variables reach the box; `secrets set docker` is removed |
 | `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_WORKDIR`, `FASTAGENT_CONFIG` and the flags | unchanged for a local instance |
@@ -147,6 +147,10 @@ Decided:
   not. Compose's own `secrets:` (files under `/run/secrets`) keeps values out of
   `docker inspect`, but it is one host's mechanism and would need a second read path in the box; not taken.
 - **A deployment's text is the program's.** An instance on a host adds no `instructions`, `skills` or `prompts`.
+- **The mark of a deployed box is the image's**, `FASTAGENT_DEPLOYED=1` in the generated Dockerfile (a hand-written one sets it
+  too, or `--run` stops), and the variables that name the release are required once it is set. Held in a platform
+  variable instead, a deleted or mistyped one would start the box as a local instance on the image's disk, with no mount
+  check, no lease and no owner, and nothing would say so.
 - **The release facts are variables**, not a file in the image (§5), because the manifest's random id would make every
   deploy, and every instance, a different image. The id is a digest of the name and the configuration, not a random
   value: it is rendered into manifests meant to be committed, and a random one would change them at every deploy.
