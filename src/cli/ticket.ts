@@ -185,13 +185,23 @@ export function procfsIsOurs(selfStat: string, pid: number): boolean {
 
 const PROCFS = existsSync("/proc/self/stat") && procfsIsOurs(readFileSync("/proc/self/stat", "utf8"), process.pid);
 
-/** What /proc says of `pid`: its state letter and its process group; undefined once it is gone. */
-function procStat(pid: number): { state: string; group: number } | undefined {
+const readProcStat = (pid: number): string => readFileSync(`/proc/${pid}/stat`, "utf8");
+
+/**
+ * What /proc says of `pid`: its state letter and its process group; undefined once it is gone. `scanning`: one of every
+ * process's, where what cannot be read is not a member of a group this user started (another user's, under hidepid=1;
+ * one that exited as it was read), and is left out rather than ending the scan.
+ */
+function procStat(
+  pid: number,
+  { scanning = false, read = readProcStat } = {},
+): { state: string; group: number } | undefined {
   let stat: string;
   try {
-    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    stat = read(pid);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    const code = (error as NodeJS.ErrnoException).code ?? "";
+    if (code === "ENOENT" || (scanning && ["ESRCH", "EPERM", "EACCES"].includes(code))) return undefined;
     throw error;
   }
   // The fields follow the command name, which is in parentheses and may hold either: state, parent, group.
@@ -212,9 +222,9 @@ function exited(pid: number): boolean {
  * Whether the process group `pid` leads still has a member running: its leader, or what it started, which may outlive
  * the leader by the time it needs to let go. Signal 0 to the group says so, except that a group of exited members
  * nobody has reaped answers it too on Linux (so /proc is asked who the members are) and answers EPERM on macOS (not
- * ours to stop, as `signalGroup` takes it).
+ * ours to stop, as `signalGroup` takes it). Not public: a test seam, with the read of a process's stat.
  */
-function groupRunning(pid: number): boolean {
+export function groupRunning(pid: number, read?: (pid: number) => string): boolean {
   try {
     process.kill(-pid, 0);
   } catch {
@@ -223,7 +233,7 @@ function groupRunning(pid: number): boolean {
   if (!PROCFS) return true;
   return readdirSync("/proc").some((entry) => {
     if (!/^\d+$/.test(entry)) return false;
-    const stat = procStat(Number(entry));
+    const stat = procStat(Number(entry), { scanning: true, ...(read === undefined ? {} : { read }) });
     return stat !== undefined && stat.group === pid && !isDead(stat.state);
   });
 }

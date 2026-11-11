@@ -11,6 +11,7 @@ import {
   checkTicket,
   createTicket,
   endTicket,
+  groupRunning,
   procfsIsOurs,
   runTicket,
   running,
@@ -303,6 +304,32 @@ describe("a step that outlives the command that starts it", () => {
       if (running(started)) process.kill(started, "SIGKILL");
     }
   });
+
+  it.skipIf(!existsSync("/proc/self/stat"))(
+    "a group is still found running when the processes of others cannot be read, and a stat read that fails for a member says so",
+    () => {
+      // Another user's process is unreadable under hidepid=1 (EPERM), and one that exits as it is read may answer ESRCH:
+      // neither is a member of a group this user started, and neither may end the look at the ones that are.
+      const leader = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+      const pid = leader.pid as number;
+      const failing =
+        (code: string) =>
+        (other: number): string => {
+          if (other === pid) return readFileSync(`/proc/${other}/stat`, "utf8");
+          throw Object.assign(new Error(code), { code });
+        };
+      try {
+        for (const code of ["EPERM", "EACCES", "ESRCH"]) expect(groupRunning(pid, failing(code))).toBe(true);
+        // A member's own stat that cannot be read is not hidden: the leader here is the member asked about.
+        const unreadable = (): string => {
+          throw Object.assign(new Error("EIO"), { code: "EIO" });
+        };
+        expect(() => groupRunning(pid, unreadable)).toThrow("EIO");
+      } finally {
+        process.kill(-pid, "SIGKILL");
+      }
+    },
+  );
 
   it("a step finishing what its person did is never stopped halfway: a newer attempt is answered with it", async () => {
     const atWork = await waitingStep("add:slack:dev:/b", { status: "working", finishing: true });
