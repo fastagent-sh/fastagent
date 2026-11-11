@@ -168,14 +168,18 @@ Not measured, and the design must not assume:
    maximum of 2048 with no unit. Every request with up to 9,000 characters in two entries passed the per-entry checks
    and stopped at the next one (the image check of a runtime that does not exist), so the total was never reached.
    Measuring it needs a runtime that can be created, that is an image in a repository, which is what the deploy itself
-   builds; the first real deploy of this design measures it. Until then the pre-flight refuses a configuration over
-   **2048** characters, the lower of the two documented figures, and says that the limit is conservative.
+   builds; the first real deploy of this design measures it. Until then the pre-flight takes **4096** characters as the
+   limit of the whole set of variables (AWS's quota says 4 KB, and 2048 is the other documented figure), and says that
+   the limit is not measured. It counts the set, not the configuration alone: the template already sets six or seven
+   variables of its own (about 250 characters), and the design adds `FASTAGENT_NAME`, `FASTAGENT_RELEASE_ID` and
+   `FASTAGENT_CONFIG_JSON`, so the configuration's room is 4096 less what the others take, which the pre-flight
+   computes and names when it refuses.
 2. **Railway's config file** does not carry variables, and one search summary says config-as-code is deprecated for
    new services; not verified.
 
 Consequence for the delivery (§5): the configuration is one variable, which fits Railway up to 32768 characters and
-AgentCore up to 5000 (and 2048 until its total is known). A configuration over a host's limit is refused by the
-pre-flight naming the limit; none of the hosts needs the file split across variables yet.
+AgentCore up to 5000 for one variable and, with the rest of the set, 4096 in all (until its total is measured). A
+configuration over a host's limit is refused by the pre-flight naming the limit; none of the hosts needs the file split across variables yet.
 
 ## 8. Migration
 
