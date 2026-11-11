@@ -37,7 +37,7 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   channels: [],
   intoLinked: false,
   forAgent: "fastagent deploy railway ../bot --into-linked --run --json",
-  deliverPublicUrl: async (url) => url,
+  delivery: (url) => ({ variables: { FASTAGENT_NAME: "bot", FASTAGENT_CONFIG_JSON: "{}" }, publicUrl: url }),
   ...over,
 });
 
@@ -81,9 +81,12 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     const out = await run(
       plan({
         channels: declaredChannels(["telegram"]),
-        deliverPublicUrl: async (url) => {
+        delivery: (url) => {
           delivered.push({ url, before: cmds() });
-          return url;
+          return {
+            variables: { FASTAGENT_NAME: "bot", FASTAGENT_CONFIG_JSON: `{"http":{"publicUrl":"${url}"}}` },
+            publicUrl: url,
+          };
         },
       }),
       railway,
@@ -91,7 +94,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     );
 
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
-    // Delivered before the upload builds the image that reads it.
+    // Delivered before the upload, as service variables: the box reads them when it starts.
     expect(delivered).toEqual([
       { url: "https://bot-production.up.railway.app", before: expect.not.arrayContaining(["up --ci --service bot"]) },
     ]);
@@ -104,8 +107,10 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "volume list --json",
       "volume add --mount-path /data",
       "volume list --json", // attached to `bot` and Ready before the deploy that needs it
-      // The domain before the upload, so the image delivers it as its http.publicUrl.
+      // The domain before the upload, so the box is given it as its http.publicUrl.
       "domain --json --service bot",
+      // `railway up` follows, so the variables alone would only be a second deploy.
+      'variables set FASTAGENT_NAME=bot FASTAGENT_CONFIG_JSON={"http":{"publicUrl":"https://bot-production.up.railway.app"}} --skip-deploys --service bot',
       "up --ci --service bot", // bare `domain` only — NOT `domain list` (destructive on older CLIs)
     ]);
     expect(tg).toHaveBeenCalledWith("https://bot-production.up.railway.app");
@@ -456,6 +461,39 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     });
     const out = await run(plan(), railway);
     expect(out).toEqual({ ok: false, gate: expect.stringMatching(/workspace/) });
+  });
+
+  it("gate: the instance's variables not set stops before the upload that would build without them", async () => {
+    const { railway, cmds } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      // The state variables are set earlier by a call of the same shape: only the delivered ones are refused.
+      if (a[0] === "variables" && a.includes("--skip-deploys")) return { code: 1 };
+      return {};
+    });
+    const out = await run(plan(), railway);
+    expect(out).toEqual({ ok: false, gate: expect.stringMatching(/`railway variables set` failed/) });
+    expect(cmds().some((c) => c.startsWith("up "))).toBe(false);
+  });
+
+  it("gate: a configuration the public URL tips over the variable limit stops before the variables are set", async () => {
+    const { railway, cmds } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const out = await run(
+      plan({ delivery: (url) => ({ variables: { FASTAGENT_CONFIG_JSON: "x".repeat(32769) }, publicUrl: url }) }),
+      railway,
+    );
+    expect(out).toEqual({
+      ok: false,
+      gate: expect.stringMatching(
+        /FASTAGENT_CONFIG_JSON is 32769 characters with the public URL .* a Railway variable holds at most 32768/,
+      ),
+    });
+    expect(cmds().some((c) => c.startsWith("variables set FASTAGENT_CONFIG_JSON"))).toBe(false);
+    expect(cmds().some((c) => c.startsWith("up "))).toBe(false);
   });
 
   it("gate: `railway add --service` failure gives PRECISE recovery (project made, service not)", async () => {

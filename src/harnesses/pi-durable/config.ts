@@ -27,7 +27,12 @@ import { instanceContent } from "../../content/file.ts";
 import { type McpServerDeclaration, checkInstanceServers } from "../../mcp/config.ts";
 import { checkInstanceName } from "../../instance-name.ts";
 import { modelRefOf } from "../../model-ref.ts";
-import { INSTANCE_CONFIG_ENV, INSTANCE_CONFIG_FILE, resolveOverridePath } from "../../paths.ts";
+import {
+  INSTANCE_CONFIG_ENV,
+  INSTANCE_CONFIG_FILE,
+  INSTANCE_CONFIG_JSON_ENV,
+  resolveOverridePath,
+} from "../../paths.ts";
 import type { AgentConfig, AgentDefaults, Ingress } from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
 
@@ -277,12 +282,34 @@ export async function readInstanceConfigFile(path: string): Promise<InstanceConf
   }
 }
 
-/** The configuration `FASTAGENT_CONFIG` names, when it names one. */
+/**
+ * The configuration the environment names, when it names one: the file `FASTAGENT_CONFIG` names, or the JSON itself in
+ * `FASTAGENT_CONFIG_JSON`, which a deploy sets on a box that has no file for it. Naming both is refused: which one
+ * counted would be a guess.
+ */
 export async function namedInstanceConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<InstanceConfigSource | undefined> {
   const path = resolveOverridePath(env[INSTANCE_CONFIG_ENV]);
+  const json = env[INSTANCE_CONFIG_JSON_ENV];
+  if (path !== undefined && json) {
+    throw new Error(`${INSTANCE_CONFIG_ENV} and ${INSTANCE_CONFIG_JSON_ENV} are both set: name the configuration once`);
+  }
+  if (json) return { values: parseConfigJson(json), label: INSTANCE_CONFIG_JSON_ENV };
   return path === undefined ? undefined : readInstanceConfigFile(path);
+}
+
+/** The configuration as `inspectMcp` and `signInMcp` take it: the file's path when it is one, else the values. */
+export function mcpConfigOf(source: InstanceConfigSource): string | Record<string, unknown> {
+  return source.directory === undefined ? (source.values as Record<string, unknown>) : source.label;
+}
+
+function parseConfigJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${INSTANCE_CONFIG_JSON_ENV} is not JSON: ${(error as Error).message}`, { cause: error });
+  }
 }
 
 /** The instance configuration `dev` runs a project with: the one named by `--config` or `FASTAGENT_CONFIG`, else the project's own. */

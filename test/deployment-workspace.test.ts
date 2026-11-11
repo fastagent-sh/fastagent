@@ -6,11 +6,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  applyReleaseEnv,
   claimDeploymentStorage,
   assertStorageMounted,
   leaseDeployment,
   parseDeploymentRelease,
+  releaseFromEnv,
   type DeploymentRelease,
 } from "../src/deploy/workspace.ts";
 
@@ -125,7 +125,7 @@ describe("deployed storage", () => {
     );
     await writeFile(join(root, ".deployment/applied.json"), "broken");
     await expect(claimDeploymentStorage(root, release("two"))).rejects.toThrow();
-    // The manifest's agent name is one path segment.
+    // The record's agent name is one path segment.
     expect(() => parseDeploymentRelease(JSON.stringify({ ...release("one"), agent: "../outside" }))).toThrow();
   });
 });
@@ -137,53 +137,45 @@ describe("storage boundary", () => {
   });
 });
 
-describe("applyReleaseEnv: the receiving half of the model chain", () => {
-  // The deploy side decides the model; this is what makes it reach the process. It runs BEFORE the workspace's
-  // own `.env` is read, so whatever it sets outranks a FASTAGENT_MODEL edited on the box.
-  const withModel = (model?: string): DeploymentRelease => ({
-    version: 1,
-    id: "r1",
-    agent: "fastagent",
-    ...(model ? { model } : {}),
+describe("releaseFromEnv: what a deploy set on the box", () => {
+  it("reads the release id and the instance's name", () => {
+    expect(releaseFromEnv({ FASTAGENT_RELEASE_ID: "abc123", FASTAGENT_NAME: "reviewer" } as NodeJS.ProcessEnv)).toEqual(
+      { version: 1, id: "abc123", agent: "reviewer" },
+    );
   });
 
-  it("projects the release's model when the environment declares none", () => {
-    const env = {} as NodeJS.ProcessEnv;
-    applyReleaseEnv(withModel("p/m"), env);
-    expect(env.FASTAGENT_MODEL).toBe("p/m");
+  it("refuses a box that has no name, which would leave its storage with no owner", () => {
+    expect(() => releaseFromEnv({ FASTAGENT_RELEASE_ID: "abc123" } as NodeJS.ProcessEnv)).toThrow(
+      "FASTAGENT_NAME is required for a deployment",
+    );
   });
 
-  it("never overwrites a platform-set variable — the deployment declares only the half of the environment it can", () => {
-    const env = { FASTAGENT_MODEL: "platform/one" } as NodeJS.ProcessEnv;
-    applyReleaseEnv(withModel("p/m"), env);
-    expect(env.FASTAGENT_MODEL).toBe("platform/one");
+  it("refuses a name that is not one path segment", () => {
+    expect(() =>
+      releaseFromEnv({ FASTAGENT_RELEASE_ID: "abc123", FASTAGENT_NAME: "../outside" } as NodeJS.ProcessEnv),
+    ).toThrow("invalid deployment release record");
   });
+});
 
-  it("is a no-op when the release names no model", () => {
-    const env = {} as NodeJS.ProcessEnv;
-    applyReleaseEnv(withModel(), env);
-    expect(env.FASTAGENT_MODEL).toBeUndefined();
-  });
-
-  it("reports the source that actually won, because the remedies differ", async () => {
-    const { log } = await import("../src/log.ts");
-    const info = vi.spyOn(log, "info").mockImplementation(() => {});
+describe("start on a deployed box that lost the variables a deploy sets", () => {
+  it("refuses to start, and a local start takes no storage", async () => {
+    const { prepareStartWorkspace } = await import("../src/cli/commands/start.ts");
+    const { root } = await fixture();
+    vi.stubEnv("FASTAGENT_ROOT", root);
     try {
-      applyReleaseEnv(withModel("p/m"), {} as NodeJS.ProcessEnv);
-      expect(info.mock.calls.flat().join(" ")).toMatch(/the release manifest \(redeploy to change it\)/);
-
-      info.mockClear();
-      applyReleaseEnv(withModel("p/m"), { FASTAGENT_MODEL: "platform/one" } as NodeJS.ProcessEnv);
-      expect(info.mock.calls.flat().join(" ")).toMatch(/outranks the release manifest/);
-
-      // A redeploy would not change a value no release ever declared, so that half is dropped.
-      info.mockClear();
-      applyReleaseEnv(withModel(), { FASTAGENT_MODEL: "platform/one" } as NodeJS.ProcessEnv);
-      const said = info.mock.calls.flat().join(" ");
-      expect(said).toMatch(/already set in this environment/);
-      expect(said).not.toMatch(/outranks the release manifest/);
+      // The image says it is a deployment; the platform's variables are gone. Running on regardless would start a
+      // local-looking instance on a disk with no mount check, no lease and no owner.
+      vi.stubEnv("FASTAGENT_DEPLOYED", "1");
+      vi.stubEnv("FASTAGENT_RELEASE_ID", "");
+      vi.stubEnv("FASTAGENT_NAME", "");
+      await expect(prepareStartWorkspace("/app")).rejects.toThrow("FASTAGENT_RELEASE_ID is required for a deployment");
+      vi.stubEnv("FASTAGENT_RELEASE_ID", "abc123");
+      await expect(prepareStartWorkspace("/app")).rejects.toThrow("FASTAGENT_NAME is required for a deployment");
+      // Not deployed: nothing is taken, nothing is required.
+      vi.stubEnv("FASTAGENT_DEPLOYED", "");
+      await expect(prepareStartWorkspace("/app")).resolves.toBe("/app");
     } finally {
-      info.mockRestore();
+      vi.unstubAllEnvs();
     }
   });
 });

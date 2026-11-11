@@ -104,9 +104,9 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (!pre.ok) return;
     const source = ".secrets/.env"; // as READ, relative to the agent directory
     expect(pre.messages).toContainEqual({ level: "note", text: `model openai/gpt-4o-mini (source: ${source})` });
-    // It travels BAKED into the image, not as a host variable: an image cannot interpolate the operator's shell,
-    // and it is not a credential, so it stays out of the secret channel and every runbook's required list.
-    expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
+    // It travels as the delivered configuration's `model`, rewritten whole by every deploy: it is not a credential, so
+    // it stays out of the secret channel and every runbook's required list.
+    expect(JSON.parse(pre.container.config)).toEqual({ model: "openai/gpt-4o-mini" });
     expect(pre.declaredSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
   });
 
@@ -125,20 +125,19 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(carried.messages.filter(({ text }) => /is in pi's published catalog/.test(text))).toEqual([]);
   });
 
-  it("a config model bakes nothing extra — the config is already in the image", async () => {
+  it("a config model adds nothing to the delivered configuration — the program's defaults are in the image", async () => {
     const pre = await call(await agent(), { model: "openai/gpt-4o-mini" }, { run: true });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
     expect(pre.messages).toContainEqual({ level: "note", text: "model openai/gpt-4o-mini (source: fastagent.config)" });
-    expect(pre.container.modelSpec).toBeUndefined();
+    expect(JSON.parse(pre.container.config)).toEqual({});
   });
 
   it("gates a model that is not a spec — in EITHER source — but accepts a multi-segment modelId", async () => {
     // A provider-less spec resolves to nothing on the box, so letting it past this point ships the crash-loop the
     // gate exists to stop. `config.model` was the half that used to go unchecked. A `/` inside the modelId is not a
     // typo: 795 of pi's 1354 built-in specs look like `baseten/zai-org/GLM-5.3`, and resolution splits on the first
-    // slash. Gated with or without `--run` — the manifest validates the spec on the way out, so there is no artifact
-    // to produce either.
+    // slash. Gated with or without `--run`: a spec the box cannot resolve is a crash loop no artifact can say otherwise.
     const dir = await agent();
     for (const bad of ["openai/gpt-4o mini", "gpt-4o"]) {
       await writeFile(join(dir, ".secrets", ".env"), `FASTAGENT_MODEL=${bad}\n`);
@@ -153,53 +152,53 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=baseten/zai-org/GLM-5.3\n");
     const pre = await call(dir, {}, { run: true });
-    expect(pre.ok && pre.container.modelSpec).toBe("baseten/zai-org/GLM-5.3");
+    expect(pre.ok && JSON.parse(pre.container.config).model).toBe("baseten/zai-org/GLM-5.3");
   });
 
-  it("gates a Dockerfile that cannot read the manifest — by the INSTRUCTION, not by who wrote the file", async () => {
-    // `prepareStartWorkspace` returns early without FASTAGENT_RELEASE_FILE, so a model living only in the value
-    // file would be reported here and missing on the box. The question is whether that ENV is set, not whether we
-    // generated the file: a hand-written Dockerfile that sets it works, and must not be refused.
-    const dir = await agent({ Dockerfile: "FROM node:22-slim\n" });
-    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
-    const gated = await call(dir, {}, { run: true });
-    expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/does not set FASTAGENT_RELEASE_FILE/);
-
-    // So does a configuration the release delivers beside the manifest, whatever the model's source.
-    await writeFile(join(dir, ".secrets", ".env"), "");
+  it("lays the value file's model over the delivered configuration's own, as the variable outranks the file everywhere", async () => {
+    const dir = await agent();
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4.1\n");
     const delivered = {
-      source: { values: { thinkingLevel: "high" }, label: "/elsewhere/fastagent.json", directory: "/elsewhere" },
-      text: '{"thinkingLevel":"high"}',
+      source: { values: { model: "openai/from-config", thinkingLevel: "high", $schema: "x" }, label: "/e/f.json" },
     };
-    const withConfig = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true, delivered });
-    expect(withConfig).toMatchObject({
+    const pre = await call(dir, { model: "openai/from-config" }, { run: true, delivered });
+    // One line, without the `$schema` an editor wants and the box does not.
+    if (!pre.ok) throw new Error(pre.gate);
+    expect(JSON.parse(pre.container.config)).toEqual({ model: "openai/gpt-4.1", thinkingLevel: "high" });
+    expect(pre.container.config).not.toMatch(/\s|schema/);
+  });
+
+  it("refuses text of this machine in the delivered configuration: a deployment's text is the program's", async () => {
+    const dir = await agent();
+    const delivered = { source: { values: { skills: ["./extra"] }, label: "/e/f.json", directory: "/e" } };
+    const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true, delivered });
+    expect(gated).toMatchObject({
       ok: false,
-      gate: expect.stringMatching(/does not set FASTAGENT_CONFIG, and --config delivers/),
+      gate: expect.stringMatching(
+        /^\/e\/f\.json: skills name text of this machine, and a deployment's text is the program's/,
+      ),
     });
-    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+  });
 
-    // `--force` does not rescue it: writeArtifacts keeps a file it did not generate whatever the flag says.
-    expect((await call(dir, {}, { run: true, force: true })).ok).toBe(false);
-
-    // Generate-only warns instead of refusing.
-    const planned = await call(dir, {});
-    expect(planned.ok && planned.messages.some((m) => /FASTAGENT_RELEASE_FILE/.test(m.text))).toBe(true);
-
-    // A hand-written Dockerfile that DOES set it is fine — the manifest is read whoever wrote the file. Including
-    // the ordinary multi-variable spelling: reading only the first name after `ENV` false-gates a working file.
-    for (const env of [
-      "ENV FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
-      "ENV FASTAGENT_ROOT=/data FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
-    ]) {
+  it("asks a kept Dockerfile for the deployed mark, and nothing about the instance: its configuration and name are variables on the host", async () => {
+    // Without the mark `start` takes no storage: a box that lost it runs as a local instance on a disk that is gone at
+    // the next restart. The INSTRUCTION is the question, not who wrote the file, and `--force` does not rescue it.
+    const unmarked = await agent({ Dockerfile: "FROM node:22-slim\n" });
+    await writeFile(join(unmarked, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+    const delivered = { source: { values: { thinkingLevel: "high" }, label: "/elsewhere/fastagent.json" } };
+    const gated = await call(unmarked, {}, { run: true, delivered });
+    expect(gated).toMatchObject({ ok: false, gate: expect.stringMatching(/does not set FASTAGENT_DEPLOYED/) });
+    expect((await call(unmarked, {}, { run: true, force: true })).ok).toBe(false);
+    const planned = await call(unmarked, {});
+    expect(planned.ok && planned.messages.some((m) => /does not set FASTAGENT_DEPLOYED/.test(m.text))).toBe(true);
+    // The ordinary multi-variable spelling is fine: reading only the first name after `ENV` would false-gate it.
+    for (const env of ["ENV FASTAGENT_DEPLOYED=1", "ENV FASTAGENT_ROOT=/data FASTAGENT_DEPLOYED=1"]) {
       const own = await agent({ Dockerfile: `FROM node:22-slim\n${env}\n` });
       await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
-      expect((await call(own, {}, { run: true })).ok).toBe(true);
+      const pre = await call(own, {}, { run: true, delivered });
+      expect(pre.ok).toBe(true);
+      if (pre.ok) expect(JSON.stringify(pre.messages)).not.toMatch(/FASTAGENT_CONFIG|FASTAGENT_RELEASE/);
     }
-
-    // And a config model needs no manifest at all.
-    const fromConfig = await agent({ Dockerfile: "FROM node:22-slim\n" });
-    expect((await call(fromConfig, { model: "openai/gpt-4o-mini" }, { run: true })).ok).toBe(true);
   });
 
   it("container facts come from the AGENT DIR; git auto-baked when it ships .git", async () => {
@@ -394,7 +393,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       }),
     );
     const delivered = await readInstanceConfigFile(config);
-    const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: { source: delivered, text: "{}" } });
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered: { source: delivered } });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
     expect(pre.declaredSecrets).toContainEqual(
@@ -409,11 +408,11 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const delivering = async (dir: string, mcpServers: unknown) => {
       const config = join(dir, "..", `mcp-${basename(dir)}.json`);
       await writeFile(config, JSON.stringify({ mcpServers }));
-      return { source: await readInstanceConfigFile(config), text: "{}", config };
+      return { source: await readInstanceConfigFile(config), config };
     };
     const said = (pre: Awaited<ReturnType<typeof call>>) => (pre.ok ? pre.messages : []);
 
-    it("warns of a literal credential in the program's servers and in the delivered configuration's, never refusing", async () => {
+    it("warns of a literal credential in the program's servers, and refuses one in the delivered configuration's", async () => {
       const dir = await agent({
         "context.json": JSON.stringify({
           mcpServers: {
@@ -424,16 +423,26 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       const delivered = await delivering(dir, {
         notes: { command: "node", env: { NOTES_TOKEN: "ghp_x", OK: "$" + "{OK_VALUE}" } },
       });
-      const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered, run: true });
-      expect(pre.ok).toBe(true);
-      const literals = said(pre).filter((m) => m.text.includes("is a literal value"));
+      // Generate-only says both, as warnings.
+      const planned = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered });
+      expect(planned.ok).toBe(true);
+      const literals = said(planned).filter((m) => m.text.includes("is a literal value"));
       expect(literals.map((m) => m.level)).toEqual(["warn", "warn"]);
       expect(literals[0]?.text).toMatch(
         /^context\.json mcpServers\.docs\.headers\.Authorization is a literal value, and this deploy puts it in the image: replace the secret in it with \$\{AUTHORIZATION\} \(a scheme stays: `Bearer \$\{AUTHORIZATION\}`\)/,
       );
       expect(literals[1]?.text).toContain(`${delivered.config} mcpServers.notes.env.NOTES_TOKEN is a literal value`);
+      expect(literals[1]?.text).toContain("manifest meant to be committed");
       expect(literals[1]?.text).toContain("write ${NOTES_TOKEN}");
       expect(literals[1]?.text).toContain("fastagent secrets set <host> <NAME>");
+
+      // A deploy that runs stops at the delivered one only: the program's is in the image, as its code is, while this
+      // one is written into a manifest meant to be committed and shown on the platform.
+      const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { delivered, run: true });
+      expect(gated.ok).toBe(false);
+      if (!gated.ok) expect(gated.gate).toContain("mcpServers.notes.env.NOTES_TOKEN is a literal value");
+      const programOnly = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+      expect(programOnly.ok).toBe(true);
     });
 
     it("refuses a relative stdio command in the delivered configuration, which nothing delivers, and allows the others", async () => {
@@ -573,7 +582,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const configDir = await mkdtemp(join(tmpdir(), "fa-preflight-config-"));
     const deliver = (values: object): NonNullable<Parameters<typeof preflightDeploy>[0]["delivered"]> => ({
       source: { values, label: join(configDir, "fastagent.json"), directory: configDir },
-      text: `${JSON.stringify(values, null, 2)}\n`,
     });
 
     const plain = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
@@ -584,7 +592,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         "<file> to deliver one",
     );
     expect(JSON.stringify(plain.messages)).not.toMatch(/works on app/);
-    expect(plain.container.config).toBeUndefined();
+    expect(plain.container.config).toBe("{}");
 
     const repository = deliver({ settings: {}, content: { extra: { github: "acme/extra" } } });
     const delivered = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true, delivered: repository });
@@ -596,7 +604,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         "works on extra: github acme/extra, cloned on the host, and brought up to date in place at each start",
       ]),
     );
-    expect(delivered.container.config).toBe(repository.text);
+    expect(delivered.container.config).toBe(JSON.stringify(repository.source.values));
     expect(delivered.messages.map((m) => m.text)).toContain(
       `fastagent.json is the development instance's configuration and a deploy does not carry it; it carries ${join(configDir, "fastagent.json")}`,
     );
@@ -961,7 +969,7 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     expect(current.ok && current.messages.some((m) => /node:sqlite/.test(m.text))).toBe(false);
     // A hand-written Dockerfile names its own base, so the pin says nothing about the image.
     const ownImage = await pinned("1.3.13");
-    await writeFile(join(ownImage, "Dockerfile"), "FROM oven/bun:1.4\nENV FASTAGENT_RELEASE_FILE=/app/x\n");
+    await writeFile(join(ownImage, "Dockerfile"), "FROM oven/bun:1.4\nENV FASTAGENT_DEPLOYED=1\n");
     const kept = await call(ownImage, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(kept.ok ? kept.messages.filter((m) => /node:sqlite/.test(m.text)) : kept.gate).toEqual([]);
   });

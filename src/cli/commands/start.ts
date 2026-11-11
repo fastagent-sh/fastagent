@@ -1,9 +1,8 @@
 /** Production serving. */
 import { join, resolve } from "node:path";
 import type { Agent } from "../../agent-api.ts";
-import { readFile } from "node:fs/promises";
 import { applyRuntimeSecrets } from "../../deploy/agentcore/runtime-secrets.ts";
-import { applyReleaseEnv, parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
+import { prepareDeployment, releaseFromEnv } from "../../deploy/workspace.ts";
 import {
   selectAgentEnvironment,
   resolveSecretsDir,
@@ -76,18 +75,16 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 }
 
 /**
- * Stage one — TAKE the storage, on a deployed box (a release manifest names it): it is mounted, held by this process,
+ * Stage one — TAKE the storage, on a deployed box (a release id names it): it is mounted, held by this process,
  * and this agent's; it becomes the instance's root, and the machinery points at it. The program stays where the image
  * built it, `dirArg`. Returns that directory. Elsewhere, nothing is taken.
  */
 export async function prepareStartWorkspace(dirArg: string): Promise<string> {
-  const manifestPath = process.env.FASTAGENT_RELEASE_FILE;
-  if (!manifestPath) return dirArg;
+  if (!isDeployedWorkspace()) return dirArg;
   const storage = process.env[INSTANCE_ROOT_ENV];
   if (!storage) throw new Error(`${INSTANCE_ROOT_ENV} is required for a deployment`);
   const root = resolve(storage);
-  const manifest = parseDeploymentRelease(await readFile(manifestPath, "utf8"));
-  await prepareDeployment(root, manifest);
+  await prepareDeployment(root, releaseFromEnv());
   process.env[INSTANCE_ROOT_ENV] = root;
   // Defaults, not overrides: an operator who pointed a directory somewhere else meant it, and silently relocating
   // their state is the one failure they could not diagnose from the logs.
@@ -96,10 +93,6 @@ export async function prepareStartWorkspace(dirArg: string): Promise<string> {
   // mise's data directory, on the storage rather than the container's disk. The image's packages are in mise's system
   // directory, which mise reads as well, so a start installs nothing there.
   process.env.MISE_DATA_DIR ||= join(process.env.FASTAGENT_STATE_DIR, "mise");
-  // The release's own declarations, projected into the environment it was resolved FOR. This must stay BEFORE
-  // `enterAgentEnv` reads the agent's `.env`, which is what makes either source outrank a value edited on the
-  // box (applyReleaseEnv's own tests pin the precedence).
-  applyReleaseEnv(manifest);
   return dirArg;
 }
 

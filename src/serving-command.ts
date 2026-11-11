@@ -19,7 +19,7 @@ export function servedByDev(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * Who runs an instance, as an open is told: `dev` serves it, a deployed box (the release manifest's variable) runs it,
+ * Who runs an instance, as an open is told: `dev` serves it, a deployed box (the release id a deploy sets) runs it,
  * on AgentCore. The CLI reads its own process's variables for these (`runsAsIn`); an app's instance is none of them.
  */
 export interface RunsAs {

@@ -251,7 +251,8 @@ const start: CommandSpec = {
     "            the agent's storage (agent.sqlite), channels, schedules; use a\n" +
     "            mounted volume so a redeploy never wipes it\n" +
     "  workdir:  --workdir > FASTAGENT_WORKDIR > --root > <agent dir>\n" +
-    "  config:   --config > FASTAGENT_CONFIG > none (never fastagent.json)\n" +
+    "  config:   --config > FASTAGENT_CONFIG or FASTAGENT_CONFIG_JSON (its JSON;\n" +
+    "            not both) > none (never fastagent.json)\n" +
     "  secrets:  --env-file > FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production\n" +
     "            .env + auth.json\n" +
     "  content:  <workdir>/content/<name> — a clone of github content; a\n" +

@@ -67,16 +67,17 @@ describe("cli: deploy docker", () => {
     // Keep the marker (it is still ours), change the content: drifted, not disowned.
     await writeFile(compose, `${await readFile(compose, "utf8")}# drifted\n`);
 
-    const release = join(dir, ".fastagent/deploy", "fastagent.release.json");
-    const before = await readFile(release, "utf8");
+    // Build output every deploy writes: a mark left in it shows whether this one wrote anything.
+    const output = join(dir, ".fastagent/deploy", "fastagent.packages");
+    await writeFile(output, "left by an earlier deploy\n");
 
     const gated = await runInProcess(["deploy", "docker", dir, "--run"]);
     expect(gated.code).toBe(1);
     expect(gated.stderr).toContain(`deploy stopped: ${dockerComposeFile(await deploymentName(dir))} no longer match`);
     expect(gated.stderr).not.toMatch(/Docker CLI not found|Docker daemon/); // refused before any Docker work
-    // Refused before anything is on disk: the release manifest is rewritten unconditionally, so deciding after the
-    // writes would leave a release id that was never deployed, and print `wrote …` lines above `deploy stopped`.
-    expect(await readFile(release, "utf8")).toBe(before);
+    // Refused before anything is on disk: build output is rewritten unconditionally, so deciding after the writes
+    // would print `wrote …` lines above `deploy stopped`.
+    expect(await readFile(output, "utf8")).toBe("left by an earlier deploy\n");
     expect(gated.stderr).not.toMatch(/wrote /);
   });
 

@@ -13,6 +13,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
 import type { SecretStore } from "../secret-store.ts";
 import { hostSignedOutGate } from "../secrets.ts";
+import { RAILWAY_VARIABLE_LIMIT } from "./plan.ts";
 import { ensureRailwayService, railwayStore } from "./store.ts";
 
 export interface RailwayRunPlan {
@@ -47,11 +48,10 @@ export interface RailwayRunPlan {
   /** The command a coding agent runs to deploy this, its person's steps handed to its user (`--run --json`). */
   forAgent: string;
   /**
-   * Put the service's domain into the configuration the image delivers (`http.publicUrl`), before `railway up` uploads
-   * it, so the box points its own channels there. Resolves the URL the configuration then names, the operator's own
-   * when it had one.
+   * The variables that vary per instance, with the service's domain in the configuration (`http.publicUrl`) so the box
+   * points its own channels there, and the URL the configuration then names: the operator's own when it had one.
    */
-  deliverPublicUrl: (url: string) => Promise<string>;
+  delivery: (url: string) => { variables: Record<string, string>; publicUrl: string };
 }
 
 /**
@@ -194,7 +194,21 @@ export async function deployRailwayRun(
   if (!url) {
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
   }
-  const publicUrl = await plan.deliverPublicUrl(url);
+  const { variables, publicUrl } = plan.delivery(url);
+  // The pre-flight counted the configuration before the domain was known; the URL it now names can tip it over.
+  const tooLong = Object.entries(variables).find(([, value]) => value.length > RAILWAY_VARIABLE_LIMIT);
+  if (tooLong !== undefined) {
+    return gate(
+      `${tooLong[0]} is ${tooLong[1].length} characters with the public URL ${publicUrl} in it, and a Railway ` +
+        `variable holds at most ${RAILWAY_VARIABLE_LIMIT}: shorten the configuration`,
+    );
+  }
+  log(`setting ${Object.keys(variables).join("/")}…`);
+  // `railway up` follows, so a deploy of the variables alone would only be a second one.
+  const delivered = Object.entries(variables).map(([name, value]) => `${name}=${value}`);
+  if ((await railway(["variables", "set", ...delivered, "--skip-deploys", ...svc])).code !== 0) {
+    return gate("`railway variables set` failed — see the railway output above");
+  }
 
   // 6. Deploy — CI mode streams build logs then exits (no interactive attach). Build runs on Railway.
   log("deploying (railway up)…");

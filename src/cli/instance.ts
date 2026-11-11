@@ -13,6 +13,7 @@ import { environmentConfig } from "../harnesses/pi-durable/environment-config.ts
 import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
 import {
   INSTANCE_CONFIG_ENV,
+  INSTANCE_CONFIG_JSON_ENV,
   INSTANCE_ROOT_ENV,
   INSTANCE_STATE_ENV,
   INSTANCE_WORKDIR_ENV,
@@ -174,6 +175,8 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
     const path = resolveOverridePath(given ?? process.env[variable]);
     if (path === undefined) continue;
     process.env[variable] = path;
+    // A flag beats every variable: the configuration the flag names is the one, not a guess between it and the JSON.
+    if (key === "config" && given !== undefined) delete process.env[INSTANCE_CONFIG_JSON_ENV];
     if (key === "root" || key === "workdir") makeDirectory(path, given === undefined ? variable : flag);
   }
   for (const [given, flag, variable] of [

@@ -196,17 +196,17 @@ export function mcpSecrets(declarations: readonly McpDeclaration[]): DeclaredSec
 /**
  * The header and environment values with no `${VAR}` in them: the format allows a literal credential, and where the
  * file travels (a build publishes it, a deploy bakes or delivers it) each is said. FastAgent cannot tell a secret from a
- * setting, so a caller warns and never refuses.
+ * setting, so what a caller does with one (warn, or refuse where it would be written into a committed file) is its own.
  */
 export function literalCredentials(
   declarations: readonly McpDeclaration[],
-): { file: string; server: string; field: "headers" | "env"; key: string }[] {
-  return declarations.flatMap(({ name, server, file }) => {
+): { file: string; server: string; field: "headers" | "env"; key: string; origin: McpDeclaration["origin"] }[] {
+  return declarations.flatMap(({ name, server, file, origin }) => {
     const [field, entries]: ["headers" | "env", Readonly<Record<string, string>>] =
       server.type === "http" ? ["headers", server.headers ?? {}] : ["env", server.env ?? {}];
     return Object.entries(entries)
       .filter(([, value]) => value !== "" && !value.includes("${"))
-      .map(([key]) => ({ file, server: name, field, key }));
+      .map(([key]) => ({ file, server: name, field, key, origin }));
   });
 }
 
