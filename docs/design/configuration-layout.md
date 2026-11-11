@@ -96,7 +96,7 @@ mechanism for non-secret values:
 | Docker | the instance's Compose file, `environment:` | a `$` in the text (an MCP server's `${VAR}`) is written `$$`, or Compose would expand it |
 | Fly | the instance's `fly.toml`, `[env]` | Fly documents `[env]` for non-sensitive values |
 | Railway | the service's variables in that environment, set with `railway variable set` | variables are not part of Railway's config file |
-| AgentCore | the template's `EnvironmentVariables` | AWS's quota is 4 KB in all with 50 entries, and the CloudFormation page lists a maximum of 2048 with no unit; to be measured (§7) |
+| AgentCore | the template's `EnvironmentVariables` | at most 50 entries, a key of at most 100 and a value of at most 5000 characters (measured, §7); the 4 KB total in AWS's quota is not measured |
 
 The box reads, in order: a flag, the individual variables (`FASTAGENT_MODEL`, `FASTAGENT_THINKING_LEVEL`,
 `FASTAGENT_HTTP_API`, `FASTAGENT_HTTP_PUBLIC_URL`, `FASTAGENT_INGRESS`), `FASTAGENT_CONFIG_JSON`, the program's
@@ -150,16 +150,32 @@ Decided:
 - **The release facts are variables**, not a file in the image (§5), because the manifest's random id would make every
   deploy, and every instance, a different image.
 
-## 7. Open
+## 7. Limits, measured and not
 
-These are decided by measuring or building, not by argument.
+Measured on 2026-11-11 against a real account (the checks created nothing that lasts: a temporary IAM role and a
+temporary Railway project, both deleted).
 
-1. **AgentCore's limit.** The API quota says 4 KB of environment variables in all, the CloudFormation page says
-   `Maximum: 2048` without a unit. The pre-flight needs the measured number for the whole set, not only the
-   configuration.
-2. **Railway's limits** for a variable's size, and whether `railway variable set` takes JSON with quotes as is. Its
-   config file does not carry variables; one search summary says config-as-code is deprecated for new services, which is
-   not verified.
+| Host | Measured | How |
+|---|---|---|
+| AgentCore, per entry | at most **50** entries, a key of at most **100** characters, a value of at most **5000** characters. The server refuses each with `Member must have length less than or equal to …` | `create-agent-runtime` with 51 entries, a 101-character key and a 5001-character value |
+| Railway, per variable | at most **32768** characters (`value exceeds maximum length of 32768`); 32768 characters are stored whole and read back identical. It counts characters, not bytes: 20000 two-byte characters (40000 bytes) were accepted | `railway variable set --stdin` at 1 KB, 8 KB, 32 KB, 32 KB + 1, 64 KB and 128 KB, read back with `variable list --json` |
+| Railway, total | **no limit seen**: 618 variables and about 245,000 characters in one service were stored | 500 small variables in one call, then five 32768-character values |
+| Railway, content | a JSON text with quotes and `${TOKEN}` is stored and read back byte for byte | one set, one read |
+
+Not measured, and the design must not assume:
+
+1. **AgentCore's total.** AWS's quota says 4 KB of environment variables in all, and the CloudFormation page lists a
+   maximum of 2048 with no unit. Every request with up to 9,000 characters in two entries passed the per-entry checks
+   and stopped at the next one (the image check of a runtime that does not exist), so the total was never reached.
+   Measuring it needs a runtime that can be created, that is an image in a repository, which is what the deploy itself
+   builds; the first real deploy of this design measures it. Until then the pre-flight refuses a configuration over
+   **2048** characters, the lower of the two documented figures, and says that the limit is conservative.
+2. **Railway's config file** does not carry variables, and one search summary says config-as-code is deprecated for
+   new services; not verified.
+
+Consequence for the delivery (§5): the configuration is one variable, which fits Railway up to 32768 characters and
+AgentCore up to 5000 (and 2048 until its total is known). A configuration over a host's limit is refused by the
+pre-flight naming the limit; none of the hosts needs the file split across variables yet.
 
 ## 8. Migration
 
