@@ -2865,6 +2865,57 @@ describe("a group's main timeline is a session per sender (Feishu)", () => {
     expect(Object.keys(JSON.parse(readFileSync(join(home, "sessions.json"), "utf8")))).toEqual(["feishu:oc_1"]);
   });
 
+  describe("a reply belongs to the session of the message it replies to", () => {
+    const owned = (home: string) =>
+      JSON.parse(readFileSync(join(home, "owners.json"), "utf8")) as Record<string, string>;
+    const sessionKeys = (home: string) =>
+      Object.keys(JSON.parse(readFileSync(join(home, "sessions.json"), "utf8"))).sort();
+
+    it("steers another sender's reply to an answer, or to the ask itself, into the session that holds it", async () => {
+      feishuFetch();
+      const { handler, home, idle } = buildChannel();
+      await flush();
+      await handler(feishuRequest(ask("om_alice", "alice's ask", "ou_alice")));
+      await idle();
+      const answerId = Object.keys(owned(home)).find((id) => id.startsWith("om_bot_"));
+      expect(answerId).toBeDefined();
+      expect(owned(home)).toMatchObject({ om_alice: "feishu:oc_1#ou_alice" });
+      await handler(feishuRequest(ask("om_bob", "and what time?", "ou_bob", { parentId: answerId })));
+      await handler(feishuRequest(ask("om_carol", "about her question", "ou_carol", { parentId: "om_alice" })));
+      await idle();
+      expect(sessionKeys(home)).toEqual(["feishu:oc_1#ou_alice"]);
+    });
+
+    it("leaves a reply to a message nothing names with its sender's own session", async () => {
+      feishuFetch();
+      const { handler, home, idle } = buildChannel();
+      await flush();
+      await handler(feishuRequest(ask("om_alice", "alice's ask", "ou_alice")));
+      await handler(feishuRequest(ask("om_bob", "a reply to chatter", "ou_bob", { parentId: "om_chatter" })));
+      await idle();
+      expect(sessionKeys(home)).toEqual(["feishu:oc_1#ou_alice", "feishu:oc_1#ou_bob"]);
+    });
+
+    it("keeps a stop a reply carries on its sender's own session", async () => {
+      feishuFetch();
+      const stopped: string[] = [];
+      const { handler, home, idle } = buildChannel({
+        stopped: (session) => {
+          stopped.push(session);
+          return { stopped: [] };
+        },
+      });
+      await flush();
+      await handler(feishuRequest(ask("om_alice", "alice's ask", "ou_alice")));
+      await handler(feishuRequest(ask("om_bob", "bob's ask", "ou_bob")));
+      await idle();
+      const sessions = JSON.parse(readFileSync(join(home, "sessions.json"), "utf8")) as Record<string, string>;
+      await handler(feishuRequest(ask("om_stop", "stop", "ou_bob", { parentId: "om_alice" })));
+      await idle();
+      expect(stopped).toEqual([sessions["feishu:oc_1#ou_bob"]]);
+    });
+  });
+
   it("starts a topic from what its asker said in the main timeline, not another sender's", async () => {
     feishuFetch();
     const { handler, protocol, home, idle } = buildChannel();

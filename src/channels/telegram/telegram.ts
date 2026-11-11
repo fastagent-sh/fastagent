@@ -34,6 +34,7 @@ import { dispatchStop } from "../kit/stop-command.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { type Target, callApi, sendMessage } from "./telegram-api.ts";
 import { createAskLog, readStart } from "../kit/ask-log.ts";
+import { createMessageOwners } from "../kit/message-owners.ts";
 import { isSenderConversation, senderConversation } from "../kit/sender-conversation.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { NO_ACK, createTurnRunner } from "../kit/turn-runner.ts";
@@ -129,6 +130,9 @@ function createTelegramRuntime(
     route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
 
   const buffer = createContextBuffer(join(stateHome, "buffers.json"));
+  // Whose a message is, so a reply to it reaches that conversation's session. A message id counts within its chat.
+  const owners = createMessageOwners({ label: "[telegram]", path: join(stateHome, "owners.json") });
+  const ownerKey = (chatId: number | string, messageId: number): string => `${chatId}:${messageId}`;
   // Where each conversation's session read to: a turn folds the buffer from the ask its session was last sent.
   const asks = createAskLog<number>({
     label: "[telegram]",
@@ -169,9 +173,11 @@ function createTelegramRuntime(
    * (a topic and a private chat have one session, which holds it), and never at the cost of the answer: it is already
    * in the chat, so a failed write is said and the turn goes on.
    */
-  const recordAnswer = (rec: PendingTurn, messageId: number | undefined, text: string): void => {
+  const recordAnswer = (rec: PendingTurn, messageIds: number[], text: string): void => {
     const place = telegramPlaceKey(rec.chatId, rec.threadId);
+    const [messageId] = messageIds;
     if (messageId === undefined || !isSenderConversation(place, rec.conversation)) return;
+    for (const id of messageIds) owners.record(ownerKey(rec.chatId, id), rec.conversation);
     // An answer is a preview that is edited into its text, so its message id is from when the answer began. Anyone
     // asked in the chat since has not read it, and their read starts strictly after their own ask: it stands at the
     // newest message of this chat the channel has taken, and sorts after it.
@@ -274,9 +280,14 @@ function createTelegramRuntime(
     }
     // A group's main timeline is one conversation per sender; a forum topic and a private chat are one per place.
     const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
-    const conversation =
-      r.conversation ??
-      (isGroup && m.message_thread_id === undefined ? senderConversation(placeKey, m.from?.id) : placeKey);
+    const mainTimeline = isGroup && m.message_thread_id === undefined;
+    const own = mainTimeline ? senderConversation(placeKey, m.from?.id) : placeKey;
+    // A reply to a message the table gives to a session belongs to that session, whoever replies.
+    const named =
+      mainTimeline && m.reply_to_message
+        ? owners.ownerOf(ownerKey(m.chat.id, m.reply_to_message.message_id))
+        : undefined;
+    const conversation = r.conversation ?? named ?? own;
     const chatId = r.chatId ?? m.chat.id;
     // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no reply-quote.
     const threadId = r.threadId ?? m.message_thread_id;
@@ -286,7 +297,7 @@ function createTelegramRuntime(
     // `abort` waits until what it stopped has ended, so the update is acknowledged first.
     if (telegramStop(update, { botUsername: mentionName, botId })) {
       sideTasks.track(
-        dispatchStop(agent, recordedSession(conversation), "[telegram]")
+        dispatchStop(agent, recordedSession(r.conversation ?? own), "[telegram]")
           .then((feedback) =>
             sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }),
           )
@@ -299,6 +310,7 @@ function createTelegramRuntime(
     const fileIds = extractFiles(m);
     if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
       asks.record(`${conversation}@${placeKey}`, { key: `${update.update_id}`, at: m.message_id });
+      if (isSenderConversation(placeKey, conversation)) owners.record(ownerKey(m.chat.id, m.message_id), conversation);
       // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
       runner.submit(
         {

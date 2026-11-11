@@ -25,7 +25,14 @@ import {
   toolLines,
 } from "../kit/preview-kit.ts";
 import { log } from "../../log.ts";
-import { TELEGRAM_MAX_TEXT, type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
+import {
+  TELEGRAM_MAX_TEXT,
+  type Target,
+  callApi,
+  editMessageText,
+  sendMessageChunks,
+  sendMessage,
+} from "./telegram-api.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
 export type TelegramFailure = ChannelFailure;
@@ -56,12 +63,12 @@ async function finalize(
   messageId: number | undefined,
   text: string,
   opts: { html?: boolean } = {},
-): Promise<number | undefined> {
+): Promise<number[]> {
   const html = opts.html ?? true;
   if (text.trim() === "") {
     if (messageId !== undefined)
       await callApi(api, botToken, "deleteMessage", { chat_id: target.chatId, message_id: messageId });
-    return undefined;
+    return [];
   }
   if (messageId !== undefined) {
     // "Fits in one message" is a plain length check against Telegram's limit — not chunkText, whose html
@@ -69,7 +76,7 @@ async function finalize(
     if (text.length <= TELEGRAM_MAX_TEXT) {
       try {
         await editMessageText(api, botToken, target, messageId, text, { html });
-        return messageId;
+        return [messageId];
       } catch {
         // Edit failed — the preview may be gone, or still there (429 retries exhausted / 5xx). Fall through
         // to delete + fresh send below so a still-present "Thinking…" is not left pinned above the answer.
@@ -79,19 +86,14 @@ async function finalize(
     // the answer is worse than the extra call), then send the whole reply as fresh, consecutive messages.
     await callApi(api, botToken, "deleteMessage", { chat_id: target.chatId, message_id: messageId }).catch(() => {});
   }
-  return sendMessage(api, botToken, target, text, { html });
+  return sendMessageChunks(api, botToken, target, text, { html });
 }
 
 /**
  * Deliver a reply this process did not generate: a recovered answer. The run that produced it is gone with its preview.
- * Resolves to the id of the message the answer starts in, which is where it stands in its chat.
+ * Resolves to the id of every message the answer is in, the first of which is where it stands in its chat.
  */
-export function deliverTelegramAnswer(
-  api: string,
-  botToken: string,
-  target: Target,
-  text: string,
-): Promise<number | undefined> {
+export function deliverTelegramAnswer(api: string, botToken: string, target: Target, text: string): Promise<number[]> {
   return finalize(api, botToken, target, undefined, text);
 }
 
@@ -107,8 +109,8 @@ export function telegramReply(
   target: Target,
   formatError: (failed: TelegramFailure) => string | undefined,
   onAnswered?: (answer: string) => void,
-  /** The answer is in the chat, starting in message `messageId`: where it stands there. */
-  onDelivered?: (messageId: number | undefined, text: string) => void,
+  /** The answer is in the chat, in messages `messageIds` (none when it said nothing); the first is where it stands. */
+  onDelivered?: (messageIds: number[], text: string) => void,
 ) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;

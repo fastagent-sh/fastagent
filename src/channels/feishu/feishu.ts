@@ -19,6 +19,7 @@ import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
 import { threadForkSource } from "../kit/thread-fork.ts";
 import { createAskLog, readStart } from "../kit/ask-log.ts";
+import { createMessageOwners } from "../kit/message-owners.ts";
 import { senderConversation } from "../kit/sender-conversation.ts";
 import type { PlaceMessage } from "../kit/place-history.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
@@ -292,6 +293,8 @@ function createFeishuRuntimeFactory(
       isPosition: isFeishuPosition,
       compare: compareFeishuPositions,
     });
+    // Whose a message is, so a reply to it reaches that conversation's session.
+    const owners = createMessageOwners({ label, path: join(stateHome, "owners.json") });
     const history = createFeishuPlaceHistory({
       api,
       appId,
@@ -316,7 +319,10 @@ function createFeishuRuntimeFactory(
     const placeApi = (turn: { historyKey?: string; conversation: string }): FeishuApi =>
       turn.historyKey === undefined
         ? api
-        : api.recordingSends((id) => history.recordOutput(turn.historyKey as string, turn.conversation, id));
+        : api.recordingSends((id) => {
+            history.recordOutput(turn.historyKey as string, turn.conversation, id);
+            owners.record(id, turn.conversation);
+          });
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
     const sideTasks = createTaskTracker(label);
     const targetOf = (r: PendingFeishuTurn): FeishuTarget => ({
@@ -494,7 +500,10 @@ function createFeishuRuntimeFactory(
       const routed = r.conversation;
       const mainTimeline = m.chat_type === "group" && m.thread_id === undefined;
       const sender = senderId(event.sender);
-      const conversation = routed ?? (mainTimeline ? senderConversation(placeKey(kind, m), sender) : placeKey(kind, m));
+      const own = mainTimeline ? senderConversation(placeKey(kind, m), sender) : placeKey(kind, m);
+      // A reply to a message the table gives to a session belongs to that session, whoever replies.
+      const named = mainTimeline && m.parent_id !== undefined ? owners.ownerOf(m.parent_id) : undefined;
+      const conversation = routed ?? named ?? own;
       // Lineage is recorded ONLY for the default place-derived conversation. A thread starts from what its asker said
       // in the main timeline: their own conversation there.
       const parentConversation =
@@ -525,7 +534,7 @@ function createFeishuRuntimeFactory(
         seen.add(m.message_id);
         stops.add(m.message_id);
         sideTasks.track(
-          dispatchStop(agent, recordedSession(conversation), label)
+          dispatchStop(agent, recordedSession(routed ?? own), label)
             .then((feedback) =>
               placeApi({ historyKey, conversation })
                 .sendText({ chatId, replyTo, replyInThread }, feedback)
@@ -545,8 +554,10 @@ function createFeishuRuntimeFactory(
       const baseText = r.text ?? cloudEnvelope(event, kind);
       if (baseText.trim() === "" && images.length === 0 && files.length === 0) return;
 
-      if (historyKey !== undefined)
+      if (historyKey !== undefined) {
         asks.record(conversation, { key: m.message_id, at: { at: askAt, id: m.message_id } });
+        owners.record(m.message_id, conversation);
+      }
       runner.submit(
         {
           id: m.message_id,

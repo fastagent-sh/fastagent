@@ -819,6 +819,93 @@ describe("inputs steered into one run (real Agent)", () => {
       expect(Object.keys(JSON.parse(readFileSync(join(state, "sessions.json"), "utf8")))).toEqual(["-100"]);
     });
 
+    describe("a reply belongs to the session of the message it replies to", () => {
+      /** Every message the bot sends gets the next id, from 101. */
+      const numberedSends = () => {
+        let next = 100;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string) => {
+            const method = String(url).split("/").pop();
+            if (method === "sendMessage") next += 1;
+            return Response.json({ ok: true, result: method === "sendMessage" ? { message_id: next } : {} });
+          }),
+        );
+      };
+      const sessionKeys = (state: string) =>
+        Object.keys(JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))).sort();
+      const replyTo = (id: number) => ({ reply_to_message: { message_id: id, chat: group } });
+
+      it("steers another sender's reply to an answer into the session that holds it", async () => {
+        numberedSends();
+        const state = freshStateDir();
+        const { agent } = replyingAgent("the answer");
+        const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go, stateDir: state });
+        await ch(tgRequest(said(10, "alice asks", 7)));
+        await flush();
+        await ch(tgRequest(said(20, "and what time?", 8, replyTo(101))));
+        await flush();
+        expect(sessionKeys(state)).toEqual(["-100#7"]);
+        expect((await agent.sessions.list()).data).toHaveLength(1);
+      });
+
+      it("reaches the session through any message of a long answer, and through the ask itself", async () => {
+        numberedSends();
+        const state = freshStateDir();
+        const { agent } = replyingAgent("x".repeat(5000));
+        const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go, stateDir: state });
+        await ch(tgRequest(said(10, "alice asks", 7)));
+        await flush();
+        // The preview was 101; its text became two messages, 102 and 103.
+        await ch(tgRequest(said(20, "about the end of it", 8, replyTo(103))));
+        await ch(tgRequest(said(21, "about her question", 9, replyTo(10))));
+        await flush();
+        expect(sessionKeys(state)).toEqual(["-100#7"]);
+      });
+
+      it("leaves a reply to a message nothing names with its sender's own session", async () => {
+        numberedSends();
+        const state = freshStateDir();
+        const { agent } = replyingAgent("ok");
+        const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go, stateDir: state });
+        await ch(tgRequest(said(10, "alice asks", 7)));
+        await flush();
+        await ch(tgRequest(said(20, "a reply to chatter", 8, replyTo(5))));
+        await flush();
+        expect(sessionKeys(state)).toEqual(["-100#7", "-100#8"]);
+      });
+
+      it("keeps a stop a reply carries on its sender's own session", async () => {
+        numberedSends();
+        const state = freshStateDir();
+        const stopped: string[] = [];
+        const { agent } = replyingAgent("ok");
+        const ch = telegramChannel(agent, {
+          secretToken: SECRET,
+          botToken: "1:A",
+          route: go,
+          stateDir: state,
+          stopped: (session) => {
+            stopped.push(session);
+            return { stopped: [] };
+          },
+        });
+        await ch(tgRequest(said(10, "alice asks", 7)));
+        await ch(tgRequest(said(11, "bob asks", 8)));
+        await flush();
+        const sessions = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8")) as Record<string, string>;
+        await ch(
+          tgRequest(
+            said(20, "/stop", 8, {
+              reply_to_message: { message_id: 101, chat: group, from: { id: 1, is_bot: true } },
+            }),
+          ),
+        );
+        await flush();
+        expect(stopped).toEqual([sessions["-100#8"]]);
+      });
+    });
+
     it("tells a sender an answer that was still being written when they asked, though it began before their ask", async () => {
       let next = 100;
       vi.stubGlobal(

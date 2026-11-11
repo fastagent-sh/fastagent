@@ -12,9 +12,10 @@ updated: 2026-11-10
 send is steered and a shared answer is delivered once ("Input reaches a running session by steering", "Answers,
 delivery and restart"), and a turn's read starts after the ask its session was last sent ("Where a turn's read starts",
 by `kit/ask-log.ts`; the table there holds asks, and the agent's own posts are still excluded per place). Session keys by
-sender (Telegram and Feishu groups' main timelines; the agent's own answers are excluded per conversation) are built; the
-reply-to-answer table, replies steered into the session they name and thread forks from it are not: current channel code
-and user guides describe them as shipped. This document proposes replacing [participant-model.md](participant-model.md)
+sender (Telegram and Feishu groups' main timelines; the agent's own answers are excluded per conversation) and replies
+steered into the session they name (`kit/message-owners.ts`, Telegram and Feishu main timelines) are built; thread forks
+from the session a reply chain names, and a thread with no source starting empty, are not: current channel code and user
+guides describe them as shipped. This document proposes replacing [participant-model.md](participant-model.md)
 Rule 3 and §6, and revising its thread-context and platform mappings. The participant axiom and the distinction between
 hearing and answering remain.
 
@@ -76,7 +77,10 @@ reply chain. Positions are read at ingress, where the channel already has them, 
 is added.
 
 - A reply to one of those messages belongs to that session, whoever sends it, and is steered into it. Carol replying to
-  Bob's answer ("what time?") reaches Bob's session, which holds the answer.
+  Bob's answer ("what time?") reaches Bob's session, which holds the answer. Built (`kit/message-owners.ts`, Telegram
+  and Feishu main timelines): the owner table is a bounded map from a platform message to its conversation (the
+  newest 1000 messages), written when an ask is accepted and for every message the agent posts for a turn, each chunk of
+  a long answer included. A `/stop` a reply carries stops its sender's own session, not the one replied to.
 - A new thread or topic forks from the session its reply chain names. When nothing in the table is named, it starts
   empty and reads the place.
 - An id that is not in the table (another bot's message, or one from before the agent joined) names nothing.

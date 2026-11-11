@@ -290,9 +290,20 @@ export async function sendMessage(
   body: string,
   opts: { html?: boolean } & CallOptions = {},
 ): Promise<number | undefined> {
+  return (await sendMessageChunks(api, botToken, t, body, opts))[0];
+}
+
+/** {@link sendMessage}, resolving to the id of every message the text was split into, in order. */
+export async function sendMessageChunks(
+  api: string,
+  botToken: string,
+  t: Target,
+  body: string,
+  opts: { html?: boolean } & CallOptions = {},
+): Promise<number[]> {
   let mode = opts.html ?? true;
   let chunks = chunkText(body, { html: mode });
-  let firstId: number | undefined;
+  const ids: number[] = [];
   let first = true;
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
@@ -319,10 +330,10 @@ export async function sendMessage(
       // A later chunk failed after the first parsed cleanly (rare) — best-effort plain resend of this chunk.
       result = await callApi(api, botToken, "sendMessage", base, opts);
     }
-    if (first) firstId = result.message_id;
+    if (result.message_id !== undefined) ids.push(result.message_id);
     first = false;
   }
-  return firstId;
+  return ids;
 }
 
 /**
