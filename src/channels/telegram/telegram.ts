@@ -9,7 +9,7 @@ import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
 import { telegramTurnStream } from "./invoke-turn.ts";
-import { type BufferEntry, collectAttachments, createContextBuffer } from "./context-buffer.ts";
+import { type BufferEntry, collectAttachments, createContextBuffer, ownPostEntry } from "./context-buffer.ts";
 import {
   type TelegramMessage,
   type TelegramRoute,
@@ -34,6 +34,7 @@ import { dispatchStop } from "../kit/stop-command.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { type Target, callApi, sendMessage } from "./telegram-api.ts";
 import { createAskLog, readStart } from "../kit/ask-log.ts";
+import { isSenderConversation, senderConversation } from "../kit/sender-conversation.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { NO_ACK, createTurnRunner } from "../kit/turn-runner.ts";
 import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
@@ -160,6 +161,27 @@ function createTelegramRuntime(
   // A message id counts only within its chat, and a custom route can send several chats to one conversation: asks are
   // kept per conversation and place, so a position is only ever compared with another of the same chat.
   const askedBy = (rec: PendingTurn): string => `${rec.conversation}@${rec.placeKey}`;
+  /** The newest message id of each place the channel has taken (a summons, or discussion it buffered). */
+  const newestTaken = new Map<string, number>();
+  /**
+   * An answer a sender's session holds, put where the chat's other senders' reads find it: Telegram never echoes a bot
+   * its own messages, so without this Bob's session would not know what Alice was told. Only in a group's main timeline
+   * (a topic and a private chat have one session, which holds it), and never at the cost of the answer: it is already
+   * in the chat, so a failed write is said and the turn goes on.
+   */
+  const recordAnswer = (rec: PendingTurn, messageId: number | undefined, text: string): void => {
+    const place = telegramPlaceKey(rec.chatId, rec.threadId);
+    if (messageId === undefined || !isSenderConversation(place, rec.conversation)) return;
+    // An answer is a preview that is edited into its text, so its message id is from when the answer began. Anyone
+    // asked in the chat since has not read it, and their read starts strictly after their own ask: it stands at the
+    // newest message of this chat the channel has taken, and sorts after it.
+    const at = Math.max(messageId, newestTaken.get(place) ?? 0);
+    try {
+      buffer.push(place, ownPostEntry(text, messageId, rec.conversation, at));
+    } catch (error) {
+      log.warn(`[telegram] an answer was not recorded into place ${place}: ${String(error)}`);
+    }
+  };
   const runner = createTurnRunner<PendingTurn, StoredTurn, BufferEntry>({
     label: "[telegram]",
     store,
@@ -167,7 +189,12 @@ function createTelegramRuntime(
       const until = rec.askedIn?.messageId;
       if (until === undefined) return { text: "", folded: [] };
       const start = await readStart(asks, "[telegram]", askedBy(rec), recordedSession(rec.conversation), until);
-      const fold = buffer.fold(rec.placeKey, { ...(start.after === undefined ? {} : { after: start.after }), until });
+      const fold = buffer.fold(rec.placeKey, {
+        ...(start.after === undefined ? {} : { after: start.after }),
+        until,
+        // What this conversation's own turns answered is in its session; other senders' answers are discussion.
+        skip: (entry) => entry.conversation === rec.conversation,
+      });
       return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
     },
     delivered: createSeenRing(join(stateHome, "delivered.json"), "[telegram]"),
@@ -182,7 +209,10 @@ function createTelegramRuntime(
       if (rec.replyTo === undefined) return;
       await sendMessage(apiBaseUrl, botToken, targetOf(rec), SHARED_ANSWER_NOTICE, { html: false });
     },
-    deliverAnswer: (rec, answer) => portJoin(() => deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer)),
+    deliverAnswer: (rec, answer) =>
+      portJoin(async () => {
+        recordAnswer(rec, await deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer), answer);
+      }),
     execute: (rec, discussion, onAnswered, turn) =>
       turn.reply(
         telegramTurnStream(
@@ -202,7 +232,10 @@ function createTelegramRuntime(
             }),
           },
         ),
-        (events) => telegramReply(events, apiBaseUrl, botToken, targetOf(rec), formatError, onAnswered),
+        (events) =>
+          telegramReply(events, apiBaseUrl, botToken, targetOf(rec), formatError, onAnswered, (id, text) =>
+            recordAnswer(rec, id, text),
+          ),
       ),
   });
 
@@ -213,6 +246,7 @@ function createTelegramRuntime(
     const m = pickMessage(update);
     if (!m) return;
     const placeKey = telegramPlaceKey(m.chat.id, m.message_thread_id);
+    newestTaken.set(placeKey, Math.max(newestTaken.get(placeKey) ?? 0, m.message_id));
     const r = decide(update);
     if (!r) {
       // Not summoned: in a group, record the message so a later summon has the discussion (needs privacy off to be
@@ -238,7 +272,11 @@ function createTelegramRuntime(
       }
       return;
     }
-    const conversation = r.conversation ?? placeKey;
+    // A group's main timeline is one conversation per sender; a forum topic and a private chat are one per place.
+    const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
+    const conversation =
+      r.conversation ??
+      (isGroup && m.message_thread_id === undefined ? senderConversation(placeKey, m.from?.id) : placeKey);
     const chatId = r.chatId ?? m.chat.id;
     // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no reply-quote.
     const threadId = r.threadId ?? m.message_thread_id;

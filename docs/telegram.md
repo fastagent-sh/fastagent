@@ -100,8 +100,9 @@ A slash command does **not** summon in a group (bare or directed like `/cmd@botn
 
 ## Group chats
 
-A group is one shared conversation (`<chat>`, or `<chat>:<thread>` in a topic), with one session: everyone talks to the same agent with one history. To keep it coherent:
+A group's main timeline is one conversation per sender (`<chat>#<sender>`), each with a session of its own, and a topic (`<chat>:<thread>`) is one shared conversation. A sender is told what the others said (the buffer below) and what the agent answered them, attributed, but another sender's request is not part of their task. To keep it coherent:
 
+- **A stop is the sender's own.** `/stop` stops the sender's session in a group's main timeline, not another sender's task.
 - **Steered turns.** A summon that lands while the session is busy is sent at once, in arrival order, with `whenBusy: "steer"`: the agent takes it at its next step, after its current tool calls. If it takes it before the run ends, the two messages end with one shared answer, which is delivered once; a message taken after the run ended gets its own answer. In a group the answer quotes the first asker's message, so a later asker whose input was answered with it gets a short "Answered together with an earlier message above" reply under their own message. The discussion a steered input would fold is read once, by the turn that started first; what arrived since is read by the next turn. While an input waits for that answer, the bot marks its message with 👀 and replaces it with 👌 when it is answered (a failed turn clears the mark); Telegram does not let a bot react with ✅, and the first message of a run shows its own preview instead. Different conversations run in parallel.
 - **Sender attribution.** Each message is prefixed with its sender, and a group is flagged in the prompt, so the model can tell participants apart and answer "summarize the discussion".
 - **Context buffer.** The channel keeps a small per-chat buffer of recent **un-summoned** messages (bounded by a character budget; the oldest are dropped) and folds what came after the ask its session was last sent, up to the turn's own ask, into each turn — annotated with message ids and reply relations, so "the one Alex replied to" resolves. Attachments posted without summoning ride along too: the next summon downloads the most recent few files (readable by the agent's tools) and includes recent photos as vision inputs (photos ride along without per-photo attribution — the fold marks every attachment line with `[photo]`/`[document: …]` next to its sender, caption or not), so "summarize the file from earlier" actually works; a stale or cap-skipped earlier attachment is counted in a visible note instead of silently missing or failing the ask. The buffer is durable: persisted before the update is acknowledged (a webhook's 200, or the next `getUpdates` offset) and reloaded on start, so a restart keeps the discussion. Nothing is cleared when a turn folds it: the folded discussion lives in the session, in the instance's storage, and the buffer only drops its oldest entries when its budget is full.
@@ -158,8 +159,12 @@ The channel appends a formatting instruction so replies use Telegram-supported H
 
 Telegram Threaded Mode is handled automatically:
 
-- if `message_thread_id` is present, the default conversation is `<chat>:<thread>`,
-- otherwise it is `<chat>`.
+- if `message_thread_id` is present, the default conversation is `<chat>:<thread>`, shared by everyone in the topic,
+- in a private chat it is `<chat>`,
+- in a group's main timeline it is `<chat>#<sender id>`: one per sender, so one person's long task does not hold up
+  another's question. A message with no `from` (a channel post) shares `<chat>`. A message an anonymous admin sends
+  on behalf of the group carries a fake `from` that is the same for every such admin, so they share one session,
+  `<chat>#<that id>`, and can hold each other up like any one sender's follow-ups.
 
 Each conversation has its own session, which the channel creates the first time it is asked there and records in
 `<state root>/channels/telegram/sessions.json`. A new topic starts a session of its own.

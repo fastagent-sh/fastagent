@@ -31,7 +31,7 @@ const CHANNEL = slackHistoryKey("T1", { channelId: "C1" });
  * `limit` before `latest`; the channel newest first, a thread oldest first after its root, which comes whatever the
  * range. An `oldest` makes Slack return the OLDEST `limit` after it instead, so a reader passing one loses messages.
  */
-function setup(opts: { turnInputs?: string[]; userName?: SlackApi["userName"] } = {}) {
+function setup(opts: { userName?: SlackApi["userName"]; controls?: string[] } = {}) {
   const messages: (SlackListedMessage & { ts: string })[] = [];
   const page = (
     candidates: (SlackListedMessage & { ts: string })[],
@@ -69,7 +69,7 @@ function setup(opts: { turnInputs?: string[]; userName?: SlackApi["userName"] } 
     self: () => ({ userId: "UBOT", botId: "BBOT" }),
     label: "[slack]",
     path: join(root, "history.json"),
-    isTurnInput: (_key, ts) => opts.turnInputs?.includes(ts) ?? false,
+    isControl: (_key, ts) => opts.controls?.includes(ts) ?? false,
   });
   /** The ask each place's session was last sent: where its next read starts. */
   const sent = new Map<string, string>();
@@ -88,7 +88,7 @@ function setup(opts: { turnInputs?: string[]; userName?: SlackApi["userName"] } 
       messages.push(ask);
       const after = sent.get(key);
       sent.set(key, ask.ts);
-      return { key, ...(after === undefined ? {} : { after }), until: ask.ts };
+      return { key, conversation: "c", ...(after === undefined ? {} : { after }), until: ask.ts };
     },
   };
 }
@@ -275,14 +275,20 @@ describe("Slack place history", () => {
     expect(next).toMatch(/^user U1 \(msg [\d.]+\): one more$/);
   });
 
-  it("leaves out the asks the channel took and the answers it recorded", async () => {
+  it("leaves out the answers its own conversation recorded, and keeps what was said to others", async () => {
     const earlierAsk = msg("<@UBOT> summarize");
-    const place = setup({ turnInputs: [earlierAsk.ts] });
+    const place = setup();
     const answer = msg("the summary", { user: "UBOT", bot_id: "BBOT" });
-    place.history.recordOutput(CHANNEL, answer.ts);
+    place.history.recordOutput(CHANNEL, "c", answer.ts);
     place.messages.push(earlierAsk, answer, msg("thanks"));
-    const text = await answeredTurn(place, place.ask());
-    expect(text).toMatch(/^user U1 \(msg [\d.]+\): thanks$/);
+    const own = await answeredTurn(place, place.ask());
+    // Someone's ask is discussion to every reader; the answer is only what this conversation already holds.
+    expect(own).toContain("summarize");
+    expect(own).not.toContain("the summary");
+    expect(own).toMatch(/\(msg [\d.]+\): thanks$/m);
+    const { after: _own, ...fromScratch } = place.ask();
+    const other = await place.history.fold({ ...fromScratch, conversation: "someone-else" });
+    expect(other.text).toContain("the summary"); // someone else's session was never told it
   });
 
   it("folded files ride along, minus the turn's own", () => {
@@ -313,7 +319,7 @@ describe("Slack place history", () => {
     expect(place.channelHistory).toHaveBeenLastCalledWith("C1", { limit: 100 }, CONTEXT_READ);
 
     const thread = slackHistoryKey("T1", { channelId: "C1", threadTs: deploy.ts });
-    place.history.recordOutput(thread, fix.ts);
+    place.history.recordOutput(thread, "c", fix.ts);
     expect((await place.history.snapshot(thread)).text).toContain("killed the backfill, redeploy succeeded");
   });
 

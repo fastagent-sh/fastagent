@@ -56,12 +56,12 @@ async function finalize(
   messageId: number | undefined,
   text: string,
   opts: { html?: boolean } = {},
-): Promise<void> {
+): Promise<number | undefined> {
   const html = opts.html ?? true;
   if (text.trim() === "") {
     if (messageId !== undefined)
       await callApi(api, botToken, "deleteMessage", { chat_id: target.chatId, message_id: messageId });
-    return;
+    return undefined;
   }
   if (messageId !== undefined) {
     // "Fits in one message" is a plain length check against Telegram's limit — not chunkText, whose html
@@ -69,7 +69,7 @@ async function finalize(
     if (text.length <= TELEGRAM_MAX_TEXT) {
       try {
         await editMessageText(api, botToken, target, messageId, text, { html });
-        return;
+        return messageId;
       } catch {
         // Edit failed — the preview may be gone, or still there (429 retries exhausted / 5xx). Fall through
         // to delete + fresh send below so a still-present "Thinking…" is not left pinned above the answer.
@@ -79,11 +79,19 @@ async function finalize(
     // the answer is worse than the extra call), then send the whole reply as fresh, consecutive messages.
     await callApi(api, botToken, "deleteMessage", { chat_id: target.chatId, message_id: messageId }).catch(() => {});
   }
-  await sendMessage(api, botToken, target, text, { html });
+  return sendMessage(api, botToken, target, text, { html });
 }
 
-/** Deliver a reply this process did not generate: a recovered answer. The run that produced it is gone with its preview. */
-export function deliverTelegramAnswer(api: string, botToken: string, target: Target, text: string): Promise<void> {
+/**
+ * Deliver a reply this process did not generate: a recovered answer. The run that produced it is gone with its preview.
+ * Resolves to the id of the message the answer starts in, which is where it stands in its chat.
+ */
+export function deliverTelegramAnswer(
+  api: string,
+  botToken: string,
+  target: Target,
+  text: string,
+): Promise<number | undefined> {
   return finalize(api, botToken, target, undefined, text);
 }
 
@@ -99,6 +107,8 @@ export function telegramReply(
   target: Target,
   formatError: (failed: TelegramFailure) => string | undefined,
   onAnswered?: (answer: string) => void,
+  /** The answer is in the chat, starting in message `messageId`: where it stands there. */
+  onDelivered?: (messageId: number | undefined, text: string) => void,
 ) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
@@ -161,7 +171,11 @@ export function telegramReply(
       },
       answer: () => (turn.answer.trim() !== "" ? turn.answer : "(no reply)"),
       ...(onAnswered ? { onAnswered } : {}),
-      settle: (text) => portJoin(() => finalize(api, botToken, target, messageId, text)),
+      settle: (text) =>
+        portJoin(async () => {
+          const delivered = await finalize(api, botToken, target, messageId, text);
+          onDelivered?.(delivered, text);
+        }),
     });
   });
 }

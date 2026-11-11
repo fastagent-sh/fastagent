@@ -46,8 +46,11 @@ export function discussionBlock(text: string): string {
 export interface ContextBuffer<E> {
   /** Record an un-summoned message. */
   push(placeKey: string, entry: E): void;
-  /** The place's entries after `after` and up to `until` (positions: see `createContextBuffer`), rendered for a turn. */
-  fold(placeKey: string, range: { after?: number; until: number }): Discussion<E>;
+  /**
+   * The place's entries after `after` and up to `until` (positions: see `createContextBuffer`), rendered for a turn,
+   * minus the ones `skip` names: what the reading conversation's own session already holds.
+   */
+  fold(placeKey: string, range: { after?: number; until: number; skip?: (entry: E) => boolean }): Discussion<E>;
 }
 
 export function createContextBuffer<E>(options: {
@@ -58,10 +61,15 @@ export function createContextBuffer<E>(options: {
   isEntry: (value: unknown) => value is E;
   /** One fold line for an entry — ALSO the eviction cost basis. */
   line: (entry: E) => string;
-  /** Where the entry stands in its place: the platform's message id, which grows with the discussion. */
+  /**
+   * Where the entry stands in its place: the platform's message id, which grows with the discussion. `after` is the
+   * position of a message a reader was already sent, so an entry standing at it came later when `later` says so.
+   */
   position: (entry: E) => number;
+  /** Whether the entry came after the message standing at its own position (an answer done after it). */
+  later?: (entry: E) => boolean;
 }): ContextBuffer<E> {
-  const { path, label, isEntry, line, position } = options;
+  const { path, label, isEntry, line, position, later } = options;
   const load = (): Map<string, E[]> => {
     const raw = loadStateFile(path);
     if (raw === undefined) return new Map();
@@ -105,9 +113,12 @@ export function createContextBuffer<E>(options: {
         throw error;
       }
     },
-    fold(placeKey, { after, until }) {
+    fold(placeKey, { after, until, skip }) {
       const folded = (buffers.get(placeKey) ?? []).filter(
-        (entry) => (after === undefined || position(entry) > after) && position(entry) <= until,
+        (entry) =>
+          (after === undefined || position(entry) > after || (position(entry) === after && later?.(entry) === true)) &&
+          position(entry) <= until &&
+          skip?.(entry) !== true,
       );
       return { text: folded.map(line).join("\n"), folded };
     },

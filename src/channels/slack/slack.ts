@@ -302,6 +302,8 @@ function createSlackRuntime(
   // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle.
   const sideTasks = createTaskTracker(label);
   const seen = createSeenRing(join(stateHome, "seen.json"), label);
+  // A `/stop` is taken as input but is no discussion: a read leaves it out, the asks themselves are kept.
+  const stops = createSeenRing(join(stateHome, "stops.json"), label);
   const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
   /**
    * A thread's participation is keyed by the CONVERSATION it describes — "the agent answered here" is a claim about
@@ -310,8 +312,6 @@ function createSlackRuntime(
   const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
     `${teamId}:${channelId}:${threadTs}`;
   const welcomed = createWelcomedUsers(join(stateHome, "welcomed.json"), label);
-  // Every message this channel took as input (a turn, a /stop) is in `seen`. A history read also leaves these out,
-  // to shape the prompt only — what keeps a queued ask out of an earlier turn is the read's bound, not this ring.
   // Where each conversation's session read to: a turn folds its place from the ask its session was last sent.
   const asks = createAskLog<string>({
     label,
@@ -325,9 +325,9 @@ function createSlackRuntime(
     self: () => ({ userId: auth.botUserId(), botId: auth.botId() }),
     label,
     path: join(stateHome, "history.json"),
-    isTurnInput: (key, ts) => {
+    isControl: (key, ts) => {
       const place = slackPlaceOf(key);
-      return seen.has(`${place.teamId}:${place.channelId}:${ts}`);
+      return stops.has(`${place.teamId}:${place.channelId}:${ts}`);
     },
   });
   // A group turn's room, for the thread-reading tool (`slackThreads`): the channel it was asked in, and its threads.
@@ -346,15 +346,17 @@ function createSlackRuntime(
   });
   registerRoomThreads("slack", stateHome, rooms);
   /**
-   * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the session already,
-   * so the place it LANDS in records it, and that place's next read leaves it out — an answer to a channel's
-   * top-level ask lands in the thread it opens. The send tool uses the plain client, so what the agent posts itself
-   * stays discussion. A routed turn has no place and reads no history.
+   * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the turn's session
+   * already, so the place it LANDS in records it for that conversation, and its next read leaves it out — an answer to
+   * a channel's top-level ask lands in the thread it opens. Another conversation's read keeps it. The send tool uses
+   * the plain client, so what the agent posts itself stays discussion. A routed turn has no place and reads no history.
    */
-  const placeApi = (turn: { historyKey?: string; teamId: string }): SlackApi =>
+  const placeApi = (turn: { historyKey?: string; teamId: string; conversation: string }): SlackApi =>
     turn.historyKey === undefined
       ? api
-      : api.recordingSends((where, ts) => history.recordOutput(slackHistoryKey(turn.teamId, where), ts));
+      : api.recordingSends((where, ts) =>
+          history.recordOutput(slackHistoryKey(turn.teamId, where), turn.conversation, ts),
+        );
   const store = createTurnStore<StoredSlackTurn>(join(stateHome, "turns.json"), {
     label,
     isRecord: isStoredSlackTurn,
@@ -395,6 +397,7 @@ function createSlackRuntime(
       const start = await readStart(asks, label, turn.conversation, recordedSession(turn.conversation), ask.ts);
       const fold = await history.fold({
         key: turn.historyKey,
+        conversation: turn.conversation,
         ...(start.after === undefined ? {} : { after: start.after }),
         until: ask.ts,
       });
@@ -560,11 +563,12 @@ function createSlackRuntime(
     // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
     if (isStopText(stripSlackMentions(event.text ?? ""))) {
       seen.add(logicalId);
+      stops.add(logicalId);
       const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
       sideTasks.track(
         dispatchStop(agent, recordedSession(routed.conversation ?? defaultConversation), label)
           .then((feedback) =>
-            placeApi({ historyKey, teamId })
+            placeApi({ historyKey, teamId, conversation: routed.conversation ?? defaultConversation })
               .postMessage(target, feedback)
               .then(() => undefined),
           )

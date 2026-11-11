@@ -89,19 +89,21 @@ function foldPlace(messages: readonly PlaceMessage[], earlier: boolean): { text:
 const MAX_PLACES = 2000;
 
 /**
- * A place's outputs kept. One turn posts a handful (an answer, its chunks, stop feedback), and a read only needs the
- * ones after the ask its session was last sent; the bound stops a place that posts without end from growing.
+ * A conversation's outputs in a place kept. One turn posts a handful (an answer, its chunks, stop feedback), and a read
+ * only needs the ones after the ask its session was last sent; the bound stops one that posts without end from growing.
  */
 const MAX_OUTPUTS = 200;
 
 /**
  * What a turn reads: its place, after the ask its session was last sent (none: the place's newest messages), up to and
- * including its own ask. The upper bound is what keeps every later message out — an ask queued behind this one is its
+ * including its own ask, leaving out what its own conversation posted there. The upper bound is what keeps every later message out — an ask queued behind this one is its
  * own turn, and folding it here would answer it twice — and it needs no record of which messages were asks, so a lost
  * or cold state cannot break it. `C` is the platform's position of a message.
  */
 export interface PlaceRead<C> {
   key: string;
+  /** The conversation reading: what it posted is in its session, what other conversations posted is discussion. */
+  conversation: string;
   after?: C;
   until?: C;
 }
@@ -117,8 +119,11 @@ export interface PlaceListing {
 export interface PlaceHistory<C> {
   /** The place's discussion for a turn. Never rejects: a place that cannot be read says so in `text`. */
   fold(read: PlaceRead<C>): Promise<Discussion<PlaceMessage>>;
-  /** A message a turn posted into this place: in the session already, so the place's next read leaves it out. */
-  recordOutput(key: string, messageId: string): void;
+  /**
+   * A message a turn of `conversation` posted into this place: in its session already, so that conversation's next read
+   * leaves it out. Another conversation's read keeps it: what the agent said to someone else is what that place said.
+   */
+  recordOutput(key: string, conversation: string, messageId: string): void;
   /**
    * A place as it reads now, for a tool: its newest messages, with nothing left out (another session's asks and
    * answers are what that place said). Rejects when the read fails: a tool's failure is the model's to see.
@@ -128,29 +133,36 @@ export interface PlaceHistory<C> {
 
 /**
  * A place's history read from its platform (docs/design/place-history.md): what was said in a chat or a thread since
- * the ask its session was last sent, up to the turn's own ask. The platform owns the read; this owns the messages turns
- * posted into the place (`recordOutput`: answers, stop feedback), which a read leaves out because the session holds
- * them, and, as prompt shaping only, what the channel took as input (`isTurnInput`). What the agent sent itself from a
- * send tool stays — that is what a later "what did point 3 mean?" is about.
+ * the ask its session was last sent, up to the turn's own ask. The platform owns the read; this owns the messages a
+ * conversation's turns posted into the place (`recordOutput`: answers, stop feedback), which that conversation's read
+ * leaves out because its session holds them. Everything else stays, other people's asks and the answers to them
+ * among it: a session that did not take part is told what was said, attributed. What the agent sent itself from a send
+ * tool stays too — that is what a later "what did point 3 mean?" is about.
  */
 export function createPlaceHistory<C>(deps: {
   label: string;
   /** Where each place's outputs persist. */
   path: string;
-  isTurnInput(key: string, messageId: string): boolean;
+  /** A message that is a control action (a `/stop`), not discussion: no read folds it. */
+  isControl?(key: string, messageId: string): boolean;
   /** The place's messages after `after` (or its newest few, with none) and before `until`, oldest first. */
   read(key: string, from: { after?: C; drop(messageId: string): boolean }, until?: C): Promise<PlaceListing>;
 }): PlaceHistory<C> {
   const { label, path } = deps;
   const places = loadOutputs(path, label);
+  /** One conversation's outputs in one place. */
+  const scope = (key: string, conversation: string): string => `${conversation}\n${key}`;
 
   return {
-    async fold({ key, after, until }) {
-      const outputs = new Set(places.get(key));
+    async fold({ key, conversation, after, until }) {
+      const outputs = new Set(places.get(scope(key, conversation)));
       try {
         const { messages, earlier } = await deps.read(
           key,
-          { ...(after !== undefined ? { after } : {}), drop: (id) => outputs.has(id) || deps.isTurnInput(key, id) },
+          {
+            ...(after !== undefined ? { after } : {}),
+            drop: (id) => outputs.has(id) || deps.isControl?.(key, id) === true,
+          },
           until,
         );
         return foldPlace(messages, earlier);
@@ -159,11 +171,12 @@ export function createPlaceHistory<C>(deps: {
         return { text: `(could not read the recent discussion here: ${String(error)})`, folded: [], unread: true };
       }
     },
-    recordOutput(key, messageId) {
-      const outputs = [...(places.get(key) ?? []), messageId].slice(-MAX_OUTPUTS);
+    recordOutput(key, conversation, messageId) {
+      const at = scope(key, conversation);
+      const outputs = [...(places.get(at) ?? []), messageId].slice(-MAX_OUTPUTS);
       // Most recently used last: the map's order is the eviction order.
-      places.delete(key);
-      places.set(key, outputs);
+      places.delete(at);
+      places.set(at, outputs);
       for (const victim of [...places.keys()].slice(0, Math.max(0, places.size - MAX_PLACES))) places.delete(victim);
       try {
         saveStateFile(path, Object.fromEntries(places));

@@ -1399,8 +1399,9 @@ describe("turn flow", () => {
     );
     await idle();
 
+    // The group's main timeline is a session per sender; a topic is one for everyone in it.
     expect(calls.map((call) => conversationOf(home, call.sessionId))).toEqual([
-      "feishu:oc_1",
+      "feishu:oc_1#ou_alice",
       "feishu:oc_1:omt_existing",
     ]);
     const topReply = fx.calls("/im/v1/messages/om_group_continuous/reply", "POST")[0];
@@ -1796,7 +1797,7 @@ describe("turn flow", () => {
     // The room already ran the ask the card answered, under the ask's message id, as the channel invokes.
     const room = await newSession(protocol);
     mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, "sessions.json"), JSON.stringify({ "feishu:oc_1": room }));
+    writeFileSync(join(home, "sessions.json"), JSON.stringify({ "feishu:oc_1#ou_alice": room }));
     await protocol.messages.send(
       { sessionId: room, idempotencyKey: "om_original_ask", content: "加一个新的页面" },
       { wait: 30 },
@@ -1841,6 +1842,41 @@ describe("turn flow", () => {
     expect(calls[0]).toMatchObject({ idempotencyKey: "om_plain", whenBusy: "steer" });
     expect(conversationOf(home, calls[0]?.sessionId)).toBe("feishu:oc_1");
     expect(protocol.forks).toEqual([{}]); // a new session, forked from nothing
+  });
+
+  it("a stop is no discussion: the next turn does not read it, but still reads other people's asks", async () => {
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel({ stopped: () => ({ stopped: [] }) });
+    await flush();
+    const mention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    await handler(
+      feishuRequest(messageEvent({ id: "om_chatter", chatType: "group", text: "someone else's question" })),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_stop",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot stop" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_ask",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot what now?" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(1); // the stop was a control action, never a turn
+    const text = calls[0]?.prompt.text ?? "";
+    expect(text).toContain("someone else's question");
+    expect(text).not.toContain("om_stop");
   });
 
   it("says a place it could not read, and forgets that ask so the next turn reads what it missed", async () => {
@@ -2760,7 +2796,7 @@ describe("Feishu inputs steered into one run", () => {
     expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
   });
 
-  it("points a group asker, under their own message, to the answer they share", async () => {
+  it("points a group sender, under their follow-up, to the answer it shares with their earlier message", async () => {
     const fx = feishuFetch();
     const { agent, release } = await holdingAgent({ shared: "the shared answer" });
     const { handler, idle } = await mountDurable(agent);
@@ -2771,7 +2807,7 @@ describe("Feishu inputs steered into one run", () => {
 
     await handler(feishuRequest(ask("om_1", "start the work", "ou_alice")));
     await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
-    await handler(feishuRequest(ask("om_2", "what about the date?", "ou_bob")));
+    await handler(feishuRequest(ask("om_2", "what about the date?", "ou_alice")));
     await vi.waitFor(async () => {
       const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
       expect((await agent.messages.get({ sessionId, idempotencyKey: "om_2" })).status).toBe("queued");
@@ -2784,6 +2820,65 @@ describe("Feishu inputs steered into one run", () => {
       .find((c) => String(c.body?.content).includes("Answered together"));
     expect(pointer).toBeDefined();
     expect(fx.calls("/cardkit/v1/cards", "POST")).toHaveLength(1); // still one answer card, alice's
+  });
+});
+
+describe("a group's main timeline is a session per sender (Feishu)", () => {
+  const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+  const ask = (id: string, text: string, sender: string | null, over: Record<string, unknown> = {}) =>
+    messageEvent({
+      id,
+      chatType: "group",
+      text: `@_user_1 ${text}`,
+      mentions: mention,
+      senderId: sender,
+      ...over,
+    });
+
+  it("gives each sender a session of their own, and a topic one for everyone in it", async () => {
+    feishuFetch();
+    const { handler, home, idle } = buildChannel();
+    await flush();
+    await handler(feishuRequest(ask("om_1", "one", "ou_alice")));
+    await handler(feishuRequest(ask("om_2", "two", "ou_bob")));
+    await handler(feishuRequest(ask("om_3", "in a topic", "ou_alice", { threadId: "omt_1" })));
+    await handler(feishuRequest(ask("om_4", "same topic", "ou_bob", { threadId: "omt_1" })));
+    await handler(feishuRequest(messageEvent({ id: "om_5", chatType: "p2p", text: "private", senderId: "ou_alice" })));
+    await idle();
+    const keys = Object.keys(JSON.parse(readFileSync(join(home, "sessions.json"), "utf8"))).sort();
+    expect(keys).toEqual(
+      [
+        "feishu:oc_1#ou_alice",
+        "feishu:oc_1#ou_bob",
+        "feishu:oc_1:omt_1",
+        "feishu:oc_1", // the private chat: one session for the chat
+      ].sort(),
+    );
+  });
+
+  it("gives a sender with no id the place's one session", async () => {
+    feishuFetch();
+    const { handler, home, idle } = buildChannel();
+    await flush();
+    await handler(feishuRequest(ask("om_1", "anonymous", null)));
+    await idle();
+    expect(Object.keys(JSON.parse(readFileSync(join(home, "sessions.json"), "utf8")))).toEqual(["feishu:oc_1"]);
+  });
+
+  it("starts a topic from what its asker said in the main timeline, not another sender's", async () => {
+    feishuFetch();
+    const { handler, protocol, home, idle } = buildChannel();
+    await flush();
+    await handler(feishuRequest(ask("om_alice", "alice's ask", "ou_alice")));
+    await handler(feishuRequest(ask("om_bob", "bob's ask", "ou_bob")));
+    await idle();
+    const sessions = JSON.parse(readFileSync(join(home, "sessions.json"), "utf8")) as Record<string, string>;
+    // Alice opens a topic by replying to her own ask: it forks her session.
+    await handler(
+      feishuRequest(ask("om_t", "now in a topic", "ou_alice", { threadId: "omt_new", parentId: "om_alice" })),
+    );
+    await idle();
+    expect(protocol.forks.at(-1)).toMatchObject({ forkFrom: { sessionId: sessions["feishu:oc_1#ou_alice"] } });
   });
 });
 

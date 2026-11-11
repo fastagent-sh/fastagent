@@ -182,6 +182,7 @@ src/
 │   │   │                   # never one it is told; the thread list's format and bound
 │   │   ├── place-history.ts # the Discussion a turn folds + the place-history fold (budget, labels) + the messages
 │   │   │                   # turns posted into a place, which a read leaves out
+│   │   ├── sender-conversation.ts # a group's main timeline: one conversation per sender (the one place the rule is written)
 │   │   ├── ask-log.ts      # where a conversation's session read to: its recent asks, the Agent saying which it holds
 │   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer, folded by message-id range, never cleared
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)

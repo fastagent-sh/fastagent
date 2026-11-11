@@ -12,7 +12,8 @@ updated: 2026-11-10
 send is steered and a shared answer is delivered once ("Input reaches a running session by steering", "Answers,
 delivery and restart"), and a turn's read starts after the ask its session was last sent ("Where a turn's read starts",
 by `kit/ask-log.ts`; the table there holds asks, and the agent's own posts are still excluded per place). Session keys by
-sender, the reply-to-answer table and thread forks from the session a reply names are not built: current channel code
+sender (Telegram and Feishu groups' main timelines; the agent's own answers are excluded per conversation) are built; the
+reply-to-answer table, replies steered into the session they name and thread forks from it are not: current channel code
 and user guides describe them as shipped. This document proposes replacing [participant-model.md](participant-model.md)
 Rule 3 and §6, and revising its thread-context and platform mappings. The participant axiom and the distinction between
 hearing and answering remain.

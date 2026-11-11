@@ -95,7 +95,8 @@ export function createFeishuPlaceHistory(deps: {
   label: string;
   /** Where each place's outputs persist. */
   path: string;
-  isTurnInput(messageId: string): boolean;
+  /** A `/stop`: a control action, not discussion. */
+  isControl(messageId: string): boolean;
 }): FeishuPlaceHistory {
   const { api, appId, label } = deps;
   /**
@@ -249,7 +250,7 @@ export function createFeishuPlaceHistory(deps: {
   const history = createPlaceHistory({
     label,
     path: deps.path,
-    isTurnInput: (_key, id) => deps.isTurnInput(id),
+    isControl: (_key, id) => deps.isControl(id),
     read,
   });
   return { ...history, threads };

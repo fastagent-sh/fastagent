@@ -46,6 +46,18 @@ describe("context-buffer", () => {
     expect(fold(buf, { after: 5, until: 9 }).text).toBe("");
   });
 
+  it("an entry that stands at a reader's own last ask counts as after it only when it came later", () => {
+    const buf = createContextBuffer(freshPath());
+    buf.push("place", entry("@alice", "the ask itself", 5));
+    buf.push("place", { ...entry("you (sent by the agent)", "an answer done after it", 3), at: 5 });
+    // The reader's last ask was message 5. The ask is not read again; the answer standing at the same place is.
+    expect(fold(buf, { after: 5, until: 9 }).folded.map((e) => e.body)).toEqual(["an answer done after it"]);
+    // Read from before it, both are in order, and the answer's own message id is what the model sees.
+    expect(fold(buf, { until: 9 }).text).toBe(
+      "@alice (msg 5): the ask itself\nyou (sent by the agent) (msg 3): an answer done after it",
+    );
+  });
+
   it("evicts the OLDEST entries when the rendered fold exceeds the budget", () => {
     const buf = createContextBuffer(freshPath());
     for (let i = 0; i < 20; i++) buf.push("place", entry(`@u${i}`, "x".repeat(300), i + 1)); // ~6000 rendered chars

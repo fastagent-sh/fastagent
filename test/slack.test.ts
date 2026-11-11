@@ -662,7 +662,7 @@ describe("Slack sessions, context, and thread participation", () => {
     );
   });
 
-  it("a DM turn reads what slack-send posted into the DM, and not the earlier asks or their answers", async () => {
+  it("a DM turn reads what slack-send posted into the DM and the earlier ask, but not the answer to it", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent("the answer");
     const { handler } = mount(agent);
@@ -679,8 +679,10 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls).toHaveLength(2);
     const second = calls[1]?.prompt.text ?? "";
     expect(second).toContain("you (msg 5.0): Weekly digest: 3. ship it");
-    expect(second).not.toContain("first ask");
-    // …nor the answer to it (in the ask's assistant thread, a place of its own): the digest is the agent's only line.
+    // The first ask went to a session of its own (each DM message opens an assistant thread), so for this one it is
+    // what was said in the DM.
+    expect(second).toContain("first ask");
+    // …but not the answer to it (in the ask's assistant thread, a place of its own): the digest is the agent's only line.
     expect(second.match(/^you \(msg /gm)).toHaveLength(1);
   });
 
@@ -1122,6 +1124,28 @@ describe("Slack stop command", () => {
     expect(aborted).toEqual(["session-dm"]);
     expect(invoked).toEqual([]); // a control action, never a turn
     expect(slackBodies(fetchMock, "chat.postMessage").map((b) => b.text)).toEqual(["⏹ Stopped."]);
+  });
+
+  it("a stop is no discussion: the next turn in the thread does not read it, but still reads other people's asks", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { stopped } = fakeStop("stopped");
+    const seen: string[] = [];
+    const recording = scriptedAgent(async function* (request) {
+      yield ev.message();
+      seen.push(promptOf(request).text);
+      yield ev.ended();
+    });
+    const { handler } = mount(recording, {}, root(), stopped);
+    await handler(signedRequest(message("60.0", { text: "incident" })));
+    await handler(signedRequest(message("60.1", { user: "U2", text: "somebody else's question", thread_ts: "60.0" })));
+    await handler(signedRequest(message("60.2", { text: "<@UBOT> stop", thread_ts: "60.0" })));
+    await handler(
+      signedRequest(message("60.3", { type: "app_mention", text: "<@UBOT> what now?", thread_ts: "60.0" })),
+    );
+    await settle();
+    expect(seen).toHaveLength(1); // the stop was a control action, never a turn
+    expect(seen[0]).toContain("somebody else's question");
+    expect(seen[0]).not.toMatch(/\(msg 60\.2\)/);
   });
 
   it("maps an idle session to the idle notice", async () => {

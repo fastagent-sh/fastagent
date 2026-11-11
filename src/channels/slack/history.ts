@@ -194,7 +194,8 @@ export function createSlackPlaceHistory(deps: {
   label: string;
   /** Where each place's outputs persist. */
   path: string;
-  isTurnInput(key: string, ts: string): boolean;
+  /** A `/stop`: a control action, not discussion. */
+  isControl(key: string, ts: string): boolean;
 }): SlackPlaceHistory {
   const { api } = deps;
 
@@ -352,7 +353,7 @@ export function createSlackPlaceHistory(deps: {
   const history = createPlaceHistory({
     label: deps.label,
     path: deps.path,
-    isTurnInput: deps.isTurnInput,
+    isControl: deps.isControl,
     read,
   });
   return { ...history, threads };

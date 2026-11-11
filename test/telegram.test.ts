@@ -179,7 +179,7 @@ describe("durable group buffer (single-process restarts)", () => {
       await entered.promise;
       expect(sawDiscussion).toBe(true);
       expect(Object.keys(JSON.parse(readFileSync(join(state, "turns.json"), "utf8")))).toHaveLength(1);
-      const sessionId = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))["-100"];
+      const sessionId = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))["-100#7"];
       expect((await agent.sessions.get(sessionId)).status).toBe("running");
       await channel(tgRequest(group(3, "later arrival")));
     } finally {
@@ -191,7 +191,7 @@ describe("durable group buffer (single-process restarts)", () => {
     const buffered = readFileSync(join(state, "buffers.json"), "utf8");
     expect(buffered).toContain("later arrival");
     expect(buffered).toContain("earlier discussion");
-    const sessionId = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))["-100"];
+    const sessionId = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))["-100#7"];
     expect((await agent.sessions.get(sessionId)).status).toBe("idle");
     await agent.close();
   });
@@ -648,7 +648,7 @@ describe("inputs steered into one run (real Agent)", () => {
     expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1);
   });
 
-  it("tells a group asker, under their own message, that their input was answered with an earlier one", async () => {
+  it("tells a group sender, under their follow-up, that it was answered with their earlier message", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent, release } = await holdingAgent({ shared: "the shared answer" });
@@ -656,12 +656,12 @@ describe("inputs steered into one run (real Agent)", () => {
     const group = { id: -100, type: "supergroup" };
     const upd = (n: number, text: string, from: string) => ({
       update_id: n,
-      message: { message_id: n, text, chat: group, from: { id: n, username: from } },
+      message: { message_id: n, text, chat: group, from: { id: 100 + from.charCodeAt(0), username: from } },
     });
 
     await ch(tgRequest(upd(1, "start the work", "alice")));
     await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
-    await ch(tgRequest(upd(2, "what about the date?", "bob")));
+    await ch(tgRequest(upd(2, "what about the date?", "alice")));
     await vi.waitFor(async () => {
       const sessionId = (await agent.sessions.list()).data[0]?.id ?? "";
       expect((await agent.messages.get({ sessionId, idempotencyKey: "2" })).status).toBe("queued");
@@ -672,7 +672,7 @@ describe("inputs steered into one run (real Agent)", () => {
     const [preview, notice] = callsTo(fetchMock, "sendMessage").map((c) => bodyOf(c));
     expect(preview?.reply_parameters).toMatchObject({ message_id: 1 }); // the answer quotes alice's ask
     expect(notice?.text).toContain("Answered together with an earlier message");
-    expect(notice?.reply_parameters).toMatchObject({ message_id: 2 }); // and bob is pointed to it under his own
+    expect(notice?.reply_parameters).toMatchObject({ message_id: 2 }); // and she is pointed to it under the second
   });
 
   it("does not fold the same un-summoned discussion into both inputs of one run", async () => {
@@ -697,13 +697,13 @@ describe("inputs steered into one run (real Agent)", () => {
     const group = { id: -100, type: "supergroup" };
     const upd = (n: number, text: string, from: string) => ({
       update_id: n,
-      message: { message_id: n, text, chat: group, from: { id: n, username: from } },
+      message: { message_id: n, text, chat: group, from: { id: 100 + from.charCodeAt(0), username: from } },
     });
 
     await ch(tgRequest(upd(1, "chatter the room had", "dana")));
     await ch(tgRequest(upd(2, "@bot start", "alice")));
     await vi.waitFor(() => expect(texts).toHaveLength(1));
-    await ch(tgRequest(upd(3, "@bot second", "bob")));
+    await ch(tgRequest(upd(3, "@bot second", "alice")));
     await vi.waitFor(() => expect(texts).toHaveLength(2));
     expect(texts.map((text) => text.includes("chatter the room had"))).toEqual([true, false]);
     release();
@@ -720,7 +720,7 @@ describe("inputs steered into one run (real Agent)", () => {
     const group = { id: -100, type: "supergroup" };
     const said = (n: number, text: string) => ({
       update_id: n,
-      message: { message_id: n, text, chat: group, from: { id: n, username: `u${n}` } },
+      message: { message_id: n, text, chat: group, from: { id: 7, username: "alice" } },
     });
     const sessionId = async () => (await agent.sessions.list()).data[0]?.id ?? "";
 
@@ -751,6 +751,141 @@ describe("inputs steered into one run (real Agent)", () => {
       .map((entry) => JSON.stringify(entry.data))
       .map((text) => ["one", "three", "five"].filter((word) => text.includes(`chatter ${word}`)));
     expect(carried).toEqual([["one"], ["three"], ["five"]]);
+  });
+
+  describe("a group's main timeline is a session per sender", () => {
+    const group = { id: -100, type: "supergroup" };
+    const said = (n: number, text: string, sender: number | undefined, extra: Record<string, unknown> = {}) => ({
+      update_id: n,
+      message: {
+        message_id: n,
+        text,
+        chat: group,
+        ...(sender === undefined ? {} : { from: { id: sender, username: `u${sender}` } }),
+        ...extra,
+      },
+    });
+    const go = () => ({});
+
+    it("lets another sender's question be answered while someone's long task runs", async () => {
+      const fetchMock = okFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const state = freshStateDir();
+      const { agent, release } = await holdingAgent({ shared: "an answer", answers: 2 });
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go, stateDir: state });
+      await ch(tgRequest(said(1, "start the long task", 7)));
+      await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
+      await ch(tgRequest(said(2, "a quick question", 8)));
+      // Bob's answer arrives while Alice's task is still held open: they are different sessions.
+      await vi.waitFor(async () => {
+        const sessions = (await agent.sessions.list()).data;
+        expect(sessions).toHaveLength(2);
+        const bob = sessions.find((session) => session.status === "idle");
+        expect(bob).toBeDefined();
+      });
+      const conversations = Object.keys(JSON.parse(readFileSync(join(state, "sessions.json"), "utf8")));
+      expect(conversations.sort()).toEqual(["-100#7", "-100#8"]);
+      release();
+    });
+
+    it("keeps a topic and a private chat to one session for everyone in them", async () => {
+      vi.stubGlobal("fetch", okFetch());
+      const state = freshStateDir();
+      const { agent } = replyingAgent("ok");
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go, stateDir: state });
+      await ch(tgRequest(said(1, "in the topic", 7, { message_thread_id: 3 })));
+      await ch(tgRequest(said(2, "same topic", 8, { message_thread_id: 3 })));
+      await ch(
+        tgRequest({
+          update_id: 3,
+          message: { message_id: 3, text: "hi", chat: { id: 42, type: "private" }, from: { id: 7 } },
+        }),
+      );
+      await flush();
+      expect(Object.keys(JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))).sort()).toEqual([
+        "-100:3",
+        "42",
+      ]);
+    });
+
+    it("gives a message with no sender the place's one session", async () => {
+      vi.stubGlobal("fetch", okFetch());
+      const state = freshStateDir();
+      const { agent } = replyingAgent("ok");
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go, stateDir: state });
+      await ch(tgRequest(said(1, "a channel post's message", undefined)));
+      await ch(tgRequest(said(2, "another", undefined)));
+      await flush();
+      expect(Object.keys(JSON.parse(readFileSync(join(state, "sessions.json"), "utf8")))).toEqual(["-100"]);
+    });
+
+    it("tells a sender an answer that was still being written when they asked, though it began before their ask", async () => {
+      let next = 100;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          const method = String(url).split("/").pop();
+          if (method === "sendMessage") next += 1;
+          return Response.json({ ok: true, result: method === "sendMessage" ? { message_id: next } : {} });
+        }),
+      );
+      let release = (): void => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const calls: Prompt[] = [];
+      const agent = scriptedAgent(async function* (request) {
+        yield ev.message();
+        const text = promptOf(request).text;
+        calls.push(promptOf(request));
+        if (text.includes("alice asks")) await gate; // alice's answer takes a while
+        yield ev.text(text.includes("alice asks") ? "ALICE-ANSWER" : "BOB-ANSWER");
+        yield ev.ended();
+      });
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go });
+      await ch(tgRequest(said(10, "alice asks", 7)));
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      // Alice's answer message already exists (its id is about 101) when bob asks: his ask is a later message.
+      await ch(tgRequest(said(150, "bob asks", 8)));
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      release();
+      await flush();
+      await ch(tgRequest(said(160, "bob asks again", 8)));
+      await flush();
+      expect(calls).toHaveLength(3);
+      // Alice's answer finished after bob's first ask was read, so it is news to him now, whatever its message id says.
+      expect(String(calls[2]?.text)).toContain("ALICE-ANSWER");
+      expect(String(calls[2]?.text)).not.toContain("BOB-ANSWER"); // his own, held in his session
+    });
+
+    it("tells another sender what the agent answered, and not the sender it was answered to", async () => {
+      let sent = 40;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          const method = String(url).split("/").pop();
+          if (method === "sendMessage") sent += 10;
+          return Response.json({ ok: true, result: method === "sendMessage" ? { message_id: sent } : {} });
+        }),
+      );
+      const calls: Prompt[] = [];
+      const agent = scriptedAgent(async function* (request) {
+        calls.push(promptOf(request));
+        yield* scriptedRun(request, { text: `answer number ${calls.length}` });
+      });
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go });
+      await ch(tgRequest(said(10, "when is the deploy?", 7)));
+      await flush();
+      await ch(tgRequest(said(55, "and what about staging?", 8)));
+      await flush();
+      await ch(tgRequest(said(70, "thanks", 7)));
+      await flush();
+      // Bob was never told alice's exchange: he is, attributed.
+      expect(String(calls[1]?.text)).toMatch(/you \(sent by the agent\) \(msg 50\): answer number 1/);
+      // Alice's own session holds her answer, so it is not read to her again; bob's answer, she was never told.
+      expect(String(calls[2]?.text)).not.toContain("answer number 1");
+      expect(String(calls[2]?.text)).toMatch(/you \(sent by the agent\) \(msg 60\): answer number 2/);
+    });
   });
 
   it("marks the message of an input steered into a running turn, and settles the mark when it is answered", async () => {
@@ -1618,12 +1753,14 @@ describe("telegram channel", () => {
   };
   const onlyCommands = (u: TelegramUpdate) => (u.message?.text?.startsWith("/") ? {} : null);
   const grp = { id: -100, type: "supergroup" as const };
+  /** A person keeps one id, as on Telegram: the same user is the same sender, and so the same session. */
+  const userId = (user: string): number => [...user].reduce((sum, char) => sum * 31 + char.charCodeAt(0), 7) % 100000;
   const groupMsg = (n: number, user: string, t: string) => ({
     update_id: n,
-    message: { message_id: n, text: t, chat: grp, from: { id: n, username: user } },
+    message: { message_id: n, text: t, chat: grp, from: { id: userId(user), username: user } },
   });
 
-  it("buffers un-summoned group messages and folds them into the next summoned turn, then clears", async () => {
+  it("buffers un-summoned group messages and folds them into a sender's next summoned turn, once per sender", async () => {
     const { agent, calls } = replyingAgent("ok");
     vi.stubGlobal(
       "fetch",
@@ -1640,9 +1777,17 @@ describe("telegram channel", () => {
     expect(p1).toMatch(/@alice \(msg \d+\): the deploy failed/);
     expect(p1).toMatch(/@bob \(msg \d+\): which service\?/);
 
-    await ch(tgRequest(groupMsg(4, "bob", "/bot again"))); // summoned → buffer already cleared
+    await ch(tgRequest(groupMsg(4, "alice", "/bot again"))); // alice's session holds the discussion already
     await groupSettle();
     expect(calls[1]?.text ?? "").not.toMatch(/recent discussion here/);
+
+    // Bob is another sender with a session of his own: he has read none of it, and is told what was said — the
+    // other people's lines and what the agent answered alice, attributed.
+    await ch(tgRequest(groupMsg(5, "bob", "/bot and me?")));
+    await groupSettle();
+    const p3 = calls[2]?.text ?? "";
+    expect(p3).toMatch(/@alice \(msg \d+\): the deploy failed/);
+    expect(p3).toMatch(/you \(sent by the agent\) \(msg \d+\): ok/);
   });
 
   it("a message the agent sends itself is in that chat's next answered turn, once", async () => {
@@ -2328,7 +2473,7 @@ describe("telegram /stop command", () => {
       const fetchMock = okFetch();
       vi.stubGlobal("fetch", fetchMock);
       const { stopped, aborted } = fakeStop("stopped");
-      const stateDir = homeWith({ "-100123": "session-group" });
+      const stateDir = homeWith({ "-100123#7": "session-group" });
       const ch = telegramChannel(agent, {
         secretToken: SECRET,
         botToken: "BOT",
@@ -2343,6 +2488,24 @@ describe("telegram /stop command", () => {
       expect(existsSync(join(stateDir, "buffers.json")), text).toBe(false);
       expect(stopFeedback(fetchMock), text).toEqual(["\u23f9 Stopped."]);
     }
+  });
+
+  // A group's main timeline is a session per sender, so a stop is the sender's own: it does not reach another's task.
+  it("stops only the asker's own session in a group", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { stopped, aborted } = fakeStop("stopped");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      botUsername: "mybot",
+      stopped,
+      stateDir: homeWith({ "-100123#7": "alice-session", "-100123#8": "bob-session" }),
+    });
+    const stop = groupStop("/stop@mybot");
+    await ch(tgRequest({ ...stop, message: { ...stop.message, from: { id: 8, username: "bob" } } as never }));
+    await flush();
+    expect(aborted).toEqual(["bob-session"]);
   });
 
   // An addressed stop reports whatever happened — the asker named this bot and must not be left
@@ -2360,7 +2523,7 @@ describe("telegram /stop command", () => {
         botToken: "BOT",
         botUsername: "mybot",
         stopped,
-        stateDir: homeWith({ "-100123": "session-group" }),
+        stateDir: homeWith({ "-100123#7": "session-group" }),
       });
       await ch(tgRequest(groupStop("/stop@mybot")));
       await flush();
