@@ -813,10 +813,49 @@ describe("inputs steered into one run (real Agent)", () => {
       const state = freshStateDir();
       const { agent } = replyingAgent("ok");
       const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go, stateDir: state });
-      await ch(tgRequest(said(1, "an anonymous admin's message", undefined)));
+      await ch(tgRequest(said(1, "a channel post's message", undefined)));
       await ch(tgRequest(said(2, "another", undefined)));
       await flush();
       expect(Object.keys(JSON.parse(readFileSync(join(state, "sessions.json"), "utf8")))).toEqual(["-100"]);
+    });
+
+    it("tells a sender an answer that was still being written when they asked, though it began before their ask", async () => {
+      let next = 100;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          const method = String(url).split("/").pop();
+          if (method === "sendMessage") next += 1;
+          return Response.json({ ok: true, result: method === "sendMessage" ? { message_id: next } : {} });
+        }),
+      );
+      let release = (): void => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const calls: Prompt[] = [];
+      const agent = scriptedAgent(async function* (request) {
+        yield ev.message();
+        const text = promptOf(request).text;
+        calls.push(promptOf(request));
+        if (text.includes("alice asks")) await gate; // alice's answer takes a while
+        yield ev.text(text.includes("alice asks") ? "ALICE-ANSWER" : "BOB-ANSWER");
+        yield ev.ended();
+      });
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go });
+      await ch(tgRequest(said(10, "alice asks", 7)));
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      // Alice's answer message already exists (its id is about 101) when bob asks: his ask is a later message.
+      await ch(tgRequest(said(150, "bob asks", 8)));
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      release();
+      await flush();
+      await ch(tgRequest(said(160, "bob asks again", 8)));
+      await flush();
+      expect(calls).toHaveLength(3);
+      // Alice's answer finished after bob's first ask was read, so it is news to him now, whatever its message id says.
+      expect(String(calls[2]?.text)).toContain("ALICE-ANSWER");
+      expect(String(calls[2]?.text)).not.toContain("BOB-ANSWER"); // his own, held in his session
     });
 
     it("tells another sender what the agent answered, and not the sender it was answered to", async () => {

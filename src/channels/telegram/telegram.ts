@@ -161,6 +161,8 @@ function createTelegramRuntime(
   // A message id counts only within its chat, and a custom route can send several chats to one conversation: asks are
   // kept per conversation and place, so a position is only ever compared with another of the same chat.
   const askedBy = (rec: PendingTurn): string => `${rec.conversation}@${rec.placeKey}`;
+  /** The newest message id of each place the channel has taken (a summons, or discussion it buffered). */
+  const newestTaken = new Map<string, number>();
   /**
    * An answer a sender's session holds, put where the chat's other senders' reads find it: Telegram never echoes a bot
    * its own messages, so without this Bob's session would not know what Alice was told. Only in a group's main timeline
@@ -170,8 +172,12 @@ function createTelegramRuntime(
   const recordAnswer = (rec: PendingTurn, messageId: number | undefined, text: string): void => {
     const place = telegramPlaceKey(rec.chatId, rec.threadId);
     if (messageId === undefined || !isSenderConversation(place, rec.conversation)) return;
+    // An answer is a preview that is edited into its text, so its message id is from when the answer began. Anyone
+    // asked in the chat since has not read it, and their read starts strictly after their own ask: it stands at the
+    // newest message of this chat the channel has taken, and sorts after it.
+    const at = Math.max(messageId, newestTaken.get(place) ?? 0);
     try {
-      buffer.push(place, ownPostEntry(text, messageId, rec.conversation));
+      buffer.push(place, ownPostEntry(text, messageId, rec.conversation, at));
     } catch (error) {
       log.warn(`[telegram] an answer was not recorded into place ${place}: ${String(error)}`);
     }
@@ -240,6 +246,7 @@ function createTelegramRuntime(
     const m = pickMessage(update);
     if (!m) return;
     const placeKey = telegramPlaceKey(m.chat.id, m.message_thread_id);
+    newestTaken.set(placeKey, Math.max(newestTaken.get(placeKey) ?? 0, m.message_id));
     const r = decide(update);
     if (!r) {
       // Not summoned: in a group, record the message so a later summon has the discussion (needs privacy off to be

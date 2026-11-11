@@ -1844,6 +1844,41 @@ describe("turn flow", () => {
     expect(protocol.forks).toEqual([{}]); // a new session, forked from nothing
   });
 
+  it("a stop is no discussion: the next turn does not read it, but still reads other people's asks", async () => {
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel({ stopped: () => ({ stopped: [] }) });
+    await flush();
+    const mention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    await handler(
+      feishuRequest(messageEvent({ id: "om_chatter", chatType: "group", text: "someone else's question" })),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_stop",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot stop" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_ask",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot what now?" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(1); // the stop was a control action, never a turn
+    const text = calls[0]?.prompt.text ?? "";
+    expect(text).toContain("someone else's question");
+    expect(text).not.toContain("om_stop");
+  });
+
   it("says a place it could not read, and forgets that ask so the next turn reads what it missed", async () => {
     vi.spyOn(log, "warn").mockImplementation(() => {});
     feishuFetch();

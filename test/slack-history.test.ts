@@ -31,7 +31,7 @@ const CHANNEL = slackHistoryKey("T1", { channelId: "C1" });
  * `limit` before `latest`; the channel newest first, a thread oldest first after its root, which comes whatever the
  * range. An `oldest` makes Slack return the OLDEST `limit` after it instead, so a reader passing one loses messages.
  */
-function setup(opts: { userName?: SlackApi["userName"] } = {}) {
+function setup(opts: { userName?: SlackApi["userName"]; controls?: string[] } = {}) {
   const messages: (SlackListedMessage & { ts: string })[] = [];
   const page = (
     candidates: (SlackListedMessage & { ts: string })[],
@@ -69,6 +69,7 @@ function setup(opts: { userName?: SlackApi["userName"] } = {}) {
     self: () => ({ userId: "UBOT", botId: "BBOT" }),
     label: "[slack]",
     path: join(root, "history.json"),
+    isControl: (_key, ts) => opts.controls?.includes(ts) ?? false,
   });
   /** The ask each place's session was last sent: where its next read starts. */
   const sent = new Map<string, string>();

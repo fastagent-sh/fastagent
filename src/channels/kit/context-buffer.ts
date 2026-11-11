@@ -61,10 +61,15 @@ export function createContextBuffer<E>(options: {
   isEntry: (value: unknown) => value is E;
   /** One fold line for an entry — ALSO the eviction cost basis. */
   line: (entry: E) => string;
-  /** Where the entry stands in its place: the platform's message id, which grows with the discussion. */
+  /**
+   * Where the entry stands in its place: the platform's message id, which grows with the discussion. `after` is the
+   * position of a message a reader was already sent, so an entry standing at it came later when `later` says so.
+   */
   position: (entry: E) => number;
+  /** Whether the entry came after the message standing at its own position (an answer done after it). */
+  later?: (entry: E) => boolean;
 }): ContextBuffer<E> {
-  const { path, label, isEntry, line, position } = options;
+  const { path, label, isEntry, line, position, later } = options;
   const load = (): Map<string, E[]> => {
     const raw = loadStateFile(path);
     if (raw === undefined) return new Map();
@@ -111,7 +116,9 @@ export function createContextBuffer<E>(options: {
     fold(placeKey, { after, until, skip }) {
       const folded = (buffers.get(placeKey) ?? []).filter(
         (entry) =>
-          (after === undefined || position(entry) > after) && position(entry) <= until && skip?.(entry) !== true,
+          (after === undefined || position(entry) > after || (position(entry) === after && later?.(entry) === true)) &&
+          position(entry) <= until &&
+          skip?.(entry) !== true,
       );
       return { text: folded.map(line).join("\n"), folded };
     },

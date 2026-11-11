@@ -30,7 +30,7 @@ function msg(id: string, text: string, over: Partial<FeishuListedMessage> = {}):
 /** A place whose messages the test appends to (oldest first); the fake lists them newest first, as the platform does. */
 type MemberNames = FeishuApi["chatMemberNames"];
 
-function setup(opts: { names?: MemberNames; path?: string } = {}) {
+function setup(opts: { names?: MemberNames; path?: string; controls?: string[] } = {}) {
   const messages: FeishuListedMessage[] = [];
   let fail: Error | undefined;
   const listMessages = vi.fn(
@@ -58,6 +58,7 @@ function setup(opts: { names?: MemberNames; path?: string } = {}) {
       appId: "cli_self",
       label: "[feishu]",
       path,
+      isControl: (id) => opts.controls?.includes(id) ?? false,
     });
   let asks = 0;
   /** The ask each place's session was last sent: where its next read starts (the Agent's answer, in the channel). */

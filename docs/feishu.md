@@ -358,7 +358,7 @@ Each conversation has its own session, which the channel creates the first time 
 `<state root>/channels/<kind>/sessions.json`. There are no session modes to choose. In a group's main timeline each
 sender has a session of their own (`<kind>:<chat_id>#<sender>`), so one person's long task does not hold up another's
 question; the others' discussion and the agent's answers to them reach a session as attributed context, not as its own
-history. A sender the platform gave no id shares the chat's session. A thread is a separate place with its own —
+history. A sender the platform gave no id (a tenant whose events carry none) shares the chat's session. A thread is a separate place with its own —
 **started from what its asker knew**: a new thread's session is a fork of its asker's session in the main timeline, up
 to the message the thread branched from, including images and tool results. The fork happens once, when the thread's session is created;
 after that the two places are independent, and the main timeline never sees what the thread discusses.

@@ -1126,6 +1126,28 @@ describe("Slack stop command", () => {
     expect(slackBodies(fetchMock, "chat.postMessage").map((b) => b.text)).toEqual(["⏹ Stopped."]);
   });
 
+  it("a stop is no discussion: the next turn in the thread does not read it, but still reads other people's asks", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { stopped } = fakeStop("stopped");
+    const seen: string[] = [];
+    const recording = scriptedAgent(async function* (request) {
+      yield ev.message();
+      seen.push(promptOf(request).text);
+      yield ev.ended();
+    });
+    const { handler } = mount(recording, {}, root(), stopped);
+    await handler(signedRequest(message("60.0", { text: "incident" })));
+    await handler(signedRequest(message("60.1", { user: "U2", text: "somebody else's question", thread_ts: "60.0" })));
+    await handler(signedRequest(message("60.2", { text: "<@UBOT> stop", thread_ts: "60.0" })));
+    await handler(
+      signedRequest(message("60.3", { type: "app_mention", text: "<@UBOT> what now?", thread_ts: "60.0" })),
+    );
+    await settle();
+    expect(seen).toHaveLength(1); // the stop was a control action, never a turn
+    expect(seen[0]).toContain("somebody else's question");
+    expect(seen[0]).not.toMatch(/\(msg 60\.2\)/);
+  });
+
   it("maps an idle session to the idle notice", async () => {
     invoked.length = 0;
     const fetchMock = okFetch();

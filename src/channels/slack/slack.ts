@@ -302,6 +302,8 @@ function createSlackRuntime(
   // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle.
   const sideTasks = createTaskTracker(label);
   const seen = createSeenRing(join(stateHome, "seen.json"), label);
+  // A `/stop` is taken as input but is no discussion: a read leaves it out, the asks themselves are kept.
+  const stops = createSeenRing(join(stateHome, "stops.json"), label);
   const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
   /**
    * A thread's participation is keyed by the CONVERSATION it describes — "the agent answered here" is a claim about
@@ -323,6 +325,10 @@ function createSlackRuntime(
     self: () => ({ userId: auth.botUserId(), botId: auth.botId() }),
     label,
     path: join(stateHome, "history.json"),
+    isControl: (key, ts) => {
+      const place = slackPlaceOf(key);
+      return stops.has(`${place.teamId}:${place.channelId}:${ts}`);
+    },
   });
   // A group turn's room, for the thread-reading tool (`slackThreads`): the channel it was asked in, and its threads.
   const rooms = createRoomThreads({
@@ -557,6 +563,7 @@ function createSlackRuntime(
     // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
     if (isStopText(stripSlackMentions(event.text ?? ""))) {
       seen.add(logicalId);
+      stops.add(logicalId);
       const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
       sideTasks.track(
         dispatchStop(agent, recordedSession(routed.conversation ?? defaultConversation), label)

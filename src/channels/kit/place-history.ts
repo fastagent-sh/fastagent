@@ -143,6 +143,8 @@ export function createPlaceHistory<C>(deps: {
   label: string;
   /** Where each place's outputs persist. */
   path: string;
+  /** A message that is a control action (a `/stop`), not discussion: no read folds it. */
+  isControl?(key: string, messageId: string): boolean;
   /** The place's messages after `after` (or its newest few, with none) and before `until`, oldest first. */
   read(key: string, from: { after?: C; drop(messageId: string): boolean }, until?: C): Promise<PlaceListing>;
 }): PlaceHistory<C> {
@@ -157,7 +159,10 @@ export function createPlaceHistory<C>(deps: {
       try {
         const { messages, earlier } = await deps.read(
           key,
-          { ...(after !== undefined ? { after } : {}), drop: (id) => outputs.has(id) },
+          {
+            ...(after !== undefined ? { after } : {}),
+            drop: (id) => outputs.has(id) || deps.isControl?.(key, id) === true,
+          },
           until,
         );
         return foldPlace(messages, earlier);

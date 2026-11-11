@@ -282,6 +282,8 @@ function createFeishuRuntimeFactory(
     });
     // Every message this channel took as input (a turn, a /stop): the dedup ring.
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
+    // A `/stop` is taken as input but is no discussion: a read leaves it out, the asks themselves are kept.
+    const stops = createSeenRing(join(stateHome, "stops.json"), label);
     // Where each conversation's session read to: a turn folds its place from the ask its session was last sent.
     const asks = createAskLog<FeishuPosition>({
       label,
@@ -295,6 +297,7 @@ function createFeishuRuntimeFactory(
       appId,
       label,
       path: join(stateHome, "history.json"),
+      isControl: (id) => stops.has(id),
     });
     // A group turn's room, for the thread-reading tool (`feishuThreads`): the chat it was asked in, and its threads.
     const rooms = createRoomThreads({
@@ -520,6 +523,7 @@ function createFeishuRuntimeFactory(
       // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
       if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
         seen.add(m.message_id);
+        stops.add(m.message_id);
         sideTasks.track(
           dispatchStop(agent, recordedSession(conversation), label)
             .then((feedback) =>

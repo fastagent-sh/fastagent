@@ -162,7 +162,9 @@ Telegram Threaded Mode is handled automatically:
 - if `message_thread_id` is present, the default conversation is `<chat>:<thread>`, shared by everyone in the topic,
 - in a private chat it is `<chat>`,
 - in a group's main timeline it is `<chat>#<sender id>`: one per sender, so one person's long task does not hold up
-  another's question. A message with no sender (an anonymous admin, a channel post) shares `<chat>`.
+  another's question. A message with no `from` (a channel post) shares `<chat>`. A message an anonymous admin sends
+  on behalf of the group carries a fake `from` that is the same for every such admin, so they share one session,
+  `<chat>#<that id>`, and can hold each other up like any one sender's follow-ups.
 
 Each conversation has its own session, which the channel creates the first time it is asked there and records in
 `<state root>/channels/telegram/sessions.json`. A new topic starts a session of its own.
