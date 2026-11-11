@@ -103,8 +103,14 @@ vi.mock("../src/cli/ticket.ts", async (importOriginal) => ({
 }));
 const { createTicket, checkTicket } = await import("../src/cli/ticket.ts");
 const { terminalPerson } = await import("../src/cli/person.ts");
-vi.mock("../src/cli/commands/deploy/fly.ts", () => ({ flyHost: { deploy: deployed, isOurs: () => true } }));
-vi.mock("../src/cli/commands/deploy/docker.ts", () => ({ dockerHost: { deploy: deployed, isOurs: () => true } }));
+// The contract of a host includes the manifest an earlier version wrote; these fakes have none.
+const NO_LEGACY_MANIFEST = vi.hoisted(() => ({ file: "", generated: () => false, renamed: () => "" }));
+vi.mock("../src/cli/commands/deploy/fly.ts", () => ({
+  flyHost: { deploy: deployed, isOurs: () => true, legacyManifest: NO_LEGACY_MANIFEST },
+}));
+vi.mock("../src/cli/commands/deploy/docker.ts", () => ({
+  dockerHost: { deploy: deployed, isOurs: () => true, legacyManifest: NO_LEGACY_MANIFEST },
+}));
 const { runDeploy } = await import("../src/cli/commands/deploy.ts");
 
 let dir: string;

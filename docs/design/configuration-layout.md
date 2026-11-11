@@ -165,7 +165,7 @@ These are decided by measuring or building, not by argument.
 
 One PR each, in this order; each leaves the product working. No compatibility layer, per the maintenance policy.
 
-1. **Name.** The instance name from the configuration; host resources, generated manifests and the storage claim use it.
+1. **Name** (built). The instance name from the configuration (`deploymentName`, `src/deploy/deployment-name.ts`); host resources, generated manifests and the storage claim use it, and `secrets`, `logs`, `destroy` and `login --deployment` take `--config` to say which instance. The default name is the program's (`package.json`'s), not the directory's, so an agent whose `package.json` name differs from its directory deploys under a new name; the manifests an earlier version wrote (`fly.toml`, `fastagent.compose.yml`, `agentcore.template.yaml`) are not read.
 2. **Delivery.** The image holds the program only; `FASTAGENT_CONFIG_JSON`, `FASTAGENT_NAME` and
    `FASTAGENT_RELEASE_ID` rendered per host; `delivered-text`, the `/etc/fastagent/` layer and the release manifest go;
    the pre-flight refuses what cannot be a variable.

@@ -41,7 +41,7 @@ export async function ensureFlyApp(
   if ((await fly(["apps", "create", app])).code !== 0) {
     return (
       `\`fly apps create ${app}\` failed — see the flyctl output above: the name may be taken (Fly app names are ` +
-      `globally unique: set a unique \`app\` in fly.toml) or the account may need payment information. Then re-run.`
+      `globally unique: set a unique \`app\` in the instance's fly.<name>.toml) or the account may need payment information. Then re-run.`
     );
   }
   return undefined;

@@ -369,7 +369,7 @@ const deploy: CommandSpec = {
   summary: "generate deploy artifacts + a runbook for docker, fly, railway, or agentcore (--run drives it)",
   description:
     "Generate Dockerfile/.dockerignore plus the target config and print an ordered runbook. " +
-    "docker: fastagent.compose.yml, loopback port, persistent state volume. fly: fly.toml " +
+    "docker: fastagent.<name>.compose.yml, loopback port, persistent state volume. fly: fly.<name>.toml " +
     "(autostop=suspend, state→volume). railway: no config file; its volume/variables/App-Sleeping " +
     "are dashboard/CLI steps the runbook states. agentcore: one " +
     "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
@@ -393,8 +393,9 @@ const deploy: CommandSpec = {
     {
       flags: "--config <file>",
       description:
-        "the instance configuration (a fastagent.json) the deployment runs with, carried in the image; without it, " +
-        "the program's defaults (the project's fastagent.json is the development instance's)",
+        "the instance configuration (a fastagent.json) the deployment runs with, carried in the image; its `name` " +
+        "names the deployment (default: the program's name). Without it, the program's defaults (the project's " +
+        "fastagent.json is the development instance's)",
     },
     {
       flags: "--into-linked",
@@ -756,7 +757,7 @@ const secrets: CommandSpec = {
         "is never read back.",
       args: [SECRETS_HOST, AGENT_ARG],
       flags: [
-        { flags: "--config <file>", description: "the configuration the deployment delivers (`deploy --config`)" },
+        { flags: "--config <file>", description: "the configuration that names the instance (`deploy --config`)" },
         JSON_FLAG,
       ],
       examples: [{ cmd: "fastagent secrets list fly" }],
@@ -775,7 +776,7 @@ const secrets: CommandSpec = {
         "and prints it once, for what FastAgent makes itself (FASTAGENT_API_KEY).",
       args: [SECRETS_HOST, { name: "<name>", description: "the environment variable" }, AGENT_ARG],
       flags: [
-        { flags: "--config <file>", description: "the configuration the deployment delivers (`deploy --config`)" },
+        { flags: "--config <file>", description: "the configuration that names the instance (`deploy --config`)" },
         { flags: "--generate", description: "a random value, printed once" },
       ],
       examples: [
@@ -804,7 +805,7 @@ const secrets: CommandSpec = {
         "(.secrets/production/.env). Names the definition does not declare are not pushed.",
       args: [SECRETS_HOST, AGENT_ARG],
       flags: [
-        { flags: "--config <file>", description: "the configuration the deployment delivers (`deploy --config`)" },
+        { flags: "--config <file>", description: "the configuration that names the instance (`deploy --config`)" },
         { flags: "--env-file <file>", description: "the value file to push from, which must exist" },
         { flags: "--from-env", description: "push from this command's environment" },
       ],
@@ -822,6 +823,12 @@ const secrets: CommandSpec = {
   ],
 };
 
+const INSTANCE_CONFIG: FlagSpec = {
+  flags: "--config <file>",
+  description:
+    "the instance configuration that names the deployment (its `name`; else the program's name), the file `deploy --config` was given",
+};
+
 const destroy: CommandSpec = {
   name: "destroy",
   summary: "delete every AWS resource `deploy agentcore` created for an agent",
@@ -831,10 +838,13 @@ const destroy: CommandSpec = {
     "log groups (the forwarder's and the runtime's own stdout) are created by AWS on first write so no " +
     "template mentions them, and the EventBridge schedules (one per schedule, one per pending wake-up) " +
     "are minted at runtime by the container — left behind, they keep firing into a deleted Lambda. " +
-    "Derives the same names from the agent directory that deploy did. Without --run it deletes nothing and reports what " +
+    "Derives the same names from the instance that deploy did (--config names it). Without --run it deletes nothing and reports what " +
     "is out there.",
   args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, AGENT_ARG],
-  flags: [{ flags: "--run", description: "actually delete. Without it, this is a read-only inventory" }],
+  flags: [
+    INSTANCE_CONFIG,
+    { flags: "--run", description: "actually delete. Without it, this is a read-only inventory" },
+  ],
   // The other hosts need no command of their own, and saying which one to use belongs where it can be READ:
   // `<host>` has `choices`, so a `destroy fly` never reaches the command body.
   examples: [
@@ -846,13 +856,14 @@ const destroy: CommandSpec = {
     "wrote agent state there, and it may be the only copy. Everything else is deleted unconditionally, " +
     "including the agent's session storage on the AgentCore runtime — this host keeps it inside the " +
     "stack, so there is no way to delete the deployment and keep the conversations. The other hosts need " +
-    "no command here: `fly apps destroy`, `railway down`, `docker compose -f fastagent.compose.yml down -v`. " +
+    "no command here: `fly apps destroy`, `railway down`, `docker compose -f fastagent.<name>.compose.yml down -v`. " +
     "AWS ONLY: the " +
     "webhook registrations `deploy --run` made with Telegram/Slack/Feishu still point at the deleted " +
     "Function URL, and clearing them is a call to those platforms (for Telegram, deleteWebhook).",
   run: async (args, f) =>
     (await import("./commands/destroy.ts")).runDestroy(args[0] as string, args[1] as string, {
       run: f.run === true,
+      ...(typeof f.config === "string" ? { config: f.config } : {}),
     }),
 };
 
@@ -860,11 +871,12 @@ const logs: CommandSpec = {
   name: "logs",
   summary: "find and tail a deployed host's application logs",
   description:
-    "Find the CloudWatch log group for the AgentCore stack derived from the agent directory, then run aws logs tail. " +
+    "Find the CloudWatch log group for the AgentCore stack derived from the instance (--config names it), then run aws logs tail. " +
     "The default Runtime source shows the agent process's own stdout/stderr; the forwarder source shows " +
     "the Lambda ingress transport logs.",
   args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, AGENT_ARG],
   flags: [
+    INSTANCE_CONFIG,
     { flags: "--source <source>", description: "agentcore log source: runtime (default) or forwarder" },
     { flags: "--since <duration>", description: "history window accepted by AWS CLI (for example 30m or 2h)" },
     { flags: "--follow", description: "keep polling for new log events until interrupted" },
@@ -874,11 +886,12 @@ const logs: CommandSpec = {
     { cmd: "fastagent logs agentcore --source forwarder --follow", note: "Lambda ingress" },
   ],
   notes:
-    "Read-only. Run it against the same agent directory passed to deploy so it derives the same CloudFormation " +
+    "Read-only. Run it against the same agent directory and --config passed to deploy so it derives the same CloudFormation " +
     "stack name. It never changes FASTAGENT_LOG_LEVEL: AgentCore keeps start's production default, and " +
     "setting that environment knob to debug exposes the existing detailed turn trace when needed.",
   run: async (args, f) =>
     (await import("./commands/logs.ts")).runLogs(args[0] as string, args[1] as string, {
+      ...(typeof f.config === "string" ? { config: f.config } : {}),
       source: f.source as string | undefined,
       since: f.since as string | undefined,
       follow: f.follow === true,
@@ -926,6 +939,11 @@ const login: CommandSpec = {
       description:
         "log in this agent's deployment on <host> instead, on the box itself (docker, fly, railway, agentcore)",
     },
+    {
+      flags: "--config <file>",
+      description:
+        "with --deployment: the instance configuration that names the deployment (the file `deploy --config` was given)",
+    },
     { flags: "--stdio", description: "the box's half of --deployment", hidden: true },
     { flags: "--if-missing", description: "with --stdio: keep a stored credential for the provider", hidden: true },
     NO_INPUT,
@@ -958,6 +976,7 @@ const login: CommandSpec = {
       ...(f.code !== undefined ? { code: f.code as string } : {}),
       ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
       ...(f.deployment !== undefined ? { deployment: f.deployment as string } : {}),
+      ...(typeof f.config === "string" ? { config: f.config } : {}),
       stdio: f.stdio === true,
       ifMissing: f.ifMissing === true,
     }),

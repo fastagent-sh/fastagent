@@ -1,4 +1,5 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
+import { shellArg } from "../shell-arg.ts";
 import { CONTENT_DIRNAME, INSTANCE_CONFIG_FILE, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { RUNTIME_FLOOR } from "../runtime.ts";
 import { RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
@@ -153,8 +154,10 @@ export interface ContainerInput {
    * {@link IMAGE_CONFIG_DIR}, and `start` reads it through `FASTAGENT_CONFIG`. Without one, `{}`: the program's defaults.
    */
   config?: string;
-  /** The agent's name, recorded in the release manifest: the agent directory's own name. */
+  /** The instance's name, recorded in the release manifest as the agent the storage belongs to. */
   agent: string;
+  /** The `--config` file that names the instance, in the commands a runbook prints. */
+  configFile?: string;
   /** Agent-dir-relative machinery paths the NAME-based excludes below would miss. */
   machineryPaths?: string[];
   /** Whether the agent directory ships a `.git` (preflight fact). */
@@ -304,6 +307,19 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 # when this directory ships a .git; otherwise run "fastagent env add apt:git"). For a smaller image with no
 # git needs, add a ".git" line here.
 `;
+
+/**
+ * The runbook line every host prints about {@link DELIVERED_CONFIG_DIR}: one directory serves every instance of the
+ * agent, and holds what the deploy generated last, so a build that does not follow this instance's own `deploy` would
+ * carry another instance's configuration and name.
+ */
+export function deliveredDirNote(input: Pick<ContainerInput, "agent" | "configFile">, host: string): string[] {
+  const again = `fastagent deploy ${host}${input.configFile === undefined ? "" : ` --config ${shellArg(input.configFile)}`}`;
+  return [
+    `# ${DELIVERED_CONFIG_DIR}/ holds the configuration of the instance \`deploy\` generated LAST, which the image copies:`,
+    `# build "${input.agent}" right after \`${again}\`, or this image carries another instance's configuration and name.`,
+  ];
+}
 
 /** The Dockerfile + ignore artifacts — spread into any host's artifact list. */
 export function containerArtifacts(input: ContainerInput): Artifact[] {

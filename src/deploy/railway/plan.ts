@@ -1,7 +1,7 @@
 /** `fastagent deploy railway` — the Railway deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, deliveredDirNote, imageHasGit } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
@@ -47,7 +47,7 @@ export interface RailwayPlan {
 /** State root = the volume mount path, kept in lockstep. */
 const MOUNT = "/data";
 
-/** The name this tool gives BOTH the project and the service, derived from the agent directory's name. */
+/** The name this tool gives BOTH the project and the service, derived from the instance's name. */
 export function toRailwayName(basename: string): string {
   return stripEdges(basename.replace(/[^a-zA-Z0-9-]+/g, "-"), (char) => char === "-") || "agent";
 }
@@ -64,6 +64,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const runbook: string[] = [
     `# Deploy to Railway. Dockerfile(.dockerignore, .railwayignore) are generated above.`,
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
+    ...deliveredDirNote(input, "railway"),
     ``,
     `# One-time setup (init → service → volume → variables). Skip it on redeploy: repeating it creates`,
     `# another project/service/volume, splitting the agent's state.`,
@@ -106,7 +107,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     runbook.push(
       ``,
       `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from the agent directory):`,
-      `${deploymentLoginCommand("railway", input.boxLogin)}`,
+      `${deploymentLoginCommand("railway", input.boxLogin, input.configFile)}`,
     );
   }
   runbook.push(

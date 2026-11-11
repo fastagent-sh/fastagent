@@ -6,7 +6,7 @@ import {
   type AgentcorePlanInput,
   MOUNT,
   SECRETS_DIR,
-  TEMPLATE_FILE,
+  agentcoreTemplateFile,
   GENERATED_TEMPLATE_MARKER,
   FORWARDER_FILE,
   DEFAULT_IDLE_TIMEOUT_SECONDS,
@@ -56,7 +56,7 @@ describe("deploy agentcore: the plan", () => {
   it("minimal shape (no channel, no schedule): the forwarder is still there — it carries the wake alarms", () => {
     const plan = planAgentcoreDeploy(baseInput());
     expect(plan.artifacts.map((a) => a.path)).toEqual([
-      TEMPLATE_FILE,
+      agentcoreTemplateFile("my-agent"),
       FORWARDER_FILE,
       ".fastagent/deploy/fastagent.release.json",
       ".fastagent/deploy/fastagent.json",

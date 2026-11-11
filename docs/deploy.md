@@ -18,7 +18,7 @@ CLI.
 ```bash
 fastagent deploy docker                 # Dockerfile + local Compose + runbook
 fastagent deploy docker --run           # start the app service
-fastagent deploy fly                    # Dockerfile + fly.toml + runbook
+fastagent deploy fly                    # Dockerfile + fly.<name>.toml + runbook
 fastagent deploy fly --run
 fastagent deploy railway
 fastagent deploy railway --run
@@ -27,6 +27,37 @@ fastagent deploy agentcore --run
 fastagent deploy fly --run --json       # a coding agent's deploy: a ticket, its person's steps handed back
 fastagent deploy fly --run --config production.json   # with the instance configuration it runs on
 ```
+
+## An instance of its own
+
+A deployment is **named**, and what the host creates and what FastAgent generates carry that name: it is the `name` of
+the instance configuration `--config` gives, and without one the program's name (`package.json`'s, as one segment of
+letters, digits, `-` and `_`; the directory's when there is none). Fly's app, Railway's service, AgentCore's runtime and
+stack and Compose's project are called by it, and the manifests written into the agent directory are
+`fly.<name>.toml`, `fastagent.<name>.compose.yml` and `agentcore.<name>.template.yaml`. The `Dockerfile` and
+`.dockerignore` hold nothing of an instance and are shared.
+
+So one agent directory can be deployed as several instances, each with a configuration file of its own and none touching
+another's resources or its own `.<name>.` manifest:
+
+```bash
+fastagent deploy fly --run --config acme.json      # acme.json: { "name": "acme" }
+fastagent deploy fly --run --config globex.json    # globex.json: { "name": "globex" }
+```
+
+One thing is still shared: `.fastagent/deploy/` (the configuration the image carries and the release manifest) holds what
+the **last** `deploy` generated, whichever instance that was. `--run` generates and builds in one go, so it is safe; with
+the runbook, build an instance right after its own `deploy` (every runbook says so), or the image carries another
+instance's configuration and name. An image that holds no instance is the next step of
+[the configuration layout](design/configuration-layout.md).
+
+An earlier version wrote `fly.toml`, `fastagent.compose.yml` and `agentcore.template.yaml`; they are no longer read, and
+`deploy` says so once when it finds one it generated.
+
+Every command that addresses a deployment takes the same `--config` to say which one: `secrets list|set|push`,
+`logs agentcore`, `destroy agentcore` and `login --deployment`. Without it they address the deployment named by the
+program. A name is not a boundary the host enforces: a host that folds names (AgentCore and Fly lowercase them) gives two
+names that differ only by case the same resources.
 
 Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are yours.
 
@@ -153,13 +184,15 @@ A model with no API key on the target (an account sign-in such as ChatGPT for `o
 ```bash
 fastagent login --deployment railway    # the host is always named
 fastagent login openai --deployment fly
+fastagent login openai --deployment fly --config acme.json   # the instance that file names
 ```
 
 The host is not inferred from the agent directory: a Railway deploy leaves no file of its own there, and one
 directory can hold several hosts' files.
 
 `login --deployment`, `logs agentcore`, and `destroy agentcore` select the same production environment as `deploy`:
-`.secrets/production/.env` supplies the host account, region, and proxy. `FASTAGENT_SECRETS_DIR` still overrides that
+`.secrets/production/.env` supplies the host account, region, and proxy, and `--config` names the instance (see
+[An instance of its own](#an-instance-of-its-own)). `FASTAGENT_SECRETS_DIR` still overrides that
 location, and shell variables still outrank file values.
 
 The login runs on the box, through the host's own authenticated shell (`docker compose exec`, `fly ssh console`,
@@ -221,7 +254,7 @@ Requires Docker Compose 2.3.3 or newer.
 fastagent deploy docker
 ```
 
-Generates `Dockerfile`, `.dockerignore` and `fastagent.compose.yml` in the agent directory, with one `agent`
+Generates `Dockerfile`, `.dockerignore` and `fastagent.<name>.compose.yml` in the agent directory, with one `agent`
 service:
 
 - the generated or your own Dockerfile,
@@ -232,12 +265,12 @@ service:
 - `restart: unless-stopped`.
 
 ```bash
-docker compose -f fastagent.compose.yml build --pull
-docker compose -f fastagent.compose.yml up -d
-docker compose -f fastagent.compose.yml logs -f agent
-docker compose -f fastagent.compose.yml ps
-docker compose -f fastagent.compose.yml down     # keeps the state volume
-docker compose -f fastagent.compose.yml down -v  # destructive: deletes all state
+docker compose -f fastagent.<name>.compose.yml build --pull
+docker compose -f fastagent.<name>.compose.yml up -d
+docker compose -f fastagent.<name>.compose.yml logs -f agent
+docker compose -f fastagent.<name>.compose.yml ps
+docker compose -f fastagent.<name>.compose.yml down     # keeps the state volume
+docker compose -f fastagent.<name>.compose.yml down -v  # destructive: deletes all state
 ```
 
 `--run` checks Docker and the daemon, gates missing values before building, refuses when another process already
@@ -255,7 +288,7 @@ Notes:
 
 ### Owning the Docker files
 
-- An existing `Dockerfile`, `.dockerignore` or `fastagent.compose.yml` is kept byte for byte and used by `--run`.
+- An existing `Dockerfile`, `.dockerignore` or `fastagent.<name>.compose.yml` is kept byte for byte and used by `--run`.
 - `--force` regenerates only files fastagent generated (they start with a marker line). Remove the marker to own a
   file; delete a file to hand it back.
 - The environment (`context.json`'s `environment`) is installed by the generated Dockerfile; a hand-written one
@@ -272,9 +305,9 @@ terminal, or for a coding agent's person with `--json`). A token goes in your sh
 fastagent deploy fly
 ```
 
-Generates `fly.toml`, `Dockerfile` and `.dockerignore`, and prints the runbook:
+Generates `fly.<name>.toml`, `Dockerfile` and `.dockerignore`, and prints the runbook:
 
-1. `fly apps create <name>` (names are global; if taken, edit `app` in `fly.toml` and re-run `deploy`).
+1. `fly apps create <name>` (names are global; if taken, edit `app` in `fly.<name>.toml` and re-run `deploy`).
 2. `fly ips allocate-v4 --shared` and `fly ips allocate-v6`. A first `fly deploy` allocates them but only warns if
    that fails, leaving `https://<name>.fly.dev` without DNS. Skip if `fly ips list` shows one.
 3. `fly secrets set …` for the listed variables.
@@ -286,7 +319,7 @@ Generates `fly.toml`, `Dockerfile` and `.dockerignore`, and prints the runbook:
 fastagent deploy fly --run   # idempotent and resumable
 ```
 
-Idle behavior is **suspend** with `min_machines_running = 0`. Both lines are in `fly.toml` and are yours to edit.
+Idle behavior is **suspend** with `min_machines_running = 0`. Both lines are in `fly.<name>.toml` and are yours to edit.
 
 ## Railway
 
@@ -334,7 +367,7 @@ Railway cron service, a CI job), which verifies the clock's call (a shared secre
 sends the agent its message, or the Agent API, called with a key (`POST /v1/sessions/{sessionId}/messages`) when the
 deployment serves it ([Configuration](configuration.md#the-agent-api-over-http)).
 
-The generated `fly.toml` and the Railway runbook follow this table. If a kept `fly.toml` scales to zero where it
+The generated `fly.<name>.toml` and the Railway runbook follow this table. If a kept `fly.<name>.toml` scales to zero where it
 should not, `deploy` warns and `--run` refuses until you raise it.
 
 Wake-ups do not keep a machine up: they are stored on the volume, and a machine that scaled to zero fires what is
@@ -351,7 +384,7 @@ fastagent deploy agentcore
 fastagent deploy agentcore --run
 ```
 
-Generates `agentcore.template.yaml`, `agentcore/forwarder/index.js`, container files and a release manifest.
+Generates `agentcore.<name>.template.yaml`, `agentcore/forwarder/index.js`, container files and a release manifest.
 The runbook: create the ECR repository and the values secret, `docker buildx build --platform linux/arm64 … --push` with a unique tag
 per deploy, `aws cloudformation deploy`, read the outputs, register webhooks. `--run` does all of it.
 
@@ -453,7 +486,7 @@ What to know:
 ### Logs
 
 ```bash
-fastagent logs agentcore --follow                    # the Runtime's stdout/stderr
+fastagent logs agentcore --follow                    # the Runtime's stdout/stderr (--config <file> for an instance)
 fastagent logs agentcore --source forwarder --follow  # the forwarder Lambda
 ```
 
@@ -524,8 +557,8 @@ declared; without `--run`, these are warnings. Chromium with CJK fonts adds abou
 [variables](configuration.md#environment) `context.json` declares are required like a module's secrets: the runbook lists
 each with its description, and a deploy whose target has no value for one stops before it builds anything.
 
-**Artifacts** land in the agent directory: `Dockerfile` and `.dockerignore`, and `fastagent.compose.yml` / `fly.toml` /
-`agentcore.template.yaml` (Railway also gets a `.railwayignore`, below). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
+**Artifacts** land in the agent directory: `Dockerfile` and `.dockerignore`, and `fastagent.<name>.compose.yml` / `fly.<name>.toml` /
+`agentcore.<name>.template.yaml` (Railway also gets a `.railwayignore`, below). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
 `**/.state`, `/.fastagent` (but not `/.fastagent/deploy`, which the image is built from), `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
 
 - **Railway** uploads the directory with `railway up`, which follows `.gitignore` and only inside a git repository: a

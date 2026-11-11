@@ -1,9 +1,10 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
 import { mkdir, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { ownPublicUrl } from "../../../deploy/container.ts";
 import {
-  DOCKER_COMPOSE_FILE,
+  dockerComposeFile,
+  isDockerComposePath,
   DOCKER_VALUE_FILE,
   ingressNotes,
   isGeneratedCompose,
@@ -25,8 +26,9 @@ import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const dockerHost: HostDeploy = {
-  isOurs: (path, content) => path.endsWith(DOCKER_COMPOSE_FILE) && isGeneratedCompose(content),
-  shell: async (agentDir) => composeShell(DOCKER_COMPOSE_FILE, agentDir),
+  isOurs: (path, content) => isDockerComposePath(path) && isGeneratedCompose(content),
+  legacyManifest: { file: "fastagent.compose.yml", generated: isGeneratedCompose, renamed: dockerComposeFile },
+  shell: async (agentDir, name) => composeShell(dockerComposeFile(name), agentDir),
   validate({ opts, agentDir, pre }) {
     if (resolve(agentDir, pre.valueFile) !== join(agentDir, DOCKER_VALUE_FILE)) {
       const issue =
@@ -38,7 +40,7 @@ export const dockerHost: HostDeploy = {
     }
   },
   async deploy(ctx) {
-    const { opts, agentDir, channels, pre, write } = ctx;
+    const { opts, agentDir, name, channels, pre, write } = ctx;
     const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
     // Compose requires its committed env_file to exist, even when no values are declared.
     const composeValueFile = join(agentDir, DOCKER_VALUE_FILE);
@@ -58,7 +60,7 @@ export const dockerHost: HostDeploy = {
       );
     }
     const plan = planDockerDeploy({
-      projectName: toDockerProjectName(basename(agentDir)),
+      projectName: toDockerProjectName(name),
       port,
       boxLogin,
       channels,

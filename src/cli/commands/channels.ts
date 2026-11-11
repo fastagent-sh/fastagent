@@ -21,7 +21,8 @@ import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { enterEnvFile } from "../instance.ts";
 import type { Person } from "../person.ts";
-import { isInteractive, shellArg } from "../shared.ts";
+import { shellArg } from "../../shell-arg.ts";
+import { isInteractive } from "../shared.ts";
 import {
   type Ticket,
   checkTicket,

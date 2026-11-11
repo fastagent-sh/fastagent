@@ -4,12 +4,13 @@
  */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import {
   type AgentcoreTopology,
   FORWARDER_FILE,
-  TEMPLATE_FILE,
+  agentcoreTemplateFile,
+  isAgentcoreTemplatePath,
   agentcoreName,
   agentcoreStackName,
   forwarderLogGroup,
@@ -26,7 +27,7 @@ import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
 import { deploySecrets } from "./secrets-step.ts";
 import { IDLE_TIMEOUT_BOUNDS } from "../../../harnesses/pi-durable/config.ts";
 import { failStartup, failUsage } from "../../fail.ts";
-import { shellArg } from "../../shared.ts";
+import { shellArg } from "../../../shell-arg.ts";
 import { ownPublicUrl } from "../../../deploy/container.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorder } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
@@ -34,9 +35,14 @@ import type { DeploymentApi } from "../../../deploy/api.ts";
 import type { ModelKey } from "../../../deploy/secrets.ts";
 
 export const agentcoreHost: HostDeploy = {
-  isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
-  async shell(agentDir) {
-    const name = agentcoreName(basename(agentDir));
+  isOurs: (path, content) => isAgentcoreTemplatePath(path) && isGeneratedAgentcoreTemplate(content),
+  legacyManifest: {
+    file: "agentcore.template.yaml",
+    generated: isGeneratedAgentcoreTemplate,
+    renamed: agentcoreTemplateFile,
+  },
+  async shell(agentDir, instance) {
+    const name = agentcoreName(instance);
     const stack = agentcoreStackName(name);
     const aws = awsRunner(agentDir);
     const read = await awsCli(aws).read(
@@ -49,7 +55,7 @@ export const agentcoreHost: HostDeploy = {
     if (!runtimeArn) throw new Error(`stack ${stack} has no RuntimeArn output — redeploy it`);
     return agentcoreShell(runtimeArn, ingressSessionId(name), aws);
   },
-  validate({ opts, agentDir, pre }) {
+  validate({ opts, name: instance, pre }) {
     idleTimeoutOf(opts);
     const longConnectionChannels = pre.channels.filter((channel) => channel.ingress === "long-connection");
     if (longConnectionChannels.length > 0) {
@@ -60,19 +66,19 @@ export const agentcoreHost: HostDeploy = {
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg}`);
     }
-    const name = agentcoreName(basename(agentDir));
+    const name = agentcoreName(instance);
     // The forwarder Lambda name embeds this name and must fit AWS's 64-character limit.
     if (name.length > 40) {
       failStartup(
         new Error(
-          `deploy stopped: the directory name maps to "${name}" (${name.length} chars) — AWS resource ` +
-            `names derived from it exceed their limits past 40 chars. Deploy from a shorter directory name.`,
+          `deploy stopped: the instance name maps to "${name}" (${name.length} chars) — AWS resource ` +
+            `names derived from it exceed their limits past 40 chars. Give the instance a shorter \`name\`.`,
         ),
       );
     }
   },
   async deploy(ctx) {
-    const { opts, agentDir, config, channels, pre, write } = ctx;
+    const { opts, agentDir, name: instance, config, channels, pre, write } = ctx;
     const { modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
     if (boxLogin) {
       console.error(
@@ -85,7 +91,7 @@ export const agentcoreHost: HostDeploy = {
     // Schedules and wake-ups need nothing from the template beyond the forwarder every stack has: the container
     // mirrors them into EventBridge schedules itself (schedule/wake-alarm.ts). A schedule that does not build is the
     // pre-flight's to report.
-    const acName = agentcoreName(basename(agentDir));
+    const acName = agentcoreName(instance);
     const plan = planAgentcoreDeploy({
       name: acName,
       boxLogin,
@@ -95,8 +101,9 @@ export const agentcoreHost: HostDeploy = {
       ...container,
     });
     // The template IS the topology (forwarder, alarm wiring, secrets).
-    const templateArtifact = plan.artifacts.find((a) => a.path.endsWith(TEMPLATE_FILE));
-    const templateHome = join(agentDir, templateArtifact?.path ?? TEMPLATE_FILE);
+    const templateFile = agentcoreTemplateFile(instance);
+    const templateArtifact = plan.artifacts.find((a) => a.path === templateFile);
+    const templateHome = join(agentDir, templateFile);
     if (!opts.force && templateArtifact && (await exists(templateHome))) {
       const existing = await readFile(templateHome, "utf8");
       if (isGeneratedAgentcoreTemplate(existing) && existing !== templateArtifact.content) {
@@ -119,6 +126,7 @@ export const agentcoreHost: HostDeploy = {
       await runDeployAgentcore({
         agentDir,
         name: acName,
+        templateFile,
         modelAuth,
         boxLogin,
         answerer: ctx.answerer,
@@ -144,6 +152,8 @@ export const agentcoreHost: HostDeploy = {
 async function runDeployAgentcore(params: {
   agentDir: string;
   name: string;
+  /** The instance's template, in the agent directory. */
+  templateFile: string;
   modelAuth: string | undefined;
   /** The provider the runtime logs in to itself once it is verified (the pre-flight's `boxLogin`). */
   boxLogin: string | undefined;
@@ -190,7 +200,7 @@ async function runDeployAgentcore(params: {
     const outcome = await deployAgentcoreRun(
       {
         name,
-        templatePath: TEMPLATE_FILE,
+        templatePath: params.templateFile,
         dockerfilePath: "Dockerfile",
         tag: new Date()
           .toISOString()

@@ -1,16 +1,23 @@
 /** `fastagent deploy fly` — the Fly.io deploy PLAN, computed from the resolved definition. */
+import { basename } from "node:path";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds } from "../../channels/webhooks.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, deliveredDirNote, imageHasGit } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 import { stripEdges } from "../../strip-edges.ts";
 
+/** The instance's manifest: `fly.<name>.toml`, in the agent directory. */
+export const flyTomlFile = (name: string): string => `fly.${name}.toml`;
+
+/** Is `path` a manifest this host names (`flyTomlFile`)? */
+export const isFlyTomlPath = (path: string): boolean => /^fly\.[A-Za-z0-9_-]+\.toml$/.test(basename(path));
+
 export interface FlyPlanInput extends ContainerInput {
   // Container facts (runtime, hasLockfile, bunVersion, apt) come from ContainerInput.
-  /** Fly app name — globally unique, lowercase; the CLI sanitizes it from the dir basename. */
+  /** Fly app name — globally unique, lowercase; the CLI sanitizes it from the instance's name. */
   appName: string;
   /** The port the app listens on (config.http.port ?? 8787); fly.toml routes to it. */
   port: number;
@@ -35,7 +42,7 @@ export interface FlyPlanInput extends ContainerInput {
 }
 
 export interface FlyPlan {
-  /** fly.toml / Dockerfile / .dockerignore — written by the CLI (skipped if present unless --force). */
+  /** The instance's manifest / Dockerfile / .dockerignore — written by the CLI (skipped if present unless --force). */
   artifacts: Artifact[];
   /** The ordered, values-resolved deploy runbook — printed to stdout for the coding agent to execute. */
   runbook: string[];
@@ -89,7 +96,7 @@ export function isGeneratedFlyToml(content: string): boolean {
 /** Compute the Fly deploy plan from the resolved definition. */
 export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const { appName, port, channels } = input;
-  const flyTomlPath = "fly.toml";
+  const flyTomlPath = flyTomlFile(input.agent);
   const artifacts: Artifact[] = [
     {
       path: flyTomlPath,
@@ -104,10 +111,11 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const runbook: string[] = [
     `# Deploy "${appName}" to Fly.io. ${flyTomlPath} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: flyctl installed (https://fly.io/docs/flyctl/install) and \`fly auth login\`.`,
+    ...deliveredDirNote(input, "fly"),
     ``,
     `# One-time setup (skip on a redeploy — a second run makes a SECOND app/volume, splitting state).`,
-    `# Fly app names are GLOBALLY unique: if this fails as taken, set a unique "app" in fly.toml and`,
-    `# re-run \`fastagent deploy fly\` — the runbook follows fly.toml's app name.`,
+    `# Fly app names are GLOBALLY unique: if this fails as taken, set a unique "app" in ${flyTomlPath} and`,
+    `# re-run \`fastagent deploy fly\` — the runbook follows ${flyTomlPath}'s app name.`,
     `fly apps create ${appName}`,
     `# The volume (the agent's working directory, state, credentials — kept across stop/suspend/redeploy) is created by the deploy`,
     `# below, in primary_region and sized by [mounts].initial_size. Creating it yourself first pins it to a host`,
@@ -150,7 +158,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     runbook.push(
       ``,
       `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from the agent directory):`,
-      `${deploymentLoginCommand("fly", input.boxLogin)}`,
+      `${deploymentLoginCommand("fly", input.boxLogin, input.configFile)}`,
     );
   }
 
@@ -195,8 +203,8 @@ export function parseFlyMinMachines(toml: string): number | undefined {
   return m === undefined ? undefined : Number(m);
 }
 
-/** Sanitize a directory basename into a Fly app name: lowercase, [a-z0-9-], must start with a letter. */
-export function toFlyAppName(basename: string): string {
-  const slug = stripEdges(basename.toLowerCase().replace(/[^a-z0-9]+/g, "-"), (char) => char === "-");
+/** Sanitize an instance's name into a Fly app name: lowercase, [a-z0-9-], must start with a letter. */
+export function toFlyAppName(name: string): string {
+  const slug = stripEdges(name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), (char) => char === "-");
   return /^[a-z]/.test(slug) ? slug : `app-${slug || "agent"}`;
 }

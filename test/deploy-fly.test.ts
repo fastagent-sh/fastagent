@@ -4,7 +4,8 @@ import { parseFlyAppName, parseFlyMinMachines, planFlyDeploy, toFlyAppName } fro
 import { declaredChannels } from "../src/channels/discover.ts";
 import { NODE_IMAGE } from "../src/deploy/container.ts";
 
-const flyToml = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "fly.toml")!.content;
+const flyToml = (p: ReturnType<typeof planFlyDeploy>) =>
+  p.artifacts.find((a) => a.path === "fly.reviewer.toml")!.content;
 const dockerfile = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "Dockerfile")!.content;
 const runbook = (p: ReturnType<typeof planFlyDeploy>) => p.runbook.join("\n");
 
@@ -139,7 +140,7 @@ describe("deploy/fly: planFlyDeploy", () => {
       ".fastagent/deploy/fastagent.packages",
       ".fastagent/deploy/fastagent.release.json",
       "Dockerfile",
-      "fly.toml",
+      "fly.reviewer.toml",
     ]);
     // Both ignore forms carry the same content (recursive patterns, .git not excluded).
     const rootIgnore = p.artifacts.find((a) => a.path === ".dockerignore")?.content ?? "";
@@ -168,7 +169,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(ignore).toMatch(/^\*\*\/\.secrets\/\*\*$/m); // credentials stay out; tracked scaffolds travel
     expect(ignore).toMatch(/^\*\*\/\.state$/m);
     // The runbook deploys from the agent directory with explicit, version-proof flags.
-    expect(runbook(p)).toContain("fly deploy . --config fly.toml --dockerfile Dockerfile --app bot");
+    expect(runbook(p)).toContain("fly deploy . --config fly.reviewer.toml --dockerfile Dockerfile --app bot");
     expect(runbook(p)).toContain("The volume is the agent's working directory: it keeps its work");
   });
 

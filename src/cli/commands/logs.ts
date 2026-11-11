@@ -1,13 +1,16 @@
 /** `fastagent logs agentcore [agent]`: discover and tail the deployed AgentCore CloudWatch logs. */
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import { agentcoreName } from "../../deploy/agentcore/plan.ts";
 import { type AgentcoreLogSource, tailAgentcoreLogs } from "../../deploy/agentcore/logs.ts";
 import { awsRunner } from "../../deploy/runner.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
+import { deploymentName } from "../../deploy/deployment-name.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 
 export interface AgentcoreLogsOptions {
+  /** `--config <file>`: the instance's configuration, which names it. */
+  config?: string;
   source?: string;
   since?: string;
   follow?: boolean;
@@ -25,7 +28,7 @@ export async function runLogs(host: string, dirArg: string, opts: AgentcoreLogsO
   }
   const outcome = await tailAgentcoreLogs(
     {
-      name: agentcoreName(basename(agentDir)),
+      name: agentcoreName(await deploymentName(agentDir, opts.config).catch(failStartup)),
       source: source as AgentcoreLogSource,
       since: opts.since,
       follow: opts.follow === true,

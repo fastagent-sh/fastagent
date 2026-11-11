@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dockerComposeFile } from "../src/deploy/docker/plan.ts";
+import { deploymentName } from "../src/deploy/deployment-name.ts";
 import { agentWorkspace, runInProcess } from "./cli-run.ts";
 
 describe("cli: deploy docker", () => {
@@ -11,28 +13,29 @@ describe("cli: deploy docker", () => {
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
 
+    const file = dockerComposeFile(await deploymentName(dir));
     const first = await runInProcess(["deploy", "docker", dir]);
     expect(first.code).toBe(0);
     expect(first.stderr).toContain("Agent API: http://127.0.0.1:8787/v1");
     expect(first.stdout).toContain(
       // One spelling: the generated Compose names the value file itself.
-      "docker compose -f fastagent.compose.yml build --pull\ndocker compose -f fastagent.compose.yml up -d\n",
+      `docker compose -f ${file} build --pull\ndocker compose -f ${file} up -d\n`,
     );
-    const generatedCompose = await readFile(join(dir, "fastagent.compose.yml"), "utf8");
+    const generatedCompose = await readFile(join(dir, file), "utf8");
     expect(generatedCompose).toContain('"127.0.0.1:8787:8787"');
     expect(generatedCompose).not.toContain("cloudflared");
 
     const customDockerfile = "FROM node:22-slim\nRUN echo custom\n";
     const customCompose = `${generatedCompose}\n# custom ingress belongs to me\n`;
     await writeFile(join(dir, "Dockerfile"), customDockerfile);
-    await writeFile(join(dir, "fastagent.compose.yml"), customCompose);
+    await writeFile(join(dir, file), customCompose);
 
     const second = await runInProcess(["deploy", "docker", dir]);
     expect(second.code).toBe(0);
     expect(second.stderr).toContain("kept Dockerfile");
-    expect(second.stderr).toContain("kept fastagent.compose.yml");
+    expect(second.stderr).toContain(`kept ${file}`);
     expect(await readFile(join(dir, "Dockerfile"), "utf8")).toBe(customDockerfile);
-    expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toBe(customCompose);
+    expect(await readFile(join(dir, file), "utf8")).toBe(customCompose);
   });
 
   it("deploy docker gates --run when FASTAGENT_SECRETS_DIR sends the values away from the committed env_file", async () => {
@@ -60,7 +63,7 @@ describe("cli: deploy docker", () => {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
     expect((await runInProcess(["deploy", "docker", dir])).code).toBe(0);
-    const compose = join(dir, "fastagent.compose.yml");
+    const compose = join(dir, dockerComposeFile(await deploymentName(dir)));
     // Keep the marker (it is still ours), change the content: drifted, not disowned.
     await writeFile(compose, `${await readFile(compose, "utf8")}# drifted\n`);
 
@@ -69,7 +72,7 @@ describe("cli: deploy docker", () => {
 
     const gated = await runInProcess(["deploy", "docker", dir, "--run"]);
     expect(gated.code).toBe(1);
-    expect(gated.stderr).toMatch(/deploy stopped: fastagent\.compose\.yml no longer match/);
+    expect(gated.stderr).toContain(`deploy stopped: ${dockerComposeFile(await deploymentName(dir))} no longer match`);
     expect(gated.stderr).not.toMatch(/Docker CLI not found|Docker daemon/); // refused before any Docker work
     // Refused before anything is on disk: the release manifest is rewritten unconditionally, so deciding after the
     // writes would leave a release id that was never deployed, and print `wrote …` lines above `deploy stopped`.
@@ -84,6 +87,6 @@ describe("cli: deploy docker", () => {
     const result = await runInProcess(["deploy", "docker", dir, "--tunnel"]);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("unknown option '--tunnel'");
-    await expect(access(join(dir, "fastagent.compose.yml"))).rejects.toThrow();
+    await expect(access(join(dir, dockerComposeFile(await deploymentName(dir))))).rejects.toThrow();
   });
 });

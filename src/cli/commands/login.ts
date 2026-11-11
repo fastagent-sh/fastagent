@@ -33,6 +33,8 @@ import { resolveConfig } from "../../harnesses/pi-durable/config.ts";
 import { definitionProviders, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { loginOnBox, ticketLoginIO } from "../box-login.ts";
 import { deploymentLoginCommand } from "../../deploy/box-shell.ts";
+import { deploymentName } from "../../deploy/deployment-name.ts";
+import { shellArg } from "../../shell-arg.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import {
   printReport,
@@ -68,6 +70,8 @@ export interface LoginOptions {
   ticket?: string;
   /** `--deployment <host>`: log in this agent's deployment on that host. */
   deployment?: string;
+  /** `--config <file>` (with `--deployment`): the configuration that names the instance to log in. */
+  config?: string;
   /** `--stdio`: the box's half of `--deployment` — the flow speaks the relay wire on stdin/stdout. */
   stdio?: boolean;
   /** `--if-missing` (with `--stdio`): keep a credential already stored for the provider. */
@@ -82,6 +86,9 @@ const UNATTENDED_TIMEOUT_SECONDS = 600;
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.stdio) return runStdioLogin(provider, opts);
+  if (opts.config !== undefined && opts.deployment === undefined) {
+    failUsage("--config names the deployment that --deployment logs in: pass --deployment <host> too");
+  }
   if (opts.deployment !== undefined) return runDeploymentLogin(provider, opts);
   if (opts.check !== undefined) return runCheck(opts.check, opts);
   if (opts.code !== undefined) failUsage("--code hands an address to a sign-in: pass --check <ticket> too");
@@ -450,6 +457,9 @@ export function signInInteraction(step: TicketStep, provider: string): AuthInter
   };
 }
 
+/** ` --config <file>` for a command that names this instance again, or nothing. */
+const configArg = ({ config }: LoginOptions): string => (config === undefined ? "" : ` --config ${shellArg(config)}`);
+
 /**
  * `--deployment <host>`: always named. The agent directory cannot answer which host it means: a Railway deploy leaves
  * no file of its own there, and a directory can hold several hosts' files, so a guess could log a different box in
@@ -473,15 +483,18 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
     );
   }
   const host = opts.deployment as DeployHost;
+  // After a ticket is taken, never before: its process takes the ticket first, then does what takes time.
+  const nameOfInstance = () => deploymentName(agentDir, opts.config).catch(failStartup);
   const method = opts.method === undefined ? undefined : methodOf(opts.method);
   if (opts.ticket !== undefined) {
     // The process `startTicket` started: it holds the box's shell while the person signs in.
-    const retry = deploymentLoginCommand(host, provider);
+    const retry = deploymentLoginCommand(host, provider, opts.config);
     await runTicket(opts.ticket, async (step) => {
       const io = ticketLoginIO(step, retry);
       const failed = await loginOnBox({
         host,
-        shell: await HOSTS[host].shell(agentDir),
+        shell: await HOSTS[host].shell(agentDir, await nameOfInstance()),
+        ...(opts.config === undefined ? {} : { configFile: opts.config }),
         provider: provider as string,
         method: "oauth",
         input: true,
@@ -498,7 +511,8 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
   }
   const failed = await loginOnBox({
     host,
-    shell: await HOSTS[host].shell(agentDir).catch(failStartup),
+    shell: await HOSTS[host].shell(agentDir, await nameOfInstance()).catch(failStartup),
+    ...(opts.config === undefined ? {} : { configFile: opts.config }),
     ...(provider ? { provider } : {}),
     ...(method ? { method } : {}),
     input: true,
@@ -527,12 +541,15 @@ async function requestDeploymentLogin(
     choice = await chooseLogin(offered, given, undefined);
   } catch (error) {
     if (!(error instanceof LoginRefused)) throw error;
-    return choiceNotGiven(error, opts, { flags: ` --deployment ${host}`, statuses: false });
+    return choiceNotGiven(error, opts, {
+      flags: ` --deployment ${host}${configArg(opts)}`,
+      statuses: false,
+    });
   }
   if (choice.method === "api_key") {
     const valueFile = dotEnvPath(agentDir);
     const { variables, what } = await keyToSet(choice, providers);
-    const deploy = `fastagent deploy ${host} --run`;
+    const deploy = `fastagent deploy ${host}${configArg(opts)} --run`;
     printReport(
       opts.json,
       {
@@ -559,7 +576,7 @@ async function requestDeploymentLogin(
     fields: { provider: choice.provider, method: "account", deployment: host },
     action: `sign in to ${choice.name} for the ${host} deployment`,
     check: LOGIN_CHECK,
-    restart: `fastagent login ${choice.provider} --method account --deployment ${host}`,
+    restart: `fastagent login ${choice.provider} --method account --deployment ${host}${configArg(opts)}`,
     timeoutSeconds,
     // Reaching the box comes first, and can take a while (a host's shell, an idle runtime woken).
     waitsFirst: false,
@@ -575,6 +592,7 @@ async function requestDeploymentLogin(
         "account",
         "--deployment",
         host,
+        ...(opts.config === undefined ? [] : ["--config", opts.config]),
       ],
       cwd: process.cwd(),
     },

@@ -5,14 +5,14 @@
  * command that injected it (`op run -- fastagent secrets push fly --from-env`).
  */
 import { randomBytes } from "node:crypto";
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import { isCancel, password } from "@clack/prompts";
 import { isEnvName } from "../../declared-secrets.ts";
 import { agentcoreName, agentcoreSecretName } from "../../deploy/agentcore/plan.ts";
 import { agentcoreSecretStore } from "../../deploy/agentcore/store.ts";
 import { deploymentApi } from "../../deploy/api.ts";
 import { fileStore } from "../../deploy/file-store.ts";
-import { toFlyAppName, parseFlyAppName } from "../../deploy/fly/plan.ts";
+import { flyTomlFile, parseFlyAppName, toFlyAppName } from "../../deploy/fly/plan.ts";
 import { flyStore } from "../../deploy/fly/store.ts";
 import { toRailwayName } from "../../deploy/railway/plan.ts";
 import { railwayStore } from "../../deploy/railway/store.ts";
@@ -26,6 +26,7 @@ import { API_KEY_VARIABLE } from "../../http/server.ts";
 import { readTextIfExists, selectAgentEnvironment } from "../../paths.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
 import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
+import { deploymentName } from "../../deploy/deployment-name.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { printReport } from "../ticket.ts";
 import { join } from "node:path";
@@ -52,12 +53,12 @@ const LABELS: Record<SecretsHost, string> = {
   agentcore: "AWS Secrets Manager",
 };
 
-/** The store of `host` for the agent in `agentDir`, its CLI signed in. */
-async function openStore(host: SecretsHost, agentDir: string): Promise<SecretStore> {
+/** The store of `host` for the instance `name` of the agent in `agentDir`, its CLI signed in. */
+async function openStore(host: SecretsHost, agentDir: string, name: string): Promise<SecretStore> {
   const log = (message: string) => console.error(`[fastagent] ${message}`);
   if (host === "docker") return fileStore(agentDir, dotEnvPath(agentDir));
   if (host === "agentcore")
-    return agentcoreSecretStore(awsRunner(agentDir), agentcoreSecretName(agentcoreName(basename(agentDir))), log);
+    return agentcoreSecretStore(awsRunner(agentDir), agentcoreSecretName(agentcoreName(name)), log);
   if (host === "fly") {
     const fly = spawnRunner("fly", agentDir, { stdoutToStderr: true });
     if ((await fly(["version"], { capture: true })).code === 127) {
@@ -66,8 +67,8 @@ async function openStore(host: SecretsHost, agentDir: string): Promise<SecretSto
     if ((await fly(["auth", "whoami"], { capture: true })).code !== 0) {
       failStartup(new Error(hostSignedOutGate("Fly", "fly auth login", "FLY_API_TOKEN", "fly auth login")));
     }
-    const toml = await readTextIfExists(join(agentDir, "fly.toml"));
-    const app = (toml && parseFlyAppName(toml)) ?? toFlyAppName(basename(agentDir));
+    const toml = await readTextIfExists(join(agentDir, flyTomlFile(name)));
+    const app = (toml && parseFlyAppName(toml)) ?? toFlyAppName(name);
     return flyStore(fly, app, log, { stage: false });
   }
   const railway = spawnRunner("railway", agentDir, { stdoutToStderr: true });
@@ -79,17 +80,19 @@ async function openStore(host: SecretsHost, agentDir: string): Promise<SecretSto
       new Error(hostSignedOutGate("Railway", "railway login", "RAILWAY_API_TOKEN (an account token)", "railway login")),
     );
   }
-  return railwayStore(railway, toRailwayName(basename(agentDir)), log, { redeploy: true });
+  return railwayStore(railway, toRailwayName(name), log, { redeploy: true });
 }
 
 /** What the definition declares for the deployment, and the production value file it reads. */
 async function declared(agentDir: string, configFile: string | undefined, host: SecretsHost) {
+  const name = await deploymentName(agentDir, configFile);
   const instance = configFile === undefined ? undefined : await readInstanceConfigFile(resolve(configFile));
   const definition = await loadSourceDefinition(agentDir);
   const config = resolveConfig(definition, instance);
   const api = deploymentApi({ config, hostServes: host !== "agentcore" });
   const facts = await preflightDeploy({
     agentDir,
+    name,
     config,
     ...(instance === undefined
       ? {}
@@ -143,7 +146,7 @@ export async function runSecrets(
   selectAgentEnvironment("production");
   unmarkDevServe();
   try {
-    const store = await openStore(host, agentDir);
+    const store = await openStore(host, agentDir, await deploymentName(agentDir, opts.config));
     if (action === "list") return await list(store, host, agentDir, opts);
     if (action === "set") return await set(store, host, name as string, opts, agentDir);
     return await push(store, host, agentDir, opts);

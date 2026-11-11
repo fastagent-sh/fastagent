@@ -2,7 +2,6 @@
  * `deploy railway`: no config file of its own, scale-to-zero is a manual dashboard step, the URL is minted (see
  * planRailwayDeploy).
  */
-import { basename } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import {
   RAILWAYIGNORE_FILE,
@@ -24,7 +23,9 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const railwayHost: HostDeploy = {
   isOurs: (path, content) => path === RAILWAYIGNORE_FILE && isGeneratedRailwayignore(content),
-  shell: async (agentDir) => railwayShell(toRailwayName(basename(agentDir)), agentDir),
+  // Railway has no manifest of its own: nothing was renamed.
+  legacyManifest: { file: "", generated: () => false, renamed: () => "" },
+  shell: async (agentDir, name) => railwayShell(toRailwayName(name), agentDir),
   validate({ opts, agentDir }) {
     const problem = keptRailwayignoreProblem(agentDir);
     if (problem === undefined) return;
@@ -32,9 +33,9 @@ export const railwayHost: HostDeploy = {
     console.error(`[fastagent] warn: ${problem}`);
   },
   async deploy(ctx) {
-    const { opts, agentDir, pre, channels, write } = ctx;
+    const { opts, agentDir, name, pre, channels, write } = ctx;
     const { hasCron, modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
-    const serviceName = toRailwayName(basename(agentDir));
+    const serviceName = toRailwayName(name);
     const plan = planRailwayDeploy({
       serviceName,
       boxLogin,

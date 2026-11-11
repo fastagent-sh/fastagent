@@ -16,7 +16,11 @@ vi.mock("../src/cli/shared.ts", async (importOriginal) => ({
 }));
 vi.mock("../src/cli/box-login.ts", () => ({ loginOnBox: async () => undefined }));
 vi.mock("../src/cli/commands/deploy/agentcore.ts", () => ({
-  agentcoreHost: { deploy: ports.deploy, shell: ports.shell },
+  agentcoreHost: {
+    deploy: ports.deploy,
+    shell: ports.shell,
+    legacyManifest: { file: "", generated: () => false, renamed: () => "" },
+  },
 }));
 vi.mock("../src/deploy/preflight.ts", () => ({
   preflightDeploy: async () => ({ ok: true, channels: [], messages: [], values: new Map() }),

@@ -4,8 +4,8 @@
  */
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename, join, relative } from "node:path";
-import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
+import { join, relative } from "node:path";
+import { isModelSpec } from "./workspace.ts";
 import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import {
@@ -216,6 +216,8 @@ class DeployGate {
 
 interface PreflightInput {
   agentDir: string;
+  /** The instance's name (`deploymentName`): the agent the release manifest says the storage belongs to. */
+  name: string;
   config: EffectiveConfig;
   /** The instance configuration this deployment delivers (`--config`): as read, and its file's text. */
   delivered?: { source: InstanceConfigSource; text: string };
@@ -258,15 +260,6 @@ export async function preflightDeploy(input: PreflightInput): Promise<DeployPref
 
 async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
   const { agentDir, config, delivered, force, noResidentProcess, storageResets = false, servesApi = false } = input;
-  // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
-  // "one path segment" is not enough here.
-  if (!isReleaseAgentName(basename(agentDir))) {
-    throw new DeployGate(
-      `the agent directory "${basename(agentDir)}" cannot be deployed — a deployed agent directory ` +
-        `may use only letters, digits, "-" and "_"; rename it (the fastagent.config.ts inside is what ` +
-        `makes it an agent, never its name)`,
-    );
-  }
 
   // A deployed agent is built (`start` opens `dist/`), and a build needs the project's own manifest and TypeScript.
   if (!(await exists(join(agentDir, "package.json")))) {
@@ -487,7 +480,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   ];
   const container: ContainerInput = {
     releaseId: randomUUID(),
-    agent: basename(agentDir),
+    agent: input.name,
+    ...(delivered === undefined ? {} : { configFile: delivered.source.label }),
     machineryPaths: paths.machineryPaths,
     runtime,
     bunVersion,
