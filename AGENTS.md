@@ -194,7 +194,7 @@ src/
 │   │   ├── attachment-path.ts # where an attachment lands (the conversation id encoded into a directory)
 │   │   ├── abortable.ts    # waiting that an abort ends, and a listener on a signal that is removed
 │   │   ├── stop-command.ts # the shared /stop parsing every chat channel accepts, and the abort it dispatches
-│   │   └── thread-fork.ts  # where a new thread forks from: its room at the message its reply chain names (by key)
+│   │   └── thread-fork.ts  # where a new thread forks from: the session holding the exchange it was opened on, at that ask (by key)
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts     # the runtime (accept an update, run the turn) + its two ways in: webhook route, long polling
 │   │   ├── polling.ts      # getUpdates as a LongConnection: webhook taken away first, confirm by offset, what ends it

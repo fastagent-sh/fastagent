@@ -197,12 +197,20 @@ function feishuFetch(
 
 /** Build a channel on a temp state root; returns the handler + the recorded agent + the state home. */
 function buildChannel(
-  opts: Partial<FeishuChannelOptions> & { stopped?: (session: string) => { stopped: string[] } } = {},
+  opts: Partial<FeishuChannelOptions> & {
+    stopped?: (session: string) => { stopped: string[] };
+    /** State the channel finds in its home when it mounts, as an earlier run left it. */
+    seed?: (home: string) => void;
+  } = {},
   agentReply = "the answer",
 ) {
-  const { stopped, ...channelOpts } = opts;
+  const { stopped, seed, ...channelOpts } = opts;
   const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
   tempRoots.push(root);
+  if (seed) {
+    mkdirSync(join(root, "channels", "feishu"), { recursive: true });
+    seed(join(root, "channels", "feishu"));
+  }
   const { agent, calls } = replyingAgent(agentReply);
   const chosen = opts2Agent(opts) ?? agent;
   const protocol: ScriptedAgent = stopped ? { ...chosen, ...withStop(chosen, stopped) } : chosen;
@@ -1793,10 +1801,17 @@ describe("turn flow", () => {
           },
         }),
     });
-    const { handler, protocol, calls, idle, home } = buildChannel({ appId: "cli_self" });
-    // The room already ran the ask the card answered, under the ask's message id, as the channel invokes.
+    // The channel recorded the card as posted for the ask it answered.
+    const { handler, protocol, calls, idle, home } = buildChannel({
+      appId: "cli_self",
+      seed: (seeded) =>
+        writeFileSync(
+          join(seeded, "owners.json"),
+          JSON.stringify({ om_bot_card: { conversation: "feishu:oc_1#ou_alice", ask: "om_original_ask" } }),
+        ),
+    });
+    // The room already ran that ask, under the ask's message id, as the channel invokes.
     const room = await newSession(protocol);
-    mkdirSync(home, { recursive: true });
     writeFileSync(join(home, "sessions.json"), JSON.stringify({ "feishu:oc_1#ou_alice": room }));
     await protocol.messages.send(
       { sessionId: room, idempotencyKey: "om_original_ask", content: "加一个新的页面" },
@@ -1828,8 +1843,7 @@ describe("turn flow", () => {
     expect(prompt).toContain("[reply chain above it, oldest first:");
     expect(prompt).toContain("(msg om_original_ask, from user ou_alice): 加一个新的页面，用 svg 构建一个足球的页面");
     expect(fx.calls("/im/v1/messages/om_original_ask", "GET")).toHaveLength(1);
-    // …and the thread starts as a fork of the room at the answer of the run its chain names: the card is no run's
-    // message (the agent posted it), so the next message up, the ask, names the run that took it.
+    // …and the thread starts as a fork of the session that holds the card's exchange, at that ask's answer.
     expect(conversationOf(home, calls.at(-1)?.sessionId)).toBe("feishu:oc_1:omt_on_card");
     expect(protocol.forks).toEqual([{}, { forkFrom: { sessionId: room, entryId: answer } }]);
   });
@@ -1938,7 +1952,7 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(1);
     const first = calls[0]?.prompt.text ?? "";
-    expect(first).toContain("[recent discussion in the room this thread branched from — not yet answered there:");
+    expect(first).toContain("[recent discussion in the room this thread was opened in:");
     expect(first).toContain("蓝色背景");
     expect(first).toContain("同意，蓝色好");
 
@@ -1949,7 +1963,7 @@ describe("turn flow", () => {
     );
     await idle();
     expect(calls).toHaveLength(2);
-    expect(calls[1]?.prompt.text ?? "").not.toContain("branched from");
+    expect(calls[1]?.prompt.text ?? "").not.toContain("opened in");
 
     // …and the ROOM's own next answered turn still folds AND commits the same chatter: the thread
     // only peeked, so nothing was stolen from the room.
@@ -2005,7 +2019,7 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(1);
     const prompt = calls[0]?.prompt.text ?? "";
-    expect(prompt).toContain("branched from"); // the fold is there…
+    expect(prompt).toContain("opened in"); // the fold is there…
     expect(calls[0]?.prompt.images).toHaveLength(1); // …and the image crossed with it
     expect(prompt).toContain("vision image 1: from Alice, msg om_room_img");
     expect(fx.calls("/im/v1/messages/om_room_img/resources/room_shot", "GET")).toHaveLength(1);
@@ -2867,7 +2881,10 @@ describe("a group's main timeline is a session per sender (Feishu)", () => {
 
   describe("a reply belongs to the session of the message it replies to", () => {
     const owned = (home: string) =>
-      JSON.parse(readFileSync(join(home, "owners.json"), "utf8")) as Record<string, string>;
+      JSON.parse(readFileSync(join(home, "owners.json"), "utf8")) as Record<
+        string,
+        { conversation: string; ask?: string }
+      >;
     const sessionKeys = (home: string) =>
       Object.keys(JSON.parse(readFileSync(join(home, "sessions.json"), "utf8"))).sort();
 
@@ -2879,7 +2896,8 @@ describe("a group's main timeline is a session per sender (Feishu)", () => {
       await idle();
       const answerId = Object.keys(owned(home)).find((id) => id.startsWith("om_bot_"));
       expect(answerId).toBeDefined();
-      expect(owned(home)).toMatchObject({ om_alice: "feishu:oc_1#ou_alice" });
+      expect(owned(home)).toMatchObject({ om_alice: { conversation: "feishu:oc_1#ou_alice", ask: "om_alice" } });
+      expect(owned(home)[answerId as string]).toEqual({ conversation: "feishu:oc_1#ou_alice", ask: "om_alice" });
       await handler(feishuRequest(ask("om_bob", "and what time?", "ou_bob", { parentId: answerId })));
       await handler(feishuRequest(ask("om_carol", "about her question", "ou_carol", { parentId: "om_alice" })));
       await idle();
@@ -2916,24 +2934,70 @@ describe("a group's main timeline is a session per sender (Feishu)", () => {
       expect(stopped).toEqual([sessions["feishu:oc_1#ou_bob"]]);
       // The feedback is Bob's: he is the one who stopped, so a reply to it reaches his session.
       const feedback = Object.entries(owned(home)).filter(([id]) => !before.includes(id));
-      expect(feedback).toEqual([[expect.stringMatching(/^om_bot_/), "feishu:oc_1#ou_bob"]]);
+      expect(feedback).toEqual([[expect.stringMatching(/^om_bot_/), { conversation: "feishu:oc_1#ou_bob" }]]);
     });
   });
 
-  it("starts a topic from what its asker said in the main timeline, not another sender's", async () => {
-    feishuFetch();
-    const { handler, protocol, home, idle } = buildChannel();
-    await flush();
-    await handler(feishuRequest(ask("om_alice", "alice's ask", "ou_alice")));
-    await handler(feishuRequest(ask("om_bob", "bob's ask", "ou_bob")));
-    await idle();
-    const sessions = JSON.parse(readFileSync(join(home, "sessions.json"), "utf8")) as Record<string, string>;
-    // Alice opens a topic by replying to her own ask: it forks her session.
-    await handler(
-      feishuRequest(ask("om_t", "now in a topic", "ou_alice", { threadId: "omt_new", parentId: "om_alice" })),
-    );
-    await idle();
-    expect(protocol.forks.at(-1)).toMatchObject({ forkFrom: { sessionId: sessions["feishu:oc_1#ou_alice"] } });
+  describe("a new topic starts from the exchange it was opened on", () => {
+    const owned = (home: string) =>
+      JSON.parse(readFileSync(join(home, "owners.json"), "utf8")) as Record<string, { conversation: string }>;
+
+    it("forks the session that holds the message, whoever opens the topic, at that ask's answer", async () => {
+      feishuFetch();
+      const { handler, protocol, home, idle } = buildChannel();
+      await flush();
+      await handler(feishuRequest(ask("om_alice", "alice's ask", "ou_alice")));
+      await handler(feishuRequest(ask("om_bob", "bob's ask", "ou_bob")));
+      await idle();
+      const sessions = JSON.parse(readFileSync(join(home, "sessions.json"), "utf8")) as Record<string, string>;
+      const aliceAnswer = Object.entries(owned(home)).find(
+        ([id, owner]) => id.startsWith("om_bot_") && owner.conversation === "feishu:oc_1#ou_alice",
+      )?.[0];
+      expect(aliceAnswer).toBeDefined();
+      // Bob opens a topic on Alice's answer, and Carol on Bob's own ask.
+      await handler(feishuRequest(ask("om_t1", "in a topic", "ou_bob", { threadId: "omt_a", parentId: aliceAnswer })));
+      await handler(feishuRequest(ask("om_t2", "another", "ou_carol", { threadId: "omt_b", parentId: "om_bob" })));
+      await idle();
+      const forks = protocol.forks.slice(-2);
+      expect(forks[0]).toMatchObject({
+        forkFrom: { sessionId: sessions["feishu:oc_1#ou_alice"], entryId: expect.any(String) },
+      });
+      expect(forks[1]).toMatchObject({
+        forkFrom: { sessionId: sessions["feishu:oc_1#ou_bob"], entryId: expect.any(String) },
+      });
+    });
+
+    it("starts empty, and reads the room, when the message it was opened on names no session", async () => {
+      feishuFetch();
+      const { handler, protocol, calls, idle } = buildChannel();
+      await flush();
+      await handler(feishuRequest(messageEvent({ id: "om_chatter", chatType: "group", text: "the deploy is broken" })));
+      await handler(feishuRequest(ask("om_alice", "alice's ask", "ou_alice")));
+      await idle();
+      await handler(
+        feishuRequest(ask("om_t", "in a topic", "ou_alice", { threadId: "omt_new", parentId: "om_chatter" })),
+      );
+      await idle();
+      expect(protocol.forks.at(-1)).toEqual({}); // a new, empty session
+      expect(calls.at(-1)?.prompt.text).toContain("the deploy is broken");
+    });
+
+    it("reads the room after the exchange it forked at, so the answer's own text repeats rather than a message going missing", async () => {
+      feishuFetch();
+      const { handler, home, calls, idle } = buildChannel();
+      await flush();
+      await handler(feishuRequest(messageEvent({ id: "om_before", chatType: "group", text: "said before the ask" })));
+      await handler(feishuRequest(ask("om_alice", "alice's ask", "ou_alice")));
+      await idle();
+      await handler(feishuRequest(messageEvent({ id: "om_after", chatType: "group", text: "said after the ask" })));
+      const aliceAnswer = Object.keys(owned(home)).find((id) => id.startsWith("om_bot_"));
+      await handler(feishuRequest(ask("om_t", "in a topic", "ou_bob", { threadId: "omt_new", parentId: aliceAnswer })));
+      await idle();
+      const text = calls.at(-1)?.prompt.text ?? "";
+      expect(text).toContain("said after the ask");
+      expect(text).not.toContain("said before the ask"); // the forked session already holds it
+      expect(text).toContain("you (msg om_bot_1"); // its own answer is read again, as discussion
+    });
   });
 });
 

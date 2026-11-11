@@ -359,14 +359,18 @@ Each conversation has its own session, which the channel creates the first time 
 sender has a session of their own (`<kind>:<chat_id>#<sender>`), so one person's long task does not hold up another's
 question; the others' discussion and the agent's answers to them reach a session as attributed context, not as its own
 history. A sender the platform gave no id (a tenant whose events carry none) shares the chat's session. A thread is a separate place with its own —
-**started from what its asker knew**: a new thread's session is a fork of its asker's session in the main timeline, up
-to the message the thread branched from, including images and tool results. The fork happens once, when the thread's session is created;
-after that the two places are independent, and the main timeline never sees what the thread discusses.
+**started from the exchange it was opened on**: a new thread's session is a fork of the session that holds the
+message the thread was opened on (the one it replies to, an answer of the Agent or a request it took, whoever sent the
+request), up to that exchange's answer, including images and tool results. The channel finds that session in the
+message table it keeps (`owners.json`, the newest ~1000 messages). A thread opened on any other message, or on one
+older than that, starts empty. The fork happens once, when the thread's session is created; after that the two places
+are independent, and the main timeline never sees what the thread discusses.
 
-Discussion the room heard but never answered has not entered its session yet, so the fork cannot
-carry it — the thread's first turn reads that pending discussion instead, attachments included.
-Nothing is consumed by reading it: the thread's session holds what its first turn folded, and the room's own next turn
-reads what the room's session was last sent up to, so each place sees the discussion once.
+The fork cannot carry what the room said since, so the thread's first turn reads that discussion instead, attachments
+included: the room's messages after the exchange it forked at, or the room's newest messages when it started empty. The
+fork's own answer is read again, since the session it came from may have answered more after it. Nothing is consumed by
+reading it: the thread's session holds what its first turn folded, and the room's own next turn reads what that
+session was last sent up to.
 
 **Starting a thread.** Mention the Agent inside a thread once (typically by replying to one of its
 messages and creating a topic). It answers there, which makes it a participant, and every later bare
