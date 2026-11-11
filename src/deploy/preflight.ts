@@ -38,7 +38,7 @@ import {
   relativeCommands,
 } from "../mcp/config.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
-import { namedValueFile } from "../value-file.ts";
+import { loadEnvValues, namedValueFile } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
 import { declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";
@@ -244,7 +244,34 @@ interface PreflightInput {
   storageResets?: boolean;
   /** Does this deployment serve the Agent API under `/v1` (deploy/api.ts)? Then a Caller with its key reaches it. */
   servesApi?: boolean;
+  /** `--from-env`: the environment this command runs in is a source of values, beside the file `--env-file` names. */
+  fromEnv?: boolean;
 }
+
+/**
+ * The values a deploy was given, and how to name where they are from. The environment is a source only with
+ * `--from-env`, like `secrets push`: it is the shell of whoever runs `deploy`, which holds what that person uses for
+ * other things, and a provider key there would decide that the key travels instead of a login on the box. A file
+ * `--env-file` names is read as data, so the values are the file's whatever else the environment holds.
+ */
+function givenValues(
+  agentDir: string,
+  fromEnv: boolean,
+  file: string | undefined,
+): { values: Map<string, string>; valuesFrom: string } {
+  const fromFile = file === undefined ? undefined : relative(agentDir, file);
+  if (fromEnv) {
+    const values = new Map(
+      Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value] as const])),
+    );
+    return { values, valuesFrom: fromFile === undefined ? "the environment" : `the environment or ${fromFile}` };
+  }
+  if (file === undefined || fromFile === undefined) return { values: new Map(), valuesFrom: NO_VALUES_GIVEN };
+  return { values: loadEnvValues(file), valuesFrom: fromFile };
+}
+
+/** Where a deploy's values are from when it was given none: what messages call the source. */
+const NO_VALUES_GIVEN = "the values given to this deploy (--env-file or --from-env)";
 
 /** Run the host-neutral pre-flight. */
 export async function preflightDeploy(input: PreflightInput): Promise<DeployPreflight> {
@@ -301,12 +328,10 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
   // cannot disagree about it.
-  // Read from this command's environment, which `--env-file` has already laid its values into.
+  // The values this deploy was given, and only those: the file `--env-file` names, and the environment when
+  // `--from-env` says so. A key exported in the shell for local tools is not one of them unless asked for.
   const file = namedValueFile();
-  const valuesFrom = file === undefined ? "the environment" : `the environment or ${relative(agentDir, file)}`;
-  const values = new Map(
-    Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value] as const])),
-  );
+  const { values, valuesFrom } = givenValues(agentDir, input.fromEnv === true, file);
   // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, a value of the target like any other.
   // This reads this machine's values only, so a target that already holds one is told as much.
   if (content.length > 0 && !values.get("GITHUB_TOKEN")) {

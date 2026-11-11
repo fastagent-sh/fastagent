@@ -376,8 +376,8 @@ const deploy: CommandSpec = {
     "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
     "the alarms the container sets for schedules and wake-ups; linux/arm64 image built locally). Durable ingress " +
     "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it). " +
-    "The values given to the target (secrets, a model key) are this command's environment, and the file --env-file " +
-    "names laid under it: a deployment has no default file, and never the dev one. Interactive --run creates " +
+    "The values given to the target (secrets, a model key) are the file --env-file names, and the environment this " +
+    "command runs in only with --from-env: a deployment has no default file, and never the dev one. Interactive --run creates " +
     "a separate Feishu/Lark production app when its credentials are missing, its credentials kept in --env-file.",
   args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, AGENT_ARG],
   flags: [
@@ -402,9 +402,15 @@ const deploy: CommandSpec = {
     {
       flags: "--env-file <file>",
       description:
-        "the values to give the target (secrets, a model key), over the environment this command runs in; it must " +
-        "exist. A deployment has no default file: a CI job's variables, or `op run -- fastagent deploy …`, are the " +
-        "usual source",
+        "the values to give the target (secrets, a model key), read from this file, which must exist. A deployment " +
+        "has no default file; a Docker deployment's Compose also takes what the file holds",
+    },
+    {
+      flags: "--from-env",
+      description:
+        "also take the values from the environment this command runs in (a CI job's variables, `op run -- fastagent " +
+        "deploy … --from-env`). Without it the shell is not a source, so a key exported for other tools does not " +
+        "decide how the model's credential travels",
     },
     {
       flags: "--into-linked",
@@ -454,6 +460,7 @@ const deploy: CommandSpec = {
       ...(typeof f.idleTimeout === "string" ? { idleTimeout: f.idleTimeout } : {}),
       ...(typeof f.config === "string" ? { config: f.config } : {}),
       ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
+      fromEnv: f.fromEnv === true,
       input: f.input !== false,
       json: f.json === true,
       ...(f.check !== undefined ? { check: f.check as string } : {}),

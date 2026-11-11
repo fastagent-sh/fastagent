@@ -191,6 +191,7 @@ async function deploy(
       // Every AgentCore deployment starts the storage over (core.md §9).
       storageResets: host === "agentcore",
       servesApi: api.served,
+      fromEnv: !!opts.fromEnv,
     }).catch(failStartup);
     if (!facts.ok) failStartup(new Error(`deploy stopped: ${facts.gate}`));
     target.validate?.({ opts, agentDir, name, pre: facts });
@@ -202,6 +203,7 @@ async function deploy(
     `fastagent deploy ${host}${agentArg === undefined ? "" : ` ${shellArg(agentArg)}`}` +
     `${opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`}` +
     `${opts.envFile === undefined ? "" : ` --env-file ${shellArg(opts.envFile)}`}` +
+    `${opts.fromEnv ? " --from-env" : ""}` +
     `${opts.intoLinked ? " --into-linked" : ""}${opts.idleTimeout === undefined ? "" : ` --idle-timeout ${opts.idleTimeout}`} --run`;
   const unprepared = opts.run ? unpreparedChannelApps(pre.channels, pre.values) : [];
 
@@ -230,6 +232,7 @@ async function deploy(
           ...(opts.force ? ["--force"] : []),
           ...(delivered === undefined ? [] : ["--config", delivered.source.label]),
           ...(opts.envFile === undefined ? [] : ["--env-file", opts.envFile]),
+          ...(opts.fromEnv ? ["--from-env"] : []),
           ...(opts.intoLinked ? ["--into-linked"] : []),
           ...(opts.idleTimeout === undefined ? [] : ["--idle-timeout", opts.idleTimeout]),
           "--run",
@@ -266,7 +269,7 @@ async function deploy(
           `deploy stopped: ${absent.join(", ")} are not in ${pre.valuesFrom}, so a production ${kinds.join(" and ")} app ` +
             `has to be made, and its credentials need a file to be kept in. Make it with ` +
             `\`fastagent channels setup ${kinds[0]} --env-file <file>${config}\` (it creates the file), then deploy ` +
-            `again with --env-file <file>; or supply them in the environment of this command`,
+            `again with --env-file <file>; or supply them in the environment of this command and pass --from-env`,
         );
       }
       if (answerer.kind === "nobody") {

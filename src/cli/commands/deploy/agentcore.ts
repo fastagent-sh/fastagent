@@ -152,6 +152,7 @@ export const agentcoreHost: HostDeploy = {
         publicUrl: ownPublicUrl(container.config),
         config: opts.config,
         envFile: opts.envFile,
+        fromEnv: !!opts.fromEnv,
       });
       return undefined;
     }
@@ -186,13 +187,15 @@ async function runDeployAgentcore(params: {
   config: string | undefined;
   /** The `--env-file` the values come from, when one was named. */
   envFile: string | undefined;
+  /** `--from-env`: the environment is a source of them too. */
+  fromEnv: boolean;
 }): Promise<void> {
   const { agentDir, name, channels, topology } = params;
   const secretsStep = deploySecrets({
     host: "agentcore",
     label: "AWS Secrets Manager",
     agentDir,
-    opts: { config: params.config, envFile: params.envFile },
+    opts: { config: params.config, envFile: params.envFile, fromEnv: params.fromEnv },
     answerer: params.answerer,
     api: params.api,
     modelAuth: params.modelAuth,

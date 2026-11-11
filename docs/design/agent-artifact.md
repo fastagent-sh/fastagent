@@ -726,11 +726,11 @@ What `deploy` read values for becomes a name or configuration:
   §2). Nothing refuses a production app that is the development one: two instances on one app are documented, as for
   Telegram and Slack.
 
-`deploy` reads no value file. The values it gives a target are the environment it runs in with the file `--env-file`
-names laid under it (a variable already set wins, as for every command that enters a file). That includes the
-environment's own keys: a provider key exported in the shell that runs `deploy` is a value it was given, offered for the
-target, and decides that the key travels instead of a login on the box; to deploy to a box that logs in itself, run
-without it. The production value file stays what local `start` reads.
+`deploy` reads no value file. The values it gives a target are those of the file `--env-file` names, and of the environment it
+runs in only with `--from-env`, as for `secrets push`. The shell of whoever runs `deploy` holds what that person uses for
+other things, and a provider key there must not decide that the key travels instead of a login on the box, so without
+the flag it is not a source. Docker's Compose, which takes values from the environment it runs in and nowhere else, is
+checked against that environment whatever the flag says. The production value file stays what local `start` reads.
 
 OAuth is created on the deployment itself and never carried: a model provider's login through
 `fastagent login --deployment`, an MCP server's grant by signing in against the deployed instance (§4.1; no automatic

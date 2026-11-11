@@ -50,20 +50,19 @@ function secretsCommands(host: string, agentDir: string, config: string | undefi
 function valuesSource(
   values: ReadonlyMap<string, string>,
   valuesFrom: string,
-  envFile: string | undefined,
-): NonNullable<ProvideSecrets["source"]> {
-  return {
-    file: valuesFrom,
-    flag: envFile === undefined ? "--from-env" : `--env-file ${shellArg(envFile)}`,
-    values,
-  };
+  opts: Pick<DeployOptions, "envFile" | "fromEnv">,
+): ProvideSecrets["source"] {
+  // `--from-env` reads the environment, which the file `--env-file` names is laid into, so it covers both.
+  if (opts.fromEnv) return { file: valuesFrom, flag: "--from-env", values };
+  if (opts.envFile !== undefined) return { file: valuesFrom, flag: `--env-file ${shellArg(opts.envFile)}`, values };
+  return undefined;
 }
 
 export function deploySecrets(input: {
   host: string;
   label: string;
   agentDir: string;
-  opts: Pick<DeployOptions, "config" | "envFile">;
+  opts: Pick<DeployOptions, "config" | "envFile" | "fromEnv">;
   answerer: Answerer;
   api: DeploymentApi;
   modelAuth: string | undefined;
@@ -75,13 +74,14 @@ export function deploySecrets(input: {
 }): (store: SecretStore) => Promise<string | undefined> {
   const { host, label, agentDir, opts, answerer, api, modelAuth, modelKey, declaredSecrets, valuesFrom, values } =
     input;
+  const source = valuesSource(values, valuesFrom, opts);
   return (store) =>
     provideSecrets({
       host: label,
       store,
       needs: secretNeeds(modelAuth, declaredSecrets, modelKey),
       known: [...declaredNames(modelAuth, declaredSecrets, modelKey), ...(api.served ? [API_KEY_VARIABLE] : [])],
-      source: valuesSource(values, valuesFrom, opts.envFile),
+      ...(source === undefined ? {} : { source }),
       ...(answerer.kind === "terminal" ? { asker: terminalAsker } : {}),
       commands: secretsCommands(host, agentDir, opts.config),
       say: (line) => {

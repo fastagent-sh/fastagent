@@ -76,6 +76,7 @@ export const railwayHost: HostDeploy = {
         intoLinked: !!opts.intoLinked,
         config: opts.config,
         envFile: opts.envFile,
+        fromEnv: !!opts.fromEnv,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -107,6 +108,8 @@ async function runDeployRailway(params: {
   config: string | undefined;
   /** The `--env-file` the values come from, when one was named. */
   envFile: string | undefined;
+  /** `--from-env`: the environment is a source of them too. */
+  fromEnv: boolean;
 }): Promise<string> {
   const { agentDir, name, channels, intoLinked } = params;
   const railway = spawnRunner("railway", agentDir);
@@ -123,7 +126,7 @@ async function runDeployRailway(params: {
         host: "railway",
         label: "Railway",
         agentDir,
-        opts: { config: params.config, envFile: params.envFile },
+        opts: { config: params.config, envFile: params.envFile, fromEnv: params.fromEnv },
         answerer: params.answerer,
         api: params.api,
         modelAuth: params.modelAuth,

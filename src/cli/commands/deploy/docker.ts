@@ -20,22 +20,30 @@ import { type Answerer, type HostDeploy, boxLoginStep, leftToPerson } from "./sh
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
+/**
+ * What Compose is given: this command's environment, which the file `--env-file` names is already laid into. It is
+ * Docker's only source, whatever `--from-env` says (that flag decides what `deploy` itself reads for a store), since
+ * Compose has no other place to take a value from.
+ */
+const COMPOSE_ENVIRONMENT = (): NodeJS.ProcessEnv => process.env;
+const COMPOSE_SOURCE = "the environment this command runs in (and --env-file)";
+
 export const dockerHost: HostDeploy = {
   isOurs: (path, content) => isDockerComposePath(path) && isGeneratedCompose(content),
   legacyManifest: { file: "fastagent.compose.yml", generated: isGeneratedCompose, renamed: dockerComposeFile },
   shell: async (agentDir, name) => composeShell(dockerComposeFile(name), agentDir),
   async deploy(ctx) {
     const { opts, agentDir, name, channels, pre, write } = ctx;
-    const { modelAuth, boxLogin, container, port, declaredSecrets, values, valuesFrom } = pre;
+    const { modelAuth, boxLogin, container, port, declaredSecrets } = pre;
     const secretNames = [
       ...declaredNames(modelAuth, declaredSecrets, pre.modelKey),
       ...(ctx.api.served ? [API_KEY_VARIABLE] : []),
     ];
     // Compose fills the Agent API's key from the environment like the rest, and a deploy cannot make one for it: there
     // is nowhere to set it. Without one the container serves no API, which is said and does not stop the deploy.
-    if (ctx.api.served && (values.get(API_KEY_VARIABLE) ?? "").trim() === "") {
+    if (ctx.api.served && (COMPOSE_ENVIRONMENT()[API_KEY_VARIABLE] ?? "").trim() === "") {
       console.error(
-        `[fastagent] note: ${API_KEY_VARIABLE} is not set in ${valuesFrom}, so this container will not serve the Agent ` +
+        `[fastagent] note: ${API_KEY_VARIABLE} is not set in ${COMPOSE_SOURCE}, so this container will not serve the Agent ` +
           `API: set one (\`export ${API_KEY_VARIABLE}=$(openssl rand -hex 32)\`) and run Compose with it`,
       );
     }
@@ -61,8 +69,6 @@ export const dockerHost: HostDeploy = {
         api: ctx.api,
         channels,
         declaredSecrets,
-        values,
-        valuesFrom,
         publicUrl: ownPublicUrl(container.config),
         config: opts.config,
         envFile: opts.envFile,
@@ -87,9 +93,6 @@ async function runDeployDocker(params: {
   api: DeploymentApi;
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
-  values: ReadonlyMap<string, string>;
-  /** Where the values are from, as a gate names it. */
-  valuesFrom: string;
   /** The `http.publicUrl` the configuration names: where the agent points its own webhook channels. */
   publicUrl: string | undefined;
   /** The `--config` file, named by the commands a gate suggests. */
@@ -104,7 +107,7 @@ async function runDeployDocker(params: {
     {
       composeFile,
       port,
-      checkValues: () => composeValuesGate(needs, Object.fromEntries(params.values), params.valuesFrom),
+      checkValues: () => composeValuesGate(needs, COMPOSE_ENVIRONMENT(), COMPOSE_SOURCE),
       ...boxLoginStep("docker", params, () => composeShell(composeFile, agentDir)),
     },
     spawnRunner("docker", agentDir),

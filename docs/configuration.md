@@ -370,7 +370,7 @@ needs, installed on every machine that runs it and in its image:
   FastAgent never runs apt itself, and elsewhere it says nothing.
 - **`variables`** are the environment variables the agent's commands read, declared by name with what each is for, as code
   declares the secrets it reads with `needs`. Their values come from the environment, never from `context.json`: `.secrets/.env` here,
-  and, for a deployment, the environment `deploy` runs in or the file `--env-file` names, from which `deploy` and
+  and, for a deployment, the file `--env-file` names (or the environment, with `--from-env`), from which `deploy` and
   `fastagent secrets push` set them on the deployment's target (only declared names are set; a variable the definition does
   not declare never reaches it). Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
   start without its value and name `context.json`, `deploy` refuses before it changes anything and lists each

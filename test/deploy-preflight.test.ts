@@ -7,6 +7,7 @@ import { preflightDeploy } from "../src/deploy/preflight.ts";
 import { type AnyModel, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import { resolveStateRoot } from "../src/paths.ts";
+import { useValueFile } from "../src/value-file.ts";
 import { keepCatalog } from "./kept-catalog.ts";
 import { type EffectiveConfig, readInstanceConfigFile, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
@@ -615,7 +616,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     );
     expect(notes).toContainEqual(
       expect.stringMatching(
-        /^no GITHUB_TOKEN in the environment: unless the target holds one, the host clones without/,
+        /^no GITHUB_TOKEN in the values given to this deploy \(--env-file or --from-env\): unless the target holds one, the host clones without/,
       ),
     );
     expect(notes.join("\n")).toContain("`fastagent secrets set <host> GITHUB_TOKEN`");
@@ -627,7 +628,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 
     // Where a deployment starts the storage over, a clone does not outlive a release, and that is said.
     vi.stubEnv("GITHUB_TOKEN", "ghp_x");
-    const reset = await call(dir, config, { storageResets: true });
+    const reset = await call(dir, config, { storageResets: true, fromEnv: true });
     expect(reset.ok).toBe(true);
     if (!reset.ok) return;
     const said = reset.messages.map((m) => m.text);
@@ -768,7 +769,7 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
       JSON.stringify({ environment: { variables: { GH_HOST: { description: "the GitHub host" } } } }),
     );
     vi.stubEnv("GH_HOST", "github.example.com");
-    const variablesOnly = await call(dir, { model: "openai/gpt-4o-mini" });
+    const variablesOnly = await call(dir, { model: "openai/gpt-4o-mini" }, { fromEnv: true });
     expect(variablesOnly.ok && variablesOnly.messages.map((m) => m.text).join("\n")).not.toMatch(
       /kept your hand-written/,
     );
@@ -1028,12 +1029,12 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
       expect(loginOnly.messages).toContainEqual({
         level: "warn",
         text: expect.stringMatching(
-          /^provider "gw" fetches its own model list, .* if "gw\/fetched-1" is only in that list, the box refuses to start on it until gw's API key is in the environment$/,
+          /^provider "gw" fetches its own model list, .* if "gw\/fetched-1" is only in that list, the box refuses to start on it until gw's API key is in the values given to this deploy \(--env-file or --from-env\)$/,
         ),
       });
 
       vi.stubEnv("GW_KEY", "k");
-      const carried = await call(dir, { model: "gw/fetched-1" }, { run: true });
+      const carried = await call(dir, { model: "gw/fetched-1" }, { run: true, fromEnv: true });
       if (!carried.ok) throw new Error(`preflight gated: ${carried.gate}`);
       expect(carried.messages.filter(({ text }) => fetchedFirst.test(text))).toEqual([]);
     } finally {
@@ -1047,14 +1048,39 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
     expect(pre.ok && pre.boxLogin).toBe("anthropic");
   });
 
-  it("a key in the environment this deploy runs in travels, and nothing logs in", async () => {
-    // A deployment has no default value file: what a CI job or `op run` injects is its values, and so is a file
-    // `--env-file` names laid under it (the one in `process.env` here, as the command enters it).
+  it("a key in the environment travels only with --from-env: without it the shell's key is not a value the deploy was given", async () => {
+    // The shell of whoever runs `deploy` holds what that person uses for other tools, and a provider key there must not
+    // turn a subscription deploy into a key deploy. A CI job or `op run` says `--from-env`, as for `secrets push`.
     noAnthropicEnv();
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant");
-    const pre = await call(await agent(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
-    expect(pre.ok && pre.boxLogin).toBeUndefined();
-    expect(pre.ok && pre.modelAuth).toBe("ANTHROPIC_API_KEY");
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-the-shell");
+    const without = await call(await agent(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    if (!without.ok) throw new Error(without.gate);
+    expect(without.boxLogin).toBe("anthropic");
+    expect(without.modelAuth).toBeUndefined();
+    expect(without.secrets.map((s) => s.name)).not.toContain("ANTHROPIC_API_KEY");
+
+    const given = await call(await agent(), { model: "anthropic/claude-sonnet-4-5" }, { run: true, fromEnv: true });
+    expect(given.ok && given.boxLogin).toBeUndefined();
+    expect(given.ok && given.modelAuth).toBe("ANTHROPIC_API_KEY");
+  });
+
+  it("a key in the file --env-file names travels without --from-env, whatever the shell holds", async () => {
+    noAnthropicEnv();
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-the-shell");
+    const dir = await agent();
+    const file = join(dir, "given.env");
+    await writeFile(file, "OPENAI_API_KEY=sk-from-the-file\n");
+    useValueFile(file);
+    try {
+      const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+      if (!pre.ok) throw new Error(pre.gate);
+      expect(pre.modelAuth).toBe("OPENAI_API_KEY");
+      expect(pre.valuesFrom).toBe("given.env");
+      // Not the shell's: the file is read as data, and the environment is not asked.
+      expect(pre.values.has("ANTHROPIC_API_KEY")).toBe(false);
+    } finally {
+      useValueFile(undefined);
+    }
   });
 
   it("a key only in a project file does not travel: neither the development file nor the one `start` reads is a source", async () => {
@@ -1079,7 +1105,7 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "p");
     vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", adc);
-    const pre = await call(await agent(), { model: `google-vertex/${vertex}` }, { run: true });
+    const pre = await call(await agent(), { model: `google-vertex/${vertex}` }, { run: true, fromEnv: true });
     expect(pre.ok && pre.boxLogin).toBe("google-vertex");
   });
 
@@ -1091,13 +1117,13 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
     for (const name of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_PROFILE"]) {
       vi.stubEnv(name, "");
     }
-    const absent = await call(await agent(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
+    const absent = await call(await agent(), { model: `amazon-bedrock/${bedrock}` }, { run: true, fromEnv: true });
     expect(absent.ok && absent.boxLogin).toBe("amazon-bedrock");
 
     vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
     vi.stubEnv("AWS_REGION", "us-east-1");
-    const carried = await call(await agent(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
+    const carried = await call(await agent(), { model: `amazon-bedrock/${bedrock}` }, { run: true, fromEnv: true });
     if (!carried.ok) throw new Error(carried.gate);
     expect(carried.boxLogin).toBeUndefined();
     expect(carried.modelAuth).toBeUndefined(); // nothing more for the values gate to ask
@@ -1110,7 +1136,7 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant");
     const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
     const dir = await agent({ ".secrets/auth.json": JSON.stringify({ anthropic: oauth }) });
-    const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true, fromEnv: true });
     if (!pre.ok) throw new Error(pre.gate);
     expect(pre.boxLogin).toBeUndefined();
     expect(pre.modelAuth).toBe("ANTHROPIC_API_KEY");

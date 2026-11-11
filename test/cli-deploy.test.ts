@@ -196,12 +196,12 @@ describe("cli: deploy", () => {
     delete clean.GITHUB_TOKEN;
     const none = await runInProcess(["deploy", "docker", dir], undefined, clean);
     expect(none.code, none.stderr).toBe(0);
-    expect(none.stderr).toContain("no GITHUB_TOKEN in the environment");
-    // The environment of the command, or the file named, is the source.
-    const given = await runInProcess(["deploy", "docker", dir, "--force"], undefined, {
-      ...clean,
-      GITHUB_TOKEN: "ghp",
-    });
+    expect(none.stderr).toContain("no GITHUB_TOKEN in the values given to this deploy");
+    // The environment is a source when asked, and the file named is one always; the shell alone is not.
+    const shell = { ...clean, GITHUB_TOKEN: "ghp" };
+    const unasked = await runInProcess(["deploy", "docker", dir, "--force"], undefined, shell);
+    expect(unasked.stderr).toContain("no GITHUB_TOKEN in the values given to this deploy");
+    const given = await runInProcess(["deploy", "docker", dir, "--force", "--from-env"], undefined, shell);
     expect(given.stderr).not.toContain("no GITHUB_TOKEN");
     const file = join(dir, "given.env");
     await writeFile(file, "GITHUB_TOKEN=ghp\n");
@@ -265,7 +265,7 @@ describe("cli: deploy", () => {
     expect(result.code).toBe(2);
     // The dev app's values are not the deployment's: nothing in the environment, and no file to make one into.
     expect(result.stderr).toContain(
-      "FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_VERIFICATION_TOKEN are not in the environment, so a production feishu app has to be made",
+      "FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_VERIFICATION_TOKEN are not in the values given to this deploy (--env-file or --from-env), so a production feishu app has to be made",
     );
     expect(result.stderr).toContain("`fastagent channels setup feishu --env-file <file>`");
     // With a file to keep it in, the next refusal is the one for nobody to ask; it names the deploy that runs from where
@@ -443,11 +443,15 @@ esac
     // Where the Agent API is reached, as Fly names the app, and how its key comes about: a generate-only deploy has
     // set nothing.
     expect(result.stderr).toMatch(
-      /Agent API: https:\/\/[\w-]+\.fly\.dev\/v1, behind FASTAGENT_API_KEY, which --run sets on the target from the environment, or makes at a terminal/,
+      /Agent API: https:\/\/[\w-]+\.fly\.dev\/v1, behind FASTAGENT_API_KEY, which --run sets on the target from the values given to this deploy \(--env-file or --from-env\), or makes at a terminal/,
     );
     // With a key in this command's environment, run from elsewhere the check names the agent: `invoke --url` is run
     // from there with the same key.
-    const keyed = await runInProcess(["deploy", "fly", dir], undefined, { ...process.env, FASTAGENT_API_KEY: "k" });
+    const shell = { ...process.env, FASTAGENT_API_KEY: "k" };
+    // The shell is not a source unless asked: a key exported there is not one the deploy was given.
+    const unasked = await runInProcess(["deploy", "fly", dir, "--force"], undefined, shell);
+    expect(unasked.stderr).not.toMatch(/check it: /);
+    const keyed = await runInProcess(["deploy", "fly", dir, "--from-env", "--force"], undefined, shell);
     expect(keyed.code, keyed.stderr).toBe(0);
     expect(/check it: .* "hello" (\S+)\n/.exec(keyed.stderr)?.[1]).toBe(dir);
     expect(result.stderr).not.toMatch(/not yet supported/); // no placement gate anywhere

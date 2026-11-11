@@ -275,6 +275,17 @@ it("a coding agent's deploy: refused here what can be, the rest started in a tic
   });
 });
 
+it("a coding agent's ticket re-runs the deploy with the sources it was given, so the child reads what the parent did", async () => {
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  await expect(runDeploy("fly", dir, { run: true, json: true, envFile: keptIn(), fromEnv: true })).rejects.toBe(
+    stopped,
+  );
+  expect(started[0]).toMatchObject({
+    restart: `fastagent deploy fly --env-file ${keptIn()} --from-env --run`,
+    command: { args: expect.arrayContaining(["--env-file", keptIn(), "--from-env", "--run", "--json"]) },
+  });
+});
+
 it("a coding agent's deploy needing a Lark app without its credentials takes them in the ticket, not in a file", async () => {
   facts.channels = [{ name: "lark", ingress: "webhook" }];
   const printed = vi.spyOn(console, "log").mockImplementation(() => {});

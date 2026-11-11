@@ -41,7 +41,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `deploy fly [agent]` | Generate `fly.<name>.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
 | `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end and continues the project that holds the agent's service; a dir linked to another project needs `--into-linked`. |
 | `deploy agentcore [agent]` | Generate `agentcore.<name>.template.yaml`, `agentcore/forwarder/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. `--idle-timeout <seconds>` (60–1209600) sets how long an idle session keeps its microVM, over the program's `defaults.deploy.agentcore.idleTimeoutSeconds`; the other hosts report it as ignored. |
-| `deploy <host> --env-file <file>` | The values to give the target, over the environment the command runs in. A deployment has **no default value file** (not `.secrets/.env`, not `.secrets/production/.env`): a CI job's variables, `op run -- fastagent deploy …`, or this file. `logs`, `destroy` and `login --deployment` take it for the host account (`AWS_PROFILE`, `AWS_REGION`). |
+| `deploy <host> --env-file <file>`, `--from-env` | The values to give the target: the file, and the environment the command runs in only with `--from-env` (a CI job's variables, `op run -- fastagent deploy … --from-env`), as for `secrets push`. A deployment has **no default value file** (not `.secrets/.env`, not `.secrets/production/.env`), and the shell alone is not a source. Docker's Compose always takes the environment it runs in. `logs`, `destroy` and `login --deployment` take `--env-file` for the host account (`AWS_PROFILE`, `AWS_REGION`), which they read from their environment as before. |
 | `deploy <host> --config <file>` | Every host: deliver an instance configuration (a `fastagent.json`) the deployment runs on, set on the host as the variable `FASTAGENT_CONFIG_JSON` ([deploy](deploy.md)); the image holds none of it. Its `name` is the deployment's name: the host's resources and the generated manifests carry it ([deploy](deploy.md#an-instance-of-its-own)), and `secrets`, `logs`, `destroy` and `login --deployment` take the same `--config` to address it. Without it, the program's defaults; the project's own `fastagent.json` is never carried. |
 | `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
 | `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
@@ -387,8 +387,8 @@ unless the message completed. This is the check a coding agent runs: one message
 
 **`--url <base>`** sends the message to the agent served at `<base>` instead, over its
 [Agent API](SPEC.md#9-http): the same output, `--json`, `--session` and exit code, nothing opened here. It
-calls with `--key`, or the first `FASTAGENT_API_KEY` of its own environment (or of the file `--env-file` names); a
-deployment has no default file to read it from. With none, it exits 2 and says where a key comes from. `--model` sets that session's model on the
+calls with `--key`, or the first `FASTAGENT_API_KEY` of its own environment (or of the file `--env-file` names): it is the
+caller's own command, not a deploy, so its environment is the source; a deployment has no default file to read it from. With none, it exits 2 and says where a key comes from. `--model` sets that session's model on the
 deployment; without it, the deployment's default answers. A coding agent that checked the agent with `invoke` checks
 its deployment with `invoke --url`, the URL `deploy` reports.
 
@@ -497,8 +497,8 @@ when it does not exist yet, so a CI job can push before its first deploy.
   not declare are not pushed, and are said.
 
 Each value reaches the target over standard input (never a command line), and a run says names only. `deploy --run`
-does the same at a terminal for what the target lacks: one question to set the declared names its environment holds, then
-each missing value typed without echo. In a coding agent's deploy or in CI it stops naming these commands.
+does the same at a terminal for what the target lacks: one question to set the declared names the values it was given hold,
+then each missing value typed without echo. In a coding agent's deploy or in CI it stops naming these commands.
 
 ## `fastagent channels setup <name>`
 

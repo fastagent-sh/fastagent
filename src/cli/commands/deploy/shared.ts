@@ -33,8 +33,10 @@ export interface DeployOptions {
   idleTimeout?: string;
   /** `--config <file>`: the instance configuration the deployment delivers. */
   config?: string;
-  /** `--env-file <file>`: the values to give the target, over the environment this command runs in. */
+  /** `--env-file <file>`: the values to give the target. */
   envFile?: string;
+  /** `--from-env`: the environment this command runs in is a source of those values too. */
+  fromEnv?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
   /** `--json`: a coding agent's `--run`, run in a ticket that hands each step only a person can take to its user. */

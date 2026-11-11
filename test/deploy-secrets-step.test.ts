@@ -85,9 +85,22 @@ describe("a deploy's secrets step", () => {
   it("offers the names its environment holds with one question first", async () => {
     prompts.confirmed.push(true);
     const values = new Map([["GH_TOKEN", "ghp_file"]]);
-    expect(await step({ kind: "terminal" }, { values })(target())).toBeUndefined();
+    expect(await step({ kind: "terminal" }, { values, opts: { fromEnv: true } })(target())).toBeUndefined();
     expect(prompts.asked).toEqual(["Fly lacks GH_TOKEN, which the environment holds. Set them on Fly from it?"]);
     expect(writes).toEqual([{ GH_TOKEN: "ghp_file" }]);
+  });
+
+  it("names the flag that gives the same source to `secrets push`: the file, or the environment which includes it", async () => {
+    const values = new Map([["GH_TOKEN", "ghp_file"]]);
+    const ticket = { kind: "ticket", step: {} } as unknown as Answerer;
+    const viaFile = await step(ticket, { values, opts: { envFile: "prod.env" } })(target());
+    expect(viaFile).toMatch(/`fastagent secrets push fly [^`]*--env-file prod\.env` sets the one/);
+    const viaEnv = await step(ticket, { values, opts: { fromEnv: true, envFile: "prod.env" } })(target());
+    expect(viaEnv).toMatch(/--from-env` sets the one/);
+    // Given nothing, a source is not offered: the environment is the shell's, and nothing was said to read it.
+    const none = await step(ticket)(target());
+    expect(none).toMatch(/`fastagent secrets push fly [^`]*--from-env` takes them from the environment/);
+    expect(none).not.toContain("sets the one");
   });
 
   it("a cancelled prompt stops the deploy with that, and sets nothing", async () => {
@@ -143,7 +156,9 @@ describe("a deploy's secrets step", () => {
     for (const answerer of [{ kind: "nobody" }, { kind: "terminal" }, ticket] as unknown as Answerer[]) {
       writes.length = 0;
       said.length = 0;
-      const out = await step(answerer, { api: { served: true }, declaredSecrets: [], values })(target());
+      const out = await step(answerer, { api: { served: true }, declaredSecrets: [], values, opts: { fromEnv: true } })(
+        target(),
+      );
       expect(out).toBeUndefined();
       expect(writes).toEqual([{ FASTAGENT_API_KEY: "kept-key" }]);
       expect(prompts.asked).toEqual([]);
