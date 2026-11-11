@@ -7,13 +7,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { dotEnvPath, loadEnvValues } from "../src/value-file.ts";
 import { DEV_SERVE_ENV } from "../src/serving-command.ts";
 
 const calls: string[] = [];
 let facts: { values: Map<string, string>; modelAuth?: string; channels?: { name: string; ingress: string }[] };
 /** Who the last preparation was handed, and who the host's last deploy was. */
 let preparedFor: unknown;
+/** The file the last preparation was told to keep its credentials in. */
+let preparedInto: string | undefined;
 /** The ticket a test runs the deploy through, and its status when the pre-flight first ran. */
 let throughTicket: string | undefined;
 let statusAtPreflight: string | undefined;
@@ -39,8 +40,8 @@ vi.mock("../src/harnesses/pi-durable/config.ts", async (importOriginal) => ({
 vi.mock("../src/harnesses/pi-durable/build.ts", () => ({ buildProject: async () => ({ warnings: [] }) }));
 vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/deploy/preflight.ts")>()),
-  // The values as the real pre-flight reads them, the selected value file, over what a test sets in `facts`.
-  preflightDeploy: async ({ agentDir }: { agentDir: string }) => {
+  // The values as a test sets them in `facts`: the real pre-flight reads this command's environment.
+  preflightDeploy: async () => {
     if (throughTicket !== undefined && statusAtPreflight === undefined) {
       const { checkTicket: read } = await import("../src/cli/ticket.ts");
       statusAtPreflight = (await read(throughTicket))?.status;
@@ -52,8 +53,8 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
       ok: true,
       messages: [],
       channels: facts.channels ?? [{ name: "feishu", ingress: "webhook" }],
-      values: new Map([...loadEnvValues(dotEnvPath(agentDir)), ...facts.values]),
-      valueFile: ".secrets/production/.env",
+      values: new Map(facts.values),
+      valuesFrom: "the environment",
       modelAuth: facts.modelAuth,
       declaredSecrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"].map((name) => ({
         name,
@@ -64,8 +65,9 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
 }));
 vi.mock("../src/cli/commands/deploy/channel-apps.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/cli/commands/deploy/channel-apps.ts")>()),
-  prepareChannelApps: async (_dir: string, apps: { kind: string }[], rerun: string, person: unknown) => {
+  prepareChannelApps: async (_dir: string, file: string, apps: { kind: string }[], rerun: string, person: unknown) => {
     calls.push(`prepare ${apps.map(({ kind }) => kind).join(",")} rerun=${rerun}`);
+    preparedInto = file;
     preparedFor = person;
     facts.values.set("FEISHU_APP_ID", "cli_production");
     facts.values.set("FEISHU_APP_SECRET", "production_secret");
@@ -116,11 +118,14 @@ const { runDeploy } = await import("../src/cli/commands/deploy.ts");
 let dir: string;
 let said: string[];
 const production = () => join(dir, ".secrets", "production", ".env");
+/** Where a deploy keeps the credentials of the app it makes: a file named, since a deployment has no default one. */
+const keptIn = () => join(dir, "prod.env");
 beforeEach(async () => {
   calls.length = 0;
   apiSeen.length = 0;
   started.length = 0;
   preparedFor = undefined;
+  preparedInto = undefined;
   throughTicket = undefined;
   statusAtPreflight = undefined;
   finishingAtHost = undefined;
@@ -163,10 +168,11 @@ it("plans as start, not dev, whatever spawned it", async () => {
 
 it("prepares the app without asking the target for other names: the host does that, once its app exists", async () => {
   facts.modelAuth = "OPENAI_API_KEY";
-  await runDeploy("fly", dir, { run: true });
+  await runDeploy("fly", dir, { run: true, envFile: keptIn() });
+  expect(preparedInto).toBe(keptIn());
   expect(calls).toEqual([
     "preflight dev=- token=-",
-    "prepare feishu rerun=fastagent deploy fly --run",
+    `prepare feishu rerun=fastagent deploy fly --env-file ${keptIn()} --run`,
     "preflight dev=- token=captured",
     "host token=captured",
   ]);
@@ -182,25 +188,36 @@ it("does not prepare an app a deployment cannot point anywhere, and says what it
 
 it("prepares only with a person: with nobody, it names the deploy that hands their part to a coding agent's user", async () => {
   interactive = false;
-  await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
+  await expect(runDeploy("fly", dir, { run: true, envFile: keptIn() })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
   expect(said.join("\n")).toContain(
     "setting up the separate production app needs a person — run this deploy in a terminal; from a coding agent, " +
-      "run `fastagent deploy fly --run --json`, which hands their part to its user",
+      `run \`fastagent deploy fly --env-file ${keptIn()} --run --json\`, which hands their part to its user`,
   );
 
   interactive = true;
   calls.length = 0;
   said.length = 0;
-  await expect(runDeploy("fly", dir, { run: true, input: false })).rejects.toBe(stopped);
+  await expect(runDeploy("fly", dir, { run: true, input: false, envFile: keptIn() })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
-  expect(said.join("\n")).toContain("fastagent deploy fly --run --json");
+  expect(said.join("\n")).toContain("fastagent deploy fly --env-file");
+});
+
+it("needs a file to keep the credentials of the app it makes in, since a deployment has no default one", async () => {
+  facts.values.clear();
+  await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
+  // Nothing was prepared, and the way to is named: the setup that makes the file, then this deploy with it.
+  expect(calls).toEqual(["preflight dev=- token=-"]);
+  const out = said.join("\n");
+  expect(out).toContain("are not in the environment, so a production feishu app has to be made");
+  expect(out).toContain("`fastagent channels setup feishu --env-file <file>`");
+  expect(out).toContain("deploy again with --env-file <file>");
 });
 
 it("creates an app when all production app values are absent, instead of gating on values onboarding supplies", async () => {
   facts.values.clear();
-  await runDeploy("fly", dir, { run: true });
-  expect(calls).toContain("prepare feishu rerun=fastagent deploy fly --run");
+  await runDeploy("fly", dir, { run: true, envFile: keptIn() });
+  expect(calls).toContain(`prepare feishu rerun=fastagent deploy fly --env-file ${keptIn()} --run`);
   expect(facts.values.get("FEISHU_APP_ID")).toBe("cli_production");
   expect(process.env.FASTAGENT_ENVIRONMENT).toBe("production");
 });
@@ -218,6 +235,13 @@ it("tells the host the deployment serves the Agent API, and writes no key itself
   await expect(readFile(production(), "utf8")).rejects.toThrow("ENOENT");
   // A generate-only deploy has set nothing: it says how the key gets made, not that there is one.
   expect(said.join("\n")).toContain("Agent API:");
+});
+
+it("says, when the values hold no key, that `invoke --url` is given one with --key: nothing of this machine's holds it", async () => {
+  await runDeploy("fly", dir, { run: true, envFile: keptIn() });
+  expect(said.join("\n")).toContain(
+    "the environment holds none, so pass the key to `fastagent invoke --url` with --key",
+  );
 });
 
 it("tells the host a definition that turns the API off serves none, and says so", async () => {
@@ -272,14 +296,16 @@ it("the ticket's run is the whole deploy, each person's step its user's, its res
     timeoutSeconds: 60,
   });
   throughTicket = ticket;
-  await expect(runDeploy("fly", dir, { run: true, json: true, ticket })).rejects.toBe(stopped);
+  // The key is in the values this deploy was given, so the report can say how to check the API with it.
+  facts.values.set("FASTAGENT_API_KEY", "k");
+  await expect(runDeploy("fly", dir, { run: true, json: true, ticket, envFile: keptIn() })).rejects.toBe(stopped);
   // Taken before the pre-flight's seconds, so the starting command never finds it unclaimed.
   expect(statusAtPreflight).toBe("working");
   // The host's work runs as the step finishing: the person's deadline never cuts it halfway.
   expect(finishingAtHost).toBe(true);
   expect(calls).toEqual([
     "preflight dev=- token=-",
-    "prepare feishu rerun=fastagent deploy fly --run --json",
+    `prepare feishu rerun=fastagent deploy fly --env-file ${keptIn()} --run --json`,
     "preflight dev=- token=captured",
     "host token=captured",
   ]);

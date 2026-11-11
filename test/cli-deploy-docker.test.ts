@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { dockerComposeFile } from "../src/deploy/docker/plan.ts";
 import { deploymentName } from "../src/deploy/deployment-name.ts";
@@ -38,21 +37,36 @@ describe("cli: deploy docker", () => {
     expect(await readFile(join(dir, file), "utf8")).toBe(customCompose);
   });
 
-  it("deploy docker gates --run when FASTAGENT_SECRETS_DIR sends the values away from the committed env_file", async () => {
-    const dir = await agentWorkspace("fa-deploy-secrets-dir-", {
+  it("deploy docker lists the names a deployment needs and writes no value, wherever it came from: no default file, the shell, --env-file", async () => {
+    const dir = await agentWorkspace("fa-deploy-names-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "src/tools/gh.mjs": `export default {
+  kind: "fastagent.needs",
+  secrets: [{ name: "GH_TOKEN", optional: false }],
+  build: () => ({ name: "gh", description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ output: [] }) }),
+};\n`,
+      // What a deployment does not read: neither the development file nor the one `start` reads.
+      ".secrets/.env": "GH_TOKEN=from-dev\n",
+      ".secrets/production/.env": "GH_TOKEN=from-start\n",
     });
-    const elsewhere = await mkdtemp(join(tmpdir(), "fa-secrets-elsewhere-"));
-    const env = { ...process.env, FASTAGENT_SECRETS_DIR: elsewhere };
-
-    const planned = await runInProcess(["deploy", "docker", dir], undefined, env);
-    expect(planned.code).toBe(0);
-    expect(planned.stderr).toMatch(/warn: FASTAGENT_SECRETS_DIR points this run's values at/);
-
-    const gated = await runInProcess(["deploy", "docker", dir, "--run"], undefined, env);
-    expect(gated.code).toBe(1);
-    expect(gated.stderr).toMatch(/deploy stopped: FASTAGENT_SECRETS_DIR points this run's values at/);
-    expect(gated.stderr).not.toMatch(/Docker CLI not found|Docker daemon/); // refused before any Docker work
+    const clean = { ...process.env };
+    delete clean.GH_TOKEN;
+    const file = join(dir, "values.env");
+    await writeFile(file, "GH_TOKEN=from-file\n");
+    const compose = async (args: string[], env: NodeJS.ProcessEnv) => {
+      const run = await runInProcess(["deploy", "docker", dir, "--force", ...args], undefined, env);
+      expect(run.code, run.stderr).toBe(0);
+      return readFile(join(dir, dockerComposeFile(await deploymentName(dir))), "utf8");
+    };
+    // The Compose file lists the name and holds no value, wherever it came from; neither project file is read.
+    for (const written of [
+      await compose([], clean),
+      await compose(["--env-file", file], clean),
+      await compose([], { ...clean, GH_TOKEN: "from-shell" }),
+    ]) {
+      expect(written).toMatch(/^ {6}GH_TOKEN:$/m);
+      for (const value of ["from-dev", "from-start", "from-file", "from-shell"]) expect(written).not.toContain(value);
+    }
   });
 
   it("deploy docker refuses --run from a generated artifact that drifted from the definition", async () => {

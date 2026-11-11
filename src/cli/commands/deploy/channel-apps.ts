@@ -1,10 +1,9 @@
 /**
  * The production Feishu or Lark app a deploy sets up on the spot when the target's values hold none: the same
- * `channels setup` a person runs by hand, aimed at the production value file (channel-setup.md §6).
+ * `channels setup` a person runs by hand, aimed at the file `--env-file` names (channel-setup.md §6).
  */
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { SetupWay } from "../../../channels/setup.ts";
-import { dotEnvPath } from "../../../value-file.ts";
 import { type SetupKind, setUpChannel, setupNames } from "../../channel-setup.ts";
 import type { Person } from "../../person.ts";
 
@@ -32,11 +31,11 @@ export function unpreparedChannelApps(
 /** Set each of `apps` up for production, its person's steps taken by `person` (absent: at this terminal). */
 export async function prepareChannelApps(
   agentDir: string,
+  file: string,
   apps: readonly ChannelAppSetup[],
   rerun: string,
   person?: Person,
 ): Promise<void> {
-  const file = dotEnvPath(agentDir);
   for (const { kind, way } of apps) {
     console.error(`[fastagent] ${kind}: preparing the production app for ${way} in ${file}`);
     const input = { kind: kind satisfies SetupKind, agentDir, file, way, dev: false, rerun };

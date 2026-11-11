@@ -3,15 +3,14 @@
  * prints its session's id; `--session <id>` sends the message into that session, continuing it. `--url` sends it to a
  * served agent instead, over its Agent API (SPEC.md §9.6), with the same output and exit code.
  */
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { type Agent, AgentError, type MessageStreamEvent, type SessionSettings } from "../../agent-api.ts";
 import { enterAgentEnv } from "../../env.ts";
-import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { connectAgent } from "../../http/client.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
-import { resolveStateRoot, selectAgentEnvironment } from "../../paths.ts";
+import { resolveStateRoot } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import { type InstanceFlags, enterEnvFile, instanceInputs } from "../instance.ts";
@@ -24,7 +23,7 @@ export interface InvokeOptions {
   session?: string;
   /** A served agent's base URL: the message goes there, over its Agent API. */
   url?: string;
-  /** The key `url` is called with; else the first in the agent's production values. */
+  /** The key `url` is called with; else the first `FASTAGENT_API_KEY` of the environment. */
   key?: string;
   instance?: InstanceFlags;
 }
@@ -80,17 +79,15 @@ async function answer(
 }
 
 /**
- * The key `--url` calls with: `--key`, or the first of `FASTAGENT_API_KEY` in the agent's production values, which
- * `deploy` writes there and carries to the deployment.
+ * The key `--url` calls with: `--key`, or the first of `FASTAGENT_API_KEY` in this command's environment (the file
+ * `--env-file` names laid under it). A deployment has no default file.
  */
-function deploymentKey(agentDir: string, url: string): string {
-  selectAgentEnvironment("production");
-  const file = dotEnvPath(agentDir);
-  const [key] = apiKeysFrom(loadEnvValues(file).get(API_KEY_VARIABLE));
+function deploymentKey(url: string): string {
+  const [key] = apiKeysFrom(process.env[API_KEY_VARIABLE]);
   if (key === undefined) {
     failUsage(
-      `no key to call ${url} with: pass --key, or set ${API_KEY_VARIABLE} in ${relative(process.cwd(), file) || file} ` +
-        "(deploy writes one there)",
+      `no key to call ${url} with: pass --key, or set ${API_KEY_VARIABLE} in the environment of this command ` +
+        "(or in the file --env-file names)",
     );
   }
   return key;
@@ -110,7 +107,7 @@ function enterForUrl(dirArg: string, key: string | undefined, url: string): stri
     return key;
   }
   enterAgentEnv(agentDir);
-  return key ?? deploymentKey(agentDir, url);
+  return key ?? deploymentKey(url);
 }
 
 /** `--url`: the message sent to a served agent over its Agent API, in a session there; nothing opens here. */
@@ -119,7 +116,8 @@ async function runRemoteInvoke(message: string, dirArg: string, opts: InvokeOpti
   const { envFile, ...placed } = opts.instance ?? {};
   for (const flag of Object.keys(placed))
     failUsage(`--${flag} places an instance this run opens, and --url opens none`);
-  enterEnvFile(envFile);
+  // A deployment has no default value file: its key is `--key`, the environment, or the file `--env-file` names.
+  enterEnvFile(envFile, { defaultFile: false });
   let settings: SessionSettings | undefined;
   try {
     settings = opts.model === undefined ? undefined : { model: modelRefOf(opts.model, "--model") };

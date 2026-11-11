@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
-import { dotEnvPath, loadEnvValues, parseEnvContent } from "./value-file.ts";
+import { loadEnvValues, parseEnvContent, valueFileOf } from "./value-file.ts";
 
 /**
  * Write parsed values into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence on BOTH
@@ -29,11 +29,12 @@ export function enterAgentEnv(agentDir: string): void {
 }
 
 /**
- * Load the agent's `.env` ({@link dotEnvPath}) into `process.env` ({@link applyEnvValues}), treating a MISSING file as
+ * Load the agent's `.env` ({@link valueFileOf}) into `process.env` ({@link applyEnvValues}), treating a MISSING file as
  * normal (no .env). Commands want {@link enterAgentEnv}, which is this plus the proxy that `.env` may declare.
  */
 export function loadDotEnv(agentDir: string): void {
-  const path = dotEnvPath(agentDir);
+  const path = valueFileOf(agentDir);
+  if (path === undefined) return;
   applyEnvValues(loadEnvValues(path)); // ONE definition of "a missing value file is normal" (loadEnvValues)
   // A `.env` at the agent's root is the file habit puts there, and nothing reads it.
   const stray = join(agentDir, ".env");

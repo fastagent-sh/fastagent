@@ -66,7 +66,7 @@ describe("cli: process contracts", () => {
     );
   });
 
-  it("invoke --url reaches a deployment through the proxy the agent's .env declares", async () => {
+  it("invoke --url reaches a deployment through the proxy the file --env-file names declares", async () => {
     const requests: string[] = [];
     const proxy = createServer((req, res) => {
       requests.push(`${req.method} ${req.url}`);
@@ -82,14 +82,28 @@ describe("cli: process contracts", () => {
       if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
       const proxyUrl = `http://127.0.0.1:${address.port}`;
       const dir = await agentWorkspace("fa-invoke-url-proxy-", {
-        ".secrets/.env": `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`,
+        "proxy.env": `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`,
       });
       const env = { ...process.env };
       for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) {
         delete env[key];
       }
       // The reserved .invalid host resolves nowhere, so only the proxy can carry the request.
-      await run(["invoke", "--url", "http://deployment.invalid", "--key", "k", "hello", dir], undefined, env);
+      await run(
+        [
+          "invoke",
+          "--url",
+          "http://deployment.invalid",
+          "--key",
+          "k",
+          "--env-file",
+          join(dir, "proxy.env"),
+          "hello",
+          dir,
+        ],
+        undefined,
+        env,
+      );
       expect(requests).toContain("POST http://deployment.invalid/v1/sessions");
     } finally {
       await new Promise<void>((resolve, reject) => proxy.close((error) => (error ? reject(error) : resolve())));

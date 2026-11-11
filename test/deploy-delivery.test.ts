@@ -9,18 +9,10 @@ import {
 
 describe("deploy/delivery: what a deploy sets on the box", () => {
   it("delivers the configuration as one line, without the editor's $schema, and {} when there is none", () => {
-    expect(deliveredConfig(undefined, undefined)).toBe("{}");
-    expect(deliveredConfig({ $schema: "./fastagent.schema.json", name: "acme", http: { api: false } }, undefined)).toBe(
+    expect(deliveredConfig(undefined)).toBe("{}");
+    expect(deliveredConfig({ $schema: "./fastagent.schema.json", name: "acme", http: { api: false } })).toBe(
       '{"name":"acme","http":{"api":false}}',
     );
-  });
-
-  it("lays the value file's model over the configuration's own, and over a configuration that has none", () => {
-    expect(JSON.parse(deliveredConfig({ model: "a/one", thinkingLevel: "low" }, "b/two"))).toEqual({
-      model: "b/two",
-      thinkingLevel: "low",
-    });
-    expect(JSON.parse(deliveredConfig(undefined, "b/two"))).toEqual({ model: "b/two" });
   });
 
   it("names the public URL the host gives the box, and leaves an operator's own", () => {

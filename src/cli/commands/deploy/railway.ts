@@ -40,7 +40,7 @@ export const railwayHost: HostDeploy = {
   },
   async deploy(ctx) {
     const { opts, agentDir, name, pre, channels, write } = ctx;
-    const { hasCron, modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
+    const { hasCron, modelAuth, boxLogin, container, declaredSecrets, values, valuesFrom } = pre;
     const serviceName = toRailwayName(name);
     const plan = planRailwayDeploy({
       serviceName,
@@ -72,9 +72,10 @@ export const railwayHost: HostDeploy = {
         channels,
         declaredSecrets,
         values,
-        valueFile,
+        valuesFrom,
         intoLinked: !!opts.intoLinked,
         config: opts.config,
+        envFile: opts.envFile,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -99,11 +100,13 @@ async function runDeployRailway(params: {
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
-  valueFile: string;
+  valuesFrom: string;
   intoLinked: boolean;
   delivery: (url: string) => { variables: Record<string, string>; publicUrl: string };
   /** The `--config` file, where a URL a person set is recorded once the box confirms it. */
   config: string | undefined;
+  /** The `--env-file` the values come from, when one was named. */
+  envFile: string | undefined;
 }): Promise<string> {
   const { agentDir, name, channels, intoLinked } = params;
   const railway = spawnRunner("railway", agentDir);
@@ -120,13 +123,13 @@ async function runDeployRailway(params: {
         host: "railway",
         label: "Railway",
         agentDir,
-        opts: { config: params.config },
+        opts: { config: params.config, envFile: params.envFile },
         answerer: params.answerer,
         api: params.api,
         modelAuth: params.modelAuth,
         modelKey: params.modelKey,
         declaredSecrets: params.declaredSecrets,
-        valueFile: params.valueFile,
+        valuesFrom: params.valuesFrom,
         values: params.values,
       }),
       channels,

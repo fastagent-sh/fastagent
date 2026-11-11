@@ -87,10 +87,20 @@ describe("cli: login and models", () => {
       status: "need_user_action",
       deployment: "fly",
       variables: ["OPENAI_API_KEY"],
-      value_file: join(await realpath(dir), ".secrets", "production", ".env"),
+      set_command: "fastagent secrets set fly OPENAI_API_KEY",
       check_command: "fastagent deploy fly --run",
-      agent_next_steps: expect.stringContaining("themselves, not in this conversation"),
+      agent_next_steps: expect.stringContaining("themselves: not in this conversation"),
     });
+    expect(JSON.parse(key.stdout)).not.toHaveProperty("value_file");
+    // Docker holds no values of its own: Compose takes the key from the environment that runs it.
+    const docker = await runInProcess(
+      ["login", "openai", "--method", "api-key", "--deployment", "docker", "--json"],
+      dir,
+    );
+    const said = JSON.parse(docker.stdout);
+    expect(said).toMatchObject({ status: "need_user_action", deployment: "docker", variables: ["OPENAI_API_KEY"] });
+    expect(said).not.toHaveProperty("set_command");
+    expect(said.agent_next_steps).toContain("in the environment that runs Compose");
   });
 
   it("login --deployment without a terminal: the ticket's process holds the box's shell until the box answers", async () => {

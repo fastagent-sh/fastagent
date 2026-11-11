@@ -137,12 +137,12 @@ export function declaredNames(
 
 /**
  * The stop for a host CLI signed out with nobody to sign it in. A token goes in the shell's (or CI's) environment,
- * never in the production value file, which holds the deployment's values and not the CLI's.
+ * never among a deployment's values, which would travel to the box with the others.
  */
 export function hostSignedOutGate(host: string, login: string, token: string, forAgent: string): string {
   return (
     `not logged in to ${host} — run \`${login}\` in a terminal (it opens a browser), or set ${token} in this ` +
-    `shell's environment, not in .secrets/production/.env (that file holds the deployment's values); then re-run. ` +
+    `shell's environment (it is not a value of the deployment); then re-run. ` +
     `From a coding agent, \`${forAgent}\` hands the sign-in to its user`
   );
 }

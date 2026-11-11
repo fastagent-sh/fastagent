@@ -1,8 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fileStore } from "../src/deploy/file-store.ts";
 import { flyStore } from "../src/deploy/fly/store.ts";
 import { railwayStore } from "../src/deploy/railway/store.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
@@ -194,26 +190,5 @@ describe("railwayStore", () => {
       railwayStore(run, "bot", quiet, { redeploy: false }).write({ A: "a", B: "b", C: "c" }),
     ).rejects.toThrow("`railway variables set B` failed");
     expect(cmds()).toHaveLength(2);
-  });
-});
-
-describe("fileStore", () => {
-  it("holds the names a value file gives a value, not the empty lines", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-file-store-"));
-    const file = join(dir, "prod.env");
-    await writeFile(file, "A=a\nB=\n# C=c\n");
-    expect([...(await fileStore(dir, file).names())]).toEqual(["A"]);
-  });
-
-  it("writes into the file, replacing a name's old value in place and keeping the rest", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-file-store-"));
-    const file = join(dir, ".secrets", "production", ".env");
-    const store = fileStore(dir, file);
-    await store.write({ A: "one" });
-    await store.write({ A: "two", B: "b" });
-    const content = await readFile(file, "utf8");
-    expect(content).toMatch(/^A=two$/m);
-    expect(content).toMatch(/^B=b$/m);
-    expect(content.match(/^A=/gm)).toHaveLength(1);
   });
 });

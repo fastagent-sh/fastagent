@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { describe, expect, it } from "vitest";
@@ -246,12 +246,27 @@ registerHooks({
     });
   });
 
-  it("without --key, uses the first key in the production values", async () => {
+  it("without --key, uses the first FASTAGENT_API_KEY of the environment, or of the file --env-file names, and of no default file", async () => {
     await withServedAgent(async (dir, url) => {
-      await mkdir(join(dir, ".secrets", "production"), { recursive: true });
-      await writeFile(join(dir, ".secrets", "production", ".env"), "FASTAGENT_API_KEY=the-next-key, a-retired-key\n");
-      const keyed = await runInProcess(["invoke", "--url", url, "hello", dir]);
+      const ambient = { ...process.env, FASTAGENT_API_KEY: "the-next-key, a-retired-key" };
+      const keyed = await runInProcess(["invoke", "--url", url, "hello", dir], undefined, ambient);
       expect([keyed.code, keyed.stdout.trim()], keyed.stderr).toEqual([0, "seen 1"]);
+
+      const file = join(dir, "api.env");
+      await writeFile(file, "FASTAGENT_API_KEY=the-next-key, a-retired-key\n");
+      const clean = { ...process.env };
+      delete clean.FASTAGENT_API_KEY;
+      const named = await runInProcess(["invoke", "--url", url, "--env-file", file, "hello", dir], undefined, clean);
+      expect([named.code, named.stdout.trim()], named.stderr).toEqual([0, "seen 1"]);
+
+      // The files of the project are not read: neither the development one, which holds the key `dev` serves with,
+      // nor the one `start` reads.
+      for (const own of [".secrets/.env", ".secrets/production/.env"]) {
+        await mkdir(join(dir, dirname(own)), { recursive: true });
+        await writeFile(join(dir, own), "FASTAGENT_API_KEY=the-next-key\n");
+      }
+      const none = await runInProcess(["invoke", "--url", url, "hello", dir], undefined, clean);
+      expect(none.code).toBe(2);
     });
   });
 
@@ -274,11 +289,13 @@ registerHooks({
 
   it("says where a key comes from when it has none, and takes --key only with --url", async () => {
     const dir = await agent("fa-invoke-url-nokey-");
-    const keyless = await runInProcess(["invoke", "--url", "http://127.0.0.1:9", "hello", dir]);
+    const clean = { ...process.env };
+    delete clean.FASTAGENT_API_KEY;
+    const keyless = await runInProcess(["invoke", "--url", "http://127.0.0.1:9", "hello", dir], undefined, clean);
     expect([keyless.code, keyless.stderr]).toEqual([
       2,
       expect.stringMatching(
-        /no key to call http:\/\/127\.0\.0\.1:9 with: pass --key, or set FASTAGENT_API_KEY in .*\.secrets\/production\/\.env/,
+        /no key to call http:\/\/127\.0\.0\.1:9 with: pass --key, or set FASTAGENT_API_KEY in the environment of this command/,
       ),
     ]);
     const stray = await runInProcess(["invoke", "--key", "k", "hello", dir]);

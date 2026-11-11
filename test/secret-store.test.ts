@@ -53,7 +53,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       store: fake,
       needs: [need("A"), need("B")],
       known: ["A", "B"],
-      source: { file: ".secrets/production/.env", values: new Map([["A", "a"]]) },
+      source: { file: "the environment", flag: "--from-env", values: new Map([["A", "a"]]) },
       asker,
     });
     expect(out).toBeUndefined();
@@ -70,7 +70,8 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       needs: [need("A"), need("B"), need("C")],
       known: ["A", "B", "C", "OPT"],
       source: {
-        file: ".secrets/production/.env",
+        file: "the environment",
+        flag: "--from-env",
         // OPT is declared and optional: offered along; UNDECLARED is held by the file and never offered; an empty
         // line is not a value.
         values: new Map([
@@ -83,10 +84,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       asker,
     });
     expect(out).toBeUndefined();
-    expect(asked).toEqual([
-      "Fly lacks A, OPT (optional), which .secrets/production/.env holds. Set them on Fly from it?",
-      "B",
-    ]);
+    expect(asked).toEqual(["Fly lacks A, OPT (optional), which the environment holds. Set them on Fly from it?", "B"]);
     expect(writes).toEqual([{ A: "file-a", OPT: "file-opt", B: "typed-b" }]);
   });
 
@@ -98,7 +96,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       store: fake,
       needs: [need("A")],
       known: ["A"],
-      source: { file: "f.env", values: new Map([["A", "file-a"]]) },
+      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["A", "file-a"]]) },
       asker,
     });
     expect(asked).toEqual(["Fly lacks A, which f.env holds. Set them on Fly from it?", "A"]);
@@ -112,12 +110,12 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       store: fake,
       needs: [need("A"), need("B", "your model provider key")],
       known: ["A", "B"],
-      source: { file: "f.env", values: new Map([["A", "file-a"]]) },
+      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["A", "file-a"]]) },
     });
     expect(out).toContain("Fly has no value for: A (required by src/A.ts); B (your model provider key).");
-    expect(out).toContain("`fastagent secrets push fly` sets the one a value file holds (A)");
-    expect(out).toContain("a person types the others in a terminal, one command each: `fastagent secrets set fly B`");
-    // A CI job and a secret manager have their own way in.
+    expect(out).toContain("`fastagent secrets push fly --env-file f.env` sets the one f.env holds (A)");
+    expect(out).toContain("a person gives the others in a terminal, one command each: `fastagent secrets set fly B`");
+    // A CI job and a secret manager have their own way in: named when the source above was not it already.
     expect(out).toContain("`fastagent secrets push fly --from-env` takes them from the environment");
     expect(out).toContain("Then re-run. A value is never asked for in a conversation");
     expect(writes).toEqual([]);
@@ -131,18 +129,18 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       store: fake,
       needs: [need("A")],
       known: ["A", "OPT"],
-      source: { file: "f.env", values: new Map([["OPT", "file-opt"]]) },
+      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["OPT", "file-opt"]]) },
       say: (line) => said.push(line),
     });
     expect(out).toBeUndefined();
-    expect(said).toEqual(["Fly lacks OPT, which f.env holds; `fastagent secrets push fly` sets it"]);
+    expect(said).toEqual(["Fly lacks OPT, which f.env holds; `fastagent secrets push fly --env-file f.env` sets it"]);
     expect(writes).toEqual([]);
   });
 
   it("one name nobody holds reads as a sentence about it, not about a plural", async () => {
     const { fake } = store();
     const out = await provideSecrets({ ...base, store: fake, needs: [need("A")], known: ["A"] });
-    expect(out).toContain("a person types it in a terminal, one command each: `fastagent secrets set fly A`");
+    expect(out).toContain("a person gives it in a terminal, one command each: `fastagent secrets set fly A`");
   });
 
   it("a target that cannot be read is a gate saying why, never an empty target to fill", async () => {
@@ -163,7 +161,8 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
 });
 
 describe("provideSecrets: values FastAgent makes itself", () => {
-  const mint = [{ name: "KEY", make: () => "made" }];
+  const mint = [{ name: "KEY", hint: "the Agent API's key", make: () => "made" }];
+  const restoreOnly = [{ name: "KEY", hint: "the Agent API's key: make it with --generate" }];
 
   it("makes one only where neither the target nor the file has it, and keeps it where its caller looks", async () => {
     const { fake, writes } = store();
@@ -192,7 +191,7 @@ describe("provideSecrets: values FastAgent makes itself", () => {
       store: fake,
       needs: [],
       known: ["KEY"],
-      source: { file: "f.env", values: new Map([["KEY", "from-file"]]) },
+      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["KEY", "from-file"]]) },
       mint,
       onMinted: async (values) => void kept.push(values),
       inform: (line) => told.push(line),
@@ -216,7 +215,7 @@ describe("provideSecrets: values FastAgent makes itself", () => {
       store: filed.fake,
       needs: [],
       known: ["KEY"],
-      source: { file: "f.env", values: new Map([["KEY", "from-file"]]) },
+      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["KEY", "from-file"]]) },
       asker,
       mint,
     });
@@ -224,14 +223,42 @@ describe("provideSecrets: values FastAgent makes itself", () => {
     expect(asked).toEqual([]);
   });
 
-  it("needs no one to ask: a coding agent's deploy mints it too, and still names a name it cannot", async () => {
+  it("made only for a person who sees it: with nobody to ask, its absence is a gap named with how to fill it", async () => {
+    // A key made in a CI job or a coding agent's run would be one nobody holds, and every Caller would be locked out.
     const { fake, writes } = store();
-    expect(await provideSecrets({ ...base, store: fake, needs: [], known: ["KEY"], mint })).toBeUndefined();
-    expect(writes).toEqual([{ KEY: "made" }]);
+    const out = await provideSecrets({ ...base, store: fake, needs: [], known: ["KEY"], mint: restoreOnly });
+    expect(out).toContain("Fly has no value for: KEY (the Agent API's key: make it with --generate)");
+    expect(out).toContain("`fastagent secrets set fly KEY`");
+    expect(writes).toEqual([]);
+  });
 
+  it("with nobody to ask, still restores the key a source holds: a deployment made again keeps its Callers", async () => {
+    const { fake, writes } = store();
+    const told: string[] = [];
+    const out = await provideSecrets({
+      ...base,
+      store: fake,
+      needs: [],
+      known: ["KEY"],
+      source: { file: "the environment", flag: "--from-env", values: new Map([["KEY", "from-env"]]) },
+      mint: restoreOnly,
+      inform: (line) => told.push(line),
+    });
+    expect(out).toBeUndefined();
+    expect(writes).toEqual([{ KEY: "from-env" }]);
+    expect(told).toEqual(["set KEY on Fly from the environment, where an earlier deploy kept it"]);
+  });
+
+  it("names a name it cannot set beside the key it cannot make", async () => {
     const lacking = store();
-    const out = await provideSecrets({ ...base, store: lacking.fake, needs: [need("A")], known: ["A", "KEY"], mint });
-    expect(out).toContain("A (required by src/A.ts)");
+    const out = await provideSecrets({
+      ...base,
+      store: lacking.fake,
+      needs: [need("A")],
+      known: ["A", "KEY"],
+      mint: restoreOnly,
+    });
+    expect(out).toContain("A (required by src/A.ts); KEY (the Agent API's key: make it with --generate)");
     expect(lacking.writes).toEqual([]);
   });
 });

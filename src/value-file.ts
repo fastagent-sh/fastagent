@@ -1,5 +1,5 @@
 /**
- * The selected environment's value file (`.secrets/.env`, or `.secrets/production/.env` for a deployment), read and
+ * The selected environment's value file (`.secrets/.env`, or `.secrets/production/.env` for `start`), read and
  * written; entering it into `process.env` is env.ts's. Read as data: what it declares, and what it adds to an agent's
  * environment. Written: what a command generates (a channel's secret, the Agent API's key) goes in as an active
  * `NAME=value` line, a value already set stays, and the secrets directory fastagent made carries its own `.gitignore`.
@@ -48,10 +48,26 @@ export function loadEnvValues(file: string): Map<string, string> {
  * the agent runs. A `dev` worker is spawned with its supervisor's arguments and takes the flag itself.
  */
 let selectedValueFile: string | undefined;
+let defaultValueFile = true;
 
-/** Use `path` as the agent's value file from here on, or the default again. */
-export function useValueFile(path: string | undefined): void {
+/**
+ * Use `path` as the agent's value file from here on, or the default again. `defaultFile: false` is for a command that
+ * runs a deployment (`deploy`, `secrets`, `destroy`, `logs`, `login --deployment`, `invoke --url`): it has no default
+ * file, only the one `--env-file` names, and otherwise the environment it runs in (what a CI job or `op run` injects).
+ */
+export function useValueFile(path: string | undefined, options: { defaultFile?: boolean } = {}): void {
   selectedValueFile = path;
+  defaultValueFile = options.defaultFile ?? true;
+}
+
+/** The file `--env-file` named, when one was: the only file a deployment's values may come from. */
+export function namedValueFile(): string | undefined {
+  return selectedValueFile;
+}
+
+/** The file this command reads values from, when it has one: the default's, or only `--env-file`'s (see {@link useValueFile}). */
+export function valueFileOf(agentDir: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return defaultValueFile ? dotEnvPath(agentDir, env) : selectedValueFile;
 }
 
 /** The agent's `.env` file: the one `--env-file` named, else `<resolved secrets dir>/.env`. */

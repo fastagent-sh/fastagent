@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { installProxyFetch } from "../src/proxy.ts";
@@ -24,8 +24,8 @@ describe("cli: channels setup --record-url", () => {
     const dir = await agentWorkspace("fa-record-url-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
-    await mkdir(join(dir, ".secrets", "production"), { recursive: true });
-    await writeFile(join(dir, ".secrets", "production", ".env"), "LARK_APP_ID=cli_lark\n");
+    const values = join(dir, "..", "prod.env");
+    await writeFile(values, "LARK_APP_ID=cli_lark\n");
     const config = join(dir, "..", "prod.json");
     await writeFile(config, JSON.stringify({ settings: {} }));
 
@@ -39,6 +39,8 @@ describe("cli: channels setup --record-url", () => {
         "--record-url",
         "--config",
         config,
+        "--env-file",
+        values,
         "--url",
         pending.url,
       ]);
@@ -61,6 +63,8 @@ describe("cli: channels setup --record-url", () => {
         "--record-url",
         "--config",
         config,
+        "--env-file",
+        values,
         "--url",
         confirmed.url,
         "--json",

@@ -33,7 +33,7 @@ export const flyHost: HostDeploy = {
   },
   async deploy(ctx) {
     const { opts, agentDir, name, channels, pre, write } = ctx;
-    const { hasCron, modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
+    const { hasCron, modelAuth, boxLogin, container, port, declaredSecrets, values, valuesFrom } = pre;
     // Two consistent modes.
     const flyTomlFileName = flyTomlFile(name);
     const flyTomlPath = join(agentDir, flyTomlFileName);
@@ -93,9 +93,10 @@ export const flyHost: HostDeploy = {
         channels,
         declaredSecrets,
         values,
-        valueFile,
+        valuesFrom,
         publicUrl: delivered.publicUrl,
         config: opts.config,
+        envFile: opts.envFile,
       });
       return reachedAt;
     }
@@ -122,11 +123,13 @@ async function runDeployFly(params: {
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
-  valueFile: string;
+  valuesFrom: string;
   /** The `http.publicUrl` the image delivers: the platforms reach the box there. */
   publicUrl: string;
   /** The `--config` file, where a URL a person set is recorded once the box confirms it. */
   config: string | undefined;
+  /** The `--env-file` the values come from, when one was named. */
+  envFile: string | undefined;
 }): Promise<void> {
   const { agentDir, appName, channels } = params;
   const fly = spawnRunner("fly", agentDir);
@@ -142,13 +145,13 @@ async function runDeployFly(params: {
         host: "fly",
         label: "Fly",
         agentDir,
-        opts: { config: params.config },
+        opts: { config: params.config, envFile: params.envFile },
         answerer: params.answerer,
         api: params.api,
         modelAuth: params.modelAuth,
         modelKey: params.modelKey,
         declaredSecrets: params.declaredSecrets,
-        valueFile: params.valueFile,
+        valuesFrom: params.valuesFrom,
         values: params.values,
       }),
       channels,

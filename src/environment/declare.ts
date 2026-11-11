@@ -85,8 +85,8 @@ function declareVariables(raw: unknown): Record<string, DeclaredVariable> {
     }
     if (!variable || typeof variable !== "object" || Array.isArray(variable)) {
       throw new Error(
-        `${at} must be { "description": "what it is for" }: its value goes in the stage's value file ` +
-          `(.secrets/.env, .secrets/production/.env) or the host, never in context.json`,
+        `${at} must be { "description": "what it is for" }: its value goes in the value file ` +
+          `(.secrets/.env), the environment a deploy runs in, or the host, never in context.json`,
       );
     }
     for (const key of Object.keys(variable)) {

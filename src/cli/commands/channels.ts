@@ -17,7 +17,7 @@ import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-d
 import { setChannelConfig } from "../../authoring.ts";
 import { INSTANCE_CONFIG_FILE, selectAgentEnvironment } from "../../paths.ts";
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
-import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
+import { dotEnvPath } from "../../value-file.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { enterEnvFile } from "../instance.ts";
 import type { Person } from "../person.ts";
@@ -105,7 +105,14 @@ async function planSetup(kind: SetupKind, dirArg: string, opts: ChannelsSetupOpt
   selectAgentEnvironment(dev ? "dev" : "production");
   if (dev) markDevServe();
   else unmarkDevServe();
-  enterEnvFile(opts.envFile);
+  // A deployment's credentials are kept in a file the person names: it has no default one.
+  if (!dev && opts.envFile === undefined) {
+    failUsage(
+      `${kind} for a deployment keeps its credentials in a file you name, since a deployment has no default one: ` +
+        `pass --env-file <file> (it is created when missing)`,
+    );
+  }
+  enterEnvFile(opts.envFile, { defaultFile: dev, mayCreate: true });
   enterAgentEnv(agentDir);
   const file = dotEnvPath(agentDir);
   const config =
@@ -168,7 +175,7 @@ async function carryOut(
   }
   const serve = plan.dev
     ? "fastagent dev"
-    : `fastagent start --env-file ${shellArg(plan.file)}   # or, from .secrets/production/.env, fastagent deploy <host> --run`;
+    : `fastagent start --env-file ${shellArg(plan.file)}   # or: fastagent deploy <host> --run --env-file ${shellArg(plan.file)}`;
   return { written: outcome.written, kept: outcome.kept, next_steps: [serve, ...outcome.after] };
 }
 
@@ -245,7 +252,8 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
     failUsage("--record-url writes into the configuration a deploy delivers: pass --config <file>");
   const agentDir = agentDirOrExit(resolve(dirArg));
   selectAgentEnvironment("production");
-  enterEnvFile(opts.envFile);
+  // The values are this command's environment, and the file `--env-file` names laid under it: no default file.
+  enterEnvFile(opts.envFile, { defaultFile: false });
   // The deployment's /health and the platform are reached as the instance's values and environment say, a proxy included.
   enterAgentEnv(agentDir);
   const config = resolve(opts.config);
@@ -270,7 +278,8 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
       ),
     );
   }
-  await recordChannelUrl(agentDir, config, kind, url, loadEnvValues(dotEnvPath(agentDir))).catch(failStartup);
+  const values = new Map(Object.entries(process.env).flatMap(([n, v]) => (v === undefined ? [] : [[n, v] as const])));
+  await recordChannelUrl(agentDir, config, kind, url, values).catch(failStartup);
   printReport(opts.json, { status: "done", channel: kind, url, config }, [`recorded ${url} for ${kind} in ${config}`]);
 }
 

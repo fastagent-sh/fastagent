@@ -94,19 +94,16 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("reads the model from the value file, reports the source, and hands back the value to carry", async () => {
-    // The value file is how a deployment picks a model without editing the committed default; the operator's
-    // shell is deliberately not a source, so this cannot be satisfied by exporting FASTAGENT_MODEL.
+  it("takes the model from the configuration alone: a FASTAGENT_MODEL in the environment or a file is the machine's", async () => {
+    // The shell and a file name what runs on the machine they are on, and a deployment's model is what its
+    // configuration says: delivered whole at every deploy, so nothing stale outlives a change on a host.
     const dir = await agent();
-    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
-    const pre = await call(dir, { model: "openai/other" }, { run: true });
-    expect(pre.ok).toBe(true);
-    if (!pre.ok) return;
-    const source = ".secrets/.env"; // as READ, relative to the agent directory
-    expect(pre.messages).toContainEqual({ level: "note", text: `model openai/gpt-4o-mini (source: ${source})` });
-    // It travels as the delivered configuration's `model`, rewritten whole by every deploy: it is not a credential, so
-    // it stays out of the secret channel and every runbook's required list.
-    expect(JSON.parse(pre.container.config)).toEqual({ model: "openai/gpt-4o-mini" });
+    vi.stubEnv("FASTAGENT_MODEL", "openai/gpt-4o-mini");
+    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=anthropic/other\n");
+    const pre = await call(dir, { model: "openai/gpt-4.1" }, { run: true });
+    if (!pre.ok) throw new Error(pre.gate);
+    expect(pre.messages).toContainEqual({ level: "note", text: "model openai/gpt-4.1 (source: fastagent.config)" });
+    expect(JSON.parse(pre.container.config)).toEqual({});
     expect(pre.declaredSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
   });
 
@@ -133,69 +130,36 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(JSON.parse(pre.container.config)).toEqual({});
   });
 
-  it("gates a model that is not a spec — in EITHER source — but accepts a multi-segment modelId", async () => {
+  it("gates a model that is not a spec, but accepts a multi-segment modelId", async () => {
     // A provider-less spec resolves to nothing on the box, so letting it past this point ships the crash-loop the
-    // gate exists to stop. `config.model` was the half that used to go unchecked. A `/` inside the modelId is not a
-    // typo: 795 of pi's 1354 built-in specs look like `baseten/zai-org/GLM-5.3`, and resolution splits on the first
-    // slash. Gated with or without `--run`: a spec the box cannot resolve is a crash loop no artifact can say otherwise.
+    // gate exists to stop. A `/` inside the modelId is not a typo: 795 of pi's 1354 built-in specs look like
+    // `baseten/zai-org/GLM-5.3`, and resolution splits on the first slash. Gated with or without `--run`: a spec the
+    // box cannot resolve is a crash loop no artifact can say otherwise.
     const dir = await agent();
     for (const bad of ["openai/gpt-4o mini", "gpt-4o"]) {
-      await writeFile(join(dir, ".secrets", ".env"), `FASTAGENT_MODEL=${bad}\n`);
-      const pre = await call(dir, {});
+      const pre = await call(dir, { model: bad });
       expect(pre.ok).toBe(false);
-      if (!pre.ok) expect(pre.gate).toMatch(/is not a "provider\/modelId" spec/);
+      if (!pre.ok) expect(pre.gate).toMatch(/model in fastagent\.config is not a "provider\/modelId"/);
     }
-    await writeFile(join(dir, ".secrets", ".env"), "");
-    const fromConfig = await call(dir, { model: "gpt-4o" });
-    expect(fromConfig.ok).toBe(false);
-    if (!fromConfig.ok) expect(fromConfig.gate).toMatch(/model in fastagent\.config is not a "provider\/modelId"/);
-
-    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=baseten/zai-org/GLM-5.3\n");
-    const pre = await call(dir, {}, { run: true });
-    expect(pre.ok && JSON.parse(pre.container.config).model).toBe("baseten/zai-org/GLM-5.3");
-  });
-
-  it("lays the value file's model over the delivered configuration's own, as the variable outranks the file everywhere", async () => {
-    const dir = await agent();
-    await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4.1\n");
-    const delivered = {
-      source: { values: { model: "openai/from-config", thinkingLevel: "high", $schema: "x" }, label: "/e/f.json" },
-    };
-    const pre = await call(dir, { model: "openai/from-config" }, { run: true, delivered });
-    // One line, without the `$schema` an editor wants and the box does not.
-    if (!pre.ok) throw new Error(pre.gate);
-    expect(JSON.parse(pre.container.config)).toEqual({ model: "openai/gpt-4.1", thinkingLevel: "high" });
-    expect(pre.container.config).not.toMatch(/\s|schema/);
-  });
-
-  it("refuses text of this machine in the delivered configuration: a deployment's text is the program's", async () => {
-    const dir = await agent();
-    const delivered = { source: { values: { skills: ["./extra"] }, label: "/e/f.json", directory: "/e" } };
-    const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true, delivered });
-    expect(gated).toMatchObject({
-      ok: false,
-      gate: expect.stringMatching(
-        /^\/e\/f\.json: skills name text of this machine, and a deployment's text is the program's/,
-      ),
-    });
+    const pre = await call(dir, { model: "baseten/zai-org/GLM-5.3" }, { run: true });
+    expect(pre.ok).toBe(true);
   });
 
   it("asks a kept Dockerfile for the deployed mark, and nothing about the instance: its configuration and name are variables on the host", async () => {
     // Without the mark `start` takes no storage: a box that lost it runs as a local instance on a disk that is gone at
     // the next restart. The INSTRUCTION is the question, not who wrote the file, and `--force` does not rescue it.
     const unmarked = await agent({ Dockerfile: "FROM node:22-slim\n" });
-    await writeFile(join(unmarked, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
+    const config = { model: "openai/gpt-4o-mini" };
     const delivered = { source: { values: { thinkingLevel: "high" }, label: "/elsewhere/fastagent.json" } };
-    const gated = await call(unmarked, {}, { run: true, delivered });
+    const gated = await call(unmarked, config, { run: true, delivered });
     expect(gated).toMatchObject({ ok: false, gate: expect.stringMatching(/does not set FASTAGENT_DEPLOYED/) });
-    expect((await call(unmarked, {}, { run: true, force: true })).ok).toBe(false);
-    const planned = await call(unmarked, {});
+    expect((await call(unmarked, config, { run: true, force: true })).ok).toBe(false);
+    const planned = await call(unmarked, config);
     expect(planned.ok && planned.messages.some((m) => /does not set FASTAGENT_DEPLOYED/.test(m.text))).toBe(true);
     // The ordinary multi-variable spelling is fine: reading only the first name after `ENV` would false-gate it.
     for (const env of ["ENV FASTAGENT_DEPLOYED=1", "ENV FASTAGENT_ROOT=/data FASTAGENT_DEPLOYED=1"]) {
       const own = await agent({ Dockerfile: `FROM node:22-slim\n${env}\n` });
-      await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
-      const pre = await call(own, {}, { run: true, delivered });
+      const pre = await call(own, config, { run: true, delivered });
       expect(pre.ok).toBe(true);
       if (pre.ok) expect(JSON.stringify(pre.messages)).not.toMatch(/FASTAGENT_CONFIG|FASTAGENT_RELEASE/);
     }
@@ -651,7 +615,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     );
     expect(notes).toContainEqual(
       expect.stringMatching(
-        /^no GITHUB_TOKEN in \.secrets\/\.env: unless the target holds one, the host clones without/,
+        /^no GITHUB_TOKEN in the environment: unless the target holds one, the host clones without/,
       ),
     );
     expect(notes.join("\n")).toContain("`fastagent secrets set <host> GITHUB_TOKEN`");
@@ -662,7 +626,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.container.apt).toEqual(["git"]);
 
     // Where a deployment starts the storage over, a clone does not outlive a release, and that is said.
-    await writeFile(join(dir, ".secrets", ".env"), "K=v\nGITHUB_TOKEN=ghp_x\n");
+    vi.stubEnv("GITHUB_TOKEN", "ghp_x");
     const reset = await call(dir, config, { storageResets: true });
     expect(reset.ok).toBe(true);
     if (!reset.ok) return;
@@ -803,8 +767,7 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
       join(dir, "context.json"),
       JSON.stringify({ environment: { variables: { GH_HOST: { description: "the GitHub host" } } } }),
     );
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    await writeFile(join(dir, ".secrets", ".env"), "GH_HOST=github.example.com\n");
+    vi.stubEnv("GH_HOST", "github.example.com");
     const variablesOnly = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(variablesOnly.ok && variablesOnly.messages.map((m) => m.text).join("\n")).not.toMatch(
       /kept your hand-written/,
@@ -1065,11 +1028,11 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
       expect(loginOnly.messages).toContainEqual({
         level: "warn",
         text: expect.stringMatching(
-          /^provider "gw" fetches its own model list, .* if "gw\/fetched-1" is only in that list, the box refuses to start on it until gw's API key is in \.secrets\/\.env$/,
+          /^provider "gw" fetches its own model list, .* if "gw\/fetched-1" is only in that list, the box refuses to start on it until gw's API key is in the environment$/,
         ),
       });
 
-      await writeFile(join(dir, ".secrets", ".env"), "GW_KEY=k\n");
+      vi.stubEnv("GW_KEY", "k");
       const carried = await call(dir, { model: "gw/fetched-1" }, { run: true });
       if (!carried.ok) throw new Error(`preflight gated: ${carried.gate}`);
       expect(carried.messages.filter(({ text }) => fetchedFirst.test(text))).toEqual([]);
@@ -1084,20 +1047,24 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
     expect(pre.ok && pre.boxLogin).toBe("anthropic");
   });
 
-  it("a key in the value file travels, and nothing logs in", async () => {
-    noAnthropicEnv(); // the value file alone decides (§9), not the shell running deploy
-    const dir = await agent({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" });
-    const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+  it("a key in the environment this deploy runs in travels, and nothing logs in", async () => {
+    // A deployment has no default value file: what a CI job or `op run` injects is its values, and so is a file
+    // `--env-file` names laid under it (the one in `process.env` here, as the command enters it).
+    noAnthropicEnv();
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant");
+    const pre = await call(await agent(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
     expect(pre.ok && pre.boxLogin).toBeUndefined();
     expect(pre.ok && pre.modelAuth).toBe("ANTHROPIC_API_KEY");
   });
 
-  it("a key exported in the shell running deploy does not travel: the box logs in, and nothing asks for that key", async () => {
-    // §9: the shell is not a source. A developer's ANTHROPIC_API_KEY for local tools must not turn a subscription
-    // deploy into a "no value for ANTHROPIC_API_KEY" refusal, nor decide which path the deploy takes at all.
+  it("a key only in a project file does not travel: neither the development file nor the one `start` reads is a source", async () => {
+    // What a person keeps for `dev` and for `start` is that machine's. The box logs in, and nothing asks for the key.
     noAnthropicEnv();
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-the-shell");
-    const pre = await call(await agent(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    const dir = await agent({
+      ".secrets/.env": "ANTHROPIC_API_KEY=sk-dev\n",
+      ".secrets/production/.env": "ANTHROPIC_API_KEY=sk-start\n",
+    });
+    const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
     if (!pre.ok) throw new Error(pre.gate);
     expect(pre.boxLogin).toBe("anthropic");
     expect(pre.secrets.map((s) => s.name)).not.toContain("ANTHROPIC_API_KEY");
@@ -1109,42 +1076,40 @@ export default { providers: [createProvider({ id: "gw", auth: { apiKey: envApiKe
     const adc = join(await mkdtemp(join(tmpdir(), "fa-adc-")), "adc.json");
     await writeFile(adc, "{}");
     const vertex = modelsOver(new InMemoryCredentialStore()).getProvider("google-vertex")?.getModels()[0]?.id as string;
-    const env = `GOOGLE_CLOUD_PROJECT=p\nGOOGLE_CLOUD_LOCATION=us-central1\nGOOGLE_APPLICATION_CREDENTIALS=${adc}\n`;
-    const pre = await call(await agent({ ".secrets/.env": env }), { model: `google-vertex/${vertex}` }, { run: true });
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "p");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", adc);
+    const pre = await call(await agent(), { model: `google-vertex/${vertex}` }, { run: true });
     expect(pre.ok && pre.boxLogin).toBe("google-vertex");
   });
 
-  it("a keyless credential in the value file travels; the same credential only in this shell leaves it to the box", async () => {
-    // AWS keys are what pi reads for amazon-bedrock, with no single key variable to require. From the value file they
-    // reach the box; from the shell they are this machine's, and whether the box has a role is the box's answer.
+  it("a keyless credential in the environment travels; none in it leaves it to the box", async () => {
+    // AWS keys are what pi reads for amazon-bedrock, with no single key variable to require. Given to the deploy they
+    // reach the box; absent, whether the box has a role is the box's answer.
     const bedrock = modelsOver(new InMemoryCredentialStore()).getProvider("amazon-bedrock")?.getModels()[0]
       ?.id as string;
-    const aws = "AWS_ACCESS_KEY_ID=AKIAEXAMPLE\nAWS_SECRET_ACCESS_KEY=secret\nAWS_REGION=us-east-1\n";
-    const carried = await call(
-      await agent({ ".secrets/.env": aws }),
-      { model: `amazon-bedrock/${bedrock}` },
-      { run: true },
-    );
-    if (!carried.ok) throw new Error(carried.gate);
-    expect(carried.boxLogin).toBeUndefined();
-    expect(carried.modelAuth).toBeUndefined(); // nothing more for the values gate to ask
+    for (const name of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_PROFILE"]) {
+      vi.stubEnv(name, "");
+    }
+    const absent = await call(await agent(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
+    expect(absent.ok && absent.boxLogin).toBe("amazon-bedrock");
 
     vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
     vi.stubEnv("AWS_REGION", "us-east-1");
-    const shellOnly = await call(await agent(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
-    expect(shellOnly.ok && shellOnly.boxLogin).toBe("amazon-bedrock");
+    const carried = await call(await agent(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
+    if (!carried.ok) throw new Error(carried.gate);
+    expect(carried.boxLogin).toBeUndefined();
+    expect(carried.modelAuth).toBeUndefined(); // nothing more for the values gate to ask
   });
 
-  it("the value file's key wins over this machine's own login: that login stays here, the key is what travels", async () => {
+  it("a key given to the deploy wins over this machine's own login: that login stays here, the key is what travels", async () => {
     // pi ranks a stored credential above the environment, which answers "what authenticates HERE". The deploy asks
-    // what reaches the box, and a key the author put in the value file for the deployment is exactly that.
+    // what reaches the box, and a key given to the deployment is exactly that.
     noAnthropicEnv();
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant");
     const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
-    const dir = await agent({
-      ".secrets/auth.json": JSON.stringify({ anthropic: oauth }),
-      ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n",
-    });
+    const dir = await agent({ ".secrets/auth.json": JSON.stringify({ anthropic: oauth }) });
     const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
     if (!pre.ok) throw new Error(pre.gate);
     expect(pre.boxLogin).toBeUndefined();
@@ -1168,8 +1133,8 @@ export default needs(["X_API_KEY", "X_API_SECRET"], () => ({
       join(dir, "context.json"),
       JSON.stringify({ environment: { variables: { GH_HOST: { description: "the GitHub host gh talks to" } } } }),
     );
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    await writeFile(join(dir, ".secrets", ".env"), "GH_TOKEN=ghp\nX_API_KEY=x\n");
+    vi.stubEnv("GH_TOKEN", "ghp");
+    vi.stubEnv("X_API_KEY", "x");
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;

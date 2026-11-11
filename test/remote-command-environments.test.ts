@@ -77,30 +77,53 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-it.each([false, true])(
-  "remote commands reach deploy's account and region (explicit override: %s)",
-  async (override) => {
-    if (override) {
-      const secrets = join(dir, "custom-secrets");
-      await mkdir(secrets);
-      await writeFile(join(secrets, ".env"), "AWS_PROFILE=custom-account\nAWS_REGION=eu-west-1\n");
-      vi.stubEnv("FASTAGENT_SECRETS_DIR", secrets);
-    }
-    const expected = override ? ["custom-account", "eu-west-1"] : ["production-account", "us-west-2"];
-    const commands = [
-      () => runDeploy("agentcore", dir, { input: false }),
-      () => runLogs("agentcore", dir, {}),
-      () => runDestroy("agentcore", dir, { run: true }),
-      () => runLogin("openai", { deployment: "agentcore" }),
-    ];
-    for (const [index, command] of commands.entries()) {
-      vi.stubEnv("AWS_PROFILE", undefined);
-      vi.stubEnv("AWS_REGION", undefined);
-      vi.stubEnv("FASTAGENT_ENVIRONMENT", "dev");
-      if (index === 3) await expect(command()).rejects.toBe(exited);
-      else await command();
-      expect(reached[index]).toEqual(expected);
-      expect(process.env.FASTAGENT_ENVIRONMENT).toBe("production");
-    }
-  },
-);
+/** The four commands that reach a deployment's host account, each given what a test says of `--env-file`. */
+const commands = (envFile?: string) => [
+  () => runDeploy("agentcore", dir, { input: false, ...(envFile === undefined ? {} : { envFile }) }),
+  () => runLogs("agentcore", dir, { ...(envFile === undefined ? {} : { envFile }) }),
+  () => runDestroy("agentcore", dir, { run: true, ...(envFile === undefined ? {} : { envFile }) }),
+  () => runLogin("openai", { deployment: "agentcore", ...(envFile === undefined ? {} : { envFile }) }),
+];
+
+async function reach(envFile?: string): Promise<string[][]> {
+  const found: string[][] = [];
+  reached.length = 0;
+  const shell = { profile: process.env.AWS_PROFILE, region: process.env.AWS_REGION };
+  for (const [index, command] of commands(envFile).entries()) {
+    // Each command starts from the shell's own variables, as a separate process would.
+    vi.stubEnv("AWS_PROFILE", shell.profile);
+    vi.stubEnv("AWS_REGION", shell.region);
+    if (index === 3) await expect(command()).rejects.toBe(exited);
+    else await command();
+    found.push(reached[index] as string[]);
+    expect(process.env.FASTAGENT_ENVIRONMENT).toBe("production");
+  }
+  return found;
+}
+
+it("remote commands reach the account their own environment names, and no file of the project", async () => {
+  // The project holds a development file and a production one, each naming an account: a deployment has no default
+  // file, so neither is read.
+  vi.stubEnv("AWS_PROFILE", "ci-account");
+  vi.stubEnv("AWS_REGION", "ap-southeast-1");
+  expect(await reach()).toEqual(Array(4).fill(["ci-account", "ap-southeast-1"]));
+});
+
+it("with nothing in the environment, they reach no account: the project's files are not a fallback", async () => {
+  vi.stubEnv("AWS_PROFILE", undefined);
+  vi.stubEnv("AWS_REGION", undefined);
+  const found = await reach();
+  for (const row of found) expect(row).toEqual([undefined, undefined]);
+});
+
+it("--env-file names the account's variables, under what the environment already holds", async () => {
+  const file = join(dir, "account.env");
+  await writeFile(file, "AWS_PROFILE=file-account\nAWS_REGION=eu-west-1\n");
+  vi.stubEnv("AWS_PROFILE", undefined);
+  vi.stubEnv("AWS_REGION", undefined);
+  expect(await reach(file)).toEqual(Array(4).fill(["file-account", "eu-west-1"]));
+  // A variable the shell sets outranks the file, as for every command that enters one.
+  vi.stubEnv("AWS_PROFILE", "shell-account");
+  vi.stubEnv("AWS_REGION", undefined);
+  expect(await reach(file)).toEqual(Array(4).fill(["shell-account", "eu-west-1"]));
+});

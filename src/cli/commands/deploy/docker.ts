@@ -1,11 +1,9 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
 import { ownPublicUrl } from "../../../deploy/delivery.ts";
 import {
   dockerComposeFile,
   isDockerComposePath,
-  DOCKER_VALUE_FILE,
+  composeValuesGate,
   ingressNotes,
   isGeneratedCompose,
   planDockerDeploy,
@@ -13,13 +11,10 @@ import {
 } from "../../../deploy/docker/plan.ts";
 import { deployDockerRun } from "../../../deploy/docker/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
-import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
-import { fileStore } from "../../../deploy/file-store.ts";
-import { dotEnvPath } from "../../../value-file.ts";
-import { deploySecrets } from "./secrets-step.ts";
+import { API_KEY_VARIABLE } from "../../../http/server.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import type { DeploymentApi } from "../../../deploy/api.ts";
-import type { ModelKey } from "../../../deploy/secrets.ts";
+import { type ModelKey, declaredNames, secretNeeds } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, leftToPerson } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
@@ -29,34 +24,19 @@ export const dockerHost: HostDeploy = {
   isOurs: (path, content) => isDockerComposePath(path) && isGeneratedCompose(content),
   legacyManifest: { file: "fastagent.compose.yml", generated: isGeneratedCompose, renamed: dockerComposeFile },
   shell: async (agentDir, name) => composeShell(dockerComposeFile(name), agentDir),
-  validate({ opts, agentDir, pre }) {
-    if (resolve(agentDir, pre.valueFile) !== join(agentDir, DOCKER_VALUE_FILE)) {
-      const issue =
-        `FASTAGENT_SECRETS_DIR points this run's values at ${pre.valueFile}, but the generated Compose reads ` +
-        `${DOCKER_VALUE_FILE} (a committed artifact cannot carry this machine's path), so the ` +
-        `container would start with none of them. Unset FASTAGENT_SECRETS_DIR, or put the values in that file.`;
-      if (opts.run) failStartup(new Error(`deploy stopped: ${issue}`));
-      console.error(`[fastagent] warn: ${issue}`);
-    }
-  },
   async deploy(ctx) {
     const { opts, agentDir, name, channels, pre, write } = ctx;
-    const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
-    // Compose requires its committed env_file to exist, even when no values are declared.
-    const composeValueFile = join(agentDir, DOCKER_VALUE_FILE);
-    await mkdir(dirname(composeValueFile), { recursive: true });
-    if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
-    // Compose interpolates `$VAR` INSIDE env_file values (`format: raw` needs Compose 2.30), so a credential
-    // containing `$` reaches the container rewritten — silently, and differently from what this pre-flight read.
-    // No escaping advice: this ONE file is also read literally by `dev`/`start` (`parseEnvContent`) and is the source
-    // `secrets push` sets every other host's values from, so `$$` would fix Docker by corrupting all of them.
-    const dollarValues = [...values].filter(([, value]) => value.includes("$")).map(([name]) => name);
-    if (dollarValues.length > 0) {
+    const { modelAuth, boxLogin, container, port, declaredSecrets, values, valuesFrom } = pre;
+    const secretNames = [
+      ...declaredNames(modelAuth, declaredSecrets, pre.modelKey),
+      ...(ctx.api.served ? [API_KEY_VARIABLE] : []),
+    ];
+    // Compose fills the Agent API's key from the environment like the rest, and a deploy cannot make one for it: there
+    // is nowhere to set it. Without one the container serves no API, which is said and does not stop the deploy.
+    if (ctx.api.served && (values.get(API_KEY_VARIABLE) ?? "").trim() === "") {
       console.error(
-        `[fastagent] warn: ${dollarValues.join(", ")} contain "$", which Compose expands when reading ${valueFile} ` +
-          `(an undefined name becomes empty), so the container sees a different value. "$$" escapes it for Compose ` +
-          `ONLY — \`fastagent dev\`/\`start\` and the other hosts read this file literally and would keep the extra ` +
-          `"$". Prefer a value without "$".`,
+        `[fastagent] note: ${API_KEY_VARIABLE} is not set in ${valuesFrom}, so this container will not serve the Agent ` +
+          `API: set one (\`export ${API_KEY_VARIABLE}=$(openssl rand -hex 32)\`) and run Compose with it`,
       );
     }
     const plan = planDockerDeploy({
@@ -65,7 +45,7 @@ export const dockerHost: HostDeploy = {
       boxLogin,
       channels,
       secrets: pre.secrets,
-      valueFile,
+      secretNames,
       ...container,
     });
     await write(plan.artifacts, { force: !!opts.force });
@@ -82,9 +62,10 @@ export const dockerHost: HostDeploy = {
         channels,
         declaredSecrets,
         values,
-        valueFile,
+        valuesFrom,
         publicUrl: ownPublicUrl(container.config),
         config: opts.config,
+        envFile: opts.envFile,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -107,33 +88,23 @@ async function runDeployDocker(params: {
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
   values: ReadonlyMap<string, string>;
-  valueFile: string;
+  /** Where the values are from, as a gate names it. */
+  valuesFrom: string;
   /** The `http.publicUrl` the configuration names: where the agent points its own webhook channels. */
   publicUrl: string | undefined;
   /** The `--config` file, named by the commands a gate suggests. */
   config: string | undefined;
+  /** The `--env-file` the values come from, when one was named. */
+  envFile: string | undefined;
 }): Promise<string | undefined> {
   const { agentDir, composeFile, port, channels } = params;
   const leave = leftToPerson(params.answerer);
-  const valueFile = dotEnvPath(agentDir);
-  const provide = deploySecrets({
-    host: "docker",
-    label: "Docker",
-    agentDir,
-    opts: { config: params.config },
-    answerer: params.answerer,
-    api: params.api,
-    modelAuth: params.modelAuth,
-    modelKey: params.modelKey,
-    declaredSecrets: params.declaredSecrets,
-    valueFile: params.valueFile,
-    values: params.values,
-  });
+  const needs = secretNeeds(params.modelAuth, params.declaredSecrets, params.modelKey);
   const outcome = await deployDockerRun(
     {
       composeFile,
       port,
-      provideSecrets: () => provide(fileStore(agentDir, valueFile)),
+      checkValues: () => composeValuesGate(needs, Object.fromEntries(params.values), params.valuesFrom),
       ...boxLoginStep("docker", params, () => composeShell(composeFile, agentDir)),
     },
     spawnRunner("docker", agentDir),

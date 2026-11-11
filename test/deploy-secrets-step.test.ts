@@ -49,7 +49,6 @@ beforeEach(async () => {
   prompts.typed.length = 0;
   prompts.asked.length = 0;
   vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
-  // A deploy is the production instance's: its value file is the one the key is kept in.
   selectAgentEnvironment("production");
   vi.spyOn(console, "error").mockImplementation((line) => void said.push(String(line)));
 });
@@ -70,7 +69,7 @@ const step = (answerer: Answerer, extra: Partial<Parameters<typeof deploySecrets
     modelAuth: undefined,
     modelKey: { variables: [], required: false },
     declaredSecrets: [{ name: "GH_TOKEN", declaredIn: "tools/gh.ts", optional: false }],
-    valueFile: ".secrets/production/.env",
+    valuesFrom: "the environment",
     values: new Map(),
     ...extra,
   });
@@ -83,13 +82,11 @@ describe("a deploy's secrets step", () => {
     expect(writes).toEqual([{ GH_TOKEN: "ghp_typed" }]);
   });
 
-  it("offers the production file's names with one question first", async () => {
+  it("offers the names its environment holds with one question first", async () => {
     prompts.confirmed.push(true);
     const values = new Map([["GH_TOKEN", "ghp_file"]]);
     expect(await step({ kind: "terminal" }, { values })(target())).toBeUndefined();
-    expect(prompts.asked).toEqual([
-      "Fly lacks GH_TOKEN, which .secrets/production/.env holds. Set them on Fly from it?",
-    ]);
+    expect(prompts.asked).toEqual(["Fly lacks GH_TOKEN, which the environment holds. Set them on Fly from it?"]);
     expect(writes).toEqual([{ GH_TOKEN: "ghp_file" }]);
   });
 
@@ -109,23 +106,37 @@ describe("a deploy's secrets step", () => {
     expect(await step({ kind: "nobody" })(target())).toContain("fastagent secrets set fly GH_TOKEN");
   });
 
-  it("mints the Agent API's key where nobody holds one, and keeps it in the production value file as well", async () => {
-    const out = await step({ kind: "nobody" }, { api: { served: true }, declaredSecrets: [] })(target());
+  it("makes the Agent API's key for a person at a terminal, once: shown, set on the target, and kept nowhere here", async () => {
+    const out = await step({ kind: "terminal" }, { api: { served: true }, declaredSecrets: [] })(target());
     expect(out).toBeUndefined();
     expect(writes).toHaveLength(1);
     const [key] = Object.entries(writes[0] as Record<string, string>);
     expect(key?.[0]).toBe("FASTAGENT_API_KEY");
     expect(key?.[1]).toMatch(/^[\w-]{43}$/);
-    // Said, since nobody typed it: what it is for, where it went, where it is kept.
-    expect(said.join("\n")).toContain(
-      "made FASTAGENT_API_KEY for the Agent API, set on Fly and kept in .secrets/production/.env",
+    const told = said.join("\n");
+    expect(told).toContain(
+      "made FASTAGENT_API_KEY for the Agent API and set it on Fly. It is shown once and kept nowhere here",
     );
-    expect(await readFile(join(dir, ".secrets", "production", ".env"), "utf8")).toContain(
-      `FASTAGENT_API_KEY=${key?.[1]}`,
-    );
+    // The one place it is shown: the person who made it has to copy it.
+    expect(told).toContain(`FASTAGENT_API_KEY=${key?.[1]}`);
+    // No file of this machine holds it: not the development file, not the one `start` reads.
+    for (const file of [".secrets/.env", ".secrets/production/.env"]) {
+      await expect(readFile(join(dir, file), "utf8")).rejects.toThrow();
+    }
   });
 
-  it("a deployment made again gets the key its earlier deploy kept in the file, with no question and no new key", async () => {
+  it("makes none where nobody would see it: a CI job or a coding agent's run stops, naming `secrets set … --generate`", async () => {
+    const ticket = { kind: "ticket", step: {} } as unknown as Answerer;
+    for (const answerer of [{ kind: "nobody" }, ticket] as unknown as Answerer[]) {
+      writes.length = 0;
+      const out = await step(answerer, { api: { served: true }, declaredSecrets: [] })(target());
+      expect(out).toContain("Fly has no value for: FASTAGENT_API_KEY");
+      expect(out).toMatch(/`fastagent secrets set fly FASTAGENT_API_KEY [^`]* --generate`/);
+      expect(writes).toEqual([]);
+    }
+  });
+
+  it("a deployment made again gets the key its environment holds, with no question and no new key", async () => {
     const values = new Map([["FASTAGENT_API_KEY", "kept-key"]]);
     const left: string[] = [];
     const ticket = { kind: "ticket", step: { person: { afterwards: (line: string) => left.push(line) } } };
@@ -137,18 +148,20 @@ describe("a deploy's secrets step", () => {
       expect(writes).toEqual([{ FASTAGENT_API_KEY: "kept-key" }]);
       expect(prompts.asked).toEqual([]);
       expect(said.join("\n")).toContain(
-        "set FASTAGENT_API_KEY on Fly from .secrets/production/.env, where an earlier deploy kept it",
+        "set FASTAGENT_API_KEY on Fly from the environment, where an earlier deploy kept it",
       );
       expect(said.join("\n")).not.toContain("made FASTAGENT_API_KEY");
     }
     // It is done, not left for the person: a ticket's afterwards lists only what they still have to do.
     expect(left).toEqual([]);
-    // The file already records it: nothing is written to it again.
     await expect(readFile(join(dir, ".secrets", "production", ".env"), "utf8")).rejects.toThrow();
   });
 
   it("makes no key when the target has one", async () => {
-    await step({ kind: "nobody" }, { api: { served: true }, declaredSecrets: [] })(target(["FASTAGENT_API_KEY"]));
+    await step({ kind: "terminal" }, { api: { served: true }, declaredSecrets: [] })(target(["FASTAGENT_API_KEY"]));
     expect(writes).toEqual([]);
+    expect(
+      await step({ kind: "nobody" }, { api: { served: true }, declaredSecrets: [] })(target(["FASTAGENT_API_KEY"])),
+    ).toBeUndefined();
   });
 });
