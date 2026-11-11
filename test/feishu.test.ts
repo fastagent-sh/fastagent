@@ -2982,6 +2982,54 @@ describe("a group's main timeline is a session per sender (Feishu)", () => {
       expect(calls.at(-1)?.prompt.text).toContain("the deploy is broken");
     });
 
+    it("says a fork it cannot tell for a thread that already has its session, and reads the room's newest messages", async () => {
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      feishuFetch();
+      const prompts: string[] = [];
+      const base = scriptedAgent(async function* (request) {
+        yield ev.message();
+        prompts.push(promptOf(request).text);
+        yield ev.text("ok");
+        yield ev.ended();
+      });
+      let aliceSession = "";
+      injectedAgent = {
+        ...base,
+        messages: {
+          ...base.messages,
+          // Only the lookup of the exchange the topic was opened on fails.
+          get: async (request) =>
+            request.sessionId === aliceSession
+              ? Promise.reject(new Error("agent storage is down"))
+              : base.messages.get(request),
+        },
+      } as ScriptedAgent;
+      const { handler, idle, home } = buildChannel({
+        seed: (seeded) =>
+          writeFileSync(
+            join(seeded, "owners.json"),
+            JSON.stringify({ om_card: { conversation: "feishu:oc_1#ou_alice", ask: "om_a" } }),
+          ),
+      });
+      // Both sessions exist in the agent: the thread's own is not replaced, so no fork is asked of it.
+      const alice = await newSession(base);
+      aliceSession = alice;
+      const thread = await newSession(base);
+      writeFileSync(
+        join(home, "sessions.json"),
+        JSON.stringify({ "feishu:oc_1#ou_alice": alice, "feishu:oc_1:omt_have": thread }),
+      );
+      await flush();
+      await handler(feishuRequest(messageEvent({ id: "om_chatter", chatType: "group", text: "the deploy is broken" })));
+      await handler(feishuRequest(ask("om_t", "in a topic", "ou_bob", { threadId: "omt_have", parentId: "om_card" })));
+      await idle();
+      expect(warn.mock.calls.flat().join(" ")).toContain(
+        "could not tell where thread feishu:oc_1:omt_have forked from",
+      );
+      expect(warn.mock.calls.flat().join(" ")).toContain("agent storage is down");
+      expect(prompts.at(-1)).toContain("the deploy is broken");
+    });
+
     it("reads the room after the exchange it forked at, so the answer's own text repeats rather than a message going missing", async () => {
       feishuFetch();
       const { handler, home, calls, idle } = buildChannel();

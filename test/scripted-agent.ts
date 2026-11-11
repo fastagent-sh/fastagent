@@ -4,7 +4,7 @@
  * `messages.stream` delivers a message. The rest of the Agent is what a channel asks of it, kept just faithful enough
  * to observe:
  *   - each message is recorded under its session, with its key and answer, so `entries` and `messages.get` answer for
- *     it (a thread forks from a room by the message its reply chain names);
+ *     it (a thread forks the session holding the message it was opened on, at that ask);
  *   - any session id a message is sent to names a session, so a test need not create each; `sessions.create` records
  *     what it is asked for (`forks`);
  *   - `sessions.cancel` records the session (`canceled`) and answers what `stopped` says, nothing running by default.

@@ -338,7 +338,7 @@ export function feishuTurnStream(
   return turnStream({
     agent,
     label: transport.label,
-    session: () => turn.session(),
+    session: turn.session,
     ...(turn.enter === undefined ? {} : { enter: turn.enter }),
     resolve: () => resolveTurnInputs(transport, attachments),
     turn: (resolved) => ({

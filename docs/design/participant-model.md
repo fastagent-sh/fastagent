@@ -212,7 +212,7 @@ visible. The people half stays the agent's to say, with a send tool, when asked 
 
 ## 8. Thread context: the inheritance ladder
 
-> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) forks a new thread from the session its reply chain names, which need not be a room session, and starts each read from what the session itself last answered. The inheritance ladder below describes the current implementation.
+> **Proposed revision:** [place-sessions.md](place-sessions.md) (#989) forks a new thread from the session that holds the message it was opened on, which need not be a room session, and starts each read from what the session itself last answered. Feishu topics follow it; the inheritance ladder below still describes Slack's and the older design.
 
 A thread must start from something. Four rungs, increasing in cost:
 
@@ -250,19 +250,17 @@ is deliberate: the walk repeats per reply turn, so an established session re-rea
 already hold (attachments are deduplicated by message identity; text cannot be, from a layer that
 cannot read the session).
 
-**Rungs 3 and 4 are one mechanism with two parameters, implemented as a fork of the room's session.** The
-channel knows which place this one branched from and the reply chain the thread starts under (the referent,
-then each message it replies to, nearest first). When the thread has no session yet, the channel
-creates one with `sessions.create({ forkFrom: { sessionId: <the room's>, entryId } })` ([Agent API](../SPEC.md) §4) and
+**Rungs 3 and 4 are one mechanism with two parameters, implemented as a fork of a session.** The
+channel knows which session holds the message the thread was opened on (its replied-to message, by the message table
+`kit/message-owners.ts`). When the thread has no session yet, the channel
+creates one with `sessions.create({ forkFrom: { sessionId: <that session's>, entryId } })` ([Agent API](../SPEC.md) §4) and
 records it in its map, inside the per-place turn queue, in the order session, record, message
 ([architecture.md](architecture.md) §2): the record is the decision, so there is no marker to persist and no decision
-to retry. (Superseded by [place-sessions.md](place-sessions.md): a thread now forks the session holding the one message it was opened on, by `kit/message-owners.ts`, and starts empty when nothing names one.)
-The branch point is the first message of the room's that the chain names (`kit/thread-fork.ts`): a channel
-sends with the platform's message id as the `idempotencyKey`, so `messages.get({ sessionId: room, idempotencyKey })` finds the
-message a user's chat message became, and the thread forks at its answer, at its own entry when it has none, and at
-the room's present when nothing in the chain names one (a chat message the agent was not asked about, or one it
-posted itself) or it is still queued. A chat message the channel posted for an answer does not name it yet
-([#796](https://github.com/fastagent-sh/fastagent/issues/796)). A fork shares the room's history up to that entry, and what the model sees of it
+to retry.The branch point is that message's ask (`kit/thread-fork.ts`): a channel sends with the platform's message id as the
+`idempotencyKey`, so `messages.get({ sessionId, idempotencyKey })` finds what a user's chat message became, and the
+thread forks at its answer, at its own entry when it has none, and at the session's present when it is still queued. A
+message the table does not hold (another bot's, one the agent was never asked about, one past its bound) names nothing,
+and the thread starts empty ([place-sessions.md](place-sessions.md)). A fork shares the session's history up to that entry, and what the model sees of it
 is bounded the way any session's is, by the harness's compaction.
 
 **The two rungs carry different halves.** The fork carries what the room's SESSION knew; a room's

@@ -385,8 +385,17 @@ function createFeishuRuntimeFactory(
           // its session holds none of it, so the room's newest messages when nothing named one. The fork's own answer
           // is read again, since the room's session may have answered more after it.
           if (rec.roomKey === undefined) return undefined;
-          // A fork that cannot be told is the session's failure too, and the turn says it there.
-          const source = rec.forkOf === undefined ? undefined : await fork().catch(() => undefined);
+          // A thread with no session yet fails at its session step when the fork cannot be told. One that has a session
+          // never asks, so the failure is said here, and the read falls back to the room's newest messages.
+          const source =
+            rec.forkOf === undefined
+              ? undefined
+              : await fork().catch((error: unknown) => {
+                  log.warn(
+                    `${label} could not tell where thread ${rec.conversation} forked from; reading the room's newest messages: ${String(error)}`,
+                  );
+                  return undefined;
+                });
           const after =
             source === undefined || rec.forkOf === undefined
               ? undefined

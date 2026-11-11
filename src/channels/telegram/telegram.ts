@@ -170,8 +170,7 @@ function createTelegramRuntime(
   /** Messages the agent posted for a sender's session, so a reply to one reaches it (a group's main timeline only). */
   const recordOwned = (rec: PendingTurn, messageIds: number[]): void => {
     if (!isSenderConversation(telegramPlaceKey(rec.chatId, rec.threadId), rec.conversation)) return;
-    for (const id of messageIds)
-      owners.record(ownerKey(rec.chatId, id), { conversation: rec.conversation, ask: rec.id });
+    for (const id of messageIds) owners.record(ownerKey(rec.chatId, id), { conversation: rec.conversation });
   };
   /**
    * An answer a sender's session holds, put where the chat's other senders' reads find it: Telegram never echoes a bot
@@ -325,7 +324,7 @@ function createTelegramRuntime(
     if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
       asks.record(`${conversation}@${placeKey}`, { key: `${update.update_id}`, at: m.message_id });
       if (isSenderConversation(placeKey, conversation))
-        owners.record(ownerKey(m.chat.id, m.message_id), { conversation, ask: `${update.update_id}` });
+        owners.record(ownerKey(m.chat.id, m.message_id), { conversation });
       // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
       runner.submit(
         {
