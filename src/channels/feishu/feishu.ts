@@ -18,6 +18,8 @@ import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
 import { threadForkSource } from "../kit/thread-fork.ts";
+import { createAskLog, readStart } from "../kit/ask-log.ts";
+import type { PlaceMessage } from "../kit/place-history.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
 import { acknowledgeFeishuAsk } from "./reaction.ts";
@@ -26,12 +28,13 @@ import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
-  type FeishuDiscussion,
-  type FeishuPlaceRead,
+  type FeishuPosition,
   collectFoldedAttachments,
+  compareFeishuPositions,
   createFeishuPlaceHistory,
   feishuHistoryKey,
   feishuPlaceOf,
+  isFeishuPosition,
 } from "./history.ts";
 import { decryptEvent, verifySignature } from "./crypto.ts";
 import { feishuTurnStream } from "./invoke-turn.ts";
@@ -279,6 +282,14 @@ function createFeishuRuntimeFactory(
     // Every message this channel took as input (a turn, a /stop): the dedup ring. A history read also leaves these out,
     // to shape the prompt only — what keeps a queued ask out of an earlier turn is the read's bound, not this ring.
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
+    // Where each conversation's session read to: a turn folds its place from the ask its session was last sent.
+    const asks = createAskLog<FeishuPosition>({
+      label,
+      path: join(stateHome, "asks.json"),
+      messages: agent.messages,
+      isPosition: isFeishuPosition,
+      compare: compareFeishuPositions,
+    });
     const history = createFeishuPlaceHistory({
       api,
       appId,
@@ -318,16 +329,26 @@ function createFeishuRuntimeFactory(
       );
     };
 
-    const runner = createTurnRunner<PendingFeishuTurn, StoredFeishuTurn, FeishuDiscussion, FeishuPlaceRead>({
+    const runner = createTurnRunner<PendingFeishuTurn, StoredFeishuTurn, PlaceMessage>({
       label,
       store,
-      discussion: history,
+      // The read ends at the ask and starts after the ask its session was last sent.
+      discussion: async (rec) => {
+        if (rec.historyKey === undefined) return { text: "", folded: [] };
+        const until = { at: rec.askAt, id: rec.id };
+        const start = await readStart(asks, label, rec.conversation, recordedSession(rec.conversation), until);
+        const fold = await history.fold({
+          key: rec.historyKey,
+          ...(start.after === undefined ? {} : { after: start.after }),
+          until,
+        });
+        if (fold.unread) asks.forget(rec.conversation, rec.id);
+        return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
+      },
       seen,
       delivered: createSeenRing(join(stateHome, "delivered.json"), label),
       toStored: (intent) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _a, ...intent }) => intent,
-      discussionKey: (rec) =>
-        rec.historyKey === undefined ? undefined : { key: rec.historyKey, until: { at: rec.askAt, id: rec.id } },
       where: (rec) => `chat=${rec.chatId}`,
       notifyDropped,
       acknowledgeHeld: (rec) => acknowledgeFeishuAsk(placeApi(rec.historyKey), rec.id, label),
@@ -339,10 +360,19 @@ function createFeishuRuntimeFactory(
       deliverAnswer: (rec, answer) =>
         portJoin(() => settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), undefined, answer)),
       execute: (rec, discussion, onAnswered, hooks) =>
-        Effect.promise(async () =>
-          // Read-only: the room's own next answered turn still reads it into the room's memory (§8).
-          rec.roomKey !== undefined ? history.room(rec.roomKey) : undefined,
-        ).pipe(
+        Effect.promise(async () => {
+          // What the room has said since its own session last read it, read by the thread's first turn (§8): the
+          // room's session holds none of it, and its own next turn reads it again.
+          if (rec.roomKey === undefined || rec.parentConversation === undefined) return undefined;
+          const start = await readStart(asks, label, rec.parentConversation, recordedSession(rec.parentConversation));
+          const room = await history.fold({
+            key: rec.roomKey,
+            ...(start.after === undefined ? {} : { after: start.after }),
+          });
+          return start.unreadable === undefined
+            ? room
+            : { ...room, text: `${start.unreadable}\n${room.text}`.trimEnd() };
+        }).pipe(
           Effect.flatMap((room) => {
             const roomBlock = room?.text
               ? `[recent discussion in the room this thread branched from — not yet answered there:\n${room.text}\n]\n\n`
@@ -350,13 +380,10 @@ function createFeishuRuntimeFactory(
             const prompt = `${roomBlock}${discussionBlock(discussion.text)}${rec.baseText}`;
             // Room messages FIRST: the collector keeps the TAIL under its cap, so the thread's own attachments win the
             // slots.
-            const buffered = collectFoldedAttachments(
-              [...(room?.folded ?? []), ...discussion.consumed.flatMap((read) => read.folded)],
-              {
-                images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
-                files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key })),
-              },
-            );
+            const buffered = collectFoldedAttachments([...(room?.folded ?? []), ...discussion.folded], {
+              images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
+              files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key })),
+            });
             // Recorded at ingress (see submit), never re-derived from the conversation key, which may be a routed
             // OPAQUE id that only looks like a place key.
             const parent = rec.parentConversation;
@@ -505,6 +532,8 @@ function createFeishuRuntimeFactory(
       const baseText = r.text ?? cloudEnvelope(event, kind);
       if (baseText.trim() === "" && images.length === 0 && files.length === 0) return;
 
+      if (historyKey !== undefined)
+        asks.record(conversation, { key: m.message_id, at: { at: askAt, id: m.message_id } });
       runner.submit(
         {
           id: m.message_id,

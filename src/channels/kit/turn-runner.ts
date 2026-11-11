@@ -7,11 +7,11 @@ import type { Message } from "../../agent-api.ts";
 import { log } from "../../log.ts";
 import { type PortFailure, portJoin } from "../../effect-port.ts";
 import type { TurnEvent } from "./invoke-turn-kit.ts";
-import type { DiscussionSource } from "./place-history.ts";
+import type { Discussion } from "./place-history.ts";
 import type { SeenRing } from "./seen.ts";
-import { answerKeyOf, gatedReply } from "./turn-gate.ts";
+import { gatedReply } from "./turn-gate.ts";
 import { type TurnSlot, createTurnQueue, unqueuedSlot } from "../turn-queue.ts";
-import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-store.ts";
+import type { TurnRecordBase, TurnStore } from "./turn-store.ts";
 
 /**
  * A pending turn is the persisted intent minus its attempt count, plus live-only fields the channel adds (a notice's
@@ -29,6 +29,11 @@ export interface TurnAck {
 
 /** An acknowledgement that does nothing: where none could be made. */
 export const NO_ACK: TurnAck = { complete: async () => undefined, remove: async () => undefined };
+
+/** `<session>:<entry>`: the Agent's answer a message ended with, the unit a delivery is recorded by. */
+function answerKeyOf(message: Message | undefined): string | undefined {
+  return message?.answer === undefined ? undefined : `${message.sessionId}:${message.answer.entryId}`;
+}
 
 /** What the runner gives a turn beyond its inputs: how its message is sent, and how its reply and answer are delivered. */
 interface TurnHooks {
@@ -48,11 +53,15 @@ interface TurnHooks {
   deliverOnce(deliver: Effect.Effect<void, PortFailure, Scope.Scope>): Effect.Effect<void, PortFailure, Scope.Scope>;
 }
 
-export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecordBase, E, P = string> {
+export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecordBase, F> {
   label: string;
   store: TurnStore<S>;
-  /** What a turn folds beyond its own ask: the context buffer, or the place's history read from the platform. */
-  discussion: DiscussionSource<E, P>;
+  /**
+   * What a turn folds beyond its own ask: the place's discussion from where its session last read to, up to the turn's
+   * own ask. It reads nothing for a turn with no place (a routed one). Never rejects: a source that cannot read says
+   * so in its text, and the turn goes on without it.
+   */
+  discussion(rec: R): Promise<Discussion<F>>;
   /** Delivery dedup by platform id, recorded post-persist (Slack, Feishu). */
   seen?: { add(id: string): void };
   /**
@@ -64,8 +73,6 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   toStored(rec: R): S;
   /** A recovered intent as a pending turn — live-only fields start absent. */
   fromStored(stored: S): R;
-  /** The place this turn folds the discussion of (a buffer bucket, or a place to read); undefined folds nothing. */
-  discussionKey(rec: R): P | undefined;
   /** The place, for the lifecycle log line (`chat=… thread=…`). */
   where(rec: R): string;
   /** Runs before the attempt is counted. */
@@ -85,7 +92,7 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   acknowledgeHeld?(rec: R): Promise<TurnAck>;
   execute(
     rec: R,
-    discussion: { text: string; consumed: E[] },
+    discussion: Discussion<F>,
     /** Called with the finished reply just before it is delivered — the point the answer becomes recoverable. */
     onAnswered: (answer: string) => void,
     turn: TurnHooks,
@@ -109,17 +116,15 @@ export interface TurnRunner<R, S> {
   idle(): Promise<void>;
 }
 
-export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, E, P = string>(
-  options: TurnRunnerOptions<R, S, E, P>,
+export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
+  options: TurnRunnerOptions<R, S, F>,
   rec: R,
   slot: TurnSlot = unqueuedSlot,
   /** The turn was left by an earlier process, so its message may have been sent and answered already. */
   afterRestart = false,
-  /** The conversations with a turn that folded discussion and has not ended (see the fold below), and how many. */
-  folding: Map<string, number> = new Map(),
 ): Effect.Effect<void, PortFailure> {
   return Effect.gen(function* () {
-    const { label, store, discussion: source, beforeRun } = options;
+    const { label, store, beforeRun } = options;
     let ended: Message | undefined;
     const answerKey = (): string | undefined => answerKeyOf(ended) ?? rec.answerKey;
     const wasDelivered = (key: string): boolean => options.delivered.has(key);
@@ -178,6 +183,7 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
           events,
           held,
           awaitEarlier: slot.awaitEarlier,
+          answerKey,
           delivered: wasDelivered,
           render,
           skipped: sharedAnswer,
@@ -234,8 +240,7 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
     // The store has logged that the attempt could not be recorded; a restart replays the turn.
     if (decision === "defer") return;
     const startedAt = Date.now();
-    // A recovered answer skips the buffer entirely: its discussion was committed when the answer was recorded, and
-    // peeking again would consume entries this turn never folded in.
+    // A recovered answer reads no discussion: the answer exists, and only its delivery is owed.
     const recovered = rec.answer;
     let answered = recovered !== undefined;
     // A recovered answer is not sent to the Agent: there is nothing to prepare, and nothing for the next input to wait for.
@@ -246,59 +251,23 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
       `${label} turn start: turn=${rec.id} conversation=${rec.conversation} ${options.where(rec)}` +
         `${recovered === undefined ? "" : " mode=re-delivery (answer recovered from a prior run)"}`,
     );
-    let folded = false;
     const work =
       recovered !== undefined
         ? Effect.suspend(() => hooks.deliverOnce(options.deliverAnswer(rec, recovered)))
-        : Effect.suspend(() => {
-            const key = options.discussionKey(rec);
-            // An earlier turn of this conversation has read the discussion and not answered yet, so its fold is not
-            // committed and a read now would be the same text again, in this input's message of the same run. This
-            // turn leaves it: what arrived since stays uncommitted and is read by a later turn.
-            const earlierFold = (folding.get(rec.conversation) ?? 0) > 0;
-            // `peek` never rejects (DiscussionSource): a source that cannot read says so in the text.
-            return Effect.promise(async () =>
-              key === undefined || earlierFold ? { text: "", consumed: [] as E[] } : source.peek(key),
-            ).pipe(
-              Effect.tap((discussion) =>
-                Effect.sync(() => {
-                  if (discussion.text === "") return;
-                  folded = true;
-                  folding.set(rec.conversation, (folding.get(rec.conversation) ?? 0) + 1);
-                }),
+        : portJoin(() => options.discussion(rec)).pipe(
+            Effect.flatMap((discussion) =>
+              options.execute(
+                rec,
+                discussion,
+                (answer) => {
+                  // Only a recorded answer is recoverable — an untracked run has no record to keep it in.
+                  answered = store.answered(rec.id, answer, answerKey());
+                },
+                hooks,
               ),
-              Effect.flatMap((discussion) =>
-                options.execute(
-                  rec,
-                  discussion,
-                  (answer) => {
-                    // Only a recorded answer is recoverable — an untracked run has no record to keep it in.
-                    const answerKeyNow = answerKey();
-                    answered =
-                      key === undefined
-                        ? store.answered(rec.id, answer, answerKeyNow)
-                        : commitAnsweredTurn(store, source, {
-                            id: rec.id,
-                            key,
-                            consumed: discussion.consumed,
-                            answer,
-                            ...(answerKeyNow === undefined ? {} : { answerKey: answerKeyNow }),
-                          });
-                  },
-                  hooks,
-                ),
-              ),
-            );
-          });
+            ),
+          );
     const delivered = yield* Effect.scoped(work).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          if (!folded) return;
-          const left = (folding.get(rec.conversation) ?? 1) - 1;
-          if (left > 0) folding.set(rec.conversation, left);
-          else folding.delete(rec.conversation);
-        }),
-      ),
       Effect.matchEffect({
         onSuccess: () =>
           Effect.sync(() => {
@@ -336,16 +305,14 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
 export function createTurnRunner<
   R extends PendingBase<S> & { id: string; conversation: string },
   S extends TurnRecordBase,
-  E,
-  P = string,
->(options: TurnRunnerOptions<R, S, E, P>): TurnRunner<R, S> {
+  F,
+>(options: TurnRunnerOptions<R, S, F>): TurnRunner<R, S> {
   const { label, store, seen } = options;
   const queue = createTurnQueue<R>({
     label,
-    run: (rec, slot) => runQueuedTurn(options, rec, slot, recoveredIds.delete(rec.id), folding),
+    run: (rec, slot) => runQueuedTurn(options, rec, slot, recoveredIds.delete(rec.id)),
   });
   const recoveredIds = new Set<string>();
-  const folding = new Map<string, number>();
   const submit = (rec: R, persist: boolean): void => {
     if (persist) {
       store.add(options.toStored(rec)); // pre-ACK: a failed write throws → 500 → redelivery

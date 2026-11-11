@@ -2,18 +2,11 @@
  * A Slack place's history, read when a turn runs (docs/design/place-history.md): a channel's top level from
  * `conversations.history`, a thread from `conversations.replies`. What a place remembers between turns, and what a
  * read leaves out, is the kit's (`createPlaceHistory`). A message's `ts` is its id and its position at once: the
- * turn's ask is the read's exclusive `latest`, and the next read's cursor. Each read lists the newest page before the
- * ask and stops at the cursor itself, as Feishu's does: Slack has no reliable "after this point" (`SlackRange`).
+ * turn's ask is the read's exclusive `latest`. Each read lists the newest page before the ask and stops where its
+ * session last read to, as Feishu's does: Slack has no reliable "after this point" (`SlackRange`).
  */
 import { capBufferedRefs } from "../kit/context-buffer.ts";
-import {
-  type PlaceDiscussion,
-  type PlaceHistory,
-  type PlaceListing,
-  type PlaceMessage,
-  type PlaceRead,
-  createPlaceHistory,
-} from "../kit/place-history.ts";
+import { type PlaceHistory, type PlaceListing, type PlaceMessage, createPlaceHistory } from "../kit/place-history.ts";
 import { type ThreadSummary, threadList } from "../kit/room-threads.ts";
 import { CONTEXT_READ } from "../kit/transport.ts";
 import { slackMessageText } from "./parse.ts";
@@ -23,14 +16,12 @@ import { type SlackApi, SlackApiError, type SlackListedMessage } from "./slack-a
 /** How many of a place's newest messages one read keeps; a place busier than this since its last answer says so. */
 const PAGE_SIZE = 50;
 
-/** What a place's first answered turn reads back, with no cursor yet. */
+/** What a read reads back when its session has read nothing of the place yet. */
 const FIRST_READ = 20;
 
 /** Message subtypes that are someone saying something; every other subtype is the platform's (a join, a topic). */
 const SPOKEN_SUBTYPES = new Set(["file_share", "thread_broadcast", "bot_message", "me_message"]);
 
-export type SlackPlaceRead = PlaceRead<string>;
-export type SlackDiscussion = PlaceDiscussion<string>;
 export interface SlackPlaceHistory extends PlaceHistory<string> {
   /** The channel's threads among its newest messages, for a tool (`kit/room-threads.ts`); `room` is its place key. */
   threads(room: string): Promise<string>;
@@ -65,7 +56,9 @@ export function slackPlaceOf(key: string): { teamId: string; channelId: string; 
  * Order two Slack timestamps (`seconds.micros`). A double tells microseconds apart until 2^33 seconds (the year 2242),
  * so plain numbers compare them exactly.
  */
-const compareSlackTs = (a: string, b: string): number => Number(a) - Number(b);
+export const compareSlackTs = (a: string, b: string): number => Number(a) - Number(b);
+
+export const isSlackTs = (value: unknown): value is string => typeof value === "string";
 
 /** Select the most recent background files of the folded messages, excluding the turn's own. */
 export function collectFoldedFiles(
@@ -199,7 +192,7 @@ export function createSlackPlaceHistory(deps: {
   /** THIS app's bot user and bot ids, once `auth.test` answered: a message from either is the agent's own. */
   self(): { userId?: string; botId?: string };
   label: string;
-  /** Where each place's cursor and outputs persist. */
+  /** Where each place's outputs persist. */
   path: string;
   isTurnInput(key: string, ts: string): boolean;
 }): SlackPlaceHistory {
@@ -282,11 +275,11 @@ export function createSlackPlaceHistory(deps: {
 
   const read = async (
     key: string,
-    { cursor, drop }: { cursor?: string; drop(ts: string): boolean },
+    { after, drop }: { after?: string; drop(ts: string): boolean },
     until?: string,
-  ): Promise<PlaceListing<string>> => {
+  ): Promise<PlaceListing> => {
     const place = slackPlaceOf(key);
-    const range = { ...(until ? { latest: until } : {}), limit: cursor ? PAGE_SIZE : FIRST_READ };
+    const range = { ...(until ? { latest: until } : {}), limit: after ? PAGE_SIZE : FIRST_READ };
     const page =
       place.threadTs === undefined
         ? await api.channelHistory(place.channelId, range, CONTEXT_READ).then(({ messages, hasMore }) => ({
@@ -297,14 +290,14 @@ export function createSlackPlaceHistory(deps: {
             .threadReplies(place.channelId, place.threadTs, range, CONTEXT_READ)
             .then(({ messages, hasMore }) => ({
               // The root comes first whatever the range: it is this place's discussion only on a first read.
-              messages: messages.filter((message) => message.ts !== place.threadTs || cursor === undefined),
+              messages: messages.filter((message) => message.ts !== place.threadTs || after === undefined),
               hasMore,
             }));
-    const after = (ts: string): boolean => cursor === undefined || compareSlackTs(ts, cursor) > 0;
+    const isAfter = (ts: string): boolean => after === undefined || compareSlackTs(ts, after) > 0;
     const listed = page.messages.filter(
       (message): message is SlackListedMessage & { ts: string } => message.ts !== undefined,
     );
-    const fresh = listed.filter((message) => after(message.ts));
+    const fresh = listed.filter((message) => isAfter(message.ts));
     const earlier = page.hasMore && fresh.length === listed.length;
 
     const spoken = fresh.filter(
@@ -333,13 +326,7 @@ export function createSlackPlaceHistory(deps: {
         };
       })
       .filter((message) => message !== undefined);
-    const newest = fresh.at(-1)?.ts;
-    return {
-      covered: fresh.map((message) => message.ts),
-      messages,
-      ...(newest ? { newest } : {}),
-      earlier,
-    };
+    return { messages, earlier };
   };
 
   /** Threads are roots with replies; `conversations.history` gives their count and last reply. */
@@ -365,8 +352,6 @@ export function createSlackPlaceHistory(deps: {
   const history = createPlaceHistory({
     label: deps.label,
     path: deps.path,
-    isCursor: (value): value is string => typeof value === "string",
-    compare: compareSlackTs,
     isTurnInput: deps.isTurnInput,
     read,
   });

@@ -3,18 +3,16 @@
  * module (telegram/feishu/slack `context-buffer.ts`). Generic over the entry shape: the channel supplies its entry
  * type, the shape validator, the fold-line renderer and its log label.
  *
- * The consume protocol every channel inherits:
- *  - `push` persists synchronously BEFORE the transport ACK (an ACKed delivery is not redelivered, so ACK-then-persist
- *    would be a silent-loss window): a throw becomes the webhook's 500 and the platform redelivers.
- *  - `peek` renders WITHOUT clearing and snapshots exactly which entries it consumed.
- *  - `commit` removes only that snapshot, by object identity, on the turn's `completed` — so a failure or crash before
- *    `completed` leaves the discussion intact, and a message arriving mid-turn survives for the next answered turn.
+ * `push` persists synchronously BEFORE the transport ACK (an ACKed delivery is not redelivered, so ACK-then-persist
+ * would be a silent-loss window): a throw becomes the webhook's 500 and the platform redelivers. Nothing is consumed:
+ * a turn folds the entries between the ask its session was last sent and its own (`fold`), so the session is the one
+ * record of what was read, and the oldest entries leave only when the budget does.
  *
  * State files are an IO boundary: valid JSON of the WRONG shape degrades exactly like a corrupt file (warn + empty),
  * never flowing in as trusted data.
  */
 import { log } from "../../log.ts";
-import type { DiscussionSource } from "./place-history.ts";
+import type { Discussion } from "./place-history.ts";
 import { loadStateFile, saveStateFile } from "../../state-file.ts";
 
 /**
@@ -45,16 +43,11 @@ export function discussionBlock(text: string): string {
   return text ? `[recent discussion here:\n${text}\n]\n\n` : "";
 }
 
-export interface ContextBuffer<E> extends DiscussionSource<E> {
+export interface ContextBuffer<E> {
   /** Record an un-summoned message. */
   push(placeKey: string, entry: E): void;
-  /** Render the fold text and snapshot the consumed entries (see the module header's consume protocol). */
-  peek(placeKey: string): { text: string; consumed: E[] };
-  /**
-   * Remove exactly `consumed` (by identity) — call on the turn's `completed` event, when the folded discussion
-   * provably lives in the durable session.
-   */
-  commit(placeKey: string, consumed: E[]): void;
+  /** The place's entries after `after` and up to `until` (positions: see `createContextBuffer`), rendered for a turn. */
+  fold(placeKey: string, range: { after?: number; until: number }): Discussion<E>;
 }
 
 export function createContextBuffer<E>(options: {
@@ -65,21 +58,28 @@ export function createContextBuffer<E>(options: {
   isEntry: (value: unknown) => value is E;
   /** One fold line for an entry — ALSO the eviction cost basis. */
   line: (entry: E) => string;
+  /** Where the entry stands in its place: the platform's message id, which grows with the discussion. */
+  position: (entry: E) => number;
 }): ContextBuffer<E> {
-  const { path, label, isEntry, line } = options;
+  const { path, label, isEntry, line, position } = options;
   const load = (): Map<string, E[]> => {
     const raw = loadStateFile(path);
     if (raw === undefined) return new Map();
-    if (
-      typeof raw === "object" &&
-      raw !== null &&
-      !Array.isArray(raw) &&
-      Object.values(raw).every((entries) => Array.isArray(entries) && entries.every(isEntry))
-    ) {
-      return new Map(Object.entries(raw as Record<string, E[]>));
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      log.warn(`${label} unexpected shape in ${path} — starting with an empty context buffer`);
+      return new Map();
     }
-    log.warn(`${label} unexpected shape in ${path} — starting with an empty context buffer`);
-    return new Map();
+    // One place at a time: an entry of an older shape costs its own place's buffer, not every place's.
+    const places = Object.entries(raw).filter(
+      (place): place is [string, E[]] => Array.isArray(place[1]) && place[1].every(isEntry),
+    );
+    const dropped = Object.keys(raw).length - places.length;
+    if (dropped > 0) {
+      log.warn(
+        `${label} unexpected shape in ${dropped} place(s) of ${path} — those start with an empty context buffer`,
+      );
+    }
+    return new Map(places);
   };
   const buffers = load();
   const persist = (): void => saveStateFile(path, Object.fromEntries(buffers));
@@ -105,23 +105,11 @@ export function createContextBuffer<E>(options: {
         throw error;
       }
     },
-    peek(placeKey) {
-      const entries = buffers.get(placeKey) ?? [];
-      return { text: entries.map(line).join("\n"), consumed: [...entries] };
-    },
-    commit(placeKey, consumed) {
-      const entries = buffers.get(placeKey);
-      if (!entries) return;
-      const remaining = entries.filter((entry) => !consumed.includes(entry));
-      if (remaining.length === 0) buffers.delete(placeKey);
-      else buffers.set(placeKey, remaining);
-      try {
-        persist();
-      } catch (error) {
-        log.error(
-          `${label} context-buffer write failed post-ACK (a restart may re-fold answered discussion): ${String(error)}`,
-        );
-      }
+    fold(placeKey, { after, until }) {
+      const folded = (buffers.get(placeKey) ?? []).filter(
+        (entry) => (after === undefined || position(entry) > after) && position(entry) <= until,
+      );
+      return { text: folded.map(line).join("\n"), folded };
     },
   };
 }

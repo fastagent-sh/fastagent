@@ -6,7 +6,7 @@ import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { makeFaux } from "./faux.ts";
 
 /** A durable Agent whose `work` tool holds the run open until `release()`, answering `shared` when it ends. */
-export async function holdingAgent(answers: { shared: string }) {
+export async function holdingAgent(answers: { shared: string; answers?: number }) {
   let release = (): void => {};
   const held = new Promise<void>((resolve) => {
     release = resolve;
@@ -15,7 +15,8 @@ export async function holdingAgent(answers: { shared: string }) {
   const model = faux.getModel();
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("work", {})], { stopReason: "toolUse" }),
-    fauxAssistantMessage(answers.shared), // the run ends with this after the steered input was taken
+    // The run ends with this once the steered inputs were taken; one answer per model call that follows.
+    ...Array.from({ length: answers.answers ?? 1 }, () => fauxAssistantMessage(answers.shared)),
   ]);
   const registry = createRegistry();
   registry.install(

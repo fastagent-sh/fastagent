@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  type SlackPlaceRead,
   collectFoldedFiles,
   createSlackPlaceHistory,
   slackHistoryKey,
@@ -11,6 +10,7 @@ import {
 } from "../src/channels/slack/history.ts";
 import { type SlackApi, SlackApiError, type SlackListedMessage } from "../src/channels/slack/slack-api.ts";
 import { log } from "../src/log.ts";
+import type { PlaceRead } from "../src/channels/kit/place-history.ts";
 import { CONTEXT_READ } from "../src/channels/kit/transport.ts";
 
 const roots: string[] = [];
@@ -71,25 +71,30 @@ function setup(opts: { turnInputs?: string[]; userName?: SlackApi["userName"] } 
     path: join(root, "history.json"),
     isTurnInput: (_key, ts) => opts.turnInputs?.includes(ts) ?? false,
   });
+  /** The ask each place's session was last sent: where its next read starts. */
+  const sent = new Map<string, string>();
   return {
     messages,
     channelHistory,
     threadReplies,
     userName,
     history,
-    /** A person asks the agent in `key`: the turn's read ends at this message. */
-    ask(key = CHANNEL, over: Partial<SlackListedMessage> = {}): SlackPlaceRead {
+    /**
+     * A person asks the agent in `key`: the turn's read starts after the ask its session was last sent (the Agent's
+     * answer, in the channel) and ends at this message.
+     */
+    ask(key = CHANNEL, over: Partial<SlackListedMessage> = {}): PlaceRead<string> & { until: string } {
       const ask = msg("<@UBOT> ?", over);
       messages.push(ask);
-      return { key, until: ask.ts };
+      const after = sent.get(key);
+      sent.set(key, ask.ts);
+      return { key, ...(after === undefined ? {} : { after }), until: ask.ts };
     },
   };
 }
 
-async function answeredTurn(place: ReturnType<typeof setup>, read: SlackPlaceRead): Promise<string> {
-  const peeked = await place.history.peek(read);
-  place.history.commit(read, peeked.consumed);
-  return peeked.text;
+async function answeredTurn(place: ReturnType<typeof setup>, read: PlaceRead<string>): Promise<string> {
+  return (await place.history.fold(read)).text;
 }
 
 describe("Slack place history", () => {
@@ -241,7 +246,7 @@ describe("Slack place history", () => {
     ]);
   });
 
-  it("a thread's read is its newest page before the ask, cut at the cursor", async () => {
+  it("a thread's read is its newest page before the ask, cut where its session last read to", async () => {
     const place = setup();
     const root = msg("incident thread");
     place.messages.push(root);
@@ -258,7 +263,7 @@ describe("Slack place history", () => {
     expect(first).toMatch(/: reply 45$/);
     expect(place.threadReplies).toHaveBeenLastCalledWith("C1", root.ts, expect.any(Object), CONTEXT_READ);
 
-    // Past the cursor: the root is not discussion again, and a busy stretch says what it did not reach.
+    // Past where the session read to: the root is not discussion again, and a busy stretch says what it did not reach.
     for (let i = 46; i <= 105; i++) place.messages.push(msg(`reply ${i}`, { thread_ts: root.ts }));
     const busy = await answeredTurn(place, place.ask(key, { thread_ts: root.ts }));
     expect(busy).not.toContain("incident thread");

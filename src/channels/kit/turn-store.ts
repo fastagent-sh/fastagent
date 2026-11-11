@@ -7,7 +7,6 @@
  * exactly-once story needs the different backend above.
  */
 import { log } from "../../log.ts";
-import type { DiscussionSource } from "./place-history.ts";
 import { loadStateFile, saveStateFile } from "../../state-file.ts";
 
 /** How many times a turn may START without finishing before it is dropped rather than run again. */
@@ -63,23 +62,6 @@ export interface TurnStoreOptions<T extends TurnRecordBase> {
    * update_id; lark: an explicit per-record seq).
    */
   order: (a: T, b: T) => number;
-}
-
-/**
- * An ANSWERED turn: record the reply for delivery, then commit the discussion it folded in. The intent is NOT
- * dropped here — generating an answer is not the same event as that answer reaching the chat, and the runner drops
- * the record only once delivery has settled.
- *
- * Returns whether the answer became recoverable, so a caller does not claim a recovery that has nothing on disk.
- */
-export function commitAnsweredTurn<T extends TurnRecordBase, E, P>(
-  store: TurnStore<T>,
-  discussion: Pick<DiscussionSource<E, P>, "commit">,
-  turn: { id: string; key: P; consumed: E[]; answer: string; answerKey?: string },
-): boolean {
-  const recorded = store.answered(turn.id, turn.answer, turn.answerKey);
-  discussion.commit(turn.key, turn.consumed);
-  return recorded;
 }
 
 export function createTurnStore<T extends TurnRecordBase>(path: string, opts: TurnStoreOptions<T>): TurnStore<T> {

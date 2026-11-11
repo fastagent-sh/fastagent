@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type StoredTurn, createTurnStore } from "../src/channels/telegram/turn-store.ts";
-import { commitAnsweredTurn } from "../src/channels/kit/turn-store.ts";
 
 const dirs: string[] = [];
 const freshPath = (): string => {
@@ -212,44 +211,5 @@ describe("turn-store", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {}); // log.warn/error both → console.error
     expect(createTurnStore(path).recover()).toHaveLength(0);
     expect(err).toHaveBeenCalledWith(expect.stringContaining("unexpected shape"));
-  });
-});
-
-describe("commitAnsweredTurn (the order a crash between the two writes depends on)", () => {
-  /** Records which durable write happened first. Both are real interfaces, faked to the two calls
-   *  this function makes — the assertion is ordering, not persistence (each side has its own tests). */
-  const recorder = () => {
-    const order: string[] = [];
-    return {
-      order,
-      store: {
-        answered: (id: string, answer: string) => void order.push(`answered:${id}:${answer}`),
-      } as unknown as Parameters<typeof commitAnsweredTurn>[0],
-      buffer: { commit: (key: string) => void order.push(`commit:${key}`) } as unknown as Parameters<
-        typeof commitAnsweredTurn
-      >[1],
-    };
-  };
-
-  it("records the answer BEFORE committing the context", () => {
-    // Reversed, a crash between the writes consumes the context of a turn whose answer is not recoverable:
-    // the replay then re-runs it with its folded discussion stripped. This order's failure is the harmless
-    // one — an answer kept for re-delivery whose discussion is re-folded if it is run again after all.
-    const { order, store, buffer } = recorder();
-    commitAnsweredTurn(store, buffer, { id: "t1", key: "chat:1", consumed: [], answer: "hi" });
-    expect(order).toEqual(["answered:t1:hi", "commit:chat:1"]);
-  });
-
-  it("forwards the consumed entries by reference", () => {
-    // Not a copy: the buffer removes by object identity, so cloning the entries on the way through
-    // would commit a set that matches nothing and leave the answered discussion buffered forever.
-    // (That identity removal itself is context-buffer's own test; this only guards the hand-off.)
-    const consumed = [{ body: "a" }];
-    const seen: unknown[] = [];
-    const buffer = { commit: (_k: string, c: unknown) => void seen.push(c) } as unknown as Parameters<
-      typeof commitAnsweredTurn
-    >[1];
-    commitAnsweredTurn(recorder().store, buffer, { id: "t1", key: "chat:1", consumed, answer: "hi" });
-    expect(seen[0]).toBe(consumed);
   });
 });

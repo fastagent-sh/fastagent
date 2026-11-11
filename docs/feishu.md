@@ -43,7 +43,7 @@ fastagent channels setup feishu --config prod.json   # another instance's app (a
 ```
 
 The Agent takes part in its group chats like a colleague: bare human replies in a thread it is part of invoke
-it, and each answered turn reads what was said in its place since the Agent last answered there. That takes the app
+it, and each turn reads what was said in its place since the ask its session was last sent. That takes the app
 scopes below, and there is no mention-only variant. The created app asks for all of them (Feishu); setup
 then checks what the app actually holds and names any scope your tenant withheld.
 
@@ -303,7 +303,7 @@ Practical consequences in groups:
 ### Place history
 
 A place is a chat (a group or a DM) or a thread in one. When a turn runs, the channel reads the place's messages from
-the platform (`GET /im/v1/messages`) and folds what was said since the Agent last answered there into the prompt, as
+the platform (`GET /im/v1/messages`) and folds what was said since the ask its session was last sent into the prompt, as
 `[recent discussion here: …]`. The first turn in a place reads its newest 20 messages. The read ends at the turn's
 own ask: an ask queued behind it, and anything said after it, are read by their own turn. Within that, the read leaves
 out what the session already holds: every message the channel posted as a turn's output (answers, stop
@@ -363,8 +363,8 @@ after that the two places are independent, and the room never sees what the thre
 
 Discussion the room heard but never answered has not entered its session yet, so the fork cannot
 carry it — the thread's first turn reads that pending discussion instead, attachments included.
-Reading it does not consume it: the room's own next answer still folds the same messages, so each
-place sees the discussion once.
+Nothing is consumed by reading it: the thread's session holds what its first turn folded, and the room's own next turn
+reads what the room's session was last sent up to, so each place sees the discussion once.
 
 **Starting a thread.** Mention the Agent inside a thread once (typically by replying to one of its
 messages and creating a topic). It answers there, which makes it a participant, and every later bare
@@ -436,7 +436,8 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `seen.json` — the most recent 2,000 `message_id`s the channel took as input (a turn, a `/stop`); Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key. A place's history read leaves these out,
-- `history.json` — per place, the newest message its last answered turn read (the next read starts after it) and the messages turns posted there that no read has passed yet (answers, queue notices, stop feedback; the next read leaves them out). Losing it costs one re-read of a place's newest 20 messages, the Agent's earlier answers among them,
+- `asks.json` — per conversation, its newest asks (message key and position in the place); the Agent says which one the session holds, and a turn's read starts after it. Losing it costs one re-read of a place's newest 20 messages,
+- `history.json` — per place, the messages turns posted there (answers, stop feedback; the next read leaves them out). Losing it costs the Agent's own earlier answers, labelled `you`, in one read,
 - `bot.json` — the bot's own `open_id`, bound to its `appId` and cached from `bot/v3/info` so a cold start recognizes @mentions immediately,
 - `thread-participants.json` — per thread, the humans the Agent heard (at most two) and whether it has answered there. Losing the file costs one mention per thread to re-enter it,
 - `files/c-<chat>/` — downloaded inbound resources, one directory per chat. Never pruned by FastAgent; size and prune it yourself.

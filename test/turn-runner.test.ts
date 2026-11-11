@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Fiber from "effect/Fiber";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type ContextBuffer, createContextBuffer } from "../src/channels/kit/context-buffer.ts";
+import type { Discussion } from "../src/channels/kit/place-history.ts";
 import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/channels/kit/turn-runner.ts";
 import type { SeenRing } from "../src/channels/kit/seen.ts";
 import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
@@ -49,16 +49,11 @@ function fakeStore(decisions: Record<string, "run" | "exceeded" | "defer"> = {})
   return { store, calls, recovered };
 }
 
-function fakeBuffer(calls: string[]): ContextBuffer<string> {
-  return {
-    push: () => {},
-    peek: (key: string) => {
-      calls.push(`peek ${key}`);
-      return { text: "earlier", consumed: ["e1"] };
-    },
-    commit: (key: string, consumed: string[]) => {
-      calls.push(`commit ${key} ${consumed.join(",")}`);
-    },
+/** What a turn folds: a read the test can see, answering "earlier". */
+function fakeDiscussion(calls: string[]) {
+  return async (rec: Pending): Promise<Discussion<string>> => {
+    calls.push(`read ${rec.conversation}`);
+    return { text: "earlier", folded: ["e1"] };
   };
 }
 
@@ -76,11 +71,10 @@ function runnerOptions(
   return {
     label: "[t]",
     store,
-    discussion: fakeBuffer(calls),
+    discussion: fakeDiscussion(calls),
     seen: { add: (id) => calls.push(`seen ${id}`) },
     toStored: ({ notice: _n, ...intent }) => ({ ...intent, attempts: 0 }),
     fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, notice: undefined }),
-    discussionKey: (rec) => `place:${rec.conversation}`,
     where: (rec) => `conversation=${rec.conversation}`,
     delivered: deliveredRing(),
     notifyDropped: (rec) => calls.push(`dropped ${rec.id}`),
@@ -117,20 +111,13 @@ function durable() {
       isRecord: (r): r is Stored => typeof r === "object" && r !== null && "attempts" in r,
       order: (a, b) => a.id.localeCompare(b.id),
     });
-  const openBuffer = () =>
-    createContextBuffer<string>({
-      path: join(dir, "buffer.json"),
-      label: "[t]",
-      isEntry: (entry): entry is string => typeof entry === "string",
-      line: (entry) => entry,
-    });
-  return { dir, storePath, openStore, openBuffer, store: openStore(), buffer: openBuffer() };
+  return { dir, storePath, openStore, store: openStore() };
 }
 
 describe("turn runner: the lifecycle order every chat channel shares", () => {
   it("SIGTERM preserves the durable state, running or answered", async () => {
     for (const phase of ["running", "committed"]) {
-      const { dir, openStore, openBuffer } = durable();
+      const { dir, openStore } = durable();
       const source = new URL("../src/channels/kit/", import.meta.url).href;
       const child = spawn(
         process.execPath,
@@ -141,19 +128,15 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         import { createTurnRunner } from ${JSON.stringify(`${source}turn-runner.ts`)};
         import { portJoin } from ${JSON.stringify(new URL("../src/effect-port.ts", import.meta.url).href)};
         import { createTurnStore } from ${JSON.stringify(`${source}turn-store.ts`)};
-        import { createContextBuffer } from ${JSON.stringify(`${source}context-buffer.ts`)};
         const root = ${JSON.stringify(dir)};
         const store = createTurnStore(root + '/turns.json', { label: '[child]', isRecord: () => true, order: () => 0 });
-        const buffer = createContextBuffer({ path: root + '/buffer.json', label: '[child]', isEntry: () => true, line: x => x });
-        buffer.push('place:s', 'earlier');
         const runner = createTurnRunner({
-          label: '[child]', store, discussion: buffer, toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
+          label: '[child]', store, discussion: async () => ({ text: '', folded: [] }), toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
           discussionKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
           deliverAnswer: () => portJoin(async () => {}),
           execute: (_rec, _discussion, onAnswered) => portJoin(async () => {
             process.on('message', () => {
               onAnswered('the answer');
-              buffer.push('place:s', 'later');
               process.send('answered');
             });
             process.send('running');
@@ -198,23 +181,20 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
           ...(phase === "committed" ? { answer: "the answer" } : {}),
         },
       ]);
-      expect(openBuffer().peek("place:s").consumed, phase).toEqual(phase === "running" ? ["earlier"] : ["later"]);
     }
   });
 
-  it("interruption joins work and preserves the actual commit decision, answered or not", async () => {
+  it("interruption joins work and keeps the record, answered or not", async () => {
     for (const completed of [false, true]) {
-      const { store, buffer, openStore, openBuffer } = durable();
-      buffer.push("place:s", "earlier");
+      const { store, openStore } = durable();
       store.add({ id: "a", conversation: "s", text: "", attempts: 0 });
       const entered = Promise.withResolvers<void>();
       const finish = Promise.withResolvers<void>();
       let running!: Fiber.Fiber<unknown, unknown>;
       const opts = runnerOptions(store, [], {
-        discussion: buffer,
         execute: (_rec, discussion, onAnswered) =>
           portJoin(async () => {
-            expect(discussion.consumed).toEqual(["earlier"]);
+            expect(discussion.folded).toEqual(["e1"]);
             if (completed) onAnswered("the answer");
             entered.resolve();
             await finish.promise;
@@ -231,7 +211,6 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       });
       queue.accept({ id: "a", conversation: "s", text: "" });
       await entered.promise;
-      buffer.push("place:s", "later");
       const label = `completed=${completed}`;
       const interrupted = Effect.runPromise(Fiber.interrupt(running));
       try {
@@ -248,9 +227,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       expect(openStore().recover(), label).toEqual([
         { id: "a", conversation: "s", text: "", attempts: 1, ...(completed ? { answer: "the answer" } : {}) },
       ]);
-      expect(openBuffer().peek("place:s").consumed, label).toEqual(completed ? ["later"] : ["earlier", "later"]);
       const calls: string[] = [];
-      const replay = runner(openStore(), calls, { discussion: openBuffer() });
+      const replay = runner(openStore(), calls);
       expect(replay.recover(), label).toHaveLength(1);
       await replay.idle();
       expect(
@@ -258,16 +236,19 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         label,
       ).toEqual(completed ? ["deliver a answer=the answer"] : ["execute a notice=- text=earlier"]);
       expect(openStore().recover(), label).toEqual([]);
-      // A re-delivery folds nothing: the discussion that arrived after the answer stays buffered for the next turn.
-      expect(openBuffer().peek("place:s").consumed, label).toEqual(completed ? ["later"] : []);
+      // A re-delivery reads no discussion: the answer exists, and only its delivery is owed.
+      expect(
+        calls.filter((c) => c.startsWith("read")),
+        label,
+      ).toEqual(completed ? [] : ["read s"]);
     }
   });
 
   it("pre-ACK persistence and attempt failures preserve dedup, busy accounting and restart recovery", async () => {
-    const { store, buffer, storePath, openStore } = durable();
+    const { store, storePath, openStore } = durable();
     const calls: string[] = [];
     const base = activeWork();
-    const r = runner(store, calls, { discussion: buffer });
+    const r = runner(store, calls);
     const write = vi.spyOn(atomic, "writeFileAtomic").mockImplementation(() => {
       throw new Error("disk failed");
     });
@@ -301,16 +282,14 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       "add b",
       "seen b",
       "attempt a",
-      "peek place:s",
+      "read s",
       "execute a notice=- text=earlier",
       "answered a the answer", // the answer is durable BEFORE delivery; the intent outlives it
-      "commit place:s e1",
       "remove a", // only now — delivery settled
       "attempt b",
-      "peek place:s",
+      "read s",
       "execute b notice=- text=earlier",
       "answered b the answer",
-      "commit place:s e1",
       "remove b",
     ]);
   });
@@ -333,126 +312,6 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     expect(calls).not.toContain("ended a"); // b was sent while a is still waiting for its answer
     gate.resolve();
     await r.idle();
-  });
-
-  it("an input steered while an earlier turn's fold is uncommitted does not read the discussion again", async () => {
-    const { store, calls } = fakeStore();
-    const gate = Promise.withResolvers<void>();
-    const r = runner(store, calls, {
-      execute: (rec, discussion, onAnswered, turn) =>
-        portJoin(async () => {
-          calls.push(`execute ${rec.id} text=${discussion.text}`);
-          turn.admitted();
-          if (rec.id === "a") await gate.promise;
-          onAnswered("the answer");
-        }),
-    });
-    r.submit({ id: "a", conversation: "s", text: "" }, false);
-    r.submit({ id: "b", conversation: "s", text: "" }, false);
-    await vi.waitFor(() => expect(calls).toContain("execute b text="));
-    expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s"]); // a read; b left it to a
-    gate.resolve();
-    await r.idle();
-    r.submit({ id: "c", conversation: "s", text: "" }, false);
-    await r.idle();
-    // Once a has answered, its fold is committed and the next turn reads again.
-    expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s", "peek place:s"]);
-    expect(calls).toContain("execute c text=earlier");
-  });
-
-  it("an earlier turn that fails frees its fold for the next one", async () => {
-    const { store, calls } = fakeStore();
-    const r = runner(store, calls, {
-      execute: (rec) =>
-        portJoin(async () => {
-          calls.push(`execute ${rec.id}`);
-          if (rec.id === "a") throw new Error("transport down");
-        }),
-    });
-    r.submit({ id: "a", conversation: "s", text: "" }, false);
-    await r.idle();
-    r.submit({ id: "b", conversation: "s", text: "" }, false);
-    await r.idle();
-    expect(calls.filter((c) => c.startsWith("peek"))).toEqual(["peek place:s", "peek place:s"]);
-  });
-
-  describe("acknowledging a turn that waits", () => {
-    const events = (): Stream.Stream<TurnEvent, PortFailure> =>
-      Stream.fromIterable<TurnEvent>([
-        { type: "message", message: { id: "m", sessionId: "s", status: "queued" } },
-        { type: "done", message: { id: "m", sessionId: "s", status: "completed" } },
-      ]);
-
-    /** Two turns of one conversation: `a` is held open until released, `b` is steered in behind it and replies. */
-    const doneEvent: TurnEvent = { type: "done", message: { id: "m", sessionId: "s", status: "completed" } };
-    /** A message that stays running until `gate` opens. */
-    const running = (gate: PromiseWithResolvers<void>): Stream.Stream<TurnEvent, PortFailure> =>
-      Stream.concat(
-        Stream.fromIterable<TurnEvent>([{ type: "message", message: { id: "m", sessionId: "s", status: "running" } }]),
-        Stream.fromEffect(Effect.promise(() => gate.promise).pipe(Effect.as(doneEvent))),
-      );
-
-    async function steered(
-      acknowledgeHeld: TurnRunnerOptions<Pending, Stored, string>["acknowledgeHeld"],
-      fail = false,
-    ) {
-      const { store, calls } = fakeStore();
-      const gate = Promise.withResolvers<void>();
-      const r = runner(store, calls, {
-        acknowledgeHeld,
-        execute: (rec, _discussion, _onAnswered, turn) =>
-          Effect.suspend(() => {
-            if (rec.id === "a") turn.admitted(); // sent; its answer is still to come, so `b` goes on behind it
-            return turn.reply(rec.id === "a" ? running(gate) : events(), (stream) =>
-              Stream.runDrain(stream).pipe(
-                Effect.flatMap(() =>
-                  fail && rec.id === "b" ? Effect.fail(new PortFailure(new Error("delivery failed"))) : Effect.void,
-                ),
-              ),
-            );
-          }),
-      });
-      r.submit({ id: "a", conversation: "s", text: "" }, false);
-      r.submit({ id: "b", conversation: "s", text: "" }, false);
-      await vi.waitFor(() => expect(calls).toContain("attempt b"));
-      gate.resolve();
-      await r.idle();
-      return calls;
-    }
-
-    it("marks the message of a turn that was steered behind a running one, and settles it when the turn ends", async () => {
-      const marks: string[] = [];
-      await steered(async (rec) => {
-        marks.push(`mark ${rec.id}`);
-        return {
-          complete: async () => void marks.push(`complete ${rec.id}`),
-          remove: async () => void marks.push(`remove ${rec.id}`),
-        };
-      });
-      expect(marks).toEqual(["mark b", "complete b"]); // `a` ran with nothing before it: it shows its own preview
-    });
-
-    it("takes the mark off when the held turn ends without an answer", async () => {
-      vi.spyOn(log, "error").mockImplementation(() => {});
-      const marks: string[] = [];
-      await steered(
-        async (rec) => ({
-          complete: async () => void marks.push(`complete ${rec.id}`),
-          remove: async () => void marks.push(`remove ${rec.id}`),
-        }),
-        true,
-      );
-      expect(marks).toEqual(["remove b"]);
-    });
-
-    it("a mark that cannot be made is logged and the turn goes on without one", async () => {
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      const calls = await steered(async () => {
-        throw new Error("reactions are off in this chat");
-      });
-      expect(warn.mock.calls.flat().join(" ")).toContain("could not acknowledge its message");
-      expect(calls).toContain("remove b"); // the turn still finished
-    });
   });
 
   it("holds an input back while an earlier turn runs, even when the turn just before it failed at once", async () => {
@@ -586,6 +445,6 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     });
     expect(r.recover()).toHaveLength(1);
     await r.idle();
-    expect(calls).toEqual(["attempt r", "peek place:s", "execute r", "remove r"]);
+    expect(calls).toEqual(["attempt r", "read s", "execute r", "remove r"]);
   });
 });

@@ -223,8 +223,9 @@ counts as two-party.
 
 A place is a channel's or DM's top level, or a thread in one. When a turn runs, the channel reads the place's
 messages from Slack (`conversations.history` for the top level, `conversations.replies` for a thread) and folds what
-was said since the Agent last answered there into the prompt, as `[recent discussion here: …]`. The first turn in a
-place reads its newest 20 messages. The read ends at the turn's own ask: an ask queued behind it, and anything said
+was said since the ask its session was last sent into the prompt, as `[recent discussion here: …]`. A session's first turn in a
+place reads its newest 20 messages: every top-level ask in a channel opens a thread with a session of its own, so each
+one starts there, and discussion that an earlier ask's session already read is read again by the new session. The read ends at the turn's own ask: an ask queued behind it, and anything said
 after it, are read by their own turn. Within that, the read leaves out what the session already holds: every message
 the channel posted as a turn's output (answers, stop feedback), and the messages it took as input. An
 answer is left out of the place it lands in: the Agent answers a top-level ask in a thread under it, so the answer
@@ -381,13 +382,15 @@ Slack state lives under:
 ├── turns.json
 ├── seen.json
 ├── thread-participants.json
+├── asks.json
 ├── history.json
 └── files/
 ```
 
-`history.json` holds, per place, the newest message its last answered turn read (the next read starts after it) and
-the messages turns posted there that no read has passed yet. Losing it costs one re-read of a place's newest 20
-messages, the Agent's earlier answers among them.
+`asks.json` holds, per conversation, its newest asks (message key and `ts`); the Agent says which one the session holds,
+and a turn's read starts after it. Losing it costs one re-read of a place's newest 20 messages. `history.json` holds,
+per place, the messages turns posted there, which the next read leaves out; losing it costs the Agent's earlier answers
+in one read.
 
 `files/` holds downloaded inbound files, one directory per channel. They are kept — the path the agent
 was given stays readable for as long as the conversation can refer back to it — and FastAgent never

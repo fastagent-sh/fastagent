@@ -829,6 +829,63 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls[1]?.prompt.text).toContain("bare follow-up");
   });
 
+  it("says a place it could not read, and forgets that ask so the next turn reads what it missed", async () => {
+    vi.spyOn(log, "warn").mockImplementation(() => {});
+    const base = okFetch();
+    let failReplies = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) =>
+        failReplies && /conversations\.replies$/.test(new URL(String(input)).pathname)
+          ? Response.json({ ok: false, error: "internal_error" })
+          : base(input, init),
+      ),
+    );
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent);
+    // One thread is one place and one session: its root, someone's aside, then two asks in it.
+    await handler(signedRequest(message("40.0", { text: "incident" })));
+    await handler(signedRequest(message("40.1", { text: "the deploy is broken", thread_ts: "40.0" })));
+    await handler(
+      signedRequest(message("40.2", { type: "app_mention", text: "<@UBOT> what broke?", thread_ts: "40.0" })),
+    );
+    await settle();
+    expect(calls[0]?.prompt.text).toContain("could not read the recent discussion here");
+
+    failReplies = false;
+    await handler(signedRequest(message("40.3", { type: "app_mention", text: "<@UBOT> and now?", thread_ts: "40.0" })));
+    await settle();
+    expect(conversationOf(stateRoot, calls[1]?.sessionId)).toBe(conversationOf(stateRoot, calls[0]?.sessionId));
+    expect(calls[1]?.prompt.text).toContain("the deploy is broken"); // the first ask forgot nothing it never read
+    expect(calls[1]?.prompt.text).not.toContain("could not read");
+  });
+
+  it("a new top-level ask is a new session, so it reads the channel's newest messages again — a follow-up in its thread does not", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent);
+    await handler(signedRequest(message("50.0", { text: "chatter before the first ask" })));
+    await handler(signedRequest(message("50.1", { type: "app_mention", text: "<@UBOT> first ask" })));
+    await settle();
+    await handler(signedRequest(message("50.2", { text: "chatter between the asks" })));
+    await handler(signedRequest(message("50.3", { type: "app_mention", text: "<@UBOT> second ask" })));
+    await settle();
+    // Two sessions, each its own reader: the second has read none of what the first did.
+    expect(conversationOf(stateRoot, calls[1]?.sessionId)).not.toBe(conversationOf(stateRoot, calls[0]?.sessionId));
+    expect(calls[1]?.prompt.text).toContain("chatter before the first ask");
+    expect(calls[1]?.prompt.text).toContain("chatter between the asks");
+
+    // Follow-ups in the second ask's thread are the same session, which holds what its earlier asks folded.
+    await handler(signedRequest(message("50.35", { text: "<@U2> a thread aside", thread_ts: "50.3" })));
+    await handler(signedRequest(message("50.4", { text: "<@UBOT> first follow-up", thread_ts: "50.3" })));
+    await settle();
+    expect(conversationOf(stateRoot, calls[2]?.sessionId)).toBe(conversationOf(stateRoot, calls[1]?.sessionId));
+    expect(calls[2]?.prompt.text).toContain("a thread aside");
+    await handler(signedRequest(message("50.6", { text: "<@UBOT> second follow-up", thread_ts: "50.3" })));
+    await settle();
+    expect(calls[3]?.prompt.text).not.toContain("a thread aside"); // the first follow-up's message carried it
+  });
+
   it("attaches an answer to its question with a thread, and that thread carries the memory", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);

@@ -1,19 +1,12 @@
 /**
  * A Feishu/Lark place's history, read from `im/v1/messages` when a turn runs (docs/design/place-history.md). What a
  * place remembers between turns, and what a read leaves out, is the kit's (`createPlaceHistory`); this is the read:
- * newest first up to the turn's own ask (`end_time` in seconds, then `(create_time, message_id)`), back to the cursor,
- * with senders named from the chat's members.
+ * newest first up to the turn's own ask (`end_time` in seconds, then `(create_time, message_id)`), back to where its
+ * session last read to, with senders named from the chat's members.
  */
 import { log } from "../../log.ts";
 import { capBufferedRefs } from "../kit/context-buffer.ts";
-import {
-  type PlaceDiscussion,
-  type PlaceHistory,
-  type PlaceListing,
-  type PlaceMessage,
-  type PlaceRead,
-  createPlaceHistory,
-} from "../kit/place-history.ts";
+import { type PlaceHistory, type PlaceListing, type PlaceMessage, createPlaceHistory } from "../kit/place-history.ts";
 import { type ThreadSummary, threadList } from "../kit/room-threads.ts";
 import { CONTEXT_READ } from "../kit/transport.ts";
 import type { FeishuApi, FeishuListedMessage } from "./feishu-api.ts";
@@ -22,21 +15,24 @@ import { decodeFeishuContent } from "./normalize.ts";
 /** How many of a place's newest messages one read lists; a place busier than this since its last answer says so. */
 const PAGE_SIZE = 50;
 
-/** What a place's first answered turn reads back, with no cursor yet. */
+/** What a read reads back when its session has read nothing of the place yet. */
 const FIRST_READ = 20;
 
 /** How long a chat's member names are reused before they are read again. */
 const NAMES_TTL_MS = 10 * 60_000;
 
 /** A message's position: `create_time` alone is not unique, so the id breaks ties. */
-interface FeishuCursor {
+export interface FeishuPosition {
   at: number;
   id: string;
 }
 
-export type FeishuPlaceRead = PlaceRead<FeishuCursor>;
-export type FeishuDiscussion = PlaceDiscussion<FeishuCursor>;
-export interface FeishuPlaceHistory extends PlaceHistory<FeishuCursor> {
+export const isFeishuPosition = (value: unknown): value is FeishuPosition =>
+  typeof (value as FeishuPosition)?.at === "number" && typeof (value as FeishuPosition).id === "string";
+
+export const compareFeishuPositions = (a: FeishuPosition, b: FeishuPosition): number => a.at - b.at;
+
+export interface FeishuPlaceHistory extends PlaceHistory<FeishuPosition> {
   /** The chat's threads among its newest messages, for a tool (`kit/room-threads.ts`). */
   threads(chatId: string): Promise<string>;
 }
@@ -97,7 +93,7 @@ export function createFeishuPlaceHistory(deps: {
   /** THIS app's id: a message whose sender is this app is the agent's own. */
   appId: string;
   label: string;
-  /** Where each place's cursor and outputs persist. */
+  /** Where each place's outputs persist. */
   path: string;
   isTurnInput(messageId: string): boolean;
 }): FeishuPlaceHistory {
@@ -170,12 +166,12 @@ export function createFeishuPlaceHistory(deps: {
     };
   };
 
-  /** The place's messages since its cursor (or its newest {@link FIRST_READ}), oldest first, minus the session's own. */
+  /** The place's messages after `after` (or its newest {@link FIRST_READ}), oldest first, minus the session's own. */
   const read = async (
     key: string,
-    { cursor, drop }: { cursor?: FeishuCursor; drop(messageId: string): boolean },
-    until?: FeishuCursor,
-  ): Promise<PlaceListing<FeishuCursor>> => {
+    { after, drop }: { after?: FeishuPosition; drop(messageId: string): boolean },
+    until?: FeishuPosition,
+  ): Promise<PlaceListing> => {
     const place = feishuPlaceOf(key);
     const listed = await api.listMessages(
       place.threadId ? { type: "thread", id: place.threadId } : { type: "chat", id: place.chatId },
@@ -188,25 +184,23 @@ export function createFeishuPlaceHistory(deps: {
     const stranger = place.threadId ? listed.items.find((item) => item.chat_id !== place.chatId) : undefined;
     if (stranger) throw new Error(`thread ${place.threadId} is not in chat ${place.chatId}`);
     const fresh: { item: FeishuListedMessage; id: string; at: number }[] = [];
-    let reachedCursor = false;
+    let reachedAfter = false;
     for (const item of listed.items) {
       const id = item.message_id;
       const at = Number(item.create_time);
       if (!id || !Number.isFinite(at)) continue;
       if (until && (id === until.id || at > until.at)) continue;
-      if (cursor && (id === cursor.id || at < cursor.at)) {
-        reachedCursor = true;
+      if (after && (id === after.id || at < after.at)) {
+        reachedAfter = true;
         break;
       }
       fresh.push({ item, id, at });
-      if (!cursor && fresh.length >= FIRST_READ) break;
+      if (!after && fresh.length >= FIRST_READ) break;
     }
-    const newest = fresh[0] ? { at: fresh[0].at, id: fresh[0].id } : undefined;
-    const earlier = cursor
-      ? !reachedCursor && (listed.hasMore || listed.items.length >= PAGE_SIZE)
+    const earlier = after
+      ? !reachedAfter && (listed.hasMore || listed.items.length >= PAGE_SIZE)
       : fresh.length >= FIRST_READ && (listed.items.length > FIRST_READ || listed.hasMore);
 
-    const covered = fresh.map(({ id }) => id);
     const kept = fresh.reverse().filter(({ item, id }) => {
       if (!isSpoken(item)) return false;
       // A topic group lists every topic's replies with its chat; the room is its top-level messages.
@@ -218,7 +212,7 @@ export function createFeishuPlaceHistory(deps: {
     );
     const people = speakers.size > 0 ? await memberNames(place.chatId, speakers) : new Map<string, string>();
     const messages = kept.map(({ item, id, at }) => placeMessage(item, id, at, people));
-    return { covered, messages, ...(newest ? { newest } : {}), earlier };
+    return { messages, earlier };
   };
 
   /**
@@ -255,9 +249,6 @@ export function createFeishuPlaceHistory(deps: {
   const history = createPlaceHistory({
     label,
     path: deps.path,
-    isCursor: (value): value is FeishuCursor =>
-      typeof (value as FeishuCursor)?.at === "number" && typeof (value as FeishuCursor).id === "string",
-    compare: (a, b) => a.at - b.at,
     isTurnInput: (_key, id) => deps.isTurnInput(id),
     read,
   });

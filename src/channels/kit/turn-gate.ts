@@ -11,17 +11,11 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { Message } from "../../agent-api.ts";
 import type { PortFailure } from "../../effect-port.ts";
 import type { TurnEvent } from "./invoke-turn-kit.ts";
 
 /** What an asker is told, under their own message, when their input was answered together with an earlier one. */
 export const SHARED_ANSWER_NOTICE = "↑ Answered together with an earlier message above.";
-
-/** `<session>:<entry>`: the Agent's answer a message ended with, the unit a delivery is recorded by. */
-export function answerKeyOf(message: Message | undefined): string | undefined {
-  return message?.answer === undefined ? undefined : `${message.sessionId}:${message.answer.entryId}`;
-}
 
 export function gatedReply(opts: {
   events: Stream.Stream<TurnEvent, PortFailure>;
@@ -29,6 +23,8 @@ export function gatedReply(opts: {
   held: boolean;
   /** Resolves once the earlier turns have ended, and delivered what they answered. */
   awaitEarlier: Effect.Effect<void>;
+  /** The answer this turn's message ended with (`<session>:<entry>`), once its events have ended; undefined without one. */
+  answerKey: () => string | undefined;
   /** Whether this answer was delivered already. */
   delivered: (answerKey: string) => boolean;
   /** Runs for a turn that is not skipped. */
@@ -40,19 +36,8 @@ export function gatedReply(opts: {
   return Effect.gen(function* () {
     const queue = yield* Queue.unbounded<TurnEvent, PortFailure | Cause.Done>();
     const over = Deferred.makeUnsafe<void>();
-    let own: Message | undefined;
-    let ended: Message | undefined;
     yield* Effect.forkScoped(
-      Stream.runForEach(opts.events, (event) =>
-        Effect.sync(() => {
-          if (event.type === "message") own = event.message;
-          else if (event.type === "done" && event.message.id === own?.id) {
-            ended = event.message;
-            void Deferred.doneUnsafe(over, Effect.void);
-          }
-          Queue.offerUnsafe(queue, event);
-        }),
-      ).pipe(
+      Stream.runForEach(opts.events, (event) => Effect.sync(() => void Queue.offerUnsafe(queue, event))).pipe(
         Effect.matchCauseEffect({
           onSuccess: () => Queue.end(queue),
           onFailure: (cause) => Queue.failCause(queue, cause as Cause.Cause<PortFailure>),
@@ -62,7 +47,7 @@ export function gatedReply(opts: {
     );
     yield* Deferred.await(over);
     yield* opts.awaitEarlier;
-    const key = answerKeyOf(ended);
+    const key = opts.answerKey();
     if (key !== undefined && opts.delivered(key)) {
       yield* opts.skipped(key);
       return;
