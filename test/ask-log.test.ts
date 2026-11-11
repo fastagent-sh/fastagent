@@ -154,6 +154,14 @@ describe("ask log: where a conversation's session read to", () => {
     expect(await asks.readTo("c", "s", 100)).toBe(9);
   });
 
+  it("says where an ask stands while it is among the newest, and nothing once it is not", () => {
+    const { asks } = setup({});
+    for (let i = 0; i < 8; i++) asks.record("c", { key: `k${i}`, at: i });
+    expect(asks.positionOf("c", "k7")).toBe(7);
+    expect(asks.positionOf("c", "k0")).toBeUndefined(); // past the newest few the log keeps
+    expect(asks.positionOf("other", "k7")).toBeUndefined();
+  });
+
   it("says a write that failed, and still answers from memory", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const { asks, path } = setup({ a: { entryId: "e1" } });

@@ -378,7 +378,7 @@ happening (see [Promise ports](#promise-ports)). Side-task drains observe only t
 called.
 
 `invoke-turn-kit.ts` owns the turn itself: resolve the platform inputs, then the conversation's session
-(`sessions.of`, §6; a new thread forks its room's, `kit/thread-fork.ts`), then ask the agent. A failed step becomes
+(`sessions.of`, §6; a new thread forks the session holding the exchange it was opened on, `kit/thread-fork.ts`), then ask the agent. A failed step becomes
 the turn's `rejected` event, never a thrown iteration. Whether a failed resolution is worth a redelivery is the
 platform's question: Slack reads its API error's status, the other two say yes. A failed session step carries the
 Agent's own `retryable`.
@@ -545,7 +545,7 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   or an id beyond the cap retains the at-least-once tail.
 - **Conversations follow the place, not the ask.** A chat is one conversation (`<kind>:<chat_id>`)
   and a thread is another (`<kind>:<chat_id>:<thread_id>`), each with its own session in the channel's
-  map; a new thread's session forks its room's at the message its reply chain names. A room keeps one
+  map; a new thread's session forks the session that holds the message it was opened on, at that exchange. A room keeps one
   memory everyone in it shares; a side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the
   platform's `root_id` tracks the reply chain and can differ between messages of one thread, which
   would split a side conversation across conversations and history reads. A place's turns are sent in arrival order and steered

@@ -80,8 +80,6 @@ export interface FeishuTurnAttachments {
 interface ResolvedInputs {
   images: ImageRef[] | undefined;
   promptSuffix: string;
-  /** The referent + its chain, nearest first: the messages that may name the run a new thread forks at. */
-  referentIds: string[];
 }
 
 /** How far up a reply chain the walk reads, beyond the replied-to message itself. The chain's natural
@@ -118,10 +116,6 @@ interface ReplyChain {
   block: string;
   images: FeishuBufferedRef[];
   files: FeishuBufferedRef[];
-  /** The walked ancestors' message ids, nearest first — the natural branch hints: a thread rooted on
-   *  the agent's own answer has an UNFINDABLE root id (the answer was sent after its turn, so its id
-   *  never entered the parent session), but the chain above it is exactly the ids that did. */
-  ids: string[];
 }
 
 /**
@@ -157,7 +151,7 @@ async function walkReplyChain(
   const files: FeishuBufferedRef[] = [];
   // No parent above the referent = no chain — not a truncated one. The marker below is only for
   // walks that END SHORT of a root that exists.
-  if (start === undefined) return { block: "", images, files, ids: [] };
+  if (start === undefined) return { block: "", images, files };
   let reachedRoot = false;
   let textBudget = REFERENT_MAX_CODE_POINTS;
   let next: string | undefined = start;
@@ -207,9 +201,6 @@ async function walkReplyChain(
     block: `\n[reply chain above it, oldest first:\n${lines.join("\n")}]`,
     images,
     files,
-    // Walked (fetched) order = nearest first — nodes were reversed for RENDERING above, so read the
-    // hint order off the rendered list backwards.
-    ids: nodes.map((node) => node.id).reverse(),
   };
 }
 
@@ -222,7 +213,7 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   const images = [...attachments.primary.images];
   const files = [...attachments.primary.files];
   let referentBlock = "";
-  let chain: ReplyChain = { block: "", images: [], files: [], ids: [] };
+  let chain: ReplyChain = { block: "", images: [], files: [] };
   if (attachments.primary.parentId !== undefined) {
     const parentId = attachments.primary.parentId;
     // A referent is CONTEXT, not the ask. Losing it (deleted, restricted, unreadable) must not cost
@@ -323,19 +314,18 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   return {
     images: allImages.length ? allImages : undefined,
     promptSuffix: `${referentBlock}${missingNote}${backgroundImageManifest}${attachedFilesManifest(allFiles)}`,
-    referentIds: [...(attachments.primary.parentId !== undefined ? [attachments.primary.parentId] : []), ...chain.ids],
   };
 }
 
 /**
  * Run one turn: resolve its inputs, then ask the agent (invoke-turn-kit — a preparation failure surfaces as a
  * `rejected` event, never a silent drop). `key` is the turn's: the message it answers, which is also how a later
- * thread finds the message this one becomes. `session` gets the reply chain's ids, where a new thread forks from.
+ * thread finds the message this one becomes.
  */
 export function feishuTurnStream(
   agent: Agent,
   turn: {
-    session: (referentIds: readonly string[]) => Promise<string>;
+    session: () => Promise<string>;
     /** While it runs, the room its thread-reading tool reads (a group turn's chat). */
     enter?: (sessionId: string) => () => void;
     key: string;
@@ -348,7 +338,7 @@ export function feishuTurnStream(
   return turnStream({
     agent,
     label: transport.label,
-    session: (resolved) => turn.session(resolved.referentIds),
+    session: turn.session,
     ...(turn.enter === undefined ? {} : { enter: turn.enter }),
     resolve: () => resolveTurnInputs(transport, attachments),
     turn: (resolved) => ({

@@ -13,9 +13,9 @@ send is steered and a shared answer is delivered once ("Input reaches a running 
 delivery and restart"), and a turn's read starts after the ask its session was last sent ("Where a turn's read starts",
 by `kit/ask-log.ts`; the table there holds asks, and the agent's own posts are still excluded per place). Session keys by
 sender (Telegram and Feishu groups' main timelines; the agent's own answers are excluded per conversation) and replies
-steered into the session they name (`kit/message-owners.ts`, Telegram and Feishu main timelines) are built; thread forks
-from the session a reply chain names, and a thread with no source starting empty, are not: current channel code and user
-guides describe them as shipped. This document proposes replacing [participant-model.md](participant-model.md)
+steered into the session they name (`kit/message-owners.ts`, Telegram and Feishu main timelines) are built, and so are
+Feishu thread forks from the session holding the message a topic was opened on, with a topic that names none starting
+empty. This document proposes replacing [participant-model.md](participant-model.md)
 Rule 3 and §6, and revising its thread-context and platform mappings. The participant axiom and the distinction between
 hearing and answering remain.
 
@@ -81,8 +81,12 @@ is added.
   and Feishu main timelines): the owner table is a bounded map from a platform message to its conversation (the
   newest 1000 messages), written when an ask is accepted and for every message the agent posts for a turn, each chunk of
   a long answer included. A `/stop` a reply carries stops its sender's own session, not the one replied to.
-- A new thread or topic forks from the session its reply chain names. When nothing in the table is named, it starts
-  empty and reads the place.
+- A new thread or topic forks from the session that holds the message it was opened on, at that exchange's answer. When
+  that message is not in the table, it starts empty and reads the place. Built for Feishu topics (`kit/thread-fork.ts`):
+  only the replied-to message names a session, the rest of its reply chain is shown to the model but names nothing, and the
+  room's read after a fork starts at that ask without leaving out the source's own answers, so the fork's answer is read
+  again rather than a later one going missing. Telegram and Slack have no fork to make: a Telegram topic is created by a
+  person, not by a reply, and a Slack thread is its own session.
 - An id that is not in the table (another bot's message, or one from before the agent joined) names nothing.
 
 The table is the only added state. An ask is written when it is accepted, before its send, and the agent's posts once
@@ -225,7 +229,7 @@ Cross-conversation context stays inside the DM and never imports private content
 
 An ordinary group's main timeline is keyed by sender; answers use the existing quoting and streaming-card behavior. In a
 topic group, each topic is a session shared by its participants; the room view consists of topics' first posts. A new
-topic forks from the session named by its reply chain. `thread_id` identifies a topic; a changing reply-chain root does
+topic forks from the session that holds the message it was opened on. `thread_id` identifies a topic; a changing reply-chain root does
 not. Reading unsummoned discussion depends on platform scopes, and setup reports missing access. Lark shares the engine;
 Feishu measurements are not live Lark validation.
 
@@ -287,7 +291,7 @@ APIs; no merge or reset operation is added.
 | Area | Responsibility |
 |---|---|
 | Channel adapters | Summon and placement policy, session keys from platform structure, message-to-session table, setup guidance |
-| `conversation-sessions.ts` | Sessions per key; fork from the session a reply chain names |
+| `conversation-sessions.ts` | Sessions per key; fork from the session holding the message a thread was opened on |
 | `channels/kit/` turn lifecycle | Admission in arrival order per session, steer, shared-answer delivery, recorded outcomes |
 | History readers and local records | The start of a read from the Agent's latest ask for the session, the fold and what it leaves out, scoped lookup tools |
 

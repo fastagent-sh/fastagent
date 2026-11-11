@@ -30,6 +30,8 @@ export interface AskLog<C> {
    * read to, and the next read starts from the ask before it, which reads what this one missed.
    */
   forget(conversation: string, key: string): void;
+  /** Where the ask `key` of `conversation` stands in its place, while it is among the newest the log keeps. */
+  positionOf(conversation: string, key: string): C | undefined;
   /**
    * Where the session of `conversation` read to before `before` (any ask, with none): the position of its newest such
    * ask that the Agent holds in `sessionId`. Undefined when it holds none (a new session, a reset one, an ask that
@@ -90,6 +92,7 @@ export function createAskLog<C>(deps: {
       );
       save();
     },
+    positionOf: (conversation, key) => conversations.get(conversation)?.find((ask) => ask.key === key)?.at,
     async readTo(conversation, sessionId, before) {
       if (sessionId === undefined) return undefined;
       const earlier = (conversations.get(conversation) ?? []).filter(

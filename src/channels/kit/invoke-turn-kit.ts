@@ -78,9 +78,9 @@ export function turnStream<R>(opts: {
   label: string;
   /**
    * The session the turn's conversation talks in: the one it has, or one created and recorded before anything is
-   * sent. It gets the prepared inputs, since where a new thread forks from is what its reply chain names.
+   * sent.
    */
-  session: (resolved: R) => Promise<string>;
+  session: () => Promise<string>;
   /** While the turn runs, what its session reaches by its id (a thread-reading tool's room); released when it ends. */
   enter?: (sessionId: string) => () => void;
   /** Prepare this turn's inputs (download attachments, walk a reply chain). */
@@ -107,7 +107,7 @@ export function turnStream<R>(opts: {
       }
       const resolved = prepared.success;
       // The Agent's own question from here on, so its own answer says whether a retry is worth it.
-      const session = yield* Effect.result(portJoin(() => opts.session(resolved)));
+      const session = yield* Effect.result(portJoin(() => opts.session()));
       if (Result.isFailure(session)) return rejected(agentFailure("its session", session.failure.cause));
       const sessionId = session.success;
       const enter = opts.enter;
