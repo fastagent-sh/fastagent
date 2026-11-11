@@ -51,7 +51,7 @@ One agent shape, one marker:
 └── .fastagent/dev/        # the local dev instance, and the agent's cwd: .state/ (agent.sqlite, channel state, schedule state) and content/ (clones, its own .gitignore); `start` uses .fastagent/start/
 ```
 
-`.secrets/` holds the `dev` environment's, and `start` and a deployment use `.secrets/production/`; the instance's root is `.fastagent/dev/` for `dev` and `.fastagent/start/` for `start` (the same `--root`, `--state` and `--workdir` place either elsewhere).
+`.secrets/` holds the `dev` environment's, and `start` uses `.secrets/production/`; a deployment has no default value file (`deploy` reads the environment it runs in and the file `--env-file` names); the instance's root is `.fastagent/dev/` for `dev` and `.fastagent/start/` for `start` (the same `--root`, `--state` and `--workdir` place either elsewhere).
 
 **The agent directory is the agent's working directory**, its coding tools' root, and deploy's build context. What it works on is not derived from where it sits:
 it is declared as its **content** ([agent model](agent-model.md) §3): the repositories every instance reaches in

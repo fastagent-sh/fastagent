@@ -73,8 +73,8 @@ features, which a free workspace has too. The channel falls back to the compatib
 
 The bot token sends and the app-level token (or the signing secret) receives. The app's Client ID and Client Secret are
 for OAuth installation of an app distributed to other workspaces and are not used. Dev's value file is `.secrets/.env`;
-a deployment's is its own: `channels setup slack --config <file>` keeps it in `.secrets/production/.env`, and
-`fastagent secrets push <host>` sets it on the target.
+a deployment has none by default: `channels setup slack --config <file> --env-file <values>` keeps it in the file you name, and
+`fastagent secrets push <host> --env-file <values>` sets it on the target.
 
 Bot-token rotation is off in the manifest. Do not turn it on: it cannot be turned off again, and FastAgent does not
 support it.

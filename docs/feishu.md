@@ -39,7 +39,7 @@ to write platform credentials into a committable file:
 fastagent add feishu                    # the channel file and its tools (lark: fastagent add lark)
 fastagent channels setup feishu         # scan-to-create the app, keep its credentials
 fastagent channels setup lark           # guided console setup, credentials pasted
-fastagent channels setup feishu --config prod.json   # another instance's app (a deployment's), its values in .secrets/production/.env
+fastagent channels setup feishu --config prod.json --env-file prod.env   # another instance's app (a deployment's), its values in prod.env
 ```
 
 The Agent takes part in its group chats like a colleague: bare human replies in a thread it is part of invoke
@@ -84,7 +84,7 @@ a machine of your own, given a configuration that says so (`deploy --config`, `s
 `channels setup feishu` sets the app up for `dev`'s WebSocket and asks for no `patch`, so a tenant that reviews it does not
 hold the first setup. `deploy --run` creates a separate production app when credentials are missing, at a terminal or,
 with `--json`, through a coding agent's user (without either it stops, naming the `--json` command): the same
-`channels setup`, aimed at `.secrets/production/.env`. It requests webhook scopes including `patch`, then captures the
+`channels setup`, aimed at the file `deploy --env-file` names (a deployment has no default one: make it with `channels setup feishu --env-file <file>` first, or pass `--env-file` to the deploy). It requests webhook scopes including `patch`, then captures the
 Verification Token. The instance registers its own Request URL once readiness and model login pass.
 Lark uses guided setup and sets the Request URL by hand when its config API answers 404.
 `channels setup feishu --ingress webhook|connection` writes `channels.feishu.ingress` to the development instance's
@@ -92,8 +92,8 @@ Lark uses guided setup and sets the Request URL by hand when its config API answ
 existing channel file that names its factory instead of offering both ways.
 A Docker deployment has no public URL of its own: name your ingress as `http.publicUrl`, or choose `connection`.
 
-**Dev and production use independent apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
-`.secrets/production/.env`, with no dev fallback. Copy required provider keys explicitly, not the dev app
+**Dev and production use independent apps.** `dev` reads `.secrets/.env`; `start` reads `.secrets/production/.env`, and
+`deploy` reads the environment it runs in and the file `--env-file` names, with no dev fallback. Copy required provider keys explicitly, not the dev app
 credentials: an app is one receiver, so two instances on the same app split its events (two WebSocket clients) or
 overwrite each other's Request URL, and nothing refuses it. `channels setup` for another instance creates a new app
 (Feishu) or asks for another app's credentials (Lark). Both apps can receive at the same time: `dev --tunnel` changes only

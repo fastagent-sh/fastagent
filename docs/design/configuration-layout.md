@@ -7,7 +7,8 @@ status: proposed
 
 # Where configuration, secrets and credentials live
 
-**Status: proposed.** Nothing here is built. Once accepted it replaces the value-file and `.secrets/` parts of
+**Status: proposed, partly built.** Steps 1 to 3 of §8 are in the code (the instance's name, delivery as variables,
+`deploy` reading no value file); the rest is not. Once accepted it replaces the value-file and `.secrets/` parts of
 [agent-artifact.md](agent-artifact.md) §4.1 and §6, which are rewritten with the code, not before. The code is `src/`.
 
 ## 1. The problem
@@ -223,7 +224,19 @@ One PR each, in this order; each leaves the product working. No compatibility la
      the variable included.
    - Only `literalCredentials` of the *delivered* configuration are refused; the program's own `context.json` entries
      stay a warning, as they ship in the image like the code.
-3. **Secrets.** `deploy` reads no value file; Docker's Compose file names the declared secrets and takes their values from the shell; `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go.
+3. **Secrets** (built). `deploy` reads no default value file. Its values are the environment it runs in with the file
+   `--env-file` names laid under it (`logs`, `destroy` and `login --deployment` the same, for the host account);
+   `secrets push` has no default source (`--env-file` or `--from-env`); Docker's Compose file lists each declared secret by
+   name (`OPENAI_API_KEY:`) and Compose fills it from the environment that runs it, `deploy --run` checks the names are
+   set there without reading a value, and `secrets set docker` is gone (Docker is no longer a `secrets` host). The Agent API's
+   key is made only at a terminal and shown once, kept nowhere (a CI job or a coding agent's run stops naming `secrets set
+   <host> FASTAGENT_API_KEY --generate`); `invoke --url` takes `--key` or the environment. A production Feishu/Lark app a
+   deploy makes keeps its credentials in the file `--env-file` names. The model is the configuration's only
+   (`FASTAGENT_MODEL` in a file or the shell is read by no deploy). `FASTAGENT_ENVIRONMENT` stays: it still selects
+   `.fastagent/dev` against `.fastagent/start` and the `.secrets/production/` credentials until step 5, and only `start`
+   still reads `.secrets/production/.env`. The shell is now a source: a provider key exported where `deploy` runs is a
+   value it was given and decides that the key travels, not a login on the box (the older rule kept the shell out); to
+   deploy to a box that logs in, run without it.
 4. **Local values.** `<agent>/.env` for `dev` and `start`; the scaffold, ignore rules and `.env.example` follow.
 5. **Credentials.** The user-level layer; `.secrets/`, `keeps` and `FASTAGENT_SECRETS_DIR` go.
 6. The user documents and agent-artifact.md §4.1 and §6 are rewritten for the new layout.
