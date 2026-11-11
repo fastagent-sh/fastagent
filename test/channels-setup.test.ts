@@ -189,6 +189,8 @@ describe("channels setup at a terminal", () => {
       prompts.answers.push(GOOD_BOT);
       await ends(setup("telegram", dir));
       expect(nextSteps()).toContain("did not say whether group privacy mode is on");
+      expect(nextSteps()).toContain("/setprivacy");
+      expect(nextSteps()).not.toContain("Bot Settings");
     });
   });
 
@@ -524,6 +526,20 @@ describe("channels setup for a coding agent", () => {
       status: "done",
       result: { written: ["TELEGRAM_BOT_TOKEN"], kept: [], next_steps: expect.arrayContaining(["fastagent dev"]) },
     });
+  });
+
+  it("hands a coding agent the group privacy step in the ticket's next_steps, for it to tell the person", async () => {
+    const dir = await workspace("fa-setup-page-gp-");
+    platforms({ groupPrivacy: "on" });
+    const { ticket, run, waiting, paste } = await onPage("telegram", dir);
+    await waiting();
+    await paste({ TELEGRAM_BOT_TOKEN: GOOD_BOT });
+    await ends(run);
+    const done = await checkTicket(ticket);
+    expect(done).toMatchObject({ status: "done" });
+    const steps = (done?.result?.next_steps ?? []) as string[];
+    expect(steps.join("\n")).toContain("/setprivacy");
+    expect(steps.join("\n")).toContain("add it again");
   });
 
   it("keeps a value that passed when another is refused, and then asks only for what is left", async () => {
