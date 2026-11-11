@@ -185,6 +185,31 @@ describe("cli: deploy --idle-timeout", () => {
 });
 
 describe("cli: deploy", () => {
+  it("a token held only in the project's own files is not a value the deploy was given", async () => {
+    const dir = await agentWorkspace("fa-deploy-held-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "context.json": JSON.stringify({ content: { app: { github: "acme/app" } } }),
+      ".secrets/.env": "GITHUB_TOKEN=held-by-dev\n",
+      ".secrets/production/.env": "GITHUB_TOKEN=held-by-start\n",
+    });
+    const clean = { ...process.env };
+    delete clean.GITHUB_TOKEN;
+    const none = await runInProcess(["deploy", "docker", dir], undefined, clean);
+    expect(none.code, none.stderr).toBe(0);
+    expect(none.stderr).toContain("no GITHUB_TOKEN in the environment");
+    // The environment of the command, or the file named, is the source.
+    const given = await runInProcess(["deploy", "docker", dir, "--force"], undefined, {
+      ...clean,
+      GITHUB_TOKEN: "ghp",
+    });
+    expect(given.stderr).not.toContain("no GITHUB_TOKEN");
+    const file = join(dir, "given.env");
+    await writeFile(file, "GITHUB_TOKEN=ghp\n");
+    const named = await runInProcess(["deploy", "docker", dir, "--force", "--env-file", file], undefined, clean);
+    expect(named.stderr).not.toContain("no GITHUB_TOKEN");
+    expect(named.stderr).not.toContain("held-by");
+  });
+
   it("reads no default value file: the model is the configuration's, and no file of the project reaches the manifest", async () => {
     const dir = await agentWorkspace("fa-deploy-env-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
