@@ -162,24 +162,42 @@ temporary Railway project, both deleted).
 | Railway, total | **no limit seen**: 618 variables and about 245,000 characters in one service were stored | 500 small variables in one call, then five 32768-character values |
 | Railway, content | a JSON text with quotes and `${TOKEN}` is stored and read back byte for byte | one set, one read |
 
+Measured with `aws-cli` 2.37.11 and `railway` 5.71.0, AgentCore in `ap-southeast-1`. The order in which AgentCore
+validates a request (each entry, then the image) is part of why its total was not reached below, so a measurement is
+worth repeating when either CLI or the service moves on.
+
 Not measured, and the design must not assume:
 
-1. **AgentCore's total.** AWS's quota says 4 KB of environment variables in all, and the CloudFormation page lists a
-   maximum of 2048 with no unit. Every request with up to 9,000 characters in two entries passed the per-entry checks
-   and stopped at the next one (the image check of a runtime that does not exist), so the total was never reached.
-   Measuring it needs a runtime that can be created, that is an image in a repository, which is what the deploy itself
-   builds; the first real deploy of this design measures it. Until then the pre-flight takes **4096** characters as the
-   limit of the whole set of variables (AWS's quota says 4 KB, and 2048 is the other documented figure), and says that
-   the limit is not measured. It counts the set, not the configuration alone: the template already sets six or seven
-   variables of its own (about 250 characters), and the design adds `FASTAGENT_NAME`, `FASTAGENT_RELEASE_ID` and
-   `FASTAGENT_CONFIG_JSON`, so the configuration's room is 4096 less what the others take, which the pre-flight
-   computes and names when it refuses.
-2. **Railway's config file** does not carry variables, and one search summary says config-as-code is deprecated for
+1. **AgentCore's total, and its unit.** AWS's quota says 4 KB of environment variables in all, and the CloudFormation
+   page lists a maximum of 2048 with no unit. Every request with up to 9,000 characters in two entries passed the
+   per-entry checks and stopped at the next one (the image check of a runtime that does not exist), so the total was
+   never reached. Measuring it needs a runtime that can be created, that is an image in a repository, which is what the
+   deploy itself builds; the first real deploy of this design measures it. Until then the pre-flight takes **4096** as
+   the limit of the whole set of variables and says that the limit is not measured.
+   - **It counts the set, not the configuration alone.** The template already sets eight variables of its own (`PORT`,
+     `FASTAGENT_AGENTCORE`, `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, the secret's ARN, and the
+     ingress and wake secrets), and the design adds `FASTAGENT_NAME`, `FASTAGENT_RELEASE_ID` and
+     `FASTAGENT_CONFIG_JSON`. The configuration's room is 4096 less what the others take, and the pre-flight names both
+     numbers when it refuses.
+   - **Values count as they will be set, not as the template is written.** Three of the eight are CloudFormation
+     parameters (`!Ref`), whose values (an ARN, two minted random strings) exist only at deploy time, so the pre-flight
+     counts the final values, never the template text. Any estimate of the others made before they exist (for instance
+     "about 250 characters") is not a figure to build on.
+   - **Count UTF-8 bytes.** The unit (characters or bytes) is not known; a configuration with non-ASCII text weighs more
+     in bytes, so counting bytes is the cautious reading. Railway counts characters (measured above), and the two
+     differ, so each host's check uses its own unit.
+2. **Docker and Fly.** Neither was measured. Fly's configuration reference states no size for `[env]` (only that values
+   are strings and that the section is for non-sensitive data). On Docker the limit comes from Linux and not from
+   Compose: reports and the kernel's `MAX_ARG_STRLEN` put one environment string at about 128 KB and charge the whole
+   environment against the same budget as the arguments (`ARG_MAX`). A configuration of the sizes above fits in both
+   by a wide margin, but that is an expectation, not a result.
+3. **Railway's config file** does not carry variables, and one search summary says config-as-code is deprecated for
    new services; not verified.
 
 Consequence for the delivery (§5): the configuration is one variable, which fits Railway up to 32768 characters and
 AgentCore up to 5000 for one variable and, with the rest of the set, 4096 in all (until its total is measured). A
-configuration over a host's limit is refused by the pre-flight naming the limit; none of the hosts needs the file split across variables yet.
+configuration over a host's limit is refused by the pre-flight naming the limit. Of the hosts measured, none needs the
+file split across variables; Docker and Fly are expected not to, and are not measured.
 
 ## 8. Migration
 
