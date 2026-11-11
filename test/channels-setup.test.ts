@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -253,6 +254,26 @@ describe("channels setup at a terminal", () => {
     expect(said.filter((line) => line.includes("now holds a secret and has no .gitignore"))).toEqual([
       expect.stringContaining(`note: ${elsewhere} (where this instance keeps its values) now holds a secret`),
     ]);
+  });
+
+  it("says a value file in a git checkout is not ignored, once, and nothing when it is ignored or outside the directory", async () => {
+    const dir = await workspace("fa-setup-tracked-");
+    // What `init` scaffolds: a `.gitignore` of the author's own, whose rules name `.env` and not this file.
+    await writeFile(join(dir, ".gitignore"), ".env\n.env.*\n");
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    platforms();
+    const file = join(dir, "prod.env");
+    prompts.answers.push(GOOD_BOT);
+    await ends(setup("telegram", dir, { envFile: file }));
+    const said = vi.mocked(console.error).mock.calls.flat().map(String);
+    expect(said.filter((line) => line.includes("holds secrets and is not ignored by git"))).toHaveLength(1);
+
+    vi.mocked(console.error).mockClear();
+    await writeFile(join(dir, ".gitignore"), ".env\nprod.env\n");
+    await rm(file);
+    prompts.answers.push(GOOD_BOT);
+    await ends(setup("telegram", dir, { envFile: file }));
+    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).not.toContain("not ignored by git");
   });
 
   it("--env-file names the file its values are kept in, created when missing, and refused when it is not a file", async () => {

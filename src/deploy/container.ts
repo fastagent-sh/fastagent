@@ -125,6 +125,8 @@ export interface ContainerInput {
   agent: string;
   /** The `--config` file that names the instance, in the commands a runbook prints. */
   configFile?: string;
+  /** The `--env-file` the deploy was given (the host account's variables), in the commands a runbook prints. */
+  envFile?: string;
   /** Agent-dir-relative machinery paths the NAME-based excludes below would miss. */
   machineryPaths?: string[];
   /** Whether the agent directory ships a `.git` (preflight fact). */

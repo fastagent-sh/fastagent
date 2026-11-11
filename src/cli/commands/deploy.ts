@@ -332,8 +332,15 @@ async function deploy(
         await applyArtifactPlan(plan);
       },
     });
-    const keyHere = apiKeysFrom(pre.values.get(API_KEY_VARIABLE)).length > 0;
-    const notes = apiReport(api, { valuesFrom: pre.valuesFrom, agentArg, keyHere, run: !!opts.run }, reachedAt);
+    // Docker's Compose takes the key from the environment it runs in, whatever `--from-env` says; every other host
+    // was given it by the values this deploy was handed.
+    const compose = host === "docker";
+    const keyHere = apiKeysFrom(compose ? process.env[API_KEY_VARIABLE] : pre.values.get(API_KEY_VARIABLE)).length > 0;
+    const notes = apiReport(
+      api,
+      { valuesFrom: pre.valuesFrom, agentArg, keyHere, run: !!opts.run, compose },
+      reachedAt,
+    );
     for (const line of notes) console.error(`[fastagent] ${line}`);
     return { ...(reachedAt === undefined ? {} : { url: reachedAt }), notes };
   };

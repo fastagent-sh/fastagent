@@ -24,7 +24,7 @@ import { telegramSetup } from "../channels/telegram/setup.ts";
 import { startCredentialsPage } from "../credentials-page.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
-import { loadEnvValues, unprotectedSecretsNote, writeValues } from "../value-file.ts";
+import { loadEnvValues, trackedValueFileNote, unprotectedSecretsNote, writeValues } from "../value-file.ts";
 import { type Person, terminalPerson } from "./person.ts";
 
 const SETUPS = {
@@ -90,6 +90,7 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
   const kept: string[] = [];
   /** A directory fastagent does not own that now holds a secret: said once, however many values went there. */
   let unprotected: string | undefined;
+  let tracked: string | undefined;
 
   const held = new Map<string, string>();
   for (const [name, value] of loadEnvValues(file)) if (value.trim() !== "") held.set(name, value.trim());
@@ -99,6 +100,7 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
     const names = entries.map((entry) => entry.name);
     const result = await writeValues(agentDir, `${kind} channel`, entries, replace ? names : [], file);
     unprotected ??= result.unprotectedSecretsDir;
+    tracked ??= result.trackedFile;
     for (const entry of entries) held.set(entry.name, entry.value);
     written.push(...names);
   };
@@ -181,6 +183,7 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
 
   if (unprotected !== undefined)
     say(`note: ${unprotectedSecretsNote(unprotected, "where this instance keeps its values")}`);
+  if (tracked !== undefined) say(`note: ${trackedValueFileNote(tracked)}`);
   return { written, kept, after: await plan.finish(held) };
 }
 

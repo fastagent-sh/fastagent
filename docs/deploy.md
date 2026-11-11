@@ -135,7 +135,7 @@ an amd64 host) is not caught here.
 ## The Agent API
 
 Docker, Fly and Railway deployments serve the [Agent API](SPEC.md#9-http) under `/v1`, behind
-`FASTAGENT_API_KEY`. When neither the target nor the values `deploy` was given (`--env-file`, and the environment with `--from-env`) has one, a `--run` **at a terminal** makes one, sets it on the target and prints it once: copy it, since nothing on this machine keeps it. A CI job or a coding agent's run makes none, because a key nobody sees would lock every Caller out; it stops naming `fastagent secrets set <host> FASTAGENT_API_KEY --generate`, which a person runs in a terminal and which prints the key once. Docker has no store: put the key in the environment that runs Compose. The report names the API's URL and the check:
+`FASTAGENT_API_KEY`. When neither the target nor the values `deploy` was given (`--env-file`, and the environment with `--from-env`) has one, a `--run` **at a terminal** makes one, sets it on the target and prints it once: copy it, since nothing on this machine keeps it. A CI job or a coding agent's run makes none, because a key nobody sees would lock every Caller out; it stops naming `fastagent secrets set <host> FASTAGENT_API_KEY --generate`, which a person runs in a terminal and which prints the key once. Docker has no store: put the key in the environment that runs Compose, and the report says whether it is there (a Compose file names the model's key only when it travels, so a key exported in your shell for other tools is not passed into a container that logs in). The report names the API's URL and the check:
 
 ```bash
 fastagent invoke --url https://<app>.fly.dev "hello"
@@ -579,7 +579,7 @@ each with its description, and a deploy whose target has no value for one stops 
 
 **Artifacts** land in the agent directory: `Dockerfile` and `.dockerignore`, and `fastagent.<name>.compose.yml` / `fly.<name>.toml` /
 `agentcore.<name>.template.yaml` (Railway also gets a `.railwayignore`, below). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
-`**/.state`, `/.fastagent` (but not `/.fastagent/deploy`, which the image is built from), `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`. The file `--env-file` names is excluded by its path when it is inside the agent directory: a name like `prod.env` matches none of the rules above, and without that line its secrets would be baked into the image. Keep it outside the directory when you can; a kept `.dockerignore` or `.railwayignore` that does not exclude it stops `--run` and names the line to add.
+`**/.state`, `/.fastagent` (but not `/.fastagent/deploy`, which the image is built from), `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`. The file `--env-file` names is excluded by its path when it is inside the agent directory: a name like `prod.env` matches none of the rules above, and without that line its secrets would be baked into the image. Git is told too: inside a checkout, a file the repository does not ignore draws a warning from `deploy` and from `channels setup` (fastagent edits no `.gitignore` it did not write), so add it to `.gitignore` or keep it outside the directory. A kept `.dockerignore` or `.railwayignore` that does not exclude it stops `--run` and names the line to add.
 
 - **Railway** uploads the directory with `railway up`, which follows `.gitignore` and only inside a git repository: a
   project without one would upload its credentials, and one with one would leave out `.fastagent/deploy/`, which

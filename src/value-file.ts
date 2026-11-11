@@ -6,7 +6,8 @@
  */
 import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import { GitNotInstalled, gitFor } from "./git.ts";
 import { SECRETS_DIRNAME, SECRET_FILE_MODE, exists, resolveSecretsDir } from "./paths.ts";
 import { baseTemplate } from "./scaffold/templates.ts";
 
@@ -99,6 +100,34 @@ export interface ValueEntry {
   hint?: string;
 }
 
+/**
+ * Whether `file`, inside the agent directory `dir`, is a secret git would track: the directory is a checkout and the file
+ * is not ignored. A name like `prod.env` is matched by no rule the scaffold's `.gitignore` writes, and fastagent does not
+ * edit a `.gitignore` it did not make, so the person is told. Not a checkout, a file outside the directory (its own
+ * place to protect), or no git at all: nothing to say, since there is nothing git could commit.
+ */
+export function trackedValueFile(dir: string, file: string): boolean {
+  const rel = relative(dir, file);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
+  const git = gitFor("check that a value file is not committed");
+  try {
+    if (git.answer(["rev-parse", "--is-inside-work-tree"], dir) !== "true") return false;
+    // `check-ignore -q` exits 0 for an ignored path and 1 for one that is not: `answer` reads the first as a value.
+    return git.answer(["check-ignore", "-q", rel], dir) === undefined;
+  } catch (error) {
+    if (error instanceof GitNotInstalled) return false;
+    throw error;
+  }
+}
+
+/** What a command says of a value file in the agent directory that git does not ignore. */
+export function trackedValueFileNote(file: string): string {
+  return (
+    `${file} holds secrets and is not ignored by git: add it to .gitignore (or keep it outside the agent directory), ` +
+    "or it can be committed. fastagent does not edit a .gitignore it did not write."
+  );
+}
+
 export interface ValueWriteResult {
   /** Generated values written as active `NAME=value` lines. */
   written: string[];
@@ -106,6 +135,8 @@ export interface ValueWriteResult {
   alreadySet: string[];
   /** Set when the secrets dir is an operator-chosen one (`FASTAGENT_SECRETS_DIR`) carrying no `.gitignore`. */
   unprotectedSecretsDir?: string;
+  /** Set when the file itself is in the agent directory and git would track it (`trackedValueFile`). */
+  trackedFile?: string;
 }
 
 /**
@@ -212,5 +243,13 @@ export async function writeValues(
       await appendFile(file, `${prefix}${marker}\n${lines.join("\n")}\n`, secret);
     }
   }
-  return { written, alreadySet, ...(unprotectedSecretsDir === undefined ? {} : { unprotectedSecretsDir }) };
+  // The directory's own `.gitignore` is the answer for a secrets dir; for the agent directory it names other files, so
+  // the file is asked about. Checked after the write, which is what makes it a secret there.
+  const trackedFile = unprotectedSecretsDir === undefined && trackedValueFile(dir, file) ? file : undefined;
+  return {
+    written,
+    alreadySet,
+    ...(unprotectedSecretsDir === undefined ? {} : { unprotectedSecretsDir }),
+    ...(trackedFile === undefined ? {} : { trackedFile }),
+  };
 }

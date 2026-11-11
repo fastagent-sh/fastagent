@@ -16,7 +16,9 @@ describe("cli: deploy docker", () => {
     const file = dockerComposeFile(await deploymentName(dir));
     const first = await runInProcess(["deploy", "docker", dir]);
     expect(first.code).toBe(0);
-    expect(first.stderr).toContain("Agent API: http://127.0.0.1:8787/v1");
+    expect(first.stderr).toContain(
+      "Agent API: not served until FASTAGENT_API_KEY is in the environment that runs Compose",
+    );
     expect(first.stdout).toContain(
       // One spelling: the generated Compose names the value file itself.
       `docker compose -f ${file} build --pull\ndocker compose -f ${file} up -d\n`,
@@ -68,6 +70,46 @@ describe("cli: deploy docker", () => {
       expect(written).toMatch(/^ {6}GH_TOKEN:$/m);
       for (const value of ["from-dev", "from-start", "from-file", "from-shell"]) expect(written).not.toContain(value);
     }
+  });
+
+  it("says of the Agent API what Docker does: the key is the environment Compose runs in, not a store a deploy sets", async () => {
+    const dir = await agentWorkspace("fa-deploy-docker-api-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    const clean = { ...process.env } as NodeJS.ProcessEnv;
+    delete clean.FASTAGENT_API_KEY;
+    const without = await runInProcess(["deploy", "docker", dir], undefined, clean);
+    expect(without.stderr).toContain(
+      "Agent API: not served until FASTAGENT_API_KEY is in the environment that runs Compose",
+    );
+    expect(without.stderr).not.toContain("sets on the target");
+    // In the shell, with no --from-env: Compose uses it, so the report says it is served, and how to check.
+    const withKey = await runInProcess(["deploy", "docker", dir, "--force"], undefined, {
+      ...clean,
+      FASTAGENT_API_KEY: "k",
+    });
+    expect(withKey.stderr).toContain("which Compose takes from the environment that runs it");
+    expect(withKey.stderr).toContain("check it: fastagent invoke --url");
+  });
+
+  it("lists the model's key only when it travels: a key exported in the shell for other tools is not passed into a container that logs in", async () => {
+    const dir = await agentWorkspace("fa-deploy-modelkey-", {
+      "fastagent.config.ts": `export default { defaults: { model: "anthropic/claude-sonnet-4-5" } };\n`,
+    });
+    const shell = { ...process.env, ANTHROPIC_API_KEY: "sk-shell" } as NodeJS.ProcessEnv;
+    const compose = async (args: string[]) => {
+      const run = await runInProcess(["deploy", "docker", dir, "--force", ...args], undefined, shell);
+      expect(run.code, run.stderr).toBe(0);
+      return readFile(join(dir, dockerComposeFile(await deploymentName(dir))), "utf8");
+    };
+    const lists = (yaml: string) => /^ {6}ANTHROPIC_API_KEY:$/m.test(yaml);
+    // The box logs in (the shell is not a source), so Compose is not told to fill the key.
+    expect(lists(await compose([]))).toBe(false);
+    // Given the key, by the environment or by a file, it travels and Compose is told.
+    expect(lists(await compose(["--from-env"]))).toBe(true);
+    const file = join(dir, "given.env");
+    await writeFile(file, "ANTHROPIC_API_KEY=sk-file\n");
+    expect(lists(await compose(["--env-file", file]))).toBe(true);
   });
 
   it("deploy docker --run checks the names against the environment Compose will run in, with or without --from-env", async () => {

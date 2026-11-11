@@ -38,7 +38,7 @@ import {
   relativeCommands,
 } from "../mcp/config.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
-import { loadEnvValues, namedValueFile } from "../value-file.ts";
+import { loadEnvValues, namedValueFile, trackedValueFile, trackedValueFileNote } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
 import { declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";
@@ -332,6 +332,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // `--from-env` says so. A key exported in the shell for local tools is not one of them unless asked for.
   const file = namedValueFile();
   const { values, valuesFrom } = givenValues(agentDir, input.fromEnv === true, file);
+  if (file !== undefined && trackedValueFile(agentDir, file))
+    report.warn(trackedValueFileNote(relative(agentDir, file)));
   // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, a value of the target like any other.
   // This reads this machine's values only, so a target that already holds one is told as much.
   if (content.length > 0 && !values.get("GITHUB_TOKEN")) {
@@ -517,6 +519,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const container: ContainerInput = {
     agent: input.name,
     ...(delivered === undefined ? {} : { configFile: delivered.source.label }),
+    ...(file === undefined ? {} : { envFile: file }),
     machineryPaths: paths.machineryPaths,
     runtime,
     bunVersion,

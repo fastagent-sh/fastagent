@@ -35,18 +35,17 @@ export const dockerHost: HostDeploy = {
   async deploy(ctx) {
     const { opts, agentDir, name, channels, pre, write } = ctx;
     const { modelAuth, boxLogin, container, port, declaredSecrets } = pre;
+    // What Compose is told to fill from its environment: the declared names, the model's key only when the deploy was
+    // given one (`modelAuth`) or the provider has no login to fall back on (a need), and the Agent API's key. Not every
+    // variable a provider reads: a key exported in the shell for other tools would otherwise ride into a container that
+    // is about to log in, and into `docker inspect`.
     const secretNames = [
-      ...declaredNames(modelAuth, declaredSecrets, pre.modelKey),
-      ...(ctx.api.served ? [API_KEY_VARIABLE] : []),
+      ...new Set([
+        ...declaredNames(modelAuth, declaredSecrets),
+        ...secretNeeds(modelAuth, declaredSecrets, pre.modelKey).map((need) => need.name),
+        ...(ctx.api.served ? [API_KEY_VARIABLE] : []),
+      ]),
     ];
-    // Compose fills the Agent API's key from the environment like the rest, and a deploy cannot make one for it: there
-    // is nowhere to set it. Without one the container serves no API, which is said and does not stop the deploy.
-    if (ctx.api.served && (COMPOSE_ENVIRONMENT()[API_KEY_VARIABLE] ?? "").trim() === "") {
-      console.error(
-        `[fastagent] note: ${API_KEY_VARIABLE} is not set in ${COMPOSE_SOURCE}, so this container will not serve the Agent ` +
-          `API: set one (\`export ${API_KEY_VARIABLE}=$(openssl rand -hex 32)\`) and run Compose with it`,
-      );
-    }
     const plan = planDockerDeploy({
       projectName: toDockerProjectName(name),
       port,

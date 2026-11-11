@@ -55,6 +55,25 @@ describe("cli: login and models", () => {
     expect([checking.code, checking.stderr]).toEqual([2, expect.stringContaining("without --deployment")]);
   });
 
+  it("login --deployment without a terminal names the commands it prints with the host account's --env-file", async () => {
+    const dir = await agentWorkspace("fa-login-envfile-");
+    const env = join(dir, "account.env");
+    await writeFile(env, "AWS_REGION=eu-west-1\n");
+    const named = await runInProcess(["login", "--deployment", "agentcore", "--env-file", env, "--json"], dir);
+    expect(named.code).toBe(2);
+    const choices = JSON.parse(named.stdout);
+    expect(choices.choices).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        method: "account",
+        command: `fastagent login openai --method account --deployment agentcore --env-file ${env} --json`,
+      }),
+    );
+    // Only for a deployment: the file is the host account's, and a local login has none.
+    const local = await runInProcess(["login", "openai", "--env-file", env, "--no-input"], dir);
+    expect([local.code, local.stderr]).toEqual([2, expect.stringContaining("pass --deployment <host> too")]);
+  });
+
   it("login --config names the deployment --deployment logs in: without it the flag is refused, not ignored", async () => {
     const dir = await agentWorkspace("fa-login-config-");
     const refused = await runInProcess(["login", "openai", "--config", "acme.json", "--no-input"], dir);

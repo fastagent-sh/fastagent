@@ -47,12 +47,30 @@ export function mintApiKey(canShow: boolean): { name: string; hint: string; make
  */
 export function apiReport(
   api: DeploymentApi,
-  where: { valuesFrom: string; agentArg: string | undefined; keyHere: boolean; run: boolean },
+  where: {
+    valuesFrom: string;
+    agentArg: string | undefined;
+    keyHere: boolean;
+    run: boolean;
+    /** Docker keeps no store: Compose takes the key from the environment that runs it, and nothing is set on a target. */
+    compose?: boolean;
+  },
   reachedAt: string | undefined,
 ): string[] {
   if (!api.served) return [`Agent API: not served — ${api.why}`];
-  const { valuesFrom, agentArg, keyHere, run } = where;
+  const { valuesFrom, agentArg, keyHere, run, compose } = where;
   const base = reachedAt ?? "<the deployment's URL>";
+  if (compose) {
+    return keyHere
+      ? [
+          `Agent API: ${base}${API_PREFIX}, behind ${API_KEY_VARIABLE}, which Compose takes from the environment that runs it`,
+          `check it: fastagent invoke --url ${base} "hello"${agentArg === undefined ? "" : ` ${agentArg}`}`,
+        ]
+      : [
+          `Agent API: not served until ${API_KEY_VARIABLE} is in the environment that runs Compose ` +
+            `(\`export ${API_KEY_VARIABLE}=$(openssl rand -hex 32)\`); pass it to \`fastagent invoke --url\` with --key`,
+        ];
+  }
   if (!keyHere && !run) {
     return [
       `Agent API: ${base}${API_PREFIX}, behind ${API_KEY_VARIABLE}, which --run sets on the target from ${valuesFrom}, ` +

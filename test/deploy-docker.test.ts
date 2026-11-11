@@ -31,6 +31,16 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(runbook(planDockerDeploy({ ...base, channels: [] }))).toContain("run `fastagent deploy docker --force`");
   });
 
+  it("names the box login with the files that name the instance and its host account, so it runs the same elsewhere", () => {
+    const out = runbook(
+      planDockerDeploy({ ...base, channels: [], boxLogin: "anthropic", configFile: "acme.json", envFile: "acct.env" }),
+    );
+    expect(out).toContain("fastagent login anthropic --deployment docker --config acme.json --env-file acct.env");
+    expect(runbook(planDockerDeploy({ ...base, channels: [], boxLogin: "anthropic" }))).toContain(
+      "fastagent login anthropic --deployment docker\n",
+    );
+  });
+
   it("renders the instance's name, release and configuration into the Compose file, with `$` doubled for Compose", () => {
     const config = JSON.stringify({
       mcpServers: { n: { url: "https://e.com", headers: { A: `Bearer $` + "{TOKEN}" } } },

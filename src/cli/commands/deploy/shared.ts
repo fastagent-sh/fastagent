@@ -148,13 +148,19 @@ export function registrarsFor(values: ReadonlyMap<string, string>, answerer: Ans
  */
 export function boxLoginStep<Args extends unknown[]>(
   host: DeployHost,
-  params: { agentDir: string; boxLogin: string | undefined; answerer: Answerer; config?: string | undefined },
+  params: {
+    agentDir: string;
+    boxLogin: string | undefined;
+    answerer: Answerer;
+    config?: string | undefined;
+    envFile?: string | undefined;
+  },
   /** The shell, from whatever the driver learns only after deploying (AgentCore's runtime ARN). */
   shell: (...args: Args) => BoxShell,
 ): { boxLogin?: BoxLoginStep<Args> } {
   const provider = params.boxLogin;
   if (provider === undefined) return {};
-  const command = deploymentLoginCommand(host, provider, params.config);
+  const command = deploymentLoginCommand(host, provider, { configFile: params.config, envFile: params.envFile });
   const { answerer } = params;
   return {
     boxLogin: {
@@ -166,6 +172,7 @@ export function boxLoginStep<Args extends unknown[]>(
           provider,
           ifMissing: true,
           ...(params.config === undefined ? {} : { configFile: params.config }),
+          ...(params.envFile === undefined ? {} : { envFile: params.envFile }),
         };
         if (answerer.kind !== "ticket") return loginOnBox({ ...request, input: answerer.kind === "terminal" });
         // An account sign-in: a key cannot be typed into a ticket.

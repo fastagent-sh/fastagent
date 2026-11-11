@@ -179,7 +179,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     ...(input.boxLogin
       ? [
           `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself:`,
-          `${deploymentLoginCommand("docker", input.boxLogin, input.configFile)}`,
+          `${deploymentLoginCommand("docker", input.boxLogin, input)}`,
         ]
       : []),
     ``,

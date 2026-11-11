@@ -19,6 +19,8 @@ export interface BoxLoginRequest {
   shell: BoxShell;
   /** The `--config` file that names the instance, in the commands this prints. */
   configFile?: string;
+  /** The `--env-file` that gives the host account, in the commands this prints. */
+  envFile?: string;
   /** Skip the provider menu. */
   provider?: string;
   /** Skip the method menu. */
@@ -37,7 +39,7 @@ export interface BoxLoginRequest {
  */
 export async function loginOnBox(request: BoxLoginRequest): Promise<string | undefined> {
   const { host, shell, provider } = request;
-  const retry = deploymentLoginCommand(host, provider, request.configFile);
+  const retry = deploymentLoginCommand(host, provider, request);
   const args = [
     ...(provider ? [provider] : []),
     ...(request.method ? ["--method", request.method === "oauth" ? "account" : "api-key"] : []),

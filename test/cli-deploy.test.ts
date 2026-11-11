@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -219,6 +220,32 @@ describe("cli: deploy", () => {
     expect(gated.stderr).toContain("`/prod.env`");
     const planned = await runInProcess(["deploy", "docker", dir, "--env-file", file]);
     expect(planned.stderr).toMatch(/warn: your \.dockerignore \(kept\) does not exclude `prod\.env`/);
+  });
+
+  it("warns that git would track a value file in the agent directory, and says nothing when it is ignored, outside it, or there is no checkout", async () => {
+    const dir = await agentWorkspace("fa-deploy-tracked-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    const file = join(dir, "prod.env");
+    await writeFile(file, "OPENAI_API_KEY=sk\n");
+    const tracked = /prod\.env holds secrets and is not ignored by git/;
+    // Not a checkout: nothing git could commit.
+    expect((await runInProcess(["deploy", "docker", dir, "--env-file", file])).stderr).not.toMatch(tracked);
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    // The scaffold's rules are `.env` and `.env.*`: this name is matched by none of them.
+    const warned = await runInProcess(["deploy", "docker", dir, "--env-file", file, "--force"]);
+    expect(warned.code, warned.stderr).toBe(0);
+    expect(warned.stderr).toMatch(tracked);
+    // Ignored by the author's own rule: silent.
+    await writeFile(join(dir, ".gitignore"), "prod.env\n");
+    expect((await runInProcess(["deploy", "docker", dir, "--env-file", file, "--force"])).stderr).not.toMatch(tracked);
+    // Outside the directory: its own place to protect, and not the repository's.
+    await writeFile(join(dir, ".gitignore"), "");
+    const outside = join(await mkdtemp(join(tmpdir(), "fa-outside-values-")), "prod.env");
+    await writeFile(outside, "OPENAI_API_KEY=sk\n");
+    expect((await runInProcess(["deploy", "docker", dir, "--env-file", outside, "--force"])).stderr).not.toMatch(
+      tracked,
+    );
   });
 
   it("a token held only in the project's own files is not a value the deploy was given", async () => {

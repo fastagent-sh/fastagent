@@ -464,7 +464,8 @@ export function signInInteraction(step: TicketStep, provider: string): AuthInter
 }
 
 /** ` --config <file>` for a command that names this instance again, or nothing. */
-const configArg = ({ config }: LoginOptions): string => (config === undefined ? "" : ` --config ${shellArg(config)}`);
+const configArg = ({ config, envFile }: LoginOptions): string =>
+  `${config === undefined ? "" : ` --config ${shellArg(config)}`}${envFile === undefined ? "" : ` --env-file ${shellArg(envFile)}`}`;
 
 /**
  * `--deployment <host>`: always named. The agent directory cannot answer which host it means: a Railway deploy leaves
@@ -495,13 +496,14 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
   const method = opts.method === undefined ? undefined : methodOf(opts.method);
   if (opts.ticket !== undefined) {
     // The process `startTicket` started: it holds the box's shell while the person signs in.
-    const retry = deploymentLoginCommand(host, provider, opts.config);
+    const retry = deploymentLoginCommand(host, provider, { configFile: opts.config, envFile: opts.envFile });
     await runTicket(opts.ticket, async (step) => {
       const io = ticketLoginIO(step, retry);
       const failed = await loginOnBox({
         host,
         shell: await HOSTS[host].shell(agentDir, await nameOfInstance()),
         ...(opts.config === undefined ? {} : { configFile: opts.config }),
+        ...(opts.envFile === undefined ? {} : { envFile: opts.envFile }),
         provider: provider as string,
         method: "oauth",
         input: true,
@@ -520,6 +522,7 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
     host,
     shell: await HOSTS[host].shell(agentDir, await nameOfInstance()).catch(failStartup),
     ...(opts.config === undefined ? {} : { configFile: opts.config }),
+    ...(opts.envFile === undefined ? {} : { envFile: opts.envFile }),
     ...(provider ? { provider } : {}),
     ...(method ? { method } : {}),
     input: true,

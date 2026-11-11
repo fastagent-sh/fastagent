@@ -562,7 +562,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       `# Model auth: after EVERY deploy and after 14 idle days (each storage reset wipes the last login),`,
       `# log the runtime in to ${input.boxLogin} from the agent directory, once the probe below has opened it (a message`,
       `# that reaches the runtime before the login fails):`,
-      `${deploymentLoginCommand("agentcore", input.boxLogin, input.configFile)}`,
+      `${deploymentLoginCommand("agentcore", input.boxLogin, input)}`,
     );
   }
 
