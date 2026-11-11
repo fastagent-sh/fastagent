@@ -26,6 +26,7 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const flyHost: HostDeploy = {
   isOurs: (path, content) => isFlyTomlPath(path) && isGeneratedFlyToml(content),
+  legacyManifest: { file: "fly.toml", generated: isGeneratedFlyToml, renamed: flyTomlFile },
   async shell(agentDir, name) {
     const flyToml = await readTextIfExists(join(agentDir, flyTomlFile(name)));
     return flyShell((flyToml && parseFlyAppName(flyToml)) ?? toFlyAppName(name), agentDir);

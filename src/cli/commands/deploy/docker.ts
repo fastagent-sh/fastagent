@@ -27,6 +27,7 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const dockerHost: HostDeploy = {
   isOurs: (path, content) => isDockerComposePath(path) && isGeneratedCompose(content),
+  legacyManifest: { file: "fastagent.compose.yml", generated: isGeneratedCompose, renamed: dockerComposeFile },
   shell: async (agentDir, name) => composeShell(dockerComposeFile(name), agentDir),
   validate({ opts, agentDir, pre }) {
     if (resolve(agentDir, pre.valueFile) !== join(agentDir, DOCKER_VALUE_FILE)) {

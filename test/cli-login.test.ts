@@ -55,6 +55,16 @@ describe("cli: login and models", () => {
     expect([checking.code, checking.stderr]).toEqual([2, expect.stringContaining("without --deployment")]);
   });
 
+  it("login --config names the deployment --deployment logs in: without it the flag is refused, not ignored", async () => {
+    const dir = await agentWorkspace("fa-login-config-");
+    const refused = await runInProcess(["login", "openai", "--config", "acme.json", "--no-input"], dir);
+    expect([refused.code, refused.stderr]).toEqual([
+      2,
+      expect.stringContaining("--config names the deployment that --deployment logs in: pass --deployment <host> too"),
+    ]);
+    expect(refused.stderr).not.toMatch(/GLOBALLY/);
+  });
+
   it("login --deployment without a terminal: a choice names the deployment, a key travels with the next deploy", async () => {
     const dir = await agentWorkspace("fa-login-deployment-agent-");
     const unnamed = await runInProcess(["login", "--deployment", "fly", "--json"], dir);

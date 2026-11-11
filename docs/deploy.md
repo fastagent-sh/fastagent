@@ -38,12 +38,21 @@ stack and Compose's project are called by it, and the manifests written into the
 `.dockerignore` hold nothing of an instance and are shared.
 
 So one agent directory can be deployed as several instances, each with a configuration file of its own and none touching
-another's resources or manifests:
+another's resources or its own `.<name>.` manifest:
 
 ```bash
 fastagent deploy fly --run --config acme.json      # acme.json: { "name": "acme" }
 fastagent deploy fly --run --config globex.json    # globex.json: { "name": "globex" }
 ```
+
+One thing is still shared: `.fastagent/deploy/` (the configuration the image carries and the release manifest) holds what
+the **last** `deploy` generated, whichever instance that was. `--run` generates and builds in one go, so it is safe; with
+the runbook, build an instance right after its own `deploy` (every runbook says so), or the image carries another
+instance's configuration and name. An image that holds no instance is the next step of
+[the configuration layout](design/configuration-layout.md).
+
+An earlier version wrote `fly.toml`, `fastagent.compose.yml` and `agentcore.template.yaml`; they are no longer read, and
+`deploy` says so once when it finds one it generated.
 
 Every command that addresses a deployment takes the same `--config` to say which one: `secrets list|set|push`,
 `logs agentcore`, `destroy agentcore` and `login --deployment`. Without it they address the deployment named by the

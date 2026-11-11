@@ -86,6 +86,9 @@ const UNATTENDED_TIMEOUT_SECONDS = 600;
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.stdio) return runStdioLogin(provider, opts);
+  if (opts.config !== undefined && opts.deployment === undefined) {
+    failUsage("--config names the deployment that --deployment logs in: pass --deployment <host> too");
+  }
   if (opts.deployment !== undefined) return runDeploymentLogin(provider, opts);
   if (opts.check !== undefined) return runCheck(opts.check, opts);
   if (opts.code !== undefined) failUsage("--code hands an address to a sign-in: pass --check <ticket> too");

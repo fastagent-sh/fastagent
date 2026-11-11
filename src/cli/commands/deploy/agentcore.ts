@@ -36,6 +36,11 @@ import type { ModelKey } from "../../../deploy/secrets.ts";
 
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => isAgentcoreTemplatePath(path) && isGeneratedAgentcoreTemplate(content),
+  legacyManifest: {
+    file: "agentcore.template.yaml",
+    generated: isGeneratedAgentcoreTemplate,
+    renamed: agentcoreTemplateFile,
+  },
   async shell(agentDir, instance) {
     const name = agentcoreName(instance);
     const stack = agentcoreStackName(name);

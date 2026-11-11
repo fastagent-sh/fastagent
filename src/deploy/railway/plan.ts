@@ -1,7 +1,7 @@
 /** `fastagent deploy railway` — the Railway deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, deliveredDirNote, imageHasGit } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
@@ -64,6 +64,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const runbook: string[] = [
     `# Deploy to Railway. Dockerfile(.dockerignore, .railwayignore) are generated above.`,
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
+    ...deliveredDirNote(input, "railway"),
     ``,
     `# One-time setup (init → service → volume → variables). Skip it on redeploy: repeating it creates`,
     `# another project/service/volume, splitting the agent's state.`,

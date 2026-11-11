@@ -22,7 +22,8 @@ export function formatAuthReport(status: {
   const authOverride = local ? `FASTAGENT_AUTH_PATH='${local.authPath.replaceAll("'", "'\\''")}' ` : "";
   const login = (name: string) =>
     deployed
-      ? `\`${name} --deployment ${deployed.host ?? "<host>"}\` from the agent directory this was deployed from`
+      ? `\`${name} --deployment ${deployed.host ?? "<host>"}\` from the agent directory this was deployed from ` +
+        `(add --config <the file it was deployed with> for an instance that file names)`
       : `\`${authOverride}${name}\``;
   if (source !== undefined) {
     const line = `auth:   ${source} (${provider}) — ${path}`;

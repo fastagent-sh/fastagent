@@ -7,7 +7,7 @@ import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds } from "../../channels/webhooks.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, deliveredDirNote } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 import { stripEdges } from "../../strip-edges.ts";
@@ -452,6 +452,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# Deploy "${name}" to AWS Bedrock AgentCore. ${agentcoreTemplateFile(input.agent)} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: AWS CLI v2 with credentials + a region where AgentCore is available, and Docker with buildx`,
     `# (the image MUST be linux/arm64 — the one host whose build runs on YOUR machine, not remotely).`,
+    ...deliveredDirNote(input, "agentcore"),
     ``,
     `# 0. First use of AgentCore in this account only: the runtime needs its service-linked role, and without it`,
     `#    CloudFormation fails at the runtime, after the build, with a bare AccessDenied. Skip if \`aws iam get-role`,

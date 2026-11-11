@@ -23,6 +23,8 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const railwayHost: HostDeploy = {
   isOurs: (path, content) => path === RAILWAYIGNORE_FILE && isGeneratedRailwayignore(content),
+  // Railway has no manifest of its own: nothing was renamed.
+  legacyManifest: { file: "", generated: () => false, renamed: () => "" },
   shell: async (agentDir, name) => railwayShell(toRailwayName(name), agentDir),
   validate({ opts, agentDir }) {
     const problem = keptRailwayignoreProblem(agentDir);

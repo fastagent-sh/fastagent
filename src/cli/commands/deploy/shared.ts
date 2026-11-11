@@ -85,6 +85,8 @@ interface DeployContext {
 export interface HostDeploy {
   /** Did this host generate the file at `path`? */
   isOurs(path: string, content: string): boolean;
+  /** The manifest an earlier version wrote under a name no instance has, which is no longer read. */
+  legacyManifest: { file: string; generated(content: string): boolean; renamed(name: string): string };
   /** The shell into the running box of the instance `name` (`fastagent login --deployment`). */
   shell(agentDir: string, name: string): Promise<BoxShell>;
   validate?(ctx: Pick<DeployContext, "opts" | "agentDir" | "name" | "pre">): void;

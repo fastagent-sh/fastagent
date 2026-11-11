@@ -45,7 +45,8 @@ describe("auth-view: formatAuthReport", () => {
     expect(box.warn).toBe(
       "ANTHROPIC_API_KEY is set but unused: the stored anthropic oauth credential in /data/.secrets/auth.json " +
         "outranks it. To run on ANTHROPIC_API_KEY, log in with it instead: `fastagent login anthropic --deployment railway` " +
-        'from the agent directory this was deployed from, choosing "API key"',
+        "from the agent directory this was deployed from (add --config <the file it was deployed with> for an instance " +
+        'that file names), choosing "API key"',
     );
   });
 
@@ -70,7 +71,7 @@ describe("auth-view: formatAuthReport", () => {
   it("a box that cannot tell its host leaves <host> in the command, never a guess", () => {
     const box = formatAuthReport({ provider: P, path: PATH, deployed: { host: undefined } });
     expect(box.warn).toContain(
-      "run `fastagent login --deployment <host>` from the agent directory this was deployed from",
+      "run `fastagent login --deployment <host>` from the agent directory this was deployed from (add --config <the file it was deployed with>",
     );
   });
 });

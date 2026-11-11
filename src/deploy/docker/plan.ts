@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { manualWebhookStep, webhookKinds } from "../../channels/webhooks.ts";
-import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, deliveredDirNote } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
@@ -148,6 +148,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     `# Run FastAgent in local Docker. ${composePath} / Dockerfile(.dockerignore) are generated above.`,
     `# Existing artifacts are authoritative and kept; edit Dockerfile or ${composePath} freely.`,
     `# Prereqs: Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION} (\`docker compose version\`).`,
+    ...deliveredDirNote(input, "docker"),
   ];
 
   if (secrets.length > 0) {

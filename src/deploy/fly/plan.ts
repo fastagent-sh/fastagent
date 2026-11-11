@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds } from "../../channels/webhooks.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, deliveredDirNote, imageHasGit } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
@@ -111,6 +111,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const runbook: string[] = [
     `# Deploy "${appName}" to Fly.io. ${flyTomlPath} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: flyctl installed (https://fly.io/docs/flyctl/install) and \`fly auth login\`.`,
+    ...deliveredDirNote(input, "fly"),
     ``,
     `# One-time setup (skip on a redeploy — a second run makes a SECOND app/volume, splitting state).`,
     `# Fly app names are GLOBALLY unique: if this fails as taken, set a unique "app" in ${flyTomlPath} and`,
