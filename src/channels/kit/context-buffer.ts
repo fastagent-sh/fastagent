@@ -65,16 +65,21 @@ export function createContextBuffer<E>(options: {
   const load = (): Map<string, E[]> => {
     const raw = loadStateFile(path);
     if (raw === undefined) return new Map();
-    if (
-      typeof raw === "object" &&
-      raw !== null &&
-      !Array.isArray(raw) &&
-      Object.values(raw).every((entries) => Array.isArray(entries) && entries.every(isEntry))
-    ) {
-      return new Map(Object.entries(raw as Record<string, E[]>));
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      log.warn(`${label} unexpected shape in ${path} — starting with an empty context buffer`);
+      return new Map();
     }
-    log.warn(`${label} unexpected shape in ${path} — starting with an empty context buffer`);
-    return new Map();
+    // One place at a time: an entry of an older shape costs its own place's buffer, not every place's.
+    const places = Object.entries(raw).filter(
+      (place): place is [string, E[]] => Array.isArray(place[1]) && place[1].every(isEntry),
+    );
+    const dropped = Object.keys(raw).length - places.length;
+    if (dropped > 0) {
+      log.warn(
+        `${label} unexpected shape in ${dropped} place(s) of ${path} — those start with an empty context buffer`,
+      );
+    }
+    return new Map(places);
   };
   const buffers = load();
   const persist = (): void => saveStateFile(path, Object.fromEntries(buffers));

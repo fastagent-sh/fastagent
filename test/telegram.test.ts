@@ -274,6 +274,33 @@ describe("durable group buffer (single-process restarts)", () => {
     expect(String(calls[1]?.text)).toContain("important context"); // still unread, so it is folded now
   });
 
+  it("chats a route sends to one conversation each fold from their own last ask", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "1:A",
+      // One conversation, so one session, for two different chats.
+      route: (u) =>
+        (u.message as { text?: string } | undefined)?.text?.startsWith("@go") ? { conversation: "shared" } : null,
+    });
+    const said = (chat: number, id: number, text: string) => ({
+      update_id: id,
+      message: { message_id: id, text, chat: { id: chat, type: "supergroup" }, from: { id: 7, username: "alice" } },
+    });
+    // Chat A's chatter has an id below chat B's ask: compared across chats, B's ask would hide it from A's read.
+    await ch(tgRequest(said(-1, 800, "chat A chatter")));
+    await ch(tgRequest(said(-2, 849, "chat B chatter")));
+    await ch(tgRequest(said(-2, 850, "@go ask in B")));
+    await flush();
+    await ch(tgRequest(said(-1, 901, "@go ask in A")));
+    await flush();
+    expect(String(calls[0]?.text)).toContain("chat B chatter");
+    expect(String(calls[0]?.text)).not.toContain("chat A chatter");
+    expect(String(calls[1]?.text)).toContain("chat A chatter"); // A has no earlier ask of its own: its chatter is unread
+    expect(String(calls[1]?.text)).not.toContain("chat B chatter");
+  });
+
   it("a turn folds only what came after the ask its session was last sent", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent("ok");

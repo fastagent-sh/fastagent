@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { log } from "../src/log.ts";
 import { type BufferEntry, collectAttachments, createContextBuffer } from "../src/channels/telegram/context-buffer.ts";
 
 const dirs: string[] = [];
@@ -11,6 +12,7 @@ const freshPath = (): string => {
   return join(d, "buffers.json");
 };
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -57,6 +59,30 @@ describe("context-buffer", () => {
     const path = freshPath();
     createContextBuffer(path).push("place", entry("@alice", "durable line", 7));
     expect(fold(createContextBuffer(path)).text).toBe("@alice (msg 7): durable line");
+  });
+
+  it("an entry of an older shape costs its own place's buffer, not every place's", () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const path = freshPath();
+    writeFileSync(
+      path,
+      JSON.stringify({
+        "-100": [{ sender: "@a", body: "kept", messageId: 5 }],
+        "-200": [{ sender: "you (sent by the agent)", body: "no id" }], // an older shape: no messageId
+      }),
+    );
+    const buf = createContextBuffer(path);
+    expect(buf.fold("-100", { until: 1e9 }).text).toBe("@a (msg 5): kept");
+    expect(buf.fold("-200", { until: 1e9 }).text).toBe("");
+    expect(warn.mock.calls.flat().join(" ")).toContain("1 place(s)");
+  });
+
+  it("starts empty, and says so, from a file that is not a map of places", () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const path = freshPath();
+    writeFileSync(path, JSON.stringify(["not", "a map"]));
+    expect(fold(createContextBuffer(path)).text).toBe("");
+    expect(warn.mock.calls.flat().join(" ")).toContain("unexpected shape");
   });
 
   it("a failed pre-ACK persist rolls the push back — memory matches disk, a redelivery re-pushes once", () => {

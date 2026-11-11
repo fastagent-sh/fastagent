@@ -157,13 +157,16 @@ function createTelegramRuntime(
     );
   };
 
+  // A message id counts only within its chat, and a custom route can send several chats to one conversation: asks are
+  // kept per conversation and place, so a position is only ever compared with another of the same chat.
+  const askedBy = (rec: PendingTurn): string => `${rec.conversation}@${rec.placeKey}`;
   const runner = createTurnRunner<PendingTurn, StoredTurn, BufferEntry>({
     label: "[telegram]",
     store,
     discussion: async (rec) => {
       const until = rec.askedIn?.messageId;
       if (until === undefined) return { text: "", folded: [] };
-      const start = await readStart(asks, "[telegram]", rec.conversation, recordedSession(rec.conversation), until);
+      const start = await readStart(asks, "[telegram]", askedBy(rec), recordedSession(rec.conversation), until);
       const fold = buffer.fold(rec.placeKey, { ...(start.after === undefined ? {} : { after: start.after }), until });
       return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
     },
@@ -257,7 +260,7 @@ function createTelegramRuntime(
     const imageFileIds = extractImages(m);
     const fileIds = extractFiles(m);
     if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
-      asks.record(conversation, { key: `${update.update_id}`, at: m.message_id });
+      asks.record(`${conversation}@${placeKey}`, { key: `${update.update_id}`, at: m.message_id });
       // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
       runner.submit(
         {

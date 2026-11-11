@@ -860,6 +860,32 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls[1]?.prompt.text).not.toContain("could not read");
   });
 
+  it("a new top-level ask is a new session, so it reads the channel's newest messages again — a follow-up in its thread does not", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent);
+    await handler(signedRequest(message("50.0", { text: "chatter before the first ask" })));
+    await handler(signedRequest(message("50.1", { type: "app_mention", text: "<@UBOT> first ask" })));
+    await settle();
+    await handler(signedRequest(message("50.2", { text: "chatter between the asks" })));
+    await handler(signedRequest(message("50.3", { type: "app_mention", text: "<@UBOT> second ask" })));
+    await settle();
+    // Two sessions, each its own reader: the second has read none of what the first did.
+    expect(conversationOf(stateRoot, calls[1]?.sessionId)).not.toBe(conversationOf(stateRoot, calls[0]?.sessionId));
+    expect(calls[1]?.prompt.text).toContain("chatter before the first ask");
+    expect(calls[1]?.prompt.text).toContain("chatter between the asks");
+
+    // Follow-ups in the second ask's thread are the same session, which holds what its earlier asks folded.
+    await handler(signedRequest(message("50.35", { text: "<@U2> a thread aside", thread_ts: "50.3" })));
+    await handler(signedRequest(message("50.4", { text: "<@UBOT> first follow-up", thread_ts: "50.3" })));
+    await settle();
+    expect(conversationOf(stateRoot, calls[2]?.sessionId)).toBe(conversationOf(stateRoot, calls[1]?.sessionId));
+    expect(calls[2]?.prompt.text).toContain("a thread aside");
+    await handler(signedRequest(message("50.6", { text: "<@UBOT> second follow-up", thread_ts: "50.3" })));
+    await settle();
+    expect(calls[3]?.prompt.text).not.toContain("a thread aside"); // the first follow-up's message carried it
+  });
+
   it("attaches an answer to its question with a thread, and that thread carries the memory", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
