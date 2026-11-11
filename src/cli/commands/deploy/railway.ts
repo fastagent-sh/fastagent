@@ -8,13 +8,14 @@ import {
   isGeneratedRailwayignore,
   keptRailwayignoreProblem,
 } from "../../../deploy/railway/ignore.ts";
-import { planRailwayDeploy, toRailwayName } from "../../../deploy/railway/plan.ts";
+import { RAILWAY_VARIABLE_LIMIT, planRailwayDeploy, toRailwayName } from "../../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../../deploy/railway/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
-import { deliveredConfigArtifact, withPublicUrl } from "../../../deploy/container.ts";
+import { deliveredVariables, withPublicUrl } from "../../../deploy/delivery.ts";
 import type { DeploymentApi } from "../../../deploy/api.ts";
 import type { ModelKey } from "../../../deploy/secrets.ts";
+import { INSTANCE_CONFIG_JSON_ENV } from "../../../paths.ts";
 import { failStartup } from "../../fail.ts";
 import { deploySecrets } from "./secrets-step.ts";
 import { RAILWAY_LOGIN, hostLogin } from "./host-login.ts";
@@ -26,8 +27,13 @@ export const railwayHost: HostDeploy = {
   // Railway has no manifest of its own: nothing was renamed.
   legacyManifest: { file: "", generated: () => false, renamed: () => "" },
   shell: async (agentDir, name) => railwayShell(toRailwayName(name), agentDir),
-  validate({ opts, agentDir }) {
-    const problem = keptRailwayignoreProblem(agentDir);
+  validate({ opts, agentDir, pre }) {
+    const problem =
+      keptRailwayignoreProblem(agentDir) ??
+      (pre.container.config.length > RAILWAY_VARIABLE_LIMIT
+        ? `the configuration is ${pre.container.config.length} characters, and a Railway variable holds at most ` +
+          `${RAILWAY_VARIABLE_LIMIT}: ${INSTANCE_CONFIG_JSON_ENV} carries it whole`
+        : undefined);
     if (problem === undefined) return;
     if (opts.run) failStartup(new Error(`deploy stopped: ${problem}`));
     console.error(`[fastagent] warn: ${problem}`);
@@ -48,11 +54,13 @@ export const railwayHost: HostDeploy = {
     if (opts.run) {
       return runDeployRailway({
         agentDir,
-        // The URL Railway mints is read before the upload, and the image delivers it as `http.publicUrl`.
-        deliverPublicUrl: async (url) => {
+        // The URL Railway mints is read before the upload, and the box is given it as `http.publicUrl`.
+        delivery: (url) => {
           const delivered = withPublicUrl(container.config, url);
-          await write([deliveredConfigArtifact(delivered.config)], { force: true });
-          return delivered.publicUrl;
+          return {
+            variables: deliveredVariables({ agent: container.agent, config: delivered.config }),
+            publicUrl: delivered.publicUrl,
+          };
         },
         name: serviceName,
         modelAuth,
@@ -93,7 +101,7 @@ async function runDeployRailway(params: {
   values: ReadonlyMap<string, string>;
   valueFile: string;
   intoLinked: boolean;
-  deliverPublicUrl: (url: string) => Promise<string>;
+  delivery: (url: string) => { variables: Record<string, string>; publicUrl: string };
   /** The `--config` file, where a URL a person set is recorded once the box confirms it. */
   config: string | undefined;
 }): Promise<string> {
@@ -123,7 +131,7 @@ async function runDeployRailway(params: {
       }),
       channels,
       intoLinked,
-      deliverPublicUrl: params.deliverPublicUrl,
+      delivery: params.delivery,
       ...urlRecorder(agentDir, params.config, params.values, params.answerer),
       ...boxLoginStep("railway", params, () => railwayShell(name, agentDir)),
       ...hostLogin(RAILWAY_LOGIN, params.answerer, agentDir),

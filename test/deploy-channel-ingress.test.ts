@@ -434,7 +434,7 @@ describe("deploy/channel-ingress: what a box that points its own channels made o
 describe("every host's runbook reads the same answer", () => {
   const fly = (channels: ReturnType<typeof webhook>) =>
     planFlyDeploy({
-      releaseId: "release-one",
+      config: "{}",
       agent: "bot",
       appName: "bot",
       port: 8787,
@@ -446,7 +446,7 @@ describe("every host's runbook reads the same answer", () => {
 
   const railway = (channels: ReturnType<typeof webhook>) =>
     planRailwayDeploy({
-      releaseId: "release-one",
+      config: "{}",
       agent: "bot",
       serviceName: "bot",
       runtime: "node",
@@ -457,7 +457,7 @@ describe("every host's runbook reads the same answer", () => {
 
   const agentcore = (channels: ReturnType<typeof webhook>) =>
     planAgentcoreDeploy({
-      releaseId: "release-one",
+      config: "{}",
       name: "bot",
       channels,
       runtime: "node",

@@ -11,77 +11,41 @@ import { once } from "node:events";
 import type { Readable } from "node:stream";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { log } from "../log.ts";
-import { exists } from "../paths.ts";
+import { RELEASE_ID_ENV, exists } from "../paths.ts";
+import { INSTANCE_NAME_ENV } from "../instance-name.ts";
 
-export const RELEASE_FILE = "fastagent.release.json";
+const SEGMENT = /^[a-zA-Z0-9_-]+$/;
 
 /** The deployment's own bookkeeping on the storage: the lease, and the release last started on it. */
 const deploymentMeta = (root: string): string => join(root, ".deployment");
 
+/** What a deploy set on the box that the storage remembers: the instance it belongs to, and the release last started. */
 export interface DeploymentRelease {
   version: 1;
   id: string;
   agent: string;
-  /**
-   * The model this release resolved, when the deployed environment's value file named it (`config.model` needs
-   * nothing here — the config ships in the image too). NON-CREDENTIAL configuration only: the manifest travels
-   * inside the image, which is readable by anyone who can pull it, and it is rebuilt on every deploy — both are the
-   * opposite of what a credential needs (see docs/design/configuration.md §3).
-   */
-  model?: string;
 }
 
-/** The manifest names the agent the storage belongs to, and that name is also a content entry's name rule (one path
- *  segment). `deploy` asks BEFORE generating artifacts — a name `init` accepts but this rejects is the author's
- *  directory name, not a corrupt manifest. */
-export function isReleaseAgentName(name: string): boolean {
-  return /^[a-zA-Z0-9_-]+$/.test(name);
-}
-
+/** The agent's name is one path segment of letters, digits, `-` and `_`, as a content entry's name is. */
 export function parseDeploymentRelease(raw: string): DeploymentRelease {
   const r = JSON.parse(raw) as DeploymentRelease;
-  if (
-    r?.version !== 1 ||
-    typeof r.id !== "string" ||
-    !r.id ||
-    typeof r.agent !== "string" ||
-    !isReleaseAgentName(r.agent) ||
-    (r.model !== undefined && !isModelSpec(r.model))
-  ) {
-    throw new Error("invalid deployment release manifest");
+  if (r?.version !== 1 || typeof r.id !== "string" || !r.id || typeof r.agent !== "string" || !SEGMENT.test(r.agent)) {
+    throw new Error("invalid deployment release record");
   }
   return r;
 }
 
 /**
- * Project a release's own declarations into the environment it was resolved FOR — the receiving half of the model
- * chain, run by `prepareStartWorkspace` BEFORE the agent's `.env` is read (so either source outranks a value
- * edited on the box).
- *
- * `||=`: a variable the platform already holds still wins, because the deployment declares only the half of this
- * environment it can. The log names whichever source actually won — the remedies differ, and a redeploy does
- * nothing at all to a platform-set variable.
+ * The release this box was started as, from the variables a deploy sets on it. A deployed box without a name is a
+ * deployment someone assembled by hand, and its storage would belong to nobody.
  */
-export function applyReleaseEnv(release: DeploymentRelease, env: NodeJS.ProcessEnv = process.env): void {
-  const fromPlatform = env.FASTAGENT_MODEL;
-  if (release.model && !fromPlatform) env.FASTAGENT_MODEL = release.model;
-  const effective = env.FASTAGENT_MODEL;
-  if (!effective) return;
-  log.info(
-    `[fastagent] model ${effective} — from ${
-      fromPlatform
-        ? `a FASTAGENT_MODEL already set in this environment${
-            release.model ? ", which outranks the release manifest" : ""
-          }`
-        : "the release manifest (redeploy to change it)"
-    }; editing FASTAGENT_MODEL in the deployed agent's .env does not override it`,
-  );
-}
-
-/** A `provider/modelId` spec. The id itself may carry `/` and `~` (`baseten/zai-org/GLM-5.3`, openrouter aliases);
- *  resolution only ever splits on the first slash. */
-export function isModelSpec(value: string): boolean {
-  return /^\S+\/\S+$/.test(value);
+export function releaseFromEnv(env: NodeJS.ProcessEnv = process.env): DeploymentRelease {
+  const id = env[RELEASE_ID_ENV];
+  const agent = env[INSTANCE_NAME_ENV];
+  if (!id) throw new Error(`${RELEASE_ID_ENV} is required for a deployment`);
+  if (!agent)
+    throw new Error(`${INSTANCE_NAME_ENV} is required for a deployment: it names the agent its storage belongs to`);
+  return parseDeploymentRelease(JSON.stringify({ version: 1, id, agent }));
 }
 
 /**

@@ -8,3 +8,9 @@ export function modelRefOf(spec: string, where: string): ModelRef {
   }
   return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) };
 }
+
+/** A `provider/modelId` spec. The id itself may carry `/` and `~` (`baseten/zai-org/GLM-5.3`, openrouter aliases);
+ *  resolution only ever splits on the first slash. */
+export function isModelSpec(value: string): boolean {
+  return /^\S+\/\S+$/.test(value);
+}

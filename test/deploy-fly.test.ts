@@ -11,7 +11,7 @@ const runbook = (p: ReturnType<typeof planFlyDeploy>) => p.runbook.join("\n");
 
 /** Defaults for the fields a test doesn't care about (a code agent with a lockfile). */
 const base = {
-  releaseId: "release-one",
+  config: "{}",
   agent: "reviewer",
   appName: "bot",
   port: 8787,
@@ -21,6 +21,25 @@ const base = {
 } as const;
 
 describe("deploy/fly: planFlyDeploy", () => {
+  it("says how to regenerate the manifest after a change: this instance's --config, and --force for a file that is kept", () => {
+    expect(runbook(planFlyDeploy({ ...base, channels: [], configFile: "acme.json" }))).toContain(
+      "run `fastagent deploy fly --config acme.json --force`",
+    );
+  });
+
+  it("sets the instance's name, release and configuration in [env], as TOML strings the box reads back whole", () => {
+    const config = JSON.stringify({ description: 'says "hi" \\ and $' + "{X}", settings: { repo: "acme/api" } });
+    const toml = flyToml(planFlyDeploy({ ...base, config, channels: [] }));
+    const line = (name: string) => new RegExp(`^  ${name} = (".*")$`, "m").exec(toml)?.[1];
+    // A TOML basic string is a JSON string for everything a configuration holds.
+    expect(JSON.parse(line("FASTAGENT_CONFIG_JSON") as string)).toBe(config);
+    expect(JSON.parse(line("FASTAGENT_NAME") as string)).toBe("reviewer");
+    expect(JSON.parse(line("FASTAGENT_RELEASE_ID") as string)).toMatch(/^[0-9a-f]{12}$/);
+    // All of it inside [env], before the next table.
+    expect(toml.indexOf("FASTAGENT_CONFIG_JSON")).toBeGreaterThan(toml.indexOf("[env]"));
+    expect(toml.indexOf("FASTAGENT_CONFIG_JSON")).toBeLessThan(toml.indexOf("[http_service]"));
+  });
+
   it("wires the state root to the volume and tunes autostop to suspend", () => {
     const toml = flyToml(planFlyDeploy({ ...base, channels: [] }));
     expect(toml).toContain('FASTAGENT_STATE_DIR = "/data/.state"');
@@ -136,9 +155,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     const p = planFlyDeploy({ ...base, channels: [] });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore",
-      ".fastagent/deploy/fastagent.json",
       ".fastagent/deploy/fastagent.packages",
-      ".fastagent/deploy/fastagent.release.json",
       "Dockerfile",
       "fly.reviewer.toml",
     ]);

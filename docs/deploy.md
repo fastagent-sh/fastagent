@@ -45,11 +45,9 @@ fastagent deploy fly --run --config acme.json      # acme.json: { "name": "acme"
 fastagent deploy fly --run --config globex.json    # globex.json: { "name": "globex" }
 ```
 
-One thing is still shared: `.fastagent/deploy/` (the configuration the image carries and the release manifest) holds what
-the **last** `deploy` generated, whichever instance that was. `--run` generates and builds in one go, so it is safe; with
-the runbook, build an instance right after its own `deploy` (every runbook says so), or the image carries another
-instance's configuration and name. An image that holds no instance is the next step of
-[the configuration layout](design/configuration-layout.md).
+The image holds the program and nothing of an instance, so one build serves every instance. What differs per instance (its
+name, its configuration and a release id) is rendered into that instance's own manifest and set on the host as variables
+(below). `.fastagent/deploy/` holds only the package list, which is the program's.
 
 An earlier version wrote `fly.toml`, `fastagent.compose.yml` and `agentcore.template.yaml`; they are no longer read, and
 `deploy` says so once when it finds one it generated.
@@ -63,17 +61,36 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 
 A deployment runs on the program's defaults, and `--config <file>` gives it an instance configuration of its own (a
 `fastagent.json`: model, settings, `http`, `deploy`, repositories it works on). The deploy decides with it (its model,
-whether it serves the Agent API, AgentCore's idle timeout), and carries it in the image: it writes it into `.fastagent/deploy/` (FastAgent's own directory, git-ignored, with the
-release manifest and the package list; `{}` without `--config`), and the generated Dockerfile copies that directory to
-`/etc/fastagent/` and names it with `FASTAGENT_CONFIG`, which the box reads at every start. A hand-written Dockerfile does
-the same, or a delivered configuration stops `--run`. The `instructions`, `skills` and `prompts` it names travel with it:
-the deploy copies those files and directories into `.fastagent/deploy/` with their layout, so a path the configuration
-wrote relative to its file resolves the same in `/etc/fastagent/`, and each deploy replaces what an earlier one delivered.
-Only what is inside the configuration's directory can be delivered, written as a relative path: an absolute or `~/` path,
-one outside that directory, one that is not the kind it names, and a skill or prompt template named like the program's
-each stop the deploy (`--run` or not) before any artifact is written. A symbolic link is delivered as what it points at, and one that points at nothing stops the deploy in the pre-flight. The project's own `fastagent.json`
-is the development instance's: a deploy never carries it, and the generated `.dockerignore` keeps it out of the image.
-A configuration holds no secret value.
+whether it serves the Agent API, AgentCore's idle timeout), and delivers it to the host as one variable,
+`FASTAGENT_CONFIG_JSON`, holding its JSON (`{}` without `--config`). It is set beside `FASTAGENT_NAME`, the instance's
+name, and `FASTAGENT_RELEASE_ID`, the release started on the storage (a digest of the name and the configuration, so a
+manifest that holds it changes only when the configuration does). What makes `start` take the deployment's storage (the
+mount check, the lease, the owner) is `FASTAGENT_DEPLOYED=1`, which the generated Dockerfile sets in the image so a
+platform variable that is deleted cannot turn the box into a local-looking one; a `start` with it and without the two
+variables refuses. A hand-written Dockerfile sets it too, or `--run` stops. The host renders them by its own mechanism for values that are not secret:
+
+| Host | Where the variables are set | After a change to the configuration |
+|---|---|---|
+| Docker | `environment:` of `fastagent.<name>.compose.yml` (a `$` is written `$$`) | `fastagent deploy docker --force`, then `up` |
+| Fly | `[env]` of `fly.<name>.toml` | `fastagent deploy fly --force`, then `fly deploy` |
+| Railway | the service's variables, set by `--run` after the domain is known (`railway variables set`; the runbook prints the command) | `--run` again, or the printed command |
+| AgentCore | `EnvironmentVariables` of `agentcore.<name>.template.yaml` | `fastagent deploy agentcore --force`, then the stack update |
+
+The generated manifests are yours once written, so a changed configuration is not put into one until `--force` (which
+resets the manifest's other settings to the generated ones: re-apply any hand edits), and `--run` stops until it is. A
+variable the platform already holds under the same name outranks what the manifest sets: change one value there without
+redeploying.
+
+What cannot be a variable is refused by the pre-flight (it stops `--run`, and warns without it): a `content` entry that
+is a directory of this machine, a relative stdio `command` in `mcpServers`, `instructions`, `skills` or `prompts` (a
+deployment's text is the program's: put it in the agent directory, which every release carries), a literal header or
+environment value in the configuration's `mcpServers` (the manifest is meant to be committed and the platform shows it:
+write `${NAME}` and set the name with `fastagent secrets set <host> <NAME>`), and a configuration over the host's limit.
+Railway holds up to 32768 characters in one variable. AgentCore's variables add up to at most 4096 bytes in all
+(AWS's quota says 4 KB; the figure is not measured), counting the runtime's own variables and its three secrets at their
+most. Docker and Fly are not measured; a configuration of those sizes is expected to fit. The project's own
+`fastagent.json` is the development instance's: a deploy never carries it, and the generated `.dockerignore` keeps it out
+of the image. A configuration holds no secret value.
 
 The MCP servers the box opens (the program's `mcpServers` in `context.json`, and the delivered configuration's) are checked
 before anything is built. A name both declare, and a relative stdio command in the delivered configuration (nothing
@@ -81,8 +98,8 @@ delivers the script it names; write an absolute path on the box, or a command on
 passed on as written and are not checked: a script named there must be on the box too. The program's own relative
 command is relative to its package, which holds what `build` copies (`assets/`, `skills/`, `prompts/`, and the resources
 beside its code), so a script a program ships belongs under `assets/`, and `build` refuses one that is not there; a literal
-header or environment value, which ships in the image, is warned about: write `${NAME}` and set the name with
-`fastagent secrets set <host> <NAME>`.
+header or environment value in the program's, which ships in the image, is warned about: write `${NAME}` and set the
+name with `fastagent secrets set <host> <NAME>`.
 
 A coding agent deploys with `--run --json`. The deploy runs in a process of its own and the command returns its
 ticket; the agent checks it with `fastagent deploy <host> --check <ticket>` and relays each `need_user_action`: the
@@ -95,7 +112,7 @@ own. See [`fastagent deploy`](cli.md#commands).
 
 | Requirement | How |
 |---|---|
-| **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is recorded in `.fastagent/deploy/fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
+| **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is delivered as the configuration's `model`. `deploy` prints the effective model and gates `--run` when none resolves. |
 | **The target holds the values** | On Fly and Railway the values live in the target's own store (Fly secrets, the service's variables), on Docker in `.secrets/production/.env`, which Compose reads. `--run` checks names, never carries a file: the names declared by code (`needs([...])`), the variables `context.json` declares and a model key with no login to fall back on must have a value on the target, or `--run` stops before building. At a terminal it asks: the names `.secrets/production/.env` holds are set there from it after one question, the rest are typed without echo. In a coding agent's deploy, or in CI, it stops naming `fastagent secrets push <host>` and `fastagent secrets set <host> <NAME>`; run them, then re-run. A variable the definition does not declare is not pushed. On AgentCore the values are one Secrets Manager secret, `fastagent/<name>`. See [Secrets](cli.md#fastagent-secrets). |
 | **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable is a name the target may hold (set it with `fastagent secrets`), and so is a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Something reaches it** | A channel, a schedule, or the [Agent API](#the-agent-api). A deployment with none of them is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
@@ -311,8 +328,8 @@ Generates `fly.<name>.toml`, `Dockerfile` and `.dockerignore`, and prints the ru
 2. `fly ips allocate-v4 --shared` and `fly ips allocate-v6`. A first `fly deploy` allocates them but only warns if
    that fails, leaving `https://<name>.fly.dev` without DNS. Skip if `fly ips list` shows one.
 3. `fly secrets set …` for the listed variables.
-4. `fly deploy`, which creates the `data` volume on the first deploy. For a new release, run
-   `fastagent deploy fly` first to refresh the release manifest.
+4. `fly deploy`, which creates the `data` volume on the first deploy. After a change to the configuration, run
+   `fastagent deploy fly --force` first: `fly.<name>.toml` carries it.
 5. Register each route channel's webhook at the live URL.
 
 ```bash
@@ -337,8 +354,9 @@ Generates `Dockerfile` and `.dockerignore`, and prints the runbook:
 2. `railway add --service <name>`.
 3. `railway volume add --mount-path /data`.
 4. `railway variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets …` before the
-   first deploy.
-5. `railway up`. For a new release, run `fastagent deploy railway` first.
+   first deploy, and `railway variables set FASTAGENT_NAME=… FASTAGENT_RELEASE_ID=… FASTAGENT_CONFIG_JSON=…` (the
+   runbook prints it with the values), again after a change to the configuration.
+5. `railway up`.
 6. `railway domain`, then register webhooks.
 
 ```bash
@@ -384,7 +402,7 @@ fastagent deploy agentcore
 fastagent deploy agentcore --run
 ```
 
-Generates `agentcore.<name>.template.yaml`, `agentcore/forwarder/index.js`, container files and a release manifest.
+Generates `agentcore.<name>.template.yaml`, `agentcore/forwarder/index.js`, container files.
 The runbook: create the ECR repository and the values secret, `docker buildx build --platform linux/arm64 … --push` with a unique tag
 per deploy, `aws cloudformation deploy`, read the outputs, register webhooks. `--run` does all of it.
 
@@ -533,9 +551,10 @@ directory is the persistent storage:
 └── .deployment/          # the lease, and the release last started here
 ```
 
-- Every `fastagent deploy <host>` writes a new release id to `.fastagent/deploy/fastagent.release.json`, and the packages the image
-  installs to `.fastagent/deploy/fastagent.packages`, empty without any (both rewritten every time; do not edit them). A new release
-  replaces the image, and so the definition; everything on the storage stays. The agent's definition is read as the
+- Every `fastagent deploy <host>` writes the packages the image installs to `.fastagent/deploy/fastagent.packages`, empty
+  without any (rewritten every time; do not edit it). A new release replaces the image, and so the definition;
+  everything on the storage stays. The storage remembers the instance it belongs to and the release id last started on
+  it (`.deployment/applied.json`). The agent's definition is read as the
   image built it: a change it makes to a copy in its working directory is not read.
 - A file lock at `.deployment/lock` excludes competing starters; do not delete it. Custom images need `flock`. A
   storage another agent's deployments started on is refused.

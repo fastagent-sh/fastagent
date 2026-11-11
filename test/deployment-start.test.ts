@@ -106,12 +106,6 @@ export default defineTool({
     );
     // What the image does: it builds the definition, and the box opens that build where the image has it.
     await buildProject(agent);
-    const manifest = join(dir, "release.json");
-    await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "reviewer" }));
-    // The instance configuration the release delivers, where the image has it and names it.
-    const delivered = join(dir, "etc", "fastagent", "fastagent.json");
-    await mkdir(dirname(delivered), { recursive: true });
-    await writeFile(delivered, JSON.stringify({ thinkingLevel: "high" }));
     await mkdir(join(root, ".secrets"), { recursive: true });
     const rotated = JSON.stringify({ openai: { type: "api_key", key: "rotated" } });
     await writeFile(join(root, ".secrets/auth.json"), rotated);
@@ -125,8 +119,11 @@ export default defineTool({
         delete env[key];
     }
     Object.assign(env, {
-      FASTAGENT_RELEASE_FILE: manifest,
-      FASTAGENT_CONFIG: delivered,
+      // What a deploy sets on the box: the image holds none of it.
+      FASTAGENT_DEPLOYED: "1",
+      FASTAGENT_RELEASE_ID: "one",
+      FASTAGENT_NAME: "reviewer",
+      FASTAGENT_CONFIG_JSON: JSON.stringify({ thinkingLevel: "high" }),
       FASTAGENT_ROOT: root,
     });
     const workspaceUrl = pathToFileURL(join(repo, "src/deploy/workspace.ts")).href;
@@ -169,9 +166,9 @@ try {
       state: join(root, ".state"),
       // The tools the agent adds on the host: on the storage, so a new container still has them.
       mise: join(root, ".state", "mise"),
-      // Read from the configuration the release delivered.
+      // Read from the configuration the deploy delivered as a variable.
       thinking: "high",
-      thinkingFrom: delivered,
+      thinkingFrom: "FASTAGENT_CONFIG_JSON",
     });
     expect(reported.end).toMatchObject({ status: "completed" });
     const result = JSON.stringify(reported.entries.find((entry) => entry.kind === "tool_result")?.data ?? "");
@@ -179,7 +176,10 @@ try {
     expect(result).toContain(reported.sessionId);
     // The tool's working directory is the storage, which every release keeps; the image holds only the program.
     expect(result).toContain(`\\"cwd\\":\\"${root}\\"`);
-    expect(JSON.parse(await readFile(join(root, ".deployment", "applied.json"), "utf8"))).toMatchObject({ id: "one" });
+    expect(JSON.parse(await readFile(join(root, ".deployment", "applied.json"), "utf8"))).toMatchObject({
+      id: "one",
+      agent: "reviewer",
+    });
     await expect(readFile(join(root, "definition", "SYSTEM.md"))).rejects.toThrow(/ENOENT/);
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe(rotated);
     expect(requests).toBe(2);

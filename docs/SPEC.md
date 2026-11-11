@@ -663,7 +663,7 @@ Otherwise `manual`, its `step` naming the URL to paste and the page to paste it 
 `openAgent` opens one instance of a built definition, the default export of an agent's package
 (`import support from "@acme/support"`), from its inputs and nothing else. Of the process's environment FastAgent
 itself reads `FASTAGENT_LOG_LEVEL` and nothing more: no variable places or configures the instance (`FASTAGENT_ROOT`,
-`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`, `FASTAGENT_CONFIG`, `FASTAGENT_MODEL`,
+`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`, `FASTAGENT_CONFIG`, `FASTAGENT_CONFIG_JSON`, `FASTAGENT_MODEL`,
 `FASTAGENT_NAME`, `FASTAGENT_OFFLINE`), none says how it is served or where it runs, and no `process.env` value reaches
 a process the agent starts. FastAgent reads no file its inputs do not name (the machine's own model credentials
 included), and it writes neither `process.env` nor the package. Its own work for the instance, installing the declared

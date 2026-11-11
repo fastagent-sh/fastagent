@@ -9,8 +9,6 @@ import { unmarkDevServe } from "../../serving-command.ts";
 import { channelAppNames, prepareChannelApps, unpreparedChannelApps } from "./deploy/channel-apps.ts";
 import { displayPath, readTextIfExists, selectAgentEnvironment } from "../../paths.ts";
 import { buildProject } from "../../harnesses/pi-durable/build.ts";
-import { DELIVERED_CONFIG_DIR } from "../../deploy/container.ts";
-import { deliverText } from "../../deploy/delivered-text.ts";
 import { deploymentName } from "../../deploy/deployment-name.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { apiReport, deploymentApi } from "../../deploy/api.ts";
@@ -158,7 +156,7 @@ async function deploy(
     opts.config === undefined
       ? undefined
       : await readInstanceConfigFile(resolve(opts.config))
-          .then((source) => ({ source, text: `${JSON.stringify(source.values, null, 2)}\n` }))
+          .then((source) => ({ source }))
           .catch(failStartup);
   const deployed = async (dir: string) => ({
     definition: await loadSourceDefinition(dir),
@@ -276,7 +274,6 @@ async function deploy(
     // What follows is the host's work: a deadline meant for the person must never cut it halfway. Its own steps for
     // the person (a host sign-in, the box's login) wait again, and are bounded again.
     if (answerer.kind === "ticket") answerer.step.person.carriesOn();
-    let textDelivered = false;
     const reachedAt = await target.deploy({
       opts,
       answerer,
@@ -291,31 +288,20 @@ async function deploy(
       // The ownership predicate is bound HERE, from the same lookup that chose the host, so no host module can pass
       // one.
       // Reporting a stale artifact is enough when only generating them — the operator reads the line and decides. But
-      // `--run` would then deploy FROM it: a determinate mismatch between what ships and what the definition says,
-      // the same class as a Dockerfile that cannot read the manifest, and gated the
-      // same way. `--force` regenerates ours; a file we did not generate is never touched by either, and the marker
-      // line is how an operator takes a path back on purpose.
+      // `--run` would then deploy FROM it: a determinate mismatch between what ships and what the definition says
+      // (a configuration the manifest does not carry), and gated the same way. `--force` regenerates ours; a file we
+      // did not generate is never touched by either, and the marker line is how an operator takes a path back on
+      // purpose.
       write: async (artifacts, options) => {
         const plan = await planArtifacts(agentDir, artifacts, { ...options, isOurs: target.isOurs });
         if (opts.run && plan.stale.length > 0) {
           failStartup(
             new Error(
-              `deploy stopped: ${plan.stale.join(", ")} no longer match what this definition generates, and --run ` +
-                `would deploy from them. Re-run with --force to regenerate, or remove each file's generated-by ` +
-                `marker to own it yourself.`,
+              `deploy stopped: ${plan.stale.join(", ")} no longer match what this definition generates (the ` +
+                `instance's configuration is rendered into them), and --run would deploy from them. Re-run with ` +
+                `--force to regenerate, or remove each file's generated-by marker to own it yourself.`,
             ),
           );
-        }
-        // Once, after the gate and before the first artifact lands: the directory is replaced whole, so a refused
-        // run must leave it as it was, and the build outputs the host writes next go into the fresh one.
-        if (!textDelivered) {
-          textDelivered = true;
-          const copied = await deliverText(agentDir, delivered?.source).catch(failStartup);
-          if (copied > 0) {
-            console.error(
-              `[fastagent] delivered ${copied} path(s) of the instance's text into ${DELIVERED_CONFIG_DIR}/`,
-            );
-          }
         }
         await applyArtifactPlan(plan);
       },
