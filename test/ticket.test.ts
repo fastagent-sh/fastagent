@@ -24,9 +24,11 @@ afterEach(() => vi.restoreAllMocks());
 const ticketFile = (ticket: string) =>
   join(process.env.HOME as string, ".fastagent", ".state", "tickets", `${ticket}.json`);
 
+const PROCFS = existsSync("/proc/self/stat");
+
 /**
- * Whether `pid` runs: signal 0 only asks. On Linux a process that exited and is not yet reaped by its parent (this
- * process, until its event loop turns) still answers it; /proc says it has exited, which is stopped for what it held.
+ * Whether `pid` runs: signal 0 only asks. Where /proc exists, a process that exited and is not yet reaped by its parent
+ * still answers it; /proc says it has exited, which is stopped for what it held, and has no entry once it is reaped.
  */
 function running(pid: number | undefined): boolean {
   if (pid === undefined) return false;
@@ -35,8 +37,14 @@ function running(pid: number | undefined): boolean {
   } catch {
     return false;
   }
-  if (!existsSync(`/proc/${pid}/stat`)) return true;
-  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  if (!PROCFS) return true;
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; // reaped since the signal answered
+    throw error;
+  }
   const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
   return state !== "Z" && state !== "X";
 }

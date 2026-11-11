@@ -70,10 +70,11 @@ describe("writeFileAtomic", () => {
         );
       return { codes: await Promise.all([run("a"), run("b")]), path };
     };
-    const shared = await twoWriters("shared");
+    // Two files, so the scenarios run together and share one wait.
+    const [shared, alone] = await Promise.all([twoWriters("shared"), twoWriters("alone")]);
     expect(shared.codes).toEqual([0, 0]);
     expect(JSON.parse(readFileSync(shared.path, "utf8")).who).toMatch(/^[ab]$/);
     // The fixed name is for one writer, as its comment says; two of them fail.
-    expect((await twoWriters("alone")).codes).toContain(1);
+    expect(alone.codes).toContain(1);
   });
 });
